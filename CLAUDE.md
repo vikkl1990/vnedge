@@ -115,5 +115,19 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    REMAINING before live: live exchange adapter + WS feed (real paper
    trading, not replay), pre-live checklist, dashboard (DESIGN.md §6).
 7. Monitoring dashboard per DESIGN.md §6
-8. Strategy research round 2 (pre-registered: 30d test windows for sparse
-   event strategies; 4h bars for trend candidates)
+8. ~~Strategy research round 2~~ ✅ ran 2026-07-02, all six combos REJECTED:
+   - Trend on 4h (±low-vol floor): mostly UNTESTABLE — <5 in-sample trades
+     per train window, so selection can't even run. 4h trend at this horizon
+     is too sparse for 90d/30d windows; not disproven, not supported.
+   - Funding-MR 30d windows: ETH clearly negative twice in a row (round 1
+     −$99, round 2 −$106, PF≈0.5) — ETH is DEAD for this strategy. BTC
+     OOS-positive AGAIN (+$54.60, 22 trades, 6 windows; round 1 +$55.73) but
+     rejected on a single zero-trade window — same gate both rounds.
+   ROUND 3 PRE-REGISTERED (do not modify after seeing results):
+   - Sparse-strategy gate variant: drop the per-window zero-trade rule;
+     require instead ≥10 aggregate OOS trades AND ≥60% of windows with ≥1
+     trade. All other gates unchanged.
+   - Judged ONLY on untouched data: BTC, the 365d period ENDING 365d ago
+     (needs downloader --until support). Current-year BTC data has now been
+     seen twice and is burned for this decision.
+   - If it passes there: eligible for paper trading, human approval next.
