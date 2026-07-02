@@ -102,11 +102,6 @@ class PreTradeRiskGateway:
                 failed.append(f"{name}: {detail}" if detail else name)
 
         # --- Always-on checks (apply to entries AND exits) -------------------
-        check(
-            "kill_switch",
-            not self._kill_switch.is_active,
-            f"active ({self._kill_switch.reason})",
-        )
         check("exchange_health", market.exchange_healthy, "exchange unhealthy/degraded")
 
         staleness = (now - market.last_update).total_seconds()
@@ -131,6 +126,13 @@ class PreTradeRiskGateway:
 
         # --- Entry-only checks ------------------------------------------------
         if not intent.reduce_only:
+            # Kill switch = exits only. It must never block the reduce-only
+            # flatten orders that tripping it is supposed to trigger.
+            check(
+                "kill_switch",
+                not self._kill_switch.is_active,
+                f"active ({self._kill_switch.reason})",
+            )
             check(
                 "min_equity",
                 account.equity_usd >= cfg.min_account_equity_usd,

@@ -71,11 +71,21 @@ def test_clean_entry_is_approved(gateway):
     assert decision.approved, decision.explanation
 
 
-def test_kill_switch_blocks_everything(gateway, kill_switch):
+def test_kill_switch_blocks_entries(gateway, kill_switch):
     kill_switch.activate("test trip")
     decision = gateway.evaluate(entry_intent(), healthy_account(), healthy_market(), now=NOW)
     assert not decision.approved
     assert any("kill_switch" in f for f in decision.failed_checks)
+
+
+def test_kill_switch_never_blocks_reduce_only_exits(gateway, kill_switch):
+    """Kill switch = exits only. Flattening must flow while it is tripped."""
+    kill_switch.activate("test trip")
+    decision = gateway.evaluate(
+        entry_intent(reduce_only=True), healthy_account(open_positions=1),
+        healthy_market(), now=NOW,
+    )
+    assert decision.approved, decision.explanation
 
 
 def test_kill_file_trips_switch(gateway, kill_switch):

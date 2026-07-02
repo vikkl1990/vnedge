@@ -20,8 +20,8 @@ Hard rules enforced here:
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
-from typing import Protocol
+from dataclasses import asdict, dataclass
+from typing import Iterable, Protocol
 
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
 from vnedge.execution.journal import DecisionJournal
@@ -34,6 +34,15 @@ from vnedge.risk.risk_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FlattenTarget:
+    """A position to close, as reported by exchange truth."""
+
+    symbol: str
+    side: str  # "long" | "short" — the position's direction
+    quantity: float
 
 
 class AdapterRejection(Exception):
@@ -180,6 +189,42 @@ class OrderManager:
         logger.warning("order refused: %s", reason)
         self.orders[order.client_order_id] = order
         return order
+
+    async def emergency_flatten(
+        self,
+        targets: Iterable[FlattenTarget],
+        account: AccountState,
+        markets: dict[str, MarketState],
+        flatten_id: str,
+    ) -> list[ManagedOrder]:
+        """Close every position with reduce-only market orders — through the
+        normal pipeline (gateway included; kill switch permits reduce-only by
+        design). ``flatten_id`` makes the operation idempotent: re-invoking
+        with the same id cannot double-close."""
+        self._journal.append("emergency_flatten_started", {"flatten_id": flatten_id})
+        logger.critical("EMERGENCY FLATTEN %s initiated", flatten_id)
+        orders = []
+        for pos in targets:
+            intent = OrderIntent(
+                symbol=pos.symbol,
+                side="short" if pos.side == "long" else "long",
+                quantity=pos.quantity,
+                notional_usd=0.0,
+                leverage=1.0,
+                reduce_only=True,
+                strategy_id="emergency_flatten",
+            )
+            orders.append(
+                await self.submit(
+                    intent, account, markets[pos.symbol],
+                    intent_key=f"flatten|{flatten_id}|{pos.symbol}",
+                )
+            )
+        self._journal.append("emergency_flatten_finished", {
+            "flatten_id": flatten_id,
+            "results": {o.client_order_id: o.state.value for o in orders},
+        })
+        return orders
 
     # --- Reconciliation hooks (driven by the reconciliation engine, m6) ------
     def begin_reconciliation(self, client_order_id: str) -> None:

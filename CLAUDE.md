@@ -99,8 +99,13 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    duplicate intents dropped). REMAINING for m5: cancel/replace, partial-fill
    accounting, adapter-level bounded retries reusing client_order_id,
    emergency flatten.
-6. Paper broker → shadow mode → reconciliation engine → live_small
-   (gated by the 10-point pre-live checklist in README)
+6. Paper broker: ~~simulated exchange + adapter + reconciliation + emergency
+   flatten~~ ✅ (idempotent venue, pessimistic fills, timeout_reached vs
+   timeout_lost both resolved via reconciliation; kill switch is now
+   exits-only in the gateway so flatten flows through the normal pipeline).
+   REMAINING for m6: paper trading LOOP (live data feed → strategy → OM on
+   paper broker), portfolio/account state tracker, shadow mode runner,
+   drift-vs-backtest monitor; then the pre-live checklist.
 7. Monitoring dashboard per DESIGN.md §6
 8. Strategy research round 2 (pre-registered: 30d test windows for sparse
    event strategies; 4h bars for trend candidates)

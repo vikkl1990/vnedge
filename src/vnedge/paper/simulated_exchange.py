@@ -1,0 +1,229 @@
+"""Simulated exchange — the first execution counterparty.
+
+Not a fake fill generator: it maintains venue-side truth (balances, net
+positions, open orders, fills, order statuses) with exchange-like semantics
+the live adapters will eventually share:
+
+- **Idempotent by client_order_id**: resubmitting an id returns the existing
+  status instead of double-booking — the venue behavior our idempotency
+  design relies on.
+- **Reduce-only really reduces**: clamped to the open position; rejected
+  when flat.
+- Market orders fill immediately at quote ± slippage; limit orders rest and
+  fill only when a quote update crosses them, at the limit price.
+- Everything is deterministic: no clock, no randomness — a monotonic event
+  sequence numbers fills.
+
+No margin model in v1 — position sizing and exposure are enforced upstream
+by the risk gateway; the venue enforces order mechanics.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+
+from vnedge.paper.fill_model import FillModel
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PaperOrderRequest:
+    client_order_id: str
+    symbol: str
+    buy: bool  # True = buy/long-impact, False = sell/short-impact
+    quantity: float
+    reduce_only: bool = False
+    order_type: str = "market"  # "market" | "limit"
+    limit_price: float | None = None
+
+
+@dataclass
+class PaperOrderStatus:
+    client_order_id: str
+    exchange_order_id: str
+    state: str  # "open" | "filled" | "partially_filled" | "cancelled" | "rejected"
+    requested_qty: float
+    filled_qty: float = 0.0
+    avg_fill_price: float = 0.0
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class PaperFill:
+    seq: int
+    client_order_id: str
+    symbol: str
+    buy: bool
+    quantity: float
+    price: float
+    fee_usd: float
+
+
+@dataclass
+class PaperPosition:
+    symbol: str
+    quantity: float  # signed: >0 long, <0 short
+    entry_price: float  # weighted average
+
+    @property
+    def side(self) -> str:
+        return "long" if self.quantity > 0 else "short"
+
+
+class SimulatedExchange:
+    def __init__(self, fill_model: FillModel, starting_balance_usd: float = 1_000.0) -> None:
+        self.fill_model = fill_model
+        self.balance_usd = starting_balance_usd
+        self.quotes: dict[str, tuple[float, float]] = {}  # symbol -> (bid, ask)
+        self.positions: dict[str, PaperPosition] = {}
+        self.orders: dict[str, PaperOrderStatus] = {}  # by client_order_id
+        self._resting: dict[str, PaperOrderRequest] = {}  # open limit orders
+        self.fills: list[PaperFill] = []
+        self._seq = 0
+
+    # --- Market data ----------------------------------------------------------
+    def set_quote(self, symbol: str, bid: float, ask: float) -> None:
+        if bid <= 0 or ask <= 0 or bid > ask:
+            raise ValueError(f"invalid quote {bid}/{ask} for {symbol}")
+        self.quotes[symbol] = (bid, ask)
+        self._try_fill_resting(symbol)
+
+    # --- Order entry ------------------------------------------------------------
+    def submit_order(self, req: PaperOrderRequest) -> PaperOrderStatus:
+        # Idempotent venue: same client id -> same order, no double booking.
+        if req.client_order_id in self.orders:
+            return self.orders[req.client_order_id]
+
+        self._seq += 1
+        status = PaperOrderStatus(
+            client_order_id=req.client_order_id,
+            exchange_order_id=f"pex_{self._seq}",
+            state="open",
+            requested_qty=req.quantity,
+        )
+        self.orders[req.client_order_id] = status
+
+        if req.symbol not in self.quotes:
+            status.state, status.reason = "rejected", f"no market data for {req.symbol}"
+            return status
+        if req.quantity <= 0:
+            status.state, status.reason = "rejected", "non-positive quantity"
+            return status
+
+        qty = req.quantity
+        if req.reduce_only:
+            pos = self.positions.get(req.symbol)
+            opposing = pos is not None and (pos.quantity > 0) != req.buy
+            if not opposing:
+                status.state, status.reason = "rejected", "reduce-only with no opposing position"
+                return status
+            qty = min(qty, abs(pos.quantity))  # venue clamps, never over-closes
+            status.requested_qty = qty
+
+        if req.order_type == "market":
+            self._execute(req, status, qty)
+        elif req.order_type == "limit":
+            if req.limit_price is None or req.limit_price <= 0:
+                status.state, status.reason = "rejected", "limit order without valid price"
+                return status
+            self._resting[req.client_order_id] = PaperOrderRequest(
+                req.client_order_id, req.symbol, req.buy, qty,
+                req.reduce_only, "limit", req.limit_price,
+            )
+            self._try_fill_resting(req.symbol)
+        else:
+            status.state, status.reason = "rejected", f"unsupported order type {req.order_type}"
+        return status
+
+    def cancel_order(self, client_order_id: str) -> PaperOrderStatus:
+        status = self.orders[client_order_id]
+        if client_order_id in self._resting:
+            del self._resting[client_order_id]
+            status.state = "cancelled"
+        elif status.state == "open":
+            status.state = "cancelled"
+        return status
+
+    # --- Fills & accounting --------------------------------------------------------
+    def _execute(self, req: PaperOrderRequest, status: PaperOrderStatus, qty: float) -> None:
+        bid, ask = self.quotes[req.symbol]
+        price = self.fill_model.market_fill_price(bid, ask, req.buy)
+        fill_qty = self.fill_model.fill_quantity(qty)
+        self._apply_fill(req.client_order_id, req.symbol, req.buy, fill_qty, price)
+        status.filled_qty = fill_qty
+        status.avg_fill_price = price
+        if fill_qty < qty:
+            status.state = "partially_filled"
+            status.reason = "remainder cancelled (IOC)"
+        else:
+            status.state = "filled"
+
+    def _fill_limit(self, req: PaperOrderRequest) -> None:
+        status = self.orders[req.client_order_id]
+        self._apply_fill(req.client_order_id, req.symbol, req.buy, req.quantity, req.limit_price)
+        status.filled_qty = req.quantity
+        status.avg_fill_price = req.limit_price
+        status.state = "filled"
+
+    def _try_fill_resting(self, symbol: str) -> None:
+        bid, ask = self.quotes[symbol]
+        for coid, req in list(self._resting.items()):
+            if req.symbol != symbol:
+                continue
+            crossed = (req.buy and ask <= req.limit_price) or (
+                not req.buy and bid >= req.limit_price
+            )
+            if crossed:
+                del self._resting[coid]
+                self._fill_limit(req)
+
+    def _apply_fill(
+        self, client_order_id: str, symbol: str, buy: bool, qty: float, price: float
+    ) -> None:
+        signed = qty if buy else -qty
+        fee = self.fill_model.fee_usd(qty * price)
+        self.balance_usd -= fee
+        self._seq += 1
+        self.fills.append(
+            PaperFill(self._seq, client_order_id, symbol, buy, qty, price, fee)
+        )
+
+        pos = self.positions.get(symbol)
+        if pos is None or pos.quantity == 0:
+            self.positions[symbol] = PaperPosition(symbol, signed, price)
+            return
+        if (pos.quantity > 0) == buy:  # extending
+            total = pos.quantity + signed
+            pos.entry_price = (
+                pos.entry_price * abs(pos.quantity) + price * qty
+            ) / abs(total)
+            pos.quantity = total
+            return
+        # Reducing (possibly through zero).
+        closing = min(qty, abs(pos.quantity))
+        direction = 1.0 if pos.quantity > 0 else -1.0
+        self.balance_usd += direction * closing * (price - pos.entry_price)
+        pos.quantity += signed
+        if abs(pos.quantity) < 1e-12:
+            del self.positions[symbol]
+        elif (pos.quantity > 0) == buy:
+            # flipped through zero: remainder is a fresh position at fill price
+            pos.entry_price = price
+
+    # --- Exchange truth (the reconciliation surface) --------------------------------
+    def get_order_status(self, client_order_id: str) -> PaperOrderStatus | None:
+        return self.orders.get(client_order_id)
+
+    def get_open_orders(self) -> list[PaperOrderStatus]:
+        return [s for s in self.orders.values() if s.state == "open"]
+
+    def get_positions(self) -> list[PaperPosition]:
+        return list(self.positions.values())
+
+    def get_balances(self) -> dict[str, float]:
+        return {"USDT": self.balance_usd}
+
+    def get_fills(self) -> list[PaperFill]:
+        return list(self.fills)
