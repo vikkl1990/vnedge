@@ -99,13 +99,21 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    duplicate intents dropped). REMAINING for m5: cancel/replace, partial-fill
    accounting, adapter-level bounded retries reusing client_order_id,
    emergency flatten.
-6. Paper broker: ~~simulated exchange + adapter + reconciliation + emergency
+6. ~~Paper broker: simulated exchange + adapter + reconciliation + emergency
    flatten~~ ✅ (idempotent venue, pessimistic fills, timeout_reached vs
    timeout_lost both resolved via reconciliation; kill switch is now
    exits-only in the gateway so flatten flows through the normal pipeline).
-   REMAINING for m6: paper trading LOOP (live data feed → strategy → OM on
-   paper broker), portfolio/account state tracker, shadow mode runner,
-   drift-vs-backtest monitor; then the pre-live checklist.
+7. ~~Paper/shadow runner loop~~ ✅ (one loop, both modes — a separate shadow
+   runner would be a second execution path; portfolio tracker feeds real
+   AccountState; daily-loss limit is now min(fixed USD, % of peak equity);
+   OrderManager.submit accepts `now` for replay/exchange-synced clocks).
+   KNOWN DIVERGENCE (by design, surfaced by compare_to_backtest on real
+   BTC data): paper enforces the full risk layer (daily-loss halt,
+   consecutive-loss breaker) that the backtester does not model — paper
+   trades ≤ backtest trades. Future option: apply gateway policies inside
+   the backtester so research matches operations.
+   REMAINING before live: live exchange adapter + WS feed (real paper
+   trading, not replay), pre-live checklist, dashboard (DESIGN.md §6).
 7. Monitoring dashboard per DESIGN.md §6
 8. Strategy research round 2 (pre-registered: 30d test windows for sparse
    event strategies; 4h bars for trend candidates)

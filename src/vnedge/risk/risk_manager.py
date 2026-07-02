@@ -138,10 +138,17 @@ class PreTradeRiskGateway:
                 account.equity_usd >= cfg.min_account_equity_usd,
                 f"equity ${account.equity_usd:.2f} < ${cfg.min_account_equity_usd:.2f}",
             )
+            # Two-leg limit: the tighter of fixed-USD and %-of-equity wins.
+            daily_limit = min(
+                cfg.max_daily_loss_usd,
+                cfg.max_daily_loss_pct / 100.0 * account.peak_equity_usd,
+            )
             check(
                 "daily_loss_limit",
-                account.daily_pnl_usd > -cfg.max_daily_loss_usd,
-                f"daily pnl ${account.daily_pnl_usd:.2f} breaches -${cfg.max_daily_loss_usd:.2f}",
+                account.daily_pnl_usd > -daily_limit,
+                f"daily pnl ${account.daily_pnl_usd:.2f} breaches -${daily_limit:.2f} "
+                f"(min of ${cfg.max_daily_loss_usd:.2f} fixed, "
+                f"{cfg.max_daily_loss_pct}% of peak equity)",
             )
             drawdown_pct = (
                 (account.peak_equity_usd - account.equity_usd)

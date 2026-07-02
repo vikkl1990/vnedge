@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Iterable, Protocol
 
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
@@ -85,6 +86,7 @@ class OrderManager:
         account: AccountState,
         market: MarketState,
         intent_key: str,
+        now: datetime | None = None,
     ) -> ManagedOrder:
         """Run one intent through the full pipeline. Always returns the
         ManagedOrder — inspect .state and .history for the outcome."""
@@ -122,7 +124,9 @@ class OrderManager:
 
         # --- Pre-trade risk gateway ------------------------------------------
         order.transition(OrderState.RISK_REQUESTED)
-        decision = self._gateway.evaluate(intent, account, market)
+        # `now` lets replay/paper evaluate at bar time; live passes exchange-
+        # synced time. Defaults to wall clock.
+        decision = self._gateway.evaluate(intent, account, market, now=now)
         self._journal.append("risk_decision", {
             "intent_key": intent_key,
             "client_order_id": order.client_order_id,
@@ -196,6 +200,7 @@ class OrderManager:
         account: AccountState,
         markets: dict[str, MarketState],
         flatten_id: str,
+        now: datetime | None = None,
     ) -> list[ManagedOrder]:
         """Close every position with reduce-only market orders — through the
         normal pipeline (gateway included; kill switch permits reduce-only by
@@ -218,6 +223,7 @@ class OrderManager:
                 await self.submit(
                     intent, account, markets[pos.symbol],
                     intent_key=f"flatten|{flatten_id}|{pos.symbol}",
+                    now=now,
                 )
             )
         self._journal.append("emergency_flatten_finished", {

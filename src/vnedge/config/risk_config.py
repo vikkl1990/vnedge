@@ -33,7 +33,12 @@ class RiskConfig(BaseModel):
     # --- Loss limits ---------------------------------------------------------
     max_daily_loss_usd: float = Field(
         default=20.0, gt=0,
-        description="Realized+unrealized loss in USD that halts trading for the UTC day.",
+        description="Fixed USD daily-loss halt. Effective limit is "
+        "min(this, max_daily_loss_pct of equity) — whichever is tighter wins.",
+    )
+    max_daily_loss_pct: float = Field(
+        default=2.0, gt=0, le=10,
+        description="Percentage leg of the daily-loss halt, applied to peak equity.",
     )
     max_drawdown_pct: float = Field(
         default=15.0, gt=0, le=50,

@@ -59,6 +59,7 @@ class PaperFill:
     quantity: float
     price: float
     fee_usd: float
+    realized_pnl_usd: float = 0.0  # nonzero only on position-reducing fills
 
 
 @dataclass
@@ -185,32 +186,34 @@ class SimulatedExchange:
         signed = qty if buy else -qty
         fee = self.fill_model.fee_usd(qty * price)
         self.balance_usd -= fee
-        self._seq += 1
-        self.fills.append(
-            PaperFill(self._seq, client_order_id, symbol, buy, qty, price, fee)
-        )
+        realized = 0.0
 
         pos = self.positions.get(symbol)
         if pos is None or pos.quantity == 0:
             self.positions[symbol] = PaperPosition(symbol, signed, price)
-            return
-        if (pos.quantity > 0) == buy:  # extending
+        elif (pos.quantity > 0) == buy:  # extending
             total = pos.quantity + signed
             pos.entry_price = (
                 pos.entry_price * abs(pos.quantity) + price * qty
             ) / abs(total)
             pos.quantity = total
-            return
-        # Reducing (possibly through zero).
-        closing = min(qty, abs(pos.quantity))
-        direction = 1.0 if pos.quantity > 0 else -1.0
-        self.balance_usd += direction * closing * (price - pos.entry_price)
-        pos.quantity += signed
-        if abs(pos.quantity) < 1e-12:
-            del self.positions[symbol]
-        elif (pos.quantity > 0) == buy:
-            # flipped through zero: remainder is a fresh position at fill price
-            pos.entry_price = price
+        else:
+            # Reducing (possibly through zero).
+            closing = min(qty, abs(pos.quantity))
+            direction = 1.0 if pos.quantity > 0 else -1.0
+            realized = direction * closing * (price - pos.entry_price)
+            self.balance_usd += realized
+            pos.quantity += signed
+            if abs(pos.quantity) < 1e-12:
+                del self.positions[symbol]
+            elif (pos.quantity > 0) == buy:
+                # flipped through zero: remainder is a fresh position at fill price
+                pos.entry_price = price
+
+        self._seq += 1
+        self.fills.append(
+            PaperFill(self._seq, client_order_id, symbol, buy, qty, price, fee, realized)
+        )
 
     # --- Exchange truth (the reconciliation surface) --------------------------------
     def get_order_status(self, client_order_id: str) -> PaperOrderStatus | None:
