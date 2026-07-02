@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data & runtime state (anchored to root — src/vnedge/data is source code)
+/data/
+/logs/
+*.parquet
+*.db
+KILL
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
