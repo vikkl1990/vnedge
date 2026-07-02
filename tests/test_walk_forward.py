@@ -91,6 +91,18 @@ def test_no_trades_leak_before_test_region():
         assert w.test_start >= w.train_start
 
 
+def test_configurable_step_creates_overlapping_windows():
+    candles = rising_candles(1000)
+    result = walk_forward(
+        candles, None, DirectionalStrategy, GRID, BacktestConfig(),
+        train_bars=400, test_bars=200, step_bars=100,
+    )
+    assert len(result.windows) == 5  # starts at 0,100,200,300,400
+    # consecutive test windows advance by exactly step_bars
+    delta = result.windows[1].test_start - result.windows[0].test_start
+    assert delta == pd.Timedelta(hours=100)
+
+
 def test_insufficient_data_rejected():
     candles = rising_candles(100)
     with pytest.raises(ValueError, match="not enough data"):
