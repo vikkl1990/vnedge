@@ -93,6 +93,14 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    need longer test windows, a change to PRE-REGISTER for the next research
    round, never applied retroactively to promote a seen result. Strategy
    iteration continues in milestone 8; do NOT relax gates to pass a candidate.
-5. Order manager: state machine, persisted idempotency, decision journal
+5. ~~Order manager core: state machine, persisted idempotency, decision
+   journal~~ ✅ (TIMEOUT_UNKNOWN blocks new risk until reconciliation
+   resolves it; journal-before-submit; journal unavailable ⇒ exits only;
+   duplicate intents dropped). REMAINING for m5: cancel/replace, partial-fill
+   accounting, adapter-level bounded retries reusing client_order_id,
+   emergency flatten.
 6. Paper broker → shadow mode → reconciliation engine → live_small
    (gated by the 10-point pre-live checklist in README)
+7. Monitoring dashboard per DESIGN.md §6
+8. Strategy research round 2 (pre-registered: 30d test windows for sparse
+   event strategies; 4h bars for trend candidates)
