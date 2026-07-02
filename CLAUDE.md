@@ -84,7 +84,15 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    and live can't diverge; stop wins stop-vs-TP ties; walk_forward.py does
    rolling train/test with OOS-only judgment, min-trade-count selection,
    no equity compounding across windows).
-4. Strategies: regime-filtered hybrids (research in Freqtrade)
+4. ~~Strategies: first candidates~~ ✅ built + judged: indicators (causal,
+   NaN-warmup convention), regime classifier (ER + EMA alignment, ATR
+   percentile), trend_continuation_v1 and funding_mean_reversion_v1, registry.
+   365d walk-forward verdicts (2026-07-02): ALL FOUR symbol/strategy combos
+   REJECTED by promotion gates. Notable: funding MR on BTC was OOS-positive
+   (+$55.73) but failed zero-trade-window gates — sparse event strategies may
+   need longer test windows, a change to PRE-REGISTER for the next research
+   round, never applied retroactively to promote a seen result. Strategy
+   iteration continues in milestone 8; do NOT relax gates to pass a candidate.
 5. Order manager: state machine, persisted idempotency, decision journal
 6. Paper broker → shadow mode → reconciliation engine → live_small
    (gated by the 10-point pre-live checklist in README)
