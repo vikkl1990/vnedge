@@ -24,3 +24,6 @@ KILL
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code local session settings
+.claude/settings.local.json
