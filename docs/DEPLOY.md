@@ -18,8 +18,10 @@ trading. 1 vCPU / 1–2 GB RAM is plenty.
 ## 2. Ship the repo + trial state
 
 ```bash
-# from the Mac — code
-rsync -av --exclude .venv --exclude data --exclude .git \
+# from the Mac — code. Excludes MUST be root-anchored (leading /):
+# a bare "data" would also exclude src/vnedge/data and break the install.
+rsync -av --exclude /.venv --exclude /data --exclude /logs \
+    --exclude /models --exclude /.git \
     ~/Desktop/VNEDGE/ vps:~/vnedge/
 
 # trial state (REQUIRED to continue the current trial, not restart it):
