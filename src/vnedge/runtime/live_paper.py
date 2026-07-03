@@ -189,6 +189,10 @@ class LivePaperSession:
                 candles="ok" if self.feed.staleness_seconds() < 120 else "stale",
                 last_update_ms=self.feed.staleness_seconds() * 1000.0,
             ),
+            symbol=self.config.symbol,
+            strategy_id=self.strategy.strategy_id,
+            recent_alerts=list(self.alert_engine.recent)
+            if self.alert_engine is not None else [],
         )
         if self.provider is not None:
             self.provider.publish(snapshot)

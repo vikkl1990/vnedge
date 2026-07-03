@@ -111,6 +111,7 @@ async def main() -> None:
                 provider.publish(
                     build_snapshot(
                         mode="paper (demo replay)", live_trading_enabled=False,
+                        symbol=SYMBOL, strategy_id="demo_sma_cross",
                         tracker=tracker_holder["runner"].tracker, exchange=exchange,
                         kill_switch=kill, journal=journal, order_manager=om,
                         feed_health=FeedHealth(

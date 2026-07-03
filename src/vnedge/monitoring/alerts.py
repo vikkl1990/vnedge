@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Protocol
@@ -47,6 +48,7 @@ class AlertEngine:
         self.store_path = Path(store_path)
         self.notifiers = notifiers or []
         self._last_fired: dict[str, datetime] = {}
+        self.recent: deque[dict] = deque(maxlen=20)  # newest last; dashboard feed
 
     def evaluate(self, snapshot: dict, now: datetime | None = None) -> list[dict]:
         now = now or datetime.now(UTC)
@@ -71,6 +73,7 @@ class AlertEngine:
                 "mode": snapshot.get("mode"),
             }
             fired.append(alert)
+            self.recent.append(alert)
             self._persist(alert)
             for notifier in self.notifiers:
                 try:

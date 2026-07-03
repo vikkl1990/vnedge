@@ -58,6 +58,9 @@ def build_snapshot(
     journal: DecisionJournal,
     order_manager: OrderManager,
     feed_health: FeedHealth,
+    symbol: str = "",
+    strategy_id: str = "",
+    recent_alerts: list[dict] | None = None,
 ) -> dict:
     account = tracker.account_state()
     positions = []
@@ -86,6 +89,9 @@ def build_snapshot(
     return {
         "ts": datetime.now(UTC).isoformat(),
         "mode": mode,
+        "symbol": symbol,
+        "strategy_id": strategy_id,
+        "recent_alerts": recent_alerts or [],
         "live_trading_enabled": live_trading_enabled,
         "kill_switch_active": kill_switch.is_active,
         "equity": tracker.equity_usd(),
