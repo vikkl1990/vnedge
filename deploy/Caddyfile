@@ -6,6 +6,6 @@
 }
 
 https://:8765 {
-	tls internal
+	tls /certs/cert.pem /certs/key.pem
 	reverse_proxy paper-trial:8080
 }

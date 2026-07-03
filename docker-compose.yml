@@ -29,6 +29,7 @@ services:
       - "8765:8765"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/certs:/certs:ro
       - caddy_data:/data
     logging:
       driver: json-file
