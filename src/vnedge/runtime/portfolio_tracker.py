@@ -46,8 +46,10 @@ class PortfolioTracker:
     def unrealized_pnl_usd(self) -> float:
         total = 0.0
         for pos in self.exchange.get_positions():
-            bid, ask = self.exchange.quotes[pos.symbol]
-            mark = (bid + ask) / 2.0
+            quote = self.exchange.quotes.get(pos.symbol)
+            if quote is None:
+                continue  # no quote yet (e.g. just resumed): mark at entry
+            mark = (quote[0] + quote[1]) / 2.0
             total += pos.quantity * (mark - pos.entry_price)
         return total
 
@@ -85,6 +87,32 @@ class PortfolioTracker:
                 del self._open_round_trips[fill.symbol]
                 del self._net_qty[fill.symbol]
         self._fills_seen = len(fills)
+
+    # --- Persistence (cross-session resume) ---------------------------------------
+    def export_state(self) -> dict:
+        return {
+            "peak_equity_usd": self.peak_equity_usd,
+            "consecutive_losses": self.consecutive_losses,
+            "day": self._day.isoformat() if self._day else None,
+            "day_baseline": self._day_baseline,
+        }
+
+    def restore_state(self, state: dict) -> None:
+        """Restore risk counters after a restart. Fill-derived internals are
+        rebuilt from the exchange's CURRENT positions: the new session's fill
+        list starts empty, so net quantities must be seeded from the restored
+        positions or round-trip loss counting breaks on the next close."""
+        self.peak_equity_usd = float(state["peak_equity_usd"])
+        self.consecutive_losses = int(state["consecutive_losses"])
+        self._day = date.fromisoformat(state["day"]) if state["day"] else None
+        self._day_baseline = float(state["day_baseline"])
+        self._fills_seen = len(self.exchange.get_fills())
+        self._net_qty = {
+            p.symbol: p.quantity for p in self.exchange.get_positions()
+        }
+        self._open_round_trips = {
+            p.symbol: _RoundTrip() for p in self.exchange.get_positions()
+        }
 
     # --- Gateway feed -----------------------------------------------------------------
     def account_state(self) -> AccountState:

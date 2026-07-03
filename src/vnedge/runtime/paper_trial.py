@@ -35,6 +35,7 @@ import yaml
 from vnedge.config.risk_config import RiskConfig
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
+from vnedge.paper.account_store import PaperAccountStore
 from vnedge.paper.fill_model import FillModel
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
@@ -147,11 +148,22 @@ def build_trial_session(
     kill = KillSwitch(kill_file=journal_dir / f"{manifest.trial_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange))
-    return LivePaperSession(
+    session = LivePaperSession(
         strategy, feed, history, config,
         gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
         snapshot_provider=snapshot_provider,
+        account_store=PaperAccountStore(
+            journal_dir / f"{manifest.trial_id}.account.json", manifest.trial_id
+        ),
     )
+    # Resume: a restart must continue the trial's account, never reset it.
+    resumed = session.account_store.restore_into(exchange, session.tracker)
+    journal.append("trial_session_start", {
+        "trial_id": manifest.trial_id, "resumed": resumed,
+        "balance_usd": exchange.balance_usd,
+        "open_positions": len(exchange.get_positions()),
+    })
+    return session
 
 
 def _current_commit() -> str:

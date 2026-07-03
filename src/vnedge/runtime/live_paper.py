@@ -60,6 +60,7 @@ class LivePaperSession:
         exchange: SimulatedExchange,
         journal: DecisionJournal,
         snapshot_provider=None,  # optional dashboard hookup
+        account_store=None,  # optional PaperAccountStore for crash/restart resume
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -70,6 +71,7 @@ class LivePaperSession:
         self.exchange = exchange
         self.journal = journal
         self.provider = snapshot_provider
+        self.account_store = account_store
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -232,6 +234,8 @@ class LivePaperSession:
                 self.recon_mismatches += len(report.mismatches)
                 self._bars_since_reconcile = 0
 
+            if self.account_store is not None:
+                self.account_store.save_from(self.exchange, self.tracker)
             self._publish_snapshot()
 
         final = self.reconciler.run()
