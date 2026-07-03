@@ -34,6 +34,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# non-Python files that must ship in the installed package (the container
+# runs from site-packages, not the repo)
+vnedge = ["dashboard/static/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
