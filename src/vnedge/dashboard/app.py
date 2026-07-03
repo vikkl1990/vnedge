@@ -38,7 +38,10 @@ class SnapshotProvider:
 
 
 def create_app(
-    provider: SnapshotProvider, token: str, snapshot_hz: float = 1.0
+    provider: SnapshotProvider,
+    token: str,
+    snapshot_hz: float = 1.0,
+    history_path: Path | None = None,
 ) -> FastAPI:
     if not token or not token.strip():
         raise ValueError("DASHBOARD_TOKEN must be non-empty — no token, no dashboard")
@@ -65,6 +68,23 @@ def create_app(
         if snapshot is None:
             return JSONResponse({"status": "no snapshot yet"}, status_code=503)
         return JSONResponse(snapshot)
+
+    @app.get("/history")
+    async def history(request: Request) -> JSONResponse:
+        """Persisted equity curve (survives restarts and page reloads)."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        points: list[dict] = []
+        if history_path is not None and history_path.exists():
+            import json
+
+            lines = history_path.read_text().strip().splitlines()[-2000:]
+            for line in lines:
+                try:
+                    points.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return JSONResponse(points)
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

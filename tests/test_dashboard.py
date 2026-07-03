@@ -59,6 +59,27 @@ def test_websocket_pushes_snapshot(client):
         assert ws.receive_json()["equity"] == 500.0
 
 
+def test_history_endpoint_auth_and_content(tmp_path):
+    import json
+
+    hist = tmp_path / "eq.jsonl"
+    hist.write_text(
+        "\n".join(json.dumps({"ts": f"2026-07-03T0{i}:00:00+00:00", "equity": 500.0 + i})
+                  for i in range(3))
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "paper"})
+    client = TestClient(create_app(provider, token="t3st-token", history_path=hist))
+    assert client.get("/history").status_code == 401
+    points = client.get("/history?token=t3st-token").json()
+    assert len(points) == 3
+    assert points[-1]["equity"] == 502.0
+
+
+def test_history_without_file_is_empty(client):
+    assert client.get("/history?token=t3st-token").json() == []
+
+
 def test_no_control_routes_exist(client):
     """Read-only invariant: nothing accepts POST/PUT/DELETE."""
     for method in ("post", "put", "delete"):

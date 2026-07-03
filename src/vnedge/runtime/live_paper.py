@@ -62,6 +62,7 @@ class LivePaperSession:
         snapshot_provider=None,  # optional dashboard hookup
         account_store=None,  # optional PaperAccountStore for crash/restart resume
         alert_engine=None,  # optional AlertEngine — same snapshot, guarded fanout
+        equity_history_path=None,  # optional JSONL of (ts, equity) per bar
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -74,6 +75,7 @@ class LivePaperSession:
         self.provider = snapshot_provider
         self.account_store = account_store
         self.alert_engine = alert_engine
+        self.equity_history_path = equity_history_path
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -244,6 +246,17 @@ class LivePaperSession:
 
             if self.account_store is not None:
                 self.account_store.save_from(self.exchange, self.tracker)
+            if self.equity_history_path is not None:
+                try:
+                    import json as _json
+
+                    with open(self.equity_history_path, "a", encoding="utf-8") as f:
+                        f.write(_json.dumps({
+                            "ts": now.isoformat(),
+                            "equity": round(self.tracker.equity_usd(), 4),
+                        }) + "\n")
+                except OSError as exc:
+                    logger.warning("equity history write failed: %s", exc)
             self._publish_snapshot()
 
         final = self.reconciler.run()

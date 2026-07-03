@@ -169,6 +169,7 @@ def build_trial_session(
             journal_dir / f"{manifest.trial_id}.account.json", manifest.trial_id
         ),
         alert_engine=alert_engine,
+        equity_history_path=journal_dir / f"{manifest.trial_id}.equity.jsonl",
     )
     # Resume: a restart must continue the trial's account, never reset it.
     resumed = session.account_store.restore_into(exchange, session.tracker)
@@ -239,7 +240,10 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
         from vnedge.dashboard.app import SnapshotProvider, create_app
 
         provider = SnapshotProvider()
-        app = create_app(provider, token=os.environ["DASHBOARD_TOKEN"])
+        app = create_app(
+            provider, token=os.environ["DASHBOARD_TOKEN"],
+            history_path=Path("logs/paper_trials") / f"{manifest.trial_id}.equity.jsonl",
+        )
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
