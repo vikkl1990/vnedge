@@ -63,10 +63,12 @@ class PaperRunner:
         order_manager: OrderManager,
         exchange: SimulatedExchange,
         journal: DecisionJournal,
+        on_bar=None,  # optional async hook(bar_index, ts) — pacing/snapshots
     ) -> None:
         self.strategy = strategy
         self.candles = candles
         self.config = config
+        self.on_bar = on_bar
         self.gateway = gateway
         self.om = order_manager
         self.exchange = exchange
@@ -241,6 +243,8 @@ class PaperRunner:
                     plan = activated
 
             equities.append(self.tracker.equity_usd())
+            if self.on_bar is not None:
+                await self.on_bar(j, ts)
 
         # final reconciliation
         self._reconcile(parked)

@@ -114,7 +114,10 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    the backtester so research matches operations.
    REMAINING before live: live exchange adapter + WS feed (real paper
    trading, not replay), pre-live checklist, dashboard (DESIGN.md §6).
-7. Monitoring dashboard per DESIGN.md §6
+7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (read-only FastAPI app:
+   GET /state + 1-2Hz snapshot WS, bearer token mandatory, zero control
+   routes — tested; vanilla single-page UI; demo replay via
+   `python -m vnedge.dashboard.demo`, preview config in .claude/launch.json)
 8. ~~Strategy research round 2~~ ✅ ran 2026-07-02, all six combos REJECTED:
    - Trend on 4h (±low-vol floor): mostly UNTESTABLE — <5 in-sample trades
      per train window, so selection can't even run. 4h trend at this horizon

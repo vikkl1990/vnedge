@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VNEDGE — trading assistant</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #111823; --border: #1e2a3a; --text: #d7e1ec;
+    --dim: #7d8ea3; --green: #2fd67b; --red: #ff5d5d; --amber: #ffb454;
+    --accent: #4aa8ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 14px; padding: 24px;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 18px; letter-spacing: 2px; }
+  h1 span { color: var(--accent); }
+  .badge {
+    padding: 3px 10px; border-radius: 4px; font-size: 12px; letter-spacing: 1px;
+    border: 1px solid var(--border); text-transform: uppercase;
+  }
+  .badge.ok { color: var(--green); border-color: var(--green); }
+  .badge.warn { color: var(--amber); border-color: var(--amber); }
+  .badge.bad { color: var(--red); border-color: var(--red); }
+  #conn { margin-left: auto; color: var(--dim); font-size: 12px; }
+  #conn.live::before { content: "●"; color: var(--green); margin-right: 6px; }
+  #conn.down::before { content: "●"; color: var(--red); margin-right: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .card .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .card .value { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--green); } .neg { color: var(--red); } .neutral { color: var(--text); }
+  section { margin-bottom: 20px; }
+  section h2 { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th { color: var(--dim); font-weight: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); }
+  tr + tr td { border-top: 1px solid var(--border); }
+  .empty { color: var(--dim); padding: 12px; }
+  footer { color: var(--dim); font-size: 11px; margin-top: 28px; line-height: 1.6; }
+  #locked { color: var(--amber); padding: 40px 0; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>VN</span>EDGE</h1>
+  <span class="badge" id="mode">—</span>
+  <span class="badge" id="risk">—</span>
+  <span class="badge" id="kill">—</span>
+  <span id="conn" class="down">connecting…</span>
+</header>
+
+<div id="locked">No token supplied. Open this page as <code>/?token=&lt;DASHBOARD_TOKEN&gt;</code>. No token, no dashboard.</div>
+
+<div id="content" style="display:none">
+  <div class="grid">
+    <div class="card"><div class="label">Equity</div><div class="value" id="equity">—</div></div>
+    <div class="card"><div class="label">Daily PnL</div><div class="value" id="daily">—</div></div>
+    <div class="card"><div class="label">Realized PnL</div><div class="value" id="realized">—</div></div>
+    <div class="card"><div class="label">Unrealized PnL</div><div class="value" id="unrealized">—</div></div>
+    <div class="card"><div class="label">Fees paid</div><div class="value" id="fees">—</div></div>
+    <div class="card"><div class="label">Fills</div><div class="value neutral" id="fills">—</div></div>
+    <div class="card"><div class="label">Loss streak</div><div class="value neutral" id="streak">—</div></div>
+    <div class="card"><div class="label">Feed</div><div class="value neutral" id="feed" style="font-size:15px">—</div></div>
+  </div>
+
+  <section>
+    <h2>Positions</h2>
+    <table id="positions">
+      <thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>uPnL</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="positions-empty">flat</div>
+  </section>
+
+  <section>
+    <h2>Open orders</h2>
+    <table id="orders">
+      <thead><tr><th>Client order id</th><th>State</th><th>Requested</th><th>Filled</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="orders-empty">none</div>
+  </section>
+
+  <section>
+    <h2>Last risk rejection</h2>
+    <div class="card" id="reject" style="font-size:13px;color:var(--dim)">none</div>
+  </section>
+</div>
+
+<footer>
+  Read-only terminal — this page cannot place orders, change risk limits, or touch the kill switch.<br>
+  Not financial advice. Crypto derivatives are high-risk instruments.
+</footer>
+
+<script>
+(function () {
+  const token = new URLSearchParams(location.search).get("token");
+  if (!token) {
+    document.getElementById("locked").style.display = "block";
+    document.getElementById("conn").textContent = "locked";
+    return;
+  }
+  document.getElementById("content").style.display = "block";
+
+  const $ = (id) => document.getElementById(id);
+  const usd = (v) => (v >= 0 ? "+$" : "-$") + Math.abs(v).toFixed(2);
+  const signClass = (v) => (v > 0.005 ? "pos" : v < -0.005 ? "neg" : "neutral");
+  const setMoney = (id, v) => { const el = $(id); el.textContent = usd(v); el.className = "value " + signClass(v); };
+
+  function render(s) {
+    $("mode").textContent = s.mode + (s.live_trading_enabled ? " · LIVE ENABLED" : "");
+    $("mode").className = "badge " + (s.live_trading_enabled ? "warn" : "ok");
+    $("risk").textContent = "risk: " + s.risk_status;
+    $("risk").className = "badge " + (s.risk_status === "ok" ? "ok" : "bad");
+    $("kill").textContent = s.kill_switch_active ? "KILL SWITCH ACTIVE" : "kill switch armed";
+    $("kill").className = "badge " + (s.kill_switch_active ? "bad" : "ok");
+
+    $("equity").textContent = "$" + s.equity.toFixed(2);
+    $("equity").className = "value neutral";
+    setMoney("daily", s.daily_pnl);
+    setMoney("realized", s.realized_pnl);
+    setMoney("unrealized", s.unrealized_pnl);
+    $("fees").textContent = "$" + s.fees_usd.toFixed(2);
+    $("fees").className = "value neutral";
+    $("fills").textContent = s.fills;
+    $("streak").textContent = s.consecutive_losses;
+    $("streak").className = "value " + (s.consecutive_losses >= 3 ? "neg" : "neutral");
+    $("feed").textContent = s.feed_health.exchange + " · " + s.feed_health.candles;
+
+    const posBody = $("positions").querySelector("tbody");
+    posBody.innerHTML = "";
+    for (const p of s.positions) {
+      const row = posBody.insertRow();
+      row.innerHTML =
+        "<td>" + p.symbol + "</td><td class='" + (p.side === "long" ? "pos" : "neg") + "'>" + p.side +
+        "</td><td>" + p.quantity.toFixed(4) + "</td><td>" + p.entry_price.toFixed(2) +
+        "</td><td>" + p.mark_price.toFixed(2) + "</td><td class='" + signClass(p.unrealized_usd) + "'>" +
+        usd(p.unrealized_usd) + "</td>";
+    }
+    $("positions").style.display = s.positions.length ? "table" : "none";
+    $("positions-empty").style.display = s.positions.length ? "none" : "block";
+
+    const ordBody = $("orders").querySelector("tbody");
+    ordBody.innerHTML = "";
+    for (const o of s.open_orders) {
+      const row = ordBody.insertRow();
+      row.innerHTML = "<td>" + o.client_order_id + "</td><td>" + o.state +
+        "</td><td>" + o.requested_qty + "</td><td>" + o.filled_qty + "</td>";
+    }
+    $("orders").style.display = s.open_orders.length ? "table" : "none";
+    $("orders-empty").style.display = s.open_orders.length ? "none" : "block";
+
+    $("reject").textContent = s.last_risk_reject || "none";
+  }
+
+  let backoff = 500;
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(proto + "//" + location.host + "/ws?token=" + encodeURIComponent(token));
+    ws.onopen = () => { $("conn").textContent = "live"; $("conn").className = "live"; backoff = 500; };
+    ws.onmessage = (ev) => render(JSON.parse(ev.data));
+    ws.onclose = () => {
+      $("conn").textContent = "reconnecting…"; $("conn").className = "down";
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 15000);
+    };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>
