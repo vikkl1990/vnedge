@@ -204,6 +204,19 @@ class PromotionGates:
     # If in-sample was profitable, OOS must retain at least this fraction of
     # the per-window IS net profit — otherwise the edge is fitted, not real.
     min_is_retention: float = 0.25
+    # Sparse-event strategies (pre-registered 2026-07-02): an eventless
+    # window is expected behavior, so per-window zero-trade rejection can be
+    # replaced by an explicit coverage floor — never silently ignored.
+    reject_zero_trade_windows: bool = True
+    min_windows_with_trades_pct: float = 0.0
+
+
+#: Round-3 pre-registered configuration for sparse event strategies. Chosen
+#: BEFORE seeing round-3 data; do not adjust after results exist.
+SPARSE_STRATEGY_GATES = PromotionGates(
+    reject_zero_trade_windows=False,
+    min_windows_with_trades_pct=60.0,
+)
 
 
 @dataclass(frozen=True)
@@ -230,8 +243,15 @@ def evaluate_promotion(
         )
 
     zero_trade = [w.window_index for w in windows if w.test_metrics.num_trades == 0]
-    if zero_trade:
+    if zero_trade and gates.reject_zero_trade_windows:
         reasons.append(f"zero OOS trades in window(s) {zero_trade}")
+    if windows and gates.min_windows_with_trades_pct > 0:
+        traded_pct = (len(windows) - len(zero_trade)) / len(windows) * 100.0
+        if traded_pct < gates.min_windows_with_trades_pct:
+            reasons.append(
+                f"only {traded_pct:.0f}% of OOS windows traded "
+                f"(need >= {gates.min_windows_with_trades_pct:.0f}%)"
+            )
 
     total_trades = sum(w.test_metrics.num_trades for w in windows)
     if total_trades < gates.min_total_oos_trades:

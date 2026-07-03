@@ -116,6 +116,28 @@ def test_gates_are_configurable():
     assert decision.passed, decision.reject_reasons
 
 
+def test_sparse_gates_tolerate_eventless_windows():
+    """Pre-registered round-3 variant: zero-trade windows allowed as long as
+    coverage stays above the floor and aggregate gates hold."""
+    from vnedge.backtest.walk_forward import SPARSE_STRATEGY_GATES
+
+    quiet = metrics(num_trades=0, net=0.0, win_rate=0.0)
+    tests = [metrics(num_trades=6), metrics(num_trades=6), quiet,
+             metrics(num_trades=6), metrics(num_trades=6)]  # 80% traded
+    decision = evaluate_promotion(result_with(tests), SPARSE_STRATEGY_GATES)
+    assert decision.passed, decision.reject_reasons
+
+
+def test_sparse_gates_still_reject_poor_coverage():
+    from vnedge.backtest.walk_forward import SPARSE_STRATEGY_GATES
+
+    quiet = metrics(num_trades=0, net=0.0, win_rate=0.0)
+    tests = [metrics(num_trades=12), quiet, quiet, quiet, quiet]  # 20% traded
+    decision = evaluate_promotion(result_with(tests), SPARSE_STRATEGY_GATES)
+    assert not decision.passed
+    assert any("windows traded" in r for r in decision.reject_reasons)
+
+
 def test_all_reasons_reported_together():
     tests = [metrics(num_trades=0, net=-10.0, win_rate=0.0, max_dd=30.0)] * 2
     decision = evaluate_promotion(result_with(tests))

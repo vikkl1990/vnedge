@@ -142,3 +142,13 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
      (needs downloader --until support). Current-year BTC data has now been
      seen twice and is burned for this decision.
    - If it passes there: eligible for paper trading, human approval next.
+   ROUND 3 VERDICT (2026-07-03, one run, untouched BTC 2024-07-03→2025-07-03):
+   funding_mean_reversion_v1 **PASSED** — under the pre-registered
+   SPARSE_STRATEGY_GATES and also under standard gates (7/7 windows traded,
+   31 OOS trades, +$16.00 net, 57% profitable windows, worst window −$12.08,
+   worst DD 4.7%). Third consecutive OOS-positive BTC result across
+   independent data slices (+$55.73, +$54.60, +$16.00). HONEST CAVEATS: thin
+   edge, single symbol, fee-sensitive, selection favored extreme_pct=0.85 /
+   z_entry=1.5 in 6/7 windows. STATUS: eligible for live-data paper trading;
+   HUMAN APPROVAL REQUIRED before starting; live capital remains gated by
+   the full pre-live checklist regardless.

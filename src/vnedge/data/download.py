@@ -14,6 +14,7 @@ import asyncio
 import logging
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ccxt.base.errors import ExchangeError, NotSupported
@@ -35,6 +36,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--timeframe", default="1h")
     p.add_argument("--days", type=int, default=90, help="lookback window in days")
+    p.add_argument(
+        "--since", default=None,
+        help="ISO date (UTC) for range start, e.g. 2024-07-03; overrides --days",
+    )
+    p.add_argument(
+        "--until", default=None,
+        help="ISO date (UTC) for range end; default now. Historical ranges keep "
+        "research data uncontaminated by hypothesis-selection data.",
+    )
     p.add_argument("--data-root", default="data", help="store root directory")
     p.add_argument(
         "--allow-gaps", action="store_true",
@@ -45,13 +55,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _parse_utc_date_ms(value: str) -> int:
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return int(dt.timestamp() * 1000)
+
+
+def resolve_range(args: argparse.Namespace) -> tuple[int, int]:
+    """(since_ms, until_ms) from --since/--until/--days. --since wins over --days."""
+    until_ms = _parse_utc_date_ms(args.until) if args.until else int(time.time() * 1000)
+    if args.since:
+        since_ms = _parse_utc_date_ms(args.since)
+    else:
+        since_ms = until_ms - args.days * 86_400_000
+    if since_ms >= until_ms:
+        raise ValueError(f"empty range: since {args.since} >= until {args.until}")
+    return since_ms, until_ms
+
+
 async def run(args: argparse.Namespace) -> tuple[list[IngestResult], list[str]]:
     """Returns (ingest results, per-dataset error strings). One dataset
     failing at the venue must not abort the rest of the run."""
     store = ParquetStore(Path(args.data_root))
     reports_dir = Path(args.data_root) / "reports" / "data_quality"
-    until_ms = int(time.time() * 1000)
-    since_ms = until_ms - args.days * 86_400_000
+    since_ms, until_ms = resolve_range(args)
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
 
     results: list[IngestResult] = []
