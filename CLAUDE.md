@@ -112,8 +112,16 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    consecutive-loss breaker) that the backtester does not model — paper
    trades ≤ backtest trades. Future option: apply gateway policies inside
    the backtester so research matches operations.
-   REMAINING before live: live exchange adapter + WS feed (real paper
-   trading, not replay), pre-live checklist, dashboard (DESIGN.md §6).
+8. ~~Live market feed + live paper session~~ ✅ (CCXT Pro websockets:
+   closed-candle discipline, order-book-top quotes — venue ticker streams
+   may lack bid/ask, funding via periodic REST; honest staleness = wall
+   clock since last WS event, so the gateway's freshness check works for
+   real; validated live against Binance: full pipeline order on streaming
+   data). NOTE: LiveMarketFeed/LivePaperSession are v1 — exits are
+   bar-close granular (tick-level stop monitoring is a live-adapter-phase
+   upgrade), and prepare() re-runs per bar (fine at 1m+, optimize later).
+   REMAINING before live trading: live ExecutionAdapter (real orders,
+   testnet first), pre-live checklist, a strategy that passes gates.
 7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (read-only FastAPI app:
    GET /state + 1-2Hz snapshot WS, bearer token mandatory, zero control
    routes — tested; vanilla single-page UI; demo replay via

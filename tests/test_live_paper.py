@@ -1,0 +1,146 @@
+"""Live paper session — deterministic tests via a fake feed."""
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+import pytest
+
+from vnedge.config.risk_config import RiskConfig
+from vnedge.data.schemas import normalize_candles
+from vnedge.execution.journal import DecisionJournal
+from vnedge.execution.order_manager import OrderManager
+from vnedge.paper.fill_model import FillModel
+from vnedge.paper.paper_broker import PaperBroker
+from vnedge.paper.simulated_exchange import SimulatedExchange
+from vnedge.risk.kill_switch import KillSwitch
+from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
+from vnedge.runtime.live_paper import LivePaperSession
+from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+
+BASE = 1_750_000_000_000
+MIN = 60_000
+SYM = "BTC/USDT:USDT"
+
+
+class FakeFeed:
+    """Same surface as LiveMarketFeed, scripted content, no network."""
+
+    exchange_id = "fake"
+
+    def __init__(self, rows, quote=(99.99, 100.01), stale: bool = False):
+        self.closed_candles = asyncio.Queue()
+        for row in rows:
+            self.closed_candles.put_nowait(row)
+        self.quote = quote
+        self.funding_rate = 0.0001
+        self.stale = stale
+        self.healthy = True
+
+    def staleness_seconds(self, now=None):
+        return 9_999.0 if self.stale else 0.5
+
+    def market_state(self) -> MarketState:
+        last = datetime.now(UTC) - (
+            timedelta(hours=3) if self.stale else timedelta(milliseconds=100)
+        )
+        bid, ask = self.quote
+        return MarketState(
+            symbol=SYM, last_update=last,
+            spread_bps=(ask - bid) / ((ask + bid) / 2) * 10_000,
+            estimated_slippage_bps=2.0, funding_rate=self.funding_rate,
+            exchange_healthy=self.healthy,
+        )
+
+
+class AlwaysLong(BaseStrategy):
+    strategy_id = "always_long"
+    warmup_bars = 2
+
+    def prepare(self, candles):
+        return candles.copy()
+
+    def signal(self, df, index):
+        close = float(df["close"].iloc[index])
+        return SignalIntent("long", stop_price=close * 0.95,
+                            take_profit_price=close * 1.10)
+
+
+def history(n=5) -> pd.DataFrame:
+    return normalize_candles(
+        [[BASE + i * MIN, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(n)]
+    )
+
+
+def live_rows(start=5, n=3, low=99.5, high=100.5):
+    return [[BASE + (start + i) * MIN, 100.0, high, low, 100.0, 5.0] for i in range(n)]
+
+
+def build_session(tmp_path, feed, strategy=None):
+    config = RunnerConfig(mode=RunnerMode.PAPER, symbol=SYM, reconcile_every_bars=2)
+    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    journal = DecisionJournal(tmp_path / "journal.jsonl")
+    kill = KillSwitch(kill_file=tmp_path / "KILL")
+    gateway = PreTradeRiskGateway(config.risk, kill)
+    om = OrderManager(gateway, journal, PaperBroker(exchange))
+    session = LivePaperSession(
+        strategy or AlwaysLong(), feed, history(), config,
+        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+    )
+    return session, exchange
+
+
+async def test_closed_candle_triggers_full_pipeline(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    report = await session.run(max_bars=1)
+    assert report.bars_processed == 1
+    assert report.signals_generated == 1
+    assert report.orders_submitted == 1
+    assert len(exchange.get_positions()) == 1  # filled at live quote
+    fill = exchange.get_fills()[0]
+    assert fill.price == pytest.approx(100.01 * (1 + 2 / 10_000))  # ask + slippage
+
+
+async def test_stale_feed_blocks_entries(tmp_path):
+    feed = FakeFeed(live_rows(n=1), stale=True)
+    session, exchange = build_session(tmp_path, feed)
+    report = await session.run(max_bars=1)
+    assert report.signals_generated == 1
+    assert report.risk_rejects == 1  # data_freshness failed at the gateway
+    assert exchange.get_positions() == []
+
+
+async def test_non_forward_candles_dropped(tmp_path):
+    stale_row = [[BASE + 2 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]]  # inside history
+    feed = FakeFeed(stale_row + live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    report = await session.run(max_bars=1)
+    assert session.dropped_candles == 1
+    assert report.bars_processed == 1  # only the valid candle counted
+
+
+class LongOnce(AlwaysLong):
+    strategy_id = "long_once"
+
+    def __init__(self):
+        self.fired = False
+
+    def signal(self, df, index):
+        if self.fired:
+            return None
+        self.fired = True
+        return super().signal(df, index)
+
+
+async def test_stop_exit_on_live_bar(tmp_path):
+    # bar 1 opens position; bar 2's low pierces the 95 stop
+    rows = live_rows(n=1) + [[BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0]]
+    feed = FakeFeed(rows)
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    report = await session.run(max_bars=2)
+    assert exchange.get_positions() == []  # stopped out, flat
+    assert report.fills == 2
+    assert report.realized_pnl_usd < 0
+    assert report.reconciliation_mismatches == 0

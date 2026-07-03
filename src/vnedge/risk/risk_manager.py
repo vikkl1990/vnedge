@@ -83,6 +83,10 @@ class PreTradeRiskGateway:
         self._config = config
         self._kill_switch = kill_switch
 
+    @property
+    def kill_switch(self) -> KillSwitch:
+        return self._kill_switch
+
     def evaluate(
         self,
         intent: OrderIntent,
