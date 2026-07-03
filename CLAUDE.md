@@ -77,6 +77,24 @@ trades, <=6% DD. NO parameter changes mid-trial. NO live orders (manifest
 validation refuses live_orders_enabled). Reports append to
 research/paper_trials/<id>.reports.jsonl with commit attribution.
 
+## Charter convergence (2026-07-03)
+
+Deviation audit vs the original architecture found 3 classes: deliberate
+cuts (recorded), silent drift, over-delivery (governance depth). Convergence
+work, in priority order:
+1. ~~Docker/VPS deployment kit~~ ✅ (Dockerfile, compose, docs/DEPLOY.md;
+   image build validates on the VPS — no Docker on the dev Mac)
+2. ~~Alert rules engine + Telegram~~ ✅ (monitoring/: cooldown, severity,
+   alerts.jsonl, guarded notifiers; wired into trial sessions; env-config)
+3. Live ExecutionAdapter on Binance testnet (last unbuilt execution piece)
+4. Second venue adapter — Bybit vs Delta India is a USER decision (live
+   venue/compliance choice)
+5. Formally retire the Freqtrade research leg + sentiment/news ambitions
+   (pending user confirmation — currently silent drift)
+NOTE: the running trial (PID on the Mac) predates alerts/persistence wiring;
+they activate on its next (re)start — the intended VPS migration moment
+(docs/DEPLOY.md §2 preserves the account).
+
 ## Roadmap additions (accepted ideas, not yet built)
 
 - docs/strategy_contract.md + AI strategy sandbox (data/strategies/ai/ with

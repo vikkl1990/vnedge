@@ -89,6 +89,7 @@ def build_snapshot(
         "live_trading_enabled": live_trading_enabled,
         "kill_switch_active": kill_switch.is_active,
         "equity": tracker.equity_usd(),
+        "peak_equity": tracker.peak_equity_usd,
         "realized_pnl": exchange.get_balances()["USDT"] - tracker.starting_equity_usd,
         "unrealized_pnl": tracker.unrealized_pnl_usd(),
         "daily_pnl": account.daily_pnl_usd,

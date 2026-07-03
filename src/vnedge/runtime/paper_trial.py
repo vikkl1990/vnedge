@@ -148,6 +148,19 @@ def build_trial_session(
     kill = KillSwitch(kill_file=journal_dir / f"{manifest.trial_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange))
+    from vnedge.monitoring.alerts import AlertEngine, default_trial_rules
+    from vnedge.monitoring.notifiers import LogNotifier, TelegramNotifier
+
+    notifiers: list = [LogNotifier()]
+    telegram = TelegramNotifier.from_env()
+    if telegram is not None:
+        notifiers.append(telegram)
+        logger.info("telegram alerts enabled")
+    alert_engine = AlertEngine(
+        default_trial_rules(manifest.daily_loss_limit_usd),
+        journal_dir / f"{manifest.trial_id}.alerts.jsonl",
+        notifiers,
+    )
     session = LivePaperSession(
         strategy, feed, history, config,
         gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
@@ -155,6 +168,7 @@ def build_trial_session(
         account_store=PaperAccountStore(
             journal_dir / f"{manifest.trial_id}.account.json", manifest.trial_id
         ),
+        alert_engine=alert_engine,
     )
     # Resume: a restart must continue the trial's account, never reset it.
     resumed = session.account_store.restore_into(exchange, session.tracker)
@@ -227,7 +241,14 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
         provider = SnapshotProvider()
         app = create_app(provider, token=os.environ["DASHBOARD_TOKEN"])
         server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=8080, log_level="warning")
+            uvicorn.Config(
+                app,
+                # inside a container this must bind 0.0.0.0; compose maps it
+                # to the HOST's 127.0.0.1 only, so it stays private
+                host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),
+                port=int(os.environ.get("DASHBOARD_PORT", "8080")),
+                log_level="warning",
+            )
         )
         server_task = asyncio.create_task(server.serve())
 

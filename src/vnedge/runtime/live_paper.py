@@ -61,6 +61,7 @@ class LivePaperSession:
         journal: DecisionJournal,
         snapshot_provider=None,  # optional dashboard hookup
         account_store=None,  # optional PaperAccountStore for crash/restart resume
+        alert_engine=None,  # optional AlertEngine — same snapshot, guarded fanout
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -72,6 +73,7 @@ class LivePaperSession:
         self.journal = journal
         self.provider = snapshot_provider
         self.account_store = account_store
+        self.alert_engine = alert_engine
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -175,21 +177,23 @@ class LivePaperSession:
         self._plan = None
 
     def _publish_snapshot(self) -> None:
-        if self.provider is None:
+        if self.provider is None and self.alert_engine is None:
             return
-        self.provider.publish(
-            build_snapshot(
-                mode="paper (live data)", live_trading_enabled=False,
-                tracker=self.tracker, exchange=self.exchange,
-                kill_switch=self.gateway.kill_switch, journal=self.journal,
-                order_manager=self.om,
-                feed_health=FeedHealth(
-                    exchange=f"{getattr(self.feed, 'exchange_id', 'feed')} (live ws)",
-                    candles="ok" if self.feed.staleness_seconds() < 120 else "stale",
-                    last_update_ms=self.feed.staleness_seconds() * 1000.0,
-                ),
-            )
+        snapshot = build_snapshot(
+            mode="paper (live data)", live_trading_enabled=False,
+            tracker=self.tracker, exchange=self.exchange,
+            kill_switch=self.gateway.kill_switch, journal=self.journal,
+            order_manager=self.om,
+            feed_health=FeedHealth(
+                exchange=f"{getattr(self.feed, 'exchange_id', 'feed')} (live ws)",
+                candles="ok" if self.feed.staleness_seconds() < 120 else "stale",
+                last_update_ms=self.feed.staleness_seconds() * 1000.0,
+            ),
         )
+        if self.provider is not None:
+            self.provider.publish(snapshot)
+        if self.alert_engine is not None:
+            self.alert_engine.evaluate(snapshot)
 
     # --- Main loop -----------------------------------------------------------------
     async def run(self, *, max_bars: int | None = None,
