@@ -18,3 +18,21 @@ services:
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
+
+  # Internet-facing TLS front (self-signed) so the read-only dashboard needs
+  # no SSH tunnel. Port 8765 must be open in the cloud security list.
+  dashboard-tls:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [paper-trial]
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+volumes:
+  caddy_data:

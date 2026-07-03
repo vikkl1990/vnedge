@@ -1,0 +1,11 @@
+# TLS front for the read-only dashboard. Self-signed ("internal") certs —
+# the browser will warn once; the point is encrypting the token in transit.
+# The dashboard itself remains token-gated and read-only.
+{
+	auto_https disable_redirects
+}
+
+https://:8765 {
+	tls internal
+	reverse_proxy paper-trial:8080
+}
