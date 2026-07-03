@@ -30,3 +30,4 @@ KILL
 
 # ML model registry artifacts
 /models/
+deploy/certs/
