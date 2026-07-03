@@ -65,6 +65,33 @@ IS +$1,343 vs OOS −$18.50 = classic overfit, caught by the IS/OOS
 collapse gate. ML judgment round deferred until an exploratory config
 shows promise; do not judge on the untouched window before then.
 
+## Paper trial: funding_mean_reversion_v1 on BTC (APPROVED 2026-07-03)
+
+Human approval received ("approved for paper: funding_mean_reversion_v1 BTC
+only"). Manifest + locked pass/fail criteria:
+research/paper_trials/funding_mr_btc_v1_20260703.yaml. Run with:
+  python -m vnedge.runtime.paper_trial research/paper_trials/funding_mr_btc_v1_20260703.yaml --hours 24
+(repeat daily or run long sessions; add --dashboard with DASHBOARD_TOKEN set).
+Params frozen (0.85/1.5), $500 equity, $10 daily loss, 14-30 days, >=10
+trades, <=6% DD. NO parameter changes mid-trial. NO live orders (manifest
+validation refuses live_orders_enabled). Reports append to
+research/paper_trials/<id>.reports.jsonl with commit attribution.
+
+## Roadmap additions (accepted ideas, not yet built)
+
+- docs/strategy_contract.md + AI strategy sandbox (data/strategies/ai/ with
+  AST validation, allowed-imports whitelist, no core-source modification) —
+  Tickflow-pattern adaptation; AI generates/reviews, never trades directly.
+- Alert rules engine (AND/OR conditions, cooldown, severity, alerts.jsonl,
+  dashboard badge, Telegram) — journal-first.
+- Symbol intelligence dashboard panel (regime, funding percentile, levels,
+  recent rejected signals + reasons).
+- HMM regime model + strategy-regime permission matrix
+  (ALLOW/BLOCK/REDUCE/SHADOW_ONLY). PRE-REGISTERED RULE: the HMM must beat
+  the existing rule-based regime baseline OOS through the same promotion
+  machinery, or it is rejected. Rule-based regime gating already exists in
+  strategy/regime.py and is used by both strategies.
+
 ## Architecture decisions (2026-07-02 review)
 
 V1 is a SINGLE-PROCESS asyncio application. The portfolio/risk state is
