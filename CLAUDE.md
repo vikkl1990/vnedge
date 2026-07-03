@@ -45,6 +45,26 @@ profit, always. Nothing here is financial advice.
 - Run `.venv/bin/python -m pytest -q` before considering any change done.
 - Risk-critical code gets tests in the same change, not later.
 
+## ML layer (milestone 9, built 2026-07-03)
+
+src/vnedge/ml/: causal feature matrix (causality unit-tested), triple-barrier
+labels (stop-first tie-break, NaN tails), sklearn HistGradientBoosting
+trainer (XGBoost deliberately avoided: libomp install fragility; interface
+is model-agnostic), versioned ModelRegistry (models/ gitignored),
+MLStrategy wrapper (models trade ONLY as BaseStrategy — every gate/gateway
+applies unchanged; threshold >= 0.5 enforced; long-only v1), purged
+walk-forward with label-horizon embargo.
+
+RULES: models never bypass the gateway; nothing trades outside the
+registry; judgment runs only on pre-registered untouched windows
+(next candidate window: BTC 2023-07-03 → 2024-07-03).
+
+EXPLORATORY baseline (2026-07-03, already-seen data, NOT a judgment):
+default config (2 ATR stop, 2R target, 24h horizon, thr 0.60) REJECTED —
+IS +$1,343 vs OOS −$18.50 = classic overfit, caught by the IS/OOS
+collapse gate. ML judgment round deferred until an exploratory config
+shows promise; do not judge on the untouched window before then.
+
 ## Architecture decisions (2026-07-02 review)
 
 V1 is a SINGLE-PROCESS asyncio application. The portfolio/risk state is
