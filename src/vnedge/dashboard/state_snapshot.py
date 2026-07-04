@@ -121,6 +121,20 @@ def build_snapshot(
             "last_note": last_event.note if last_event is not None else "",
             "reason": status.reason if status is not None else "",
         })
+    recent_fills = [
+        {
+            "seq": fill.seq,
+            "client_order_id": fill.client_order_id,
+            "symbol": fill.symbol,
+            "side": "buy" if fill.buy else "sell",
+            "quantity": fill.quantity,
+            "price": fill.price,
+            "notional_usd": abs(fill.quantity * fill.price),
+            "fee_usd": fill.fee_usd,
+            "realized_pnl_usd": fill.realized_pnl_usd,
+        }
+        for fill in exchange.get_fills()[-12:]
+    ]
     return {
         "ts": now.isoformat(),
         "mode": mode,
@@ -157,6 +171,7 @@ def build_snapshot(
         },
         "positions": positions,
         "open_orders": open_orders,
+        "recent_fills": recent_fills,
         "fills": len(exchange.get_fills()),
         "fees_usd": sum(f.fee_usd for f in exchange.get_fills()),
         "last_risk_reject": _last_risk_reject(order_manager),

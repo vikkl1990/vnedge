@@ -253,7 +253,118 @@
   .latency-table th,.latency-table td{font-size:11px;padding:7px 10px}
   .latency-table td:nth-child(2),.latency-table td:nth-child(3){text-align:right}
 
-  .loop-board{order:4;background:rgba(6,14,24,.92)}
+  .institutional-board{order:3;background:rgba(5,12,22,.96)}
+  .workspace-grid{
+    display:grid;
+    grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);
+    gap:12px;
+    padding:12px;
+  }
+  .terminal{
+    min-width:0;
+    border:1px solid rgba(77,178,255,.35);
+    border-radius:8px;
+    background:linear-gradient(180deg, rgba(7,16,27,.98), rgba(4,9,16,.98));
+    overflow:hidden;
+  }
+  .terminal.purple{border-color:rgba(169,140,255,.48);background:linear-gradient(180deg, rgba(15,11,27,.98), rgba(7,7,15,.98))}
+  .terminal-head{
+    display:flex;
+    justify-content:space-between;
+    gap:10px;
+    align-items:center;
+    padding:10px 12px;
+    border-bottom:1px solid var(--line);
+    color:#dbe8f7;
+    font-size:10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+  }
+  .terminal.purple .terminal-head{border-bottom-color:rgba(169,140,255,.38)}
+  .terminal-body{padding:10px;display:grid;gap:10px}
+  .mini-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+  .mini-card{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:rgba(8,15,25,.9);
+    padding:9px;
+  }
+  .mini-card .small-label{color:var(--quiet);font-size:9px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mini-card .big{margin-top:7px;font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mini-card .tiny{margin-top:5px;color:var(--muted);font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mini-card.good,.gov-card.good{background:linear-gradient(180deg, rgba(12,36,26,.92), rgba(7,17,19,.92))}
+  .mini-card.warn,.gov-card.warn{background:linear-gradient(180deg, rgba(42,30,13,.92), rgba(17,15,12,.92))}
+  .mini-card.bad,.gov-card.bad{background:linear-gradient(180deg, rgba(43,16,22,.92), rgba(18,11,14,.92))}
+  .mini-card.info,.gov-card.info{background:linear-gradient(180deg, rgba(12,28,47,.92), rgba(7,15,24,.92))}
+  .mini-card.plan,.gov-card.plan{background:linear-gradient(180deg, rgba(25,18,43,.92), rgba(13,11,22,.92))}
+  .terminal-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+  .dense-panel{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:7px;
+    overflow:hidden;
+    background:rgba(6,12,21,.86);
+  }
+  .dense-title{
+    display:flex;
+    justify-content:space-between;
+    gap:8px;
+    padding:8px 10px;
+    border-bottom:1px solid var(--line);
+    color:#dbe8f7;
+    font-size:10px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+  .dense-panel table{min-width:0}
+  .dense-panel th,.dense-panel td{font-size:10.5px;padding:6px 9px}
+  .audit-table{min-width:640px}
+  .fill-table{min-width:680px}
+  .gov-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .gov-card{
+    min-width:0;
+    border:1px solid rgba(169,140,255,.28);
+    border-radius:7px;
+    padding:10px;
+    background:rgba(15,11,27,.72);
+  }
+  .gov-card .small-label{color:var(--quiet);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+  .gov-card .big{margin-top:7px;font-size:17px;font-weight:900;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gov-card .tiny{margin-top:5px;color:var(--muted);font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gate-line{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+  .gate-step{
+    position:relative;
+    border:1px solid rgba(51,209,122,.35);
+    border-radius:6px;
+    padding:7px 6px;
+    color:var(--green);
+    background:rgba(10,28,20,.58);
+    font-size:9.5px;
+    text-align:center;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .gate-step.warn{color:var(--amber);border-color:rgba(255,184,77,.42);background:rgba(39,28,12,.58)}
+  .gate-step.bad{color:var(--red);border-color:rgba(255,90,104,.44);background:rgba(38,13,18,.58)}
+  .gate-step.idle{color:var(--quiet);border-color:rgba(79,97,121,.46);background:rgba(11,17,27,.62)}
+  .drift-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .trail{
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr) auto;
+    gap:8px;
+    align-items:center;
+    padding:7px 9px;
+    border-top:1px solid var(--line);
+    font-size:10.5px;
+  }
+  .trail:first-child{border-top:none}
+  .trail .time{color:var(--quiet);white-space:nowrap}
+  .trail .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trail .who{color:var(--muted);white-space:nowrap}
+
+  .loop-board{order:5;background:rgba(6,14,24,.92)}
   .loop-board summary{list-style:none;cursor:pointer}
   .loop-board summary::-webkit-details-marker{display:none}
   .loop-board .panel-title{border-bottom-color:rgba(77,178,255,.32)}
@@ -325,7 +436,7 @@
   }
 
   .workbench{
-    order:3;
+    order:4;
     display:grid;
     grid-template-columns:minmax(0,1.58fr) minmax(330px,.9fr);
     gap:12px;
@@ -414,7 +525,7 @@
   .alert:first-child{border-top:none}
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
-  .agent-board{order:5}
+  .agent-board{order:6}
   .mini-badge{
     display:inline-flex;
     align-items:center;
@@ -431,7 +542,7 @@
   }
 
   footer{
-    order:6;
+    order:7;
     display:flex;
     flex-wrap:wrap;
     gap:10px 18px;
@@ -450,6 +561,8 @@
     .operator-head{grid-template-columns:1fr}
     .op-clock{text-align:left}
     .operator-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .workspace-grid{grid-template-columns:1fr}
+    .mini-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-node:after{display:none}
   }
@@ -460,6 +573,7 @@
     .price-symbol{text-align:left}
     .command-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
     .truth-grid{grid-template-columns:1fr}
+    .terminal-split{grid-template-columns:1fr}
     .workbench{grid-template-columns:1fr}
     .side-column{order:-1}
     .loop-row{grid-template-columns:1fr}
@@ -471,6 +585,8 @@
     .brand-sub{display:none}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .mini-grid,.gov-grid,.drift-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .gate-line{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
     .loop-flow{grid-template-columns:1fr}
     .gate .value,.kpi .val{font-size:15px}
@@ -481,6 +597,7 @@
   }
   @media(max-width:430px){
     .kpis{grid-template-columns:1fr}
+    .mini-grid,.gov-grid,.drift-grid{grid-template-columns:1fr}
     .price-main{font-size:19px}
     .op-state{font-size:22px}
     section h2,.panel-title{align-items:flex-start;flex-direction:column}
@@ -575,6 +692,162 @@
                 <tr><td>Decision journal</td><td id="lat_journal_age">--</td><td id="lat_journal_status">--</td><td id="lat_journal_block">--</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="institutional-board" aria-label="institutional workspace">
+      <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
+      <div class="workspace-grid">
+        <div class="terminal" aria-label="system telemetry and microstructure terminal">
+          <div class="terminal-head">
+            <span>View 1: System Telemetry & Microstructure Performance</span>
+            <span class="tag" id="it_status">read-only terminal</span>
+          </div>
+          <div class="terminal-body">
+            <div class="mini-grid">
+              <div class="mini-card" id="card_core_feed"><div class="small-label">Exchange feed</div><div class="big" id="it_core_feed">--</div><div class="tiny" id="it_core_feed_detail">waiting</div></div>
+              <div class="mini-card" id="card_core_strategy"><div class="small-label">Strategy core</div><div class="big" id="it_core_strategy">--</div><div class="tiny" id="it_core_strategy_detail">registry gated</div></div>
+              <div class="mini-card" id="card_core_risk"><div class="small-label">Risk gateway</div><div class="big" id="it_core_risk">--</div><div class="tiny" id="it_core_risk_detail">all intents evaluated</div></div>
+              <div class="mini-card" id="card_core_research"><div class="small-label">Research lanes</div><div class="big" id="it_core_research">--</div><div class="tiny" id="it_core_research_detail">hourly sweep</div></div>
+              <div class="mini-card" id="card_core_snapshot"><div class="small-label">Snapshot bus</div><div class="big" id="it_core_snapshot">--</div><div class="tiny" id="it_core_snapshot_detail">coalesced latest state</div></div>
+              <div class="mini-card" id="card_core_context"><div class="small-label">Process model</div><div class="big" id="it_core_context">--</div><div class="tiny" id="it_core_context_detail">single writer</div></div>
+            </div>
+
+            <div class="terminal-split">
+              <div class="dense-panel">
+                <div class="dense-title"><span>Latency Distribution Profile</span><span class="tag">observed surface age</span></div>
+                <div class="table-wrap">
+                  <table class="audit-table">
+                    <thead><tr><th>Metric</th><th>Current</th><th>Target</th><th>Status</th></tr></thead>
+                    <tbody>
+                      <tr><td>Public WS feed</td><td id="it_lat_feed_now">--</td><td id="it_lat_feed_target">&lt;30s</td><td id="it_lat_feed_status">--</td></tr>
+                      <tr><td>Dashboard snapshot</td><td id="it_lat_snapshot_now">--</td><td>&lt;5s</td><td id="it_lat_snapshot_status">--</td></tr>
+                      <tr><td>Order state machine</td><td id="it_lat_order_now">--</td><td>resolved</td><td id="it_lat_order_status">--</td></tr>
+                      <tr><td>Decision journal WAL</td><td id="it_lat_journal_now">--</td><td>append ok</td><td id="it_lat_journal_status">--</td></tr>
+                      <tr><td>Research publication</td><td id="it_lat_research_now">--</td><td>hourly</td><td id="it_lat_research_status">--</td></tr>
+                      <tr><td>Private order stream</td><td id="it_lat_private_now">--</td><td>live adapter</td><td id="it_lat_private_status">--</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="dense-panel">
+                <div class="dense-title"><span>Microstructure Signal Depth</span><span class="tag" id="obi_summary">L1 ready</span></div>
+                <div class="table-wrap">
+                  <table class="audit-table">
+                    <thead><tr><th>Layer</th><th>Bid</th><th>Ask</th><th>Signal</th></tr></thead>
+                    <tbody>
+                      <tr><td>L1 Top</td><td id="obi_l1_bid">--</td><td id="obi_l1_ask">--</td><td id="obi_l1_signal">--</td></tr>
+                      <tr><td>Spread</td><td id="obi_spread_bps">--</td><td id="obi_mid">--</td><td id="obi_spread_signal">--</td></tr>
+                      <tr><td>Funding</td><td id="obi_funding">--</td><td id="obi_oi">--</td><td id="obi_funding_signal">--</td></tr>
+                      <tr><td>L2 Builder</td><td id="obi_l2_state">--</td><td id="obi_recorder">--</td><td id="obi_l2_signal">--</td></tr>
+                      <tr><td>OBI Aggregate</td><td id="obi_bid_qty">--</td><td id="obi_ask_qty">--</td><td id="obi_value">--</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="mini-grid">
+              <div class="mini-card" id="card_rt_journal"><div class="small-label">Journal</div><div class="big" id="rt_journal">--</div><div class="tiny" id="rt_journal_detail">WAL health</div></div>
+              <div class="mini-card" id="card_rt_gc"><div class="small-label">GC / runtime</div><div class="big" id="rt_gc">--</div><div class="tiny" id="rt_gc_detail">instrumentation</div></div>
+              <div class="mini-card" id="card_rt_shared"><div class="small-label">State cache</div><div class="big" id="rt_shared">--</div><div class="tiny" id="rt_shared_detail">single-process cache</div></div>
+              <div class="mini-card" id="card_rt_heartbeat"><div class="small-label">Heartbeat</div><div class="big" id="rt_heartbeat">--</div><div class="tiny" id="rt_heartbeat_detail">snapshot pulse</div></div>
+              <div class="mini-card" id="card_rt_event_rate"><div class="small-label">Event rate</div><div class="big" id="rt_event_rate">--</div><div class="tiny" id="rt_event_rate_detail">bars / minute</div></div>
+              <div class="mini-card" id="card_rt_clock"><div class="small-label">Clock skew</div><div class="big" id="rt_clock">--</div><div class="tiny" id="rt_clock_detail">server vs browser</div></div>
+            </div>
+
+            <div class="terminal-split">
+              <div class="dense-panel">
+                <div class="dense-title"><span>Alerts & Anomalies</span><span class="tag" id="it_anomaly_count">quiet</span></div>
+                <div id="it_anomalies"></div>
+              </div>
+              <div class="dense-panel">
+                <div class="dense-title"><span>Fast Loop Operating Envelope</span><span class="tag">read-only</span></div>
+                <div class="kv">
+                  <span class="k">Entries</span><span class="v" id="it_env_entries">--</span>
+                  <span class="k">Reduce-only exits</span><span class="v" id="it_env_exits">--</span>
+                  <span class="k">Open exposure</span><span class="v" id="it_env_exposure">--</span>
+                  <span class="k">Data age max</span><span class="v" id="it_env_data_age">--</span>
+                  <span class="k">Unresolved orders</span><span class="v" id="it_env_unresolved">--</span>
+                  <span class="k">Fee drag</span><span class="v" id="it_env_fee_drag">--</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="terminal purple" aria-label="compliance audit and model governance terminal">
+          <div class="terminal-head">
+            <span>View 2: Compliance, Audit & Model Governance</span>
+            <span class="tag" id="cg_status">asynchronous audit</span>
+          </div>
+          <div class="terminal-body">
+            <div class="gov-grid">
+              <div class="gov-card" id="card_gov_model"><div class="small-label">Active model</div><div class="big" id="gov_model">--</div><div class="tiny" id="gov_model_detail">registry / strategy</div></div>
+              <div class="gov-card" id="card_gov_hurdle"><div class="small-label">Hurdle status</div><div class="big" id="gov_hurdle">--</div><div class="tiny" id="gov_hurdle_detail">promotion gate</div></div>
+              <div class="gov-card" id="card_gov_net"><div class="small-label">Latest OOS net</div><div class="big" id="gov_oos_net">--</div><div class="tiny" id="gov_oos_net_detail">walk-forward only</div></div>
+              <div class="gov-card" id="card_gov_dd"><div class="small-label">Max drawdown</div><div class="big" id="gov_max_dd">--</div><div class="tiny" id="gov_max_dd_detail">candidate / trial</div></div>
+            </div>
+
+            <div class="gate-line" aria-label="promotion gates">
+              <span class="gate-step idle" id="gate_no_lookahead">No lookahead</span>
+              <span class="gate-step idle" id="gate_min_trades">Min trades</span>
+              <span class="gate-step idle" id="gate_oos_net">OOS net</span>
+              <span class="gate-step idle" id="gate_pf">PF / payoff</span>
+              <span class="gate-step idle" id="gate_dd">DD cap</span>
+              <span class="gate-step idle" id="gate_stability">Stability</span>
+            </div>
+
+            <div class="terminal-split">
+              <div class="dense-panel">
+                <div class="dense-title"><span>Parquet / JSONL Landing Audit</span><span class="tag" id="landing_count">ledger view</span></div>
+                <div class="table-wrap">
+                  <table class="audit-table">
+                    <thead><tr><th>Dataset</th><th>Rows</th><th>State</th><th>Modified</th></tr></thead>
+                    <tbody id="audit_landing_rows"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="dense-panel">
+                <div class="dense-title"><span>Fill / Fee Transaction Matrix</span><span class="tag" id="fill_matrix_count">latest fills</span></div>
+                <div class="table-wrap">
+                  <table class="fill-table">
+                    <thead><tr><th>Seq</th><th>Symbol</th><th>Side</th><th>Notional</th><th>Fee</th><th>Realized</th></tr></thead>
+                    <tbody id="fill_matrix_rows"></tbody>
+                  </table>
+                </div>
+                <div class="empty" id="fill_matrix_empty">no fills in latest snapshot</div>
+              </div>
+            </div>
+
+            <div class="drift-grid">
+              <div class="gov-card" id="card_drift_match"><div class="small-label">Live vs backtest</div><div class="big" id="drift_match">--</div><div class="tiny" id="drift_match_detail">variance alerts</div></div>
+              <div class="gov-card" id="card_drift_slip"><div class="small-label">Adverse slippage</div><div class="big" id="drift_slip">--</div><div class="tiny" id="drift_slip_detail">fill spread proxy</div></div>
+              <div class="gov-card" id="card_drift_funding"><div class="small-label">Funding anomaly</div><div class="big" id="drift_funding">--</div><div class="tiny" id="drift_funding_detail">current funding</div></div>
+              <div class="gov-card" id="card_drift_edge"><div class="small-label">Edge decay</div><div class="big" id="drift_edge">--</div><div class="tiny" id="drift_edge_detail">latest research candidate</div></div>
+            </div>
+
+            <div class="terminal-split">
+              <div class="dense-panel">
+                <div class="dense-title"><span>Audit Trail</span><span class="tag">latest events</span></div>
+                <div id="audit_trail"></div>
+              </div>
+              <div class="dense-panel">
+                <div class="dense-title"><span>Governance & Compliance Health</span><span class="tag">India live path</span></div>
+                <div class="kv">
+                  <span class="k">Model registry</span><span class="v" id="ch_registry">--</span>
+                  <span class="k">Data freshness</span><span class="v" id="ch_data">--</span>
+                  <span class="k">Fill ledger</span><span class="v" id="ch_ledger">--</span>
+                  <span class="k">Audit trail</span><span class="v" id="ch_audit">--</span>
+                  <span class="k">Tax treatment</span><span class="v" id="ch_tax">CA gated</span>
+                  <span class="k">Access control</span><span class="v" id="ch_access">read-only</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -816,6 +1089,7 @@
   const hist={};
   let eq=[];
   let lastResearch={results:[],drift_alerts:[]};
+  let lastSnapshot=null;
 
   function finite(v){return Number.isFinite(Number(v));}
   function num(v,def=0){return finite(v)?Number(v):def;}
@@ -950,11 +1224,26 @@
   function statusTone(value){
     return value==="ok"?"good":value?"bad":"idle";
   }
+  function cellTone(tone){
+    return tone==="good"?"pos":tone==="bad"?"neg":tone==="warn"?"neutral":"dimval";
+  }
+  function setBoxTone(id,base,tone){
+    const e=$(id);
+    if(e)e.className=base+(tone?" "+tone:"");
+  }
+  function timeAgoFromIso(ts){
+    const t=Date.parse(ts||"");
+    return Number.isFinite(t)?ageText(Math.max(0,Date.now()-t)):"--";
+  }
+  function shortName(value){
+    return String(value||"--").replace(/_v1$/,"").replace(/_/g," ");
+  }
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
   function renderSnapshot(raw){
     const s=raw||{};
+    lastSnapshot=s;
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
@@ -1087,6 +1376,7 @@
     setNode("nodeJournal",journalTone,s.last_journal_write||"--");
     setNode("nodeExplain",s.last_risk_reject?"warn":"good",s.last_risk_reject?"latest rejection shown":"no rejection");
     setNode("nodeSnapshot","good",s.ts?String(s.ts).slice(11,19)+" UTC":"streaming");
+    renderInstitutional();
   }
 
   function renderOperator(ctx){
@@ -1255,6 +1545,282 @@
     }
   }
 
+  function renderInstitutional(){
+    const s=lastSnapshot||{};
+    const feed=s.feed_health||{};
+    const price=s.price||null;
+    const positions=Array.isArray(s.positions)?s.positions:[];
+    const orders=Array.isArray(s.open_orders)?s.open_orders:[];
+    const fills=Array.isArray(s.recent_fills)?s.recent_fills:[];
+    const alerts=Array.isArray(s.recent_alerts)?s.recent_alerts:[];
+    const session=s.session||{};
+    const research=lastResearch||{};
+    const rows=Array.isArray(research.results)?research.results:[];
+    const drift=Array.isArray(research.drift_alerts)?research.drift_alerts:[];
+    const best=bestResearch(rows);
+    const lat=feed.last_update_ms;
+    const feedTone=latencyTone(lat);
+    const journalTone=s.last_journal_write==="ok"?"good":"bad";
+    const riskTone=s.risk_status==="ok"?"good":s.risk_status==="reconciling"?"warn":"bad";
+    const snapshotAge=s.ts?Math.max(0,Date.now()-Date.parse(s.ts)):null;
+    const exposure=positions.reduce((sum,p)=>sum+Math.abs(num(p.notional_usd)||num(p.quantity)*num(p.mark_price)),0);
+    const unresolved=orders.filter(o=>["timeout_unknown","reconciling"].includes(String(o.state))).length;
+    const feePct=num(s.equity)>0?num(s.fees_usd)/num(s.equity)*100:0;
+    const entriesAllowed=riskTone==="good"&&feedTone==="good"&&journalTone==="good"&&!s.kill_switch_active&&unresolved===0;
+
+    text("it_status",feed.exchange?feed.exchange+" telemetry":"read-only terminal");
+    renderInstCard("card_core_feed","it_core_feed",toneText(feedTone),ageText(lat),feedTone);
+    renderInstCard("card_core_strategy","it_core_strategy",s.strategy_id?shortName(s.strategy_id):"--",
+      num(session.signals)+" signals",s.strategy_id?"info":"idle");
+    renderInstCard("card_core_risk","it_core_risk",s.risk_status||"--",
+      entriesAllowed?"entries allowed":"entries blocked",riskTone);
+    renderInstCard("card_core_research","it_core_research",rows.length?String(rows.length):"--",
+      research.generated_at?"updated "+String(research.generated_at).slice(11,19)+" UTC":"waiting",rows.length?"plan":"idle");
+    renderInstCard("card_core_snapshot","it_core_snapshot",snapshotAge==null?"--":ageText(snapshotAge),
+      "coalesced latest state",snapshotAge!=null&&snapshotAge<5000?"good":"warn");
+    renderInstCard("card_core_context","it_core_context","single",
+      "asyncio single-writer kernel",s.live_trading_enabled?"warn":"good");
+
+    renderInstLatency("feed",ageText(lat),toneText(feedTone),feedTone);
+    renderInstLatency("snapshot",snapshotAge==null?"--":ageText(snapshotAge),
+      snapshotAge!=null&&snapshotAge<5000?"GOOD":"WATCH",snapshotAge!=null&&snapshotAge<5000?"good":"warn");
+    renderInstLatency("order",unresolved?unresolved+" unresolved":orders.length?orders.length+" working":"resolved",
+      unresolved?"BLOCKED":orders.length?"WATCH":"GOOD",unresolved?"bad":orders.length?"warn":"good");
+    renderInstLatency("journal",s.last_journal_write||"--",journalTone==="good"?"GOOD":"BLOCKED",journalTone);
+    renderInstLatency("research",research.generated_at?timeAgoFromIso(research.generated_at):"--",
+      rows.length?"PUBLISHED":"WAITING",rows.length?"plan":"idle");
+    renderInstLatency("private",s.live_trading_enabled?"verify stream":"live phase",
+      s.live_trading_enabled?"WATCH":"WAITING",s.live_trading_enabled?"warn":"idle");
+
+    if(price){
+      text("obi_l1_bid",num(price.bid).toFixed(2));
+      text("obi_l1_ask",num(price.ask).toFixed(2));
+      text("obi_l1_signal","top-of-book live");
+      setPlainTone("obi_l1_signal","top-of-book live","pos");
+      text("obi_spread_bps",num(price.spread_bps).toFixed(2)+" bps");
+      text("obi_mid",num(price.mid).toFixed(2));
+      setPlainTone("obi_spread_signal",num(price.spread_bps)<8?"tradable":"wide",num(price.spread_bps)<8?"pos":"neutral");
+    }else{
+      text("obi_l1_bid","--");text("obi_l1_ask","--");setPlainTone("obi_l1_signal","waiting","dimval");
+      text("obi_spread_bps","--");text("obi_mid","--");setPlainTone("obi_spread_signal","waiting","dimval");
+    }
+    const fundingRate=num(s.funding_rate);
+    text("obi_funding",(fundingRate*100).toFixed(4)+"%");
+    text("obi_oi",feed.open_interest||"--");
+    setPlainTone("obi_funding_signal",feed.funding==="ok"&&feed.open_interest==="ok"?"funding/OI ok":"incomplete",
+      feed.funding==="ok"&&feed.open_interest==="ok"?"pos":"neg");
+    text("obi_l2_state","not wired");
+    text("obi_recorder","tick recorder next");
+    setPlainTone("obi_l2_signal","needed for true scalper","neutral");
+    text("obi_bid_qty","pending L2");
+    text("obi_ask_qty","pending L2");
+    setPlainTone("obi_value","not computed","dimval");
+    text("obi_summary",price?"L1 ready; L2 pending":"waiting for book");
+
+    renderInstCard("card_rt_journal","rt_journal",journalTone==="good"?"OK":"BLOCKED",
+      journalTone==="good"?"append-only writes healthy":"exits-only mode",journalTone);
+    renderInstCard("card_rt_gc","rt_gc","N/A","Python GC probe not instrumented","idle");
+    renderInstCard("card_rt_shared","rt_shared","SYNCED","in-process state cache","good");
+    renderInstCard("card_rt_heartbeat","rt_heartbeat",snapshotAge==null?"--":ageText(snapshotAge),
+      "latest dashboard pulse",snapshotAge!=null&&snapshotAge<5000?"good":"warn");
+    const barsPerMinute=barsPerMinuteFrom(session);
+    renderInstCard("card_rt_event_rate","rt_event_rate",finite(barsPerMinute)?barsPerMinute.toFixed(2):"--",
+      "bars / minute",finite(barsPerMinute)?"info":"idle");
+    renderInstCard("card_rt_clock","rt_clock","not measured","add exchange/server skew probe","idle");
+
+    renderInstAnomalies(alerts,drift,unresolved);
+    setTextTone("it_env_entries",entriesAllowed?"allowed":"blocked",entriesAllowed?"pos":"neg");
+    setTextTone("it_env_exits","allowed","pos");
+    setTextTone("it_env_exposure",moneyAbs(exposure),exposure>0?"":"pos");
+    setTextTone("it_env_data_age",ageText(lat),feedTone==="bad"?"neg":feedTone==="warn"?"":"pos");
+    setTextTone("it_env_unresolved",String(unresolved),unresolved?"neg":"pos");
+    setTextTone("it_env_fee_drag",feePct.toFixed(2)+"%",feePct>2?"neg":feePct>0?"":"pos");
+
+    renderGovernance(best,rows,drift,fills,alerts,s,feedTone,journalTone);
+  }
+
+  function bestResearch(rows){
+    const copy=rows.slice();
+    copy.sort((a,b)=>{
+      const passDelta=(b.verdict==="PASS"?1:0)-(a.verdict==="PASS"?1:0);
+      if(passDelta)return passDelta;
+      return num(b.oos_net_usd,Number.NEGATIVE_INFINITY)-num(a.oos_net_usd,Number.NEGATIVE_INFINITY);
+    });
+    return copy[0]||null;
+  }
+
+  function renderInstCard(cardId,valueId,value,detail,tone,base="mini-card"){
+    text(valueId,value);
+    text(valueId+"_detail",detail);
+    setBoxTone(cardId,base,tone);
+  }
+
+  function renderInstLatency(key,current,status,tone){
+    text("it_lat_"+key+"_now",current);
+    setPlainTone("it_lat_"+key+"_status",status,cellTone(tone));
+  }
+
+  function barsPerMinuteFrom(session){
+    if(!session.started_at||!finite(session.bars_processed))return null;
+    const elapsedMinutes=Math.max(1/60,(Date.now()-Date.parse(session.started_at))/60000);
+    return num(session.bars_processed)/elapsedMinutes;
+  }
+
+  function renderInstAnomalies(alerts,drift,unresolved){
+    const box=$("it_anomalies");
+    box.replaceChildren();
+    const items=[];
+    for(const a of alerts.slice(-4))items.push({label:a.severity||"info",tone:a.severity==="critical"?"bad":a.severity==="warning"?"warn":"info",msg:a.message||"--",ts:a.ts});
+    for(const d of drift.slice(-3))items.push({label:"drift",tone:d.severity==="critical"?"bad":d.severity==="warning"?"warn":"info",msg:d.message||"--",ts:d.ts});
+    if(unresolved)items.push({label:"order",tone:"bad",msg:unresolved+" unresolved order state(s)",ts:null});
+    for(const item of items.slice(-6)){
+      const row=document.createElement("div");
+      row.className="alert";
+      appendBadge(row,item.label,item.tone);
+      const ts=document.createElement("span");
+      ts.className="ats";
+      ts.textContent=(item.ts||"").slice(11,19)||"--";
+      row.appendChild(ts);
+      const msg=document.createElement("span");
+      msg.className="msg";
+      msg.textContent=item.msg;
+      row.appendChild(msg);
+      box.appendChild(row);
+    }
+    if(!items.length){
+      const empty=document.createElement("div");
+      empty.className="empty";
+      empty.textContent="no alerts or drift anomalies in the latest snapshot";
+      box.appendChild(empty);
+    }
+    text("it_anomaly_count",items.length?items.length+" signal"+(items.length===1?"":"s"):"quiet");
+  }
+
+  function renderGovernance(best,rows,drift,fills,alerts,s,feedTone,journalTone){
+    const hasRows=rows.length>0;
+    const passed=best&&best.verdict==="PASS";
+    const active=s.strategy_id||best&&best.strategy||"--";
+    text("cg_status",passed?"candidate has passing evidence":"asynchronous audit");
+    renderInstCard("card_gov_model","gov_model",shortName(active),
+      s.strategy_id?"running strategy":"latest research lane",s.strategy_id?"info":hasRows?"plan":"idle","gov-card");
+    renderInstCard("card_gov_hurdle","gov_hurdle",passed?"PASSED":best?String(best.verdict||"PENDING"):"PENDING",
+      best?(shortName(best.symbol)+" / "+shortName(best.strategy)):"awaiting research",passed?"good":best?"warn":"idle","gov-card");
+    renderInstCard("card_gov_net","gov_oos_net",best?usd(best.oos_net_usd):"--",
+      best?num(best.oos_trades)+" OOS trades":"walk-forward not published",best&&num(best.oos_net_usd)>0?"good":best?"warn":"idle","gov-card");
+    const dd=best&&finite(best.max_drawdown_pct)?pct(best.max_drawdown_pct):s.trial&&finite(s.trial.max_drawdown_pct)?pct(s.trial.max_drawdown_pct):"--";
+    renderInstCard("card_gov_dd","gov_max_dd",dd,
+      s.trial?"paper trial envelope":"candidate metric",dd==="--"?"idle":"info","gov-card");
+
+    setGateStep("gate_no_lookahead",hasRows,"No lookahead");
+    setGateStep("gate_min_trades",best&&num(best.oos_trades)>=10,"Min trades");
+    setGateStep("gate_oos_net",best&&num(best.oos_net_usd)>0,"OOS net");
+    setGateStep("gate_pf",passed||best&&num(best.profit_factor)>=1.1||best&&num(best.payoff_ratio)>=1.8,"PF / payoff");
+    setGateStep("gate_dd",passed||best&&(!finite(best.max_drawdown_pct)||num(best.max_drawdown_pct)<=15),"DD cap");
+    setGateStep("gate_stability",passed||best&&num(best.profitable_windows_pct)>=50,"Stability");
+
+    renderLandingAudit(rows,s,feedTone,journalTone);
+    renderFillMatrix(fills);
+    renderDriftCards(best,drift,s);
+    renderAuditTrail(best,drift,fills,alerts,s);
+    setTextTone("ch_registry",hasRows?"published":"waiting",hasRows?"pos":"");
+    setTextTone("ch_data",toneText(feedTone),feedTone==="bad"?"neg":feedTone==="warn"?"":"pos");
+    setTextTone("ch_ledger",fills.length?fills.length+" recent fills":"no fills",fills.length?"pos":"");
+    setTextTone("ch_audit",(alerts.length+drift.length)+" events",(alerts.length+drift.length)?"":"pos");
+    setTextTone("ch_tax","CA gated","neutral");
+    setTextTone("ch_access","read-only","pos");
+  }
+
+  function setGateStep(id,ok,label){
+    const e=$(id);
+    if(!e)return;
+    e.textContent=label;
+    e.className="gate-step "+(ok?"good":"idle");
+  }
+
+  function renderLandingAudit(rows,s,feedTone,journalTone){
+    const body=$("audit_landing_rows");
+    body.replaceChildren();
+    appendLanding(body,"decision_journal.jsonl",String(num(s.fills)+num((s.open_orders||[]).length)),
+      journalTone==="good"?"append-ok":"unavailable",s.ts,journalTone);
+    appendLanding(body,"equity_history.jsonl",String(eq.length),eq.length?"loaded":"waiting",eq.length?"browser cache":"",eq.length?"good":"idle");
+    appendLanding(body,"research_latest.json",String(rows.length),rows.length?"published":"waiting",
+      lastResearch.generated_at||"",rows.length?"plan":"idle");
+    appendLanding(body,"tick_l2_recorder.parquet","--","not started","scalper validation phase","warn");
+    text("landing_count",rows.length+" research rows");
+  }
+
+  function appendLanding(body,name,rows,state,modified,tone){
+    const tr=body.insertRow();
+    appendCell(tr,name,"clip",name);
+    appendCell(tr,rows);
+    appendCell(tr,state,cellTone(tone));
+    appendCell(tr,modified?String(modified).slice(0,19):"--","clip",modified||"");
+  }
+
+  function renderFillMatrix(fills){
+    const body=$("fill_matrix_rows");
+    body.replaceChildren();
+    for(const f of fills.slice().reverse()){
+      const tr=body.insertRow();
+      appendCell(tr,f.seq);
+      appendCell(tr,String(f.symbol||"--").split(":")[0],"clip",f.symbol||"");
+      appendCell(tr,f.side,f.side==="buy"?"pos":"neg");
+      appendCell(tr,moneyAbs(f.notional_usd));
+      appendCell(tr,moneyAbs(f.fee_usd));
+      appendCell(tr,usd(f.realized_pnl_usd),classFor(f.realized_pnl_usd));
+    }
+    $("fill_matrix_empty").style.display=fills.length?"none":"block";
+    text("fill_matrix_count",fills.length?fills.length+" latest":"latest fills");
+  }
+
+  function renderDriftCards(best,drift,s){
+    renderInstCard("card_drift_match","drift_match",drift.length?drift.length+" alerts":"clean",
+      drift.length?"telemetry drift present":"no drift alerts",drift.length?"warn":"good","gov-card");
+    const spread=s.price&&finite(s.price.spread_bps)?num(s.price.spread_bps):null;
+    renderInstCard("card_drift_slip","drift_slip",spread==null?"--":spread.toFixed(2)+" bps",
+      "top-of-book spread proxy",spread==null?"idle":spread>8?"warn":"good","gov-card");
+    const fundingRate=num(s.funding_rate);
+    renderInstCard("card_drift_funding","drift_funding",(fundingRate*100).toFixed(4)+"%",
+      "current funding / 8h",Math.abs(fundingRate)>0.001?"warn":"info","gov-card");
+    renderInstCard("card_drift_edge","drift_edge",best?usd(best.oos_net_usd):"--",
+      best?shortName(best.strategy):"no candidate",best&&num(best.oos_net_usd)>0?"good":best?"warn":"idle","gov-card");
+  }
+
+  function renderAuditTrail(best,drift,fills,alerts,s){
+    const box=$("audit_trail");
+    box.replaceChildren();
+    const events=[];
+    if(s.ts)events.push({ts:s.ts,what:"dashboard snapshot published",who:"system"});
+    if(best)events.push({ts:lastResearch.generated_at,what:"research lane "+String(best.verdict||"PENDING")+" for "+shortName(best.strategy),who:"research"});
+    for(const a of alerts.slice(-2))events.push({ts:a.ts,what:a.message||"alert fired",who:a.severity||"alert"});
+    for(const d of drift.slice(-2))events.push({ts:d.ts,what:d.message||"drift alert",who:"drift"});
+    for(const f of fills.slice(-2))events.push({ts:s.ts,what:"fill "+f.side+" "+String(f.symbol||"--").split(":")[0]+" "+moneyAbs(f.notional_usd),who:"ledger"});
+    const view=events.slice(-7).reverse();
+    for(const event of view){
+      const row=document.createElement("div");
+      row.className="trail";
+      const ts=document.createElement("span");
+      ts.className="time";
+      ts.textContent=(event.ts||"").slice(11,19)||"--";
+      const what=document.createElement("span");
+      what.className="what";
+      what.textContent=event.what;
+      const who=document.createElement("span");
+      who.className="who";
+      who.textContent=event.who;
+      row.appendChild(ts);
+      row.appendChild(what);
+      row.appendChild(who);
+      box.appendChild(row);
+    }
+    if(!view.length){
+      const empty=document.createElement("div");
+      empty.className="empty";
+      empty.textContent="waiting for audit events";
+      box.appendChild(empty);
+    }
+  }
+
   function drawEquity(){
     const c=$("eqchart");
     if(!c)return;
@@ -1377,6 +1943,7 @@
       dv.appendChild(e);
     }
     dv.style.display=drift.length?"block":"none";
+    renderInstitutional();
   }
 
   function fmtNet(side){

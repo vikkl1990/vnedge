@@ -107,7 +107,7 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     for field in ("ts", "mode", "live_trading_enabled", "kill_switch_active",
                   "equity", "realized_pnl", "unrealized_pnl", "daily_pnl",
                   "consecutive_losses", "risk_status", "feed_health",
-                  "positions", "open_orders", "last_risk_reject",
+                  "positions", "open_orders", "recent_fills", "last_risk_reject",
                   "last_journal_write"):
         assert field in snap
     assert snap["risk_status"] == "ok"
@@ -117,6 +117,9 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     assert snap["open_orders"][0]["client_order_id"] == "o2"
     assert snap["open_orders"][0]["exchange_order_id"].startswith("pex_")
     assert "state_age_ms" in snap["open_orders"][0]
+    assert snap["recent_fills"][0]["client_order_id"] == "o1"
+    assert snap["recent_fills"][0]["notional_usd"] == pytest.approx(100.02)
+    assert snap["recent_fills"][0]["side"] == "buy"
 
     kill.activate("test")
     snap2 = build_snapshot(
