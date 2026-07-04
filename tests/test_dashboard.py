@@ -42,6 +42,16 @@ def test_state_with_token(client):
     assert client.get("/state?token=t3st-token").status_code == 200
 
 
+def test_dashboard_shell_contains_quant_cockpit_panels(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "operator actionability matrix" in html
+    assert "Multi-exchange Lane Matrix" in html
+    assert "Fee Wall" in html
+    assert "LIVE ARMED" in html
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")
