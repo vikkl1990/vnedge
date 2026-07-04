@@ -6,9 +6,11 @@ from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env
 from vnedge.runtime.runner_config import RunnerMode
 
 
-def snap(equity, fills=0, realized=0.0, symbol="BTC/USDT:USDT"):
+def snap(equity, fills=0, realized=0.0, symbol="BTC/USDT:USDT",
+         strategy_id="funding_mean_reversion_v1"):
     return {
         "mode": "paper (live data)", "symbol": symbol, "equity": equity,
+        "strategy_id": strategy_id,
         "realized_pnl": realized, "unrealized_pnl": 0.0, "fills": fills,
         "fees_usd": 0.5 * fills, "risk_status": "ok",
         "feed_health": {"candles": "ok"}, "positions": [],
@@ -39,8 +41,12 @@ def test_lanes_comparison_array():
     by_ex = {lane["exchange"]: lane for lane in lanes}
     assert by_ex["binanceusdm"]["equity"] == 505.0 and by_ex["binanceusdm"]["fills"] == 2
     assert by_ex["bybit"]["realized_pnl"] == -2.0
+    # dashboard lane matrix labels mode + strategy per lane
+    assert by_ex["binanceusdm"]["mode"] == "paper (live data)"
+    assert by_ex["binanceusdm"]["strategy_id"] == "funding_mean_reversion_v1"
     for lane in lanes:
-        for f in ("lane_id", "exchange", "symbol", "equity", "realized_pnl",
+        for f in ("lane_id", "exchange", "symbol", "mode", "strategy_id",
+                  "equity", "realized_pnl",
                   "fills", "fees_usd", "risk_status", "feed"):
             assert f in lane
 
