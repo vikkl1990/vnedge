@@ -81,6 +81,8 @@ class TradeTick:
     def __post_init__(self) -> None:
         if self.price <= 0 or self.quantity <= 0:
             raise ValueError("trade price and quantity must be positive")
+        if self.taker_side not in ("buy", "sell"):
+            raise ValueError(f"invalid taker side: {self.taker_side}")
         object.__setattr__(self, "event_time", _as_aware_utc(self.event_time))
 
     @property
