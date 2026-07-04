@@ -131,6 +131,15 @@
         <h2>Last risk rejection <span class="tag">pre-trade gateway</span></h2>
         <div class="empty" id="reject">none — all submissions passed or none attempted</div>
       </section>
+
+      <section>
+        <h2>Research lab — rolling walk-forward <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
+        <table id="research"><thead><tr>
+          <th>Strategy</th><th>Symbol</th><th>OOS net</th><th>Trades</th><th>Windows</th><th>Profitable</th><th>Verdict</th>
+        </tr></thead><tbody></tbody></table>
+        <div class="empty" id="research-empty">research loop has not published yet</div>
+        <div class="empty" id="rl_note" style="display:none;font-size:10.5px"></div>
+      </section>
     </div>
 
     <div>
@@ -369,6 +378,30 @@
   }
   fetch("/history?token="+encodeURIComponent(token)).then(r=>r.ok?r.json():[])
     .then(pts=>{eq=pts.concat(eq).slice(-EQMAX);drawEquity();}).catch(()=>{});
+
+  function loadResearch(){
+    fetch("/research?token="+encodeURIComponent(token)).then(r=>r.ok?r.json():{results:[]})
+      .then(d=>{
+        const rows=d.results||[];
+        const body=$("research").querySelector("tbody");body.innerHTML="";
+        for(const r of rows){
+          const tr=body.insertRow();
+          const v=r.verdict==="PASS"
+            ?"<span class='sev info' style='color:var(--green);border-color:rgba(47,214,123,.4)' title='candidate signal — judgment still requires untouched data'>PASS</span>"
+            :"<span class='sev warning' title='"+(r.reasons||[]).join("; ").replace(/"/g,"")+"'>REJECT</span>";
+          tr.innerHTML="<td>"+r.strategy+"</td><td>"+r.symbol.split(":")[0]+"</td>"+
+            "<td class='"+(r.oos_net_usd>0?"pos":r.oos_net_usd<0?"neg":"neutral")+"'>"+
+            (r.oos_net_usd>=0?"+$":"-$")+Math.abs(r.oos_net_usd).toFixed(2)+"</td>"+
+            "<td>"+r.oos_trades+"</td><td>"+r.traded_windows+"/"+r.windows+"</td>"+
+            "<td>"+r.profitable_windows_pct.toFixed(0)+"%</td><td>"+v+"</td>";
+        }
+        $("research").style.display=rows.length?"table":"none";
+        $("research-empty").style.display=rows.length?"none":"block";
+        if(d.generated_at){$("rl_updated").textContent="updated "+d.generated_at.slice(11,19)+" UTC · hourly";}
+        if(d.note){const n=$("rl_note");n.textContent=d.note;n.style.display="block";}
+      }).catch(()=>{});
+  }
+  loadResearch();setInterval(loadResearch,60000);
 
   let backoff=500;
   function connect(){

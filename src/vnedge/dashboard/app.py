@@ -42,6 +42,7 @@ def create_app(
     token: str,
     snapshot_hz: float = 1.0,
     history_path: Path | None = None,
+    research_path: Path | None = None,
 ) -> FastAPI:
     if not token or not token.strip():
         raise ValueError("DASHBOARD_TOKEN must be non-empty — no token, no dashboard")
@@ -85,6 +86,20 @@ def create_app(
                 except json.JSONDecodeError:
                     continue
         return JSONResponse(points)
+
+    @app.get("/research")
+    async def research(request: Request) -> JSONResponse:
+        """Latest rolling walk-forward verdicts from the research loop."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        if research_path is None or not research_path.exists():
+            return JSONResponse({"results": []})
+        import json
+
+        try:
+            return JSONResponse(json.loads(research_path.read_text()))
+        except json.JSONDecodeError:
+            return JSONResponse({"results": []})  # mid-write race: serve empty
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

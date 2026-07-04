@@ -15,9 +15,26 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./research/paper_trials:/app/research/paper_trials
+      - ./research/live_research:/app/research/live_research:ro
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
+
+  # Continuous research: hourly data refresh + rolling walk-forward +
+  # promotion-gate verdicts. No execution access — it shares only market
+  # data (rw) and the research output dir the dashboard reads (ro there).
+  research-loop:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.continuous_research"]
+    environment:
+      RESEARCH_INTERVAL_SECONDS: "3600"
+    volumes:
+      - ./data:/app/data
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   # Internet-facing TLS front (self-signed) so the read-only dashboard needs
   # no SSH tunnel. Port 8765 must be open in the cloud security list.
