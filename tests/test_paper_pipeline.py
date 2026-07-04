@@ -7,7 +7,6 @@ reconciliation reports.
 
 from datetime import UTC, datetime, timedelta
 
-import pandas as pd
 import pytest
 
 from vnedge.config.risk_config import RiskConfig
