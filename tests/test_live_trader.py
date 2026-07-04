@@ -60,6 +60,14 @@ class FakeLiveAdapter:
         if behavior == "timeout":
             from vnedge.execution.order_manager import AdapterTimeout
             raise AdapterTimeout("no ack")
+        if behavior == "timeout_reached":
+            from vnedge.execution.order_manager import AdapterTimeout
+
+            self._status[order.client_order_id] = {
+                "status": "closed",
+                "filled": order.intent.quantity,
+            }
+            raise AdapterTimeout("ack lost after venue accepted")
         self._status[order.client_order_id] = {"status": "closed", "filled": order.intent.quantity}
         return f"ex_{len(self.submitted)}"
 
@@ -188,3 +196,16 @@ async def test_timeout_order_blocks_new_risk_until_reconciled(tmp_path):
     # the entry timed out -> TIMEOUT_UNKNOWN; but fetch_order_status returns None
     # (never recorded), so reconciler resolves it to REJECTED
     assert not om.has_unresolved_orders  # reconciled at end of run
+
+
+async def test_timeout_reached_entry_plan_survives_reconciliation(tmp_path):
+    adapter = FakeLiveAdapter(script=["timeout_reached"])
+    feed = FakeFeed([bar(0)])
+    session, om = wire(live_settings(), feed, adapter, FakeAccounts(), tmp_path,
+                       OneShotLong(at_bar=6))
+
+    await session.run(max_bars=1)
+
+    assert session.orders_submitted == 1
+    assert not om.has_unresolved_orders
+    assert session._plan is not None
