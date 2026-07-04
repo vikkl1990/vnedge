@@ -6,11 +6,11 @@ so it proves the genuine signal path, not a reimplementation.
 
 Fill model (conservative maker-in / taker-out):
 - Entry is a POST-ONLY limit that joins the favored touch. It fills only when
-  a taker trade prints THROUGH it (a seller hits your bid at <= your price /
-  a buyer lifts your ask at >= your price). This is pessimistic on fill rate
-  and, crucially, captures ADVERSE SELECTION: your passive order fills exactly
-  when the market is pushing against you. Optimistic touch-fills are the #1
-  way scalper backtests lie; we don't do them.
+  a taker trade prints strictly THROUGH it (a seller trades below your bid /
+  a buyer trades above your ask). This is pessimistic on fill rate and,
+  crucially, captures ADVERSE SELECTION: your passive order fills exactly when
+  the market is pushing against you. Optimistic touch-fills are the #1 way
+  scalper backtests lie; we don't do them.
 - Exit is a TAKER market order at the opposite touch + slippage when the
   target or stop is reached. Maker fee on entry, taker fee on exit.
 - Unfilled entries expire after ttl_ms and are counted as MISSED.
@@ -78,6 +78,7 @@ class ReplayResult:
     trades: list[ReplayTrade] = field(default_factory=list)
     quotes_placed: int = 0
     missed_fills: int = 0
+    open_quotes_at_end: int = 0
     notional_usd: float = 100.0
 
     @property
@@ -96,12 +97,14 @@ class ReplayResult:
     def summary(self) -> str:
         if not self.trades:
             return (f"0 fills / {self.quotes_placed} quotes "
-                    f"({self.missed_fills} missed) — no completed trades")
+                    f"({self.missed_fills} missed, "
+                    f"{self.open_quotes_at_end} open at end) — no completed trades")
         wins = sum(1 for t in self.trades if t.net_bps > 0)
         avg_adverse = sum(t.adverse_bps for t in self.trades) / len(self.trades)
         return (
             f"{self.filled} fills / {self.quotes_placed} quotes "
-            f"(fill rate {self.fill_rate:.0%}, {self.missed_fills} missed) | "
+            f"(fill rate {self.fill_rate:.0%}, {self.missed_fills} missed, "
+            f"{self.open_quotes_at_end} open at end) | "
             f"net ${self.net_usd:+.2f} on ${self.notional_usd:.0f} notional | "
             f"win {wins / len(self.trades):.0%} | "
             f"avg adverse selection {avg_adverse:+.2f}bps"
@@ -184,6 +187,9 @@ class TickReplayBacktester:
         position: _Open | None = None
 
         for ts_ms, kind, obj in events:
+            if self._expired(resting, ts_ms):
+                result.missed_fills += 1
+                resting = None
             if kind == "book":
                 top = obj
                 feats = engine.on_book(top)
@@ -195,10 +201,6 @@ class TickReplayBacktester:
                     # exit checks on book move (taker out)
                     if self._check_exit(position, top, ts_ms, result):
                         position = None
-                # expire stale resting quote
-                if resting is not None and ts_ms - resting.placed_ms > resting.ttl_ms:
-                    result.missed_fills += 1
-                    resting = None
                 # place a new quote only when flat and nothing resting
                 if position is None and resting is None:
                     q = scalper.quote(feats, top)
@@ -229,10 +231,21 @@ class TickReplayBacktester:
                         position = self._open(resting, top, ts_ms)
                         resting = None
 
-        # force-close any open position at the last mid
+        if resting is not None:
+            if self._expired(resting, ts_ms):
+                result.missed_fills += 1
+            else:
+                result.open_quotes_at_end += 1
+
+        # force-close any open position at the tradable touch, never mid
         if position is not None and top is not None:
-            self._close(position, top.mid_price, ts_ms, "end", result)
+            exit_price = top.bid if position.side == "buy" else top.ask
+            self._close(position, exit_price, ts_ms, "end", result)
         return result
+
+    @staticmethod
+    def _expired(resting: _Resting | None, ts_ms: int) -> bool:
+        return resting is not None and ts_ms - resting.placed_ms >= resting.ttl_ms
 
     def _open(self, resting: _Resting, top: TopOfBook, ts_ms: int) -> _Open:
         entry = resting.limit_price

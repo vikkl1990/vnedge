@@ -55,7 +55,12 @@ Rules are deliberately strict:
 - Exits are taker exits at the actually tradable opposite touch. Long targets
   require the bid to reach target; short targets require the ask to reach
   target. The engine does not award phantom exits through the spread.
-- Unfilled quotes expire and count as missed fills.
+- Unfilled quotes expire on the first later event at or beyond TTL and count
+  as missed fills; stale quotes cannot fill just because the next event is a
+  trade.
+- Quotes still alive when the replay window ends are counted separately as
+  open-at-end, not mislabeled as expired misses.
+- End-of-window forced exits use the tradable bid/ask touch, never mid.
 - Invalid/crossed book records and invalid trade sides are skipped, not
   coerced into useful-looking signals.
 
