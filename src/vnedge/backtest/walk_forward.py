@@ -60,6 +60,8 @@ class WindowResult:
     chosen_params: dict
     train_metrics: BacktestMetrics
     test_metrics: BacktestMetrics
+    # OOS trade list (small) — enables side/funding attribution downstream
+    test_trades: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,7 @@ def walk_forward(
                 chosen_params=best_params,
                 train_metrics=best_train_metrics,
                 test_metrics=test_metrics,
+                test_trades=test_result.trades,
             )
         )
         start += step_bars

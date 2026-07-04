@@ -70,6 +70,67 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     assert len(feed) == 2
 
 
+def make_record(verdict="PASS", net=20.0, trades=6):
+    return {"strategy": "funding_mean_reversion_v1", "symbol": "BTC/USDT:USDT",
+            "verdict": verdict, "oos_net_usd": net, "oos_trades": trades,
+            "reasons": [] if verdict == "PASS" else ["aggregate OOS net not positive"]}
+
+
+def test_attribution_by_side():
+    from vnedge.backtest.backtester import Trade
+
+    def trade(side, net):
+        return Trade(side=side, quantity=1.0, entry_ts=ts(0), entry_price=100.0,
+                     exit_ts=ts(1), exit_price=100.0 + net, exit_reason="stop",
+                     gross_pnl_usd=net, fees_usd=0.0, funding_usd=0.0,
+                     entry_reason="t")
+
+    windows = tuple(
+        WindowResult(i, ts(0), ts(1), ts(2), {}, metrics(), metrics(),
+                     test_trades=(trade("long", 10.0), trade("short", -4.0)))
+        for i in range(3)
+    )
+    att = cr.side_attribution(WalkForwardResult(windows=windows))
+    assert att["long"] == {"trades": 3, "net_usd": 30.0, "win_rate_pct": 100.0}
+    assert att["short"]["trades"] == 3 and att["short"]["net_usd"] == -12.0
+
+
+def test_drift_verdict_flip_fires_once():
+    prev = [make_record("PASS"), make_record("PASS")]
+    alerts = cr.compute_drift_alerts(prev, make_record("REJECT", net=-5.0))
+    assert any(a["rule_id"] == "drift_verdict_flip" for a in alerts)
+    assert any(a["rule_id"] == "drift_oos_sign_flip" for a in alerts)
+    # next cycle: REJECT again — edge conditions must NOT refire
+    prev2 = prev + [make_record("REJECT", net=-5.0)]
+    again = cr.compute_drift_alerts(prev2, make_record("REJECT", net=-6.0))
+    assert not any(a["rule_id"] == "drift_verdict_flip" for a in again)
+    assert not any(a["rule_id"] == "drift_oos_sign_flip" for a in again)
+
+
+def test_drift_consecutive_rejects_fires_exactly_at_threshold():
+    prev = [make_record("PASS")] + [make_record("REJECT")] * 2
+    alerts = cr.compute_drift_alerts(prev, make_record("REJECT"))
+    assert any(a["rule_id"] == "drift_consecutive_rejects" and
+               a["severity"] == "critical" for a in alerts)
+    prev4 = prev + [make_record("REJECT")]
+    again = cr.compute_drift_alerts(prev4, make_record("REJECT"))
+    assert not any(a["rule_id"] == "drift_consecutive_rejects" for a in again)
+
+
+def test_drift_trade_collapse_edge_triggered():
+    prev = [make_record(trades=20) for _ in range(8)]
+    alerts = cr.compute_drift_alerts(prev, make_record(trades=4))
+    assert any(a["rule_id"] == "drift_trade_collapse" for a in alerts)
+    prev2 = prev + [make_record(trades=4)]
+    again = cr.compute_drift_alerts(prev2, make_record(trades=3))
+    assert not any(a["rule_id"] == "drift_trade_collapse" for a in again)
+
+
+def test_quiet_when_healthy():
+    prev = [make_record() for _ in range(10)]
+    assert cr.compute_drift_alerts(prev, make_record()) == []
+
+
 def test_research_endpoint(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "x"})
