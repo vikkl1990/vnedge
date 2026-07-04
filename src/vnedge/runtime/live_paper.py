@@ -82,6 +82,9 @@ class LivePaperSession:
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self._plan: _LivePlan | None = None
         self._bars_since_reconcile = 0
+        self._report_day = None
+        self._day_open_equity = config.starting_equity_usd
+        self._day_open_fills = 0
 
     # --- Internals ---------------------------------------------------------------
     def _sync_quote(self) -> bool:
@@ -178,6 +181,41 @@ class LivePaperSession:
         self.journal.append("live_paper_exit", {"reason": reason, "state": order.state.value})
         self._plan = None
 
+    def _maybe_daily_report(self, now: datetime) -> None:
+        """At each UTC day rollover, journal a summary of the finished day
+        and push it through the alert notifiers (severity info)."""
+        day = now.date()
+        if self._report_day is None:
+            self._report_day = day
+            self._day_open_equity = self.tracker.equity_usd()
+            self._day_open_fills = len(self.exchange.get_fills())
+            return
+        if day == self._report_day:
+            return
+        equity = self.tracker.equity_usd()
+        fills = len(self.exchange.get_fills())
+        summary = (
+            f"daily report {self._report_day}: equity ${equity:.2f} "
+            f"({equity - self._day_open_equity:+.2f}), "
+            f"fills {fills - self._day_open_fills} (total {fills}), "
+            f"open positions {len(self.exchange.get_positions())}, "
+            f"loss streak {self.tracker.consecutive_losses}, "
+            f"risk rejects {self.risk_rejects}, recon mismatches {self.recon_mismatches}"
+        )
+        self.journal.append("daily_report", {"day": str(self._report_day), "summary": summary})
+        if self.alert_engine is not None:
+            alert = {"ts": now.isoformat(), "rule_id": "daily_report",
+                     "severity": "info", "message": summary, "mode": "paper (live data)"}
+            self.alert_engine.recent.append(alert)
+            for notifier in self.alert_engine.notifiers:
+                try:
+                    notifier.send(alert)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("daily report notifier failed: %s", exc)
+        self._report_day = day
+        self._day_open_equity = equity
+        self._day_open_fills = fills
+
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
@@ -226,6 +264,7 @@ class LivePaperSession:
                 continue
             bars += 1
             self.tracker.on_bar(now)
+            self._maybe_daily_report(now)
 
             bar = self.candles.iloc[-1]
             await self._manage_exit(bar, now)

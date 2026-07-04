@@ -232,6 +232,50 @@ class OrderManager:
         })
         return orders
 
+    async def cancel_order(self, client_order_id: str, reason: str = "") -> ManagedOrder:
+        """Cancel a working order. The venue's answer wins: if the order
+        filled before the cancel arrived, the state becomes FILLED — a cancel
+        is a request, not a fact."""
+        order = self.orders[client_order_id]
+        order.transition(OrderState.CANCEL_REQUESTED, reason)
+        venue_state = await self._adapter.cancel_order(order)
+        target = {
+            "cancelled": OrderState.CANCELLED,
+            "filled": OrderState.FILLED,
+            "partially_filled": OrderState.PARTIALLY_FILLED,
+        }.get(venue_state)
+        if target is None:
+            order.transition(OrderState.TIMEOUT_UNKNOWN,
+                             f"cancel returned unknown venue state '{venue_state}'")
+        else:
+            order.transition(target, f"venue: {venue_state}")
+        self._journal.append("order_cancel", {
+            "client_order_id": client_order_id, "venue_state": venue_state,
+            "reason": reason,
+        })
+        return order
+
+    async def cancel_replace(
+        self,
+        client_order_id: str,
+        new_intent: OrderIntent,
+        account: AccountState,
+        market: MarketState,
+        new_intent_key: str,
+        now: datetime | None = None,
+    ) -> tuple[ManagedOrder, ManagedOrder | None]:
+        """Cancel then submit a replacement — ONLY if the cancel actually
+        cancelled. A fill that beat the cancel means the position already
+        changed; replacing on top would double up."""
+        old = await self.cancel_order(client_order_id, reason="cancel/replace")
+        if old.state is not OrderState.CANCELLED:
+            self._journal.append("cancel_replace_aborted", {
+                "client_order_id": client_order_id, "old_state": old.state.value,
+            })
+            return old, None
+        replacement = await self.submit(new_intent, account, market, new_intent_key, now=now)
+        return old, replacement
+
     # --- Reconciliation hooks (driven by the reconciliation engine, m6) ------
     def begin_reconciliation(self, client_order_id: str) -> None:
         order = self.orders[client_order_id]

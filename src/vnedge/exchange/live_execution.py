@@ -84,7 +84,8 @@ class CcxtExecutionAdapter:
         for attempt in range(1, self.max_submit_attempts + 1):
             try:
                 result = await self._ex.create_order(
-                    intent.symbol, "market", side, intent.quantity, None, params
+                    intent.symbol, intent.order_type, side, intent.quantity,
+                    intent.limit_price, params,
                 )
                 return str(result["id"])
             except DuplicateOrderId:
@@ -115,7 +116,9 @@ class CcxtExecutionAdapter:
                 raise AdapterRejection(f"venue error: {exc}") from exc
         raise AdapterTimeout("unreachable")  # pragma: no cover
 
-    async def cancel_order(self, order: ManagedOrder) -> None:
+    async def cancel_order(self, order: ManagedOrder) -> str:
+        """Returns the venue's resulting state ('cancelled'/'filled'/...);
+        a cancel losing the race to a fill is an answer, not an error."""
         from ccxt.base.errors import OrderNotFound
 
         try:
@@ -123,8 +126,17 @@ class CcxtExecutionAdapter:
                 order.exchange_order_id, order.intent.symbol,
                 {"origClientOrderId": order.client_order_id},
             )
+            return "cancelled"
         except OrderNotFound:
-            pass  # already gone — reconciliation confirms final state
+            status = await self.fetch_order_status(order)
+            if status is None:
+                return "cancelled"  # never existed venue-side; nothing working
+            s = status.get("status", "")
+            if s == "closed":
+                return "filled"
+            if s == "open" and (status.get("filled") or 0) > 0:
+                return "partially_filled"
+            return "cancelled" if s in ("canceled", "cancelled", "expired") else s
 
     # --- Venue truth (reconciliation surface, same shape as the paper venue) --------
     async def fetch_order_status(self, order: ManagedOrder) -> dict | None:

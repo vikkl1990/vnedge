@@ -38,6 +38,8 @@ class OrderIntent:
     leverage: float
     reduce_only: bool = False
     strategy_id: str = "unknown"
+    order_type: str = "market"  # "market" | "limit"
+    limit_price: float | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,17 @@ class PreTradeRiskGateway:
         check("symbol_match", market.symbol == intent.symbol,
               f"market data for {market.symbol}, order for {intent.symbol}")
         check("quantity_valid", intent.quantity > 0, f"qty={intent.quantity}")
+        check(
+            "order_type_valid",
+            intent.order_type in ("market", "limit"),
+            f"unsupported order type '{intent.order_type}'",
+        )
+        if intent.order_type == "limit":
+            check(
+                "limit_price_valid",
+                intent.limit_price is not None and intent.limit_price > 0,
+                f"limit order without valid price ({intent.limit_price})",
+            )
         check(
             "leverage_cap",
             intent.leverage <= cfg.max_leverage_per_position,

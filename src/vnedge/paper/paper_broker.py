@@ -47,6 +47,8 @@ class PaperBroker:
             buy=order.intent.side == "long",
             quantity=order.intent.quantity,
             reduce_only=order.intent.reduce_only,
+            order_type=order.intent.order_type,
+            limit_price=order.intent.limit_price,
         )
         status = self.exchange.submit_order(request)
 
@@ -56,3 +58,8 @@ class PaperBroker:
         if status.state == "rejected":
             raise AdapterRejection(status.reason)
         return status.exchange_order_id
+
+    async def cancel_order(self, order: ManagedOrder) -> str:
+        """Cancel at the venue; returns the venue's resulting state
+        ('cancelled', or 'filled'/'partially_filled' if it beat the cancel)."""
+        return self.exchange.cancel_order(order.client_order_id).state
