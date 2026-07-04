@@ -1,10 +1,12 @@
 services:
-  paper-trial:
+  multi-lane-shadow:
     build: .
     restart: unless-stopped
-    # Multi-exchange shadow lanes: Binance (governed funding-MR trial,
-    # continues its account) + Bybit (same strategy, comparison). Both live
-    # data, $500 base, NO live orders. Serves the read-only dashboard.
+    # Multi-exchange lanes: Binance + Bybit, each in BOTH fill modes —
+    #   paper  = simulated fills on live data (live-$ venue comparison; the
+    #            governed funding-MR trials continue on their account files)
+    #   shadow = gateway-evaluated intents journaled, never a fill
+    # Both live data, $500 imaginary base, NO live orders. Read-only dashboard.
     command: ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
     environment:
       # dashboard binds 0.0.0.0 INSIDE the container; the port mapping below
@@ -13,6 +15,13 @@ services:
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit}"
+      MULTI_LANE_SYMBOLS: "${MULTI_LANE_SYMBOLS:-BTC/USDT:USDT}"
+      MULTI_LANE_MODES: "${MULTI_LANE_MODES:-paper,shadow}"
+      MULTI_LANE_TIMEFRAME: "${MULTI_LANE_TIMEFRAME:-1h}"
+      MULTI_LANE_PRIMARY_EXCHANGE: "${MULTI_LANE_PRIMARY_EXCHANGE:-binanceusdm}"
+      MULTI_LANE_PRIMARY_SYMBOL: "${MULTI_LANE_PRIMARY_SYMBOL:-BTC/USDT:USDT}"
+      MULTI_LANE_PRIMARY_MODE: "${MULTI_LANE_PRIMARY_MODE:-paper}"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -63,7 +72,7 @@ services:
   dashboard-tls:
     image: caddy:2-alpine
     restart: unless-stopped
-    depends_on: [paper-trial]
+    depends_on: [multi-lane-shadow]
     ports:
       - "8765:8765"
     volumes:

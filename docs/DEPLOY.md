@@ -1,8 +1,9 @@
-# Deploying VNEDGE (paper trial) to a Linux VPS
+# Deploying VNEDGE (multi-lane shadow) to a Linux VPS
 
 Target per the project charter: Ubuntu VPS + Docker. Everything below is for
-the PAPER trial — no API keys, no live orders (the manifest loader refuses
-them structurally).
+the live-data shadow workspace — no API keys, no live orders. Each lane runs
+through sizing, the pre-trade risk gateway, journaling, reconciliation, and
+dashboard telemetry, but shadow mode never submits to a broker.
 
 ## 1. VPS prep (once)
 
@@ -31,10 +32,9 @@ rsync -av ~/Desktop/VNEDGE/logs/paper_trials/ vps:~/vnedge/logs/paper_trials/
 rsync -av ~/Desktop/VNEDGE/research/paper_trials/ vps:~/vnedge/research/paper_trials/
 ```
 
-The account store (`logs/paper_trials/<trial>.account.json`) is what makes
-this a CONTINUATION: on start, the runner logs `resumed: true` with the
-carried balance/positions/loss-streak. Never run the same trial on two
-machines at once.
+The account store (`logs/paper_trials/<lane>.account.json`) is what makes
+this a CONTINUATION for paper lanes and a stable audit trail for shadow
+lanes. Never run the same lane id on two machines at once.
 
 ## 3. Configure and start
 
@@ -44,12 +44,16 @@ cat > .env <<EOF
 DASHBOARD_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
 TELEGRAM_BOT_TOKEN=            # optional: @BotFather token
 TELEGRAM_CHAT_ID=              # optional: your chat id
+# optional grid expansion; defaults shown
+MULTI_LANE_EXCHANGES=binanceusdm,bybit
+MULTI_LANE_SYMBOLS=BTC/USDT:USDT
 EOF
 docker compose up -d --build
-docker compose logs -f paper-trial   # watch the resume line
+docker compose logs -f multi-lane-shadow   # watch lane build/resume lines
 ```
 
-`restart: unless-stopped` + the account store = reboots continue the trial.
+`restart: unless-stopped` + per-lane account stores = reboots continue the
+same governed workspace.
 
 ## 4. Dashboard access (never public)
 

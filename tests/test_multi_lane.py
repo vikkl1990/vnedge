@@ -1,6 +1,9 @@
 """Multi-lane shadow — provider fan-in, primary flat snapshot, comparison array."""
 
-from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider
+from vnedge.runtime import multi_lane
+from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
+from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env
+from vnedge.runtime.runner_config import RunnerMode
 
 
 def snap(equity, fills=0, realized=0.0, symbol="BTC/USDT:USDT"):
@@ -70,3 +73,105 @@ def test_lane_spec_defaults():
     assert spec.starting_equity == 500.0
     assert spec.daily_loss_usd == 10.0
     assert spec.is_primary is False
+    assert spec.mode is RunnerMode.SHADOW
+
+
+def test_publish_error_adds_faulted_lane():
+    p = MultiLaneProvider("binance")
+    p.publish_error("bybit", "bybit", "BTC/USDT:USDT", "build failed")
+    out = p.latest()
+    assert out["risk_status"] == "lane_error"
+    assert out["lanes"][0]["feed"] == "error"
+
+
+def test_lane_specs_expand_from_env():
+    # single explicit mode: pure exchange x symbol grid expansion
+    specs = build_lane_specs_from_env({
+        "MULTI_LANE_EXCHANGES": "binanceusdm,bybit",
+        "MULTI_LANE_SYMBOLS": "BTC/USDT:USDT,ETH/USDT:USDT",
+        "MULTI_LANE_MODES": "shadow",
+        "MULTI_LANE_PRIMARY_EXCHANGE": "bybit",
+        "MULTI_LANE_PRIMARY_SYMBOL": "ETH/USDT:USDT",
+    })
+    assert len(specs) == 4
+    primary = [spec for spec in specs if spec.is_primary]
+    assert len(primary) == 1
+    assert primary[0].exchange == "bybit"
+    assert primary[0].symbol == "ETH/USDT:USDT"
+    assert all(spec.mode is RunnerMode.SHADOW for spec in specs)
+
+
+def test_lane_specs_default_runs_both_modes_per_venue():
+    # default env: binanceusdm+bybit x BTC x {paper, shadow} = 4 lanes
+    specs = build_lane_specs_from_env({})
+    assert len(specs) == 4
+    assert {s.mode for s in specs} == {RunnerMode.PAPER, RunnerMode.SHADOW}
+    ids = {s.lane_id for s in specs}
+    # governed paper trials keep their exact ids (continue their account files)
+    assert "funding_mr_btc_v1_20260703" in ids
+    assert "funding_mr_bybit_20260704" in ids
+    # shadow lanes are distinct, isolated ids
+    assert "funding_mr_binanceusdm_btc_usdt_usdt_shadow" in ids
+    assert "funding_mr_bybit_btc_usdt_usdt_shadow" in ids
+    # the flat top-level snapshot is the governed Binance PAPER lane
+    primary = [s for s in specs if s.is_primary]
+    assert len(primary) == 1
+    assert primary[0].lane_id == "funding_mr_btc_v1_20260703"
+    assert primary[0].mode is RunnerMode.PAPER
+
+
+def test_lane_specs_reject_unknown_mode():
+    import pytest
+    with pytest.raises(ValueError, match="unknown multi-lane mode"):
+        build_lane_specs_from_env({"MULTI_LANE_MODES": "paper,bogus"})
+
+
+async def test_runner_continues_when_one_lane_build_fails(monkeypatch, tmp_path):
+    events = []
+
+    class FakeFeed:
+        def __init__(self, lane_id):
+            self.lane_id = lane_id
+
+        async def start(self):
+            events.append(("start", self.lane_id))
+
+        async def stop(self):
+            events.append(("stop", self.lane_id))
+
+    class FakeSession:
+        def __init__(self, lane_id):
+            self.lane_id = lane_id
+
+        async def run(self, *, deadline_seconds=None):
+            events.append(("run", self.lane_id, deadline_seconds))
+
+    async def fake_build_lane(spec, provider, journal_dir):
+        if spec.exchange == "bad":
+            raise RuntimeError("boom")
+        return multi_lane._LaneRuntime(
+            spec=spec,
+            session=FakeSession(spec.lane_id),
+            feed=FakeFeed(spec.lane_id),
+        )
+
+    monkeypatch.setattr(multi_lane, "build_lane", fake_build_lane)
+    provider = MultiLaneProvider("good")
+    runner = MultiLaneShadowRunner(
+        [
+            LaneSpec("bad", "bad", "BTC/USDT:USDT"),
+            LaneSpec("good", "bybit", "BTC/USDT:USDT"),
+        ],
+        tmp_path,
+        provider,
+    )
+
+    await runner.run(deadline_seconds=0.01)
+
+    assert ("start", "good") in events
+    assert ("run", "good", 0.01) in events
+    assert ("stop", "good") in events
+    latest = provider.latest()
+    assert latest is not None
+    faulted = [lane for lane in latest["lanes"] if lane["lane_id"] == "bad"]
+    assert faulted and faulted[0]["risk_status"] == "lane_error"
