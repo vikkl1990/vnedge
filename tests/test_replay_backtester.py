@@ -273,3 +273,33 @@ def test_crossed_book_snapshot_skipped(tmp_path):
     ]).to_parquet(base / "20260704.parquet")
     events = load_tick_events(tmp_path, "binanceusdm", SYM, "20260704")
     assert len(events) == 1  # crossed snapshot dropped
+
+
+def test_loader_reads_sharded_l2_layout(tmp_path):
+    from vnedge.exchange.tick_recorder import _book_row
+    book_dir = (tmp_path / "ticks" / "exchange=binanceusdm"
+                / "symbol=BTCUSDT" / "stream=book" / "20260704")
+    book_dir.mkdir(parents=True)
+    ob = {"bids": [[100.0 - i * 0.1, 5.0] for i in range(10)],
+          "asks": [[100.1 + i * 0.1, 5.0] for i in range(10)]}
+    # two L2 shards; the final events.sort makes ts order deterministic
+    pd.DataFrame([_book_row(ob, 10, T0 + 100)]).to_parquet(book_dir / "b.parquet")
+    pd.DataFrame([_book_row(ob, 10, T0)]).to_parquet(book_dir / "a.parquet")
+    events = load_tick_events(tmp_path, "binanceusdm", SYM, "20260704")
+    assert [e[0] for e in events] == [T0, T0 + 100]        # time-ordered
+    assert all(k == "book" for _, k, _ in events)
+    # L2 rows still feed TopOfBook via their level-0 aliases
+    assert events[0][2].bid == 100.0 and events[0][2].ask == 100.1
+
+
+def test_loader_merges_shard_dir_and_legacy_single_file(tmp_path):
+    from vnedge.exchange.tick_recorder import _book_row
+    base = (tmp_path / "ticks" / "exchange=binanceusdm"
+            / "symbol=BTCUSDT" / "stream=book")
+    (base / "20260704").mkdir(parents=True)
+    ob = {"bids": [[100.0, 5.0]], "asks": [[100.1, 5.0]]}
+    pd.DataFrame([_book_row(ob, 10, T0 + 50)]).to_parquet(base / "20260704" / "s.parquet")
+    pd.DataFrame([{"ts_ms": T0, "bid": 100.0, "bid_qty": 5.0, "ask": 100.1, "ask_qty": 5.0}]
+                 ).to_parquet(base / "20260704.parquet")     # legacy L1 single file
+    events = load_tick_events(tmp_path, "binanceusdm", SYM, "20260704")
+    assert [e[0] for e in events] == [T0, T0 + 50]           # both layouts merged, ordered

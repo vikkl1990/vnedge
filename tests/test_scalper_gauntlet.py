@@ -93,13 +93,18 @@ def test_buffer_append_and_day_split(tmp_path):
     buf.add({"ts_ms": day2, "bid": 2.0})
     buf.flush(now=0.0)
     files = sorted((tmp_path / "ticks").rglob("*.parquet"))
-    assert len(files) == 2  # split across two daily files
-    # appending to an existing day file accumulates
+    assert len(files) == 2  # split across two day directories, one shard each
+    # a second flush writes a NEW shard (atomic, never rewrites) — day1 gets a
+    # second shard; its rows accumulate across shards, not within one file
     buf.add({"ts_ms": day1 + 1000, "bid": 1.5})
     buf.flush(now=0.0)
-    day1_file = [f for f in (tmp_path / "ticks").rglob("*.parquet")
-                 if f.name <= sorted(f2.name for f2 in files)[0]][0]
-    assert len(pd.read_parquet(day1_file)) == 2
+    day1_str = pd.to_datetime(day1, unit="ms", utc=True).strftime("%Y%m%d")
+    day1_dir = (tmp_path / "ticks" / "exchange=binanceusdm"
+                / "symbol=BTCUSDT" / "stream=book" / day1_str)
+    shards = sorted(day1_dir.glob("*.parquet"))
+    assert len(shards) == 2  # two flushes -> two shards, never a rewritten file
+    rows = pd.concat([pd.read_parquet(s) for s in shards], ignore_index=True)
+    assert list(rows["bid"]) == [1.0, 1.5]  # both day-1 rows, across shards
 
 
 def test_should_flush_thresholds(tmp_path):

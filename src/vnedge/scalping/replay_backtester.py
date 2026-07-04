@@ -113,18 +113,36 @@ class ReplayResult:
 
 # --- Event loading ----------------------------------------------------------------
 
+def _load_stream_frame(stream_base: Path, day: str) -> pd.DataFrame | None:
+    """Read one stream for a day from EITHER layout, concatenated in shard
+    order: new atomic shards (stream=<s>/<day>/*.parquet) and/or the legacy
+    single file (stream=<s>/<day>.parquet). Returns None if neither exists."""
+    frames: list[pd.DataFrame] = []
+    shard_dir = stream_base / day
+    if shard_dir.is_dir():
+        for shard in sorted(shard_dir.glob("*.parquet")):
+            frames.append(pd.read_parquet(shard))
+    single = stream_base / f"{day}.parquet"
+    if single.exists():
+        frames.append(pd.read_parquet(single))
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True)
+
+
 def load_tick_events(
     data_root: Path | str, exchange: str, symbol: str, day: str
 ) -> list[tuple[int, str, object]]:
     """Merge recorded trades + book into one time-ordered event list.
-    Returns (ts_ms, kind, obj) tuples; kind in {"book","trade"}."""
+    Returns (ts_ms, kind, obj) tuples; kind in {"book","trade"}. Reads both the
+    L1 legacy schema and the L2 schema (the level-0 columns are identical)."""
     root = Path(data_root) / "ticks" / f"exchange={exchange}"
     safe = symbol.split(":")[0].replace("/", "")
-    book_path = root / f"symbol={safe}" / "stream=book" / f"{day}.parquet"
-    trade_path = root / f"symbol={safe}" / "stream=trades" / f"{day}.parquet"
+    book_df = _load_stream_frame(root / f"symbol={safe}" / "stream=book", day)
+    trade_df = _load_stream_frame(root / f"symbol={safe}" / "stream=trades", day)
     events: list[tuple[int, str, object]] = []
-    if book_path.exists():
-        for r in pd.read_parquet(book_path).itertuples():
+    if book_df is not None:
+        for r in book_df.itertuples():
             try:
                 top = TopOfBook(
                     symbol=symbol, bid=r.bid, bid_size=r.bid_qty,
@@ -134,8 +152,8 @@ def load_tick_events(
             except ValueError:
                 continue  # crossed/invalid book snapshot — skip
             events.append((int(r.ts_ms), "book", top))
-    if trade_path.exists():
-        for r in pd.read_parquet(trade_path).itertuples():
+    if trade_df is not None:
+        for r in trade_df.itertuples():
             try:
                 tick = TradeTick(
                     symbol=symbol,
