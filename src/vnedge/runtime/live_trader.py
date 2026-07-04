@@ -1,0 +1,228 @@
+"""Live / testnet trader runtime.
+
+The paper session's counterpart that submits REAL orders through the
+CcxtExecutionAdapter. Every safety property is preserved and one is added:
+
+- THREE-GATE ENFORCEMENT: the session refuses to construct unless
+  settings.is_live (a live_* mode AND live_trading_enabled AND the exact
+  confirmation phrase). There is no way to run it with a real adapter
+  without all three. Mainnet adds a fourth gate inside the adapter
+  (live_confirmed); testnet stops at three.
+- No bypass of PreTradeRiskGateway: every intent goes through OrderManager,
+  exactly as in paper.
+- emergency_reduce_only mode blocks new entries; only reduce-only exits flow.
+- capital cap: entries are refused once account equity reaches the
+  live_small ceiling (defence in depth on top of the gateway's exposure caps).
+- Unknown orders are resolved by LiveReconciler against venue truth, never
+  by assumption; while any is unresolved, new risk is blocked.
+
+Account state (equity, positions) comes from the venue via an
+AccountProvider, so the gateway sees real balances. Built to be exercised
+with fakes now (no keys) and wired to a live CcxtAccountProvider later.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import Protocol
+
+import pandas as pd
+
+from vnedge.config.settings import Settings, TradingMode
+from vnedge.execution.live_reconciliation import LiveReconciler
+from vnedge.execution.order_manager import FlattenTarget, OrderManager
+from vnedge.execution.order_state import OrderState
+from vnedge.risk.position_sizer import SymbolLimits, size_position
+from vnedge.risk.risk_manager import AccountState, OrderIntent
+from vnedge.runtime.run_report import RunReport
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+
+logger = logging.getLogger(__name__)
+
+
+class AccountProvider(Protocol):
+    """Supplies live account truth to the gateway."""
+
+    async def account_state(self) -> AccountState: ...
+    async def open_positions(self) -> list[FlattenTarget]: ...
+
+
+class LiveTraderSession:
+    def __init__(
+        self,
+        strategy: BaseStrategy,
+        feed,  # LiveMarketFeed or a fake with the same surface
+        history: pd.DataFrame,
+        *,
+        settings: Settings,
+        gateway,  # PreTradeRiskGateway
+        order_manager: OrderManager,
+        reconciler: LiveReconciler,
+        account_provider: AccountProvider,
+        symbol: str,
+        limits: SymbolLimits,
+        reconcile_every_bars: int = 1,
+    ) -> None:
+        # --- THE GATE: no live trader without all three live gates open ---
+        if not settings.is_live:
+            raise RuntimeError(
+                "LiveTraderSession requires all three live gates: a live_* mode, "
+                "live_trading_enabled=true, and the exact confirmation phrase. "
+                f"Current: mode={settings.trading_mode.value}, "
+                f"enabled={settings.live_trading_enabled}, "
+                f"phrase_ok={settings.confirm_live_trading != ''}"
+            )
+        self.strategy = strategy
+        self.feed = feed
+        self.candles = history.reset_index(drop=True)
+        self.settings = settings
+        self.gateway = gateway
+        self.om = order_manager
+        self.reconciler = reconciler
+        self.accounts = account_provider
+        self.symbol = symbol
+        self.limits = limits
+        self.reconcile_every_bars = reconcile_every_bars
+        self.signals = self.orders_submitted = self.risk_rejects = 0
+        self.sizing_skips = self.recon_mismatches = 0
+        self._plan: SignalIntent | None = None
+        self._entry_bar_ts = None
+        self._bars = 0
+
+    @property
+    def entries_allowed(self) -> bool:
+        """emergency_reduce_only mode allows exits only."""
+        return self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
+
+    async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
+        account = await self.accounts.account_state()
+        if account.equity_usd >= self.settings.live_small_capital_cap_usd \
+                and self.settings.trading_mode is TradingMode.LIVE_SMALL:
+            logger.warning("equity $%.2f at/above live_small cap $%.2f — entry refused",
+                           account.equity_usd, self.settings.live_small_capital_cap_usd)
+            return
+        bid, ask = self.feed.quote
+        ref = ask if sig.side == "long" else bid
+        sizing = size_position(
+            equity_usd=account.equity_usd, entry_price=ref, stop_price=sig.stop_price,
+            side=sig.side, config=self.settings.risk, limits=self.limits,
+        )
+        if not sizing.approved:
+            self.sizing_skips += 1
+            return
+        intent = OrderIntent(
+            symbol=self.symbol, side=sig.side, quantity=sizing.quantity,
+            notional_usd=sizing.notional_usd,
+            leverage=max(sizing.required_leverage, 1.0),
+            reduce_only=False, strategy_id=self.strategy.strategy_id,
+        )
+        from vnedge.execution.idempotency import make_intent_key
+
+        key = make_intent_key(self.strategy.strategy_id, self.symbol, sig.side,
+                              self.candles["timestamp"].iloc[-1])
+        order = await self.om.submit(intent, account, self.feed.market_state(), key, now=now)
+        if order.state is OrderState.RISK_REJECTED:
+            self.risk_rejects += 1
+        elif order.state is OrderState.ACKNOWLEDGED:
+            self.orders_submitted += 1
+            self._plan = sig
+            self._entry_bar_ts = self.candles["timestamp"].iloc[-1]
+
+    async def _submit_exit(self, reason: str, now: datetime) -> None:
+        positions = await self.accounts.open_positions()
+        pos = next((p for p in positions if p.symbol == self.symbol), None)
+        if pos is None:
+            self._plan = None
+            return
+        intent = OrderIntent(
+            symbol=self.symbol, side="short" if pos.side == "long" else "long",
+            quantity=pos.quantity, notional_usd=0.0, leverage=1.0,
+            reduce_only=True, strategy_id=self.strategy.strategy_id,
+        )
+        account = await self.accounts.account_state()
+        await self.om.submit(
+            intent, account, self.feed.market_state(),
+            intent_key=f"exit|{self.symbol}|{reason}|{int(now.timestamp() * 1000)}", now=now,
+        )
+        self.orders_submitted += 1
+        self._plan = None
+
+    async def emergency_flatten(self) -> None:
+        """Close every venue position reduce-only through the normal pipeline."""
+        positions = await self.accounts.open_positions()
+        account = await self.accounts.account_state()
+        markets = {self.symbol: self.feed.market_state()}
+        fid = f"flatten|{int(datetime.now(UTC).timestamp() * 1000)}"
+        await self.om.emergency_flatten(positions, account, markets, fid,
+                                        now=datetime.now(UTC))
+
+    async def run(self, *, max_bars: int | None = None) -> RunReport:
+        import asyncio
+
+        while max_bars is None or self._bars < max_bars:
+            try:
+                raw = await asyncio.wait_for(self.feed.closed_candles.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                await self._reconcile()
+                continue
+            now = datetime.now(UTC)
+            ts = pd.to_datetime(raw[0], unit="ms", utc=True)
+            if len(self.candles) and ts <= self.candles["timestamp"].iloc[-1]:
+                continue
+            row = {"timestamp": ts, "open": float(raw[1]), "high": float(raw[2]),
+                   "low": float(raw[3]), "close": float(raw[4]), "volume": float(raw[5])}
+            self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
+            self._bars += 1
+
+            bar = self.candles.iloc[-1]
+            # exits first (always allowed, even in emergency_reduce_only)
+            if self._plan is not None:
+                sig = self._plan
+                hit = None
+                if sig.side == "long":
+                    if float(bar["low"]) <= sig.stop_price:
+                        hit = "stop"
+                    elif sig.take_profit_price and float(bar["high"]) >= sig.take_profit_price:
+                        hit = "take_profit"
+                else:
+                    if float(bar["high"]) >= sig.stop_price:
+                        hit = "stop"
+                    elif sig.take_profit_price and float(bar["low"]) <= sig.take_profit_price:
+                        hit = "take_profit"
+                if hit is not None:
+                    await self._submit_exit(hit, now)
+
+            # entries only when allowed, flat, and nothing unresolved
+            if (self.entries_allowed and self._plan is None
+                    and not self.om.has_unresolved_orders
+                    and len(self.candles) > self.strategy.warmup_bars):
+                df = self.strategy.prepare(self.candles)
+                sig = self.strategy.signal(df, len(df) - 1)
+                if sig is not None:
+                    self.signals += 1
+                    await self._submit_entry(sig, now)
+
+            if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
+                await self._reconcile()
+
+        await self._reconcile()
+        return self._report()
+
+    async def _reconcile(self) -> None:
+        try:
+            await self.reconciler.resolve_unknown_orders()
+        except Exception as exc:  # noqa: BLE001 — reconciliation errors must not crash the loop
+            logger.error("live reconciliation failed: %s", exc)
+
+    def _report(self) -> RunReport:
+        return RunReport(
+            mode=self.settings.trading_mode.value, symbol=self.symbol,
+            strategy_id=self.strategy.strategy_id, bars_processed=self._bars,
+            signals_generated=self.signals, orders_submitted=self.orders_submitted,
+            fills=0, fees_usd=0.0, realized_pnl_usd=0.0, unrealized_pnl_usd=0.0,
+            max_drawdown_pct=0.0, risk_rejects=self.risk_rejects,
+            sizing_skips=self.sizing_skips, shadow_approved=0, shadow_rejected=0,
+            reconciliation_mismatches=self.recon_mismatches,
+            final_equity_usd=0.0,
+        )
