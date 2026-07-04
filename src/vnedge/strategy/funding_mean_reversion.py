@@ -48,6 +48,7 @@ class FundingMeanReversion(BaseStrategy):
         z_window: int = 48,
         z_entry: float = 2.0,
         stop_atr_mult: float = 1.5,
+        allowed_sides: tuple[str, ...] | list[str] = ("long", "short"),
         regime: RegimeParams = RegimeParams(),
     ) -> None:
         if funding is None or funding.empty:
@@ -61,6 +62,10 @@ class FundingMeanReversion(BaseStrategy):
         self.z_window = z_window
         self.z_entry = z_entry
         self.stop_atr_mult = stop_atr_mult
+        # Side restriction (e.g. short_only) — the attribution finding on BTC
+        # showed the edge is short-side-carried. A restricted variant is a
+        # pre-registered candidate, never an in-place tweak to the trial.
+        self.allowed_sides = tuple(allowed_sides)
         self.regime = regime
         self.warmup_bars = max(
             funding_pct_window, z_window, regime_warmup_bars(regime)
@@ -87,7 +92,8 @@ class FundingMeanReversion(BaseStrategy):
 
         # Fade crowded longs: rich funding + stretched price, no up-trend.
         if (
-            float(row["funding_pct"]) >= self.extreme_pct
+            "short" in self.allowed_sides
+            and float(row["funding_pct"]) >= self.extreme_pct
             and float(row["close_z"]) >= self.z_entry
             and not row["regime_trend_up"]
             and mean < close
@@ -103,7 +109,8 @@ class FundingMeanReversion(BaseStrategy):
             )
         # Fade crowded shorts: deeply negative funding + stretched down.
         if (
-            float(row["funding_pct"]) <= 1.0 - self.extreme_pct
+            "long" in self.allowed_sides
+            and float(row["funding_pct"]) <= 1.0 - self.extreme_pct
             and float(row["close_z"]) <= -self.z_entry
             and not row["regime_trend_down"]
             and mean > close

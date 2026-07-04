@@ -394,8 +394,17 @@
           const sideCell=(at.long||at.short)
             ?"L "+fmtNet(at.long)+" · S "+fmtNet(at.short)
             :"—";
-          tr.innerHTML="<td title='gate profile: "+(r.gates||"standard")+"'>"+r.strategy+
-            (r.gates==="offensive"?" <span class='ts' style='color:var(--amber)'>off</span>":"")+
+          const diag=r.diagnosis||{};
+          const sv=(diag.suggested_variants||[]);
+          const stratTitle=r.auto?("auto-proposed uplift: "+(r.rationale||r.goal||""))
+            :(sv.length?"diagnosis: "+(diag.failure_tags||[]).join(", ")+
+              " → proposes "+sv.join(", "):"gate profile: "+(r.gates||"standard"));
+          const badge=r.auto
+            ?" <span class='ts' style='color:var(--purple)'>↳auto</span>"
+            :(r.gates==="offensive"?" <span class='ts' style='color:var(--amber)'>off</span>":"")
+             +(sv.length?" <span class='ts' style='color:var(--blue)'>◦"+sv.length+"</span>":"");
+          tr.innerHTML="<td title=\""+stratTitle.replace(/"/g,"'")+"\">"+
+            (r.auto?"&nbsp;&nbsp;":"")+r.strategy+badge+
             "</td><td>"+r.symbol.split(":")[0]+"</td>"+
             "<td class='"+(r.oos_net_usd>0?"pos":r.oos_net_usd<0?"neg":"neutral")+"'>"+
             (r.oos_net_usd>=0?"+$":"-$")+Math.abs(r.oos_net_usd).toFixed(2)+"</td>"+
@@ -405,7 +414,11 @@
         }
         $("research").style.display=rows.length?"table":"none";
         $("research-empty").style.display=rows.length?"none":"block";
-        if(d.generated_at){$("rl_updated").textContent="updated "+d.generated_at.slice(11,19)+" UTC · hourly";}
+        if(d.generated_at){
+          const ae=d.auto_explore||{};
+          const aetxt=ae.total_attempts?" · auto-explore "+ae.total_attempts+" tried ("+ae.distinct_variants+" variants)":"";
+          $("rl_updated").textContent="updated "+d.generated_at.slice(11,19)+" UTC · hourly"+aetxt;
+        }
         if(d.note){const n=$("rl_note");n.textContent=d.note;n.style.display="block";}
         const dr=d.drift_alerts||[];const dv=$("drift");dv.innerHTML="";
         for(const a of dr){const e=document.createElement("div");e.className="alert";

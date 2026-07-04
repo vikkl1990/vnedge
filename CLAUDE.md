@@ -113,6 +113,24 @@ verdict stands. Panic_reversal produced ZERO qualifying setups in 365d —
 rare-event evidence; any parameter change must be pre-registered for a
 future round, never applied to seen data.
 
+## Auto-diagnosis + bounded auto-explore (built 2026-07-04)
+
+research/strategy_diagnostics.py: when a lane REJECTs, diagnose WHY (gate
+reasons + side attribution) and propose bounded, WHITELISTED uplift variants
+from a per-strategy CATALOG. Continuous loop attaches diagnosis to every
+REJECT and runs the top suggestion for the ~2 closest-to-passing lanes as
+EXPLORATORY auto-variants (auto=true, tracked in auto_explore.json,
+already-tried skipped to bound multiple-comparisons).
+
+HARD INVARIANT (the line between assistant and overfitter): auto-explore is
+exploratory ONLY. A rolling PASS from an auto-variant is a candidate; it
+still requires human-approved pre-registered judgment on UNTOUCHED data
+before promotion. win_concentration / is_oos_collapse failures are
+diagnosed as "needs more data, do NOT tune" — catalog offers no param
+variant for them (that IS the overfitting trap). Nothing auto-tunes the
+running trial; nothing auto-deploys. funding_mr gained allowed_sides so the
+attribution-driven short_only/long_only variants are real & testable.
+
 ## Roadmap additions (accepted ideas, not yet built)
 
 - docs/strategy_contract.md + AI strategy sandbox (data/strategies/ai/ with

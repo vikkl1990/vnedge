@@ -46,6 +46,7 @@ from vnedge.data.candle_ingestor import ingest_candles
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
+from vnedge.research.strategy_diagnostics import diagnose
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.panic_reversal import PanicReversal
@@ -100,6 +101,13 @@ def wf_record(
     decision = evaluate_promotion(result, gates)
     trades = sum(w.test_metrics.num_trades for w in result.windows)
     traded = sum(1 for w in result.windows if w.test_metrics.num_trades > 0)
+    all_trades = [t for w in result.windows for t in w.test_trades]
+    total_fees = round(sum(t.fees_usd for t in all_trades), 2)
+    wins = [t.net_pnl_usd for t in all_trades if t.net_pnl_usd > 0]
+    losses = [-t.net_pnl_usd for t in all_trades if t.net_pnl_usd <= 0]
+    payoff = round(
+        (sum(wins) / len(wins)) / (sum(losses) / len(losses)), 2
+    ) if wins and losses else 0.0
     return {
         "attribution": side_attribution(result),
         "gates": gates_label,
@@ -111,6 +119,8 @@ def wf_record(
         "oos_trades": trades,
         "oos_net_usd": round(result.oos_net_profit_usd, 2),
         "profitable_windows_pct": round(result.oos_profitable_window_pct, 1),
+        "total_fees_usd": total_fees,
+        "payoff_ratio": payoff,
         "verdict": "PASS" if decision.passed else "REJECT",
         "reasons": list(decision.reject_reasons),
         "updated": datetime.now(UTC).isoformat(),
@@ -254,17 +264,117 @@ def run_walk_forwards(store: ParquetStore, symbol: str) -> list[dict]:
     return records
 
 
+_GATES = {
+    "sparse": SPARSE_STRATEGY_GATES,
+    "offensive": OFFENSIVE_GATES,
+    "standard": PromotionGates(),
+}
+
+
+def _build_strategy(strategy_id: str, funding, **params):
+    from vnedge.strategy.strategy_registry import STRATEGIES
+
+    return STRATEGIES[strategy_id](funding, **params)
+
+
+def _promotion_distance(record: dict) -> float:
+    """Lower = closer to passing. Positive-net lanes with few failed gates
+    are the highest-value places to spend an auto-explore slot."""
+    net_penalty = 0.0 if record["oos_net_usd"] > 0 else 1000.0 - record["oos_net_usd"]
+    return net_penalty + 10.0 * len(record.get("reasons", []))
+
+
+def _load_auto_state() -> dict:
+    path = OUT_DIR / "auto_explore.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {"tried": [], "total_attempts": 0}
+
+
+def _save_auto_state(state: dict) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / "auto_explore.json").write_text(json.dumps(state, indent=2))
+
+
+def auto_explore(store: ParquetStore, records: list[dict], max_variants: int = 2) -> list[dict]:
+    """Bounded auto-uplift: for the closest-to-passing failing lanes, run
+    their top diagnostic suggestion as an EXPLORATORY variant. Results are
+    labeled auto=true; a rolling PASS here is a candidate, never a promotion.
+    Already-tried variants are skipped so the search can't inflate the
+    multiple-comparisons count by re-running the same idea hourly."""
+    state = _load_auto_state()
+    tried = set(state["tried"])
+    config = BacktestConfig()
+    variants: list[dict] = []
+
+    candidates = [r for r in records if r["verdict"] == "REJECT" and not r.get("auto")]
+    candidates.sort(key=_promotion_distance)
+
+    for base in candidates:
+        if len(variants) >= max_variants:
+            break
+        diag = diagnose(base)
+        for sug in diag.suggestions:
+            key = f"{sug.variant_id}@{base['symbol']}"
+            if key in tried:
+                continue
+            candles = store.read_candles(EXCHANGE, base["symbol"], TIMEFRAME)
+            funding = store.read_funding(EXCHANGE, base["symbol"])
+            cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
+            c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
+            f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
+            factory = (lambda sug=sug, f=f: (
+                lambda **p: _build_strategy(sug.strategy_id, f, **{**sug.fixed_params, **p})
+            ))()
+            grid = param_grid(**sug.grid_axes) if sug.grid_axes else [{}]
+            try:
+                result = walk_forward(
+                    c, f, factory, grid, config, train_bars=1440,
+                    test_bars=sug.test_bars, symbol=base["symbol"], timeframe=TIMEFRAME,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auto-explore %s failed: %s", key, exc)
+                tried.add(key)
+                continue
+            rec = wf_record(sug.variant_id, base["symbol"], result,
+                            _GATES[sug.gates_label], gates_label=sug.gates_label)
+            rec["auto"] = True
+            rec["parent"] = base["strategy"]
+            rec["goal"] = sug.goal
+            rec["rationale"] = sug.rationale
+            variants.append(rec)
+            tried.add(key)
+            state["total_attempts"] += 1
+            logger.info("auto-explore %s: %s (oos $%+.2f) — %s",
+                        key, rec["verdict"], rec["oos_net_usd"], sug.goal)
+            break  # one variant per base lane per cycle
+
+    state["tried"] = sorted(tried)
+    _save_auto_state(state)
+    return variants
+
+
 def publish(records: list[dict], started: float,
-            drift_alerts: list[dict] | None = None) -> None:
+            drift_alerts: list[dict] | None = None,
+            auto_state: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
         "cycle_seconds": round(time.time() - started, 1),
         "lookback_days": LOOKBACK_DAYS,
         "note": "rolling exploratory walk-forward — a PASS is a candidate "
-                "signal, not a promotion; judgment requires untouched data",
+                "signal, not a promotion; judgment requires untouched data. "
+                "auto=true rows are machine-proposed uplift variants, "
+                "exploratory only.",
         "results": records,
         "drift_alerts": drift_alerts or [],
+        "auto_explore": {
+            "total_attempts": (auto_state or {}).get("total_attempts", 0),
+            "distinct_variants": len((auto_state or {}).get("tried", [])),
+        },
     }
     tmp = OUT_DIR / "latest.json.tmp"
     tmp.write_text(json.dumps(payload, indent=2))
@@ -311,11 +421,31 @@ async def run_cycle() -> list[dict]:
                         except Exception as exc:  # noqa: BLE001
                             logger.warning("drift notifier failed: %s", exc)
 
-    publish(records, started, drift)
+    # Attach failure diagnoses to every REJECT (cheap, always on): "why did
+    # it fail, and what bounded variant might uplift it".
     for r in records:
-        logger.info("%s %s: %s (oos $%+.2f, %d trades, %d windows)",
+        if r["verdict"] == "REJECT":
+            diag = diagnose(r)
+            r["diagnosis"] = {
+                "failure_tags": list(diag.failure_tags),
+                "notes": list(diag.notes),
+                "suggested_variants": [s.variant_id for s in diag.suggestions],
+            }
+
+    # Bounded auto-explore: run the top suggestion for the closest-to-passing
+    # lanes as exploratory variants. Never promotes, never touches the trial.
+    try:
+        variants = auto_explore(store, records)
+        records.extend(variants)
+    except Exception as exc:  # noqa: BLE001 — auto-explore must never kill a cycle
+        logger.exception("auto-explore failed: %s", exc)
+
+    publish(records, started, drift, _load_auto_state())
+    for r in records:
+        tag = " [auto]" if r.get("auto") else ""
+        logger.info("%s %s: %s (oos $%+.2f, %d trades, %d windows)%s",
                     r["strategy"], r["symbol"], r["verdict"],
-                    r["oos_net_usd"], r["oos_trades"], r["windows"])
+                    r["oos_net_usd"], r["oos_trades"], r["windows"], tag)
     return records
 
 
