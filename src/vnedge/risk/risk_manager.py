@@ -135,11 +135,6 @@ class PreTradeRiskGateway:
             intent.leverage <= cfg.max_leverage_per_position,
             f"{intent.leverage:.1f}x > cap {cfg.max_leverage_per_position}x",
         )
-        check(
-            "slippage",
-            market.estimated_slippage_bps <= cfg.max_slippage_bps,
-            f"{market.estimated_slippage_bps:.1f}bps > {cfg.max_slippage_bps}bps",
-        )
 
         # --- Entry-only checks ------------------------------------------------
         if not intent.reduce_only:
@@ -188,6 +183,11 @@ class PreTradeRiskGateway:
                 account.consecutive_losses < cfg.max_consecutive_losses,
                 f"{account.consecutive_losses} consecutive losses "
                 f"(max {cfg.max_consecutive_losses}) — manual review required",
+            )
+            check(
+                "slippage",
+                market.estimated_slippage_bps <= cfg.max_slippage_bps,
+                f"{market.estimated_slippage_bps:.1f}bps > {cfg.max_slippage_bps}bps",
             )
             symbol_exposure = (
                 account.exposure_by_symbol_usd.get(intent.symbol, 0.0) + intent.notional_usd
