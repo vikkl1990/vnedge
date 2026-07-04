@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from vnedge.data.schemas import normalize_candles, normalize_funding

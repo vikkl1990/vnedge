@@ -5,8 +5,6 @@ Uses a fake client so no test touches the network.
 
 import json
 
-import pandas as pd
-
 from vnedge.data.candle_ingestor import ingest_candles
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore

@@ -21,7 +21,7 @@ by the risk gateway; the venue enforces order mechanics.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from vnedge.paper.fill_model import FillModel
 

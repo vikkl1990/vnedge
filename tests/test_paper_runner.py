@@ -3,7 +3,6 @@
 import pandas as pd
 import pytest
 
-from vnedge.config.risk_config import RiskConfig
 from vnedge.data.schemas import normalize_candles
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager

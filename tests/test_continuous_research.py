@@ -3,7 +3,6 @@
 import json
 
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from vnedge.backtest.metrics import BacktestMetrics
@@ -61,10 +60,15 @@ def test_wf_record_reject_carries_reasons():
 def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
     records = [cr.wf_record("s", "BTC/USDT:USDT", make_result(), SPARSE_STRATEGY_GATES)]
-    cr.publish(records, started=0.0)
-    cr.publish(records, started=0.0)  # second cycle appends feed, replaces latest
+    cr.publish(records, started=0.0, universe={"targets": 1},
+               agent_plan={"policy": {"can_trade": False}})
+    cr.publish(records, started=0.0, universe={"targets": 1},
+               agent_plan={"policy": {"can_trade": False}})
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["results"][0]["verdict"] == "PASS"
+    assert latest["results"][0]["exchange"] == "binanceusdm"
+    assert latest["universe"]["targets"] == 1
+    assert latest["edge_agents"]["policy"]["can_trade"] is False
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()
     assert len(feed) == 2
