@@ -697,6 +697,18 @@
       </div>
     </section>
 
+    <section id="lanesBoard" style="display:none" aria-label="multi-exchange lanes">
+      <h2>Multi-exchange shadow lanes <span class="tag">same strategy, live data, per-venue — no live orders</span></h2>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left">Lane</th><th>Venue</th><th>Symbol</th>
+          <th>Equity</th><th>Realized</th><th>Unrealized</th><th>Fills</th>
+          <th>Fees</th><th>Risk</th><th>Feed</th>
+        </tr></thead>
+        <tbody id="lanesBody"></tbody>
+      </table>
+    </section>
+
     <section class="institutional-board" aria-label="institutional workspace">
       <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
       <div class="workspace-grid">
@@ -1241,9 +1253,34 @@
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
+  function renderLanes(lanes){
+    const board=document.getElementById("lanesBoard");
+    const body=document.getElementById("lanesBody");
+    if(!board||!body)return;
+    if(!Array.isArray(lanes)||lanes.length<2){board.style.display="none";return;}
+    board.style.display="";
+    body.innerHTML="";
+    const money=(v)=>(v>=0?"+$":"-$")+Math.abs(Number(v)||0).toFixed(2);
+    const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
+    for(const l of lanes){
+      const tr=body.insertRow();
+      tr.innerHTML="<td style='text-align:left'>"+(l.lane_id||"")+"</td>"+
+        "<td>"+(l.exchange||"").replace("usdm","")+"</td>"+
+        "<td>"+String(l.symbol||"").split(":")[0]+"</td>"+
+        "<td>$"+(Number(l.equity)||0).toFixed(2)+"</td>"+
+        "<td class='"+cls(l.realized_pnl)+"'>"+money(l.realized_pnl)+"</td>"+
+        "<td class='"+cls(l.unrealized_pnl)+"'>"+money(l.unrealized_pnl)+"</td>"+
+        "<td>"+(l.fills||0)+"</td>"+
+        "<td>$"+(Number(l.fees_usd)||0).toFixed(2)+"</td>"+
+        "<td class='"+(l.risk_status==="ok"?"pos":"neg")+"'>"+(l.risk_status||"?")+"</td>"+
+        "<td class='"+(l.feed==="ok"?"pos":"neg")+"'>"+(l.feed||"?")+"</td>";
+    }
+  }
+
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
+    renderLanes(s.lanes);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
