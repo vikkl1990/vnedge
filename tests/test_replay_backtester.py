@@ -79,10 +79,42 @@ def test_same_instant_trade_does_not_fill():
     assert res.filled == 0
 
 
+def test_stale_quote_expires_on_trade_event_before_fill():
+    # Expiry must be checked on every event, not only book updates. Otherwise a
+    # long-dead quote can fill just because the next event happens to be a trade.
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 2000, 99.99, 1.0, "sell"),
+    ]
+    res = TickReplayBacktester().run(events, AlwaysBuy(ttl_ms=1000))
+    assert res.filled == 0
+    assert res.missed_fills == 1
+
+
+def test_trade_at_exact_ttl_boundary_does_not_fill():
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 1000, 99.99, 1.0, "sell"),
+    ]
+    res = TickReplayBacktester().run(events, AlwaysBuy(ttl_ms=1000))
+    assert res.filled == 0
+    assert res.missed_fills == 1
+
+
+def test_quote_censored_at_replay_end_is_not_missed():
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+    ]
+    res = TickReplayBacktester().run(events, AlwaysBuy(ttl_ms=1000))
+    assert res.filled == 0
+    assert res.missed_fills == 0
+    assert res.open_quotes_at_end == 1
+
+
 def test_seller_hitting_bid_fills_us():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0   # seller hits our bid at 100.0 -> fill
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells through our bid -> fill at 100.0
         book(T0 + 20, 100.6, 5.0, 100.7, 5.0),  # price ran up -> target
     ]
     res = TickReplayBacktester(ReplayFees(maker_bps=2, taker_bps=5, slippage_bps=0)
@@ -99,7 +131,7 @@ def test_seller_hitting_bid_fills_us():
 def test_stop_exit_is_a_loss():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0        # fill our bid
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells through our bid -> fill at 100.0
         book(T0 + 20, 99.4, 5.0, 99.5, 5.0),       # price dropped -> stop
     ]
     res = TickReplayBacktester(ReplayFees(slippage_bps=0)).run(
@@ -161,6 +193,20 @@ def test_adverse_selection_measured():
         events, AlwaysBuy(stop_bps=60.0, target_bps=40.0))
     assert res.filled == 1
     assert res.trades[0].adverse_bps < -20.0  # captured the adverse move
+
+
+def test_end_close_uses_tradable_bid_not_mid_for_long():
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),
+        book(T0 + 20, 100.0, 5.0, 102.0, 5.0),  # wide spread; mid would flatter exit
+    ]
+    res = TickReplayBacktester(ReplayFees(slippage_bps=0)).run(
+        events, AlwaysBuy(stop_bps=1000.0, target_bps=1000.0))
+    assert res.filled == 1
+    assert res.trades[0].exit_reason == "end"
+    assert res.trades[0].exit_price == pytest.approx(100.0)
+    assert res.trades[0].gross_bps == pytest.approx(0.0)
 
 
 def test_missed_fill_on_ttl_expiry():
