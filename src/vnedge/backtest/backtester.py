@@ -63,6 +63,8 @@ class Trade:
     fees_usd: float
     funding_usd: float  # negative = paid
     entry_reason: str
+    mae_usd: float = 0.0  # max adverse excursion while open (<= 0)
+    mfe_usd: float = 0.0  # max favorable excursion while open (>= 0)
 
     @property
     def net_pnl_usd(self) -> float:
@@ -78,6 +80,19 @@ class _OpenPosition:
     entry_bar: int
     entry_fee_usd: float
     funding_usd: float = 0.0
+    best_price: float = 0.0
+    worst_price: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.best_price = self.worst_price = self.entry_price
+
+    def track_excursion(self, high: float, low: float) -> None:
+        if self.intent.side == "long":
+            self.best_price = max(self.best_price, high)
+            self.worst_price = min(self.worst_price, low)
+        else:
+            self.best_price = min(self.best_price, low)
+            self.worst_price = max(self.worst_price, high)
 
 
 @dataclass(frozen=True)
@@ -155,6 +170,7 @@ def run_backtest(
         gross = _unrealized(pos, fill)
         fees = pos.entry_fee_usd + exit_fee
         equity += gross - exit_fee + pos.funding_usd
+        direction = 1.0 if pos.intent.side == "long" else -1.0
         trades.append(
             Trade(
                 side=pos.intent.side, quantity=pos.quantity,
@@ -162,6 +178,8 @@ def run_backtest(
                 exit_ts=ts, exit_price=fill, exit_reason=reason,
                 gross_pnl_usd=gross, fees_usd=fees, funding_usd=pos.funding_usd,
                 entry_reason=pos.intent.reason,
+                mae_usd=direction * pos.quantity * (pos.worst_price - pos.entry_price),
+                mfe_usd=direction * pos.quantity * (pos.best_price - pos.entry_price),
             )
         )
         position = None
@@ -209,6 +227,7 @@ def run_backtest(
         # 3) Exit checks (applies to just-entered positions too — a stop can
         #    be hit in the entry bar).
         if position is not None:
+            position.track_excursion(float(bar["high"]), float(bar["low"]))
             hit = _check_intrabar_exit(position, float(bar["high"]), float(bar["low"]))
             if hit is not None:
                 close_position(position, ts, hit[1], hit[0])

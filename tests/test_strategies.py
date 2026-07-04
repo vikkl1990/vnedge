@@ -170,8 +170,8 @@ def test_funding_series_is_mandatory():
 
 # --- Registry -------------------------------------------------------------------
 
-def test_registry_contains_both_candidates():
-    assert set(STRATEGIES) == {"trend_continuation_v1", "funding_mean_reversion_v1"}
+def test_registry_contains_core_candidates():
+    assert {"trend_continuation_v1", "funding_mean_reversion_v1"} <= set(STRATEGIES)
     assert get_strategy_class("trend_continuation_v1") is TrendContinuation
 
 

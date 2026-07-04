@@ -212,6 +212,25 @@ class PromotionGates:
     # replaced by an explicit coverage floor — never silently ignored.
     reject_zero_trade_windows: bool = True
     min_windows_with_trades_pct: float = 0.0
+    # Offensive-lane gates (0 / 1.0 = disabled). High-R strategies are
+    # judged on payoff distribution, not win rate — but a "great" result
+    # carried by one lucky trade is luck, and gets rejected as such.
+    min_payoff_ratio: float = 0.0
+    max_single_trade_profit_share: float = 1.0
+
+
+#: Offensive-lane profile: asymmetric-payoff candidates. Wider drawdown
+#: tolerance and no per-window trade demand, but a stricter profit factor,
+#: a payoff-ratio floor, and a win-concentration cap.
+OFFENSIVE_GATES = PromotionGates(
+    min_total_oos_trades=15,
+    min_profit_factor=1.25,
+    max_window_drawdown_pct=12.0,
+    reject_zero_trade_windows=False,
+    min_windows_with_trades_pct=50.0,
+    min_payoff_ratio=1.8,
+    max_single_trade_profit_share=0.40,
+)
 
 
 #: Round-3 pre-registered configuration for sparse event strategies. Chosen
@@ -283,6 +302,34 @@ def evaluate_promotion(
             )
     elif gross_wins <= 0 and windows:
         reasons.append("no OOS gross wins — profit factor 0")
+
+    if gates.min_payoff_ratio > 0:
+        n_wins = sum(
+            round(w.test_metrics.win_rate_pct / 100.0 * w.test_metrics.num_trades)
+            for w in windows
+        )
+        n_losses = total_trades - n_wins
+        if n_wins > 0 and n_losses > 0 and gross_losses > 0:
+            payoff = (gross_wins / n_wins) / (gross_losses / n_losses)
+            if payoff < gates.min_payoff_ratio:
+                reasons.append(
+                    f"payoff ratio {payoff:.2f} < {gates.min_payoff_ratio} "
+                    "(avg win / avg loss)"
+                )
+
+    if gates.max_single_trade_profit_share < 1.0:
+        trade_pnls = [
+            t.net_pnl_usd for w in windows for t in w.test_trades
+        ]
+        gross_profit = sum(p for p in trade_pnls if p > 0)
+        if trade_pnls and gross_profit > 0:
+            share = max(trade_pnls) / gross_profit
+            if share > gates.max_single_trade_profit_share:
+                reasons.append(
+                    f"single trade contributes {share:.0%} of gross profit "
+                    f"(cap {gates.max_single_trade_profit_share:.0%}) — "
+                    "one lucky trade is not an edge"
+                )
 
     worst_dd = max((w.test_metrics.max_drawdown_pct for w in windows), default=0.0)
     if worst_dd > gates.max_window_drawdown_pct:

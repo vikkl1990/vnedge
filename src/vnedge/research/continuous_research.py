@@ -34,6 +34,7 @@ import pandas as pd
 
 from vnedge.backtest.backtester import BacktestConfig
 from vnedge.backtest.walk_forward import (
+    OFFENSIVE_GATES,
     SPARSE_STRATEGY_GATES,
     PromotionGates,
     WalkForwardResult,
@@ -46,13 +47,20 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
+from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.trend_continuation import TrendContinuation
+from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 logger = logging.getLogger(__name__)
 
 EXCHANGE = "binanceusdm"
-# SOL is research-only: no paper deployment without gates + human approval.
-SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+# All non-BTC symbols are research-only: no paper deployment without gates
+# + human approval. Offensive lanes (milestone 10A) sweep the wider set.
+SYMBOLS = [
+    "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
+    "BNB/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
+]
 TIMEFRAME = "1h"
 LOOKBACK_DAYS = 365
 INTERVAL_SECONDS = float(os.environ.get("RESEARCH_INTERVAL_SECONDS", "3600"))
@@ -87,12 +95,14 @@ def side_attribution(result: WalkForwardResult) -> dict:
 
 def wf_record(
     strategy: str, symbol: str, result: WalkForwardResult, gates: PromotionGates,
+    gates_label: str = "standard",
 ) -> dict:
     decision = evaluate_promotion(result, gates)
     trades = sum(w.test_metrics.num_trades for w in result.windows)
     traded = sum(1 for w in result.windows if w.test_metrics.num_trades > 0)
     return {
         "attribution": side_attribution(result),
+        "gates": gates_label,
         "strategy": strategy,
         "symbol": symbol,
         "timeframe": TIMEFRAME,
@@ -212,23 +222,35 @@ def run_walk_forwards(store: ParquetStore, symbol: str) -> list[dict]:
     config = BacktestConfig()
     records = []
 
-    result = walk_forward(
-        c, f, lambda **p: FundingMeanReversion(funding=f, **p),
-        param_grid(extreme_pct=[0.85, 0.95], z_entry=[1.5, 2.5]),
-        config, train_bars=1440, test_bars=720, symbol=symbol, timeframe=TIMEFRAME,
-    )
-    records.append(
-        wf_record("funding_mean_reversion_v1", symbol, result, SPARSE_STRATEGY_GATES)
-    )
-
-    result = walk_forward(
-        c, f, lambda **p: TrendContinuation(funding=f, **p),
-        param_grid(breakout_bars=[48, 96], take_profit_r=[2.0, 3.0]),
-        config, train_bars=1440, test_bars=360, symbol=symbol, timeframe=TIMEFRAME,
-    )
-    records.append(
-        wf_record("trend_continuation_v1", symbol, result, PromotionGates())
-    )
+    lanes = [
+        ("funding_mean_reversion_v1",
+         lambda **p: FundingMeanReversion(funding=f, **p),
+         param_grid(extreme_pct=[0.85, 0.95], z_entry=[1.5, 2.5]),
+         720, SPARSE_STRATEGY_GATES, "sparse"),
+        ("trend_continuation_v1",
+         lambda **p: TrendContinuation(funding=f, **p),
+         param_grid(breakout_bars=[48, 96], take_profit_r=[2.0, 3.0]),
+         360, PromotionGates(), "standard"),
+        # --- offensive lanes (milestone 10A): research-only ---
+        ("volatility_expansion_breakout_v1",
+         lambda **p: VolatilityExpansionBreakout(funding=f, **p),
+         param_grid(breakout_bars=[48, 96]),
+         720, OFFENSIVE_GATES, "offensive"),
+        ("panic_reversal_v1",
+         lambda **p: PanicReversal(funding=f, **p),
+         param_grid(drop_z_entry=[-2.5, -3.0]),
+         720, OFFENSIVE_GATES, "offensive"),
+        ("funding_squeeze_continuation_v1",
+         lambda **p: FundingSqueezeContinuation(funding=f, **p),
+         param_grid(extreme_pct=[0.88, 0.94]),
+         720, OFFENSIVE_GATES, "offensive"),
+    ]
+    for name, factory, grid, test_bars, gates, label in lanes:
+        result = walk_forward(
+            c, f, factory, grid, config,
+            train_bars=1440, test_bars=test_bars, symbol=symbol, timeframe=TIMEFRAME,
+        )
+        records.append(wf_record(name, symbol, result, gates, gates_label=label))
     return records
 
 

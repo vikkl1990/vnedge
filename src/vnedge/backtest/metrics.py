@@ -32,6 +32,9 @@ class BacktestMetrics:
     total_fees_usd: float
     total_funding_usd: float
     exit_reasons: dict[str, int]
+    payoff_ratio: float = 0.0  # avg win / |avg loss|
+    avg_mae_usd: float = 0.0
+    avg_mfe_usd: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -97,4 +100,10 @@ def compute_metrics(result: BacktestResult) -> BacktestMetrics:
         total_fees_usd=sum(t.fees_usd for t in trades),
         total_funding_usd=sum(t.funding_usd for t in trades),
         exit_reasons=exit_reasons,
+        payoff_ratio=(
+            (gross_wins / len(wins)) / (gross_losses / len(losses))
+            if wins and losses and gross_losses > 0 else 0.0
+        ),
+        avg_mae_usd=sum(t.mae_usd for t in trades) / len(trades) if trades else 0.0,
+        avg_mfe_usd=sum(t.mfe_usd for t in trades) / len(trades) if trades else 0.0,
     )
