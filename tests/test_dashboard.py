@@ -91,6 +91,9 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     exchange = SimulatedExchange(FillModel(), 500.0)
     exchange.set_quote(SYM, bid=100.0, ask=100.0)
     exchange.submit_order(PaperOrderRequest("o1", SYM, True, 1.0))
+    exchange.submit_order(
+        PaperOrderRequest("o2", SYM, True, 1.0, order_type="limit", limit_price=99.0)
+    )
     tracker = PortfolioTracker(exchange, 500.0)
     kill = KillSwitch(kill_file=tmp_path / "KILL")
     journal = DecisionJournal(tmp_path / "j.jsonl")
@@ -110,6 +113,10 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     assert snap["risk_status"] == "ok"
     assert len(snap["positions"]) == 1
     assert snap["positions"][0]["side"] == "long"
+    assert snap["positions"][0]["notional_usd"] == 100.0
+    assert snap["open_orders"][0]["client_order_id"] == "o2"
+    assert snap["open_orders"][0]["exchange_order_id"].startswith("pex_")
+    assert "state_age_ms" in snap["open_orders"][0]
 
     kill.activate("test")
     snap2 = build_snapshot(
