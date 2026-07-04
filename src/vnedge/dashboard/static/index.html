@@ -120,6 +120,25 @@
     text-overflow:ellipsis;
   }
   .price-meta{grid-column:1/-1;color:var(--quiet);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tape-stats{
+    grid-column:1/-1;
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:4px;
+    min-width:0;
+  }
+  .tape-stats span{
+    min-width:0;
+    border:1px solid rgba(49,80,112,.55);
+    border-radius:4px;
+    padding:3px 5px;
+    color:var(--muted);
+    font-size:9.5px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    background:rgba(7,13,22,.6);
+  }
   #clock{color:var(--muted);font-size:11px;white-space:nowrap;text-align:right}
 
   #locked{
@@ -211,6 +230,56 @@
     padding:12px;
     border-bottom:1px solid var(--line);
   }
+  .action-matrix{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:8px;
+    padding:10px 12px 0;
+  }
+  .action-cell{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:rgba(6,13,22,.88);
+    padding:8px 9px;
+  }
+  .action-cell .label{
+    color:var(--quiet);
+    font-size:9px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .action-cell .state{
+    margin-top:5px;
+    font-size:13px;
+    font-weight:900;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .action-cell .why{
+    margin-top:4px;
+    color:var(--muted);
+    font-size:10px;
+    line-height:1.25;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .action-cell.good{border-color:rgba(51,209,122,.42);background:rgba(9,30,22,.72)}
+  .action-cell.warn{border-color:rgba(255,184,77,.46);background:rgba(35,25,10,.72)}
+  .action-cell.bad{border-color:rgba(255,90,104,.5);background:rgba(37,13,18,.72)}
+  .action-cell.info{border-color:rgba(77,178,255,.42);background:rgba(9,24,40,.72)}
+  .action-cell.idle{border-color:rgba(79,97,121,.55);background:rgba(8,13,21,.72)}
+  .action-cell.good .state{color:var(--green)}
+  .action-cell.warn .state{color:var(--amber)}
+  .action-cell.bad .state{color:var(--red)}
+  .action-cell.info .state{color:var(--blue)}
+  .action-cell.idle .state{color:var(--quiet)}
   .op-card{
     min-width:0;
     border:1px solid var(--line);
@@ -364,7 +433,7 @@
   .trail .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .trail .who{color:var(--muted);white-space:nowrap}
 
-  .loop-board{order:5;background:rgba(6,14,24,.92)}
+  .loop-board{order:4;background:rgba(6,14,24,.92)}
   .loop-board summary{list-style:none;cursor:pointer}
   .loop-board summary::-webkit-details-marker{display:none}
   .loop-board .panel-title{border-bottom-color:rgba(77,178,255,.32)}
@@ -436,7 +505,7 @@
   }
 
   .workbench{
-    order:4;
+    order:5;
     display:grid;
     grid-template-columns:minmax(0,1.58fr) minmax(330px,.9fr);
     gap:12px;
@@ -480,6 +549,9 @@
     border-collapse:collapse;
   }
   #orders{min-width:980px}
+  #positions{min-width:820px}
+  #research{min-width:1180px}
+  #ea_proposals{min-width:980px}
   th,td{
     text-align:left;
     padding:7px 12px;
@@ -526,6 +598,40 @@
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
   .agent-board{order:6}
+  .lane-board table{
+    min-width:100%;
+    table-layout:fixed;
+  }
+  .lane-board th,.lane-board td{
+    padding:7px 8px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-board th:nth-child(1),.lane-board td:nth-child(1){width:12%}
+  .lane-board th:nth-child(2),.lane-board td:nth-child(2){width:8%}
+  .lane-board th:nth-child(3),.lane-board td:nth-child(3){width:10%}
+  .lane-board th:nth-child(4),.lane-board td:nth-child(4){width:9%}
+  .lane-board th:nth-child(5),.lane-board td:nth-child(5){width:11%}
+  .lane-board th:nth-child(6),.lane-board td:nth-child(6){width:7%}
+  .lane-board th:nth-child(7),.lane-board td:nth-child(7){width:8%}
+  .lane-board th:nth-child(8),.lane-board td:nth-child(8){width:7%}
+  .lane-board th:nth-child(9),.lane-board td:nth-child(9){width:6%}
+  .lane-board th:nth-child(10),.lane-board td:nth-child(10){width:7%}
+  .lane-board th:nth-child(11),.lane-board td:nth-child(11){width:6%}
+  .lane-board th:nth-child(12),.lane-board td:nth-child(12){width:9%}
+  .lane-rank{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:24px;
+    height:22px;
+    margin-right:8px;
+    border:1px solid var(--line2);
+    border-radius:4px;
+    color:var(--blue);
+    background:rgba(77,178,255,.08);
+    font-size:10px;
+  }
   .mini-badge{
     display:inline-flex;
     align-items:center;
@@ -560,6 +666,7 @@
     .kpis{grid-template-columns:repeat(3,minmax(128px,1fr))}
     .operator-head{grid-template-columns:1fr}
     .op-clock{text-align:left}
+    .action-matrix{grid-template-columns:repeat(3,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .workspace-grid{grid-template-columns:1fr}
     .mini-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -584,6 +691,7 @@
     .brand-name{font-size:18px}
     .brand-sub{display:none}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .action-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .gate-line{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -599,6 +707,7 @@
     .kpis{grid-template-columns:1fr}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:1fr}
     .price-main{font-size:19px}
+    .tape-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
     .op-state{font-size:22px}
     section h2,.panel-title{align-items:flex-start;flex-direction:column}
     .tag{white-space:normal}
@@ -627,6 +736,12 @@
       <div class="price-main" id="priceMain">--</div>
       <div class="price-symbol" id="priceSymbol">--</div>
       <div class="price-meta" id="priceMeta">bid / ask --</div>
+      <div class="tape-stats" aria-label="market tape">
+        <span id="tape_spread">spread --</span>
+        <span id="tape_funding">funding --</span>
+        <span id="tape_feed">feed --</span>
+        <span id="tape_edge">fee wall --</span>
+      </div>
     </div>
     <div id="clock">--:--:-- UTC</div>
   </header>
@@ -655,6 +770,14 @@
         </div>
         <div class="op-detail" id="op_stack">risk, feed, journal, and order state pending</div>
         <div class="op-clock">snapshot <span id="op_snapshot_age">--</span></div>
+      </div>
+      <div class="action-matrix" aria-label="operator actionability matrix">
+        <div class="action-cell idle" id="act_entries"><div class="label">Entries</div><div class="state" id="act_entries_state">--</div><div class="why" id="act_entries_why">gateway pending</div></div>
+        <div class="action-cell idle" id="act_exits"><div class="label">Exits</div><div class="state" id="act_exits_state">--</div><div class="why" id="act_exits_why">reduce-only path</div></div>
+        <div class="action-cell idle" id="act_flatten"><div class="label">Flatten</div><div class="state" id="act_flatten_state">--</div><div class="why" id="act_flatten_why">emergency path</div></div>
+        <div class="action-cell idle" id="act_live"><div class="label">Live Capital</div><div class="state" id="act_live_state">--</div><div class="why" id="act_live_why">three locks</div></div>
+        <div class="action-cell idle" id="act_shadow"><div class="label">Shadow Lanes</div><div class="state" id="act_shadow_state">--</div><div class="why" id="act_shadow_why">cross-venue watch</div></div>
+        <div class="action-cell idle" id="act_research"><div class="label">Research</div><div class="state" id="act_research_state">--</div><div class="why" id="act_research_why">walk-forward lab</div></div>
       </div>
       <div class="operator-grid">
         <div class="op-card" id="op_loss_card"><div class="label">Daily stop left</div><div class="metric" id="op_loss_left">--</div><div class="sub" id="op_loss_detail">trial stop pending</div></div>
@@ -697,16 +820,17 @@
       </div>
     </section>
 
-    <section id="lanesBoard" style="display:none" aria-label="multi-exchange lanes">
-      <h2>Multi-exchange shadow lanes <span class="tag">same strategy, live data, per-venue — no live orders</span></h2>
-      <table style="width:100%;border-collapse:collapse">
+    <section id="lanesBoard" class="lane-board" aria-label="multi-exchange lanes">
+      <h2>Multi-exchange Lane Matrix <span class="tag">Binance, Bybit, Delta readiness; research/shadow only unless live gates pass</span></h2>
+      <div class="table-wrap">
+      <table>
         <thead><tr>
-          <th style="text-align:left">Lane</th><th>Venue</th><th>Symbol</th>
-          <th>Equity</th><th>Realized</th><th>Unrealized</th><th>Fills</th>
-          <th>Fees</th><th>Risk</th><th>Feed</th>
+          <th>Rank / Lane</th><th>Venue</th><th>Mode</th><th>Symbol</th><th>Strategy</th>
+          <th>Equity</th><th>Net</th><th>Fees</th><th>Fills</th><th>Risk</th><th>Feed</th><th>Block / Next</th>
         </tr></thead>
         <tbody id="lanesBody"></tbody>
       </table>
+      </div>
     </section>
 
     <section class="institutional-board" aria-label="institutional workspace">
@@ -754,6 +878,8 @@
                       <tr><td>L1 Top</td><td id="obi_l1_bid">--</td><td id="obi_l1_ask">--</td><td id="obi_l1_signal">--</td></tr>
                       <tr><td>Spread</td><td id="obi_spread_bps">--</td><td id="obi_mid">--</td><td id="obi_spread_signal">--</td></tr>
                       <tr><td>Funding</td><td id="obi_funding">--</td><td id="obi_oi">--</td><td id="obi_funding_signal">--</td></tr>
+                      <tr><td>Fee Wall</td><td id="obi_fee_wall">--</td><td id="obi_maker_edge">--</td><td id="obi_fee_signal">--</td></tr>
+                      <tr><td>Adverse Selection</td><td id="obi_spread_regime">--</td><td id="obi_fill_bias">--</td><td id="obi_selection_signal">--</td></tr>
                       <tr><td>L2 Builder</td><td id="obi_l2_state">--</td><td id="obi_recorder">--</td><td id="obi_l2_signal">--</td></tr>
                       <tr><td>OBI Aggregate</td><td id="obi_bid_qty">--</td><td id="obi_ask_qty">--</td><td id="obi_value">--</td></tr>
                     </tbody>
@@ -865,7 +991,7 @@
       </div>
     </section>
 
-    <details class="loop-board">
+    <details class="loop-board" open>
       <summary class="panel-title">
         <span>Execution Architecture</span>
         <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
@@ -957,7 +1083,7 @@
           <h2>Positions <span class="tag" id="posmark">mark-to-market</span></h2>
           <div class="table-wrap">
             <table id="positions"><thead><tr>
-              <th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Entry</th><th>Mark</th><th>uPnL</th>
+              <th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Entry</th><th>Mark</th><th>uPnL</th><th>Risk note</th>
             </tr></thead><tbody></tbody></table>
           </div>
           <div class="empty" id="positions-empty">flat -- no open positions</div>
@@ -977,7 +1103,7 @@
           <h2>Research Lab <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
           <div class="table-wrap">
             <table id="research"><thead><tr>
-              <th>Strategy</th><th>Symbol</th><th>OOS net</th><th>L / S</th><th>Trades</th><th>Windows</th><th>Profitable</th><th>Verdict</th>
+              <th>Lane</th><th>Venue</th><th>Strategy</th><th>Symbol</th><th>OOS net</th><th>Fee wall</th><th>L / S</th><th>Trades</th><th>Windows</th><th>Gate</th><th>Action</th>
             </tr></thead><tbody></tbody></table>
           </div>
           <div class="empty" id="research-empty">research loop has not published yet</div>
@@ -1054,7 +1180,7 @@
       </div>
       <div class="table-wrap">
         <table id="ea_proposals"><thead><tr>
-          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Why</th>
+          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Why</th>
         </tr></thead><tbody></tbody></table>
       </div>
       <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
@@ -1250,38 +1376,111 @@
   function shortName(value){
     return String(value||"--").replace(/_v1$/,"").replace(/_/g," ");
   }
+  function modeLabelAndTone(s){
+    const mode=String(s.mode||"--").toLowerCase();
+    if(s.kill_switch_active)return ["KILL ACTIVE","bad"];
+    if(s.live_trading_enabled)return ["LIVE ARMED","warn"];
+    if(mode.includes("shadow"))return ["SHADOW","plan"];
+    if(mode.includes("paper"))return ["PAPER","good"];
+    if(mode.includes("backtest"))return ["BACKTEST","info"];
+    if(mode.includes("live"))return ["LIVE LOCKED","warn"];
+    return [String(s.mode||"--").toUpperCase(),"idle"];
+  }
+  function setAction(id,state,why,tone){
+    const cell=$("act_"+id);
+    if(cell)cell.className="action-cell "+(tone||"idle");
+    text("act_"+id+"_state",state);
+    text("act_"+id+"_why",why);
+  }
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
-  function renderLanes(lanes){
+  function renderLanes(lanes,snapshot){
+    const s=snapshot||{};
+    const feed=s.feed_health||{};
     const board=document.getElementById("lanesBoard");
     const body=document.getElementById("lanesBody");
     if(!board||!body)return;
-    if(!Array.isArray(lanes)||lanes.length<2){board.style.display="none";return;}
     board.style.display="";
     body.replaceChildren();
+    const supplied=Array.isArray(lanes)&&lanes.length?lanes:[];
+    const rows=supplied.length?supplied:[
+      {
+        lane_id:"primary-governed",
+        exchange:feed.exchange||"binanceusdm",
+        mode:s.mode||"paper",
+        symbol:s.symbol||"BTC/USDT:USDT",
+        strategy_id:s.strategy_id||"--",
+        equity:s.equity,
+        realized_pnl:s.realized_pnl,
+        unrealized_pnl:s.unrealized_pnl,
+        fees_usd:s.fees_usd,
+        fills:s.fills,
+        risk_status:s.risk_status||"--",
+        feed:feed.candles==="ok"?"ok":feed.candles||"--",
+        next:"active governed snapshot"
+      },
+      {
+        lane_id:"bybit-shadow",
+        exchange:"bybit",
+        mode:"research/shadow",
+        symbol:"BTC/USDT + ETH/USDT",
+        strategy_id:"same gate suite",
+        equity:null,
+        realized_pnl:0,
+        unrealized_pnl:0,
+        fees_usd:0,
+        fills:0,
+        risk_status:"not armed",
+        feed:"pending",
+        next:"second venue adapter decision"
+      },
+      {
+        lane_id:"delta-india",
+        exchange:"delta",
+        mode:"research/compliance",
+        symbol:"INR-eligible perps",
+        strategy_id:"CA-gated live path",
+        equity:null,
+        realized_pnl:0,
+        unrealized_pnl:0,
+        fees_usd:0,
+        fills:0,
+        risk_status:"not armed",
+        feed:"pending",
+        next:"India compliance sign-off"
+      }
+    ];
     const money=(v)=>(v>=0?"+$":"-$")+Math.abs(Number(v)||0).toFixed(2);
     const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
-    for(const l of lanes){
+    rows.forEach((l,idx)=>{
       const tr=body.insertRow();
-      const laneCell=appendCell(tr,l.lane_id||"");
+      const laneCell=appendCell(tr,"");
+      const rank=document.createElement("span");
+      rank.className="lane-rank";
+      rank.textContent=String(idx+1);
+      laneCell.appendChild(rank);
+      laneCell.appendChild(document.createTextNode(l.lane_id||""));
       laneCell.style.textAlign="left";
       appendCell(tr,(l.exchange||"").replace("usdm",""));
-      appendCell(tr,String(l.symbol||"").split(":")[0]);
-      appendCell(tr,"$"+(Number(l.equity)||0).toFixed(2));
-      appendCell(tr,money(l.realized_pnl),cls(l.realized_pnl));
-      appendCell(tr,money(l.unrealized_pnl),cls(l.unrealized_pnl));
-      appendCell(tr,l.fills||0);
+      appendCell(tr,l.mode||s.mode||"--");
+      appendCell(tr,String(l.symbol||"").split(":")[0],"clip",l.symbol||"");
+      appendCell(tr,String(l.strategy_id||l.strategy||"--").replace(/_v1$/,""),"clip",l.strategy_id||l.strategy||"");
+      appendCell(tr,l.equity==null?"--":"$"+(Number(l.equity)||0).toFixed(2));
+      const net=num(l.realized_pnl)+num(l.unrealized_pnl);
+      appendCell(tr,money(net),cls(net));
       appendCell(tr,"$"+(Number(l.fees_usd)||0).toFixed(2));
-      appendCell(tr,l.risk_status||"?",l.risk_status==="ok"?"pos":"neg");
-      appendCell(tr,l.feed||"?",l.feed==="ok"?"pos":"neg");
-    }
+      appendCell(tr,l.fills||0);
+      appendCell(tr,l.risk_status||"?",l.risk_status==="ok"?"pos":String(l.risk_status).includes("pending")||String(l.risk_status).includes("not")?"neutral":"neg");
+      appendCell(tr,l.feed||"?",l.feed==="ok"?"pos":String(l.feed).includes("pending")?"neutral":"neg");
+      appendCell(tr,l.block_reason||l.next||"--","clip",l.block_reason||l.next||"");
+    });
   }
 
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
-    renderLanes(s.lanes);
+    renderLanes(s.lanes,s);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
@@ -1293,6 +1492,7 @@
     const riskTone=s.risk_status==="ok"?"good":s.risk_status==="reconciling"?"warn":"bad";
     const killTone=s.kill_switch_active?"bad":"good";
     const liveTone=s.live_trading_enabled?"warn":"good";
+    const [modeLabel,modeTone]=modeLabelAndTone(s);
     const journalTone=s.last_journal_write==="ok"?"good":"bad";
     const dd=num(s.peak_equity)>0?(num(s.peak_equity)-num(s.equity))/num(s.peak_equity)*100:0;
     const exposure=positions.reduce((sum,p)=>sum+Math.abs(num(p.notional_usd)||num(p.quantity)*num(p.mark_price)),0);
@@ -1302,18 +1502,18 @@
     const dailyLeft=dailyStop==null?null:dailyStop+num(s.daily_pnl);
     const entriesAllowed=riskTone==="good"&&feedTone==="good"&&journalTone==="good"&&!s.kill_switch_active&&unresolved===0;
 
-    setChip("mode",s.live_trading_enabled?(s.mode+" live enabled"):s.mode,liveTone);
+    setChip("mode",modeLabel,modeTone);
     setChip("symbol",s.symbol||"--","info");
     setChip("strategy",s.strategy_id||"--",s.strategy_id?"info":"idle");
     setChip("risk","risk "+(s.risk_status||"--"),riskTone);
     setChip("kill",s.kill_switch_active?"kill active":"kill armed",killTone);
 
-    text("gateMode",s.mode||"--");setTone("gateMode",liveTone);
+    text("gateMode",s.mode||"--");setTone("gateMode",modeTone);
     text("gateModeDetail",s.live_trading_enabled?"live path enabled":"paper/shadow safe path");
     text("gateRisk",s.risk_status||"--");setTone("gateRisk",riskTone);
     text("gateRiskDetail",riskTone==="good"?"accepting evaluated intents":"entries blocked or restricted");
-    text("gateLive",s.live_trading_enabled?"enabled":"disabled");setTone("gateLive",liveTone);
-    text("gateLiveDetail",s.live_trading_enabled?"confirmation locks satisfied":"no live order path");
+    text("gateLive",s.live_trading_enabled?"armed":"locked");setTone("gateLive",s.live_trading_enabled?"warn":"good");
+    text("gateLiveDetail",s.live_trading_enabled?"confirmation locks satisfied":"live order path closed");
     text("gateKill",s.kill_switch_active?"active":"armed");setTone("gateKill",killTone);
     text("gateKillDetail",s.kill_switch_active?"reduce-only exits":"manual file trip ready");
     text("gateFeed",toneText(feedTone));setTone("gateFeed",feedTone);
@@ -1325,12 +1525,17 @@
       text("priceMain","$"+num(price.mid).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1}));
       text("priceSymbol",s.symbol||"--");
       text("priceMeta","bid "+num(price.bid).toFixed(1)+" / ask "+num(price.ask).toFixed(1)+" / spread "+num(price.spread_bps).toFixed(2)+" bps");
+      text("tape_spread","spread "+num(price.spread_bps).toFixed(2)+" bps");
       text("mk_ba",num(price.bid).toFixed(1)+" / "+num(price.ask).toFixed(1));
       text("mk_spread",num(price.spread_bps).toFixed(2)+" bps");
     }else{
       text("priceMain","--");text("priceSymbol",s.symbol||"--");text("priceMeta","bid / ask --");
+      text("tape_spread","spread --");
       text("mk_ba","--");text("mk_spread","--");
     }
+    text("tape_funding","funding "+((num(s.funding_rate)*100).toFixed(4))+"% / 8h");
+    text("tape_feed","feed "+ageText(lat));
+    text("tape_edge","wall 10bps");
 
     setValue("equity",moneyAbs(s.equity),"neutral");
     setValue("daily",usd(s.daily_pnl),classFor(s.daily_pnl));
@@ -1442,6 +1647,24 @@
     text("op_stack",entriesAllowed?"entries evaluated; reduce-only exits guarded":"new entries blocked; reduce-only exits remain visible");
     const snapshotAge=s.ts?Math.max(0,Date.now()-Date.parse(s.ts)):null;
     text("op_snapshot_age",snapshotAge==null?"--":ageText(snapshotAge));
+    const researchRows=Array.isArray(lastResearch.results)?lastResearch.results.length:0;
+    const laneCount=Array.isArray(s.lanes)?s.lanes.length:0;
+    setAction("entries",entriesAllowed?"ALLOW":"BLOCK",
+      entriesAllowed?"all intent gates green":blockers[0]||"waiting for clean gateway",
+      entriesAllowed?"good":"bad");
+    setAction("exits","ALLOW","reduce-only exits stay available","good");
+    setAction("flatten",s.kill_switch_active||unresolved?"READY":"ARMED",
+      s.kill_switch_active?"kill switch active":unresolved?"reconcile before new risk":"manual emergency path",
+      s.kill_switch_active||unresolved?"warn":"info");
+    setAction("live",s.live_trading_enabled?"ARMED":"LOCKED",
+      s.live_trading_enabled?"live confirmation locks satisfied":"three live locks not satisfied",
+      s.live_trading_enabled?"warn":"good");
+    setAction("shadow",laneCount?"RUNNING":"PLANNED",
+      laneCount?laneCount+" venue lanes reporting":"primary lane plus venue readiness",
+      laneCount?"plan":"idle");
+    setAction("research",researchRows?"PUBLISHED":"WAITING",
+      researchRows?researchRows+" walk-forward rows":"no latest research payload",
+      researchRows?"plan":"idle");
 
     const lossTone=dailyLeft==null?"idle":dailyLeft<=0?"bad":dailyLeft<=Math.max(1,dailyStop*0.25)?"warn":"good";
     text("op_loss_left",dailyLeft==null?"--":moneyAbs(Math.max(0,dailyLeft)));
@@ -1509,6 +1732,7 @@
       appendCell(row,finite(p.entry_price)?num(p.entry_price).toFixed(2):"--");
       appendCell(row,finite(p.mark_price)?num(p.mark_price).toFixed(2):"--");
       appendCell(row,usd(p.unrealized_usd),classFor(p.unrealized_usd));
+      appendCell(row,"stop/liquidation model pending","clip","paper snapshot has no liquidation or stop metadata");
     }
     $("positions").style.display=positions.length?"table":"none";
     $("positions-empty").style.display=positions.length?"none":"block";
@@ -1647,6 +1871,15 @@
     text("obi_oi",feed.open_interest||"--");
     setPlainTone("obi_funding_signal",feed.funding==="ok"&&feed.open_interest==="ok"?"funding/OI ok":"incomplete",
       feed.funding==="ok"&&feed.open_interest==="ok"?"pos":"neg");
+    const spread=price&&finite(price.spread_bps)?num(price.spread_bps):null;
+    text("obi_fee_wall","10.0 bps taker RT");
+    text("obi_maker_edge","~7.0 bps maker-first");
+    setPlainTone("obi_fee_signal",spread==null?"waiting":spread<3?"maker lane required":"fee wall dominant",
+      spread==null?"dimval":spread<3?"pos":"neutral");
+    text("obi_spread_regime",spread==null?"--":(spread<2?"tight":spread<8?"normal":"wide"));
+    text("obi_fill_bias",spread==null?"--":(spread<3?"queue risk":"adverse selection watch"));
+    setPlainTone("obi_selection_signal",spread==null?"waiting":spread<8?"watch maker fills":"block scalps",
+      spread==null?"dimval":spread<8?"neutral":"neg");
     text("obi_l2_state","not wired");
     text("obi_recorder","tick recorder next");
     setPlainTone("obi_l2_signal","needed for true scalper","neutral");
@@ -1749,12 +1982,15 @@
     renderInstCard("card_gov_dd","gov_max_dd",dd,
       s.trial?"paper trial envelope":"candidate metric",dd==="--"?"idle":"info","gov-card");
 
-    setGateStep("gate_no_lookahead",hasRows,"No lookahead");
-    setGateStep("gate_min_trades",best&&num(best.oos_trades)>=10,"Min trades");
-    setGateStep("gate_oos_net",best&&num(best.oos_net_usd)>0,"OOS net");
-    setGateStep("gate_pf",passed||best&&num(best.profit_factor)>=1.1||best&&num(best.payoff_ratio)>=1.8,"PF / payoff");
-    setGateStep("gate_dd",passed||best&&(!finite(best.max_drawdown_pct)||num(best.max_drawdown_pct)<=15),"DD cap");
-    setGateStep("gate_stability",passed||best&&num(best.profitable_windows_pct)>=50,"Stability");
+    setGateStep("gate_no_lookahead",hasRows,"Causal matrix");
+    setGateStep("gate_min_trades",best&&num(best.oos_trades)>=10,"Trades "+(best?num(best.oos_trades):0)+"/10");
+    setGateStep("gate_oos_net",best&&num(best.oos_net_usd)>0,"Net "+(best?usd(best.oos_net_usd):"--"));
+    setGateStep("gate_pf",passed||best&&num(best.profit_factor)>=1.1||best&&num(best.payoff_ratio)>=1.8,
+      "PF "+(best&&finite(best.profit_factor)?num(best.profit_factor).toFixed(2):"--"));
+    setGateStep("gate_dd",passed||best&&(!finite(best.max_drawdown_pct)||num(best.max_drawdown_pct)<=15),
+      "DD "+(best&&finite(best.max_drawdown_pct)?pct(best.max_drawdown_pct):"--"));
+    setGateStep("gate_stability",passed||best&&num(best.profitable_windows_pct)>=50,
+      "Stable "+(best&&finite(best.profitable_windows_pct)?num(best.profitable_windows_pct).toFixed(0)+"%":"--"));
 
     renderLandingAudit(rows,s,feedTone,journalTone);
     renderFillMatrix(fills);
@@ -1932,7 +2168,7 @@
     const rows=Array.isArray(d.results)?d.results:[];
     const body=$("research").querySelector("tbody");
     body.replaceChildren();
-    for(const r of rows){
+    rows.forEach((r,idx)=>{
       const tr=body.insertRow();
       const diag=r.diagnosis||{};
       const variants=Array.isArray(diag.suggested_variants)?diag.suggested_variants:[];
@@ -1940,19 +2176,27 @@
       const title=r.auto?("auto-proposed uplift: "+(r.rationale||r.goal||""))
         :variants.length?("diagnosis: "+tags.join(", ")+"; proposes "+variants.join(", "))
         :("gate profile: "+(r.gates||"standard"));
-      const strat=appendCell(tr,(r.auto?"  ":"")+(r.strategy||"--"),"clip",title);
+      const lane=appendCell(tr,"");
+      const rank=document.createElement("span");
+      rank.className="lane-rank";
+      rank.textContent=String(idx+1);
+      lane.appendChild(rank);
+      lane.appendChild(document.createTextNode(r.verdict==="PASS"?"candidate":r.auto?"auto-variant":"research"));
+      appendCell(tr,String(r.exchange||r.venue||"--").replace("usdm",""));
+      const strat=appendCell(tr,(r.auto?"* ":"")+(r.strategy||"--"),"clip",title);
       if(r.auto)strat.classList.add("text-info");
       const symbol=String(r.symbol||"--").split(":")[0];
       appendCell(tr,symbol);
       appendCell(tr,usd(r.oos_net_usd),classFor(r.oos_net_usd));
+      appendCell(tr,feeWallText(r),r.verdict==="PASS"?"pos":"neutral");
       const at=r.attribution||{};
       appendCell(tr,(at.long||at.short)?("L "+fmtNet(at.long)+" / S "+fmtNet(at.short)):"--",null,"per-side OOS net (trades)");
       appendCell(tr,r.oos_trades);
       appendCell(tr,(r.traded_windows==null||r.windows==null)?"--":r.traded_windows+"/"+r.windows);
-      appendCell(tr,finite(r.profitable_windows_pct)?num(r.profitable_windows_pct).toFixed(0)+"%":"--");
-      const verdict=tr.insertCell();
-      appendBadge(verdict,r.verdict==="PASS"?"PASS":"REJECT",r.verdict==="PASS"?"good":"warn");
-    }
+      const gate=tr.insertCell();
+      appendBadge(gate,r.verdict==="PASS"?"PASS":"REJECT",r.verdict==="PASS"?"good":"warn");
+      appendCell(tr,nextResearchAction(r,variants),r.verdict==="PASS"?"pos":r.auto?"text-info":"neutral","profitable windows "+(finite(r.profitable_windows_pct)?num(r.profitable_windows_pct).toFixed(0)+"%":"--"));
+    });
     $("research").style.display=rows.length?"table":"none";
     $("research-empty").style.display=rows.length?"none":"block";
     if(d.generated_at){
@@ -1987,6 +2231,21 @@
   function fmtNet(side){
     if(!side)return "--";
     return (num(side.net_usd)>=0?"+$":"-$")+Math.abs(num(side.net_usd)).toFixed(0)+" ("+num(side.trades)+")";
+  }
+
+  function feeWallText(r){
+    const trades=num(r.oos_trades);
+    const net=num(r.oos_net_usd);
+    if(!trades)return "no trades";
+    const perTrade=net/trades;
+    return (perTrade>=0?"+$":"-$")+Math.abs(perTrade).toFixed(2)+"/trade";
+  }
+
+  function nextResearchAction(r,variants){
+    if(r.verdict==="PASS")return "pre-register untouched judgment";
+    if(r.auto)return "candidate only; no promotion";
+    if(variants&&variants.length)return "bounded variant queued";
+    return "collect more data / reject";
   }
 
   function loadResearch(){
@@ -2033,6 +2292,8 @@
       appendCell(tr,action,proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"text-good");
       appendCell(tr,target);
       appendCell(tr,String(proposal.parent_strategy||proposal.strategy_id||"--").replace(/_v1$/,""),"clip");
+      appendCell(tr,proposal.proposal_type==="pre_registered_judgment"?"human gate":proposal.proposal_type==="cross_exchange_validation"?"shadow check":"explore only",
+        proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"neutral");
       appendCell(tr,String(proposal.rationale||"--").slice(0,110),"clip",proposal.rationale||"");
     }
     $("ea_proposals").style.display=proposals.length?"table":"none";
@@ -2051,7 +2312,7 @@
     const proto=location.protocol==="https:"?"wss:":"ws:";
     const ws=new WebSocket(proto+"//"+location.host+"/ws?token="+encodeURIComponent(token));
     ws.onopen=()=>{
-      setChip("conn","live","good");
+      setChip("conn","streaming","good");
       backoff=500;
     };
     let lastEq=null;
