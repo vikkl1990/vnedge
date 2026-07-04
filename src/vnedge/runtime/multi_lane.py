@@ -1,0 +1,179 @@
+"""Multi-exchange shadow lanes.
+
+Runs the same (or different) strategy as parallel, fully isolated shadow
+lanes across venues — e.g. funding-MR on Binance AND Bybit at once — to
+answer: does the strategy behave better on one venue under live markets?
+
+Each lane is a complete, independent LivePaperSession:
+- its own live feed (real venue websockets), simulated exchange, gateway,
+  order manager, journal, account store, equity history, and $ shadow base.
+- NO live orders, NO cross-venue routing. Pure per-venue shadow.
+
+The dashboard sees the PRIMARY (governed) lane as the flat top-level
+snapshot (backward-compatible), plus a `lanes` array for side-by-side
+comparison. One venue's feed stalling never blocks another lane.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from vnedge.config.risk_config import RiskConfig
+from vnedge.data.ccxt_client import CcxtPublicClient
+from vnedge.data.schemas import normalize_candles, normalize_funding
+from vnedge.exchange.live_feed import LiveMarketFeed
+from vnedge.execution.journal import DecisionJournal
+from vnedge.execution.order_manager import OrderManager
+from vnedge.paper.account_store import PaperAccountStore
+from vnedge.paper.fill_model import FillModel
+from vnedge.paper.paper_broker import PaperBroker
+from vnedge.paper.simulated_exchange import SimulatedExchange
+from vnedge.risk.kill_switch import KillSwitch
+from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.live_paper import LivePaperSession
+from vnedge.runtime.paper_trial import LiveFundingMR
+from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LaneSpec:
+    lane_id: str          # unique, e.g. "binance_funding_mr"
+    exchange: str         # ccxt id, e.g. "binanceusdm" | "bybit"
+    symbol: str
+    timeframe: str = "1h"
+    starting_equity: float = 500.0
+    strategy_params: dict | None = None
+    is_primary: bool = False   # the governed lane shown as the flat snapshot
+    daily_loss_usd: float = 10.0
+
+
+# --- snapshot fan-in --------------------------------------------------------------
+
+class _LaneSink:
+    """A provider-shaped object one lane publishes to; tags + forwards."""
+
+    def __init__(self, parent: "MultiLaneProvider", lane_id: str, exchange: str) -> None:
+        self._parent, self._lane_id, self._exchange = parent, lane_id, exchange
+
+    def publish(self, snapshot: dict) -> None:
+        self._parent._publish(self._lane_id, self._exchange, snapshot)
+
+
+class MultiLaneProvider:
+    """Holds each lane's latest snapshot. latest() returns the primary lane
+    (flat, backward-compatible) with a `lanes` array appended for comparison."""
+
+    def __init__(self, primary_lane_id: str) -> None:
+        self.primary = primary_lane_id
+        self._lanes: dict[str, dict] = {}
+        self._order: list[str] = []
+
+    def sink(self, lane_id: str, exchange: str) -> _LaneSink:
+        return _LaneSink(self, lane_id, exchange)
+
+    def _publish(self, lane_id: str, exchange: str, snapshot: dict) -> None:
+        snap = dict(snapshot)
+        snap["lane_id"] = lane_id
+        snap["lane_exchange"] = exchange
+        if lane_id not in self._lanes:
+            self._order.append(lane_id)
+        self._lanes[lane_id] = snap
+
+    def latest(self) -> dict | None:
+        if not self._lanes:
+            return None
+        primary = self._lanes.get(self.primary) or self._lanes[self._order[0]]
+        out = dict(primary)
+        out["lanes"] = [
+            {
+                "lane_id": self._lanes[lid]["lane_id"],
+                "exchange": self._lanes[lid]["lane_exchange"],
+                "symbol": self._lanes[lid].get("symbol", ""),
+                "equity": self._lanes[lid].get("equity", 0.0),
+                "realized_pnl": self._lanes[lid].get("realized_pnl", 0.0),
+                "unrealized_pnl": self._lanes[lid].get("unrealized_pnl", 0.0),
+                "fills": self._lanes[lid].get("fills", 0),
+                "fees_usd": self._lanes[lid].get("fees_usd", 0.0),
+                "risk_status": self._lanes[lid].get("risk_status", "?"),
+                "feed": self._lanes[lid].get("feed_health", {}).get("candles", "?"),
+                "positions": len(self._lanes[lid].get("positions", [])),
+            }
+            for lid in self._order if lid in self._lanes
+        ]
+        return out
+
+
+# --- lane construction ------------------------------------------------------------
+
+async def build_lane(
+    spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
+) -> LivePaperSession:
+    """Seed warmup history + build an isolated LivePaperSession for one venue."""
+    warmup_hours = 450
+    until = int(time.time() * 1000)
+    since = until - warmup_hours * 3_600_000
+    async with CcxtPublicClient(spec.exchange) as rest:
+        raw_c = await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
+        raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
+    history = normalize_candles(raw_c)
+    seed_funding = normalize_funding(raw_f)
+
+    feed = LiveMarketFeed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
+    risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
+    config = RunnerConfig(mode=RunnerMode.PAPER, symbol=spec.symbol,
+                          timeframe=spec.timeframe,
+                          starting_equity_usd=spec.starting_equity, risk=risk)
+    strategy = LiveFundingMR(seed_funding, feed, **(spec.strategy_params or {}))
+    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
+    kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
+    gateway = PreTradeRiskGateway(config.risk, kill)
+    om = OrderManager(gateway, journal, PaperBroker(exchange))
+    session = LivePaperSession(
+        strategy, feed, history, config,
+        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+        snapshot_provider=provider.sink(spec.lane_id, spec.exchange),
+        account_store=PaperAccountStore(
+            journal_dir / f"{spec.lane_id}.account.json", spec.lane_id),
+        equity_history_path=journal_dir / f"{spec.lane_id}.equity.jsonl",
+        trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
+                    "min_days": 14, "preferred_days": 30, "min_trades": 10,
+                    "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
+                    "promotion_source": spec.exchange},
+    )
+    resumed = session.account_store.restore_into(exchange, session.tracker)
+    logger.info("lane %s (%s %s) built; resumed=%s", spec.lane_id, spec.exchange,
+                spec.symbol, resumed)
+    return session, feed
+
+
+class MultiLaneShadowRunner:
+    def __init__(self, specs: list[LaneSpec], journal_dir: Path,
+                 provider: MultiLaneProvider) -> None:
+        self.specs = specs
+        self.journal_dir = journal_dir
+        self.provider = provider
+
+    async def run(self, *, deadline_seconds: float | None = None) -> None:
+        built = await asyncio.gather(
+            *[build_lane(s, self.provider, self.journal_dir) for s in self.specs]
+        )
+        sessions = [b[0] for b in built]
+        feeds = [b[1] for b in built]
+        for feed in feeds:
+            await feed.start()
+        logger.info("multi-lane shadow: %d lanes running (%s)",
+                    len(sessions), ", ".join(s.lane_id for s in self.specs))
+        try:
+            await asyncio.gather(*[
+                s.run(deadline_seconds=deadline_seconds) for s in sessions
+            ])
+        finally:
+            for feed in feeds:
+                await feed.stop()

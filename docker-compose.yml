@@ -2,6 +2,10 @@ services:
   paper-trial:
     build: .
     restart: unless-stopped
+    # Multi-exchange shadow lanes: Binance (governed funding-MR trial,
+    # continues its account) + Bybit (same strategy, comparison). Both live
+    # data, $500 base, NO live orders. Serves the read-only dashboard.
+    command: ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
     environment:
       # dashboard binds 0.0.0.0 INSIDE the container; the port mapping below
       # exposes it only on the host's loopback — SSH-tunnel to reach it.
