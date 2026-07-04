@@ -136,14 +136,14 @@
   #locked code{color:var(--text)}
   #content{display:none;flex-direction:column}
 
-  section,.panel{
+  section,.panel,.loop-board{
     border:1px solid var(--line);
     border-radius:8px;
     background:rgba(10,18,31,.9);
     box-shadow:0 14px 34px rgba(0,0,0,.2);
     min-width:0;
   }
-  section{margin-bottom:12px;overflow:hidden}
+  section,.loop-board{margin-bottom:12px;overflow:hidden}
   section h2,.panel-title{
     min-height:35px;
     display:flex;
@@ -184,7 +184,78 @@
   .value.info,.text-info{color:var(--blue)}
   .value.idle,.text-idle{color:var(--quiet)}
 
-  .loop-board{order:2;background:rgba(6,14,24,.92)}
+  .operator-board{order:2;background:rgba(7,15,25,.96)}
+  .operator-head{
+    display:grid;
+    grid-template-columns:minmax(240px,1.05fr) minmax(0,1.7fr) auto;
+    gap:12px;
+    align-items:center;
+    padding:12px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(14,28,45,.96), rgba(8,15,25,.96));
+  }
+  .eyebrow{color:var(--quiet);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}
+  .op-state{font-size:28px;font-weight:900;line-height:1;letter-spacing:.08em;text-transform:uppercase}
+  .op-detail{color:var(--muted);font-size:11px;line-height:1.4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .op-clock{
+    color:var(--quiet);
+    font-size:10.5px;
+    font-variant-numeric:tabular-nums;
+    text-align:right;
+    white-space:nowrap;
+  }
+  .operator-grid{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:8px;
+    padding:12px;
+    border-bottom:1px solid var(--line);
+  }
+  .op-card{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:rgba(8,15,25,.94);
+    padding:10px;
+  }
+  .op-card.good{background:linear-gradient(180deg, rgba(13,36,27,.95), rgba(8,17,20,.96))}
+  .op-card.warn{background:linear-gradient(180deg, rgba(39,29,14,.95), rgba(18,16,13,.96))}
+  .op-card.bad{background:linear-gradient(180deg, rgba(43,17,23,.95), rgba(18,12,15,.96))}
+  .op-card.info{background:linear-gradient(180deg, rgba(13,29,48,.95), rgba(8,15,24,.96))}
+  .op-card .label{color:var(--quiet);font-size:9.8px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
+  .op-card .metric{font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .op-card .sub{margin-top:5px;color:var(--muted);font-size:10.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .truth-grid{
+    display:grid;
+    grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);
+    gap:12px;
+    padding:12px;
+  }
+  .truth-panel{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:rgba(8,15,25,.86);
+    overflow:hidden;
+  }
+  .truth-title{
+    display:flex;
+    justify-content:space-between;
+    gap:10px;
+    padding:9px 11px;
+    border-bottom:1px solid var(--line);
+    color:#dbe8f7;
+    font-size:10.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+  }
+  .latency-table{min-width:0}
+  .latency-table th,.latency-table td{font-size:11px;padding:7px 10px}
+  .latency-table td:nth-child(2),.latency-table td:nth-child(3){text-align:right}
+
+  .loop-board{order:4;background:rgba(6,14,24,.92)}
+  .loop-board summary{list-style:none;cursor:pointer}
+  .loop-board summary::-webkit-details-marker{display:none}
   .loop-board .panel-title{border-bottom-color:rgba(77,178,255,.32)}
   .loop-stack{padding:12px;display:grid;gap:10px}
   .loop-row{
@@ -297,6 +368,7 @@
     min-width:620px;
     border-collapse:collapse;
   }
+  #orders{min-width:980px}
   th,td{
     text-align:left;
     padding:7px 12px;
@@ -342,7 +414,7 @@
   .alert:first-child{border-top:none}
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
-  .agent-board{order:4}
+  .agent-board{order:5}
   .mini-badge{
     display:inline-flex;
     align-items:center;
@@ -359,7 +431,7 @@
   }
 
   footer{
-    order:5;
+    order:6;
     display:flex;
     flex-wrap:wrap;
     gap:10px 18px;
@@ -375,6 +447,9 @@
     .topbar{grid-template-columns:minmax(200px,.8fr) minmax(320px,1.2fr) minmax(220px,.8fr)}
     #clock{grid-column:1/-1;text-align:left}
     .kpis{grid-template-columns:repeat(3,minmax(128px,1fr))}
+    .operator-head{grid-template-columns:1fr}
+    .op-clock{text-align:left}
+    .operator-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-node:after{display:none}
   }
@@ -384,8 +459,7 @@
     .market-tape{grid-template-columns:auto 1fr}
     .price-symbol{text-align:left}
     .command-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
-    .loop-board{order:3}
-    .workbench{order:2}
+    .truth-grid{grid-template-columns:1fr}
     .workbench{grid-template-columns:1fr}
     .side-column{order:-1}
     .loop-row{grid-template-columns:1fr}
@@ -396,16 +470,19 @@
     .brand-name{font-size:18px}
     .brand-sub{display:none}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
     .loop-flow{grid-template-columns:1fr}
     .gate .value,.kpi .val{font-size:15px}
     .kv{grid-template-columns:1fr;gap:4px}
     .kv .v{text-align:left}
     table{min-width:560px}
+    .latency-table{min-width:520px}
   }
   @media(max-width:430px){
-    .command-strip,.kpis{grid-template-columns:1fr}
+    .kpis{grid-template-columns:1fr}
     .price-main{font-size:19px}
+    .op-state{font-size:22px}
     section h2,.panel-title{align-items:flex-start;flex-direction:column}
     .tag{white-space:normal}
   }
@@ -452,11 +529,62 @@
       <div class="gate"><div class="label">Journal</div><div class="value idle" id="gateJournal">--</div><div class="detail" id="gateJournalDetail">WAL status</div></div>
     </div>
 
-    <section class="loop-board">
-      <div class="panel-title">
+    <section class="operator-board" aria-label="operator cockpit">
+      <div class="operator-head">
+        <div>
+          <div class="eyebrow">Operator state</div>
+          <div class="op-state value idle" id="op_state">WAITING</div>
+          <div class="op-detail" id="op_detail">awaiting snapshot</div>
+        </div>
+        <div class="op-detail" id="op_stack">risk, feed, journal, and order state pending</div>
+        <div class="op-clock">snapshot <span id="op_snapshot_age">--</span></div>
+      </div>
+      <div class="operator-grid">
+        <div class="op-card" id="op_loss_card"><div class="label">Daily stop left</div><div class="metric" id="op_loss_left">--</div><div class="sub" id="op_loss_detail">trial stop pending</div></div>
+        <div class="op-card" id="op_exposure_card"><div class="label">Exposure</div><div class="metric" id="op_exposure">--</div><div class="sub" id="op_exposure_detail">flat</div></div>
+        <div class="op-card" id="op_orders_card"><div class="label">Order truth</div><div class="metric" id="op_order_truth">--</div><div class="sub" id="op_order_detail">state machine idle</div></div>
+        <div class="op-card" id="op_feed_card"><div class="label">Freshness</div><div class="metric" id="op_feed_age">--</div><div class="sub" id="op_feed_detail">public feed</div></div>
+        <div class="op-card" id="op_fees_card"><div class="label">Fee drag</div><div class="metric" id="op_fees">--</div><div class="sub" id="op_fee_detail">session fees</div></div>
+        <div class="op-card" id="op_recon_card"><div class="label">Reconciliation</div><div class="metric" id="op_recon">--</div><div class="sub" id="op_recon_detail">waiting</div></div>
+      </div>
+      <div class="truth-grid">
+        <div class="truth-panel">
+          <div class="truth-title"><span>Risk Budget</span><span class="tag" id="rb_gate">entries pending</span></div>
+          <div class="kv">
+            <span class="k">Daily loss left</span><span class="v" id="rb_loss_left">--</span>
+            <span class="k">Drawdown</span><span class="v" id="rb_drawdown">--</span>
+            <span class="k">Open exposure</span><span class="v" id="rb_exposure">--</span>
+            <span class="k">Fees / equity</span><span class="v" id="rb_fee_drag">--</span>
+            <span class="k">Entries</span><span class="v" id="rb_entries">--</span>
+            <span class="k">Exits</span><span class="v" id="rb_exits">--</span>
+            <span class="k">Margin / liquidation</span><span class="v" id="rb_margin">--</span>
+          </div>
+        </div>
+        <div class="truth-panel">
+          <div class="truth-title"><span>Scalper Latency Matrix</span><span class="tag" id="lat_summary">waiting</span></div>
+          <div class="table-wrap">
+            <table class="latency-table" id="latency">
+              <thead><tr><th>Surface</th><th>Age / State</th><th>Status</th><th>Block</th></tr></thead>
+              <tbody>
+                <tr><td>Public feed</td><td id="lat_public_age">--</td><td id="lat_public_status">--</td><td id="lat_public_block">--</td></tr>
+                <tr><td>Candles</td><td id="lat_candles_age">--</td><td id="lat_candles_status">--</td><td id="lat_candles_block">--</td></tr>
+                <tr><td>Funding / OI</td><td id="lat_funding_age">--</td><td id="lat_funding_status">--</td><td id="lat_funding_block">--</td></tr>
+                <tr><td>Private orders</td><td id="lat_private_age">--</td><td id="lat_private_status">--</td><td id="lat_private_block">--</td></tr>
+                <tr><td>Order ack</td><td id="lat_order_age">--</td><td id="lat_order_status">--</td><td id="lat_order_block">--</td></tr>
+                <tr><td>Portfolio cache</td><td id="lat_portfolio_age">--</td><td id="lat_portfolio_status">--</td><td id="lat_portfolio_block">--</td></tr>
+                <tr><td>Decision journal</td><td id="lat_journal_age">--</td><td id="lat_journal_status">--</td><td id="lat_journal_block">--</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <details class="loop-board">
+      <summary class="panel-title">
         <span>Execution Architecture</span>
         <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
-      </div>
+      </summary>
       <div class="loop-stack">
         <div class="loop-row">
           <div class="loop-label">
@@ -518,7 +646,7 @@
           </div>
         </div>
       </div>
-    </section>
+    </details>
 
     <div class="workbench">
       <div class="main-column">
@@ -544,17 +672,17 @@
           <h2>Positions <span class="tag" id="posmark">mark-to-market</span></h2>
           <div class="table-wrap">
             <table id="positions"><thead><tr>
-              <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>uPnL</th>
+              <th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Entry</th><th>Mark</th><th>uPnL</th>
             </tr></thead><tbody></tbody></table>
           </div>
           <div class="empty" id="positions-empty">flat -- no open positions</div>
         </section>
 
         <section>
-          <h2>Open Orders <span class="tag">state machine</span></h2>
+          <h2>Execution Truth <span class="tag">state, venue, age</span></h2>
           <div class="table-wrap">
             <table id="orders"><thead><tr>
-              <th>Client order id</th><th>State</th><th>Requested</th><th>Filled</th>
+              <th>Client order id</th><th>State</th><th>Side</th><th>Type</th><th>Requested</th><th>Filled</th><th>Venue</th><th>Age</th><th>Note</th>
             </tr></thead><tbody></tbody></table>
           </div>
           <div class="empty" id="orders-empty">none working</div>
@@ -794,6 +922,34 @@
     if(tone==="bad")return "BLOCKED";
     return "WAITING";
   }
+  function bps(v,d=1){return finite(v)?Number(v).toFixed(d)+" bps":"--";}
+  function setTextTone(id,value,tone){
+    const e=$(id);
+    if(!e)return;
+    e.textContent=value==null||value===""?"--":String(value);
+    e.className="v "+(tone||"");
+  }
+  function setPlainTone(id,value,tone){
+    const e=$(id);
+    if(!e)return;
+    e.textContent=value==null||value===""?"--":String(value);
+    e.className=tone||"";
+  }
+  function setCardTone(id,tone){
+    const e=$(id);
+    if(e)e.className="op-card "+(tone||"");
+  }
+  function orderTone(state){
+    const s=String(state||"");
+    if(s==="timeout_unknown"||s==="reconciling")return "bad";
+    if(s==="open"||s==="acknowledged"||s==="partially_filled"||s==="cancel_requested")return "warn";
+    if(s==="filled"||s==="cancelled")return "good";
+    if(s==="rejected"||s==="risk_rejected")return "bad";
+    return "";
+  }
+  function statusTone(value){
+    return value==="ok"?"good":value?"bad":"idle";
+  }
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
@@ -811,6 +967,13 @@
     const killTone=s.kill_switch_active?"bad":"good";
     const liveTone=s.live_trading_enabled?"warn":"good";
     const journalTone=s.last_journal_write==="ok"?"good":"bad";
+    const dd=num(s.peak_equity)>0?(num(s.peak_equity)-num(s.equity))/num(s.peak_equity)*100:0;
+    const exposure=positions.reduce((sum,p)=>sum+Math.abs(num(p.notional_usd)||num(p.quantity)*num(p.mark_price)),0);
+    const unresolved=orders.filter(o=>["timeout_unknown","reconciling"].includes(String(o.state))).length;
+    const dailyStop=s.trial&&finite(s.trial.daily_stop_usd)?num(s.trial.daily_stop_usd):null;
+    const dailyLossUsed=Math.max(0,-num(s.daily_pnl));
+    const dailyLeft=dailyStop==null?null:dailyStop+num(s.daily_pnl);
+    const entriesAllowed=riskTone==="good"&&feedTone==="good"&&journalTone==="good"&&!s.kill_switch_active&&unresolved===0;
 
     setChip("mode",s.live_trading_enabled?(s.mode+" live enabled"):s.mode,liveTone);
     setChip("symbol",s.symbol||"--","info");
@@ -846,7 +1009,6 @@
     setValue("daily",usd(s.daily_pnl),classFor(s.daily_pnl));
     setValue("realized",usd(s.realized_pnl),classFor(s.realized_pnl));
     setValue("unrealized",usd(s.unrealized_pnl),classFor(s.unrealized_pnl));
-    const dd=num(s.peak_equity)>0?(num(s.peak_equity)-num(s.equity))/num(s.peak_equity)*100:0;
     setValue("dd",dd.toFixed(2)+"%",dd>6?"neg":dd>3?"neutral":"pos");
     setValue("fees",moneyAbs(s.fees_usd),"dimval");
     setValue("fills",finite(s.fills)?String(s.fills):"--","neutral");
@@ -867,6 +1029,11 @@
     spark("sp_dd","dd","#ffb84d");
     spark("sp_feed","feed","#a98cff");
 
+    renderOperator({
+      s, feed, lat, feedTone, riskTone, journalTone, liveTone, dd,
+      exposure, unresolved, dailyStop, dailyLeft, dailyLossUsed, entriesAllowed,
+      positions, orders, session
+    });
     renderPositions(positions);
     renderOrders(orders);
     renderAlerts(alerts);
@@ -922,6 +1089,86 @@
     setNode("nodeSnapshot","good",s.ts?String(s.ts).slice(11,19)+" UTC":"streaming");
   }
 
+  function renderOperator(ctx){
+    const {
+      s, feed, lat, feedTone, riskTone, journalTone, liveTone, dd,
+      exposure, unresolved, dailyStop, dailyLeft, dailyLossUsed, entriesAllowed,
+      positions, orders, session
+    }=ctx;
+    const blockers=[];
+    const watches=[];
+    if(s.kill_switch_active)blockers.push("kill switch active");
+    if(journalTone==="bad")blockers.push("journal unavailable");
+    if(riskTone==="bad"&&s.risk_status!=="kill_switch_active")blockers.push(String(s.risk_status||"risk blocked"));
+    if(feedTone==="bad")blockers.push("public feed stale");
+    if(unresolved>0)blockers.push(unresolved+" unresolved order"+(unresolved===1?"":"s"));
+    if(riskTone==="warn")watches.push("reconciliation watch");
+    if(orders.length>0)watches.push(orders.length+" working order"+(orders.length===1?"":"s"));
+    if(liveTone==="warn")watches.push("live gate enabled");
+    if(dd>3)watches.push("drawdown "+dd.toFixed(1)+"%");
+    const state=blockers.length?"BLOCKED":watches.length?"WATCH":"OPERATE";
+    const tone=blockers.length?"bad":watches.length?"warn":"good";
+    text("op_state",state);
+    setPlainTone("op_state",state,"op-state value "+tone);
+    text("op_detail",blockers[0]||watches[0]||"risk, feed, journal, and order state clean");
+    text("op_stack",entriesAllowed?"entries evaluated; reduce-only exits guarded":"new entries blocked; reduce-only exits remain visible");
+    const snapshotAge=s.ts?Math.max(0,Date.now()-Date.parse(s.ts)):null;
+    text("op_snapshot_age",snapshotAge==null?"--":ageText(snapshotAge));
+
+    const lossTone=dailyLeft==null?"idle":dailyLeft<=0?"bad":dailyLeft<=Math.max(1,dailyStop*0.25)?"warn":"good";
+    text("op_loss_left",dailyLeft==null?"--":moneyAbs(Math.max(0,dailyLeft)));
+    text("op_loss_detail",dailyStop==null?"no trial stop in snapshot":"used "+moneyAbs(dailyLossUsed)+" / stop "+moneyAbs(dailyStop));
+    setCardTone("op_loss_card",lossTone);
+
+    const expPct=num(s.equity)>0?exposure/num(s.equity)*100:0;
+    text("op_exposure",moneyAbs(exposure));
+    text("op_exposure_detail",positions.length+" position"+(positions.length===1?"":"s")+" / "+expPct.toFixed(1)+"% equity");
+    setCardTone("op_exposure_card",exposure>num(s.equity)*2?"warn":exposure>0?"info":"good");
+
+    text("op_order_truth",unresolved?unresolved+" unknown":String(orders.length));
+    text("op_order_detail",unresolved?"fail closed until reconciled":orders.length?"working at venue":"state machine idle");
+    setCardTone("op_orders_card",unresolved?"bad":orders.length?"warn":"good");
+
+    text("op_feed_age",ageText(lat));
+    text("op_feed_detail",(feed.exchange||"--")+" / "+toneText(feedTone).toLowerCase());
+    setCardTone("op_feed_card",feedTone);
+
+    const feePct=num(s.equity)>0?num(s.fees_usd)/num(s.equity)*100:0;
+    text("op_fees",moneyAbs(s.fees_usd));
+    text("op_fee_detail",feePct.toFixed(2)+"% of equity");
+    setCardTone("op_fees_card",feePct>2?"warn":num(s.fees_usd)>0?"info":"good");
+
+    const recon=num(session.recon_mismatches);
+    text("op_recon",unresolved?"blocked":recon?String(recon):"clean");
+    text("op_recon_detail",unresolved?"timeout/reconciling order":recon?"mismatch count":"no mismatch");
+    setCardTone("op_recon_card",unresolved?"bad":recon?"warn":"good");
+
+    setTextTone("rb_loss_left",dailyLeft==null?"--":moneyAbs(Math.max(0,dailyLeft)),lossTone==="bad"?"neg":lossTone==="warn"?"":"pos");
+    setTextTone("rb_drawdown",dd.toFixed(2)+"%",dd>6?"neg":dd>3?"":"pos");
+    setTextTone("rb_exposure",moneyAbs(exposure),exposure>0?"":"pos");
+    setTextTone("rb_fee_drag",feePct.toFixed(2)+"%",feePct>2?"neg":feePct>0?"":"pos");
+    setTextTone("rb_entries",entriesAllowed?"allowed":"blocked",entriesAllowed?"pos":"neg");
+    setTextTone("rb_exits","allowed","pos");
+    setTextTone("rb_margin",s.live_trading_enabled?"live adapter":"paper; no liquidation model",s.live_trading_enabled?"":"");
+    text("rb_gate",entriesAllowed?"entries allowed":"entries blocked");
+
+    const fundingOk=feed.funding==="ok"&&feed.open_interest==="ok";
+    renderLatencyRow("public",ageText(lat),toneText(feedTone),feedTone,feedTone==="bad"?"blocks entries":"");
+    renderLatencyRow("candles",feed.candles||"--",toneText(statusTone(feed.candles)),statusTone(feed.candles),feed.candles==="ok"?"":"blocks research/live");
+    renderLatencyRow("funding",((feed.funding||"--")+" / "+(feed.open_interest||"--")),fundingOk?"GOOD":"BLOCKED",fundingOk?"good":"bad",fundingOk?"":"funding or OI bad");
+    renderLatencyRow("private",s.live_trading_enabled?"pending live adapter":"next live phase",s.live_trading_enabled?"WATCH":"WAITING",s.live_trading_enabled?"warn":"idle",s.live_trading_enabled?"verify before live":"not in paper");
+    renderLatencyRow("order",unresolved?"timeout unknown":orders.length?orders.length+" working":"none working",unresolved?"BLOCKED":orders.length?"WATCH":"GOOD",unresolved?"bad":orders.length?"warn":"good",unresolved?"blocks new risk":"");
+    renderLatencyRow("portfolio",snapshotAge==null?"--":ageText(snapshotAge),snapshotAge!=null&&snapshotAge<5000?"GOOD":"WATCH",snapshotAge!=null&&snapshotAge<5000?"good":"warn",snapshotAge!=null&&snapshotAge<5000?"":"snapshot stale");
+    renderLatencyRow("journal",s.last_journal_write||"--",journalTone==="good"?"GOOD":"BLOCKED",journalTone,journalTone==="good"?"":"exits only");
+    text("lat_summary",blockers.length?blockers.length+" blocker"+(blockers.length===1?"":"s"):watches.length?watches.length+" watch":"clean");
+  }
+
+  function renderLatencyRow(key,age,status,tone,block){
+    text("lat_"+key+"_age",age);
+    setPlainTone("lat_"+key+"_status",status,tone==="good"?"pos":tone==="bad"?"neg":tone==="warn"?"neutral":"dimval");
+    text("lat_"+key+"_block",block||"--");
+  }
+
   function renderPositions(positions){
     const body=$("positions").querySelector("tbody");
     body.replaceChildren();
@@ -930,6 +1177,7 @@
       appendCell(row,p.symbol,"clip");
       appendCell(row,p.side,p.side==="long"?"pos":"neg");
       appendCell(row,finite(p.quantity)?num(p.quantity).toFixed(4):"--");
+      appendCell(row,moneyAbs(p.notional_usd));
       appendCell(row,finite(p.entry_price)?num(p.entry_price).toFixed(2):"--");
       appendCell(row,finite(p.mark_price)?num(p.mark_price).toFixed(2):"--");
       appendCell(row,usd(p.unrealized_usd),classFor(p.unrealized_usd));
@@ -944,9 +1192,14 @@
     for(const o of orders){
       const row=body.insertRow();
       appendCell(row,o.client_order_id,"clip",o.client_order_id);
-      appendCell(row,o.state);
-      appendCell(row,o.requested_qty);
-      appendCell(row,o.filled_qty);
+      appendCell(row,o.state,orderTone(o.state)==="bad"?"neg":orderTone(o.state)==="warn"?"neutral":"pos");
+      appendCell(row,(o.side||"--")+(o.reduce_only?" RO":""));
+      appendCell(row,(o.order_type||"--")+(finite(o.limit_price)?" @ "+num(o.limit_price).toFixed(2):""));
+      appendCell(row,finite(o.requested_qty)?num(o.requested_qty).toFixed(4):"--");
+      appendCell(row,finite(o.filled_qty)?num(o.filled_qty).toFixed(4):"--");
+      appendCell(row,o.exchange_order_id||"--","clip",o.exchange_order_id||"");
+      appendCell(row,finite(o.state_age_ms)?ageText(o.state_age_ms):"--");
+      appendCell(row,o.last_note||o.reason||"--","clip",o.last_note||o.reason||"");
     }
     $("orders").style.display=orders.length?"table":"none";
     $("orders-empty").style.display=orders.length?"none":"block";

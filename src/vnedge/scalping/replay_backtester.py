@@ -66,7 +66,7 @@ class ReplayTrade:
     exit_reason: str          # "target" | "stop" | "end"
     gross_bps: float
     fees_bps: float
-    adverse_bps: float        # mid drift against us in the 2s after entry fill
+    adverse_bps: float        # worst adverse mid excursion while open (MAE), <= 0
 
     @property
     def net_bps(self) -> float:
@@ -209,13 +209,21 @@ class TickReplayBacktester:
                         result.quotes_placed += 1
             else:  # trade
                 engine.on_trade(obj)
-                if resting is not None and position is None:
+                # Conservative maker fill: the taker must trade STRICTLY
+                # THROUGH our resting price (price < our bid / > our ask), so
+                # the whole level cleared and we definitely filled — touch
+                # (<=) would assume front-of-queue. And the fill trade must
+                # post-date our quote (ts_ms > placed_ms): a same-instant
+                # trade was already in flight before our order joined the
+                # queue. Both guards keep the engine honest about fills.
+                if (resting is not None and position is None
+                        and ts_ms > resting.placed_ms):
                     filled = (
                         resting.side == "buy" and obj.taker_side == "sell"
-                        and obj.price <= resting.limit_price
+                        and obj.price < resting.limit_price
                     ) or (
                         resting.side == "sell" and obj.taker_side == "buy"
-                        and obj.price >= resting.limit_price
+                        and obj.price > resting.limit_price
                     )
                     if filled and top is not None:
                         position = self._open(resting, top, ts_ms)
@@ -273,7 +281,6 @@ class TickReplayBacktester:
             gross_bps=gross_bps, fees_bps=fees_bps,
             adverse_bps=pos.worst_adverse_bps,
         ))
-        self._closed = True
 
 
 class ImbalanceScalper:

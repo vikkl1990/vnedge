@@ -55,10 +55,34 @@ def test_conservative_fill_requires_trade_through():
     assert res.filled == 0  # never filled by a same-side taker
 
 
+def test_touch_at_limit_does_not_fill():
+    # a seller printing AT our bid (not through it) assumes we're front-of-queue;
+    # conservative model refuses the fill and lets the quote expire.
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 10, 100.0, 1.0, "sell"),        # AT the bid, not through
+        book(T0 + 5000, 100.0, 5.0, 100.1, 5.0),   # ttl expiry
+    ]
+    res = TickReplayBacktester().run(events, AlwaysBuy(ttl_ms=1000))
+    assert res.filled == 0 and res.missed_fills == 1
+
+
+def test_same_instant_trade_does_not_fill():
+    # a trade at the SAME ms as quote placement was already in flight before our
+    # order could join the queue — the latency guard rejects it.
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),          # quote placed at T0
+        trade(T0, 99.99, 1.0, "sell"),             # same ms, through-price
+        book(T0 + 5000, 100.0, 5.0, 100.1, 5.0),
+    ]
+    res = TickReplayBacktester().run(events, AlwaysBuy(ttl_ms=1000))
+    assert res.filled == 0
+
+
 def test_seller_hitting_bid_fills_us():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 100.0, 1.0, "sell"),   # seller hits our bid at 100.0 -> fill
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0   # seller hits our bid at 100.0 -> fill
         book(T0 + 20, 100.6, 5.0, 100.7, 5.0),  # price ran up -> target
     ]
     res = TickReplayBacktester(ReplayFees(maker_bps=2, taker_bps=5, slippage_bps=0)
@@ -75,7 +99,7 @@ def test_seller_hitting_bid_fills_us():
 def test_stop_exit_is_a_loss():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 100.0, 1.0, "sell"),        # fill our bid
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0        # fill our bid
         book(T0 + 20, 99.4, 5.0, 99.5, 5.0),       # price dropped -> stop
     ]
     res = TickReplayBacktester(ReplayFees(slippage_bps=0)).run(
@@ -88,7 +112,7 @@ def test_stop_exit_is_a_loss():
 def test_long_target_requires_bid_through_target_not_just_ask():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 100.0, 1.0, "sell"),
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0
         book(T0 + 20, 100.1, 5.0, 100.5, 5.0),  # ask through target, bid not sellable there
         book(T0 + 30, 100.5, 5.0, 100.6, 5.0),  # now the bid can realize target
     ]
@@ -114,7 +138,7 @@ class AlwaysSell:
 def test_short_target_requires_ask_through_target_not_just_bid():
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 100.1, 1.0, "buy"),
+        trade(T0 + 10, 100.11, 1.0, "buy"),  # buys THROUGH our 100.1 ask -> fill at 100.1
         book(T0 + 20, 99.5, 5.0, 100.0, 5.0),  # bid through target, ask not buyable there
         book(T0 + 30, 99.4, 5.0, 99.6, 5.0),   # now the ask can realize target
     ]
@@ -129,7 +153,7 @@ def test_adverse_selection_measured():
     # fill, then mid drifts against the long before recovering to target
     events = [
         book(T0, 100.0, 5.0, 100.1, 5.0),
-        trade(T0 + 10, 100.0, 1.0, "sell"),
+        trade(T0 + 10, 99.99, 1.0, "sell"),  # sells THROUGH our 100.0 bid -> fill at 100.0
         book(T0 + 20, 99.7, 5.0, 99.8, 5.0),       # adverse: mid down ~30bps
         book(T0 + 30, 100.6, 5.0, 100.7, 5.0),     # then up to target
     ]
