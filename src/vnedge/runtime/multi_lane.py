@@ -36,6 +36,8 @@ from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
+from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,7 @@ class LaneSpec:
     is_primary: bool = False   # the governed lane shown as the flat snapshot
     daily_loss_usd: float = 10.0
     mode: RunnerMode = RunnerMode.SHADOW
+    strategy_id: str = "funding_mean_reversion_v1"
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,20 @@ class MultiLaneProvider:
 
 # --- lane construction ------------------------------------------------------------
 
+def _build_strategy(
+    spec: LaneSpec, seed_funding, feed
+) -> BaseStrategy:
+    """Construct the live strategy a lane runs, keyed by strategy_id."""
+    params = spec.strategy_params or {}
+    if spec.strategy_id == "funding_mean_reversion_v1":
+        # needs the funding stream augmented live off the feed
+        return LiveFundingMR(seed_funding, feed, **params)
+    if spec.strategy_id == "trend_continuation_v1":
+        # candle-only; funding is a mild static filter (fine for a shadow lane)
+        return TrendContinuation(seed_funding, **params)
+    raise ValueError(f"unsupported lane strategy_id: {spec.strategy_id!r}")
+
+
 async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
 ) -> _LaneRuntime:
@@ -160,7 +177,7 @@ async def build_lane(
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk)
-    strategy = LiveFundingMR(seed_funding, feed, **(spec.strategy_params or {}))
+    strategy = _build_strategy(spec, seed_funding, feed)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
@@ -179,8 +196,9 @@ async def build_lane(
                     "promotion_source": spec.exchange},
     )
     resumed = session.account_store.restore_into(exchange, session.tracker)
-    logger.info("lane %s (%s %s %s) built; resumed=%s",
-                spec.lane_id, spec.exchange, spec.symbol, spec.mode.value, resumed)
+    logger.info("lane %s (%s %s %s %s) built; resumed=%s",
+                spec.lane_id, spec.exchange, spec.symbol, spec.strategy_id,
+                spec.mode.value, resumed)
     return _LaneRuntime(spec=spec, session=session, feed=feed)
 
 

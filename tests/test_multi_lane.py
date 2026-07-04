@@ -175,3 +175,48 @@ async def test_runner_continues_when_one_lane_build_fails(monkeypatch, tmp_path)
     assert latest is not None
     faulted = [lane for lane in latest["lanes"] if lane["lane_id"] == "bad"]
     assert faulted and faulted[0]["risk_status"] == "lane_error"
+
+
+def test_build_strategy_selects_trend_continuation():
+    import pandas as pd
+
+    from vnedge.runtime.multi_lane import _build_strategy
+    from vnedge.strategy.trend_continuation import TrendContinuation
+
+    spec = LaneSpec(lane_id="x", exchange="bybit", symbol="XRP/USDT:USDT",
+                    strategy_id="trend_continuation_v1", strategy_params={})
+    strat = _build_strategy(
+        spec, pd.DataFrame(columns=["timestamp", "funding_rate"]), feed=None)
+    assert isinstance(strat, TrendContinuation)
+    assert strat.strategy_id == "trend_continuation_v1"
+
+
+def test_build_strategy_rejects_unknown_id():
+    import pandas as pd
+    import pytest
+
+    from vnedge.runtime.multi_lane import _build_strategy
+
+    spec = LaneSpec(lane_id="x", exchange="bybit", symbol="XRP/USDT:USDT",
+                    strategy_id="not_a_real_strategy_v9")
+    with pytest.raises(ValueError, match="unsupported lane strategy_id"):
+        _build_strategy(spec, pd.DataFrame(), feed=None)
+
+
+def test_candidate_shadow_lanes_default_includes_xrp_trend():
+    from vnedge.runtime.multi_lane_shadow import candidate_shadow_lanes
+
+    lanes = candidate_shadow_lanes({})
+    xrp = next(lane for lane in lanes
+               if lane.lane_id == "trend_continuation_xrp_bybit_shadow")
+    assert xrp.strategy_id == "trend_continuation_v1"
+    assert xrp.symbol == "XRP/USDT:USDT"
+    assert xrp.exchange == "bybit"
+    assert xrp.mode is RunnerMode.SHADOW      # observe only, never a fill
+    assert xrp.is_primary is False            # never the governed flat snapshot
+
+
+def test_candidate_shadow_lanes_can_be_disabled():
+    from vnedge.runtime.multi_lane_shadow import candidate_shadow_lanes
+
+    assert candidate_shadow_lanes({"MULTI_LANE_CANDIDATES": "0"}) == []
