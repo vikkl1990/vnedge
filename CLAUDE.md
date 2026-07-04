@@ -131,6 +131,21 @@ variant for them (that IS the overfitting trap). Nothing auto-tunes the
 running trial; nothing auto-deploys. funding_mr gained allowed_sides so the
 attribution-driven short_only/long_only variants are real & testable.
 
+## Edge research agent — deployed & visible (2026-07-04)
+
+research/edge_agents.py + universe.py: the continuous loop now runs a
+multi-exchange universe (binanceusdm+bybit × 6 symbols = 12 targets;
+delta excluded — no ccxt funding history). EdgeResearchAgent.plan() each
+cycle: finds profitable lanes, proposes pre-registered judgments +
+cross-exchange validations + diagnosed auto-uplift variants; auto_explore
+runs bounded variants. Published to /research; dashboard "Edge research
+agent" panel shows universe, candidate lanes, proposals. Policy hard-wired:
+can_trade=False, can_promote=False, requires_untouched_judgment=True.
+Live candidates found: BTC funding-MR (binance, trial), DOGE vol-breakout
+(binance, PASS), BTC vol-breakout (bybit, PASS). Cross-exchange = same
+symbol on 2 venues, validated independently. Deploy: env RESEARCH_EXCHANGES
+in docker-compose research-loop service.
+
 ## Roadmap additions (accepted ideas, not yet built)
 
 - docs/strategy_contract.md + AI strategy sandbox (data/strategies/ai/ with
