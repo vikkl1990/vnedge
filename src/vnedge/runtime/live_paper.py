@@ -63,6 +63,7 @@ class LivePaperSession:
         account_store=None,  # optional PaperAccountStore for crash/restart resume
         alert_engine=None,  # optional AlertEngine — same snapshot, guarded fanout
         equity_history_path=None,  # optional JSONL of (ts, equity) per bar
+        trial_meta=None,  # optional dict shown on the dashboard governance panel
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -76,6 +77,9 @@ class LivePaperSession:
         self.account_store = account_store
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
+        self.trial_meta = trial_meta
+        self.bars_processed = 0
+        self._started_at = datetime.now(UTC)
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -233,6 +237,19 @@ class LivePaperSession:
             strategy_id=self.strategy.strategy_id,
             recent_alerts=list(self.alert_engine.recent)
             if self.alert_engine is not None else [],
+            quote=self.feed.quote,
+            funding_rate=getattr(self.feed, "funding_rate", 0.0),
+            session_stats={
+                "started_at": self._started_at.isoformat(),
+                "bars_processed": self.bars_processed,
+                "signals": self.signals,
+                "orders_submitted": self.orders_submitted,
+                "risk_rejects": self.risk_rejects,
+                "sizing_skips": self.sizing_skips,
+                "recon_mismatches": self.recon_mismatches,
+                "dropped_candles": self.dropped_candles,
+            },
+            trial=self.trial_meta,
         )
         if self.provider is not None:
             self.provider.publish(snapshot)
@@ -263,6 +280,7 @@ class LivePaperSession:
             if not self._append_candle(raw) or not self._sync_quote():
                 continue
             bars += 1
+            self.bars_processed += 1
             self.tracker.on_bar(now)
             self._maybe_daily_report(now)
 

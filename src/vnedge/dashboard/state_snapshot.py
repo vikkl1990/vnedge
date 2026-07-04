@@ -61,6 +61,10 @@ def build_snapshot(
     symbol: str = "",
     strategy_id: str = "",
     recent_alerts: list[dict] | None = None,
+    quote: tuple[float, float] | None = None,
+    funding_rate: float = 0.0,
+    session_stats: dict | None = None,
+    trial: dict | None = None,
 ) -> dict:
     account = tracker.account_state()
     positions = []
@@ -92,6 +96,18 @@ def build_snapshot(
         "symbol": symbol,
         "strategy_id": strategy_id,
         "recent_alerts": recent_alerts or [],
+        "price": (
+            {
+                "bid": quote[0],
+                "ask": quote[1],
+                "mid": (quote[0] + quote[1]) / 2.0,
+                "spread_bps": (quote[1] - quote[0]) / ((quote[0] + quote[1]) / 2.0) * 10_000.0,
+            }
+            if quote is not None else None
+        ),
+        "funding_rate": funding_rate,
+        "session": session_stats or {},
+        "trial": trial,
         "live_trading_enabled": live_trading_enabled,
         "kill_switch_active": kill_switch.is_active,
         "equity": tracker.equity_usd(),

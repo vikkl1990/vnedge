@@ -170,6 +170,16 @@ def build_trial_session(
         ),
         alert_engine=alert_engine,
         equity_history_path=journal_dir / f"{manifest.trial_id}.equity.jsonl",
+        trial_meta={
+            "trial_id": manifest.trial_id,
+            "started": "2026-07-03",
+            "min_days": 14,
+            "preferred_days": 30,
+            "min_trades": 10,
+            "max_dd_pct": 6.0,
+            "daily_stop_usd": manifest.daily_loss_limit_usd,
+            "promotion_source": manifest.promotion_source_commit,
+        },
     )
     # Resume: a restart must continue the trial's account, never reset it.
     resumed = session.account_store.restore_into(exchange, session.tracker)

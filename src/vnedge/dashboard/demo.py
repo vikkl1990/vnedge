@@ -108,16 +108,35 @@ async def main() -> None:
             tracker_holder = {}
 
             async def on_bar(index: int, ts) -> None:
+                runner = tracker_holder["runner"]
                 provider.publish(
                     build_snapshot(
                         mode="paper (demo replay)", live_trading_enabled=False,
                         symbol=SYMBOL, strategy_id="demo_sma_cross",
-                        tracker=tracker_holder["runner"].tracker, exchange=exchange,
+                        tracker=runner.tracker, exchange=exchange,
                         kill_switch=kill, journal=journal, order_manager=om,
                         feed_health=FeedHealth(
                             exchange="binanceusdm (replay)",
                             last_update_ms=1000.0 / BARS_PER_SECOND,
                         ),
+                        quote=exchange.quotes.get(SYMBOL),
+                        funding_rate=0.0001,
+                        session_stats={
+                            "started_at": "2026-07-03T00:00:00+00:00",
+                            "bars_processed": index,
+                            "signals": runner.signals,
+                            "orders_submitted": runner.orders_submitted,
+                            "risk_rejects": runner.risk_rejects,
+                            "sizing_skips": runner.sizing_skips,
+                            "recon_mismatches": runner.recon_mismatches,
+                            "dropped_candles": 0,
+                        },
+                        trial={
+                            "trial_id": "demo_replay", "started": "2026-07-03",
+                            "min_days": 14, "preferred_days": 30, "min_trades": 10,
+                            "max_dd_pct": 6.0, "daily_stop_usd": 10.0,
+                            "promotion_source": "demo",
+                        },
                     )
                 )
                 await asyncio.sleep(1.0 / BARS_PER_SECOND)

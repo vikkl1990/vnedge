@@ -38,8 +38,14 @@
   .kpi canvas{width:100%;height:26px;display:block;margin-top:4px;opacity:.9}
   .pos{color:var(--green)}.neg{color:var(--red)}.neutral{color:var(--text)}.dimval{color:var(--dim)}
 
-  .grid{display:grid;grid-template-columns:1.6fr 1fr;gap:12px}
+  .grid{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:12px}
+  @media(max-width:1280px){.grid{grid-template-columns:1.5fr 1fr}}
   @media(max-width:980px){.grid{grid-template-columns:1fr}}
+  .bigprice{font-size:20px;font-variant-numeric:tabular-nums;margin-left:6px}
+  .bigprice small{color:var(--dim);font-size:11px;margin-left:6px}
+  .meter{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin:4px 0 2px}
+  .meter i{display:block;height:100%;background:var(--blue)}
+  .meter i.done{background:var(--green)}
   section{background:var(--panel);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden}
   section h2{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:1.5px;
     padding:9px 13px;border-bottom:1px solid var(--border);background:var(--panel2);
@@ -78,6 +84,7 @@
   <span class="chip" id="strategy">—</span>
   <span class="chip" id="risk">—</span>
   <span class="chip" id="kill">—</span>
+  <span class="bigprice" id="price">—<small id="pricemeta"></small></span>
   <span id="clock">--:--:-- UTC</span>
   <span id="conn" class="down">connecting…</span>
 </header>
@@ -99,7 +106,7 @@
 
   <section>
     <h2>Equity curve <span class="tag" id="eqrange">persisted · survives restarts</span></h2>
-    <div style="padding:10px 13px 6px"><canvas id="eqchart" style="width:100%;height:150px;display:block"></canvas></div>
+    <div style="padding:10px 13px 6px"><canvas id="eqchart" style="width:100%;height:110px;display:block"></canvas></div>
   </section>
 
   <div class="grid">
@@ -128,31 +135,55 @@
 
     <div>
       <section>
+        <h2>Session</h2>
+        <div class="kv">
+          <span class="k">Uptime</span><span class="v" id="ss_uptime">—</span>
+          <span class="k">Bars processed</span><span class="v" id="ss_bars">—</span>
+          <span class="k">Signals</span><span class="v" id="ss_signals">—</span>
+          <span class="k">Orders submitted</span><span class="v" id="ss_orders">—</span>
+          <span class="k">Risk rejects</span><span class="v" id="ss_rejects">—</span>
+          <span class="k">Sizing skips</span><span class="v" id="ss_skips">—</span>
+          <span class="k">Recon mismatches</span><span class="v" id="ss_recon">—</span>
+          <span class="k">Dropped candles</span><span class="v" id="ss_dropped">—</span>
+        </div>
+      </section>
+
+      <section>
         <h2>Alerts <span class="tag" id="alertcount"></span></h2>
         <div class="alerts" id="alerts"></div>
         <div class="empty" id="alerts-empty">no alerts fired</div>
       </section>
+    </div>
 
+    <div>
       <section>
-        <h2>Feed health</h2>
+        <h2>Market</h2>
         <div class="kv">
           <span class="k">Exchange</span><span class="v" id="fh_ex">—</span>
+          <span class="k">Bid / Ask</span><span class="v" id="mk_ba">—</span>
+          <span class="k">Spread</span><span class="v" id="mk_spread">—</span>
+          <span class="k">Funding rate</span><span class="v" id="mk_funding">—</span>
           <span class="k">Candles</span><span class="v" id="fh_candles">—</span>
-          <span class="k">Funding</span><span class="v" id="fh_funding">—</span>
           <span class="k">Last event</span><span class="v" id="fh_last">—</span>
           <span class="k">Journal</span><span class="v" id="fh_journal">—</span>
         </div>
       </section>
 
       <section>
-        <h2>Governance</h2>
+        <h2>Governance <span class="tag" id="gv_trial"></span></h2>
         <div class="kv">
-          <span class="k">Mode ladder</span><span class="v">backtest → paper → shadow → <b id="gv_mode">—</b></span>
+          <span class="k">Mode</span><span class="v" id="gv_mode">—</span>
           <span class="k">Live trading</span><span class="v" id="gv_live">—</span>
-          <span class="k">Promotion</span><span class="v">round-3 gates passed</span>
-          <span class="k">Trial rules</span><span class="v">params frozen · $10 daily stop</span>
+          <span class="k">Promotion</span><span class="v" id="gv_promo">—</span>
+          <span class="k">Daily stop</span><span class="v" id="gv_stop">—</span>
           <span class="k">Peak equity</span><span class="v" id="gv_peak">—</span>
           <span class="k">Snapshot</span><span class="v" id="gv_ts">—</span>
+        </div>
+        <div class="kv" id="trialmeters" style="display:none">
+          <span class="k">Trial days</span>
+          <span class="v"><span id="tm_days">—</span><div class="meter"><i id="tm_days_bar" style="width:0%"></i></div></span>
+          <span class="k">Round trips</span>
+          <span class="v"><span id="tm_trades">—</span><div class="meter"><i id="tm_trades_bar" style="width:0%"></i></div></span>
         </div>
       </section>
     </div>
@@ -253,19 +284,60 @@
     $("alerts").style.display=alerts.length?"block":"none";
     $("alerts-empty").style.display=alerts.length?"none":"block";
 
+    if(s.price){
+      $("price").childNodes[0].textContent="$"+s.price.mid.toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1});
+      $("pricemeta").textContent=s.symbol;
+      $("mk_ba").textContent=s.price.bid.toFixed(1)+" / "+s.price.ask.toFixed(1);
+      $("mk_spread").textContent=s.price.spread_bps.toFixed(2)+" bps";
+    }
+    $("mk_funding").innerHTML=(s.funding_rate>=0?"<span class='pos'>":"<span class='neg'>")
+      +(s.funding_rate*100).toFixed(4)+"%</span> / 8h";
+
     $("fh_ex").textContent=s.feed_health.exchange;
     $("fh_candles").innerHTML=s.feed_health.candles==="ok"
       ?"<span class='pos'>ok</span>":"<span class='neg'>"+s.feed_health.candles+"</span>";
-    $("fh_funding").textContent=s.feed_health.funding;
     $("fh_last").textContent=lat<1000?lat.toFixed(0)+" ms ago":(lat/1000).toFixed(1)+" s ago";
     $("fh_journal").innerHTML=s.last_journal_write==="ok"
       ?"<span class='pos'>ok</span>":"<span class='neg'>"+s.last_journal_write+"</span>";
+
+    const ses=s.session||{};
+    if(ses.started_at){
+      const up=(Date.now()-Date.parse(ses.started_at))/1000;
+      $("ss_uptime").textContent=up>86400?(up/86400).toFixed(1)+"d":up>3600?(up/3600).toFixed(1)+"h":Math.floor(up/60)+"m";
+    }
+    $("ss_bars").textContent=ses.bars_processed??"—";
+    $("ss_signals").textContent=ses.signals??"—";
+    $("ss_orders").textContent=ses.orders_submitted??"—";
+    const rej=$("ss_rejects");rej.textContent=ses.risk_rejects??"—";
+    rej.className="v "+((ses.risk_rejects||0)>0?"neg":"");
+    $("ss_skips").textContent=ses.sizing_skips??"—";
+    const rc=$("ss_recon");rc.textContent=ses.recon_mismatches??"—";
+    rc.className="v "+((ses.recon_mismatches||0)>0?"neg":"pos");
+    $("ss_dropped").textContent=ses.dropped_candles??"—";
 
     $("gv_mode").textContent=s.mode;
     $("gv_live").innerHTML=s.live_trading_enabled
       ?"<span class='neg'>ENABLED</span>":"<span class='pos'>disabled</span>";
     $("gv_peak").textContent="$"+(s.peak_equity||0).toFixed(2);
     $("gv_ts").textContent=(s.ts||"").slice(11,19)+" UTC";
+    const t=s.trial;
+    if(t){
+      $("gv_trial").textContent=t.trial_id;
+      $("gv_promo").textContent="gates passed @ "+(t.promotion_source||"—");
+      $("gv_stop").textContent="-$"+(t.daily_stop_usd||0).toFixed(2)+" / day · params frozen";
+      $("trialmeters").style.display="grid";
+      const days=Math.max(0,(Date.now()-Date.parse(t.started))/86400000);
+      const dpct=Math.min(100,days/t.preferred_days*100);
+      $("tm_days").textContent=days.toFixed(1)+" / "+t.min_days+"–"+t.preferred_days;
+      const db=$("tm_days_bar");db.style.width=dpct+"%";
+      db.className=days>=t.min_days?"done":"";
+      const trips=Math.floor(s.fills/2);
+      $("tm_trades").textContent=trips+" / "+t.min_trades+" minimum";
+      const tb=$("tm_trades_bar");tb.style.width=Math.min(100,trips/t.min_trades*100)+"%";
+      tb.className=trips>=t.min_trades?"done":"";
+    } else {
+      $("gv_promo").textContent="—";$("gv_stop").textContent="—";
+    }
   }
 
   let eq=[];const EQMAX=2000;
@@ -275,7 +347,10 @@
     c.width=c.clientWidth*dpr;c.height=c.clientHeight*dpr;
     const x=c.getContext("2d");x.scale(dpr,dpr);
     const w=c.clientWidth,h=c.clientHeight;
-    const vals=eq.map(p=>p.equity),mn=Math.min(...vals),mx=Math.max(...vals),r=(mx-mn)||1;
+    const vals=eq.map(p=>p.equity);
+    let mn=Math.min(...vals),mx=Math.max(...vals);
+    if(mx-mn<0.5){mn-=0.75;mx+=0.75;}  // flat curve: pad so labels never collide
+    const r=mx-mn;
     const start=vals[0];
     x.strokeStyle="#1b2739";x.lineWidth=1;
     const y0=h-6-((start-mn)/r)*(h-14);
