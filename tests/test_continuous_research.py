@@ -45,6 +45,8 @@ def test_wf_record_pass():
     assert record["verdict"] == "PASS"
     assert record["oos_trades"] == 30
     assert record["windows"] == 5
+    assert record["selected_params"]["consensus"] == {"p": 1}
+    assert record["selected_params"]["consensus_windows"] == 5
     assert record["reasons"] == []
     for field in ("strategy", "symbol", "oos_net_usd",
                   "profitable_windows_pct", "traded_windows", "updated"):
@@ -69,6 +71,8 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     assert latest["results"][0]["exchange"] == "binanceusdm"
     assert latest["universe"]["targets"] == 1
     assert latest["edge_agents"]["policy"]["can_trade"] is False
+    assert latest["shadow_manifest"]["ready_lanes"] == 0
+    assert (tmp_path / "live_research" / "shadow_lanes.json").exists()
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()
     assert len(feed) == 2

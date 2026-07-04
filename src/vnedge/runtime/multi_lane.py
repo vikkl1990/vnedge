@@ -35,8 +35,9 @@ from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
-from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.strategy_registry import get_strategy_class
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class LaneSpec:
     lane_id: str          # unique, e.g. "binance_funding_mr"
     exchange: str         # ccxt id, e.g. "binanceusdm" | "bybit"
     symbol: str
+    strategy_id: str = "funding_mean_reversion_v1"
     timeframe: str = "1h"
     starting_equity: float = 500.0
     strategy_params: dict | None = None
@@ -59,6 +61,44 @@ class _LaneRuntime:
     spec: LaneSpec
     session: LivePaperSession
     feed: LiveMarketFeed
+
+
+class LiveFundingStrategy(BaseStrategy):
+    """Wrap any registered candle strategy and append live funding snapshots.
+
+    Research strategies are constructed with a historical funding DataFrame.
+    In live-data paper/shadow lanes, the public feed exposes the current
+    funding estimate; this wrapper extends the inner strategy's funding series
+    at the newest candle timestamp before delegating prepare/signal.
+    """
+
+    def __init__(self, inner: BaseStrategy, feed) -> None:
+        self._inner = inner
+        self._feed = feed
+        self.strategy_id = inner.strategy_id
+        self.warmup_bars = inner.warmup_bars
+
+    def prepare(self, candles):
+        funding = getattr(self._inner, "funding", None)
+        if funding is not None and not funding.empty and self._feed.funding_rate is not None:
+            newest = candles["timestamp"].iloc[-1]
+            if newest > funding["timestamp"].iloc[-1]:
+                import pandas as pd
+
+                self._inner.funding = pd.concat(
+                    [
+                        funding,
+                        pd.DataFrame([{
+                            "timestamp": newest,
+                            "funding_rate": float(self._feed.funding_rate),
+                        }]),
+                    ],
+                    ignore_index=True,
+                )
+        return self._inner.prepare(candles)
+
+    def signal(self, df, index) -> SignalIntent | None:
+        return self._inner.signal(df, index)
 
 
 # --- snapshot fan-in --------------------------------------------------------------
@@ -142,6 +182,13 @@ class MultiLaneProvider:
 
 # --- lane construction ------------------------------------------------------------
 
+def build_live_strategy(
+    strategy_id: str, seed_funding, feed, strategy_params: dict | None = None
+) -> BaseStrategy:
+    cls = get_strategy_class(strategy_id)
+    return LiveFundingStrategy(cls(seed_funding, **(strategy_params or {})), feed)
+
+
 async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
 ) -> _LaneRuntime:
@@ -160,7 +207,8 @@ async def build_lane(
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk)
-    strategy = LiveFundingMR(seed_funding, feed, **(spec.strategy_params or {}))
+    strategy = build_live_strategy(spec.strategy_id, seed_funding, feed,
+                                   spec.strategy_params)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
@@ -176,6 +224,7 @@ async def build_lane(
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
+                    "strategy_id": spec.strategy_id,
                     "promotion_source": spec.exchange},
     )
     resumed = session.account_store.restore_into(exchange, session.tracker)

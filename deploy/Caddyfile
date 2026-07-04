@@ -7,5 +7,5 @@
 
 https://:8765 {
 	tls /certs/cert.pem /certs/key.pem
-	reverse_proxy paper-trial:8080
+	reverse_proxy multi-lane-shadow:8080
 }

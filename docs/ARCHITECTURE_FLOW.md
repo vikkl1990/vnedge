@@ -55,6 +55,8 @@ flowchart TB
         Diagnostics --> EdgeAgents["Bounded edge research agents"]
         EdgeAgents --> AutoExplore["Whitelisted exploratory variants"]
         EdgeAgents --> CandidateList["Profitable pair candidates"]
+        CandidateList --> ShadowManifest["Shadow lane manifest"]
+        ShadowManifest --> ShadowCockpit["Multi-lane shadow cockpit"]
         CandidateList --> Judgment["Human-approved untouched-data judgment"]
         Judgment --> PaperTrial["Paper / shadow trial"]
         PaperTrial --> Promotion["Mode ladder promotion"]
@@ -208,6 +210,7 @@ RESEARCH_TIMEFRAME=1h
 | Dashboard read-only snapshot | Current | No control routes. |
 | Multi-exchange research universe | Branch | Offline research only; execution remains V1 scoped. |
 | Bounded edge research agents | Branch | Propose/rank/explain only. |
+| Research-to-shadow lane manifest | Branch | Turns passing locked-param candidates into shadow-only lanes. |
 | Control-room dashboard cockpit | Branch | Visual architecture/status surface. |
 | Scalper microstructure foundation | Branch | In-process features/risk/tick-stop foundation. |
 | Live Binance testnet execution | Next | Required before any live mode. |

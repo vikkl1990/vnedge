@@ -35,6 +35,25 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
   backtests.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
   `can_promote=false`, and untouched-data judgment remains required.
+- `shadow_manifest`: a summary of `research/live_research/shadow_lanes.json`,
+  the shadow-only deployment manifest produced from ready research lanes.
+
+`research/live_research/shadow_lanes.json` contains:
+
+- `lanes`: research candidates that passed gates and have human-locked runtime
+  params. These are shadow-only by construction.
+- `blocked_candidates`: profitable or passing candidates that are not runnable
+  yet, usually because params are not human-locked for live-data shadow.
+- `policy`: `can_trade=false`, `can_promote=false`, and human approval remains
+  required before any paper or live promotion.
+
+To run the cockpit from the manifest instead of a static env grid:
+
+```bash
+MULTI_LANE_MANIFEST=research/live_research/shadow_lanes.json \
+DASHBOARD_TOKEN=... \
+.venv/bin/python -m vnedge.runtime.multi_lane_shadow
+```
 
 ## Guardrails
 
@@ -43,3 +62,4 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
 - Agent variants come from `strategy_diagnostics.CATALOG`; no arbitrary search.
 - Auto-explore records are marked `auto=true` and cannot be promoted directly.
 - The running paper trial is never retuned by this loop.
+- A shadow manifest is not a promotion. It is an operator-visible proving lane.

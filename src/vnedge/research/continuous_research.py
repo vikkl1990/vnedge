@@ -47,6 +47,10 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
+from vnedge.research.shadow_manifest import (
+    build_shadow_lane_manifest,
+    write_shadow_lane_manifest,
+)
 from vnedge.research.strategy_diagnostics import diagnose
 from vnedge.research.universe import (
     ResearchTarget,
@@ -76,6 +80,13 @@ TRIAL_SYMBOL = "BTC/USDT:USDT"
 DRIFT_CONSECUTIVE_REJECTS = 3
 
 
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def side_attribution(result: WalkForwardResult) -> dict:
     """Break OOS performance by trade side. For funding-MR this doubles as
     funding-sign attribution: shorts fade positive-funding crowding, longs
@@ -93,6 +104,31 @@ def side_attribution(result: WalkForwardResult) -> dict:
             "win_rate_pct": round(wins / len(trades) * 100.0, 1) if trades else 0.0,
         }
     return out
+
+
+def selected_params_summary(result: WalkForwardResult) -> dict:
+    """Summarize the params selected inside rolling train windows.
+
+    The live/shadow runtime must use a single human-locked parameter set, not
+    silently cherry-pick a different set each window. This metadata lets the
+    operator see whether research had a stable consensus before promotion.
+    """
+    counts: dict[str, dict] = {}
+    for window in result.windows:
+        key = json.dumps(window.chosen_params, sort_keys=True)
+        row = counts.setdefault(key, {
+            "params": dict(window.chosen_params),
+            "windows": 0,
+        })
+        row["windows"] += 1
+    votes = sorted(counts.values(), key=lambda r: (-r["windows"], str(r["params"])))
+    consensus = votes[0] if votes else {"params": {}, "windows": 0}
+    return {
+        "consensus": consensus["params"],
+        "consensus_windows": consensus["windows"],
+        "windows": len(result.windows),
+        "votes": votes,
+    }
 
 
 def wf_record(
@@ -123,6 +159,7 @@ def wf_record(
         "profitable_windows_pct": round(result.oos_profitable_window_pct, 1),
         "total_fees_usd": total_fees,
         "payoff_ratio": payoff,
+        "selected_params": selected_params_summary(result),
         "verdict": "PASS" if decision.passed else "REJECT",
         "reasons": list(decision.reject_reasons),
         "updated": datetime.now(UTC).isoformat(),
@@ -412,6 +449,21 @@ def publish(records: list[dict], started: float,
             "distinct_variants": len((auto_state or {}).get("tried", [])),
         },
     }
+    shadow_path = OUT_DIR / "shadow_lanes.json"
+    shadow_manifest = build_shadow_lane_manifest(
+        payload,
+        max_lanes=int(os.environ.get("RESEARCH_SHADOW_MAX_LANES", "12")),
+        include_rejects=_truthy_env("RESEARCH_SHADOW_INCLUDE_REJECTS"),
+        starting_equity=float(os.environ.get("RESEARCH_SHADOW_STARTING_EQUITY", "500")),
+        daily_loss_usd=float(os.environ.get("RESEARCH_SHADOW_DAILY_LOSS_USD", "10")),
+    )
+    payload["shadow_manifest"] = {
+        "path": str(shadow_path),
+        "ready_lanes": len(shadow_manifest["lanes"]),
+        "blocked_candidates": len(shadow_manifest["blocked_candidates"]),
+        "policy": shadow_manifest["policy"],
+    }
+    write_shadow_lane_manifest(shadow_manifest, shadow_path)
     tmp = OUT_DIR / "latest.json.tmp"
     tmp.write_text(json.dumps(payload, indent=2))
     tmp.replace(OUT_DIR / "latest.json")

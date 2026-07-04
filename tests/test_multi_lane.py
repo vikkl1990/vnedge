@@ -1,8 +1,13 @@
 """Multi-lane shadow — provider fan-in, primary flat snapshot, comparison array."""
 
+import json
+
 from vnedge.runtime import multi_lane
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
-from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env
+from vnedge.runtime.multi_lane_shadow import (
+    build_lane_specs_from_env,
+    build_lane_specs_from_manifest,
+)
 from vnedge.runtime.runner_config import RunnerMode
 
 
@@ -74,6 +79,7 @@ def test_lane_spec_defaults():
     assert spec.daily_loss_usd == 10.0
     assert spec.is_primary is False
     assert spec.mode is RunnerMode.SHADOW
+    assert spec.strategy_id == "funding_mean_reversion_v1"
 
 
 def test_publish_error_adds_faulted_lane():
@@ -124,6 +130,42 @@ def test_lane_specs_reject_unknown_mode():
     import pytest
     with pytest.raises(ValueError, match="unknown multi-lane mode"):
         build_lane_specs_from_env({"MULTI_LANE_MODES": "paper,bogus"})
+
+
+def test_lane_specs_load_research_shadow_manifest(tmp_path):
+    path = tmp_path / "shadow_lanes.json"
+    path.write_text(json.dumps({
+        "lanes": [
+            {
+                "lane_id": "candidate_a",
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "1h",
+                "strategy_id": "funding_mean_reversion_v1",
+                "strategy_params": {"extreme_pct": 0.85},
+                "mode": "shadow",
+                "starting_equity": 600,
+                "daily_loss_usd": 12,
+                "runtime_status": "ready",
+            },
+            {
+                "lane_id": "blocked",
+                "exchange": "bybit",
+                "symbol": "ETH/USDT:USDT",
+                "runtime_status": "blocked",
+            },
+        ],
+    }))
+
+    specs = build_lane_specs_from_manifest(path)
+
+    assert len(specs) == 1
+    assert specs[0].lane_id == "candidate_a"
+    assert specs[0].strategy_params == {"extreme_pct": 0.85}
+    assert specs[0].starting_equity == 600
+    assert specs[0].daily_loss_usd == 12
+    assert specs[0].is_primary is True
+    assert build_lane_specs_from_env({"MULTI_LANE_MANIFEST": str(path)}) == specs
 
 
 async def test_runner_continues_when_one_lane_build_fails(monkeypatch, tmp_path):
