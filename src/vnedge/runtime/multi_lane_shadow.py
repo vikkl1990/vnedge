@@ -61,6 +61,32 @@ _MODES: dict[str, RunnerMode] = {
     "shadow": RunnerMode.SHADOW,
 }
 
+# Exploratory candidate lanes surfaced by the edge-research agent — run in
+# SHADOW only (gateway-evaluated intents journaled, NEVER a fill) so their live
+# behaviour can be watched without committing capital. A rolling PASS on
+# already-seen data is a candidate, NOT a promotion: each still needs a
+# human-approved, pre-registered judgment on UNTOUCHED data before it could
+# ever reach a paper lane. Toggle with MULTI_LANE_CANDIDATES=0.
+#
+# trend_continuation_v1 on XRP was the standout of the 2026-07-04 sweep:
+# OOS +$92.20 (bybit) / +$80.25 (binance), 53-57 trades, but gate-REJECTED —
+# so it is explicitly not promotable, only observable. Default trend config.
+CANDIDATE_SHADOW_LANES = [
+    LaneSpec(
+        lane_id="trend_continuation_xrp_bybit_shadow",
+        exchange="bybit", symbol="XRP/USDT:USDT",
+        strategy_id="trend_continuation_v1",
+        strategy_params={},          # default trend_continuation_v1 config
+        mode=RunnerMode.SHADOW,
+    ),
+]
+
+
+def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    if environ.get("MULTI_LANE_CANDIDATES", "1").lower() not in ("1", "true", "yes", "on"):
+        return []
+    return list(CANDIDATE_SHADOW_LANES)
+
 
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     raw = environ.get(name, default)
@@ -146,7 +172,7 @@ def build_lane_specs_from_env(
 
 async def main() -> None:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
-    lanes = build_lane_specs_from_env()
+    lanes = build_lane_specs_from_env() + candidate_shadow_lanes()
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
     provider = MultiLaneProvider(primary_lane_id=primary)
 
