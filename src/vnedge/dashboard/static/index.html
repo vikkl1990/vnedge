@@ -199,6 +199,19 @@
     </div>
   </div>
 
+  <section>
+    <h2>Edge research agent — autonomous hunt &amp; uplift
+      <span class="tag" id="ea_policy">exploratory only · cannot trade or promote</span></h2>
+    <div class="kv" style="grid-template-columns:auto 1fr">
+      <span class="k">Universe</span><span class="v" id="ea_universe">—</span>
+      <span class="k">Candidate lanes</span><span class="v" id="ea_pairs">—</span>
+    </div>
+    <table id="ea_proposals"><thead><tr>
+      <th>Agent action</th><th>Target</th><th>Strategy</th><th>Why</th>
+    </tr></thead><tbody></tbody></table>
+    <div class="empty" id="ea_empty">agent has no open proposals — all lanes either passing or awaiting data</div>
+  </section>
+
   <footer>
     <span class="legend">
       <span><span class="dot" style="background:var(--green)"></span>good</span>
@@ -419,6 +432,7 @@
           const aetxt=ae.total_attempts?" · auto-explore "+ae.total_attempts+" tried ("+ae.distinct_variants+" variants)":"";
           $("rl_updated").textContent="updated "+d.generated_at.slice(11,19)+" UTC · hourly"+aetxt;
         }
+        renderAgent(d.edge_agents||{}, d.universe||{});
         if(d.note){const n=$("rl_note");n.textContent=d.note;n.style.display="block";}
         const dr=d.drift_alerts||[];const dv=$("drift");dv.innerHTML="";
         for(const a of dr){const e=document.createElement("div");e.className="alert";
@@ -430,6 +444,38 @@
   }
   function fmtNet(s){if(!s)return "—";
     return (s.net_usd>=0?"+$":"-$")+Math.abs(s.net_usd).toFixed(0)+" ("+s.trades+")";}
+
+  const ACTION_LABEL={
+    pre_registered_judgment:"↳ pre-register judgment",
+    cross_exchange_validation:"↳ cross-exchange check",
+    variant_backtest:"↳ auto-uplift variant"};
+  function renderAgent(ea, uni){
+    if(uni.targets){
+      $("ea_universe").textContent=uni.targets+" targets · "+
+        (uni.exchanges||[]).join(", ")+" × "+(uni.symbols||[]).length+" symbols";
+    }
+    const pairs=ea.profitable_pairs||[];
+    $("ea_pairs").innerHTML=pairs.length
+      ? pairs.slice(0,6).map(p=>"<span class='"+(p.verdict==="PASS"?"pos":"neutral")+"'>"+
+          p.symbol.split(":")[0]+"/"+p.exchange.replace("usdm","")+" "+p.best_strategy.replace(/_v1$/,"")+
+          " $"+p.oos_net_usd.toFixed(0)+(p.verdict==="PASS"?" ✓":"")+"</span>").join(" · ")
+      : "none currently profitable";
+    const props=ea.proposals||[];
+    const body=$("ea_proposals").querySelector("tbody");body.innerHTML="";
+    for(const p of props.slice(0,12)){
+      const tr=body.insertRow();
+      const color=p.proposal_type==="pre_registered_judgment"?"var(--green)"
+        :p.proposal_type==="cross_exchange_validation"?"var(--blue)":"var(--purple)";
+      tr.innerHTML="<td style='color:"+color+"'>"+(ACTION_LABEL[p.proposal_type]||p.proposal_type)+"</td>"+
+        "<td>"+p.symbol.split(":")[0]+" / "+p.exchange.replace("usdm","")+"</td>"+
+        "<td>"+(p.parent_strategy||p.strategy_id||"").replace(/_v1$/,"")+"</td>"+
+        "<td style='color:var(--dim);font-size:11px'>"+(p.rationale||"").slice(0,90)+"</td>";
+    }
+    $("ea_proposals").style.display=props.length?"table":"none";
+    $("ea_empty").style.display=props.length?"none":"block";
+    if(ea.policy){$("ea_policy").textContent=
+      "exploratory only · cannot trade or promote · "+(ea.policy.max_variant_proposals||0)+" variant cap";}
+  }
   loadResearch();setInterval(loadResearch,60000);
 
   let backoff=500;
