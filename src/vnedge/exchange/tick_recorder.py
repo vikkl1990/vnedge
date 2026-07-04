@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd

@@ -27,7 +27,7 @@ import pandas as pd
 
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr as atr_indicator
-from vnedge.strategy.indicators import sma, zscore
+from vnedge.strategy.indicators import zscore
 
 
 class Scalper1m(BaseStrategy):

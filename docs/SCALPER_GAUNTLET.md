@@ -4,7 +4,8 @@ The user-endorsed proof path for scalping (do not skip steps):
 
 1. **1-minute candle approximation** with harsh fees — `scalper_gauntlet.py`
 2. **Tick/L2 recorder** — zero-risk data collection (`tick_recorder.py`, deployed)
-3. **True microstructure backtest** — after ~2 weeks of recorded ticks
+3. **True microstructure backtest** — replay recorded ticks through
+   `replay_backtester.py`
 4. **Paper trial** — only if it clears cost through walk-forward + human approval
 
 ## Step 1 result (2026-07-04): candle scalper has no gross edge
@@ -39,3 +40,25 @@ negative, no live/paper exposure.
 Measurement caveat: the gauntlet relaxes the 5x leverage cap so tight-stop
 scalp trades execute (isolating the fee variable). Live sizing would throttle
 it further — another headwind, not a tailwind.
+
+## Step 3 scaffold (2026-07-04): conservative tick replay engine
+
+`src/vnedge/scalping/replay_backtester.py` now replays recorded trades +
+top-of-book snapshots through the same `TopOfBook`, `TradeTick`, and
+`IncrementalFeatureEngine` used by the event-driven scalper foundation.
+
+Rules are deliberately strict:
+
+- Entry is a post-only maker quote at the favored touch.
+- A buy quote fills only when seller flow trades through the bid; a sell quote
+  fills only when buyer flow trades through the ask.
+- Exits are taker exits at the actually tradable opposite touch. Long targets
+  require the bid to reach target; short targets require the ask to reach
+  target. The engine does not award phantom exits through the spread.
+- Unfilled quotes expire and count as missed fills.
+- Invalid/crossed book records and invalid trade sides are skipped, not
+  coerced into useful-looking signals.
+
+This is not a promotion gate yet. It is the proof engine we run once the tick
+recorder has enough real data. The principle stays the same: no live or paper
+scalper exposure until the strategy clears costs on untouched replay data.
