@@ -134,9 +134,11 @@ class LiveMarketFeed:
     async def _watch_quotes(self) -> None:
         # Top-of-book via watch_order_book: some venues' ticker streams
         # (e.g. Binance USDT-M 24h ticker) carry no bid/ask at all.
+        # limit=50 is the common depth both Binance and Bybit accept for swaps
+        # (Bybit rejects 5: only {1,50,200,1000}). We only read level 0.
         while True:
             try:
-                book = await self._ex.watch_order_book(self.symbol, limit=5)
+                book = await self._ex.watch_order_book(self.symbol, limit=50)
                 if book["bids"] and book["asks"]:
                     bid = float(book["bids"][0][0])
                     ask = float(book["asks"][0][0])
