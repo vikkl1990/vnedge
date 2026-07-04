@@ -119,14 +119,42 @@ async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     report = await session.run(max_bars=1)
 
     assert report.mode == "shadow_live"
-    assert report.signals_generated == 1
-    assert report.shadow_approved == 1
+    # startup prime (latest seeded bar) + one forward bar = two shadow intents
+    assert report.signals_generated == 2
+    assert report.shadow_approved == 2
     assert report.orders_submitted == 0
     assert report.fills == 0
     assert exchange.get_positions() == []
     records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(records) == 1
-    assert records[0]["payload"]["approved"] is True
+    assert len(records) == 2
+    assert all(r["payload"]["approved"] is True for r in records)
+
+
+async def test_shadow_prime_fires_on_startup_without_a_new_bar(tmp_path):
+    # no new candles arrive; the seeded latest bar is armed (AlwaysLong).
+    # a restart must NOT discard that — the startup prime journals it.
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+
+    report = await session.run(max_bars=0)
+
+    records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    assert len(records) == 1          # primed off the seeded bar, zero new bars
+    assert report.shadow_approved == 1
+    assert report.orders_submitted == 0
+    assert report.fills == 0
+    assert exchange.get_positions() == []
+
+
+async def test_paper_mode_is_not_primed_on_startup(tmp_path):
+    # paper/live must never re-enter the latest bar on restart (double-position)
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
+
+    await session.run(max_bars=0)
+
+    assert session.orders_submitted == 0      # nothing submitted from a prime
+    assert exchange.get_positions() == []
 
 
 async def test_non_forward_candles_dropped(tmp_path):

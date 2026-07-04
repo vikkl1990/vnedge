@@ -322,11 +322,43 @@ class LivePaperSession:
             self.alert_engine.evaluate(snapshot)
 
     # --- Main loop -----------------------------------------------------------------
+    async def _shadow_prime(self) -> None:
+        """SHADOW lanes only: evaluate the latest already-closed (seeded) bar
+        once at startup.
+
+        The live loop otherwise acts only on bars that close AFTER startup, so a
+        restart silently discards an already-armed condition while it waits up
+        to a full bar for the next close — with frequent restarts a slow-bar
+        strategy may never get a single decision opportunity. Shadow lanes never
+        fill, so re-evaluating a bar is safe: it only journals an observation.
+        Deliberately NOT done for paper/live modes, where re-entering the latest
+        bar on restart could double a position.
+        """
+        if self.config.mode is not RunnerMode.SHADOW:
+            return
+        if len(self.candles) <= self.strategy.warmup_bars:
+            return
+        # let the live feed publish its first top-of-book so sizing has a
+        # real reference price (immediate when a quote is already present)
+        for _ in range(30):
+            if self.feed.quote is not None:
+                break
+            await asyncio.sleep(0.5)
+        if self.feed.quote is None:
+            return
+        df = self.strategy.prepare(self.candles)
+        sig = self.strategy.signal(df, len(df) - 1)
+        if sig is not None:
+            self.signals += 1
+            await self._submit_entry(sig, datetime.now(UTC))
+
     async def run(self, *, max_bars: int | None = None,
                   deadline_seconds: float | None = None) -> RunReport:
         started = datetime.now(UTC)
         bars = 0
         prepared_warmup = self.strategy.warmup_bars
+
+        await self._shadow_prime()
 
         while True:
             if max_bars is not None and bars >= max_bars:
