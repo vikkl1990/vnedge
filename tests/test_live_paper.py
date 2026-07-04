@@ -11,7 +11,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
 from vnedge.paper.paper_broker import PaperBroker
-from vnedge.paper.simulated_exchange import SimulatedExchange
+from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
@@ -76,13 +76,13 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
     return [[BASE + (start + i) * MIN, 100.0, high, low, 100.0, 5.0] for i in range(n)]
 
 
-def build_session(tmp_path, feed, strategy=None):
+def build_session(tmp_path, feed, strategy=None, script=None):
     config = RunnerConfig(mode=RunnerMode.PAPER, symbol=SYM, reconcile_every_bars=2)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
-    om = OrderManager(gateway, journal, PaperBroker(exchange))
+    om = OrderManager(gateway, journal, PaperBroker(exchange, script=script))
     session = LivePaperSession(
         strategy or AlwaysLong(), feed, history(), config,
         gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
@@ -143,3 +143,34 @@ async def test_stop_exit_on_live_bar(tmp_path):
     assert report.fills == 2
     assert report.realized_pnl_usd < 0
     assert report.reconciliation_mismatches == 0
+
+
+async def test_timeout_reached_entry_activates_plan_after_reconciliation(tmp_path):
+    rows = live_rows(n=1) + [[BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0]]
+    feed = FakeFeed(rows)
+    session, exchange = build_session(
+        tmp_path, feed, strategy=LongOnce(), script=["timeout_reached"]
+    )
+
+    report = await session.run(max_bars=2)
+
+    assert report.orders_submitted == 2  # timed-out entry + reduce-only stop
+    assert report.fills == 2
+    assert exchange.get_positions() == []
+    assert report.reconciliation_mismatches == 0
+
+
+async def test_restored_orphan_position_trips_kill_and_blocks_entries(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=AlwaysLong())
+    exchange.set_quote(SYM, bid=99.99, ask=100.01)
+    exchange.submit_order(PaperOrderRequest("restored", SYM, True, 1.0))
+    existing_fills = len(exchange.get_fills())
+
+    report = await session.run(max_bars=1)
+
+    assert session.gateway.kill_switch.is_active
+    assert report.risk_rejects == 1
+    assert len(exchange.get_fills()) == existing_fills
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert "orphaned_paper_position" in kinds

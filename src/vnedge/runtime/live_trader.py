@@ -88,6 +88,7 @@ class LiveTraderSession:
         self.sizing_skips = self.recon_mismatches = 0
         self._plan: SignalIntent | None = None
         self._entry_bar_ts = None
+        self._parked_entries = {}
         self._bars = 0
 
     @property
@@ -128,6 +129,12 @@ class LiveTraderSession:
             self.orders_submitted += 1
             self._plan = sig
             self._entry_bar_ts = self.candles["timestamp"].iloc[-1]
+        elif order.state is OrderState.TIMEOUT_UNKNOWN:
+            self.orders_submitted += 1
+            self._parked_entries[order.client_order_id] = (
+                sig,
+                self.candles["timestamp"].iloc[-1],
+            )
 
     async def _submit_exit(self, reason: str, now: datetime) -> None:
         positions = await self.accounts.open_positions()
@@ -211,9 +218,21 @@ class LiveTraderSession:
 
     async def _reconcile(self) -> None:
         try:
-            await self.reconciler.resolve_unknown_orders()
+            resolved = await self.reconciler.resolve_unknown_orders()
         except Exception as exc:  # noqa: BLE001 — reconciliation errors must not crash the loop
             logger.error("live reconciliation failed: %s", exc)
+            return
+        for coid in resolved:
+            parked = self._parked_entries.pop(coid, None)
+            if parked is None:
+                continue
+            order = self.om.orders[coid]
+            if order.state in (
+                OrderState.ACKNOWLEDGED,
+                OrderState.PARTIALLY_FILLED,
+                OrderState.FILLED,
+            ) and self._plan is None:
+                self._plan, self._entry_bar_ts = parked
 
     def _report(self) -> RunReport:
         return RunReport(

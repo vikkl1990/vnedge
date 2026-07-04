@@ -85,6 +85,8 @@ class LivePaperSession:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self._plan: _LivePlan | None = None
+        self._parked_entries: dict[str, _LivePlan] = {}
+        self._orphan_position_guarded = False
         self._bars_since_reconcile = 0
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
@@ -144,8 +146,11 @@ class LivePaperSession:
             self.risk_rejects += 1
         else:
             self.orders_submitted += 1
+            plan = _LivePlan(sig, self.candles["timestamp"].iloc[-1])
             if order.state is OrderState.ACKNOWLEDGED:
-                self._plan = _LivePlan(sig, self.candles["timestamp"].iloc[-1])
+                self._plan = plan
+            elif order.state is OrderState.TIMEOUT_UNKNOWN:
+                self._parked_entries[order.client_order_id] = plan
 
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
@@ -220,6 +225,26 @@ class LivePaperSession:
         self._day_open_equity = equity
         self._day_open_fills = fills
 
+    def _guard_orphaned_position(self) -> None:
+        if self._orphan_position_guarded or self._plan is not None or self._parked_entries:
+            return
+        positions = self.exchange.get_positions()
+        if not positions:
+            return
+        self._orphan_position_guarded = True
+        reason = (
+            "restored paper position without active trade plan — entries halted; "
+            "manual reduce-only flatten required"
+        )
+        self.gateway.kill_switch.activate(reason)
+        self.journal.append("orphaned_paper_position", {
+            "reason": reason,
+            "positions": [
+                {"symbol": p.symbol, "side": p.side, "quantity": abs(p.quantity)}
+                for p in positions
+            ],
+        })
+
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
@@ -286,6 +311,7 @@ class LivePaperSession:
 
             bar = self.candles.iloc[-1]
             await self._manage_exit(bar, now)
+            self._guard_orphaned_position()
 
             if self._plan is None and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
@@ -297,7 +323,7 @@ class LivePaperSession:
             self._bars_since_reconcile += 1
             if self._bars_since_reconcile >= self.config.reconcile_every_bars \
                     or self.om.has_unresolved_orders:
-                report = self.reconciler.run()
+                report = self._reconcile()
                 self.recon_mismatches += len(report.mismatches)
                 self._bars_since_reconcile = 0
 
@@ -316,7 +342,7 @@ class LivePaperSession:
                     logger.warning("equity history write failed: %s", exc)
             self._publish_snapshot()
 
-        final = self.reconciler.run()
+        final = self._reconcile()
         self.recon_mismatches += len(final.mismatches)
         fills = self.exchange.get_fills()
         report = RunReport(
@@ -335,4 +361,19 @@ class LivePaperSession:
             final_equity_usd=self.tracker.equity_usd(),
         )
         self.journal.append("live_paper_report", report.to_dict())
+        return report
+
+    def _reconcile(self):
+        report = self.reconciler.run()
+        for coid in report.resolved_orders:
+            plan = self._parked_entries.pop(coid, None)
+            if plan is None:
+                continue
+            order = self.om.orders[coid]
+            if order.state in (
+                OrderState.ACKNOWLEDGED,
+                OrderState.PARTIALLY_FILLED,
+                OrderState.FILLED,
+            ) and self._plan is None:
+                self._plan = plan
         return report
