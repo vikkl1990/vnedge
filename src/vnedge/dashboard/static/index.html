@@ -1259,21 +1259,22 @@
     if(!board||!body)return;
     if(!Array.isArray(lanes)||lanes.length<2){board.style.display="none";return;}
     board.style.display="";
-    body.innerHTML="";
+    body.replaceChildren();
     const money=(v)=>(v>=0?"+$":"-$")+Math.abs(Number(v)||0).toFixed(2);
     const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
     for(const l of lanes){
       const tr=body.insertRow();
-      tr.innerHTML="<td style='text-align:left'>"+(l.lane_id||"")+"</td>"+
-        "<td>"+(l.exchange||"").replace("usdm","")+"</td>"+
-        "<td>"+String(l.symbol||"").split(":")[0]+"</td>"+
-        "<td>$"+(Number(l.equity)||0).toFixed(2)+"</td>"+
-        "<td class='"+cls(l.realized_pnl)+"'>"+money(l.realized_pnl)+"</td>"+
-        "<td class='"+cls(l.unrealized_pnl)+"'>"+money(l.unrealized_pnl)+"</td>"+
-        "<td>"+(l.fills||0)+"</td>"+
-        "<td>$"+(Number(l.fees_usd)||0).toFixed(2)+"</td>"+
-        "<td class='"+(l.risk_status==="ok"?"pos":"neg")+"'>"+(l.risk_status||"?")+"</td>"+
-        "<td class='"+(l.feed==="ok"?"pos":"neg")+"'>"+(l.feed||"?")+"</td>";
+      const laneCell=appendCell(tr,l.lane_id||"");
+      laneCell.style.textAlign="left";
+      appendCell(tr,(l.exchange||"").replace("usdm",""));
+      appendCell(tr,String(l.symbol||"").split(":")[0]);
+      appendCell(tr,"$"+(Number(l.equity)||0).toFixed(2));
+      appendCell(tr,money(l.realized_pnl),cls(l.realized_pnl));
+      appendCell(tr,money(l.unrealized_pnl),cls(l.unrealized_pnl));
+      appendCell(tr,l.fills||0);
+      appendCell(tr,"$"+(Number(l.fees_usd)||0).toFixed(2));
+      appendCell(tr,l.risk_status||"?",l.risk_status==="ok"?"pos":"neg");
+      appendCell(tr,l.feed||"?",l.feed==="ok"?"pos":"neg");
     }
   }
 

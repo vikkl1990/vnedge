@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -35,7 +35,7 @@ from vnedge.risk.position_sizer import size_position
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
-from vnedge.runtime.runner_config import RunnerConfig
+from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
@@ -84,9 +84,11 @@ class LivePaperSession:
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
+        self.shadow_approved = self.shadow_rejected = 0
         self._plan: _LivePlan | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
         self._orphan_position_guarded = False
+        self._reconciliation_fail_closed = False
         self._bars_since_reconcile = 0
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
@@ -118,6 +120,11 @@ class LivePaperSession:
         )
         return True
 
+    def _mode_label(self) -> str:
+        if self.config.mode is RunnerMode.SHADOW:
+            return "shadow (live data)"
+        return "paper (live data)"
+
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
         bid, ask = self.feed.quote
         ref_price = ask if sig.side == "long" else bid
@@ -139,6 +146,24 @@ class LivePaperSession:
             self.strategy.strategy_id, self.config.symbol, sig.side,
             self.candles["timestamp"].iloc[-1],
         )
+        if self.config.mode is RunnerMode.SHADOW:
+            decision = self.gateway.evaluate(
+                intent, self.tracker.account_state(), self.feed.market_state(), now=now
+            )
+            self.journal.append("shadow_intent", {
+                "intent_key": key,
+                "approved": decision.approved,
+                "failed_checks": list(decision.failed_checks),
+                "passed_checks": list(decision.passed_checks),
+                "explanation": decision.explanation,
+                "intent": asdict(intent),
+                "signal_reason": sig.reason,
+            })
+            if decision.approved:
+                self.shadow_approved += 1
+            else:
+                self.shadow_rejected += 1
+            return
         order = await self.om.submit(
             intent, self.tracker.account_state(), self.feed.market_state(), key, now=now
         )
@@ -214,7 +239,7 @@ class LivePaperSession:
         self.journal.append("daily_report", {"day": str(self._report_day), "summary": summary})
         if self.alert_engine is not None:
             alert = {"ts": now.isoformat(), "rule_id": "daily_report",
-                     "severity": "info", "message": summary, "mode": "paper (live data)"}
+                     "severity": "info", "message": summary, "mode": self._mode_label()}
             self.alert_engine.recent.append(alert)
             for notifier in self.alert_engine.notifiers:
                 try:
@@ -245,11 +270,24 @@ class LivePaperSession:
             ],
         })
 
+    def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
+        if not mismatches or self._reconciliation_fail_closed:
+            return
+        self._reconciliation_fail_closed = True
+        reason = (
+            "reconciliation mismatch — entries halted; reduce-only exits remain allowed"
+        )
+        self.gateway.kill_switch.activate(reason)
+        self.journal.append("reconciliation_fail_closed", {
+            "reason": reason,
+            "mismatches": list(mismatches),
+        })
+
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
         snapshot = build_snapshot(
-            mode="paper (live data)", live_trading_enabled=False,
+            mode=self._mode_label(), live_trading_enabled=False,
             tracker=self.tracker, exchange=self.exchange,
             kill_switch=self.gateway.kill_switch, journal=self.journal,
             order_manager=self.om,
@@ -271,6 +309,8 @@ class LivePaperSession:
                 "orders_submitted": self.orders_submitted,
                 "risk_rejects": self.risk_rejects,
                 "sizing_skips": self.sizing_skips,
+                "shadow_approved": self.shadow_approved,
+                "shadow_rejected": self.shadow_rejected,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
             },
@@ -346,7 +386,7 @@ class LivePaperSession:
         self.recon_mismatches += len(final.mismatches)
         fills = self.exchange.get_fills()
         report = RunReport(
-            mode="paper_live", symbol=self.config.symbol,
+            mode=f"{self.config.mode.value}_live", symbol=self.config.symbol,
             strategy_id=self.strategy.strategy_id,
             bars_processed=bars, signals_generated=self.signals,
             orders_submitted=self.orders_submitted, fills=len(fills),
@@ -356,7 +396,8 @@ class LivePaperSession:
             unrealized_pnl_usd=self.tracker.unrealized_pnl_usd(),
             max_drawdown_pct=0.0,  # session-level dd needs longer runs; journal has equity
             risk_rejects=self.risk_rejects, sizing_skips=self.sizing_skips,
-            shadow_approved=0, shadow_rejected=0,
+            shadow_approved=self.shadow_approved,
+            shadow_rejected=self.shadow_rejected,
             reconciliation_mismatches=self.recon_mismatches,
             final_equity_usd=self.tracker.equity_usd(),
         )
@@ -365,6 +406,7 @@ class LivePaperSession:
 
     def _reconcile(self):
         report = self.reconciler.run()
+        self._fail_closed_on_reconciliation(report.mismatches)
         for coid in report.resolved_orders:
             plan = self._parked_entries.pop(coid, None)
             if plan is None:
