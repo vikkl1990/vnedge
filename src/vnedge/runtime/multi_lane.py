@@ -129,6 +129,10 @@ class MultiLaneProvider:
                 "lane_id": self._lanes[lid]["lane_id"],
                 "exchange": self._lanes[lid]["lane_exchange"],
                 "symbol": self._lanes[lid].get("symbol", ""),
+                # per-lane mode + strategy so the dashboard lane matrix can
+                # label paper vs shadow and which strategy each lane runs
+                "mode": self._lanes[lid].get("mode", ""),
+                "strategy_id": self._lanes[lid].get("strategy_id", ""),
                 "equity": self._lanes[lid].get("equity", 0.0),
                 "realized_pnl": self._lanes[lid].get("realized_pnl", 0.0),
                 "unrealized_pnl": self._lanes[lid].get("unrealized_pnl", 0.0),
