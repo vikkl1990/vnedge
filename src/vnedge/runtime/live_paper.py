@@ -348,6 +348,11 @@ class LivePaperSession:
             return
         df = self.strategy.prepare(self.candles)
         sig = self.strategy.signal(df, len(df) - 1)
+        logger.info(
+            "shadow prime [%s %s]: latest seeded bar -> %s",
+            self.strategy.strategy_id, self.config.symbol,
+            f"{sig.side} intent" if sig is not None else "no signal",
+        )
         if sig is not None:
             self.signals += 1
             await self._submit_entry(sig, datetime.now(UTC))
