@@ -20,6 +20,7 @@ driven (MULTI_LANE_MODES, MULTI_LANE_EXCHANGES, MULTI_LANE_SYMBOLS).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Mapping
@@ -101,9 +102,39 @@ def _parse_modes(environ: Mapping[str, str]) -> list[RunnerMode]:
     return modes
 
 
+def build_lane_specs_from_manifest(path: Path) -> list[LaneSpec]:
+    raw = json.loads(path.read_text())
+    lanes = raw.get("lanes", [])
+    specs = [
+        LaneSpec(
+            lane_id=lane["lane_id"],
+            exchange=lane["exchange"],
+            symbol=lane["symbol"],
+            strategy_id=lane.get("strategy_id", "funding_mean_reversion_v1"),
+            timeframe=lane.get("timeframe", "1h"),
+            starting_equity=float(lane.get("starting_equity", 500.0)),
+            daily_loss_usd=float(lane.get("daily_loss_usd", 10.0)),
+            is_primary=bool(lane.get("is_primary", False)),
+            strategy_params=dict(lane.get("strategy_params", {})),
+            mode=RunnerMode(lane.get("mode", "shadow")),
+        )
+        for lane in lanes
+        if lane.get("runtime_status", "ready") == "ready"
+    ]
+    if not specs:
+        raise ValueError(f"shadow manifest {path} has no ready lanes")
+    if not any(spec.is_primary for spec in specs):
+        specs[0] = replace(specs[0], is_primary=True)
+    return specs
+
+
 def build_lane_specs_from_env(
     environ: Mapping[str, str] = os.environ,
 ) -> list[LaneSpec]:
+    manifest = environ.get("MULTI_LANE_MANIFEST")
+    if manifest:
+        return build_lane_specs_from_manifest(Path(manifest))
+
     exchanges = _csv_env("MULTI_LANE_EXCHANGES", "binanceusdm,bybit", environ)
     symbols = _csv_env("MULTI_LANE_SYMBOLS", "BTC/USDT:USDT", environ)
     if not exchanges or not symbols:

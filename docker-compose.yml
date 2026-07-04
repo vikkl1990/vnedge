@@ -22,6 +22,9 @@ services:
       MULTI_LANE_PRIMARY_EXCHANGE: "${MULTI_LANE_PRIMARY_EXCHANGE:-binanceusdm}"
       MULTI_LANE_PRIMARY_SYMBOL: "${MULTI_LANE_PRIMARY_SYMBOL:-BTC/USDT:USDT}"
       MULTI_LANE_PRIMARY_MODE: "${MULTI_LANE_PRIMARY_MODE:-paper}"
+      # Optional: point at research/live_research/shadow_lanes.json to run
+      # research-selected shadow-only lanes instead of the static env grid.
+      MULTI_LANE_MANIFEST: "${MULTI_LANE_MANIFEST:-}"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
