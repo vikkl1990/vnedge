@@ -3,7 +3,6 @@
 import json
 
 import pandas as pd
-import pytest
 from fastapi.testclient import TestClient
 
 from vnedge.backtest.metrics import BacktestMetrics

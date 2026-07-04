@@ -86,7 +86,12 @@ def load_candles() -> pd.DataFrame:
 
 async def main() -> None:
     provider = SnapshotProvider()
-    app = create_app(provider, token=TOKEN, snapshot_hz=2.0)
+    app = create_app(
+        provider,
+        token=TOKEN,
+        snapshot_hz=2.0,
+        research_path=Path("research/live_research/latest.json"),
+    )
     server = uvicorn.Server(
         uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
     )

@@ -66,7 +66,6 @@ def test_trial_id_mismatch_refused(tmp_path):
 
 def test_session_persists_each_bar(tmp_path):
     from tests.test_live_paper import AlwaysLong, FakeFeed, history, live_rows
-    from vnedge.config.risk_config import RiskConfig
     from vnedge.execution.journal import DecisionJournal
     from vnedge.execution.order_manager import OrderManager
     from vnedge.paper.paper_broker import PaperBroker
