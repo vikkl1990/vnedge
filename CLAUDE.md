@@ -95,6 +95,24 @@ NOTE: the running trial (PID on the Mac) predates alerts/persistence wiring;
 they activate on its next (re)start — the intended VPS migration moment
 (docs/DEPLOY.md §2 preserves the account).
 
+## Milestone 10A: offensive alpha lab (built 2026-07-04)
+
+Three offensive lanes (vol_expansion_breakout, panic_reversal,
+funding_squeeze_continuation) under OFFENSIVE_GATES (PF>=1.25, payoff>=1.8,
+DD<=12%, >=15 trades, win-concentration cap; win rate deliberately not a
+gate). Research sweep: 6 symbols x 5 strategies hourly. DEFERRED to 10B:
+relative_strength_rotation (needs multi-symbol portfolio backtester),
+risk-bucket config (needed at paper stage).
+
+PRE-REGISTERED JUDGMENT (declared 2026-07-04, do not modify):
+volatility_expansion_breakout_v1 on DOGE/USDT (first rolling offensive
+PASS, +$23.79). Config frozen: grid breakout_bars [48,96], train 1440 /
+test 720 bars, OFFENSIVE_GATES unchanged. Judgment data: DOGE 1h,
+2024-07-03 -> 2025-07-03 (untouched by any prior decision). One run;
+verdict stands. Panic_reversal produced ZERO qualifying setups in 365d —
+rare-event evidence; any parameter change must be pre-registered for a
+future round, never applied to seen data.
+
 ## Roadmap additions (accepted ideas, not yet built)
 
 - docs/strategy_contract.md + AI strategy sandbox (data/strategies/ai/ with
