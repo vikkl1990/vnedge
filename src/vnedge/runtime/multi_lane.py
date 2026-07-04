@@ -51,6 +51,14 @@ class LaneSpec:
     strategy_params: dict | None = None
     is_primary: bool = False   # the governed lane shown as the flat snapshot
     daily_loss_usd: float = 10.0
+    mode: RunnerMode = RunnerMode.SHADOW
+
+
+@dataclass(frozen=True)
+class _LaneRuntime:
+    spec: LaneSpec
+    session: LivePaperSession
+    feed: LiveMarketFeed
 
 
 # --- snapshot fan-in --------------------------------------------------------------
@@ -85,6 +93,29 @@ class MultiLaneProvider:
             self._order.append(lane_id)
         self._lanes[lane_id] = snap
 
+    def publish_error(
+        self, lane_id: str, exchange: str, symbol: str, error: str
+    ) -> None:
+        self._publish(lane_id, exchange, {
+            "mode": "shadow (live data)",
+            "symbol": symbol,
+            "equity": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "fills": 0,
+            "fees_usd": 0.0,
+            "risk_status": "lane_error",
+            "feed_health": {"candles": "error", "last_update_ms": 0.0},
+            "positions": [],
+            "open_orders": [],
+            "recent_alerts": [{
+                "severity": "critical",
+                "message": error,
+                "rule_id": "lane_error",
+            }],
+            "session": {"lane_error": error},
+        })
+
     def latest(self) -> dict | None:
         if not self._lanes:
             return None
@@ -113,7 +144,7 @@ class MultiLaneProvider:
 
 async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
-) -> LivePaperSession:
+) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     warmup_hours = 450
     until = int(time.time() * 1000)
@@ -126,7 +157,7 @@ async def build_lane(
 
     feed = LiveMarketFeed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
-    config = RunnerConfig(mode=RunnerMode.PAPER, symbol=spec.symbol,
+    config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk)
     strategy = LiveFundingMR(seed_funding, feed, **(spec.strategy_params or {}))
@@ -148,9 +179,9 @@ async def build_lane(
                     "promotion_source": spec.exchange},
     )
     resumed = session.account_store.restore_into(exchange, session.tracker)
-    logger.info("lane %s (%s %s) built; resumed=%s", spec.lane_id, spec.exchange,
-                spec.symbol, resumed)
-    return session, feed
+    logger.info("lane %s (%s %s %s) built; resumed=%s",
+                spec.lane_id, spec.exchange, spec.symbol, spec.mode.value, resumed)
+    return _LaneRuntime(spec=spec, session=session, feed=feed)
 
 
 class MultiLaneShadowRunner:
@@ -161,19 +192,75 @@ class MultiLaneShadowRunner:
         self.provider = provider
 
     async def run(self, *, deadline_seconds: float | None = None) -> None:
-        built = await asyncio.gather(
-            *[build_lane(s, self.provider, self.journal_dir) for s in self.specs]
+        results = await asyncio.gather(
+            *[build_lane(s, self.provider, self.journal_dir) for s in self.specs],
+            return_exceptions=True,
         )
-        sessions = [b[0] for b in built]
-        feeds = [b[1] for b in built]
-        for feed in feeds:
-            await feed.start()
-        logger.info("multi-lane shadow: %d lanes running (%s)",
-                    len(sessions), ", ".join(s.lane_id for s in self.specs))
+        runtimes: list[_LaneRuntime] = []
+        for spec, result in zip(self.specs, results, strict=True):
+            if isinstance(result, Exception):
+                logger.error(
+                    "lane %s (%s %s) failed to build: %s",
+                    spec.lane_id, spec.exchange, spec.symbol, result,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
+                self.provider.publish_error(
+                    spec.lane_id, spec.exchange, spec.symbol,
+                    f"build failed: {result}",
+                )
+                continue
+            runtimes.append(result)
+
+        started: list[_LaneRuntime] = []
+        for runtime in runtimes:
+            try:
+                await runtime.feed.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "lane %s (%s %s) feed failed to start: %s",
+                    runtime.spec.lane_id, runtime.spec.exchange,
+                    runtime.spec.symbol, exc,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                self.provider.publish_error(
+                    runtime.spec.lane_id, runtime.spec.exchange,
+                    runtime.spec.symbol, f"feed start failed: {exc}",
+                )
+                continue
+            started.append(runtime)
+
+        if not started:
+            raise RuntimeError("no multi-lane shadow lanes started")
+
+        logger.info("multi-lane shadow: %d/%d lanes running (%s)",
+                    len(started), len(self.specs),
+                    ", ".join(r.spec.lane_id for r in started))
+        await asyncio.gather(*[
+            self._run_lane(runtime, deadline_seconds=deadline_seconds)
+            for runtime in started
+        ])
+
+    async def _run_lane(
+        self, runtime: _LaneRuntime, *, deadline_seconds: float | None
+    ) -> None:
         try:
-            await asyncio.gather(*[
-                s.run(deadline_seconds=deadline_seconds) for s in sessions
-            ])
+            await runtime.session.run(deadline_seconds=deadline_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "lane %s (%s %s) stopped with error: %s",
+                runtime.spec.lane_id, runtime.spec.exchange,
+                runtime.spec.symbol, exc,
+            )
+            self.provider.publish_error(
+                runtime.spec.lane_id, runtime.spec.exchange,
+                runtime.spec.symbol, f"session failed: {exc}",
+            )
         finally:
-            for feed in feeds:
-                await feed.stop()
+            try:
+                await runtime.feed.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "lane %s feed stop failed: %s", runtime.spec.lane_id, exc
+                )

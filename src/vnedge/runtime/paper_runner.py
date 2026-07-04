@@ -83,6 +83,7 @@ class PaperRunner:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.shadow_approved = self.shadow_rejected = 0
         self.recon_mismatches = 0
+        self._reconciliation_fail_closed = False
 
     # --- Helpers -----------------------------------------------------------------
     def _set_quote(self, price: float) -> None:
@@ -127,11 +128,25 @@ class PaperRunner:
             "reason": reason, "state": order.state.value, "ts": str(bar_ts),
         })
 
+    def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
+        if not mismatches or self._reconciliation_fail_closed:
+            return
+        self._reconciliation_fail_closed = True
+        reason = (
+            "reconciliation mismatch — entries halted; reduce-only exits remain allowed"
+        )
+        self.gateway.kill_switch.activate(reason)
+        self.journal.append("reconciliation_fail_closed", {
+            "reason": reason,
+            "mismatches": list(mismatches),
+        })
+
     def _reconcile(self, resolved_plans: dict[str, _TradePlan]) -> _TradePlan | None:
         """Run reconciliation; activate/discard parked plans; return the plan
         that became active (if its entry turned out FILLED)."""
         report = self.reconciler.run()
         self.recon_mismatches += len(report.mismatches)
+        self._fail_closed_on_reconciliation(report.mismatches)
         activated: _TradePlan | None = None
         for coid in report.resolved_orders:
             plan = resolved_plans.pop(coid, None)

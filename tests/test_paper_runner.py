@@ -8,6 +8,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
 from vnedge.paper.paper_broker import PaperBroker
+from vnedge.paper.paper_reconciliation import ReconciliationReport
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
@@ -149,6 +150,25 @@ async def test_timeout_unknown_parks_plan_until_reconciled(tmp_path):
     assert report.orders_submitted == 2
     assert exchange.get_positions() == []
     assert report.reconciliation_mismatches == 0
+
+
+def test_reconciliation_mismatch_trips_runner_fail_closed_once(tmp_path):
+    candles = make_candles([FLAT] * 8)
+    runner, _, kill, journal = build_world(
+        tmp_path, candles, OneShotStrategy(4, LONG)
+    )
+
+    runner.reconciler.run = lambda: ReconciliationReport((), ("internal vs venue",))
+    runner._reconcile({})
+    runner._reconcile({})
+
+    assert kill.is_active
+    records = [
+        r for r in journal.read_all()
+        if r["kind"] == "reconciliation_fail_closed"
+    ]
+    assert len(records) == 1
+    assert records[0]["payload"]["mismatches"] == ["internal vs venue"]
 
 
 async def test_kill_switch_blocks_runner_entries(tmp_path):

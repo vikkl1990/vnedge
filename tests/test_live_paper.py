@@ -10,6 +10,7 @@ from vnedge.data.schemas import normalize_candles
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
+from vnedge.paper.paper_reconciliation import ReconciliationReport
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
@@ -76,8 +77,8 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
     return [[BASE + (start + i) * MIN, 100.0, high, low, 100.0, 5.0] for i in range(n)]
 
 
-def build_session(tmp_path, feed, strategy=None, script=None):
-    config = RunnerConfig(mode=RunnerMode.PAPER, symbol=SYM, reconcile_every_bars=2)
+def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER):
+    config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
@@ -109,6 +110,23 @@ async def test_stale_feed_blocks_entries(tmp_path):
     assert report.signals_generated == 1
     assert report.risk_rejects == 1  # data_freshness failed at the gateway
     assert exchange.get_positions() == []
+
+
+async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+
+    report = await session.run(max_bars=1)
+
+    assert report.mode == "shadow_live"
+    assert report.signals_generated == 1
+    assert report.shadow_approved == 1
+    assert report.orders_submitted == 0
+    assert report.fills == 0
+    assert exchange.get_positions() == []
+    records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    assert len(records) == 1
+    assert records[0]["payload"]["approved"] is True
 
 
 async def test_non_forward_candles_dropped(tmp_path):
@@ -174,3 +192,20 @@ async def test_restored_orphan_position_trips_kill_and_blocks_entries(tmp_path):
     assert len(exchange.get_fills()) == existing_fills
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert "orphaned_paper_position" in kinds
+
+
+def test_reconciliation_mismatch_trips_live_session_fail_closed_once(tmp_path):
+    feed = FakeFeed([])
+    session, _ = build_session(tmp_path, feed)
+
+    session.reconciler.run = lambda: ReconciliationReport((), ("internal vs venue",))
+    session._reconcile()
+    session._reconcile()
+
+    assert session.gateway.kill_switch.is_active
+    records = [
+        r for r in session.journal.read_all()
+        if r["kind"] == "reconciliation_fail_closed"
+    ]
+    assert len(records) == 1
+    assert records[0]["payload"]["mismatches"] == ["internal vs venue"]

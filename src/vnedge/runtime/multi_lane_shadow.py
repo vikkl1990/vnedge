@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from vnedge.runtime.multi_lane import (
@@ -34,19 +36,69 @@ FUNDING_MR_PARAMS = {
     "stop_atr_mult": 1.5,
 }
 
-LANES = [
-    LaneSpec(lane_id="funding_mr_btc_v1_20260703", exchange="binanceusdm",
-             symbol="BTC/USDT:USDT", is_primary=True,
-             strategy_params=FUNDING_MR_PARAMS),
-    LaneSpec(lane_id="funding_mr_bybit_20260704", exchange="bybit",
-             symbol="BTC/USDT:USDT", strategy_params=FUNDING_MR_PARAMS),
-]
-JOURNAL_DIR = Path("logs/paper_trials")
-PRIMARY = "funding_mr_btc_v1_20260703"
+DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
+DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
+
+
+def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
+    raw = environ.get(name, default)
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _slug_symbol(symbol: str) -> str:
+    return (
+        symbol.lower()
+        .replace("/", "_")
+        .replace(":", "_")
+        .replace("-", "_")
+    )
+
+
+def _lane_id(exchange: str, symbol: str) -> str:
+    if exchange == "binanceusdm" and symbol == "BTC/USDT:USDT":
+        return DEFAULT_PRIMARY_LANE_ID
+    if exchange == "bybit" and symbol == "BTC/USDT:USDT":
+        return DEFAULT_BYBIT_BTC_LANE_ID
+    return f"funding_mr_{exchange}_{_slug_symbol(symbol)}_shadow"
+
+
+def build_lane_specs_from_env(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    exchanges = _csv_env("MULTI_LANE_EXCHANGES", "binanceusdm,bybit", environ)
+    symbols = _csv_env("MULTI_LANE_SYMBOLS", "BTC/USDT:USDT", environ)
+    if not exchanges or not symbols:
+        raise ValueError("at least one multi-lane exchange and symbol is required")
+    timeframe = environ.get("MULTI_LANE_TIMEFRAME", "1h")
+    primary_exchange = environ.get("MULTI_LANE_PRIMARY_EXCHANGE", exchanges[0])
+    primary_symbol = environ.get("MULTI_LANE_PRIMARY_SYMBOL", symbols[0])
+    starting_equity = float(environ.get("MULTI_LANE_STARTING_EQUITY", "500"))
+    daily_loss_usd = float(environ.get("MULTI_LANE_DAILY_LOSS_USD", "10"))
+
+    specs = [
+        LaneSpec(
+            lane_id=_lane_id(exchange, symbol),
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            starting_equity=starting_equity,
+            daily_loss_usd=daily_loss_usd,
+            is_primary=exchange == primary_exchange and symbol == primary_symbol,
+            strategy_params=FUNDING_MR_PARAMS,
+        )
+        for exchange in exchanges
+        for symbol in symbols
+    ]
+    if not any(spec.is_primary for spec in specs):
+        specs[0] = replace(specs[0], is_primary=True)
+    return specs
 
 
 async def main() -> None:
-    provider = MultiLaneProvider(primary_lane_id=PRIMARY)
+    journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
+    lanes = build_lane_specs_from_env()
+    primary = next(spec.lane_id for spec in lanes if spec.is_primary)
+    provider = MultiLaneProvider(primary_lane_id=primary)
 
     server_task = None
     token = os.environ.get("DASHBOARD_TOKEN")
@@ -57,7 +109,7 @@ async def main() -> None:
 
         app = create_app(
             provider, token=token,
-            history_path=JOURNAL_DIR / f"{PRIMARY}.equity.jsonl",
+            history_path=journal_dir / f"{primary}.equity.jsonl",
             research_path=Path("research/live_research/latest.json"),
         )
         server = uvicorn.Server(uvicorn.Config(
@@ -65,7 +117,8 @@ async def main() -> None:
             port=int(os.environ.get("DASHBOARD_PORT", "8080")), log_level="warning"))
         server_task = asyncio.create_task(server.serve())
 
-    runner = MultiLaneShadowRunner(LANES, JOURNAL_DIR, provider)
+    logger.info("configured %d shadow lanes; primary=%s", len(lanes), primary)
+    runner = MultiLaneShadowRunner(lanes, journal_dir, provider)
     try:
         await runner.run()
     finally:
