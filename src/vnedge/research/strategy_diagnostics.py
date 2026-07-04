@@ -22,7 +22,7 @@ Hard boundary — this is a research assistant, not an auto-tuner:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
