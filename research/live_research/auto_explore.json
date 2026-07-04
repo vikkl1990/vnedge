@@ -1,0 +1,7 @@
+{
+  "tried": [
+    "variant|binanceusdm|BTC/USDT:USDT|1h|volatility_expansion_breakout_v1|volatility_expansion_breakout_v1__tighter_stop",
+    "variant|binanceusdm|BTC/USDT:USDT|1h|volatility_expansion_breakout_v1|volatility_expansion_breakout_v1__vol_confirmed"
+  ],
+  "total_attempts": 2
+}

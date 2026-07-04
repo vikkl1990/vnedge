@@ -118,6 +118,16 @@ def test_daily_loss_limit_does_not_block_exits(gateway):
     assert decision.approved, decision.explanation
 
 
+def test_slippage_does_not_block_reduce_only_exits(gateway):
+    """Bad slippage is an entry-quality problem; exits still need to flow."""
+    account = healthy_account(open_positions=1)
+    market = healthy_market(estimated_slippage_bps=99.0)
+    decision = gateway.evaluate(
+        entry_intent(reduce_only=True), account, market, now=NOW
+    )
+    assert decision.approved, decision.explanation
+
+
 def test_leverage_cap_enforced(gateway):
     decision = gateway.evaluate(
         entry_intent(leverage=12.0), healthy_account(), healthy_market(), now=NOW

@@ -342,6 +342,7 @@
   .alert:first-child{border-top:none}
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
+  .agent-board{order:4}
   .mini-badge{
     display:inline-flex;
     align-items:center;
@@ -358,7 +359,7 @@
   }
 
   footer{
-    order:4;
+    order:5;
     display:flex;
     flex-wrap:wrap;
     gap:10px 18px;
@@ -631,6 +632,20 @@
         </section>
       </aside>
     </div>
+
+    <section class="agent-board">
+      <h2>Edge Research Agent <span class="tag" id="ea_policy">exploratory only; cannot trade or promote</span></h2>
+      <div class="kv">
+        <span class="k">Universe</span><span class="v" id="ea_universe">--</span>
+        <span class="k">Candidate lanes</span><span class="v" id="ea_pairs">--</span>
+      </div>
+      <div class="table-wrap">
+        <table id="ea_proposals"><thead><tr>
+          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Why</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
+    </section>
 
     <footer>
       <span class="legend">
@@ -1088,6 +1103,7 @@
       const extra=ae.total_attempts?" ; auto-explore "+ae.total_attempts+" tried ("+ae.distinct_variants+" variants)":"";
       text("rl_updated","updated "+String(d.generated_at).slice(11,19)+" UTC; hourly"+extra);
     }
+    renderAgent(d.edge_agents||{}, d.universe||{});
     const note=$("rl_note");
     if(d.note){note.textContent=d.note;note.style.display="block";}else{note.style.display="none";}
     const drift=Array.isArray(d.drift_alerts)?d.drift_alerts:[];
@@ -1118,6 +1134,57 @@
   function loadResearch(){
     fetchJSON("/research").then(renderResearch).catch(()=>{});
   }
+
+  const AGENT_ACTION_LABEL={
+    pre_registered_judgment:"pre-register judgment",
+    cross_exchange_validation:"cross-exchange check",
+    variant_backtest:"auto-uplift variant"
+  };
+
+  function renderAgent(edgeAgents, universe){
+    const uni=universe||{};
+    if(uni.targets){
+      const exchanges=Array.isArray(uni.exchanges)?uni.exchanges.join(", "):"--";
+      const symbolCount=Array.isArray(uni.symbols)?uni.symbols.length:0;
+      text("ea_universe",uni.targets+" targets; "+exchanges+" x "+symbolCount+" symbols");
+    }else{
+      text("ea_universe","--");
+    }
+
+    const pairs=Array.isArray(edgeAgents.profitable_pairs)?edgeAgents.profitable_pairs:[];
+    if(pairs.length){
+      const summary=pairs.slice(0,6).map(p=>{
+        const sym=String(p.symbol||"--").split(":")[0];
+        const ex=String(p.exchange||"--").replace("usdm","");
+        const strategy=String(p.best_strategy||"--").replace(/_v1$/,"");
+        const net=finite(p.oos_net_usd)?usd(p.oos_net_usd):"--";
+        return sym+"/"+ex+" "+strategy+" "+net+(p.verdict==="PASS"?" PASS":"");
+      }).join(" | ");
+      text("ea_pairs",summary);
+    }else{
+      text("ea_pairs","none currently profitable");
+    }
+
+    const proposals=Array.isArray(edgeAgents.proposals)?edgeAgents.proposals:[];
+    const body=$("ea_proposals").querySelector("tbody");
+    body.replaceChildren();
+    for(const proposal of proposals.slice(0,12)){
+      const tr=body.insertRow();
+      const action=AGENT_ACTION_LABEL[proposal.proposal_type]||proposal.proposal_type||"--";
+      const target=String(proposal.symbol||"--").split(":")[0]+" / "+String(proposal.exchange||"--").replace("usdm","");
+      appendCell(tr,action,proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"text-good");
+      appendCell(tr,target);
+      appendCell(tr,String(proposal.parent_strategy||proposal.strategy_id||"--").replace(/_v1$/,""),"clip");
+      appendCell(tr,String(proposal.rationale||"--").slice(0,110),"clip",proposal.rationale||"");
+    }
+    $("ea_proposals").style.display=proposals.length?"table":"none";
+    $("ea_empty").style.display=proposals.length?"none":"block";
+    if(edgeAgents.policy){
+      text("ea_policy","exploratory only; cannot trade or promote; "+
+        (edgeAgents.policy.max_variant_proposals||0)+" variant cap");
+    }
+  }
+
   loadResearch();
   setInterval(loadResearch,60000);
 

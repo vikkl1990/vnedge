@@ -46,7 +46,13 @@ from vnedge.data.candle_ingestor import ingest_candles
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
+from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
 from vnedge.research.strategy_diagnostics import diagnose
+from vnedge.research.universe import (
+    ResearchTarget,
+    load_research_targets,
+    summarize_universe,
+)
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.panic_reversal import PanicReversal
@@ -55,13 +61,7 @@ from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 logger = logging.getLogger(__name__)
 
-EXCHANGE = "binanceusdm"
-# All non-BTC symbols are research-only: no paper deployment without gates
-# + human approval. Offensive lanes (milestone 10A) sweep the wider set.
-SYMBOLS = [
-    "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT",
-    "BNB/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
-]
+EXCHANGE = "binanceusdm"  # backward-compatible default for tests/helpers
 TIMEFRAME = "1h"
 LOOKBACK_DAYS = 365
 INTERVAL_SECONDS = float(os.environ.get("RESEARCH_INTERVAL_SECONDS", "3600"))
@@ -71,6 +71,7 @@ OUT_DIR = Path("research/live_research")
 # drift detection watches THIS series and alerts the operator. It never
 # mutates the trial.
 TRIAL_STRATEGY = "funding_mean_reversion_v1"
+TRIAL_EXCHANGE = "binanceusdm"
 TRIAL_SYMBOL = "BTC/USDT:USDT"
 DRIFT_CONSECUTIVE_REJECTS = 3
 
@@ -96,7 +97,7 @@ def side_attribution(result: WalkForwardResult) -> dict:
 
 def wf_record(
     strategy: str, symbol: str, result: WalkForwardResult, gates: PromotionGates,
-    gates_label: str = "standard",
+    gates_label: str = "standard", exchange: str = EXCHANGE, timeframe: str = TIMEFRAME,
 ) -> dict:
     decision = evaluate_promotion(result, gates)
     trades = sum(w.test_metrics.num_trades for w in result.windows)
@@ -110,10 +111,11 @@ def wf_record(
     ) if wins and losses else 0.0
     return {
         "attribution": side_attribution(result),
+        "exchange": exchange,
         "gates": gates_label,
         "strategy": strategy,
         "symbol": symbol,
-        "timeframe": TIMEFRAME,
+        "timeframe": timeframe,
         "windows": len(result.windows),
         "traded_windows": traded,
         "oos_trades": trades,
@@ -127,7 +129,9 @@ def wf_record(
     }
 
 
-def read_feed_series(strategy: str, symbol: str, limit: int = 48) -> list[dict]:
+def read_feed_series(
+    strategy: str, symbol: str, exchange: str = EXCHANGE, limit: int = 48
+) -> list[dict]:
     """Prior cycles' records for one strategy/symbol, oldest first."""
     path = OUT_DIR / "feed.jsonl"
     if not path.exists():
@@ -139,7 +143,11 @@ def read_feed_series(strategy: str, symbol: str, limit: int = 48) -> list[dict]:
         except json.JSONDecodeError:
             continue
         for r in payload.get("results", []):
-            if r.get("strategy") == strategy and r.get("symbol") == symbol:
+            if (
+                r.get("strategy") == strategy
+                and r.get("symbol") == symbol
+                and r.get("exchange", EXCHANGE) == exchange
+            ):
                 series.append(r)
     return series
 
@@ -191,41 +199,43 @@ def compute_drift_alerts(prev: list[dict], current: dict) -> list[dict]:
     return alerts
 
 
-async def refresh_data(store: ParquetStore, symbol: str) -> bool:
+async def refresh_data(store: ParquetStore, target: ResearchTarget | str) -> bool:
     """Incremental refresh through the quality gate; full backfill if the
     store is empty. Returns False when the gate rejects (research skips the
     symbol this cycle — fail closed, never research on bad data)."""
     until_ms = int(time.time() * 1000)
+    target = _as_target(target)
     try:
-        candles = store.read_candles(EXCHANGE, symbol, TIMEFRAME)
+        candles = store.read_candles(target.exchange, target.symbol, target.timeframe)
         since_ms = int(candles["timestamp"].iloc[-1].value // 1_000_000) - 2 * 3_600_000
     except FileNotFoundError:
         since_ms = until_ms - LOOKBACK_DAYS * 86_400_000
-        logger.info("%s: no local data — full %dd backfill", symbol, LOOKBACK_DAYS)
+        logger.info("%s: no local data — full %dd backfill", target.label, LOOKBACK_DAYS)
 
     # Funding prints only every 8h: a short incremental window would fetch
     # zero rows and (correctly) fail the empty-dataset gate. Always look
     # back >= 48h for funding; the upsert dedupes the overlap.
     funding_since_ms = min(since_ms, until_ms - 48 * 3_600_000)
-    async with CcxtPublicClient(EXCHANGE) as client:
+    async with CcxtPublicClient(target.exchange) as client:
         c = await ingest_candles(
-            client, store, symbol=symbol, timeframe=TIMEFRAME,
+            client, store, symbol=target.symbol, timeframe=target.timeframe,
             since_ms=since_ms, until_ms=until_ms,
         )
         f = await ingest_funding(
-            client, store, symbol=symbol,
+            client, store, symbol=target.symbol,
             since_ms=funding_since_ms, until_ms=until_ms,
         )
     if not (c.persisted and f.persisted):
         logger.error("%s: quality gate rejected refresh (%s / %s)",
-                     symbol, c.report.summary, f.report.summary)
+                     target.label, c.report.summary, f.report.summary)
         return False
     return True
 
 
-def run_walk_forwards(store: ParquetStore, symbol: str) -> list[dict]:
-    candles = store.read_candles(EXCHANGE, symbol, TIMEFRAME)
-    funding = store.read_funding(EXCHANGE, symbol)
+def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list[dict]:
+    target = _as_target(target)
+    candles = store.read_candles(target.exchange, target.symbol, target.timeframe)
+    funding = store.read_funding(target.exchange, target.symbol)
     cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
     c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
     f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
@@ -258,10 +268,22 @@ def run_walk_forwards(store: ParquetStore, symbol: str) -> list[dict]:
     for name, factory, grid, test_bars, gates, label in lanes:
         result = walk_forward(
             c, f, factory, grid, config,
-            train_bars=1440, test_bars=test_bars, symbol=symbol, timeframe=TIMEFRAME,
+            train_bars=1440, test_bars=test_bars, symbol=target.symbol,
+            timeframe=target.timeframe,
         )
-        records.append(wf_record(name, symbol, result, gates, gates_label=label))
+        records.append(
+            wf_record(
+                name, target.symbol, result, gates, gates_label=label,
+                exchange=target.exchange, timeframe=target.timeframe,
+            )
+        )
     return records
+
+
+def _as_target(target: ResearchTarget | str) -> ResearchTarget:
+    if isinstance(target, ResearchTarget):
+        return target
+    return ResearchTarget(exchange=EXCHANGE, symbol=target, timeframe=TIMEFRAME)
 
 
 _GATES = {
@@ -275,13 +297,6 @@ def _build_strategy(strategy_id: str, funding, **params):
     from vnedge.strategy.strategy_registry import STRATEGIES
 
     return STRATEGIES[strategy_id](funding, **params)
-
-
-def _promotion_distance(record: dict) -> float:
-    """Lower = closer to passing. Positive-net lanes with few failed gates
-    are the highest-value places to spend an auto-explore slot."""
-    net_penalty = 0.0 if record["oos_net_usd"] > 0 else 1000.0 - record["oos_net_usd"]
-    return net_penalty + 10.0 * len(record.get("reasons", []))
 
 
 def _load_auto_state() -> dict:
@@ -299,7 +314,13 @@ def _save_auto_state(state: dict) -> None:
     (OUT_DIR / "auto_explore.json").write_text(json.dumps(state, indent=2))
 
 
-def auto_explore(store: ParquetStore, records: list[dict], max_variants: int = 2) -> list[dict]:
+def auto_explore(
+    store: ParquetStore,
+    records: list[dict],
+    *,
+    targets: tuple[ResearchTarget, ...] = (),
+    max_variants: int = 2,
+) -> list[dict]:
     """Bounded auto-uplift: for the closest-to-passing failing lanes, run
     their top diagnostic suggestion as an EXPLORATORY variant. Results are
     labeled auto=true; a rolling PASS here is a candidate, never a promotion.
@@ -309,48 +330,59 @@ def auto_explore(store: ParquetStore, records: list[dict], max_variants: int = 2
     tried = set(state["tried"])
     config = BacktestConfig()
     variants: list[dict] = []
+    plan = EdgeResearchAgent(max_variant_proposals=max_variants).plan(
+        records, targets=targets
+    )
 
-    candidates = [r for r in records if r["verdict"] == "REJECT" and not r.get("auto")]
-    candidates.sort(key=_promotion_distance)
-
-    for base in candidates:
+    for proposal in runnable_variant_proposals(plan):
         if len(variants) >= max_variants:
             break
-        diag = diagnose(base)
-        for sug in diag.suggestions:
-            key = f"{sug.variant_id}@{base['symbol']}"
-            if key in tried:
-                continue
-            candles = store.read_candles(EXCHANGE, base["symbol"], TIMEFRAME)
-            funding = store.read_funding(EXCHANGE, base["symbol"])
-            cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
-            c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
-            f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
-            factory = (lambda sug=sug, f=f: (
-                lambda **p: _build_strategy(sug.strategy_id, f, **{**sug.fixed_params, **p})
-            ))()
-            grid = param_grid(**sug.grid_axes) if sug.grid_axes else [{}]
-            try:
-                result = walk_forward(
-                    c, f, factory, grid, config, train_bars=1440,
-                    test_bars=sug.test_bars, symbol=base["symbol"], timeframe=TIMEFRAME,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("auto-explore %s failed: %s", key, exc)
-                tried.add(key)
-                continue
-            rec = wf_record(sug.variant_id, base["symbol"], result,
-                            _GATES[sug.gates_label], gates_label=sug.gates_label)
-            rec["auto"] = True
-            rec["parent"] = base["strategy"]
-            rec["goal"] = sug.goal
-            rec["rationale"] = sug.rationale
-            variants.append(rec)
+        key = proposal["proposal_id"]
+        if key in tried:
+            continue
+        target = ResearchTarget(
+            exchange=proposal["exchange"],
+            symbol=proposal["symbol"],
+            timeframe=proposal["timeframe"],
+        )
+        candles = store.read_candles(target.exchange, target.symbol, target.timeframe)
+        funding = store.read_funding(target.exchange, target.symbol)
+        cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
+        c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
+        f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
+        factory = (lambda proposal=proposal, f=f: (
+            lambda **p: _build_strategy(
+                proposal["strategy_id"], f,
+                **{**proposal["fixed_params"], **p},
+            )
+        ))()
+        grid = param_grid(**proposal["grid_axes"]) if proposal["grid_axes"] else [{}]
+        try:
+            result = walk_forward(
+                c, f, factory, grid, config, train_bars=1440,
+                test_bars=proposal["test_bars"], symbol=target.symbol,
+                timeframe=target.timeframe,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("auto-explore %s failed: %s", key, exc)
             tried.add(key)
-            state["total_attempts"] += 1
-            logger.info("auto-explore %s: %s (oos $%+.2f) — %s",
-                        key, rec["verdict"], rec["oos_net_usd"], sug.goal)
-            break  # one variant per base lane per cycle
+            continue
+        rec = wf_record(
+            proposal["variant_id"], target.symbol, result,
+            _GATES[proposal["gates_label"]], gates_label=proposal["gates_label"],
+            exchange=target.exchange, timeframe=target.timeframe,
+        )
+        rec["auto"] = True
+        rec["parent"] = proposal["parent_strategy"]
+        rec["goal"] = proposal["goal"]
+        rec["rationale"] = proposal["rationale"]
+        rec["agent"] = proposal["agent"]
+        rec["proposal_id"] = proposal["proposal_id"]
+        variants.append(rec)
+        tried.add(key)
+        state["total_attempts"] += 1
+        logger.info("auto-explore %s: %s (oos $%+.2f) — %s",
+                    key, rec["verdict"], rec["oos_net_usd"], proposal["goal"])
 
     state["tried"] = sorted(tried)
     _save_auto_state(state)
@@ -359,7 +391,9 @@ def auto_explore(store: ParquetStore, records: list[dict], max_variants: int = 2
 
 def publish(records: list[dict], started: float,
             drift_alerts: list[dict] | None = None,
-            auto_state: dict | None = None) -> None:
+            auto_state: dict | None = None,
+            agent_plan: dict | None = None,
+            universe: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -371,6 +405,8 @@ def publish(records: list[dict], started: float,
                 "exploratory only.",
         "results": records,
         "drift_alerts": drift_alerts or [],
+        "universe": universe or {},
+        "edge_agents": agent_plan or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
             "distinct_variants": len((auto_state or {}).get("tried", [])),
@@ -387,22 +423,24 @@ async def run_cycle() -> list[dict]:
     started = time.time()
     store = ParquetStore("data")
     records: list[dict] = []
-    for symbol in SYMBOLS:
+    targets = load_research_targets()
+    for target in targets:
         try:
-            if not await refresh_data(store, symbol):
+            if not await refresh_data(store, target):
                 continue
-            records.extend(run_walk_forwards(store, symbol))
+            records.extend(run_walk_forwards(store, target))
         except Exception as exc:  # noqa: BLE001 — one symbol must not kill the loop
-            logger.exception("research cycle failed for %s: %s", symbol, exc)
+            logger.exception("research cycle failed for %s: %s", target.label, exc)
 
     # Drift watch on the live-trial strategy (read feed BEFORE publishing
     # this cycle, so `prev` excludes the current record).
     drift: list[dict] = []
     current = next((r for r in records if r["strategy"] == TRIAL_STRATEGY
-                    and r["symbol"] == TRIAL_SYMBOL), None)
+                    and r["symbol"] == TRIAL_SYMBOL
+                    and r.get("exchange", EXCHANGE) == TRIAL_EXCHANGE), None)
     if current is not None:
         drift = compute_drift_alerts(
-            read_feed_series(TRIAL_STRATEGY, TRIAL_SYMBOL), current
+            read_feed_series(TRIAL_STRATEGY, TRIAL_SYMBOL, TRIAL_EXCHANGE), current
         )
         if drift:
             from vnedge.monitoring.notifiers import LogNotifier, TelegramNotifier
@@ -435,16 +473,25 @@ async def run_cycle() -> list[dict]:
     # Bounded auto-explore: run the top suggestion for the closest-to-passing
     # lanes as exploratory variants. Never promotes, never touches the trial.
     try:
-        variants = auto_explore(store, records)
+        variants = auto_explore(store, records, targets=targets)
         records.extend(variants)
     except Exception as exc:  # noqa: BLE001 — auto-explore must never kill a cycle
         logger.exception("auto-explore failed: %s", exc)
 
-    publish(records, started, drift, _load_auto_state())
+    agent_plan = EdgeResearchAgent().plan(records, targets=targets)
+    publish(
+        records, started, drift, _load_auto_state(),
+        agent_plan={
+            "profitable_pairs": list(agent_plan.profitable_pairs),
+            "proposals": list(agent_plan.proposals),
+            "policy": agent_plan.policy,
+        },
+        universe=summarize_universe(targets),
+    )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
-        logger.info("%s %s: %s (oos $%+.2f, %d trades, %d windows)%s",
-                    r["strategy"], r["symbol"], r["verdict"],
+        logger.info("%s %s %s: %s (oos $%+.2f, %d trades, %d windows)%s",
+                    r.get("exchange", EXCHANGE), r["strategy"], r["symbol"], r["verdict"],
                     r["oos_net_usd"], r["oos_trades"], r["windows"], tag)
     return records
 
@@ -452,7 +499,10 @@ async def run_cycle() -> list[dict]:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    logger.info("continuous research loop: %s every %.0fs", SYMBOLS, INTERVAL_SECONDS)
+    logger.info(
+        "continuous research loop: %s every %.0fs",
+        [t.label for t in load_research_targets()], INTERVAL_SECONDS,
+    )
     while True:
         try:
             await run_cycle()
