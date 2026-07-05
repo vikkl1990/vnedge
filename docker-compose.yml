@@ -15,7 +15,7 @@ services:
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-      MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit}"
+      MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit,delta_india}"
       MULTI_LANE_SYMBOLS: "${MULTI_LANE_SYMBOLS:-BTC/USDT:USDT}"
       MULTI_LANE_MODES: "${MULTI_LANE_MODES:-paper,shadow}"
       MULTI_LANE_TIMEFRAME: "${MULTI_LANE_TIMEFRAME:-1h}"
@@ -42,9 +42,11 @@ services:
     command: ["python", "-m", "vnedge.research.continuous_research"]
     environment:
       RESEARCH_INTERVAL_SECONDS: "3600"
-      # delta lacks funding-history via ccxt (probed 2026-07-04) — its lanes
-      # would fail the quality gate; binance + bybit are both validated.
-      RESEARCH_EXCHANGES: "binanceusdm,bybit"
+      # All three venues. delta_india has no ccxt funding history, so its
+      # funding-strategy lanes are marked UNTESTABLE (not run) while its
+      # candle-compatible lanes run — the research loop is funding-capability
+      # aware (#41), so this no longer breaks the cycle.
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
       RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
       # L2-mining passes run in the decoupled l2-research-loop below, NOT here,
       # so this hourly candle loop never scans the tick/L2 tape. It folds the
@@ -69,7 +71,8 @@ services:
     command: ["python", "-m", "vnedge.research.l2_research_loop"]
     environment:
       L2_RESEARCH_INTERVAL_SECONDS: "${L2_RESEARCH_INTERVAL_SECONDS:-21600}"
-      RESEARCH_EXCHANGES: "binanceusdm,bybit"
+      # only binanceusdm has recorded L2 today; the others are simply skipped.
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
       RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
     volumes:
       - ./data:/app/data
