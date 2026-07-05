@@ -37,6 +37,8 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
 - `alpha_factory`: structural alpha hypotheses and replay queue. See
   `docs/ALPHA_FACTORY.md`. Hypotheses are split by `4h/1h/15m/1m` context
   tags when those candle datasets are available.
+- `alpha_stack_confluence_v1`: causal candle-structure confluence lane. See
+  `docs/ALPHA_STACK.md`.
 - `scalper_parameter_registry`: frozen TF/horizon, family, fee, route, and
   exit policy contract. See `docs/SCALPER_PARAMETERS.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
@@ -125,3 +127,5 @@ untouched judgment, and human paper/shadow approval remain mandatory.
 - The alpha factory creates structural hypotheses only; no hypothesis can trade
   without conservative replay, untouched judgment, paper, shadow, and gateway
   approval.
+- AlphaStack emits ordinary strategy intents only after walk-forward scoring;
+  it is not an indicator-alert import path and cannot bypass promotion gates.

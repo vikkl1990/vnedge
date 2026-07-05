@@ -152,6 +152,20 @@ CATALOG: dict[str, dict[str, Suggestion]] = {
             "reduce_risk",
             "stretch the target for a better payoff ratio on the winners"),
     },
+    "alpha_stack_confluence_v1": {
+        "increase_quality": _mk(
+            "alpha_stack_confluence_v1", "higher_confluence",
+            {"min_score": 6.0}, {"structure_window": [24, 48], "take_profit_r": [2.0]},
+            "offensive", 720, "increase_quality",
+            "raise the confluence bar so SMC-style marks do not become noisy "
+            "indicator spam"),
+        "reduce_risk": _mk(
+            "alpha_stack_confluence_v1", "tighter_structure_risk",
+            {"stop_atr_mult": 1.2, "take_profit_r": 2.5},
+            {"structure_window": [24, 48]}, "offensive", 720, "reduce_risk",
+            "tighten ATR risk while keeping the structure stop; useful when "
+            "payoff ratio is the limiting gate"),
+    },
 }
 
 

@@ -7,6 +7,7 @@ class — never an ad-hoc script.
 
 from __future__ import annotations
 
+from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
@@ -20,6 +21,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     VolatilityExpansionBreakout.strategy_id: VolatilityExpansionBreakout,
     PanicReversal.strategy_id: PanicReversal,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
+    AlphaStackConfluence.strategy_id: AlphaStackConfluence,
 }
 
 
