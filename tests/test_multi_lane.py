@@ -108,9 +108,9 @@ def test_lane_specs_expand_from_env():
 
 
 def test_lane_specs_default_runs_both_modes_per_venue():
-    # default env: binanceusdm+bybit x BTC x {paper, shadow} = 4 lanes
+    # default env: Binance/Bybit governed paper+shadow plus Delta shadow.
     specs = build_lane_specs_from_env({})
-    assert len(specs) == 4
+    assert len(specs) == 5
     assert {s.mode for s in specs} == {RunnerMode.PAPER, RunnerMode.SHADOW}
     ids = {s.lane_id for s in specs}
     # governed paper trials keep their exact ids (continue their account files)
@@ -119,11 +119,42 @@ def test_lane_specs_default_runs_both_modes_per_venue():
     # shadow lanes are distinct, isolated ids
     assert "funding_mr_binanceusdm_btc_usdt_usdt_shadow" in ids
     assert "funding_mr_bybit_btc_usdt_usdt_shadow" in ids
+    assert "trend_continuation_delta_india_btc_usd_usd_shadow" in ids
+    delta = next(s for s in specs if s.exchange == "delta_india")
+    assert delta.symbol == "BTC/USD:USD"
+    assert delta.mode is RunnerMode.SHADOW
+    assert delta.strategy_id == "trend_continuation_v1"
     # the flat top-level snapshot is the governed Binance PAPER lane
     primary = [s for s in specs if s.is_primary]
     assert len(primary) == 1
     assert primary[0].lane_id == "funding_mr_btc_v1_20260703"
     assert primary[0].mode is RunnerMode.PAPER
+
+
+def test_delta_paper_requires_explicit_opt_in():
+    specs = build_lane_specs_from_env({
+        "MULTI_LANE_EXCHANGES": "delta_india",
+        "MULTI_LANE_SYMBOLS": "BTC/USDT:USDT",
+        "MULTI_LANE_MODES": "paper,shadow",
+    })
+    assert len(specs) == 1
+    assert specs[0].exchange == "delta_india"
+    assert specs[0].symbol == "BTC/USD:USD"
+    assert specs[0].mode is RunnerMode.SHADOW
+    assert specs[0].strategy_id == "trend_continuation_v1"
+
+
+def test_delta_paper_opt_in_still_uses_candle_only_strategy():
+    specs = build_lane_specs_from_env({
+        "MULTI_LANE_EXCHANGES": "delta_india",
+        "MULTI_LANE_SYMBOLS": "BTC/USDT:USDT",
+        "MULTI_LANE_MODES": "paper",
+        "MULTI_LANE_DELTA_PAPER": "1",
+    })
+    assert len(specs) == 1
+    assert specs[0].symbol == "BTC/USD:USD"
+    assert specs[0].mode is RunnerMode.PAPER
+    assert specs[0].strategy_id == "trend_continuation_v1"
 
 
 def test_lane_specs_reject_unknown_mode():

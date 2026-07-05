@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
+from ccxt.base.errors import NotSupported
 
 from vnedge.backtest.backtester import BacktestConfig
 from vnedge.backtest.walk_forward import (
@@ -239,13 +240,20 @@ async def refresh_data(store: ParquetStore, target: ResearchTarget | str) -> boo
             client, store, symbol=target.symbol, timeframe=target.timeframe,
             since_ms=since_ms, until_ms=until_ms,
         )
-        f = await ingest_funding(
-            client, store, symbol=target.symbol,
-            since_ms=funding_since_ms, until_ms=until_ms,
-        )
-    if not (c.persisted and f.persisted):
+        try:
+            f = await ingest_funding(
+                client, store, symbol=target.symbol,
+                since_ms=funding_since_ms, until_ms=until_ms,
+            )
+            funding_ok = f.persisted
+            funding_summary = f.report.summary
+        except NotSupported as exc:
+            logger.info("%s: funding history unavailable: %s", target.label, exc)
+            funding_ok = True
+            funding_summary = "funding history unsupported; candle-only lanes continue"
+    if not (c.persisted and funding_ok):
         logger.error("%s: quality gate rejected refresh (%s / %s)",
-                     target.label, c.report.summary, f.report.summary)
+                     target.label, c.report.summary, funding_summary)
         return False
     return True
 
@@ -253,7 +261,10 @@ async def refresh_data(store: ParquetStore, target: ResearchTarget | str) -> boo
 def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list[dict]:
     target = _as_target(target)
     candles = store.read_candles(target.exchange, target.symbol, target.timeframe)
-    funding = store.read_funding(target.exchange, target.symbol)
+    try:
+        funding = store.read_funding(target.exchange, target.symbol)
+    except FileNotFoundError:
+        funding = _empty_funding_frame()
     cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
     c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
     f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
@@ -264,26 +275,34 @@ def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list
         ("funding_mean_reversion_v1",
          lambda **p: FundingMeanReversion(funding=f, **p),
          param_grid(extreme_pct=[0.85, 0.95], z_entry=[1.5, 2.5]),
-         720, SPARSE_STRATEGY_GATES, "sparse"),
+         720, SPARSE_STRATEGY_GATES, "sparse", True),
         ("trend_continuation_v1",
          lambda **p: TrendContinuation(funding=f, **p),
          param_grid(breakout_bars=[48, 96], take_profit_r=[2.0, 3.0]),
-         360, PromotionGates(), "standard"),
+         360, PromotionGates(), "standard", False),
         # --- offensive lanes (milestone 10A): research-only ---
         ("volatility_expansion_breakout_v1",
          lambda **p: VolatilityExpansionBreakout(funding=f, **p),
          param_grid(breakout_bars=[48, 96]),
-         720, OFFENSIVE_GATES, "offensive"),
+         720, OFFENSIVE_GATES, "offensive", False),
         ("panic_reversal_v1",
          lambda **p: PanicReversal(funding=f, **p),
          param_grid(drop_z_entry=[-2.5, -3.0]),
-         720, OFFENSIVE_GATES, "offensive"),
+         720, OFFENSIVE_GATES, "offensive", False),
         ("funding_squeeze_continuation_v1",
          lambda **p: FundingSqueezeContinuation(funding=f, **p),
          param_grid(extreme_pct=[0.88, 0.94]),
-         720, OFFENSIVE_GATES, "offensive"),
+         720, OFFENSIVE_GATES, "offensive", True),
     ]
-    for name, factory, grid, test_bars, gates, label in lanes:
+    for name, factory, grid, test_bars, gates, label, requires_funding in lanes:
+        if requires_funding and f.empty:
+            records.append(
+                _skipped_record(
+                    name, target, gates_label=label,
+                    reason="funding history unavailable for this venue",
+                )
+            )
+            continue
         result = walk_forward(
             c, f, factory, grid, config,
             train_bars=1440, test_bars=test_bars, symbol=target.symbol,
@@ -298,6 +317,36 @@ def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list
     return records
 
 
+def _skipped_record(
+    strategy: str,
+    target: ResearchTarget,
+    *,
+    gates_label: str,
+    reason: str,
+) -> dict:
+    return {
+        "attribution": {
+            "long": {"trades": 0, "net_usd": 0.0, "win_rate_pct": 0.0},
+            "short": {"trades": 0, "net_usd": 0.0, "win_rate_pct": 0.0},
+        },
+        "exchange": target.exchange,
+        "gates": gates_label,
+        "strategy": strategy,
+        "symbol": target.symbol,
+        "timeframe": target.timeframe,
+        "windows": 0,
+        "traded_windows": 0,
+        "oos_trades": 0,
+        "oos_net_usd": 0.0,
+        "profitable_windows_pct": 0.0,
+        "total_fees_usd": 0.0,
+        "payoff_ratio": 0.0,
+        "verdict": "UNTESTABLE",
+        "reasons": [reason],
+        "updated": datetime.now(UTC).isoformat(),
+    }
+
+
 def _as_target(target: ResearchTarget | str) -> ResearchTarget:
     if isinstance(target, ResearchTarget):
         return target
@@ -309,6 +358,18 @@ _GATES = {
     "offensive": OFFENSIVE_GATES,
     "standard": PromotionGates(),
 }
+
+_FUNDING_HISTORY_REQUIRED = {
+    "funding_mean_reversion_v1",
+    "funding_squeeze_continuation_v1",
+}
+
+
+def _empty_funding_frame() -> pd.DataFrame:
+    return pd.DataFrame({
+        "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+        "funding_rate": pd.Series(dtype="float64"),
+    })
 
 
 def _build_strategy(strategy_id: str, funding, **params):
@@ -364,7 +425,17 @@ def auto_explore(
             timeframe=proposal["timeframe"],
         )
         candles = store.read_candles(target.exchange, target.symbol, target.timeframe)
-        funding = store.read_funding(target.exchange, target.symbol)
+        try:
+            funding = store.read_funding(target.exchange, target.symbol)
+        except FileNotFoundError:
+            funding = _empty_funding_frame()
+        if proposal["strategy_id"] in _FUNDING_HISTORY_REQUIRED and funding.empty:
+            tried.add(key)
+            logger.info(
+                "auto-explore %s skipped: funding history unavailable for %s",
+                key, target.label,
+            )
+            continue
         cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
         c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
         f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)

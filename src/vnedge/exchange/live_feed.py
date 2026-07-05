@@ -1,4 +1,4 @@
-"""Live market data feed via CCXT Pro websockets.
+"""Live market data feeds.
 
 Public data only — no credentials, no orders, no risk decisions. This module
 produces exactly two things for the trading loop:
@@ -15,6 +15,11 @@ Failure posture: errors mark the feed unhealthy and retry with bounded
 backoff. An unhealthy or stale feed doesn't need to block anything itself —
 the risk gateway already rejects on `exchange_healthy`/`data_freshness`,
 which is where that decision belongs.
+
+CCXT Pro is preferred for low-latency websocket venues. Some venues in the
+architecture (notably Delta in current CCXT) expose public REST data but no
+CCXT Pro websocket class; those use ``RestPollingMarketFeed`` so the lane can
+still be observed in paper/shadow without pretending to be a fast path.
 """
 
 from __future__ import annotations
@@ -23,12 +28,17 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from vnedge.data.ccxt_client import create_ccxt_async_exchange
+from vnedge.data.schemas import TIMEFRAME_MS
 from vnedge.risk.risk_manager import MarketState
 
 logger = logging.getLogger(__name__)
 
 _MAX_CONSECUTIVE_ERRORS = 5
 _BACKOFF_SECONDS = 2.0
+_DEFAULT_REST_CANDLE_POLL_SECONDS = 10.0
+_DEFAULT_REST_QUOTE_POLL_SECONDS = 2.0
+_VALIDATED_CCXT_PRO_FEEDS = {"binanceusdm", "bybit"}
 
 
 class LiveMarketFeed:
@@ -47,6 +57,7 @@ class LiveMarketFeed:
             raise ValueError(f"unknown CCXT Pro exchange id: {exchange_id}")
         self._ex = getattr(ccxtpro, exchange_id)({"enableRateLimit": True})
         self.exchange_id = exchange_id
+        self.feed_mode = "live ws"
         self.symbol = symbol
         self.timeframe = timeframe
         self.slippage_est_bps = slippage_est_bps
@@ -163,3 +174,171 @@ class LiveMarketFeed:
             except Exception as exc:  # noqa: BLE001
                 self._mark_error("funding", exc)
             await asyncio.sleep(self.funding_refresh_seconds)
+
+
+class RestPollingMarketFeed:
+    """Public REST fallback feed for venues without CCXT Pro websocket support.
+
+    This is an observability/shadow bridge, not a scalping feed. It polls
+    top-of-book and OHLCV, emits only closed candles, and keeps the same
+    surface as ``LiveMarketFeed`` so the runner remains single-path.
+    """
+
+    def __init__(
+        self,
+        exchange_id: str,
+        *,
+        symbol: str,
+        timeframe: str = "1m",
+        slippage_est_bps: float = 3.0,
+        candle_poll_seconds: float = _DEFAULT_REST_CANDLE_POLL_SECONDS,
+        quote_poll_seconds: float = _DEFAULT_REST_QUOTE_POLL_SECONDS,
+        funding_refresh_seconds: float = 900.0,
+    ) -> None:
+        if timeframe not in TIMEFRAME_MS:
+            raise ValueError(f"unsupported timeframe for REST polling feed: {timeframe}")
+        self._ex = create_ccxt_async_exchange(exchange_id)
+        self.exchange_id = exchange_id
+        self.feed_mode = "rest polling"
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.slippage_est_bps = slippage_est_bps
+        self.candle_poll_seconds = candle_poll_seconds
+        self.quote_poll_seconds = quote_poll_seconds
+        self.funding_refresh_seconds = funding_refresh_seconds
+
+        self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
+        self.quote: tuple[float, float] | None = None
+        self.funding_rate: float = 0.0
+        self.last_event_at: datetime | None = None
+        self.healthy: bool = False
+        self.candles_closed = 0
+        self._consecutive_errors = 0
+        self._last_emitted_candle_ts: int | None = None
+        self._tasks: list[asyncio.Task] = []
+
+    async def start(self) -> None:
+        self._tasks = [
+            asyncio.create_task(self._poll_candles(), name="rest-feed-candles"),
+            asyncio.create_task(self._poll_quotes(), name="rest-feed-quotes"),
+            asyncio.create_task(self._refresh_funding(), name="rest-feed-funding"),
+        ]
+
+    async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self._ex.close()
+
+    def _mark_ok(self) -> None:
+        self.last_event_at = datetime.now(UTC)
+        self._consecutive_errors = 0
+        self.healthy = True
+
+    def _mark_error(self, where: str, exc: Exception) -> None:
+        self._consecutive_errors += 1
+        if self._consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+            self.healthy = False
+        logger.warning("REST feed %s %s error (%d consecutive): %s",
+                       self.exchange_id, where, self._consecutive_errors, exc)
+
+    def staleness_seconds(self, now: datetime | None = None) -> float:
+        if self.last_event_at is None:
+            return float("inf")
+        return ((now or datetime.now(UTC)) - self.last_event_at).total_seconds()
+
+    def market_state(self) -> MarketState:
+        if self.quote is not None:
+            bid, ask = self.quote
+            spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10_000.0
+        else:
+            spread_bps = float("inf")
+        return MarketState(
+            symbol=self.symbol,
+            last_update=self.last_event_at or datetime(1970, 1, 1, tzinfo=UTC),
+            spread_bps=spread_bps,
+            estimated_slippage_bps=self.slippage_est_bps,
+            funding_rate=self.funding_rate,
+            exchange_healthy=self.healthy,
+        )
+
+    async def _poll_candles(self) -> None:
+        step_ms = TIMEFRAME_MS[self.timeframe]
+        while True:
+            try:
+                now_ms = int(datetime.now(UTC).timestamp() * 1000)
+                since = now_ms - 4 * step_ms
+                rows = await self._ex.fetch_ohlcv(
+                    self.symbol, self.timeframe, since=since, limit=4
+                )
+                closed = self._latest_closed_row(rows, now_ms, step_ms)
+                if closed is not None and closed[0] != self._last_emitted_candle_ts:
+                    await self.closed_candles.put(closed)
+                    self._last_emitted_candle_ts = int(closed[0])
+                    self.candles_closed += 1
+                if rows:
+                    self._mark_ok()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_error("candles", exc)
+                await asyncio.sleep(_BACKOFF_SECONDS)
+            await asyncio.sleep(self.candle_poll_seconds)
+
+    @staticmethod
+    def _latest_closed_row(rows: list[list], now_ms: int, step_ms: int) -> list | None:
+        closed = [row for row in rows if int(row[0]) + step_ms <= now_ms]
+        if not closed:
+            return None
+        return closed[-1]
+
+    async def _poll_quotes(self) -> None:
+        while True:
+            try:
+                book = await self._ex.fetch_order_book(self.symbol, limit=5)
+                if book.get("bids") and book.get("asks"):
+                    bid = float(book["bids"][0][0])
+                    ask = float(book["asks"][0][0])
+                    if 0 < bid <= ask:
+                        self.quote = (bid, ask)
+                        self._mark_ok()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_error("quotes", exc)
+                await asyncio.sleep(_BACKOFF_SECONDS)
+            await asyncio.sleep(self.quote_poll_seconds)
+
+    async def _refresh_funding(self) -> None:
+        while True:
+            try:
+                if self._ex.has.get("fetchFundingRate"):
+                    data = await self._ex.fetch_funding_rate(self.symbol)
+                    rate = data.get("fundingRate")
+                    if rate is not None:
+                        self.funding_rate = float(rate)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_error("funding", exc)
+            await asyncio.sleep(self.funding_refresh_seconds)
+
+
+def supports_ccxt_pro_feed(exchange_id: str) -> bool:
+    """Whether this CCXT id has the websocket methods our live feed needs."""
+    try:
+        import ccxt.pro as ccxtpro  # heavy import kept local
+    except Exception:  # pragma: no cover - import failure is environment-specific
+        return False
+    return exchange_id in _VALIDATED_CCXT_PRO_FEEDS and hasattr(ccxtpro, exchange_id)
+
+
+def create_market_feed(
+    exchange_id: str,
+    *,
+    symbol: str,
+    timeframe: str = "1m",
+) -> LiveMarketFeed | RestPollingMarketFeed:
+    if supports_ccxt_pro_feed(exchange_id):
+        return LiveMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+    return RestPollingMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)

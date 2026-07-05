@@ -212,7 +212,7 @@ flowchart LR
     Env["RESEARCH_EXCHANGES and RESEARCH_SYMBOLS"] --> Targets["ResearchTarget list"]
     Targets --> Binance["binanceusdm symbols"]
     Targets --> Bybit["bybit symbols"]
-    Targets --> Delta["delta symbols"]
+    Targets --> Delta["delta_india symbols"]
     Binance --> CandleLanes["Candle strategy lanes"]
     Bybit --> CandleLanes
     Delta --> CandleLanes
@@ -226,15 +226,17 @@ flowchart LR
 
 Default research universe:
 
-- Exchanges: `binanceusdm`, `bybit`, `delta`.
+- Exchanges: `binanceusdm`, `bybit`, `delta_india`.
 - Symbols: `BTC/USDT:USDT`, `ETH/USDT:USDT`, `SOL/USDT:USDT`,
   `BNB/USDT:USDT`, `XRP/USDT:USDT`, `DOGE/USDT:USDT`.
+  Delta India defaults map these VNEDGE USDT perp symbols to the venue's
+  USD-settled perp format, for example `BTC/USD:USD`.
 - Timeframe: `1h`.
 
 Runtime knobs:
 
 ```bash
-RESEARCH_EXCHANGES=binanceusdm,bybit,delta
+RESEARCH_EXCHANGES=binanceusdm,bybit,delta_india
 RESEARCH_SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
 RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT
 RESEARCH_TIMEFRAME=1h

@@ -128,7 +128,7 @@ universe:
 ```bash
 python -m vnedge.research.scalper_scanners \
   --all-markets \
-  --exchanges binanceusdm,bybit,delta \
+  --exchanges binanceusdm,bybit,delta_india \
   --quote-assets USDT,USDC,USD \
   --days YYYYMMDD
 ```
@@ -190,7 +190,7 @@ Run:
 ```bash
 python -m vnedge.research.scalper_edge_miner \
   --all-markets \
-  --exchanges binanceusdm,bybit,delta \
+  --exchanges binanceusdm,bybit,delta_india \
   --quote-assets USDT,USDC,USD \
   --days YYYYMMDD \
   --limit 100

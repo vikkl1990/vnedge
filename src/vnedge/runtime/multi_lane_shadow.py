@@ -2,9 +2,10 @@
 
     DASHBOARD_TOKEN=... python -m vnedge.runtime.multi_lane_shadow
 
-Runs funding-MR as parallel, fully isolated lanes on Binance and Bybit, both
-on live data, both $500 imaginary base, NO live orders. Each venue runs in
-BOTH fill modes side by side:
+Runs fully isolated lanes on Binance, Bybit, and Delta. Binance/Bybit run the
+governed funding-MR paper/shadow lanes; Delta runs a candle-only shadow lane
+until funding-history and native websocket support are added. All lanes use
+live public market data, $500 imaginary base, and NO live orders.
 
   - PAPER  — simulated fills on live data; produces the live-$ venue
              comparison and keeps the human-approved funding_mr_btc_v1_20260703
@@ -44,9 +45,12 @@ FUNDING_MR_PARAMS = {
     "z_window": 48,
     "stop_atr_mult": 1.5,
 }
+TREND_PARAMS: dict = {}
 
 DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
+DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
+DELTA_EXCHANGE = "delta_india"
 
 # The human-approved PAPER trials, keyed by (exchange, symbol). Their PAPER
 # lane reuses these exact ids so it continues the governed trial (account
@@ -134,13 +138,71 @@ def _slug_symbol(symbol: str) -> str:
     )
 
 
-def _lane_id(exchange: str, symbol: str, mode: RunnerMode) -> str:
-    if mode is RunnerMode.PAPER:
+def _env_suffix(exchange: str) -> str:
+    return exchange.upper().replace("-", "_").replace("/", "_")
+
+
+def _delta_india_symbol(symbol: str) -> str:
+    if "/USDT" not in symbol:
+        return symbol
+    base = symbol.split("/", maxsplit=1)[0]
+    return f"{base}/USD:USD"
+
+
+def _symbols_for_exchange(
+    exchange: str,
+    symbols: list[str],
+    environ: Mapping[str, str],
+) -> list[str]:
+    override = _csv_env(f"MULTI_LANE_SYMBOLS_{_env_suffix(exchange)}", "", environ)
+    if override:
+        return override
+    if exchange == DELTA_EXCHANGE:
+        return [_delta_india_symbol(symbol) for symbol in symbols]
+    return symbols
+
+
+def _lane_prefix(strategy_id: str) -> str:
+    if strategy_id == "funding_mean_reversion_v1":
+        return "funding_mr"
+    if strategy_id == "trend_continuation_v1":
+        return "trend_continuation"
+    return strategy_id
+
+
+def _lane_id(exchange: str, symbol: str, mode: RunnerMode, strategy_id: str) -> str:
+    if strategy_id == "funding_mean_reversion_v1" and mode is RunnerMode.PAPER:
         governed = GOVERNED_PAPER_LANE_IDS.get((exchange, symbol))
         if governed is not None:
             return governed
-        return f"funding_mr_{exchange}_{_slug_symbol(symbol)}_paper"
-    return f"funding_mr_{exchange}_{_slug_symbol(symbol)}_shadow"
+    return f"{_lane_prefix(strategy_id)}_{exchange}_{_slug_symbol(symbol)}_{mode.value}"
+
+
+def _default_strategy_for_exchange(exchange: str) -> str:
+    if exchange == DELTA_EXCHANGE:
+        return "trend_continuation_v1"
+    return "funding_mean_reversion_v1"
+
+
+def _default_params_for_strategy(strategy_id: str) -> dict:
+    if strategy_id == "funding_mean_reversion_v1":
+        return FUNDING_MR_PARAMS
+    if strategy_id == "trend_continuation_v1":
+        return TREND_PARAMS
+    return {}
+
+
+def _modes_for_exchange(
+    exchange: str, modes: list[RunnerMode], environ: Mapping[str, str]
+) -> list[RunnerMode]:
+    if exchange != DELTA_EXCHANGE:
+        return modes
+    if _truthy(environ, "MULTI_LANE_DELTA_PAPER", "0"):
+        return modes
+    # Delta India has no funding history and no CCXT Pro websocket in the current
+    # adapter set, so default it to observe-only shadow. Operators can opt in
+    # to simulated paper explicitly after choosing a Delta-ready strategy.
+    return [mode for mode in modes if mode is RunnerMode.SHADOW]
 
 
 def _parse_modes(environ: Mapping[str, str]) -> list[RunnerMode]:
@@ -162,7 +224,7 @@ def _parse_modes(environ: Mapping[str, str]) -> list[RunnerMode]:
 def build_lane_specs_from_env(
     environ: Mapping[str, str] = os.environ,
 ) -> list[LaneSpec]:
-    exchanges = _csv_env("MULTI_LANE_EXCHANGES", "binanceusdm,bybit", environ)
+    exchanges = _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ)
     symbols = _csv_env("MULTI_LANE_SYMBOLS", "BTC/USDT:USDT", environ)
     if not exchanges or not symbols:
         raise ValueError("at least one multi-lane exchange and symbol is required")
@@ -177,26 +239,39 @@ def build_lane_specs_from_env(
     starting_equity = float(environ.get("MULTI_LANE_STARTING_EQUITY", "500"))
     daily_loss_usd = float(environ.get("MULTI_LANE_DAILY_LOSS_USD", "10"))
 
-    specs = [
-        LaneSpec(
-            lane_id=_lane_id(exchange, symbol, mode),
-            exchange=exchange,
-            symbol=symbol,
-            timeframe=timeframe,
-            starting_equity=starting_equity,
-            daily_loss_usd=daily_loss_usd,
-            is_primary=(
-                exchange == primary_exchange
-                and symbol == primary_symbol
-                and mode is primary_mode
-            ),
-            strategy_params=FUNDING_MR_PARAMS,
-            mode=mode,
-        )
-        for exchange in exchanges
-        for symbol in symbols
-        for mode in modes
-    ]
+    specs: list[LaneSpec] = []
+    for exchange in exchanges:
+        strategy_id = _default_strategy_for_exchange(exchange)
+        strategy_params = _default_params_for_strategy(strategy_id)
+        exchange_modes = _modes_for_exchange(exchange, modes, environ)
+        if not exchange_modes:
+            logger.warning(
+                "%s produced no lanes for modes=%s; use shadow or set "
+                "MULTI_LANE_DELTA_PAPER=1 deliberately",
+                exchange,
+                ",".join(mode.value for mode in modes),
+            )
+            continue
+        for symbol in _symbols_for_exchange(exchange, symbols, environ):
+            for mode in exchange_modes:
+                specs.append(LaneSpec(
+                    lane_id=_lane_id(exchange, symbol, mode, strategy_id),
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    starting_equity=starting_equity,
+                    daily_loss_usd=daily_loss_usd,
+                    is_primary=(
+                        exchange == primary_exchange
+                        and symbol == primary_symbol
+                        and mode is primary_mode
+                    ),
+                    strategy_id=strategy_id,
+                    strategy_params=strategy_params,
+                    mode=mode,
+                ))
+    if not specs:
+        raise ValueError("multi-lane configuration produced no runnable lanes")
     if not any(spec.is_primary for spec in specs):
         specs[0] = replace(specs[0], is_primary=True)
     return specs
