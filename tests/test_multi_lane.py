@@ -197,6 +197,53 @@ def test_build_strategy_selects_trend_continuation():
     assert strat.strategy_id == "trend_continuation_v1"
 
 
+def test_build_strategy_selects_signal_arbiter_composite():
+    import pandas as pd
+
+    from vnedge.runtime.multi_lane import _build_strategy
+    from vnedge.strategy.composite import CompositeSignalStrategy
+
+    spec = LaneSpec(
+        lane_id="arb",
+        exchange="bybit",
+        symbol="BTC/USDT:USDT",
+        strategy_id="signal_arbiter_v1",
+        strategy_params={
+            "arbiter": {
+                "min_net_edge_bps": 0.0,
+                "taker_min_profit_factor": 1.35,
+            },
+            "strategies": [
+                {
+                    "strategy_id": "trend_continuation_v1",
+                    "expected_edge_bps": 3.0,
+                    "expected_cost_bps": 1.0,
+                    "profit_factor": 1.2,
+                },
+                {
+                    "strategy_id": "scalper_1m_v1",
+                    "source_id": "scalper_fast_lane",
+                    "expected_edge_bps": 6.0,
+                    "expected_cost_bps": 2.0,
+                    "profit_factor": 1.5,
+                },
+            ],
+        },
+    )
+
+    strat = _build_strategy(
+        spec, pd.DataFrame(columns=["timestamp", "funding_rate"]), feed=None
+    )
+
+    assert isinstance(strat, CompositeSignalStrategy)
+    assert strat.strategy_id == "signal_arbiter_v1"
+    assert [child.strategy_id for child in strat.strategies] == [
+        "trend_continuation_v1",
+        "scalper_1m_v1",
+    ]
+    assert strat.candidate_defaults["scalper_1m_v1#2"]["source_id"] == "scalper_fast_lane"
+
+
 def test_build_strategy_rejects_unknown_id():
     import pandas as pd
     import pytest
