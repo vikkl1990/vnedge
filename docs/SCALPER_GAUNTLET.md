@@ -98,3 +98,116 @@ quotes, but every sweep row remained negative after costs; best row was
 
 Action: keep recording tick/L2 data. Do not loosen filters or route live/paper
 signals just to create activity.
+
+## Step 3 scanner layer (2026-07-05): find profitable scalp lanes
+
+The scalper to build is not an always-on high-frequency bot. It is a
+discovery-first, scanner-gated, maker/taker-aware microstructure scalper:
+
+1. Discover active linear perp/future markets across venues.
+2. Record tick/L2 data before judging a scalper lane.
+3. Mine the recorded tape for pressure, absorption, and microprice hypotheses.
+4. Rank lanes with scanners for liquidity, sample sufficiency, PF, route cost,
+   fill evidence, adverse selection, and positive net bps after fees.
+5. Replay untouched windows through the conservative maker-in/taker-out engine.
+6. Only then run walk-forward / untouched judgment and human approval. Even a
+   replay candidate is research-only until human-approved paper/shadow.
+
+Run the scanner:
+
+```bash
+python -m vnedge.research.scalper_scanners \
+  --exchanges binanceusdm,bybit \
+  --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
+  --days YYYYMMDD
+```
+
+Exchange-wide discovery is supported for the full active linear derivatives
+universe:
+
+```bash
+python -m vnedge.research.scalper_scanners \
+  --all-markets \
+  --exchanges binanceusdm,bybit,delta \
+  --quote-assets USDT,USDC,USD \
+  --days YYYYMMDD
+```
+
+Use `--max-symbols-per-exchange N` for first-pass recorder allocation. Discovery
+still includes the long tail, but prioritizes the default major universe before
+obscure contracts when a cap is used.
+
+Scanner states:
+
+- `MISSING_TICK_DATA` - start the public tick/L2 recorder.
+- `RECORD_MORE` - lane has useful ingredients, but the sample is too short.
+- `REPLAY_CANDIDATE` - research candidate only; pre-register untouched replay.
+- `REJECTED_LIQUIDITY` - spread/depth conditions are not scalper-grade.
+- `REJECTED_NO_QUOTES` - imbalance never becomes quote-worthy.
+- `REJECTED_NO_FILLS` - passive quotes do not fill under conservative rules.
+- `REJECTED_COST_WALL` - fills happen, but fees/slippage/adverse selection win.
+
+First scanner read on the local BTC sample:
+
+```text
+state=RECORD_MORE priority=85.3 edge_score=50
+spread_p95=0.016bps fills=2 fill_rate=2.4% avg_net=-5.61bps
+action=record 5.7h more before judging
+```
+
+Interpretation: Binance BTC is worth recording because liquidity is excellent,
+but it is not worth trading. The edge evidence is still negative and too short.
+
+## Maker vs taker routing rule
+
+The scanner now emits `route_decision` for the best replay row:
+
+- `BLOCKED` - PF or avg net bps is below breakeven. No signal is valid.
+- `MAKER_ONLY` - replay clears maker-entry economics, but not taker-entry cost.
+- `TAKER_ALLOWED` - PF and avg net bps clear the extra taker-entry fee wall.
+
+Defaults:
+
+- Maker floor: PF >= 1.15 and avg net bps >= +0.5bps after replay costs.
+- Taker floor: PF >= 1.80 and avg net bps must also cover the extra taker-entry
+  fee versus maker entry.
+
+This is the hard rule behind "bare minimum breakeven": a scanner row below
+breakeven is a blocked research lane, not a weak trading signal.
+
+## Edge miner (2026-07-05): prove the missing edge
+
+The edge miner searches recorded tick/L2 tapes for non-candle hypotheses before
+they become strategies:
+
+- `pressure_continuation`: book imbalance and taker flow agree.
+- `absorption_reversal`: resting liquidity absorbs opposite taker pressure.
+- `microprice_continuation`: microprice is displaced from mid enough to imply
+  short-horizon pressure.
+
+Run:
+
+```bash
+python -m vnedge.research.scalper_edge_miner \
+  --all-markets \
+  --exchanges binanceusdm,bybit,delta \
+  --quote-assets USDT,USDC,USD \
+  --days YYYYMMDD \
+  --limit 100
+```
+
+The miner evaluates forward horizons, subtracts maker-entry + taker-exit +
+slippage costs, computes PF on net bps, and emits the same route decision:
+`BLOCKED`, `MAKER_ONLY`, or `TAKER_ALLOWED`.
+
+First BTC read (`20260704`) still shows the core problem:
+
+```text
+state=BELOW_BREAKEVEN
+route=BLOCKED
+best avg_forward ~= +0.60bps
+best avg_net ~= -7.40bps
+```
+
+Interpretation: there is microstructure movement, but not enough to clear the
+fee wall. This is the missing edge made measurable.

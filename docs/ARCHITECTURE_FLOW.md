@@ -48,13 +48,22 @@ flowchart TB
     end
 
     subgraph Slow["III. Slow Research And Agent Loop"]
-        Universe["Research universe: exchanges x symbols"] --> Ingest["Public REST ingestion"]
-        Ingest --> ResearchStore["Parquet research store"]
-        ResearchStore --> WalkForward["Walk-forward gates"]
-        WalkForward --> Diagnostics["Failure diagnosis"]
+        Universe["Research universe: exchanges x symbols"] --> CandleIngest["Candle/funding/OI ingestion"]
+        CandleIngest --> ResearchStore["Parquet research store"]
+        ResearchStore --> CandleWalkForward["Candle strategy walk-forward gates"]
+        CandleWalkForward --> Diagnostics["Failure diagnosis"]
+
+        Universe --> TickRecorder["Tick/L2 recorder"]
+        TickRecorder --> TickStore["Recorded tick/L2 store"]
+        TickStore --> EdgeMiner["Microstructure edge miner"]
+        EdgeMiner --> ScalpScanner["Scalper scanner ranking"]
+        ScalpScanner --> ReplayGauntlet["Conservative replay gauntlet"]
+        ReplayGauntlet --> ReplayCandidates["Replay candidates"]
+
         Diagnostics --> EdgeAgents["Bounded edge research agents"]
+        ReplayCandidates --> EdgeAgents
         EdgeAgents --> AutoExplore["Whitelisted exploratory variants"]
-        EdgeAgents --> CandidateList["Profitable pair candidates"]
+        EdgeAgents --> CandidateList["Candidate lanes"]
         CandidateList --> Judgment["Human-approved untouched-data judgment"]
         Judgment --> PaperTrial["Paper / shadow trial"]
         PaperTrial --> Promotion["Mode ladder promotion"]
@@ -63,7 +72,8 @@ flowchart TB
     subgraph Audit["IV. Audit And Explanation Loop"]
         Journal --> AuditLedger["Immutable decision record"]
         Risk --> RejectReasons["Explainable reject reasons"]
-        WalkForward --> ResearchFeed["Research feed JSONL"]
+        CandleWalkForward --> ResearchFeed["Research feed JSONL"]
+        ReplayGauntlet --> ResearchFeed
         EdgeAgents --> AgentPolicy["Agent policy: no trade, no promote"]
     end
 ```
@@ -108,6 +118,13 @@ sub-3ms colocated execution exists in V1.
 flowchart LR
     Trades["Streaming trades"] --> Micro["Microstructure state"]
     L2["L2 book builder"] --> Micro
+    AllMarkets["All active linear perp/future markets"] --> RecorderPlan["Recorder allocation\n(majors first / missing data)"]
+    RecorderPlan --> Recorder["Tick/L2 recorder"]
+    Recorder --> Miner["Edge miner\n(pressure / absorption / microprice)"]
+    Miner --> Scanner["Scalper scanners\n(liquidity / flow / PF / route cost)"]
+    Scanner --> Replay["Conservative replay gauntlet"]
+    Replay --> Judgment["Untouched-data judgment"]
+    Recorder --> L2
     Private["Private fill/order stream"] --> Truth["Exchange truth cache"]
     Micro --> Features["Incremental feature engine"]
     Features --> Scalper["Scalper strategy interface"]
@@ -130,17 +147,27 @@ Scalper-specific checks:
 - Order-rate and cancel-rate limits.
 - Private stream freshness.
 - Reduce-only exits not blocked by entry-quality checks.
+- Scanner approval is research-only; it never bypasses replay, paper, or the
+  gateway.
+- Maker/taker route is blocked unless replay PF and avg net bps clear the
+  breakeven floor.
 
 ## Research Agent Flow
 
 ```mermaid
 flowchart TB
-    Targets["Research targets from env"] --> Refresh["Quality-gated refresh"]
+    Targets["Research targets from env"] --> Refresh["Quality-gated candle refresh"]
+    MarketDiscovery["CCXT all-market discovery"] --> RecorderTargets
     Refresh --> Store["Parquet store"]
     Store --> Lanes["Strategy lanes"]
     Lanes --> Gates["Promotion gates"]
     Gates --> Records["Exchange-aware research records"]
     Records --> Profitable["Profitable-pair ranking"]
+    RecorderTargets["Recorder targets"] --> TickData["Recorded tick/L2 days"]
+    TickData --> EdgeMiner["Microstructure edge miner"]
+    EdgeMiner --> ScalpScan["Scalper scanner ranking"]
+    ScalpScan --> Replay["Conservative replay gauntlet"]
+    Replay --> ReplayCandidates["Replay candidates"]
     Records --> Diagnosis["Reject diagnosis"]
     Diagnosis --> Agent["Bounded edge research agent"]
     Profitable --> Agent
@@ -148,6 +175,7 @@ flowchart TB
     Proposals --> Variants["Whitelisted auto-variant backtests"]
     Proposals --> CrossVenue["Cross-exchange validation prompts"]
     Proposals --> JudgmentPrompt["Pre-registered judgment prompt"]
+    ReplayCandidates --> JudgmentPrompt
     Variants --> Records
     JudgmentPrompt --> Human["Human approval"]
     Human --> Untouched["Untouched-data judgment"]
@@ -173,10 +201,15 @@ flowchart LR
     Targets --> Binance["binanceusdm symbols"]
     Targets --> Bybit["bybit symbols"]
     Targets --> Delta["delta symbols"]
-    Binance --> SameGates["Same walk-forward gates"]
-    Bybit --> SameGates
-    Delta --> SameGates
-    SameGates --> PairRank["Best lane per exchange/symbol"]
+    Binance --> CandleLanes["Candle strategy lanes"]
+    Bybit --> CandleLanes
+    Delta --> CandleLanes
+    CandleLanes --> WalkForward["Walk-forward gates"]
+    Targets --> TickLanes["Tick/L2 scalper lanes"]
+    TickLanes --> EdgeMiner["Edge miner"]
+    EdgeMiner --> Replay["Replay gauntlet"]
+    WalkForward --> PairRank["Best validated candle lane"]
+    Replay --> ScalpRank["Best replay-proven scalper lane"]
 ```
 
 Default research universe:
@@ -210,9 +243,10 @@ RESEARCH_TIMEFRAME=1h
 | Bounded edge research agents | Branch | Propose/rank/explain only. |
 | Control-room dashboard cockpit | Branch | Visual architecture/status surface. |
 | Scalper microstructure foundation | Branch | In-process features/risk/tick-stop foundation. |
+| Scalper scanners and edge miner | Branch | Discover all derivative pairs; rank lanes by liquidity, PF, route cost, fill evidence, sample sufficiency, and microstructure hypothesis expectancy. |
 | Live Binance testnet execution | Next | Required before any live mode. |
 | Private stream reconciliation | Next | Source of truth for orders/fills/positions. |
-| L2 order book builder | Next | Needed for serious scalper lanes. |
+| L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |
 | Tick-level stop monitoring | Next | Reduce-only exits through gateway. |
 | Delta/Bybit live adapters | Next | After one venue is proven. |
 | TimescaleDB historian | Deferred | Parquet is enough for V1. |

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Mapping
 
 DEFAULT_EXCHANGES = ("binanceusdm", "bybit", "delta")
 DEFAULT_SYMBOLS = (
@@ -23,6 +23,7 @@ DEFAULT_SYMBOLS = (
     "DOGE/USDT:USDT",
 )
 DEFAULT_TIMEFRAME = "1h"
+DEFAULT_DERIVATIVE_QUOTES = ("USDT", "USDC", "USD")
 
 
 @dataclass(frozen=True, order=True)
@@ -122,6 +123,134 @@ def summarize_universe(targets: Iterable[ResearchTarget]) -> dict:
         "symbols": sorted({t.symbol for t in targets}),
         "timeframes": sorted({t.timeframe for t in targets}),
     }
+
+
+def targets_from_markets(
+    exchange: str,
+    markets: Mapping[str, Mapping],
+    *,
+    timeframe: str = DEFAULT_TIMEFRAME,
+    quote_assets: Iterable[str] = DEFAULT_DERIVATIVE_QUOTES,
+    active_only: bool = True,
+    max_symbols: int | None = None,
+) -> tuple[ResearchTarget, ...]:
+    """Build research targets from CCXT market metadata.
+
+    This is intentionally derivatives-first: active linear swaps/futures only,
+    excluding options and inactive/delisted contracts. It is used by scanners to
+    cover "all pairs" for research data collection; it does not change V1
+    execution scope.
+    """
+    quote_set = {q.upper() for q in quote_assets}
+    out: list[ResearchTarget] = []
+    seen: set[str] = set()
+    for market in markets.values():
+        if not _is_research_derivative_market(market, quote_set, active_only):
+            continue
+        symbol = str(market.get("symbol") or "")
+        if not symbol:
+            continue
+        target = ResearchTarget(exchange=exchange, symbol=symbol, timeframe=timeframe)
+        if target.key in seen:
+            continue
+        out.append(target)
+        seen.add(target.key)
+    out.sort(key=_target_discovery_sort_key)
+    if max_symbols is not None:
+        out = out[:max_symbols]
+    return tuple(out)
+
+
+async def discover_exchange_targets(
+    exchange: str,
+    *,
+    timeframe: str = DEFAULT_TIMEFRAME,
+    quote_assets: Iterable[str] = DEFAULT_DERIVATIVE_QUOTES,
+    active_only: bool = True,
+    max_symbols: int | None = None,
+) -> tuple[ResearchTarget, ...]:
+    """Discover active derivative research targets for one exchange via CCXT."""
+    import ccxt.async_support as ccxt_async
+
+    if not hasattr(ccxt_async, exchange):
+        raise ValueError(f"unknown CCXT exchange id: {exchange}")
+    ex = getattr(ccxt_async, exchange)({"enableRateLimit": True})
+    try:
+        markets = await ex.load_markets()
+    finally:
+        await ex.close()
+    return targets_from_markets(
+        exchange,
+        markets,
+        timeframe=timeframe,
+        quote_assets=quote_assets,
+        active_only=active_only,
+        max_symbols=max_symbols,
+    )
+
+
+async def discover_research_targets(
+    exchanges: Iterable[str],
+    *,
+    timeframe: str = DEFAULT_TIMEFRAME,
+    quote_assets: Iterable[str] = DEFAULT_DERIVATIVE_QUOTES,
+    active_only: bool = True,
+    max_symbols_per_exchange: int | None = None,
+) -> tuple[ResearchTarget, ...]:
+    """Discover active derivatives across exchanges for research-only scanners."""
+    targets: list[ResearchTarget] = []
+    seen: set[str] = set()
+    for exchange in exchanges:
+        for target in await discover_exchange_targets(
+            exchange,
+            timeframe=timeframe,
+            quote_assets=quote_assets,
+            active_only=active_only,
+            max_symbols=max_symbols_per_exchange,
+        ):
+            if target.key not in seen:
+                targets.append(target)
+                seen.add(target.key)
+    return tuple(sorted(targets))
+
+
+def _is_research_derivative_market(
+    market: Mapping,
+    quote_assets: set[str],
+    active_only: bool,
+) -> bool:
+    if active_only and market.get("active") is False:
+        return False
+    if market.get("option"):
+        return False
+    derivative = bool(
+        market.get("swap")
+        or market.get("future")
+        or market.get("contract")
+        or market.get("type") in {"swap", "future"}
+    )
+    if not derivative:
+        return False
+    # For this project the scalper lane is linear perps/futures; inverse/quanto
+    # contracts add collateral and sizing mechanics we should not mix into v1.
+    if market.get("linear") is False:
+        return False
+    quote = str(market.get("quote") or "").upper()
+    settle = str(market.get("settle") or "").upper()
+    return quote in quote_assets or settle in quote_assets
+
+
+def _target_discovery_sort_key(target: ResearchTarget) -> tuple[int, int, str]:
+    default_rank = {
+        symbol: i for i, symbol in enumerate(DEFAULT_SYMBOLS)
+    }
+    if target.symbol in default_rank:
+        return (0, default_rank[target.symbol], target.symbol)
+    base = target.symbol.split("/")[0]
+    base_rank = {
+        symbol.split("/")[0]: i for i, symbol in enumerate(DEFAULT_SYMBOLS)
+    }
+    return (1, base_rank.get(base, len(DEFAULT_SYMBOLS)), target.symbol)
 
 
 def profitable_pairs(

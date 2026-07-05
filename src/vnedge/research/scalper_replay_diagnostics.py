@@ -75,6 +75,8 @@ class ScalperReplayRow:
     avg_net_bps: float | None
     avg_adverse_bps: float | None
     verdict: str
+    profit_factor: float | None = None
+    breakeven_bps: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,14 @@ def _row(
         sum(t.adverse_bps for t in result.trades) / len(result.trades)
         if result.trades else None
     )
+    wins = [t.net_bps for t in result.trades if t.net_bps > 0]
+    losses = [-t.net_bps for t in result.trades if t.net_bps < 0]
+    if wins and losses:
+        profit_factor = sum(wins) / sum(losses)
+    elif wins:
+        profit_factor = 999.0
+    else:
+        profit_factor = None
     return ScalperReplayRow(
         min_imbalance=min_imbalance,
         max_spread_bps=max_spread_bps,
@@ -161,6 +171,7 @@ def _row(
         avg_net_bps=avg_net,
         avg_adverse_bps=avg_adverse,
         verdict=_row_verdict(result, config),
+        profit_factor=profit_factor,
     )
 
 
@@ -264,12 +275,13 @@ def render_text_report(report: ScalperReplayDiagnostics) -> str:
     ]
     if report.rows:
         lines.append("")
-        lines.append("imb  spread  quotes fills fill%    net$ avg_net_bps avg_adv_bps verdict")
+        lines.append("imb  spread  quotes fills fill%    net$ avg_net_bps pf avg_adv_bps verdict")
         for r in sorted(report.rows, key=lambda x: (x.min_imbalance, x.max_spread_bps)):
             lines.append(
                 f"{r.min_imbalance:>3.2f} {r.max_spread_bps:>6.1f} "
                 f"{r.quotes:>7} {r.filled:>5} {r.fill_rate_pct:>5.1f} "
                 f"{r.net_usd:>7.3f} {_fmt(r.avg_net_bps):>11} "
+                f"{_fmt(r.profit_factor):>4} "
                 f"{_fmt(r.avg_adverse_bps):>11} {r.verdict}"
             )
     best = report.best_row
