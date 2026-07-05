@@ -49,6 +49,7 @@ from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.scalper_1m import Scalper1m
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
@@ -203,6 +204,8 @@ def _build_single_strategy(
         return Scalper1m(seed_funding, **params)
     if strategy_id == "alpha_stack_confluence_v1":
         return AlphaStackConfluence(seed_funding, **params)
+    if strategy_id == "quant_signal_pack_v1":
+        return QuantSignalPack(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 

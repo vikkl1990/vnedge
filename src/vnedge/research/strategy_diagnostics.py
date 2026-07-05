@@ -166,6 +166,20 @@ CATALOG: dict[str, dict[str, Suggestion]] = {
             "tighten ATR risk while keeping the structure stop; useful when "
             "payoff ratio is the limiting gate"),
     },
+    "quant_signal_pack_v1": {
+        "increase_quality": _mk(
+            "quant_signal_pack_v1", "higher_confluence",
+            {"min_score": 6.0}, {"structure_window": [24, 48], "take_profit_r": [2.0]},
+            "offensive", 720, "increase_quality",
+            "raise the confluence bar so Lux/Willy-style visual marks do not "
+            "become low-quality signal spam"),
+        "reduce_risk": _mk(
+            "quant_signal_pack_v1", "tighter_stop",
+            {"stop_atr_mult": 1.1, "take_profit_r": 2.5},
+            {"structure_window": [24, 48]}, "offensive", 720, "reduce_risk",
+            "tighten the structure stop and stretch reward; useful when payoff "
+            "ratio or drawdown is the failing gate"),
+    },
 }
 
 

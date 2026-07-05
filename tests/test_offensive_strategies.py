@@ -183,9 +183,10 @@ def test_squeeze_requires_funding_series():
         FundingSqueezeContinuation(pd.DataFrame())
 
 
-def test_registry_has_all_five():
+def test_registry_has_research_lanes():
     assert set(STRATEGIES) == {
         "trend_continuation_v1", "funding_mean_reversion_v1",
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
         "funding_squeeze_continuation_v1", "alpha_stack_confluence_v1",
+        "quant_signal_pack_v1",
     }
