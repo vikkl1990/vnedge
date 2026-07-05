@@ -3,9 +3,11 @@
     DASHBOARD_TOKEN=... python -m vnedge.runtime.multi_lane_shadow
 
 Runs fully isolated lanes on Binance, Bybit, and Delta. Binance/Bybit run the
-governed funding-MR paper/shadow lanes; Delta runs a candle-only shadow lane
-until funding-history and native websocket support are added. All lanes use
-live public market data, $500 imaginary base, and NO live orders.
+governed funding-MR paper/shadow lanes; Delta runs a candle-only trend shadow
+lane plus a funding-MR shadow lane that accumulates funding live off its native
+websocket (no REST funding history on Delta) and warms up until the percentile
+window fills. All lanes use live public market data, $500 imaginary base, and
+NO live orders.
 
   - PAPER  — simulated fills on live data; produces the live-$ venue
              comparison and keeps the human-approved funding_mr_btc_v1_20260703
@@ -122,6 +124,33 @@ def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[Lane
     curated = list(CANDIDATE_SHADOW_LANES)
     seen = {s.lane_id for s in curated}
     return curated + [s for s in manifest_shadow_lanes(environ) if s.lane_id not in seen]
+
+
+def delta_funding_mr_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    """Delta India funding-MR — SHADOW only, accumulating funding live.
+
+    Delta exposes no REST funding history, so this lane builds the percentile
+    window purely from live funding observations (persisted across restarts via
+    the funding accumulator) and warms up — emitting NO signal — until the
+    window fills. Same frozen human-approved params as the governed lanes; no
+    fills, $500 imaginary base. Toggle with MULTI_LANE_DELTA_FUNDING_MR=0.
+    """
+    if not _truthy(environ, "MULTI_LANE_DELTA_FUNDING_MR", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    symbol = "BTC/USD:USD"
+    return [
+        LaneSpec(
+            lane_id=f"funding_mr_{DELTA_EXCHANGE}_{_slug_symbol(symbol)}_shadow",
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe=environ.get("MULTI_LANE_TIMEFRAME", "1h"),
+            strategy_id="funding_mean_reversion_v1",
+            strategy_params=FUNDING_MR_PARAMS,
+            mode=RunnerMode.SHADOW,
+        )
+    ]
 
 
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
@@ -280,6 +309,8 @@ def build_lane_specs_from_env(
 async def main() -> None:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
     lanes = build_lane_specs_from_env() + candidate_shadow_lanes()
+    seen = {spec.lane_id for spec in lanes}
+    lanes += [s for s in delta_funding_mr_lanes() if s.lane_id not in seen]
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
     provider = MultiLaneProvider(primary_lane_id=primary)
 

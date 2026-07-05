@@ -171,13 +171,18 @@ def _requires_funding_history(strategy_id: str) -> bool:
 
 
 def _build_strategy(
-    spec: LaneSpec, seed_funding, feed
+    spec: LaneSpec, seed_funding, feed, *, funding_store_path=None
 ) -> BaseStrategy:
     """Construct the live strategy a lane runs, keyed by strategy_id."""
     params = spec.strategy_params or {}
     if spec.strategy_id == "signal_arbiter_v1":
-        return _build_signal_arbiter_strategy(spec, seed_funding, feed)
-    return _build_single_strategy(spec.strategy_id, params, seed_funding, feed)
+        return _build_signal_arbiter_strategy(
+            spec, seed_funding, feed, funding_store_path=funding_store_path
+        )
+    return _build_single_strategy(
+        spec.strategy_id, params, seed_funding, feed,
+        funding_store_path=funding_store_path,
+    )
 
 
 def _build_single_strategy(
@@ -185,9 +190,23 @@ def _build_single_strategy(
     params: dict,
     seed_funding,
     feed,
+    *,
+    funding_store_path=None,
 ) -> BaseStrategy:
     """Construct one strategy implementation for a live-data lane."""
     if strategy_id == "funding_mean_reversion_v1":
+        # No REST funding history (Delta) => accumulate the series live and
+        # persist it so a restart resumes the percentile window. Warming up is
+        # signal-safe (funding_pct is NaN until the window fills). Venues WITH
+        # history keep the proven REST-seeded path unchanged.
+        if funding_store_path is not None and (
+            seed_funding is None or getattr(seed_funding, "empty", True)
+        ):
+            from vnedge.runtime.funding_accumulator import LivePersistentFundingMR
+
+            return LivePersistentFundingMR(
+                seed_funding, feed, store_path=funding_store_path, **params
+            )
         # needs the funding stream augmented live off the feed
         return LiveFundingMR(seed_funding, feed, **params)
     if strategy_id == "trend_continuation_v1":
@@ -206,7 +225,9 @@ def _build_single_strategy(
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 
-def _build_signal_arbiter_strategy(spec: LaneSpec, seed_funding, feed) -> BaseStrategy:
+def _build_signal_arbiter_strategy(
+    spec: LaneSpec, seed_funding, feed, *, funding_store_path=None
+) -> BaseStrategy:
     params = spec.strategy_params or {}
     children = params.get("strategies") or params.get("children")
     if not isinstance(children, list) or not children:
@@ -235,7 +256,10 @@ def _build_signal_arbiter_strategy(spec: LaneSpec, seed_funding, feed) -> BaseSt
             raise ValueError("signal_arbiter_v1 child params must be an object")
 
         strategies.append(
-            _build_single_strategy(child_strategy_id, child_params, seed_funding, feed)
+            _build_single_strategy(
+                child_strategy_id, child_params, seed_funding, feed,
+                funding_store_path=funding_store_path,
+            )
         )
         default_source_id = f"{child_strategy_id}#{index + 1}"
         source_id = str(child.get("source_id", default_source_id))
@@ -269,26 +293,33 @@ async def build_lane(
         raw_c = await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
-        except NotSupported as exc:
+        except NotSupported:
             if _requires_funding_history(spec.strategy_id):
-                raise ValueError(
-                    f"{spec.exchange} does not expose funding history needed by "
-                    f"{spec.strategy_id}"
-                ) from exc
-            logger.info(
-                "%s %s: funding history unavailable; running %s with zero funding",
-                spec.exchange, spec.symbol, spec.strategy_id,
-            )
+                # No REST funding history (Delta). Don't fail the lane — build the
+                # percentile window live from the funding stream and persist it.
+                logger.info(
+                    "%s %s: no funding history; %s will accumulate funding live "
+                    "and persist it (warming up until the window fills)",
+                    spec.exchange, spec.symbol, spec.strategy_id,
+                )
+            else:
+                logger.info(
+                    "%s %s: funding history unavailable; running %s with zero funding",
+                    spec.exchange, spec.symbol, spec.strategy_id,
+                )
             raw_f = []
     history = normalize_candles(raw_c)
     seed_funding = normalize_funding(raw_f)
+    funding_store_path = journal_dir / f"{spec.lane_id}.funding.jsonl"
 
     feed = create_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk)
-    strategy = _build_strategy(spec, seed_funding, feed)
+    strategy = _build_strategy(
+        spec, seed_funding, feed, funding_store_path=funding_store_path
+    )
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
