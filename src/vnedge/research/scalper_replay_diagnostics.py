@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
@@ -22,6 +22,10 @@ from vnedge.scalping.replay_backtester import (
     TickReplayBacktester,
     load_tick_events,
 )
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
+
+
+_REPLAY_DEFAULTS = DEFAULT_SCALPER_PARAMETER_REGISTRY.replay_sweep_kwargs()
 
 
 def _quantile(values: list[float], q: float) -> float | None:
@@ -37,17 +41,43 @@ def _quantile(values: list[float], q: float) -> float | None:
 
 @dataclass(frozen=True)
 class ReplaySweepConfig:
-    min_imbalances: tuple[float, ...] = (0.10, 0.20, 0.35, 0.50, 0.65)
-    max_spread_bps: tuple[float, ...] = (1.5, 3.0, 6.0)
-    ttl_ms: int = 3_000
-    stop_bps: float = 6.0
-    target_bps: float = 8.0
+    family_id: str = _REPLAY_DEFAULTS["family_id"]
+    exit_policy_id: str = _REPLAY_DEFAULTS["exit_policy_id"]
+    min_imbalances: tuple[float, ...] = _REPLAY_DEFAULTS["min_imbalances"]
+    max_spread_bps: tuple[float, ...] = _REPLAY_DEFAULTS["max_spread_bps"]
+    ttl_ms: int = _REPLAY_DEFAULTS["ttl_ms"]
+    stop_bps: float = _REPLAY_DEFAULTS["stop_bps"]
+    target_bps: float = _REPLAY_DEFAULTS["target_bps"]
     notional_usd: float = 100.0
-    maker_bps: float = 2.0
-    taker_bps: float = 5.0
-    slippage_bps: float = 1.0
+    maker_bps: float = _REPLAY_DEFAULTS["maker_bps"]
+    taker_bps: float = _REPLAY_DEFAULTS["taker_bps"]
+    slippage_bps: float = _REPLAY_DEFAULTS["slippage_bps"]
     min_fills_for_candidate: int = 20
     min_span_seconds: float = 3_600.0
+
+    @classmethod
+    def from_registry(
+        cls,
+        *,
+        exchange: str = "binanceusdm",
+        family_id: str = "book_imbalance_continuation",
+    ) -> "ReplaySweepConfig":
+        defaults = DEFAULT_SCALPER_PARAMETER_REGISTRY.replay_sweep_kwargs(
+            exchange=exchange,
+            family_id=family_id,
+        )
+        return cls(
+            family_id=defaults["family_id"],
+            exit_policy_id=defaults["exit_policy_id"],
+            min_imbalances=defaults["min_imbalances"],
+            max_spread_bps=defaults["max_spread_bps"],
+            ttl_ms=defaults["ttl_ms"],
+            stop_bps=defaults["stop_bps"],
+            target_bps=defaults["target_bps"],
+            maker_bps=defaults["maker_bps"],
+            taker_bps=defaults["taker_bps"],
+            slippage_bps=defaults["slippage_bps"],
+        )
 
 
 @dataclass(frozen=True)
@@ -77,6 +107,9 @@ class ScalperReplayRow:
     verdict: str
     profit_factor: float | None = None
     breakeven_bps: float = 0.0
+    family_id: str = "book_imbalance_continuation"
+    exit_policy_id: str = "static_fast"
+    exit_reason_counts: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,7 +192,12 @@ def _row(
         profit_factor = 999.0
     else:
         profit_factor = None
+    exit_reasons: dict[str, int] = {}
+    for trade in result.trades:
+        exit_reasons[trade.exit_reason] = exit_reasons.get(trade.exit_reason, 0) + 1
     return ScalperReplayRow(
+        family_id=config.family_id,
+        exit_policy_id=config.exit_policy_id,
         min_imbalance=min_imbalance,
         max_spread_bps=max_spread_bps,
         quotes=result.quotes_placed,
@@ -172,6 +210,8 @@ def _row(
         avg_adverse_bps=avg_adverse,
         verdict=_row_verdict(result, config),
         profit_factor=profit_factor,
+        breakeven_bps=config.maker_bps + config.taker_bps + config.slippage_bps,
+        exit_reason_counts=exit_reasons,
     )
 
 
@@ -200,7 +240,17 @@ def diagnose_events(
         taker_bps=config.taker_bps,
         slippage_bps=config.slippage_bps,
     )
-    runner = TickReplayBacktester(fees, notional_usd=config.notional_usd)
+    try:
+        exit_policy = DEFAULT_SCALPER_PARAMETER_REGISTRY.exit_policy(
+            config.exit_policy_id
+        )
+    except KeyError as exc:
+        raise ValueError(f"unknown exit_policy_id: {config.exit_policy_id}") from exc
+    runner = TickReplayBacktester(
+        fees,
+        notional_usd=config.notional_usd,
+        exit_policy=exit_policy,
+    )
     rows: list[ScalperReplayRow] = []
     for imb in config.min_imbalances:
         for spread in config.max_spread_bps:
@@ -275,14 +325,25 @@ def render_text_report(report: ScalperReplayDiagnostics) -> str:
     ]
     if report.rows:
         lines.append("")
-        lines.append("imb  spread  quotes fills fill%    net$ avg_net_bps pf avg_adv_bps verdict")
+        lines.append(
+            "imb  spread  quotes fills fill%    net$ avg_net_bps "
+            "pf avg_adv_bps policy exits verdict"
+        )
         for r in sorted(report.rows, key=lambda x: (x.min_imbalance, x.max_spread_bps)):
+            exits = (
+                ",".join(
+                    f"{reason}:{count}"
+                    for reason, count in sorted((r.exit_reason_counts or {}).items())
+                )
+                or "--"
+            )
             lines.append(
                 f"{r.min_imbalance:>3.2f} {r.max_spread_bps:>6.1f} "
                 f"{r.quotes:>7} {r.filled:>5} {r.fill_rate_pct:>5.1f} "
                 f"{r.net_usd:>7.3f} {_fmt(r.avg_net_bps):>11} "
                 f"{_fmt(r.profit_factor):>4} "
-                f"{_fmt(r.avg_adverse_bps):>11} {r.verdict}"
+                f"{_fmt(r.avg_adverse_bps):>11} {r.exit_policy_id} "
+                f"{exits} {r.verdict}"
             )
     best = report.best_row
     if best is not None:
@@ -291,7 +352,7 @@ def render_text_report(report: ScalperReplayDiagnostics) -> str:
             "best="
             f"imb>={best.min_imbalance:.2f} spread<={best.max_spread_bps:.1f} "
             f"quotes={best.quotes} fills={best.filled} net=${best.net_usd:+.3f} "
-            f"verdict={best.verdict}"
+            f"policy={best.exit_policy_id} verdict={best.verdict}"
         )
     return "\n".join(lines)
 
@@ -302,9 +363,39 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--exchange", default="binanceusdm")
     p.add_argument("--symbol", default="BTC/USDT:USDT")
     p.add_argument("--day", required=True, help="UTC day in YYYYMMDD")
+    p.add_argument(
+        "--family-id",
+        default="book_imbalance_continuation",
+        choices=sorted(DEFAULT_SCALPER_PARAMETER_REGISTRY.families),
+    )
+    p.add_argument(
+        "--exit-policy",
+        default=None,
+        choices=sorted(DEFAULT_SCALPER_PARAMETER_REGISTRY.exit_policies),
+        help="override the family exit policy for replay comparison",
+    )
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = p.parse_args(argv)
-    report = diagnose_recorded_day(args.data_root, args.exchange, args.symbol, args.day)
+    config = ReplaySweepConfig.from_registry(
+        exchange=args.exchange,
+        family_id=args.family_id,
+    )
+    if args.exit_policy:
+        policy = DEFAULT_SCALPER_PARAMETER_REGISTRY.exit_policy(args.exit_policy)
+        config = replace(
+            config,
+            exit_policy_id=policy.policy_id,
+            ttl_ms=policy.ttl_ms,
+            stop_bps=policy.stop_bps,
+            target_bps=policy.target_bps,
+        )
+    report = diagnose_recorded_day(
+        args.data_root,
+        args.exchange,
+        args.symbol,
+        args.day,
+        config=config,
+    )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:

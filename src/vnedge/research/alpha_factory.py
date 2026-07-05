@@ -14,8 +14,15 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from statistics import mean
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Mapping
 
+import pandas as pd
+
+from vnedge.research.scalper_context import (
+    ScalperContextStack,
+    build_context_stack,
+    load_context_candles,
+)
 from vnedge.research.scalper_replay_diagnostics import ScalperReplayRow
 from vnedge.research.scalper_scanners import (
     ExecutionRouteDecision,
@@ -25,6 +32,7 @@ from vnedge.research.scalper_scanners import (
 from vnedge.research.universe import ResearchTarget, load_research_targets
 from vnedge.scalping.features import IncrementalFeatureEngine, ScalperFeatures
 from vnedge.scalping.microstructure import TopOfBook
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 from vnedge.scalping.replay_backtester import load_tick_events
 
 
@@ -38,26 +46,29 @@ ALPHA_FACTORY_FLOW = (
     "untouched_judgment",
     "paper_shadow_after_human_approval",
 )
+_ALPHA_DEFAULTS = DEFAULT_SCALPER_PARAMETER_REGISTRY.alpha_factory_kwargs()
 
 
 @dataclass(frozen=True)
 class AlphaFactoryConfig:
     scanner_config: ScalperScannerConfig = field(default_factory=ScalperScannerConfig)
-    horizons_ms: tuple[int, ...] = (1_000, 3_000, 5_000, 15_000)
-    sample_every_ms: int = 500
-    min_samples: int = 30
-    max_spread_bps: float = 3.0
-    min_trade_count: int = 8
-    min_abs_imbalance: float = 0.35
-    flow_agreement: float = 0.66
-    min_pressure_notional_usd: float = 75_000.0
-    microprice_dislocation_bps: float = 0.20
-    liquidity_vacuum_depth_usd: float = 250_000.0
-    min_realized_vol_bps: float = 0.08
-    maker_bps: float = 2.0
-    taker_bps: float = 5.0
-    slippage_bps: float = 1.0
-    safety_buffer_bps: float = 1.0
+    horizons_ms: tuple[int, ...] = _ALPHA_DEFAULTS["horizons_ms"]
+    context_timeframes: tuple[str, ...] = _ALPHA_DEFAULTS["context_timeframes"]
+    context_enabled: bool = True
+    sample_every_ms: int = _ALPHA_DEFAULTS["sample_every_ms"]
+    min_samples: int = _ALPHA_DEFAULTS["min_samples"]
+    max_spread_bps: float = _ALPHA_DEFAULTS["max_spread_bps"]
+    min_trade_count: int = _ALPHA_DEFAULTS["min_trade_count"]
+    min_abs_imbalance: float = _ALPHA_DEFAULTS["min_abs_imbalance"]
+    flow_agreement: float = _ALPHA_DEFAULTS["flow_agreement"]
+    min_pressure_notional_usd: float = _ALPHA_DEFAULTS["min_pressure_notional_usd"]
+    microprice_dislocation_bps: float = _ALPHA_DEFAULTS["microprice_dislocation_bps"]
+    liquidity_vacuum_depth_usd: float = _ALPHA_DEFAULTS["liquidity_vacuum_depth_usd"]
+    min_realized_vol_bps: float = _ALPHA_DEFAULTS["min_realized_vol_bps"]
+    maker_bps: float = _ALPHA_DEFAULTS["maker_bps"]
+    taker_bps: float = _ALPHA_DEFAULTS["taker_bps"]
+    slippage_bps: float = _ALPHA_DEFAULTS["slippage_bps"]
+    safety_buffer_bps: float = _ALPHA_DEFAULTS["safety_buffer_bps"]
     notional_usd: float = 100.0
 
 
@@ -67,6 +78,7 @@ class AlphaObservation:
     side: Literal["buy", "sell"]
     forward_bps: float
     net_bps: float
+    context_tag: str = "ungated"
 
 
 @dataclass(frozen=True)
@@ -77,6 +89,7 @@ class AlphaHypothesisResult:
     day: str
     hypothesis_id: str
     family: str
+    context_tag: str
     side: str
     horizon_ms: int
     samples: int
@@ -90,6 +103,8 @@ class AlphaHypothesisResult:
     replay_priority: float
     rationale: str
     evidence: dict
+    context_score: float | None = None
+    context_summary: dict | None = None
     can_trade: bool = False
     can_promote: bool = False
     requires_conservative_replay: bool = True
@@ -137,6 +152,10 @@ def alpha_factory_policy() -> dict:
             "liquidity_vacuum_continuation",
             "volatility_impulse",
         ],
+        "context_timeframes": list(DEFAULT_SCALPER_PARAMETER_REGISTRY.context_timeframes),
+        "context_principle": (
+            "4h/1h/15m/1m are mined as context tags, not as direct scalp entries"
+        ),
     }
 
 
@@ -169,6 +188,11 @@ def run_alpha_factory(
         },
         "targets": [asdict(t) for t in targets],
         "days": list(days),
+        "context_mining": {
+            "enabled": config.context_enabled,
+            "timeframes": list(config.context_timeframes),
+            "purpose": "test whether candle context improves L2 hypothesis expectancy",
+        },
         "hypotheses": [h.to_dict() for h in hypotheses[:max_rows]],
         "replay_queue": replay_queue,
         "recorder_directives": _recorder_directives(targets, days, hypotheses),
@@ -186,6 +210,15 @@ def mine_recorded_alpha_days(
 ) -> tuple[AlphaHypothesisResult, ...]:
     out: list[AlphaHypothesisResult] = []
     for target in targets:
+        context_candles = (
+            load_context_candles(
+                data_root,
+                target.exchange,
+                target.symbol,
+                config.context_timeframes,
+            )
+            if config.context_enabled else {}
+        )
         for day in days:
             events = load_tick_events(data_root, target.exchange, target.symbol, day)
             out.extend(
@@ -195,6 +228,7 @@ def mine_recorded_alpha_days(
                     symbol=target.symbol,
                     day=day,
                     config=config,
+                    context_candles=context_candles,
                 )
             )
     return tuple(sorted(out, key=_result_sort_key))
@@ -207,20 +241,38 @@ def mine_structural_alpha_events(
     symbol: str,
     day: str,
     config: AlphaFactoryConfig = AlphaFactoryConfig(),
+    context_candles: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[AlphaHypothesisResult, ...]:
     points = _feature_points(events)
     if len(points) < 2:
         return ()
     timestamps = [p.ts_ms for p in points]
     mids = [p.top.mid_price for p in points]
-    observations: dict[tuple[str, str, int], list[AlphaObservation]] = {}
-    evidence: dict[tuple[str, str, int], dict] = {}
-    last_sample: dict[tuple[str, str, int], int] = {}
+    observations: dict[tuple[str, str, int, str], list[AlphaObservation]] = {}
+    evidence: dict[tuple[str, str, int, str], dict] = {}
+    last_sample: dict[tuple[str, str, int, str], int] = {}
+    context_cache: dict[int, ScalperContextStack] = {}
 
     for i, point in enumerate(points):
+        context_stack = None
+        if config.context_enabled and context_candles:
+            context_bucket = point.ts_ms // 60_000
+            context_stack = context_cache.get(context_bucket)
+            if context_stack is None:
+                context_stack = build_context_stack(
+                    context_candles,
+                    at_ms=point.ts_ms,
+                    timeframes=config.context_timeframes,
+                )
+                context_cache[context_bucket] = context_stack
         for signal in _signals(point, config):
+            context_tag = "ungated"
+            context_summary = None
+            if context_stack is not None:
+                context_tag = context_stack.tag_for_side(signal.side)
+                context_summary = context_stack.summary_for_side(signal.side)
             for horizon_ms in config.horizons_ms:
-                key = (signal.label, signal.side, horizon_ms)
+                key = (signal.label, signal.side, horizon_ms, context_tag)
                 if point.ts_ms - last_sample.get(key, -10**15) < config.sample_every_ms:
                     continue
                 j = bisect.bisect_left(timestamps, point.ts_ms + horizon_ms, lo=i + 1)
@@ -230,9 +282,12 @@ def mine_structural_alpha_events(
                 signed = forward if signal.side == "buy" else -forward
                 net = signed - _maker_replay_cost_bps(config)
                 observations.setdefault(key, []).append(
-                    AlphaObservation(point.ts_ms, signal.side, signed, net)
+                    AlphaObservation(point.ts_ms, signal.side, signed, net, context_tag)
                 )
-                evidence.setdefault(key, signal.evidence)
+                row_evidence = dict(signal.evidence)
+                if context_summary is not None:
+                    row_evidence["context"] = context_summary
+                evidence.setdefault(key, row_evidence)
                 last_sample[key] = point.ts_ms
 
     results = [
@@ -247,15 +302,16 @@ def render_alpha_report(results: Iterable[AlphaHypothesisResult], *, limit: int 
         "alpha factory",
         "policy=research_only can_trade=false can_promote=false",
         "",
-        "state                 route         side pf    net_bps fwd_bps win% samples "
-        "priority exchange    symbol          horizon family",
+        "state                 route         side context  pf    net_bps fwd_bps win% "
+        "samples priority exchange    symbol          horizon family",
     ]
     for r in tuple(results)[:limit]:
         lines.append(
             f"{r.state:<21} {r.route_decision.route:<13} {r.side:<4} "
-            f"{_fmt(r.profit_factor):>5} {_fmt(r.avg_net_bps):>7} "
-            f"{_fmt(r.avg_forward_bps):>7} {r.win_rate_pct:>4.0f} "
-            f"{r.samples:>7} {r.replay_priority:>8.1f} {r.exchange:<11} "
+            f"{r.context_tag:<8} {_fmt(r.profit_factor):>5} "
+            f"{_fmt(r.avg_net_bps):>7} {_fmt(r.avg_forward_bps):>7} "
+            f"{r.win_rate_pct:>4.0f} {r.samples:>7} "
+            f"{r.replay_priority:>8.1f} {r.exchange:<11} "
             f"{r.symbol:<15} {r.horizon_ms:>7} {r.family}"
         )
     if len(lines) == 4:
@@ -362,12 +418,12 @@ def _result(
     exchange: str,
     symbol: str,
     day: str,
-    key: tuple[str, str, int],
+    key: tuple[str, str, int, str],
     observations: list[AlphaObservation],
     evidence: dict,
     config: AlphaFactoryConfig,
 ) -> AlphaHypothesisResult:
-    family, side, horizon_ms = key
+    family, side, horizon_ms, context_tag = key
     net = [o.net_bps for o in observations]
     forward = [o.forward_bps for o in observations]
     wins = [v for v in net if v > 0]
@@ -376,6 +432,7 @@ def _result(
     avg_net = mean(net) if net else None
     avg_forward = mean(forward) if forward else None
     win_rate = len(wins) / len(net) * 100.0 if net else 0.0
+    exit_policy_id = DEFAULT_SCALPER_PARAMETER_REGISTRY.family(family).exit_policy_id
     fake_row = ScalperReplayRow(
         min_imbalance=0.0,
         max_spread_bps=config.max_spread_bps,
@@ -390,16 +447,24 @@ def _result(
         verdict="CANDIDATE" if avg_net and avg_net > 0 else "NEGATIVE_EDGE",
         profit_factor=pf,
         breakeven_bps=_maker_replay_cost_bps(config),
+        family_id=family,
+        exit_policy_id=exit_policy_id,
     )
     route = decide_execution_route(fake_row, config.scanner_config)
     state = _alpha_state(len(observations), route, config)
+    context_summary = evidence.get("context")
+    context_score = None
+    if isinstance(context_summary, dict):
+        raw_score = context_summary.get("score")
+        context_score = float(raw_score) if raw_score is not None else None
     return AlphaHypothesisResult(
         alpha_factory_id=ALPHA_FACTORY_ID,
         exchange=exchange,
         symbol=symbol,
         day=day,
-        hypothesis_id=f"{family}|side={side}|h={horizon_ms}",
+        hypothesis_id=f"{family}|side={side}|h={horizon_ms}|context={context_tag}",
         family=family,
+        context_tag=context_tag,
         side=side,
         horizon_ms=horizon_ms,
         samples=len(observations),
@@ -413,6 +478,8 @@ def _result(
         replay_priority=_replay_priority(len(observations), avg_net, pf, route, config),
         rationale=_rationale(family, route, avg_net),
         evidence=evidence,
+        context_score=context_score,
+        context_summary=context_summary,
     )
 
 

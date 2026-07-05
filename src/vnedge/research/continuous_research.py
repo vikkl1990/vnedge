@@ -67,6 +67,7 @@ from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuat
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -527,7 +528,8 @@ def publish(records: list[dict], started: float,
             agent_plan: dict | None = None,
             universe: dict | None = None,
             scalper_research: dict | None = None,
-            alpha_factory: dict | None = None) -> None:
+            alpha_factory: dict | None = None,
+            scalper_parameter_registry: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -542,6 +544,7 @@ def publish(records: list[dict], started: float,
         "universe": universe or {},
         "scalper_research": scalper_research or {},
         "alpha_factory": alpha_factory or {},
+        "scalper_parameter_registry": scalper_parameter_registry or {},
         "edge_agents": agent_plan or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
@@ -669,6 +672,10 @@ async def run_cycle() -> list[dict]:
     l2 = _load_l2_latest()
     scalper_research = scalper_research or l2.get("scalper_research", {})
     alpha_factory = alpha_factory or l2.get("alpha_factory", {})
+    scalper_parameter_registry = (
+        l2.get("scalper_parameter_registry")
+        or DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict()
+    )
     publish(
         records, started, drift, _load_auto_state(),
         agent_plan={
@@ -679,6 +686,7 @@ async def run_cycle() -> list[dict]:
         universe=summarize_universe(targets),
         scalper_research=scalper_research,
         alpha_factory=alpha_factory,
+        scalper_parameter_registry=scalper_parameter_registry,
     )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""

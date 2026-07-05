@@ -28,6 +28,7 @@ from vnedge.research.continuous_research import (
     run_scalper_research,
 )
 from vnedge.research.universe import load_research_targets
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def run_once(data_root: str | Path = "data") -> dict:
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "days": list(days),
+        "scalper_parameter_registry": DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict(),
         "scalper_research": scalper,
         "alpha_factory": alpha,
     }

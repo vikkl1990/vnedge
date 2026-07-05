@@ -33,9 +33,11 @@ from vnedge.research.universe import (
     discover_research_targets,
     load_research_targets,
 )
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
 
 SCANNER_ID = "scalper_microstructure_scanner_v1"
+_SCANNER_DEFAULTS = DEFAULT_SCALPER_PARAMETER_REGISTRY.scanner_gate_kwargs()
 
 
 @dataclass(frozen=True)
@@ -47,11 +49,11 @@ class ScalperScannerConfig:
     max_spread_p95_bps: float = 2.0
     min_abs_imbalance_p90: float = 0.35
     min_fills: int = 20
-    min_fill_rate_pct: float = 5.0
-    maker_min_profit_factor: float = 1.15
-    taker_min_profit_factor: float = 1.80
-    min_avg_net_bps: float = 0.5
-    max_avg_adverse_bps: float = 8.0
+    min_fill_rate_pct: float = _SCANNER_DEFAULTS["min_fill_rate_pct"]
+    maker_min_profit_factor: float = _SCANNER_DEFAULTS["maker_min_profit_factor"]
+    taker_min_profit_factor: float = _SCANNER_DEFAULTS["taker_min_profit_factor"]
+    min_avg_net_bps: float = _SCANNER_DEFAULTS["min_avg_net_bps"]
+    max_avg_adverse_bps: float = _SCANNER_DEFAULTS["max_avg_adverse_bps"]
     min_candidate_score: float = 85.0
 
 

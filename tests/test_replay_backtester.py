@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
+from vnedge.scalping.parameter_registry import ExitPolicy
 from vnedge.scalping.replay_backtester import (
     ImbalanceScalper,
     ReplayFees,
@@ -193,6 +194,44 @@ def test_adverse_selection_measured():
         events, AlwaysBuy(stop_bps=60.0, target_bps=40.0))
     assert res.filled == 1
     assert res.trades[0].adverse_bps < -20.0  # captured the adverse move
+
+
+def test_adverse_cut_exit_can_leave_before_static_stop():
+    policy = ExitPolicy(
+        "test_cut", "adverse_cut", ttl_ms=10_000, stop_bps=60.0,
+        target_bps=80.0, max_hold_ms=10_000, adverse_cut_bps=20.0,
+    )
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),
+        book(T0 + 20, 99.7, 5.0, 99.8, 5.0),  # not static stop, but adverse cut
+    ]
+    res = TickReplayBacktester(ReplayFees(slippage_bps=0), exit_policy=policy).run(
+        events, AlwaysBuy(stop_bps=60.0, target_bps=80.0))
+
+    assert res.filled == 1
+    assert res.trades[0].exit_reason == "adverse_cut"
+    assert -60.0 < res.trades[0].gross_bps < -20.0
+
+
+def test_trailing_exit_locks_in_partial_move():
+    policy = ExitPolicy(
+        "test_trail", "adaptive_trail", ttl_ms=10_000, stop_bps=60.0,
+        target_bps=100.0, max_hold_ms=10_000, trail_after_bps=30.0,
+        trail_distance_bps=20.0,
+    )
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),
+        book(T0 + 20, 100.5, 5.0, 100.6, 5.0),  # favorable > 30bps
+        book(T0 + 30, 100.25, 5.0, 100.35, 5.0),  # retrace triggers trail
+    ]
+    res = TickReplayBacktester(ReplayFees(slippage_bps=0), exit_policy=policy).run(
+        events, AlwaysBuy(stop_bps=60.0, target_bps=100.0))
+
+    assert res.filled == 1
+    assert res.trades[0].exit_reason == "trail"
+    assert res.trades[0].gross_bps > 0
 
 
 def test_end_close_uses_tradable_bid_not_mid_for_long():

@@ -262,6 +262,7 @@ def _result(
     avg_net = mean(net) if net else None
     avg_forward = mean(forward) if forward else None
     win_rate = len(wins) / len(net) * 100.0 if net else 0.0
+    family = hypothesis_id.split("|", 1)[0]
     fake_row = ScalperReplayRow(
         min_imbalance=0.0,
         max_spread_bps=config.max_spread_bps,
@@ -276,6 +277,7 @@ def _result(
         verdict="CANDIDATE" if avg_net and avg_net > 0 else "NEGATIVE_EDGE",
         profit_factor=pf,
         breakeven_bps=_maker_round_trip_cost_bps(config),
+        family_id=family,
     )
     route = decide_execution_route(fake_row, config.scanner_config)
     state = _edge_state(len(observations), route, config)
@@ -284,7 +286,7 @@ def _result(
         symbol=symbol,
         day=day,
         hypothesis_id=hypothesis_id,
-        family=hypothesis_id.split("|", 1)[0],
+        family=family,
         side=side,
         horizon_ms=horizon_ms,
         samples=len(observations),
