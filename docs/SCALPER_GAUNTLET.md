@@ -102,16 +102,16 @@ signals just to create activity.
 ## Step 3 scanner layer (2026-07-05): find profitable scalp lanes
 
 The scalper to build is not an always-on high-frequency bot. It is a
-scanner-gated, maker-first microstructure scalper:
+discovery-first, scanner-gated, maker/taker-aware microstructure scalper:
 
-1. Scan exchange/symbol/day lanes for tight spread, enough trade/book activity,
-   recurring imbalance pressure, passive fill probability, tolerable adverse
-   selection, and positive net bps after fees.
-2. Record more tick/L2 data only for lanes that look liquid and information-rich.
-3. Replay untouched windows through the conservative maker-in/taker-out engine.
-4. Promote only a replay candidate that clears sample, liquidity, flow, fill,
-   edge-after-cost, and adverse-selection gates. Even then it is research only
-   until human-approved paper/shadow.
+1. Discover active linear perp/future markets across venues.
+2. Record tick/L2 data before judging a scalper lane.
+3. Mine the recorded tape for pressure, absorption, and microprice hypotheses.
+4. Rank lanes with scanners for liquidity, sample sufficiency, PF, route cost,
+   fill evidence, adverse selection, and positive net bps after fees.
+5. Replay untouched windows through the conservative maker-in/taker-out engine.
+6. Only then run walk-forward / untouched judgment and human approval. Even a
+   replay candidate is research-only until human-approved paper/shadow.
 
 Run the scanner:
 
