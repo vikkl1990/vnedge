@@ -74,3 +74,91 @@ def test_buffer_writes_atomic_shards_never_rewrites(tmp_path):
 def test_empty_flush_is_a_noop(tmp_path):
     buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "book")
     assert buf.flush(0.0) == 0
+
+
+# -- Delta native recorder -------------------------------------------------
+
+import asyncio  # noqa: E402
+import json  # noqa: E402
+
+from vnedge.exchange.tick_recorder import DeltaTickRecorder, _delta_ob  # noqa: E402
+
+
+def test_delta_ob_to_ccxt_book_shape():
+    ob = _delta_ob(
+        buy=[{"limit_price": "100.0", "size": 3}, {"limit_price": "99.5", "size": 5}],
+        sell=[{"limit_price": "100.5", "size": 2}, {"limit_price": "101.0", "size": 8}],
+    )
+    assert ob["bids"] == [[100.0, 3.0], [99.5, 5.0]]  # descending
+    assert ob["asks"] == [[100.5, 2.0], [101.0, 8.0]]  # ascending
+    row = _book_row(ob, levels=2, ts_ms=DAY_TS)
+    assert row["bid"] == 100.0 and row["ask"] == 100.5
+    assert row["bid_px_1"] == 99.5 and row["ask_qty_1"] == 8.0
+
+
+class _FakeWs:
+    def __init__(self, frames):
+        self._frames = frames
+        self.sent = []
+
+    async def send(self, data):
+        self.sent.append(json.loads(data))
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for f in self._frames:
+            yield f
+        # keep the socket "open" so the recorder's flush loop can run; the test
+        # cancels run() to finish.
+        await asyncio.Event().wait()
+
+
+async def test_delta_recorder_writes_book_and_trade_shards(tmp_path):
+    frames = [
+        json.dumps({
+            "type": "l2_orderbook", "symbol": "BTCUSD", "timestamp": DAY_TS * 1000,
+            "buy": [{"limit_price": "62697.5", "size": 1762}, {"limit_price": "62697.0", "size": 10}],
+            "sell": [{"limit_price": "62698.0", "size": 5}, {"limit_price": "62698.5", "size": 20}],
+        }),
+        json.dumps({
+            "type": "all_trades", "symbol": "BTCUSD", "size": 3, "price": "62698.0",
+            "buyer_role": "taker", "seller_role": "maker", "timestamp": DAY_TS * 1000,
+        }),
+    ]
+    fake = _FakeWs(frames)
+    rec = DeltaTickRecorder(
+        ["BTC/USD:USD"], tmp_path, levels=2,
+        connect=lambda url: fake, clock=lambda: 0.0,
+    )
+    task = asyncio.create_task(rec.run())
+    for _ in range(100):
+        if rec.book_count and rec.trade_count:
+            break
+        await asyncio.sleep(0.01)
+    task.cancel()  # triggers final flush
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert rec.book_count == 1 and rec.trade_count == 1
+    day = pd.to_datetime(DAY_TS, unit="ms", utc=True).strftime("%Y%m%d")
+    base = tmp_path / "ticks" / "exchange=delta_india" / "symbol=BTCUSD"
+    book = pd.concat(
+        [pd.read_parquet(s) for s in (base / "stream=book" / day).glob("*.parquet")],
+        ignore_index=True,
+    )
+    assert book.loc[0, "bid"] == 62697.5 and book.loc[0, "ask"] == 62698.0
+    assert book.loc[0, "bid_px_1"] == 62697.0  # full L2 ladder captured
+    trades = pd.concat(
+        [pd.read_parquet(s) for s in (base / "stream=trades" / day).glob("*.parquet")],
+        ignore_index=True,
+    )
+    assert trades.loc[0, "price"] == 62698.0
+    assert trades.loc[0, "amount"] == 3.0
+    assert trades.loc[0, "side"] == "buy"  # buyer is the taker/aggressor

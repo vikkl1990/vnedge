@@ -97,6 +97,23 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Delta India L2/trade recorder — native websocket (Delta has no CCXT Pro
+  # class), writing to the SAME atomic Parquet tick lake under
+  # ticks/exchange=delta_india/… so scalper discovery and the L2 research loop
+  # pick it up with no other changes.
+  tick-recorder-delta:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.exchange.tick_recorder",
+              "--exchange", "delta_india",
+              "--symbols", "BTC/USD:USD,ETH/USD:USD",
+              "--data-root", "/app/data", "--levels", "10"]
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Internet-facing TLS front (self-signed) so the read-only dashboard needs
   # no SSH tunnel. Port 8765 must be open in the cloud security list.
   dashboard-tls:

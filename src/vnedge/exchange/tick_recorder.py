@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 FLUSH_EVERY = 500       # records
 FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
+_DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
 
 def _book_row(ob: dict, levels: int, ts_ms: int) -> dict:
@@ -187,6 +188,132 @@ class TickRecorder:
             await self._ex.close()
 
 
+def _delta_ob(buy: list, sell: list) -> dict:
+    """Convert Delta native l2_orderbook buy/sell arrays into a CCXT-shaped
+    order book (bids descending, asks ascending) so ``_book_row`` can flatten
+    it exactly like the CCXT Pro path. Delta entries are
+    {"limit_price": <str>, "size": <num>, "depth": ...}."""
+    return {
+        "bids": [[float(e["limit_price"]), float(e["size"])] for e in buy],
+        "asks": [[float(e["limit_price"]), float(e["size"])] for e in sell],
+    }
+
+
+class DeltaTickRecorder:
+    """Records Delta India L2 books + trades to the same Parquet tick lake.
+
+    Delta has no CCXT Pro class, so this drives the native
+    ``DeltaPublicWsClient``: its ``on_book`` / ``on_trade`` callbacks fill the
+    same ``_Buffer`` instances ``TickRecorder`` uses, and a flush loop persists
+    them (parquet IO kept off the websocket reader path). Output lands under
+    ``ticks/exchange=delta_india/…`` so the L2 research lake and scalper
+    discovery pick it up with no other changes.
+    """
+
+    def __init__(
+        self,
+        symbols: list[str],
+        root: Path,
+        *,
+        levels: int = 10,
+        exchange_id: str = "delta_india",
+        url: str | None = None,
+        connect=None,
+        clock=None,
+    ) -> None:
+        from vnedge.exchange.delta_ws import (
+            DELTA_INDIA_WS_URL,
+            DeltaPublicWsClient,
+            delta_native_symbol,
+        )
+
+        if levels < 1:
+            raise ValueError("levels must be >= 1")
+        root = Path(root)
+        self.exchange_id = exchange_id
+        self.symbols = [delta_native_symbol(s) for s in symbols]
+        self.root = root
+        self.levels = levels
+        self._clock = clock
+        self.trade_count = 0
+        self.book_count = 0
+        self._trade_bufs = {
+            s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols
+        }
+        self._book_bufs = {
+            s: _Buffer(root, exchange_id, s, "book") for s in self.symbols
+        }
+        self._client = DeltaPublicWsClient(
+            self.symbols,
+            channels=("l2_orderbook", "all_trades"),
+            url=url or DELTA_INDIA_WS_URL,
+            connect=connect,
+            on_book=self._on_book,
+            on_trade=self._on_trade,
+        )
+
+    @staticmethod
+    def _epoch_ms() -> int:
+        from datetime import UTC, datetime
+
+        return int(datetime.now(UTC).timestamp() * 1000)
+
+    def _on_book(self, sym: str, buy: list, sell: list, msg: dict) -> None:
+        if not buy or not sell:
+            return
+        buf = self._book_bufs.get(sym)
+        if buf is None:
+            return
+        ts_raw = msg.get("timestamp")
+        ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._epoch_ms()
+        try:
+            buf.add(_book_row(_delta_ob(buy, sell), self.levels, ts_ms))
+        except (KeyError, TypeError, ValueError):
+            return
+        self.book_count += 1
+
+    def _on_trade(self, sym: str, trade: dict) -> None:
+        buf = self._trade_bufs.get(sym)
+        if buf is None:
+            return
+        buf.add(
+            {
+                "ts_ms": int(trade["ts_ms"]),
+                "price": float(trade["price"]),
+                "amount": float(trade["size"]),
+                "side": trade.get("side", ""),
+            }
+        )
+        self.trade_count += 1
+
+    def _all_buffers(self):
+        return (*self._trade_bufs.values(), *self._book_bufs.values())
+
+    async def run(self, clock=None) -> None:
+        import time as _t
+
+        clock = clock or self._clock or _t.monotonic
+        await self._client.start()
+        logger.info(
+            "delta tick recorder: %s %s -> %s",
+            self.exchange_id, self.symbols, self.root,
+        )
+        try:
+            while True:
+                now = clock()
+                for buf in self._all_buffers():
+                    if buf.should_flush(now):
+                        buf.flush(now)
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            now = clock()
+            for buf in self._all_buffers():
+                buf.flush(now)
+            raise
+        finally:
+            await self._client.stop()
+
+
 def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="zero-risk tick/book recorder")
@@ -196,8 +323,13 @@ def main(argv=None) -> int:
     p.add_argument("--levels", type=int, default=10, help="L2 depth levels per side")
     args = p.parse_args(argv)
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    recorder = TickRecorder(args.exchange, symbols, Path(args.data_root),
-                            levels=args.levels)
+    if args.exchange in _DELTA_NATIVE_IDS:
+        recorder: DeltaTickRecorder | TickRecorder = DeltaTickRecorder(
+            symbols, Path(args.data_root), levels=args.levels, exchange_id=args.exchange
+        )
+    else:
+        recorder = TickRecorder(args.exchange, symbols, Path(args.data_root),
+                                levels=args.levels)
     asyncio.run(recorder.run())
     return 0
 
