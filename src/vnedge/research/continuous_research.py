@@ -47,6 +47,7 @@ from vnedge.data.candle_ingestor import ingest_candles
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
+from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
 from vnedge.research.scalper_edge_miner import mine_recorded_days
 from vnedge.research.scalper_scanners import (
@@ -461,6 +462,12 @@ def _scalper_research_enabled() -> bool:
     }
 
 
+def _alpha_factory_enabled() -> bool:
+    return os.environ.get("ALPHA_FACTORY_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -507,7 +514,8 @@ def publish(records: list[dict], started: float,
             auto_state: dict | None = None,
             agent_plan: dict | None = None,
             universe: dict | None = None,
-            scalper_research: dict | None = None) -> None:
+            scalper_research: dict | None = None,
+            alpha_factory: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -521,6 +529,7 @@ def publish(records: list[dict], started: float,
         "drift_alerts": drift_alerts or [],
         "universe": universe or {},
         "scalper_research": scalper_research or {},
+        "alpha_factory": alpha_factory or {},
         "edge_agents": agent_plan or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
@@ -595,6 +604,7 @@ async def run_cycle() -> list[dict]:
 
     agent_plan = EdgeResearchAgent().plan(records, targets=targets)
     scalper_research: dict = {}
+    alpha_factory: dict = {}
     if _scalper_research_enabled():
         try:
             scalper_research = run_scalper_research("data", targets)
@@ -610,6 +620,30 @@ async def run_cycle() -> list[dict]:
                     "replay_required_for_candidate": True,
                 },
             }
+    if _alpha_factory_enabled():
+        try:
+            alpha_days = tuple(
+                scalper_research.get("days")
+                or _scalper_research_days(Path("data"), targets)
+            )
+            alpha_factory = run_alpha_factory(
+                "data",
+                targets,
+                days=alpha_days,
+                max_rows=_env_int("ALPHA_FACTORY_MAX_ROWS", 50),
+            )
+        except Exception as exc:  # noqa: BLE001 — alpha mining must not kill research
+            logger.exception("alpha factory failed: %s", exc)
+            alpha_factory = {
+                "policy": alpha_factory_policy(),
+                "error": str(exc),
+                "flow_guards": {
+                    "raw_hypothesis_is_not_signal": True,
+                    "conservative_replay_required": True,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            }
     publish(
         records, started, drift, _load_auto_state(),
         agent_plan={
@@ -619,6 +653,7 @@ async def run_cycle() -> list[dict]:
         },
         universe=summarize_universe(targets),
         scalper_research=scalper_research,
+        alpha_factory=alpha_factory,
     )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
