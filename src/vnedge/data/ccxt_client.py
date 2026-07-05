@@ -32,14 +32,36 @@ _BACKOFF_BASE_SECONDS = 1.0
 _OI_LOOKBACK_LIMIT_MS: dict[str, int] = {
     "binanceusdm": 29 * 86_400_000,
 }
+_CCXT_EXCHANGE_ALIASES: dict[str, str] = {
+    "delta_india": "delta",
+}
+_API_URL_OVERRIDES: dict[str, dict[str, str]] = {
+    "delta_india": {
+        "public": "https://api.india.delta.exchange",
+        "private": "https://api.india.delta.exchange",
+    },
+}
+
+
+def resolve_ccxt_exchange_id(exchange_id: str) -> str:
+    return _CCXT_EXCHANGE_ALIASES.get(exchange_id, exchange_id)
+
+
+def create_ccxt_async_exchange(exchange_id: str):
+    ccxt_exchange_id = resolve_ccxt_exchange_id(exchange_id)
+    if not hasattr(ccxt_async, ccxt_exchange_id):
+        raise ValueError(f"unknown CCXT exchange id: {exchange_id}")
+    exchange = getattr(ccxt_async, ccxt_exchange_id)({"enableRateLimit": True})
+    if exchange_id in _API_URL_OVERRIDES:
+        exchange.urls["api"] = dict(_API_URL_OVERRIDES[exchange_id])
+    return exchange
 
 
 class CcxtPublicClient:
     def __init__(self, exchange_id: str = "binanceusdm") -> None:
-        if not hasattr(ccxt_async, exchange_id):
-            raise ValueError(f"unknown CCXT exchange id: {exchange_id}")
         self.exchange_id = exchange_id
-        self._exchange = getattr(ccxt_async, exchange_id)({"enableRateLimit": True})
+        self.ccxt_exchange_id = resolve_ccxt_exchange_id(exchange_id)
+        self._exchange = create_ccxt_async_exchange(exchange_id)
 
     async def close(self) -> None:
         await self._exchange.close()

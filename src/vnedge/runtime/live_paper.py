@@ -292,7 +292,10 @@ class LivePaperSession:
             kill_switch=self.gateway.kill_switch, journal=self.journal,
             order_manager=self.om,
             feed_health=FeedHealth(
-                exchange=f"{getattr(self.feed, 'exchange_id', 'feed')} (live ws)",
+                exchange=(
+                    f"{getattr(self.feed, 'exchange_id', 'feed')} "
+                    f"({getattr(self.feed, 'feed_mode', 'live feed')})"
+                ),
                 candles="ok" if self.feed.staleness_seconds() < 120 else "stale",
                 last_update_ms=self.feed.staleness_seconds() * 1000.0,
             ),

@@ -1,8 +1,9 @@
 """Multi-exchange shadow lanes.
 
 Runs the same (or different) strategy as parallel, fully isolated shadow
-lanes across venues — e.g. funding-MR on Binance AND Bybit at once — to
-answer: does the strategy behave better on one venue under live markets?
+lanes across venues — e.g. funding-MR on Binance/Bybit and a candle-only
+Delta lane — to answer: does the strategy behave better on one venue under
+live markets?
 
 Each lane is a complete, independent LivePaperSession:
 - its own live feed (real venue websockets), simulated exchange, gateway,
@@ -22,10 +23,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ccxt.base.errors import NotSupported
+
 from vnedge.config.risk_config import RiskConfig
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.schemas import normalize_candles, normalize_funding
-from vnedge.exchange.live_feed import LiveMarketFeed
+from vnedge.exchange.live_feed import (
+    LiveMarketFeed,
+    RestPollingMarketFeed,
+    create_market_feed,
+)
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
@@ -67,7 +74,7 @@ class LaneSpec:
 class _LaneRuntime:
     spec: LaneSpec
     session: LivePaperSession
-    feed: LiveMarketFeed
+    feed: LiveMarketFeed | RestPollingMarketFeed
 
 
 # --- snapshot fan-in --------------------------------------------------------------
@@ -154,6 +161,13 @@ class MultiLaneProvider:
 
 
 # --- lane construction ------------------------------------------------------------
+
+_FUNDING_HISTORY_REQUIRED = {"funding_mean_reversion_v1"}
+
+
+def _requires_funding_history(strategy_id: str) -> bool:
+    return strategy_id in _FUNDING_HISTORY_REQUIRED
+
 
 def _build_strategy(
     spec: LaneSpec, seed_funding, feed
@@ -250,11 +264,23 @@ async def build_lane(
     since = until - warmup_hours * 3_600_000
     async with CcxtPublicClient(spec.exchange) as rest:
         raw_c = await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
-        raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
+        try:
+            raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
+        except NotSupported as exc:
+            if _requires_funding_history(spec.strategy_id):
+                raise ValueError(
+                    f"{spec.exchange} does not expose funding history needed by "
+                    f"{spec.strategy_id}"
+                ) from exc
+            logger.info(
+                "%s %s: funding history unavailable; running %s with zero funding",
+                spec.exchange, spec.symbol, spec.strategy_id,
+            )
+            raw_f = []
     history = normalize_candles(raw_c)
     seed_funding = normalize_funding(raw_f)
 
-    feed = LiveMarketFeed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
+    feed = create_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,

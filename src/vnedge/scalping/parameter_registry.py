@@ -359,8 +359,8 @@ def _registry() -> ScalperParameterRegistry:
                 slippage_bps=1.0, safety_buffer_bps=1.0,
                 notes="default derivatives assumption",
             ),
-            "delta": ExchangeFeeProfile(
-                "delta", maker_bps=2.0, taker_bps=5.0,
+            "delta_india": ExchangeFeeProfile(
+                "delta_india", maker_bps=2.0, taker_bps=5.0,
                 slippage_bps=1.5, safety_buffer_bps=1.0,
                 notes="India live candidate; verify fee tier before live",
             ),

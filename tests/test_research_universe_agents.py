@@ -55,6 +55,18 @@ def test_load_research_targets_allows_per_exchange_symbol_overrides(monkeypatch)
     }
 
 
+def test_delta_india_defaults_to_usd_settled_perp_symbols(monkeypatch):
+    monkeypatch.setenv("RESEARCH_EXCHANGES", "binanceusdm,delta_india")
+    monkeypatch.setenv("RESEARCH_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT")
+    monkeypatch.delenv("RESEARCH_SYMBOLS_DELTA_INDIA", raising=False)
+
+    targets = load_research_targets()
+
+    assert ResearchTarget("binanceusdm", "BTC/USDT:USDT", "1h") in targets
+    assert ResearchTarget("delta_india", "BTC/USD:USD", "1h") in targets
+    assert ResearchTarget("delta_india", "ETH/USD:USD", "1h") in targets
+
+
 def test_targets_from_markets_discovers_active_linear_derivatives_only():
     markets = {
         "BTC/USDT:USDT": {
@@ -137,7 +149,7 @@ def test_edge_agent_proposals_are_exploratory_and_non_trading():
     targets = (
         ResearchTarget("binanceusdm", "BTC/USDT:USDT"),
         ResearchTarget("bybit", "BTC/USDT:USDT"),
-        ResearchTarget("delta", "BTC/USDT:USDT"),
+        ResearchTarget("delta_india", "BTC/USDT:USDT"),
     )
 
     plan = EdgeResearchAgent(max_variant_proposals=3).plan(rows, targets=targets)
@@ -148,7 +160,7 @@ def test_edge_agent_proposals_are_exploratory_and_non_trading():
     assert plan.policy["requires_untouched_judgment"] is True
     assert any(p["proposal_type"] == "pre_registered_judgment" for p in plan.proposals)
     assert any(p["proposal_type"] == "cross_exchange_validation" and
-               p["exchange"] == "delta" for p in plan.proposals)
+               p["exchange"] == "delta_india" for p in plan.proposals)
     assert variants
     assert variants[0]["proposal_id"].startswith("variant|binanceusdm|BTC/USDT:USDT")
     assert variants[0]["auto_runnable"] is True

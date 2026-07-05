@@ -8,10 +8,25 @@ alter paper-trial params, or bypass untouched-data judgment.
 ## Run
 
 ```bash
-RESEARCH_EXCHANGES=binanceusdm,bybit,delta \
+RESEARCH_EXCHANGES=binanceusdm,bybit,delta_india \
 RESEARCH_SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
 .venv/bin/python -m vnedge.research.continuous_research
 ```
+
+The live-data workspace also defaults to all three venues:
+
+```bash
+DASHBOARD_TOKEN=... .venv/bin/python -m vnedge.runtime.multi_lane_shadow
+```
+
+Binance and Bybit use websocket feeds and governed funding-MR paper/shadow
+lanes. Delta India currently uses a public REST-polled, candle-only shadow lane
+(`trend_continuation_v1`) because current CCXT exposes Delta India public REST data
+but no CCXT Pro websocket feed and no funding-rate history. Funding-dependent
+Delta India research rows are marked `UNTESTABLE` until a native historical funding
+source is added. Default VNEDGE USDT perp symbols are mapped to Delta India's
+USD-settled perps (`BTC/USDT:USDT` -> `BTC/USD:USD`) unless a
+`RESEARCH_SYMBOLS_DELTA_INDIA` override is supplied.
 
 Per-exchange symbol overrides are supported:
 
@@ -60,7 +75,7 @@ Full exchange-wide derivative discovery:
 ```bash
 .venv/bin/python -m vnedge.research.scalper_scanners \
   --all-markets \
-  --exchanges binanceusdm,bybit,delta \
+  --exchanges binanceusdm,bybit,delta_india \
   --quote-assets USDT,USDC,USD \
   --days YYYYMMDD \
   --limit 200
@@ -88,7 +103,7 @@ tick/L2 data for microstructure hypotheses before strategy promotion:
 ```bash
 .venv/bin/python -m vnedge.research.scalper_edge_miner \
   --all-markets \
-  --exchanges binanceusdm,bybit,delta \
+  --exchanges binanceusdm,bybit,delta_india \
   --quote-assets USDT,USDC,USD \
   --days YYYYMMDD \
   --limit 100

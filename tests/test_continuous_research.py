@@ -57,6 +57,32 @@ def test_wf_record_reject_carries_reasons():
     assert any("splits" in r for r in record["reasons"])
 
 
+def test_run_walk_forwards_marks_delta_funding_lanes_untestable(monkeypatch, tmp_path):
+    from vnedge.data.parquet_store import ParquetStore
+
+    store = ParquetStore(tmp_path)
+    candles = pd.DataFrame({
+        "timestamp": [ts(i) for i in range(2000)],
+        "open": [100.0] * 2000,
+        "high": [101.0] * 2000,
+        "low": [99.0] * 2000,
+        "close": [100.0] * 2000,
+        "volume": [10.0] * 2000,
+    })
+    store.upsert_candles("delta_india", "BTC/USD:USD", "1h", candles)
+    monkeypatch.setattr(cr, "walk_forward", lambda *a, **k: make_result())
+
+    records = cr.run_walk_forwards(
+        store, cr.ResearchTarget("delta_india", "BTC/USD:USD", "1h")
+    )
+
+    by_strategy = {record["strategy"]: record for record in records}
+    assert by_strategy["funding_mean_reversion_v1"]["verdict"] == "UNTESTABLE"
+    assert by_strategy["funding_squeeze_continuation_v1"]["verdict"] == "UNTESTABLE"
+    assert by_strategy["trend_continuation_v1"]["exchange"] == "delta_india"
+    assert by_strategy["trend_continuation_v1"]["verdict"] in {"PASS", "REJECT"}
+
+
 def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
     records = [cr.wf_record("s", "BTC/USDT:USDT", make_result(), SPARSE_STRATEGY_GATES)]

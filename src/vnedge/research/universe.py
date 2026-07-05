@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
-DEFAULT_EXCHANGES = ("binanceusdm", "bybit", "delta")
+DEFAULT_EXCHANGES = ("binanceusdm", "bybit", "delta_india")
 DEFAULT_SYMBOLS = (
     "BTC/USDT:USDT",
     "ETH/USDT:USDT",
@@ -24,6 +24,7 @@ DEFAULT_SYMBOLS = (
 )
 DEFAULT_TIMEFRAME = "1h"
 DEFAULT_DERIVATIVE_QUOTES = ("USDT", "USDC", "USD")
+DELTA_INDIA_EXCHANGE = "delta_india"
 
 
 @dataclass(frozen=True, order=True)
@@ -75,6 +76,19 @@ def _env_suffix(exchange: str) -> str:
     return exchange.upper().replace("-", "_").replace("/", "_")
 
 
+def _delta_india_symbol(symbol: str) -> str:
+    if "/USDT" not in symbol:
+        return symbol
+    base = symbol.split("/", maxsplit=1)[0]
+    return f"{base}/USD:USD"
+
+
+def _symbols_for_exchange(exchange: str, symbols: tuple[str, ...]) -> tuple[str, ...]:
+    if exchange == DELTA_INDIA_EXCHANGE:
+        return tuple(_delta_india_symbol(symbol) for symbol in symbols)
+    return symbols
+
+
 def load_research_targets(
     *,
     exchanges: Iterable[str] | None = None,
@@ -84,7 +98,7 @@ def load_research_targets(
     """Build the target universe.
 
     Env controls:
-    - RESEARCH_EXCHANGES=binanceusdm,bybit,delta
+    - RESEARCH_EXCHANGES=binanceusdm,bybit,delta_india
     - RESEARCH_SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT
     - RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT
     - RESEARCH_TIMEFRAME=1h
@@ -100,7 +114,7 @@ def load_research_targets(
     for exchange in selected_exchanges:
         per_exchange_symbols = (
             _split_csv(os.environ.get(f"RESEARCH_SYMBOLS_{_env_suffix(exchange)}"))
-            or selected_symbols
+            or _symbols_for_exchange(exchange, selected_symbols)
         )
         for symbol in per_exchange_symbols:
             target = ResearchTarget(exchange=exchange, symbol=symbol,
