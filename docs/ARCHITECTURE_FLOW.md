@@ -108,6 +108,11 @@ sub-3ms colocated execution exists in V1.
 flowchart LR
     Trades["Streaming trades"] --> Micro["Microstructure state"]
     L2["L2 book builder"] --> Micro
+    AllMarkets["All active linear perp/future markets"] --> Scanner["Scalper scanners\n(liquidity / flow / PF / route cost)"]
+    Scanner --> Recorder["Tick/L2 recorder priorities"]
+    Recorder --> Miner["Edge miner\n(pressure / absorption / microprice)"]
+    Miner --> Scanner
+    Recorder --> L2
     Private["Private fill/order stream"] --> Truth["Exchange truth cache"]
     Micro --> Features["Incremental feature engine"]
     Features --> Scalper["Scalper strategy interface"]
@@ -130,17 +135,27 @@ Scalper-specific checks:
 - Order-rate and cancel-rate limits.
 - Private stream freshness.
 - Reduce-only exits not blocked by entry-quality checks.
+- Scanner approval is research-only; it never bypasses replay, paper, or the
+  gateway.
+- Maker/taker route is blocked unless replay PF and avg net bps clear the
+  breakeven floor.
 
 ## Research Agent Flow
 
 ```mermaid
 flowchart TB
     Targets["Research targets from env"] --> Refresh["Quality-gated refresh"]
+    MarketDiscovery["CCXT all-market discovery"] --> ScalpScan
     Refresh --> Store["Parquet store"]
     Store --> Lanes["Strategy lanes"]
     Lanes --> Gates["Promotion gates"]
     Gates --> Records["Exchange-aware research records"]
     Records --> Profitable["Profitable-pair ranking"]
+    TickData["Recorded tick/L2 days"] --> ScalpScan["Scalper scanner ranking"]
+    ScalpScan --> RecorderTargets["Recorder targets"]
+    TickData --> EdgeMiner["Microstructure edge miner"]
+    EdgeMiner --> ReplayCandidates
+    ScalpScan --> ReplayCandidates["Replay candidates"]
     Records --> Diagnosis["Reject diagnosis"]
     Diagnosis --> Agent["Bounded edge research agent"]
     Profitable --> Agent
@@ -148,6 +163,7 @@ flowchart TB
     Proposals --> Variants["Whitelisted auto-variant backtests"]
     Proposals --> CrossVenue["Cross-exchange validation prompts"]
     Proposals --> JudgmentPrompt["Pre-registered judgment prompt"]
+    ReplayCandidates --> JudgmentPrompt
     Variants --> Records
     JudgmentPrompt --> Human["Human approval"]
     Human --> Untouched["Untouched-data judgment"]
@@ -210,9 +226,10 @@ RESEARCH_TIMEFRAME=1h
 | Bounded edge research agents | Branch | Propose/rank/explain only. |
 | Control-room dashboard cockpit | Branch | Visual architecture/status surface. |
 | Scalper microstructure foundation | Branch | In-process features/risk/tick-stop foundation. |
+| Scalper scanners and edge miner | Branch | Discover all derivative pairs; rank lanes by liquidity, PF, route cost, fill evidence, sample sufficiency, and microstructure hypothesis expectancy. |
 | Live Binance testnet execution | Next | Required before any live mode. |
 | Private stream reconciliation | Next | Source of truth for orders/fills/positions. |
-| L2 order book builder | Next | Needed for serious scalper lanes. |
+| L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |
 | Tick-level stop monitoring | Next | Reduce-only exits through gateway. |
 | Delta/Bybit live adapters | Next | After one venue is proven. |
 | TimescaleDB historian | Deferred | Parquet is enough for V1. |
