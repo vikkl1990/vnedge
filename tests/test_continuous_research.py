@@ -61,16 +61,21 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
     records = [cr.wf_record("s", "BTC/USDT:USDT", make_result(), SPARSE_STRATEGY_GATES)]
     scalper = {"flow": ["tick_l2_recorder"], "flow_guards": {"can_trade": False}}
+    alpha = {"flow": ["mine_structural_hypotheses"], "flow_guards": {"can_trade": False}}
     cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper)
+               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
+               alpha_factory=alpha)
     cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper)
+               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
+               alpha_factory=alpha)
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["results"][0]["verdict"] == "PASS"
     assert latest["results"][0]["exchange"] == "binanceusdm"
     assert latest["universe"]["targets"] == 1
     assert latest["scalper_research"]["flow"] == ["tick_l2_recorder"]
     assert latest["scalper_research"]["flow_guards"]["can_trade"] is False
+    assert latest["alpha_factory"]["flow"] == ["mine_structural_hypotheses"]
+    assert latest["alpha_factory"]["flow_guards"]["can_trade"] is False
     assert latest["edge_agents"]["policy"]["can_trade"] is False
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()

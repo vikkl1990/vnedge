@@ -1,0 +1,125 @@
+"""Research-only structural alpha factory."""
+
+from datetime import UTC, datetime, timedelta
+
+from vnedge.research.alpha_factory import (
+    AlphaFactoryConfig,
+    mine_structural_alpha_events,
+    run_alpha_factory,
+)
+from vnedge.research.universe import ResearchTarget
+from vnedge.scalping.microstructure import TopOfBook, TradeTick
+
+
+SYM = "BTC/USDT:USDT"
+T0 = datetime(2026, 7, 5, tzinfo=UTC)
+
+
+def book(ms: int, mid: float, *, bid_size: float = 10.0,
+         ask_size: float = 2.0) -> tuple[int, str, TopOfBook]:
+    ts = T0 + timedelta(milliseconds=ms)
+    return (
+        ms,
+        "book",
+        TopOfBook(
+            symbol=SYM,
+            bid=mid - 0.01,
+            bid_size=bid_size,
+            ask=mid + 0.01,
+            ask_size=ask_size,
+            event_time=ts,
+        ),
+    )
+
+
+def trade(ms: int, price: float, side: str = "buy") -> tuple[int, str, TradeTick]:
+    ts = T0 + timedelta(milliseconds=ms)
+    return (
+        ms,
+        "trade",
+        TradeTick(symbol=SYM, price=price, quantity=1.0,
+                  taker_side=side, event_time=ts),
+    )
+
+
+def rising_pressure_events() -> list[tuple[int, str, object]]:
+    events: list[tuple[int, str, object]] = []
+    for i in range(30):
+        ms = i * 100
+        mid = 100.0 + i * 0.04
+        events.append(trade(ms, mid + 0.01, "buy"))
+        events.append(book(ms + 1, mid))
+    return events
+
+
+def flat_pressure_events() -> list[tuple[int, str, object]]:
+    events: list[tuple[int, str, object]] = []
+    for i in range(30):
+        ms = i * 100
+        events.append(trade(ms, 100.01, "buy"))
+        events.append(book(ms + 1, 100.0))
+    return events
+
+
+def config(**kwargs) -> AlphaFactoryConfig:
+    defaults = dict(
+        horizons_ms=(200,),
+        sample_every_ms=0,
+        min_samples=5,
+        max_spread_bps=3.0,
+        min_trade_count=1,
+        min_pressure_notional_usd=1.0,
+        maker_bps=0.0,
+        taker_bps=0.0,
+        slippage_bps=0.0,
+        safety_buffer_bps=0.0,
+    )
+    defaults.update(kwargs)
+    return AlphaFactoryConfig(**defaults)
+
+
+def test_structural_alpha_routes_to_replay_but_never_trades():
+    results = mine_structural_alpha_events(
+        rising_pressure_events(),
+        exchange="binanceusdm",
+        symbol=SYM,
+        day="20260705",
+        config=config(),
+    )
+
+    assert results
+    best = results[0]
+    assert best.state in {"REPLAY_REQUIRED_MAKER", "REPLAY_REQUIRED_TAKER"}
+    assert best.avg_net_bps and best.avg_net_bps > 0
+    assert best.route_decision.route in {"MAKER_ONLY", "TAKER_ALLOWED"}
+    assert best.can_trade is False
+    assert best.can_promote is False
+    assert best.requires_conservative_replay is True
+    assert best.requires_untouched_judgment is True
+
+
+def test_structural_alpha_below_cost_stays_blocked():
+    results = mine_structural_alpha_events(
+        flat_pressure_events(),
+        exchange="binanceusdm",
+        symbol=SYM,
+        day="20260705",
+        config=config(maker_bps=2.0, taker_bps=5.0,
+                      slippage_bps=1.0, safety_buffer_bps=1.0),
+    )
+
+    assert results
+    assert results[0].state == "BELOW_COST"
+    assert results[0].route_decision.route == "BLOCKED"
+    assert results[0].can_trade is False
+
+
+def test_run_alpha_factory_without_tape_requests_recording(tmp_path):
+    targets = (ResearchTarget("binanceusdm", SYM),)
+    payload = run_alpha_factory(tmp_path, targets, days=())
+
+    assert payload["hypotheses"] == []
+    assert payload["replay_queue"] == []
+    assert payload["flow_guards"]["raw_hypothesis_is_not_signal"] is True
+    assert payload["flow_guards"]["can_trade"] is False
+    assert payload["recorder_directives"][0]["reason"] == "no recorded tick/L2 day available"

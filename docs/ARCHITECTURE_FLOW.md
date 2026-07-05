@@ -56,8 +56,11 @@ flowchart TB
         Universe --> TickRecorder["Tick/L2 recorder"]
         TickRecorder --> TickStore["Recorded tick/L2 store"]
         TickStore --> EdgeMiner["Microstructure edge miner"]
+        TickStore --> AlphaFactory["Structural alpha factory"]
         EdgeMiner --> ScalpScanner["Scalper scanner ranking"]
+        AlphaFactory --> ReplayQueue["Replay queue"]
         ScalpScanner --> ReplayGauntlet["Conservative replay gauntlet"]
+        ReplayQueue --> ReplayGauntlet
         ReplayGauntlet --> ReplayCandidates["Replay candidates"]
 
         Diagnostics --> EdgeAgents["Bounded edge research agents"]
@@ -165,8 +168,11 @@ flowchart TB
     Records --> Profitable["Profitable-pair ranking"]
     RecorderTargets["Recorder targets"] --> TickData["Recorded tick/L2 days"]
     TickData --> EdgeMiner["Microstructure edge miner"]
+    TickData --> AlphaFactory["Structural alpha factory"]
     EdgeMiner --> ScalpScan["Scalper scanner ranking"]
+    AlphaFactory --> ReplayQueue["Replay queue"]
     ScalpScan --> Replay["Conservative replay gauntlet"]
+    ReplayQueue --> Replay
     Replay --> ReplayCandidates["Replay candidates"]
     Records --> Diagnosis["Reject diagnosis"]
     Diagnosis --> Agent["Bounded edge research agent"]
@@ -244,6 +250,7 @@ RESEARCH_TIMEFRAME=1h
 | Control-room dashboard cockpit | Branch | Visual architecture/status surface. |
 | Scalper microstructure foundation | Branch | In-process features/risk/tick-stop foundation. |
 | Scalper scanners and edge miner | Branch | Discover all derivative pairs; rank lanes by liquidity, PF, route cost, fill evidence, sample sufficiency, and microstructure hypothesis expectancy. |
+| Structural alpha factory | Branch | Mines forced-flow, absorption, microprice, thin-book, and volatility-impulse hypotheses; queues replay only. |
 | Live Binance testnet execution | Next | Required before any live mode. |
 | Private stream reconciliation | Next | Source of truth for orders/fills/positions. |
 | L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |

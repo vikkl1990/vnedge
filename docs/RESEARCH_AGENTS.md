@@ -33,6 +33,9 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
 - `edge_agents.proposals`: exploratory follow-ups, including pre-registered
   judgment prompts, cross-exchange validation prompts, and whitelisted variant
   backtests.
+- `scalper_research`: tick/L2 replay diagnostics and recorder targets.
+- `alpha_factory`: structural alpha hypotheses and replay queue. See
+  `docs/ALPHA_FACTORY.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
   `can_promote=false`, and untouched-data judgment remains required.
 
@@ -92,6 +95,19 @@ It tests pressure continuation, absorption reversal, and microprice
 continuation across forward horizons. Results are still research-only and use
 the same route gate: below PF/breakeven means `BLOCKED`.
 
+## Alpha Factory
+
+Use the alpha factory to mine structural hypotheses from recorded tick/L2 tape:
+
+```bash
+.venv/bin/python -m vnedge.research.alpha_factory --days YYYYMMDD --limit 100
+```
+
+It looks for forced-flow continuation, absorption reversal, microprice
+dislocation, liquidity-vacuum continuation, and volatility impulse families.
+Any positive result is a replay queue item, not a signal. Conservative replay,
+untouched judgment, and human paper/shadow approval remain mandatory.
+
 ## Guardrails
 
 - A rolling PASS is only a candidate signal.
@@ -103,3 +119,6 @@ the same route gate: below PF/breakeven means `BLOCKED`.
   signals into execution.
 - The edge miner creates hypotheses only; no mined edge can trade without
   untouched replay, paper, shadow, and gateway approval.
+- The alpha factory creates structural hypotheses only; no hypothesis can trade
+  without conservative replay, untouched judgment, paper, shadow, and gateway
+  approval.
