@@ -2,6 +2,7 @@
 
 from vnedge.data.ccxt_client import create_ccxt_async_exchange, resolve_ccxt_exchange_id
 from vnedge.exchange.live_feed import (
+    DeltaWsFeed,
     LiveMarketFeed,
     RestPollingMarketFeed,
     create_market_feed,
@@ -34,13 +35,18 @@ async def test_feed_factory_routes_validated_websocket_venues():
         await bybit.stop()
 
 
-async def test_feed_factory_routes_delta_to_rest_polling():
+async def test_feed_factory_routes_delta_to_native_websocket():
+    # Delta has no CCXT Pro class, but it does have a native public websocket.
     assert supports_ccxt_pro_feed("delta_india") is False
 
     feed = create_market_feed("delta_india", symbol="BTC/USD:USD")
     try:
+        assert isinstance(feed, DeltaWsFeed)
+        # DeltaWsFeed keeps the RestPollingMarketFeed surface (candles via REST).
         assert isinstance(feed, RestPollingMarketFeed)
         assert feed.exchange_id == "delta_india"
+        assert feed._native_symbol == "BTCUSD"
+        assert "native ws" in feed.feed_mode
     finally:
         await feed.stop()
 

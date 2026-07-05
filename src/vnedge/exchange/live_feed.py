@@ -324,6 +324,74 @@ class RestPollingMarketFeed:
             await asyncio.sleep(self.funding_refresh_seconds)
 
 
+class DeltaWsFeed(RestPollingMarketFeed):
+    """Delta India feed: REST closed candles + NATIVE websocket quotes/funding.
+
+    Delta has no CCXT Pro class, so candles still come from REST (closed 1h
+    bars, same discipline as the polling feed). But quotes and funding no
+    longer poll every couple of seconds — they are pushed from Delta's native
+    public websocket (``DeltaPublicWsClient``): top-of-book from ``l2_orderbook``
+    and funding from the ``funding_rate`` channel. Staleness mirrors the last
+    websocket event, so the gateway's freshness check reflects the real stream.
+    """
+
+    def __init__(
+        self,
+        exchange_id: str,
+        *,
+        symbol: str,
+        timeframe: str = "1m",
+        slippage_est_bps: float = 3.0,
+        candle_poll_seconds: float = _DEFAULT_REST_CANDLE_POLL_SECONDS,
+    ) -> None:
+        super().__init__(
+            exchange_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            slippage_est_bps=slippage_est_bps,
+            candle_poll_seconds=candle_poll_seconds,
+        )
+        from vnedge.exchange.delta_ws import DeltaPublicWsClient, delta_native_symbol
+
+        self.feed_mode = "delta native ws + rest candles"
+        self._native_symbol = delta_native_symbol(symbol)
+        self._ws = DeltaPublicWsClient([self._native_symbol])
+
+    async def start(self) -> None:
+        await self._ws.start()
+        self._tasks = [
+            asyncio.create_task(self._poll_candles(), name="delta-feed-candles"),
+            asyncio.create_task(self._sync_ws_state(), name="delta-feed-ws-sync"),
+        ]
+
+    async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self._ws.stop()
+        await self._ex.close()
+
+    async def _sync_ws_state(self) -> None:
+        """Mirror native websocket state into the polling-feed surface."""
+        while True:
+            try:
+                quote = self._ws.quote(self._native_symbol)
+                if quote is not None:
+                    self.quote = quote
+                fr = self._ws.funding_rate.get(self._native_symbol)
+                if fr is not None:
+                    self.funding_rate = fr
+                # honest staleness/health: track the real stream, not this loop
+                if self._ws.last_event_at is not None:
+                    self.last_event_at = self._ws.last_event_at
+                    self.healthy = self._ws.healthy
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_error("ws-sync", exc)
+            await asyncio.sleep(0.5)
+
+
 def supports_ccxt_pro_feed(exchange_id: str) -> bool:
     """Whether this CCXT id has the websocket methods our live feed needs."""
     try:
@@ -331,6 +399,9 @@ def supports_ccxt_pro_feed(exchange_id: str) -> bool:
     except Exception:  # pragma: no cover - import failure is environment-specific
         return False
     return exchange_id in _VALIDATED_CCXT_PRO_FEEDS and hasattr(ccxtpro, exchange_id)
+
+
+_DELTA_NATIVE_WS_IDS = {"delta_india", "delta", "deltaindia"}
 
 
 def create_market_feed(
@@ -341,4 +412,7 @@ def create_market_feed(
 ) -> LiveMarketFeed | RestPollingMarketFeed:
     if supports_ccxt_pro_feed(exchange_id):
         return LiveMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+    if exchange_id in _DELTA_NATIVE_WS_IDS:
+        # Delta has no CCXT Pro class but does have a native public websocket.
+        return DeltaWsFeed(exchange_id, symbol=symbol, timeframe=timeframe)
     return RestPollingMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
