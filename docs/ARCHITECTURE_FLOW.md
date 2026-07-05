@@ -250,6 +250,7 @@ RESEARCH_TIMEFRAME=1h
 | Candle/funding/OI ingestion | Current | Quality-gated public data ingestion. |
 | Backtester and walk-forward gates | Current | OOS-only judgment, sparse/offensive gates. |
 | Strategy registry and current lanes | Current | Funding MR, trend, offensive lanes. |
+| AlphaStack confluence lane | Branch | Causal SMC/confluence features for walk-forward only; no auto-promotion. |
 | Order manager, idempotency, WAL | Current | Timeout and reconciliation semantics exist. |
 | Paper/shadow runner | Current | Uses same gateway/order manager path. |
 | Dashboard read-only snapshot | Current | No control routes. |

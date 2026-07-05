@@ -44,6 +44,7 @@ from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
+from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
@@ -200,6 +201,8 @@ def _build_single_strategy(
         return FundingSqueezeContinuation(seed_funding, **params)
     if strategy_id == "scalper_1m_v1":
         return Scalper1m(seed_funding, **params)
+    if strategy_id == "alpha_stack_confluence_v1":
+        return AlphaStackConfluence(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 

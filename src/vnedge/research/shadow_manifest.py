@@ -27,6 +27,7 @@ RUNTIME_LOCKED_PARAMS: dict[str, dict] = {
     },
     "trend_continuation_v1": {},              # default config (judged on DOGE/XRP)
     "volatility_expansion_breakout_v1": {},   # default config (DOGE-judged)
+    "alpha_stack_confluence_v1": {},          # research-only confluence default
 }
 
 SHADOW_MANIFEST = "shadow_lanes.json"
