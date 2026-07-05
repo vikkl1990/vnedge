@@ -228,6 +228,20 @@ def test_build_strategy_selects_trend_continuation():
     assert strat.strategy_id == "trend_continuation_v1"
 
 
+def test_build_strategy_selects_quant_signal_pack():
+    import pandas as pd
+
+    from vnedge.runtime.multi_lane import _build_strategy
+    from vnedge.strategy.quant_signal_pack import QuantSignalPack
+
+    spec = LaneSpec(lane_id="x", exchange="bybit", symbol="SOL/USDT:USDT",
+                    strategy_id="quant_signal_pack_v1", strategy_params={})
+    strat = _build_strategy(
+        spec, pd.DataFrame(columns=["timestamp", "funding_rate"]), feed=None)
+    assert isinstance(strat, QuantSignalPack)
+    assert strat.strategy_id == "quant_signal_pack_v1"
+
+
 def test_build_strategy_selects_signal_arbiter_composite():
     import pandas as pd
 

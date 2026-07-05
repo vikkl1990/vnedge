@@ -71,6 +71,7 @@ from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
+from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
@@ -300,6 +301,11 @@ def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list
          720, OFFENSIVE_GATES, "offensive", True),
         ("alpha_stack_confluence_v1",
          lambda **p: AlphaStackConfluence(funding=f, **p),
+         param_grid(structure_window=[24, 48], min_score=[5.0, 6.0],
+                    take_profit_r=[1.5, 2.0]),
+         720, OFFENSIVE_GATES, "offensive", False),
+        ("quant_signal_pack_v1",
+         lambda **p: QuantSignalPack(funding=f, **p),
          param_grid(structure_window=[24, 48], min_score=[5.0, 6.0],
                     take_profit_r=[1.5, 2.0]),
          720, OFFENSIVE_GATES, "offensive", False),

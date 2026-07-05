@@ -54,6 +54,10 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
   tags when those candle datasets are available.
 - `alpha_stack_confluence_v1`: causal candle-structure confluence lane. See
   `docs/ALPHA_STACK.md`.
+- `quant_signal_pack_v1`: broader Lux/Willy-style concept pack covering
+  structure, sweeps, FVG/order-block retests, squeeze release, VWAP reclaim,
+  multi-horizon bias, displacement, and volume impulse. See
+  `docs/QUANT_SIGNAL_PACK.md`.
 - `scalper_parameter_registry`: frozen TF/horizon, family, fee, route, and
   exit policy contract. See `docs/SCALPER_PARAMETERS.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
