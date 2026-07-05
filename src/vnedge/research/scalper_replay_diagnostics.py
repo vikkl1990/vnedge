@@ -1,0 +1,304 @@
+"""Scalper replay diagnostics.
+
+This is the honest answer to "why are no scalp signals firing?"  It does not
+promote, trade, or tune live parameters.  It replays recorded tick/book data
+through the conservative maker-in/taker-out replay engine and classifies the
+blocker: no data, no quotes, no fills, negative edge after cost, under-sampled,
+or candidate evidence.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from vnedge.scalping.microstructure import TopOfBook, TradeTick
+from vnedge.scalping.replay_backtester import (
+    ImbalanceScalper,
+    ReplayFees,
+    ReplayResult,
+    TickReplayBacktester,
+    load_tick_events,
+)
+
+
+def _quantile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    vals = sorted(values)
+    pos = (len(vals) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    frac = pos - lo
+    return vals[lo] * (1 - frac) + vals[hi] * frac
+
+
+@dataclass(frozen=True)
+class ReplaySweepConfig:
+    min_imbalances: tuple[float, ...] = (0.10, 0.20, 0.35, 0.50, 0.65)
+    max_spread_bps: tuple[float, ...] = (1.5, 3.0, 6.0)
+    ttl_ms: int = 3_000
+    stop_bps: float = 6.0
+    target_bps: float = 8.0
+    notional_usd: float = 100.0
+    maker_bps: float = 2.0
+    taker_bps: float = 5.0
+    slippage_bps: float = 1.0
+    min_fills_for_candidate: int = 20
+    min_span_seconds: float = 3_600.0
+
+
+@dataclass(frozen=True)
+class TickSampleStats:
+    events: int
+    book_events: int
+    trade_events: int
+    span_seconds: float
+    spread_bps_p50: float | None
+    spread_bps_p95: float | None
+    abs_imbalance_p90: float | None
+    taker_buy_ratio: float | None
+
+
+@dataclass(frozen=True)
+class ScalperReplayRow:
+    min_imbalance: float
+    max_spread_bps: float
+    quotes: int
+    filled: int
+    missed: int
+    open_at_end: int
+    fill_rate_pct: float
+    net_usd: float
+    avg_net_bps: float | None
+    avg_adverse_bps: float | None
+    verdict: str
+
+
+@dataclass(frozen=True)
+class ScalperReplayDiagnostics:
+    exchange: str
+    symbol: str
+    day: str
+    stats: TickSampleStats
+    rows: tuple[ScalperReplayRow, ...]
+    primary_blocker: str
+    action: str
+
+    @property
+    def best_row(self) -> ScalperReplayRow | None:
+        if not self.rows:
+            return None
+        return max(self.rows, key=lambda r: (r.net_usd, r.filled, r.quotes))
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["best_row"] = asdict(self.best_row) if self.best_row else None
+        return d
+
+
+def _stats(events: list[tuple[int, str, object]]) -> TickSampleStats:
+    books = [obj for _ts, kind, obj in events if kind == "book" and isinstance(obj, TopOfBook)]
+    trades = [
+        obj for _ts, kind, obj in events
+        if kind == "trade" and isinstance(obj, TradeTick)
+    ]
+    timestamps = [ts for ts, _kind, _obj in events]
+    span = (max(timestamps) - min(timestamps)) / 1000.0 if len(timestamps) >= 2 else 0.0
+    total_qty = sum(t.quantity for t in trades)
+    buy_qty = sum(t.quantity for t in trades if t.taker_side == "buy")
+    spreads = [b.spread_bps for b in books]
+    imbalances = [abs(b.book_imbalance) for b in books]
+    return TickSampleStats(
+        events=len(events),
+        book_events=len(books),
+        trade_events=len(trades),
+        span_seconds=span,
+        spread_bps_p50=_quantile(spreads, 0.50),
+        spread_bps_p95=_quantile(spreads, 0.95),
+        abs_imbalance_p90=_quantile(imbalances, 0.90),
+        taker_buy_ratio=(buy_qty / total_qty) if total_qty > 0 else None,
+    )
+
+
+def _row_verdict(result: ReplayResult, config: ReplaySweepConfig) -> str:
+    if result.quotes_placed == 0:
+        return "NO_QUOTES"
+    if result.filled == 0:
+        return "NO_FILLS"
+    if result.net_usd <= 0:
+        return "NEGATIVE_EDGE"
+    if result.filled < config.min_fills_for_candidate:
+        return "UNDER_SAMPLED_POSITIVE"
+    return "CANDIDATE"
+
+
+def _row(
+    min_imbalance: float,
+    max_spread_bps: float,
+    result: ReplayResult,
+    config: ReplaySweepConfig,
+) -> ScalperReplayRow:
+    avg_net = (
+        sum(t.net_bps for t in result.trades) / len(result.trades)
+        if result.trades else None
+    )
+    avg_adverse = (
+        sum(t.adverse_bps for t in result.trades) / len(result.trades)
+        if result.trades else None
+    )
+    return ScalperReplayRow(
+        min_imbalance=min_imbalance,
+        max_spread_bps=max_spread_bps,
+        quotes=result.quotes_placed,
+        filled=result.filled,
+        missed=result.missed_fills,
+        open_at_end=result.open_quotes_at_end,
+        fill_rate_pct=result.fill_rate * 100.0,
+        net_usd=result.net_usd,
+        avg_net_bps=avg_net,
+        avg_adverse_bps=avg_adverse,
+        verdict=_row_verdict(result, config),
+    )
+
+
+def diagnose_events(
+    events: list[tuple[int, str, object]],
+    *,
+    exchange: str,
+    symbol: str,
+    day: str,
+    config: ReplaySweepConfig = ReplaySweepConfig(),
+) -> ScalperReplayDiagnostics:
+    stats = _stats(events)
+    if stats.book_events == 0 or stats.trade_events == 0:
+        return ScalperReplayDiagnostics(
+            exchange=exchange,
+            symbol=symbol,
+            day=day,
+            stats=stats,
+            rows=(),
+            primary_blocker="NO_TICK_DATA",
+            action="start/repair the tick recorder; scalper research cannot run on candles",
+        )
+
+    fees = ReplayFees(
+        maker_bps=config.maker_bps,
+        taker_bps=config.taker_bps,
+        slippage_bps=config.slippage_bps,
+    )
+    runner = TickReplayBacktester(fees, notional_usd=config.notional_usd)
+    rows: list[ScalperReplayRow] = []
+    for imb in config.min_imbalances:
+        for spread in config.max_spread_bps:
+            scalper = ImbalanceScalper(
+                min_imbalance=imb,
+                max_spread_bps=spread,
+                ttl_ms=config.ttl_ms,
+                stop_bps=config.stop_bps,
+                target_bps=config.target_bps,
+            )
+            result = runner.run(events, scalper)
+            rows.append(_row(imb, spread, result, config))
+
+    if stats.span_seconds < config.min_span_seconds:
+        blocker = "UNDER_SAMPLED_TICKS"
+        action = "keep recording; do not infer edge from a short tick window"
+    elif all(r.quotes == 0 for r in rows):
+        blocker = "NO_QUOTES"
+        action = "book/spread filters never qualified; inspect data quality before loosening"
+    elif all(r.filled == 0 for r in rows):
+        blocker = "NO_FILLS"
+        action = "passive quotes are not getting conservative through-fills; do not trade"
+    elif any(r.verdict == "CANDIDATE" for r in rows):
+        blocker = "CANDIDATE_FOUND"
+        action = "pre-register an untouched replay window before any shadow/paper exposure"
+    elif any(r.verdict == "UNDER_SAMPLED_POSITIVE" for r in rows):
+        blocker = "UNDER_SAMPLED_POSITIVE"
+        action = "keep recording; positive sample is too thin for promotion"
+    else:
+        blocker = "NEGATIVE_EDGE_AFTER_COST"
+        action = "do not force signals; current scalp shape does not clear maker/taker costs"
+
+    return ScalperReplayDiagnostics(
+        exchange=exchange,
+        symbol=symbol,
+        day=day,
+        stats=stats,
+        rows=tuple(rows),
+        primary_blocker=blocker,
+        action=action,
+    )
+
+
+def diagnose_recorded_day(
+    data_root: Path | str,
+    exchange: str,
+    symbol: str,
+    day: str,
+    config: ReplaySweepConfig = ReplaySweepConfig(),
+) -> ScalperReplayDiagnostics:
+    events = load_tick_events(Path(data_root), exchange, symbol, day)
+    return diagnose_events(events, exchange=exchange, symbol=symbol, day=day, config=config)
+
+
+def _fmt(v: float | None, digits: int = 2) -> str:
+    return "--" if v is None else f"{v:.{digits}f}"
+
+
+def render_text_report(report: ScalperReplayDiagnostics) -> str:
+    s = report.stats
+    lines = [
+        f"scalper replay diagnostics: {report.exchange} {report.symbol} {report.day}",
+        (
+            f"events={s.events} book={s.book_events} trades={s.trade_events} "
+            f"span={s.span_seconds / 60:.1f}m spread_p50={_fmt(s.spread_bps_p50, 3)}bps "
+            f"spread_p95={_fmt(s.spread_bps_p95, 3)}bps "
+            f"|imb|_p90={_fmt(s.abs_imbalance_p90, 3)} "
+            f"taker_buy={_fmt(s.taker_buy_ratio, 3)}"
+        ),
+        f"primary_blocker={report.primary_blocker}",
+        f"action={report.action}",
+    ]
+    if report.rows:
+        lines.append("")
+        lines.append("imb  spread  quotes fills fill%    net$ avg_net_bps avg_adv_bps verdict")
+        for r in sorted(report.rows, key=lambda x: (x.min_imbalance, x.max_spread_bps)):
+            lines.append(
+                f"{r.min_imbalance:>3.2f} {r.max_spread_bps:>6.1f} "
+                f"{r.quotes:>7} {r.filled:>5} {r.fill_rate_pct:>5.1f} "
+                f"{r.net_usd:>7.3f} {_fmt(r.avg_net_bps):>11} "
+                f"{_fmt(r.avg_adverse_bps):>11} {r.verdict}"
+            )
+    best = report.best_row
+    if best is not None:
+        lines.append("")
+        lines.append(
+            "best="
+            f"imb>={best.min_imbalance:.2f} spread<={best.max_spread_bps:.1f} "
+            f"quotes={best.quotes} fills={best.filled} net=${best.net_usd:+.3f} "
+            f"verdict={best.verdict}"
+        )
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="diagnose recorded tick replay scalper blockers")
+    p.add_argument("--data-root", default="data")
+    p.add_argument("--exchange", default="binanceusdm")
+    p.add_argument("--symbol", default="BTC/USDT:USDT")
+    p.add_argument("--day", required=True, help="UTC day in YYYYMMDD")
+    p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    args = p.parse_args(argv)
+    report = diagnose_recorded_day(args.data_root, args.exchange, args.symbol, args.day)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(render_text_report(report))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

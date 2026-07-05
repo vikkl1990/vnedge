@@ -67,3 +67,34 @@ Rules are deliberately strict:
 This is not a promotion gate yet. It is the proof engine we run once the tick
 recorder has enough real data. The principle stays the same: no live or paper
 scalper exposure until the strategy clears costs on untouched replay data.
+
+## Step 3 diagnostic command (2026-07-05): explain signal silence
+
+Use the diagnostic wrapper when the scalper appears quiet:
+
+```bash
+python -m vnedge.research.scalper_replay_diagnostics --day YYYYMMDD
+```
+
+It runs a small replay sweep across imbalance/spread thresholds and labels the
+primary blocker:
+
+- `NO_TICK_DATA` - no usable trade/book recorder files.
+- `NO_QUOTES` - book/spread filters never produce passive quotes.
+- `NO_FILLS` - quotes are placed, but conservative through-fill rules do not
+  fill them.
+- `NEGATIVE_EDGE_AFTER_COST` - fills happen, but maker/taker/slippage costs
+  beat the scalp.
+- `UNDER_SAMPLED_TICKS` / `UNDER_SAMPLED_POSITIVE` - keep recording; the sample
+  is too thin to promote or reject decisively.
+- `CANDIDATE_FOUND` - still research only; pre-register an untouched replay
+  window before shadow/paper exposure.
+
+First local BTC sample (`20260704`, Binance USD-M) was only 16 minutes:
+19,030 usable events, 9,424 book updates, 9,606 trades. The replay did place
+quotes, but every sweep row remained negative after costs; best row was
+83 quotes / 2 fills / -$0.112 on $100 notional. Primary blocker is therefore
+`UNDER_SAMPLED_TICKS`, with a negative directional read from the rows we have.
+
+Action: keep recording tick/L2 data. Do not loosen filters or route live/paper
+signals just to create activity.
