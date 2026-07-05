@@ -50,7 +50,11 @@ from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
-from vnedge.research.shadow_manifest import generate_shadow_manifest, write_shadow_manifest
+from vnedge.research.shadow_manifest import (
+    generate_shadow_manifest,
+    load_shadow_manifest,
+    write_shadow_manifest,
+)
 from vnedge.research.scalper_edge_miner import mine_recorded_days
 from vnedge.research.scalper_scanners import (
     scan_recorded_days,
@@ -616,6 +620,7 @@ def publish(records: list[dict], started: float,
         "scalper_research": scalper_research or {},
         "alpha_factory": alpha_factory or {},
         "scalper_parameter_registry": scalper_parameter_registry or {},
+        "shadow_lanes": load_shadow_manifest(OUT_DIR),
         "edge_agents": agent_plan or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
