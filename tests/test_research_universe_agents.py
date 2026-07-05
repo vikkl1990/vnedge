@@ -6,6 +6,7 @@ from vnedge.research.universe import (
     load_research_targets,
     profitable_pairs,
     summarize_universe,
+    targets_from_markets,
 )
 
 
@@ -52,6 +53,64 @@ def test_load_research_targets_allows_per_exchange_symbol_overrides(monkeypatch)
         "binanceusdm": 2,
         "bybit": 1,
     }
+
+
+def test_targets_from_markets_discovers_active_linear_derivatives_only():
+    markets = {
+        "BTC/USDT:USDT": {
+            "symbol": "BTC/USDT:USDT",
+            "active": True,
+            "swap": True,
+            "linear": True,
+            "quote": "USDT",
+            "settle": "USDT",
+        },
+        "ETH/USDC:USDC": {
+            "symbol": "ETH/USDC:USDC",
+            "active": True,
+            "future": True,
+            "linear": True,
+            "quote": "USDC",
+            "settle": "USDC",
+        },
+        "DOGE/USDT": {
+            "symbol": "DOGE/USDT",
+            "active": True,
+            "spot": True,
+            "quote": "USDT",
+        },
+        "BTC/USD:BTC": {
+            "symbol": "BTC/USD:BTC",
+            "active": True,
+            "swap": True,
+            "linear": False,
+            "quote": "USD",
+            "settle": "BTC",
+        },
+        "SOL/USDT:USDT-260626-C": {
+            "symbol": "SOL/USDT:USDT-260626-C",
+            "active": True,
+            "option": True,
+            "quote": "USDT",
+        },
+        "XRP/USDT:USDT": {
+            "symbol": "XRP/USDT:USDT",
+            "active": False,
+            "swap": True,
+            "linear": True,
+            "quote": "USDT",
+        },
+    }
+
+    targets = targets_from_markets("bybit", markets, quote_assets=("USDT", "USDC"))
+
+    assert targets == (
+        ResearchTarget("bybit", "BTC/USDT:USDT", "1h"),
+        ResearchTarget("bybit", "ETH/USDC:USDC", "1h"),
+    )
+    assert targets_from_markets("bybit", markets, max_symbols=1) == (
+        ResearchTarget("bybit", "BTC/USDT:USDT", "1h"),
+    )
 
 
 def test_profitable_pairs_keeps_best_lane_per_exchange_symbol():
