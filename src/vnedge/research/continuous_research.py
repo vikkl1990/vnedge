@@ -468,6 +468,17 @@ def _alpha_factory_enabled() -> bool:
     }
 
 
+def _load_l2_latest() -> dict:
+    """Last output of the decoupled l2-research-loop, or {} if absent/unreadable."""
+    path = OUT_DIR / "l2_latest.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -644,6 +655,12 @@ async def run_cycle() -> list[dict]:
                     "can_promote": False,
                 },
             }
+    # When the inline L2 passes are disabled (default), fold in the decoupled
+    # l2-research-loop's last output so the dashboard still shows L2 discovery
+    # without the candle cycle ever scanning the tape.
+    l2 = _load_l2_latest()
+    scalper_research = scalper_research or l2.get("scalper_research", {})
+    alpha_factory = alpha_factory or l2.get("alpha_factory", {})
     publish(
         records, started, drift, _load_auto_state(),
         agent_plan={

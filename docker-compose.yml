@@ -46,12 +46,31 @@ services:
       # would fail the quality gate; binance + bybit are both validated.
       RESEARCH_EXCHANGES: "binanceusdm,bybit"
       RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
-      # L2-mining passes (scalper discovery + alpha factory) each re-scan the
-      # recorded tick/L2 tape per cycle. Kept OFF here so the hourly candle loop
-      # stays fast; they run on-demand via CLI and will move to their own slower
-      # cadence (decouple follow-up). Flip to "1" to re-enable in this loop.
+      # L2-mining passes run in the decoupled l2-research-loop below, NOT here,
+      # so this hourly candle loop never scans the tick/L2 tape. It folds the
+      # l2-research-loop's l2_latest.json into its dashboard latest.json. Flip
+      # either to "1" to re-enable the pass inline (it then bloats this cycle).
       SCALPER_RESEARCH_ENABLED: "${SCALPER_RESEARCH_ENABLED:-0}"
       ALPHA_FACTORY_ENABLED: "${ALPHA_FACTORY_ENABLED:-0}"
+    volumes:
+      - ./data:/app/data
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Decoupled tick/L2 discovery — scalper discovery + structural alpha factory
+  # on their OWN slow cadence (default 6h) so they never bloat the hourly candle
+  # loop. Writes l2_latest.json; research-loop folds it into latest.json.
+  # Research-only: can_trade=false, can_promote=false on every output.
+  l2-research-loop:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.l2_research_loop"]
+    environment:
+      L2_RESEARCH_INTERVAL_SECONDS: "${L2_RESEARCH_INTERVAL_SECONDS:-21600}"
+      RESEARCH_EXCHANGES: "binanceusdm,bybit"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
     volumes:
       - ./data:/app/data
       - ./research/live_research:/app/research/live_research
