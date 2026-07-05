@@ -60,8 +60,9 @@ services:
     build: .
     restart: unless-stopped
     command: ["python", "-m", "vnedge.exchange.tick_recorder",
-              "--symbols", "BTC/USDT:USDT", "--data-root", "/app/data",
-              "--levels", "10"]
+              "--symbols",
+              "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT",
+              "--data-root", "/app/data", "--levels", "10"]
     volumes:
       - ./data:/app/data
     logging:
