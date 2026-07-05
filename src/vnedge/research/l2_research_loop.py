@@ -1,14 +1,21 @@
-"""Decoupled tick/L2 research loop.
+"""Decoupled tick/L2 research loop — restart-safe, per-symbol checkpoints.
 
 Runs the L2-mining discovery passes — scalper discovery and the structural
 alpha factory — on their own slower cadence (default 6h) so they never bloat
-the hourly candle research loop. Writes research/live_research/l2_latest.json,
-which the candle loop folds into its dashboard latest.json.
+the hourly candle research loop.
+
+Restart safety: a pass is expensive (mines the recorded tape per symbol), so it
+is checkpointed to l2_progress.json AFTER EACH SYMBOL. On restart the loop
+resumes from that file, skipping symbols already done for the same days — no
+mining work is lost. Consumers read l2_latest.json, which only ever holds the
+last COMPLETE pass (promoted from the progress file), so they never see a
+partial regression. The candle loop folds l2_latest.json into its dashboard
+latest.json.
 
 Research-only, same hard guards as the inline passes: every output carries
 can_trade=false / can_promote=false; raw hypotheses are not signals;
-conservative replay + untouched-data judgment + human approval remain mandatory
-before anything is promoted. This loop discovers; it never trades or promotes.
+conservative replay + untouched-data judgment + human approval remain mandatory.
+This loop discovers; it never trades or promotes.
 """
 
 from __future__ import annotations
@@ -33,54 +40,118 @@ from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTR
 logger = logging.getLogger(__name__)
 
 L2_LATEST = "l2_latest.json"
+L2_PROGRESS = "l2_progress.json"
+
+# keys constant across symbols (kept from the first) vs list results
+# (accumulated across symbols) when merging per-symbol payloads.
+_CONST_KEYS = frozenset({
+    "policy", "flow", "flow_guards", "days", "targets",
+    "generated_at", "note", "error", "source",
+})
 
 
-def run_once(data_root: str | Path = "data") -> dict:
-    """One decoupled L2-mining pass: scalper discovery + structural alpha."""
-    targets = load_research_targets()
-    root = Path(data_root)
-    days = _scalper_research_days(root, targets)
-    scalper = run_scalper_research(data_root, targets, days=days)
-    alpha = run_alpha_factory(
-        data_root, targets, days=days,
-        max_rows=_env_int("ALPHA_FACTORY_MAX_ROWS", 50),
-    )
-    return {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "days": list(days),
-        "scalper_parameter_registry": DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict(),
-        "scalper_research": scalper,
-        "alpha_factory": alpha,
-    }
+def _read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_json(payload: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)   # atomic — readers only ever see a whole file
+
+
+def load_l2_latest(out_dir: Path | None = None) -> dict:
+    return _read_json((out_dir or OUT_DIR) / L2_LATEST)
 
 
 def publish_l2(payload: dict, out_dir: Path | None = None) -> None:
-    out = out_dir or OUT_DIR
-    out.mkdir(parents=True, exist_ok=True)
-    tmp = out / (L2_LATEST + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2))
-    tmp.replace(out / L2_LATEST)   # atomic; the candle loop only ever reads whole files
+    _write_json(payload, (out_dir or OUT_DIR) / L2_LATEST)
+
+
+def _blank_pass(days: tuple[str, ...], total: int) -> dict:
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "days": list(days),
+        "complete": False,
+        "progress": {"completed_targets": [], "total": total},
+        "scalper_parameter_registry": DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict(),
+        "scalper_research": {},
+        "alpha_factory": {},
+    }
+
+
+def _merge_stage(acc: dict, part: dict) -> None:
+    """Accumulate a per-symbol stage payload: extend list results, keep the
+    constant/scalar keys from the first symbol."""
+    for k, v in part.items():
+        if k in _CONST_KEYS:
+            acc.setdefault(k, v)
+        elif isinstance(v, list):
+            acc.setdefault(k, []).extend(v)
+        else:
+            acc.setdefault(k, v)
+
+
+def run_incremental(data_root: str | Path = "data", out_dir: Path | None = None) -> dict:
+    """One L2-mining pass, checkpointed per symbol and resumable across restarts."""
+    out_dir = out_dir or OUT_DIR
+    targets = load_research_targets()
+    root = Path(data_root)
+    days = _scalper_research_days(root, targets)
+    max_rows = _env_int("ALPHA_FACTORY_MAX_ROWS", 50)
+
+    prev = _read_json(out_dir / L2_PROGRESS)
+    if prev.get("days") == list(days) and not prev.get("complete", True):
+        payload = prev                     # resume the interrupted pass
+        payload["progress"]["total"] = len(targets)
+    else:
+        payload = _blank_pass(days, len(targets))
+    done = set(payload["progress"]["completed_targets"])
+
+    for target in targets:
+        if target.label in done:
+            continue                       # already mined this symbol this pass
+        one = (target,)
+        _merge_stage(payload["scalper_research"],
+                     run_scalper_research(data_root, one, days=days))
+        _merge_stage(payload["alpha_factory"],
+                     run_alpha_factory(data_root, one, days=days, max_rows=max_rows))
+        payload["progress"]["completed_targets"].append(target.label)
+        payload["generated_at"] = datetime.now(UTC).isoformat()
+        _write_json(payload, out_dir / L2_PROGRESS)   # CHECKPOINT after each symbol
+
+    payload["complete"] = True
+    _write_json(payload, out_dir / L2_PROGRESS)
+    publish_l2(payload, out_dir)           # promote the complete pass for consumers
+    return payload
 
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     interval = _env_int("L2_RESEARCH_INTERVAL_SECONDS", 21600)  # 6h
-    logger.info("l2 research loop: every %ds -> %s", interval, OUT_DIR / L2_LATEST)
+    logger.info("l2 research loop: every %ds -> %s (resumable via %s)",
+                interval, OUT_DIR / L2_LATEST, L2_PROGRESS)
     while True:
         started = time.time()
         try:
-            payload = run_once("data")
-            publish_l2(payload)
-            sr = payload["scalper_research"]
-            af = payload["alpha_factory"]
+            payload = run_incremental("data")
+            sr, af = payload["scalper_research"], payload["alpha_factory"]
             logger.info(
-                "l2 research: %d edge hyps / %d scanned / %d replay-candidates | "
-                "%d alpha hyps | %.0fs",
+                "l2 research: %d/%d symbols | %d edge / %d scanned / %d replay-cand "
+                "| %d alpha hyps | %.0fs",
+                len(payload["progress"]["completed_targets"]),
+                payload["progress"]["total"],
                 len(sr.get("edge_hypotheses", [])),
                 len(sr.get("scanner_results", [])),
                 len(sr.get("replay_candidates", [])),
-                len(af.get("hypotheses", [])) if isinstance(af, dict) else 0,
+                len(af.get("hypotheses", [])),
                 time.time() - started,
             )
         except Exception as exc:  # noqa: BLE001 — one cycle must not kill the loop
