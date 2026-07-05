@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,6 +48,12 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
+from vnedge.research.scalper_edge_miner import mine_recorded_days
+from vnedge.research.scalper_scanners import (
+    scan_recorded_days,
+    scanner_policy,
+    select_recorder_targets,
+)
 from vnedge.research.strategy_diagnostics import diagnose
 from vnedge.research.universe import (
     ResearchTarget,
@@ -74,6 +81,14 @@ TRIAL_STRATEGY = "funding_mean_reversion_v1"
 TRIAL_EXCHANGE = "binanceusdm"
 TRIAL_SYMBOL = "BTC/USDT:USDT"
 DRIFT_CONSECUTIVE_REJECTS = 3
+SCALPER_DISCOVERY_FLOW = (
+    "tick_l2_recorder",
+    "edge_miner",
+    "scanner_ranking",
+    "conservative_replay",
+    "untouched_judgment",
+    "paper_shadow_after_human_approval",
+)
 
 
 def side_attribution(result: WalkForwardResult) -> dict:
@@ -389,11 +404,110 @@ def auto_explore(
     return variants
 
 
+def run_scalper_research(
+    data_root: Path | str,
+    targets: tuple[ResearchTarget, ...],
+    *,
+    days: tuple[str, ...] | None = None,
+) -> dict:
+    """Run the scalper slow-loop in discovery-first order.
+
+    This publishes research artifacts only. Edge-miner rows are hypotheses;
+    scanner rows are diagnostics; replay candidates can only come from the
+    scanner/replay diagnostic path.
+    """
+    root = Path(data_root)
+    targets = targets[:_env_int("SCALPER_RESEARCH_MAX_TARGETS", 12)]
+    days = days or _scalper_research_days(root, targets)
+    payload = {
+        "policy": scanner_policy(),
+        "flow": list(SCALPER_DISCOVERY_FLOW),
+        "flow_guards": {
+            "edge_miner_before_scanner": True,
+            "scanner_output_is_not_candidate": True,
+            "replay_required_for_candidate": True,
+            "can_trade": False,
+            "can_promote": False,
+        },
+        "targets": [asdict(t) for t in targets],
+        "days": list(days),
+        "edge_hypotheses": [],
+        "scanner_results": [],
+        "recorder_targets": [],
+        "replay_candidates": [],
+    }
+    if not days:
+        payload["note"] = "no recorded tick/L2 days found; run the public recorder first"
+        return payload
+
+    edge_results = mine_recorded_days(root, targets, days)
+    scans = scan_recorded_days(root, targets, days)
+    recorder_targets = select_recorder_targets(scans)
+    max_rows = _env_int("SCALPER_RESEARCH_MAX_ROWS", 50)
+    payload["edge_hypotheses"] = [r.to_dict() for r in edge_results[:max_rows]]
+    payload["scanner_results"] = [s.to_dict() for s in scans[:max_rows]]
+    payload["recorder_targets"] = [s.to_dict() for s in recorder_targets]
+    payload["replay_candidates"] = [
+        {**s.to_dict(), "source": "conservative_replay"}
+        for s in scans
+        if s.state == "REPLAY_CANDIDATE"
+    ][:max_rows]
+    return payload
+
+
+def _scalper_research_enabled() -> bool:
+    return os.environ.get("SCALPER_RESEARCH_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _split_csv(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _scalper_research_days(root: Path, targets: tuple[ResearchTarget, ...]) -> tuple[str, ...]:
+    explicit = _split_csv(os.environ.get("SCALPER_RESEARCH_DAYS"))
+    if explicit:
+        return explicit
+    limit = _env_int("SCALPER_RESEARCH_MAX_DAYS", 1)
+    days = sorted(_available_tick_days(root, targets))
+    return tuple(days[-limit:])
+
+
+def _available_tick_days(root: Path, targets: tuple[ResearchTarget, ...]) -> set[str]:
+    days: set[str] = set()
+    for target in targets:
+        safe = target.symbol.split(":")[0].replace("/", "")
+        symbol_root = root / "ticks" / f"exchange={target.exchange}" / f"symbol={safe}"
+        book_days = _stream_days(symbol_root / "stream=book")
+        trade_days = _stream_days(symbol_root / "stream=trades")
+        days.update(book_days & trade_days)
+    return days
+
+
+def _stream_days(stream_root: Path) -> set[str]:
+    if not stream_root.exists():
+        return set()
+    days = {p.stem for p in stream_root.glob("*.parquet")}
+    days.update(p.name for p in stream_root.iterdir() if p.is_dir())
+    return {d for d in days if len(d) == 8 and d.isdigit()}
+
+
 def publish(records: list[dict], started: float,
             drift_alerts: list[dict] | None = None,
             auto_state: dict | None = None,
             agent_plan: dict | None = None,
-            universe: dict | None = None) -> None:
+            universe: dict | None = None,
+            scalper_research: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -406,6 +520,7 @@ def publish(records: list[dict], started: float,
         "results": records,
         "drift_alerts": drift_alerts or [],
         "universe": universe or {},
+        "scalper_research": scalper_research or {},
         "edge_agents": agent_plan or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
@@ -479,6 +594,22 @@ async def run_cycle() -> list[dict]:
         logger.exception("auto-explore failed: %s", exc)
 
     agent_plan = EdgeResearchAgent().plan(records, targets=targets)
+    scalper_research: dict = {}
+    if _scalper_research_enabled():
+        try:
+            scalper_research = run_scalper_research("data", targets)
+        except Exception as exc:  # noqa: BLE001 — discovery must not kill candle research
+            logger.exception("scalper research discovery failed: %s", exc)
+            scalper_research = {
+                "policy": scanner_policy(),
+                "flow": list(SCALPER_DISCOVERY_FLOW),
+                "error": str(exc),
+                "flow_guards": {
+                    "can_trade": False,
+                    "can_promote": False,
+                    "replay_required_for_candidate": True,
+                },
+            }
     publish(
         records, started, drift, _load_auto_state(),
         agent_plan={
@@ -487,6 +618,7 @@ async def run_cycle() -> list[dict]:
             "policy": agent_plan.policy,
         },
         universe=summarize_universe(targets),
+        scalper_research=scalper_research,
     )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
