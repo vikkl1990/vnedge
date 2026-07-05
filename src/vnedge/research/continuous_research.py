@@ -49,6 +49,7 @@ from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
+from vnedge.research.shadow_manifest import generate_shadow_manifest, write_shadow_manifest
 from vnedge.research.scalper_edge_miner import mine_recorded_days
 from vnedge.research.scalper_scanners import (
     scan_recorded_days,
@@ -614,6 +615,13 @@ async def run_cycle() -> list[dict]:
         logger.exception("auto-explore failed: %s", exc)
 
     agent_plan = EdgeResearchAgent().plan(records, targets=targets)
+    # research -> shadow bridge: turn profitable winners with locked params into
+    # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
+    try:
+        write_shadow_manifest(
+            generate_shadow_manifest(list(agent_plan.profitable_pairs)), OUT_DIR)
+    except Exception as exc:  # noqa: BLE001 — manifest gen must not kill research
+        logger.exception("shadow manifest generation failed: %s", exc)
     scalper_research: dict = {}
     alpha_factory: dict = {}
     if _scalper_research_enabled():
