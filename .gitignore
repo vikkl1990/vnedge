@@ -7,6 +7,7 @@ secrets/
 # Python
 __pycache__/
 *.py[cod]
+.venv
 .venv/
 *.egg-info/
 .pytest_cache/
@@ -19,6 +20,8 @@ __pycache__/
 *.parquet
 *.db
 KILL
+/research/live_research/*
+!/research/live_research/README.md
 
 # OS / editor
 .DS_Store
