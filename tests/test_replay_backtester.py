@@ -303,3 +303,47 @@ def test_loader_merges_shard_dir_and_legacy_single_file(tmp_path):
                  ).to_parquet(base / "20260704.parquet")     # legacy L1 single file
     events = load_tick_events(tmp_path, "binanceusdm", SYM, "20260704")
     assert [e[0] for e in events] == [T0, T0 + 50]           # both layouts merged, ordered
+
+
+# --- queue-aware fill model (opt-in) --------------------------------------------
+
+def test_queue_aware_waits_for_queue_ahead_to_clear():
+    # resting buy at 100.0 with 5.0 resting ahead of us at placement.
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),        # queue_ahead = 5.0
+        trade(T0 + 10, 100.0, 2.0, "sell"),       # consumes 2 of 5 -> no fill
+        trade(T0 + 20, 100.0, 2.0, "sell"),       # consumes 4 of 5 -> no fill
+        trade(T0 + 30, 100.0, 2.0, "sell"),       # cumulative 6 >= 5 -> FILL
+    ]
+    res = TickReplayBacktester(queue_aware=True).run(events, AlwaysBuy())
+    assert res.quotes_placed == 1
+    assert res.filled == 1                         # filled once the queue cleared
+
+
+def test_queue_aware_never_fills_if_queue_never_clears():
+    events = [
+        book(T0, 100.0, 100.0, 100.1, 5.0),        # deep queue ahead (100)
+        trade(T0 + 10, 100.0, 2.0, "sell"),
+        trade(T0 + 20, 99.99, 2.0, "sell"),        # trades through, but queue huge
+    ]
+    res = TickReplayBacktester(queue_aware=True).run(events, AlwaysBuy())
+    assert res.filled == 0                          # queue ahead never exhausted
+
+
+def test_queue_aware_stricter_than_trade_through_on_same_events():
+    # one small trade-through: default fills, queue-aware (deep queue) does not
+    events = [
+        book(T0, 100.0, 50.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),         # trade-through, qty 1 << queue 50
+    ]
+    assert TickReplayBacktester().run(events, AlwaysBuy()).filled == 1
+    assert TickReplayBacktester(queue_aware=True).run(events, AlwaysBuy()).filled == 0
+
+
+def test_queue_aware_default_off_preserves_trade_through():
+    # sanity: the flag defaults off; identical to the strict model
+    events = [
+        book(T0, 100.0, 5.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),         # trade-through fills default model
+    ]
+    assert TickReplayBacktester().run(events, AlwaysBuy()).filled == 1
