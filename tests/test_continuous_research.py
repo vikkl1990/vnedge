@@ -60,14 +60,17 @@ def test_wf_record_reject_carries_reasons():
 def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
     records = [cr.wf_record("s", "BTC/USDT:USDT", make_result(), SPARSE_STRATEGY_GATES)]
+    scalper = {"flow": ["tick_l2_recorder"], "flow_guards": {"can_trade": False}}
     cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}})
+               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper)
     cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}})
+               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper)
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["results"][0]["verdict"] == "PASS"
     assert latest["results"][0]["exchange"] == "binanceusdm"
     assert latest["universe"]["targets"] == 1
+    assert latest["scalper_research"]["flow"] == ["tick_l2_recorder"]
+    assert latest["scalper_research"]["flow_guards"]["can_trade"] is False
     assert latest["edge_agents"]["policy"]["can_trade"] is False
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()
@@ -78,6 +81,73 @@ def make_record(verdict="PASS", net=20.0, trades=6):
     return {"strategy": "funding_mean_reversion_v1", "symbol": "BTC/USDT:USDT",
             "verdict": verdict, "oos_net_usd": net, "oos_trades": trades,
             "reasons": [] if verdict == "PASS" else ["aggregate OOS net not positive"]}
+
+
+class FakeDiscoveryRow:
+    def __init__(self, state, payload):
+        self.state = state
+        self._payload = payload
+
+    def to_dict(self):
+        return dict(self._payload)
+
+
+def test_scalper_research_flow_orders_discovery_before_replay(monkeypatch, tmp_path):
+    calls = []
+    targets = (cr.ResearchTarget("binanceusdm", "BTC/USDT:USDT"),)
+
+    def mine(root, passed_targets, days):
+        calls.append("edge_miner")
+        assert root == tmp_path
+        assert passed_targets == targets
+        assert days == ("20260704",)
+        return (FakeDiscoveryRow("EDGE_CANDIDATE_MAKER", {"edge": "hypothesis"}),)
+
+    def scan(root, passed_targets, days):
+        calls.append("scanner_replay")
+        assert root == tmp_path
+        assert passed_targets == targets
+        assert days == ("20260704",)
+        return (
+            FakeDiscoveryRow("REPLAY_CANDIDATE", {"lane": "replay-pass"}),
+            FakeDiscoveryRow("RECORD_MORE", {"lane": "record-more"}),
+        )
+
+    def recorder_targets(scans):
+        calls.append("recorder_targets")
+        return (scans[1],)
+
+    monkeypatch.setattr(cr, "mine_recorded_days", mine)
+    monkeypatch.setattr(cr, "scan_recorded_days", scan)
+    monkeypatch.setattr(cr, "select_recorder_targets", recorder_targets)
+
+    payload = cr.run_scalper_research(tmp_path, targets, days=("20260704",))
+
+    assert calls == ["edge_miner", "scanner_replay", "recorder_targets"]
+    assert payload["flow"][:4] == [
+        "tick_l2_recorder",
+        "edge_miner",
+        "scanner_ranking",
+        "conservative_replay",
+    ]
+    assert payload["flow_guards"]["scanner_output_is_not_candidate"] is True
+    assert payload["flow_guards"]["replay_required_for_candidate"] is True
+    assert payload["edge_hypotheses"] == [{"edge": "hypothesis"}]
+    assert payload["recorder_targets"] == [{"lane": "record-more"}]
+    assert payload["replay_candidates"] == [
+        {"lane": "replay-pass", "source": "conservative_replay"}
+    ]
+
+
+def test_scalper_research_no_tick_days_requests_recorder(tmp_path):
+    targets = (cr.ResearchTarget("binanceusdm", "BTC/USDT:USDT"),)
+    payload = cr.run_scalper_research(tmp_path, targets)
+
+    assert payload["days"] == []
+    assert payload["edge_hypotheses"] == []
+    assert payload["scanner_results"] == []
+    assert "recorder" in payload["note"]
+    assert payload["flow_guards"]["can_trade"] is False
 
 
 def test_attribution_by_side():
