@@ -40,6 +40,7 @@ import pandas as pd
 
 from vnedge.scalping.features import IncrementalFeatureEngine, ScalperFeatures
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
+from vnedge.scalping.parameter_registry import ExitPolicy
 
 
 @dataclass(frozen=True)
@@ -201,16 +202,19 @@ class _Open:
     stop_price: float
     target_price: float
     worst_adverse_bps: float = 0.0
+    best_favorable_bps: float = 0.0
 
 
 class TickReplayBacktester:
     def __init__(self, fees: ReplayFees = ReplayFees(), notional_usd: float = 100.0,
-                 *, queue_aware: bool = False) -> None:
+                 *, queue_aware: bool = False,
+                 exit_policy: ExitPolicy | None = None) -> None:
         self.fees = fees
         self.notional_usd = notional_usd
         # queue_aware=True uses the FIFO queue model (needs the touch depth the
         # L2 recorder banks); default False keeps the strict trade-through model.
         self.queue_aware = queue_aware
+        self.exit_policy = exit_policy
 
     def run(self, events, scalper: QuotingScalper) -> ReplayResult:
         engine = IncrementalFeatureEngine()
@@ -231,6 +235,10 @@ class TickReplayBacktester:
                     drift = (top.mid_price - position.entry_mid) / position.entry_mid * 10_000.0
                     signed = drift if position.side == "buy" else -drift
                     position.worst_adverse_bps = min(position.worst_adverse_bps, signed)
+                    position.best_favorable_bps = max(
+                        position.best_favorable_bps,
+                        self._tradable_bps(position, top),
+                    )
                     # exit checks on book move (taker out)
                     if self._check_exit(position, top, ts_ms, result):
                         position = None
@@ -317,21 +325,51 @@ class TickReplayBacktester:
     def _check_exit(self, pos: _Open, top: TopOfBook, ts_ms: int,
                     result: ReplayResult) -> bool:
         """Returns True if the position was closed this book update."""
+        current_bps = self._tradable_bps(pos, top)
+        policy = self.exit_policy
         if pos.side == "buy":
             if top.bid <= pos.stop_price:
                 self._close(pos, top.bid, ts_ms, "stop", result)
                 return True
+            if policy is not None and policy.adverse_cut_bps > 0 \
+                    and current_bps <= -policy.adverse_cut_bps:
+                self._close(pos, top.bid, ts_ms, "adverse_cut", result)
+                return True
             if top.bid >= pos.target_price:
                 self._close(pos, top.bid, ts_ms, "target", result)
+                return True
+            if self._trail_hit(pos, current_bps):
+                self._close(pos, top.bid, ts_ms, "trail", result)
                 return True
         else:
             if top.ask >= pos.stop_price:
                 self._close(pos, top.ask, ts_ms, "stop", result)
                 return True
+            if policy is not None and policy.adverse_cut_bps > 0 \
+                    and current_bps <= -policy.adverse_cut_bps:
+                self._close(pos, top.ask, ts_ms, "adverse_cut", result)
+                return True
             if top.ask <= pos.target_price:
                 self._close(pos, top.ask, ts_ms, "target", result)
                 return True
+            if self._trail_hit(pos, current_bps):
+                self._close(pos, top.ask, ts_ms, "trail", result)
+                return True
         return False
+
+    @staticmethod
+    def _tradable_bps(pos: _Open, top: TopOfBook) -> float:
+        if pos.side == "buy":
+            return (top.bid - pos.entry_price) / pos.entry_price * 10_000.0
+        return (pos.entry_price - top.ask) / pos.entry_price * 10_000.0
+
+    def _trail_hit(self, pos: _Open, current_bps: float) -> bool:
+        policy = self.exit_policy
+        if policy is None or policy.trail_after_bps <= 0 or policy.trail_distance_bps <= 0:
+            return False
+        if pos.best_favorable_bps < policy.trail_after_bps:
+            return False
+        return current_bps <= pos.best_favorable_bps - policy.trail_distance_bps
 
     def _close(self, pos: _Open, raw_exit: float, ts_ms: int, reason: str,
                result: ReplayResult) -> None:

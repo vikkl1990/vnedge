@@ -20,6 +20,10 @@ def test_run_once_composes_scalper_and_alpha(monkeypatch, tmp_path):
     assert payload["days"] == ["20260705"]
     assert payload["scalper_research"]["edge_hypotheses"] == [1, 2]
     assert payload["alpha_factory"]["hypotheses"] == [1]
+    registry = payload["scalper_parameter_registry"]
+    assert registry["can_trade"] is False
+    assert "250ms" in registry["timeframes"]
+    assert registry["exit_intelligence"]["best_policy"]["policy_id"] == "adaptive_trail"
     assert "generated_at" in payload
 
 
@@ -36,15 +40,19 @@ def test_candle_loop_folds_in_l2_latest_when_inline_disabled(tmp_path, monkeypat
     (tmp_path / "l2_latest.json").write_text(json.dumps({
         "scalper_research": {"flow_guards": {"can_trade": False}, "edge_hypotheses": [1]},
         "alpha_factory": {"flow_guards": {"can_trade": False}},
+        "scalper_parameter_registry": {"version": "test", "can_trade": False},
     }))
     l2latest = cr._load_l2_latest()
     assert l2latest["scalper_research"]["edge_hypotheses"] == [1]
     # emulate the run_cycle merge: inline empty -> fold in decoupled output
     scalper_research, alpha_factory = {}, {}
+    params = {}
     scalper_research = scalper_research or l2latest.get("scalper_research", {})
     alpha_factory = alpha_factory or l2latest.get("alpha_factory", {})
+    params = params or l2latest.get("scalper_parameter_registry", {})
     assert scalper_research["edge_hypotheses"] == [1]
     assert alpha_factory["flow_guards"]["can_trade"] is False
+    assert params["version"] == "test"
 
 
 def test_load_l2_latest_missing_or_corrupt_returns_empty(tmp_path, monkeypatch):

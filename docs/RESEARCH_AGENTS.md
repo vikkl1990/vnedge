@@ -35,7 +35,10 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
   backtests.
 - `scalper_research`: tick/L2 replay diagnostics and recorder targets.
 - `alpha_factory`: structural alpha hypotheses and replay queue. See
-  `docs/ALPHA_FACTORY.md`.
+  `docs/ALPHA_FACTORY.md`. Hypotheses are split by `4h/1h/15m/1m` context
+  tags when those candle datasets are available.
+- `scalper_parameter_registry`: frozen TF/horizon, family, fee, route, and
+  exit policy contract. See `docs/SCALPER_PARAMETERS.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
   `can_promote=false`, and untouched-data judgment remains required.
 

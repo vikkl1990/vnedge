@@ -89,6 +89,32 @@ def test_negative_edge_after_cost_is_reported():
     assert "do not force signals" in report.action
 
 
+def test_adaptive_exit_policy_is_wired_into_diagnostics():
+    events = [
+        book(T0, 100.0, 9.0, 100.1, 1.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),
+        book(T0 + 20, 100.5, 9.0, 100.6, 1.0),
+        book(T0 + 30, 100.25, 9.0, 100.35, 1.0),
+    ]
+    report = diagnose(
+        events,
+        family_id="liquidity_vacuum_continuation",
+        exit_policy_id="adaptive_trail",
+        min_imbalances=(0.5,),
+        max_spread_bps=(12.0,),
+        stop_bps=60.0,
+        target_bps=100.0,
+        maker_bps=0.0,
+        taker_bps=0.0,
+        slippage_bps=0.0,
+    )
+
+    row = report.rows[0]
+    assert row.exit_policy_id == "adaptive_trail"
+    assert row.exit_reason_counts == {"trail": 1}
+    assert row.net_usd > 0
+
+
 def test_text_report_names_blocker_and_best_row():
     events = [
         book(T0, 100.0, 9.0, 100.01, 1.0),

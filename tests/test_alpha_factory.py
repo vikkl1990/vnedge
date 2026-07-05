@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pandas as pd
+
 from vnedge.research.alpha_factory import (
     AlphaFactoryConfig,
     mine_structural_alpha_events,
@@ -61,6 +63,52 @@ def flat_pressure_events() -> list[tuple[int, str, object]]:
     return events
 
 
+def epoch_pressure_events() -> list[tuple[int, str, object]]:
+    base = int(T0.timestamp() * 1000)
+    events: list[tuple[int, str, object]] = []
+    for i in range(30):
+        ts_ms = base + i * 100
+        mid = 100.0 + i * 0.04
+        ts = datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
+        events.append((
+            ts_ms,
+            "trade",
+            TradeTick(symbol=SYM, price=mid + 0.01, quantity=1.0,
+                      taker_side="buy", event_time=ts),
+        ))
+        events.append((
+            ts_ms + 1,
+            "book",
+            TopOfBook(
+                symbol=SYM,
+                bid=mid - 0.01,
+                bid_size=10.0,
+                ask=mid + 0.01,
+                ask_size=2.0,
+                event_time=ts + timedelta(milliseconds=1),
+            ),
+        ))
+    return events
+
+
+def bullish_context() -> dict[str, pd.DataFrame]:
+    base = T0 - timedelta(hours=24)
+    closes = [100, 101, 102, 103, 104, 105, 106]
+    freqs = {"4h": "4h", "1h": "1h", "15m": "15min", "1m": "1min"}
+    out: dict[str, pd.DataFrame] = {}
+    for timeframe, freq in freqs.items():
+        timestamps = pd.date_range(base, periods=len(closes), freq=freq)
+        out[timeframe] = pd.DataFrame({
+            "timestamp": timestamps,
+            "open": closes,
+            "high": [c * 1.001 for c in closes],
+            "low": [c * 0.999 for c in closes],
+            "close": closes,
+            "volume": [100.0] * len(closes),
+        })
+    return out
+
+
 def config(**kwargs) -> AlphaFactoryConfig:
     defaults = dict(
         horizons_ms=(200,),
@@ -114,6 +162,26 @@ def test_structural_alpha_below_cost_stays_blocked():
     assert results[0].can_trade is False
 
 
+def test_structural_alpha_mines_context_tagged_lanes():
+    results = mine_structural_alpha_events(
+        epoch_pressure_events(),
+        exchange="binanceusdm",
+        symbol=SYM,
+        day="20260705",
+        config=config(context_enabled=True),
+        context_candles=bullish_context(),
+    )
+
+    assert results
+    aligned = [r for r in results if r.context_tag == "aligned"]
+    assert aligned
+    best = aligned[0]
+    assert "|context=aligned" in best.hypothesis_id
+    assert best.context_score and best.context_score > 0
+    assert best.context_summary is not None
+    assert best.context_summary["coverage"] == 4
+
+
 def test_run_alpha_factory_without_tape_requests_recording(tmp_path):
     targets = (ResearchTarget("binanceusdm", SYM),)
     payload = run_alpha_factory(tmp_path, targets, days=())
@@ -122,4 +190,5 @@ def test_run_alpha_factory_without_tape_requests_recording(tmp_path):
     assert payload["replay_queue"] == []
     assert payload["flow_guards"]["raw_hypothesis_is_not_signal"] is True
     assert payload["flow_guards"]["can_trade"] is False
+    assert payload["context_mining"]["timeframes"] == ["4h", "1h", "15m", "1m"]
     assert payload["recorder_directives"][0]["reason"] == "no recorded tick/L2 day available"

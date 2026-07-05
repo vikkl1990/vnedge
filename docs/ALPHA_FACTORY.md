@@ -8,8 +8,10 @@ produce executable signals.
 
 ```mermaid
 flowchart LR
+    Context["4h / 1h / 15m / 1m candle context"] --> Mine["Mine structural hypotheses"]
     Tape["Recorded tick/L2 tape"] --> Mine["Mine structural hypotheses"]
-    Mine --> Cost["Score after maker-first costs"]
+    Mine --> Tags["Split evidence by context tag"]
+    Tags --> Cost["Score after maker-first costs"]
     Cost --> Route["Route policy: blocked / maker / taker"]
     Route --> Queue["Replay queue"]
     Queue --> Replay["Conservative tick replay"]
@@ -22,6 +24,7 @@ Hard guards:
 - `can_trade=false`
 - `can_promote=false`
 - raw hypotheses are not signals
+- candle context tags are evidence splits, not trade permission
 - conservative replay is mandatory
 - untouched judgment and human approval remain mandatory
 
@@ -40,6 +43,20 @@ for contexts professional scalpers care about: forced flow, absorption,
 thin-book continuation, volatility impulse, and microprice dislocation. A
 family only enters the replay queue if conditional expectancy clears the
 maker-first cost floor and route policy.
+
+## Context Stack
+
+The factory consumes the registered scalper context stack:
+
+- `4h`
+- `1h`
+- `15m`
+- `1m`
+
+Each tick/L2 hypothesis is tagged as `aligned`, `mixed`, `hostile`, or
+`missing` for the proposed side. This subjects context to the same mining
+discipline as the microstructure families: it must improve conditional
+expectancy after costs before it matters.
 
 ## Runtime
 
@@ -62,5 +79,6 @@ Manual report:
 python -m vnedge.research.alpha_factory --days 20260704
 ```
 
-The factory shares the tick/L2 day selection used by scalper research, but it
-does not depend on scalper research being enabled.
+The factory shares the tick/L2 day selection used by scalper research and will
+load available `4h/1h/15m/1m` candle Parquet datasets from the same data root.
+It does not depend on scalper research being enabled.

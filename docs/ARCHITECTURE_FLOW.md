@@ -1,6 +1,6 @@
 # VNEDGE Architecture Flow
 
-Status date: 2026-07-04.
+Status date: 2026-07-05.
 
 This document maps the current VNEDGE system to the target scalper/research
 vision. The core rule is unchanged: every execution order must pass
@@ -50,15 +50,18 @@ flowchart TB
     subgraph Slow["III. Slow Research And Agent Loop"]
         Universe["Research universe: exchanges x symbols"] --> CandleIngest["Candle/funding/OI ingestion"]
         CandleIngest --> ResearchStore["Parquet research store"]
-        ResearchStore --> CandleWalkForward["Candle strategy walk-forward gates"]
-        CandleWalkForward --> Diagnostics["Failure diagnosis"]
+    ResearchStore --> CandleWalkForward["Candle strategy walk-forward gates"]
+    CandleWalkForward --> Diagnostics["Failure diagnosis"]
+    ResearchStore --> ContextStack["Scalper context stack\n(4h / 1h / 15m / 1m)"]
 
-        Universe --> TickRecorder["Tick/L2 recorder"]
+    Universe --> TickRecorder["Tick/L2 recorder"]
         TickRecorder --> TickStore["Recorded tick/L2 store"]
         TickStore --> EdgeMiner["Microstructure edge miner"]
         TickStore --> AlphaFactory["Structural alpha factory"]
         EdgeMiner --> ScalpScanner["Scalper scanner ranking"]
-        AlphaFactory --> ReplayQueue["Replay queue"]
+        ContextStack --> AlphaFactory
+        AlphaFactory --> ContextTags["Context-tagged edge splits"]
+        ContextTags --> ReplayQueue["Replay queue"]
         ScalpScanner --> ReplayGauntlet["Conservative replay gauntlet"]
         ReplayQueue --> ReplayGauntlet
         ReplayGauntlet --> ReplayCandidates["Replay candidates"]
@@ -168,9 +171,12 @@ flowchart TB
     Records --> Profitable["Profitable-pair ranking"]
     RecorderTargets["Recorder targets"] --> TickData["Recorded tick/L2 days"]
     TickData --> EdgeMiner["Microstructure edge miner"]
+    Store --> ContextStack["Scalper context stack\n(4h / 1h / 15m / 1m)"]
     TickData --> AlphaFactory["Structural alpha factory"]
     EdgeMiner --> ScalpScan["Scalper scanner ranking"]
-    AlphaFactory --> ReplayQueue["Replay queue"]
+    ContextStack --> AlphaFactory
+    AlphaFactory --> ContextTags["Context-tagged alpha splits"]
+    ContextTags --> ReplayQueue["Replay queue"]
     ScalpScan --> Replay["Conservative replay gauntlet"]
     ReplayQueue --> Replay
     Replay --> ReplayCandidates["Replay candidates"]
@@ -251,10 +257,11 @@ RESEARCH_TIMEFRAME=1h
 | Scalper microstructure foundation | Branch | In-process features/risk/tick-stop foundation. |
 | Scalper scanners and edge miner | Branch | Discover all derivative pairs; rank lanes by liquidity, PF, route cost, fill evidence, sample sufficiency, and microstructure hypothesis expectancy. |
 | Structural alpha factory | Branch | Mines forced-flow, absorption, microprice, thin-book, and volatility-impulse hypotheses; queues replay only. |
+| Scalper parameter registry | Branch | Frozen TF/horizon, family, fee, route, and exit-policy map published into research payloads. |
 | Live Binance testnet execution | Next | Required before any live mode. |
 | Private stream reconciliation | Next | Source of truth for orders/fills/positions. |
 | L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |
-| Tick-level stop monitoring | Next | Reduce-only exits through gateway. |
+| Tick-level stop monitoring | Partial | Reduce-only tick-stop primitive exists; adaptive exit policy live wiring remains next. |
 | Delta/Bybit live adapters | Next | After one venue is proven. |
 | TimescaleDB historian | Deferred | Parquet is enough for V1. |
 | NATS/shared-memory IPC | Deferred | Single-process V1 remains simpler and safer. |
