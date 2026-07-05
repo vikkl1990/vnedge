@@ -27,6 +27,7 @@ from typing import Iterable, Protocol
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_state import ManagedOrder, OrderState
+from vnedge.execution.order_state import IllegalTransition
 from vnedge.risk.risk_manager import (
     AccountState,
     MarketState,
@@ -176,8 +177,16 @@ class OrderManager:
             )
             return order
 
-        order.exchange_order_id = exchange_id
-        order.transition(OrderState.ACKNOWLEDGED, f"exchange id {exchange_id}")
+        if order.exchange_order_id is None:
+            order.exchange_order_id = exchange_id
+        if order.state is OrderState.SUBMITTING:
+            order.transition(OrderState.ACKNOWLEDGED, f"exchange id {exchange_id}")
+        else:
+            self._journal.append("order_ack_race_resolved", {
+                "client_order_id": order.client_order_id,
+                "exchange_order_id": exchange_id,
+                "state": order.state.value,
+            })
         self._journal.append("order_acknowledged", {
             "client_order_id": order.client_order_id,
             "exchange_order_id": exchange_id,
@@ -294,3 +303,170 @@ class OrderManager:
             "state": resolved_state.value,
             "note": note,
         })
+
+    def apply_venue_order_update(
+        self,
+        *,
+        client_order_id: str,
+        state: OrderState,
+        note: str,
+        exchange_order_id: str | None = None,
+        filled_quantity: float | None = None,
+        fees_paid: float | None = None,
+    ) -> bool:
+        """Apply a private stream order update through the state machine.
+
+        Private WS is venue truth, but it still must respect our state model
+        and WAL. This method handles expected races: a private fill can arrive
+        before the REST submit returns, and a venue-side cancel can arrive
+        before we requested one locally. Conflicting terminal updates are
+        logged and ignored instead of guessing.
+        """
+        order = self.orders.get(client_order_id)
+        if order is None:
+            self._journal.append("private_order_unmatched", {
+                "client_order_id": client_order_id,
+                "exchange_order_id": exchange_order_id,
+                "state": state.value,
+                "note": note,
+            })
+            logger.error("private stream update for unknown order %s", client_order_id)
+            return False
+
+        if exchange_order_id and order.exchange_order_id is None:
+            order.exchange_order_id = exchange_order_id
+        if filled_quantity is not None:
+            order.filled_quantity = max(order.filled_quantity, float(filled_quantity))
+        if fees_paid is not None:
+            order.fees_paid += max(float(fees_paid), 0.0)
+
+        if order.state is state:
+            self._journal.append("private_order_update", {
+                "client_order_id": client_order_id,
+                "state": state.value,
+                "note": note,
+                "no_state_change": True,
+            })
+            return True
+
+        if order.is_terminal:
+            self._journal.append("private_order_terminal_conflict", {
+                "client_order_id": client_order_id,
+                "current_state": order.state.value,
+                "venue_state": state.value,
+                "note": note,
+            })
+            logger.error(
+                "private stream conflicts with terminal order %s: %s -> %s",
+                client_order_id, order.state.value, state.value,
+            )
+            return False
+
+        try:
+            self._transition_from_private_stream(order, state, note)
+        except IllegalTransition as exc:
+            self._journal.append("private_order_transition_error", {
+                "client_order_id": client_order_id,
+                "current_state": order.state.value,
+                "venue_state": state.value,
+                "note": note,
+                "error": str(exc),
+            })
+            logger.error("private stream transition failed: %s", exc)
+            return False
+
+        self._journal.append("private_order_update", {
+            "client_order_id": client_order_id,
+            "exchange_order_id": order.exchange_order_id,
+            "state": order.state.value,
+            "filled_quantity": order.filled_quantity,
+            "fees_paid": order.fees_paid,
+            "note": note,
+        })
+        return True
+
+    def apply_venue_fill_update(
+        self,
+        *,
+        client_order_id: str,
+        exchange_order_id: str | None,
+        trade_id: str,
+        fill_quantity: float,
+        fill_price: float | None = None,
+        fee_cost: float = 0.0,
+    ) -> bool:
+        """Apply one private trade/fill event idempotently."""
+        order = self.orders.get(client_order_id)
+        if order is None:
+            self._journal.append("private_fill_unmatched", {
+                "client_order_id": client_order_id,
+                "exchange_order_id": exchange_order_id,
+                "trade_id": trade_id,
+                "fill_quantity": fill_quantity,
+            })
+            logger.error("private stream fill for unknown order %s", client_order_id)
+            return False
+
+        order.filled_quantity += max(float(fill_quantity), 0.0)
+        order.fees_paid += max(float(fee_cost), 0.0)
+        target = (
+            OrderState.FILLED
+            if order.filled_quantity + 1e-12 >= order.intent.quantity
+            else OrderState.PARTIALLY_FILLED
+        )
+        return self.apply_venue_order_update(
+            client_order_id=client_order_id,
+            exchange_order_id=exchange_order_id,
+            state=target,
+            note=(
+                f"private fill {trade_id}: qty={fill_quantity}, "
+                f"price={fill_price}, fee={fee_cost}"
+            ),
+        )
+
+    def client_id_for_exchange_order(self, exchange_order_id: str) -> str | None:
+        for order in self.orders.values():
+            if order.exchange_order_id == exchange_order_id:
+                return order.client_order_id
+        return None
+
+    @staticmethod
+    def _transition_from_private_stream(
+        order: ManagedOrder, state: OrderState, note: str
+    ) -> None:
+        if order.state is OrderState.TIMEOUT_UNKNOWN:
+            order.transition(OrderState.RECONCILING, "private stream resolved timeout")
+
+        if state is OrderState.ACKNOWLEDGED:
+            if order.state is OrderState.PARTIALLY_FILLED:
+                return  # never downgrade a partial fill back to open
+            order.transition(OrderState.ACKNOWLEDGED, note)
+            return
+
+        if state is OrderState.PARTIALLY_FILLED:
+            if order.state is OrderState.SUBMITTING:
+                order.transition(OrderState.ACKNOWLEDGED, "private fill before submit ack")
+            order.transition(OrderState.PARTIALLY_FILLED, note)
+            return
+
+        if state is OrderState.FILLED:
+            if order.state is OrderState.SUBMITTING:
+                order.transition(OrderState.ACKNOWLEDGED, "private fill before submit ack")
+            order.transition(OrderState.FILLED, note)
+            return
+
+        if state is OrderState.CANCELLED:
+            if order.state is OrderState.SUBMITTING:
+                order.transition(OrderState.ACKNOWLEDGED, "venue cancel before submit ack")
+            if order.state in (OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED):
+                order.transition(OrderState.CANCEL_REQUESTED, "venue-side cancel event")
+            order.transition(OrderState.CANCELLED, note)
+            return
+
+        if state is OrderState.REJECTED:
+            if order.state is OrderState.SUBMITTING:
+                order.transition(OrderState.ACKNOWLEDGED, "venue reject after submit ack")
+            order.transition(OrderState.REJECTED, note)
+            return
+
+        order.transition(state, note)

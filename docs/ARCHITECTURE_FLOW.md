@@ -259,7 +259,8 @@ RESEARCH_TIMEFRAME=1h
 | Structural alpha factory | Branch | Mines forced-flow, absorption, microprice, thin-book, and volatility-impulse hypotheses; queues replay only. |
 | Scalper parameter registry | Branch | Frozen TF/horizon, family, fee, route, and exit-policy map published into research payloads. |
 | Live Binance testnet execution | Next | Required before any live mode. |
-| Private stream reconciliation | Next | Source of truth for orders/fills/positions. |
+| Private order/fill stream | Current | CCXT-Pro private order/fill events update OrderManager through legal state transitions and WAL. |
+| Private stream reconciliation | Partial | Orders/fills are real-time; positions/balances/margin/leverage still need REST truth pass before live. |
 | L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |
 | Tick-level stop monitoring | Partial | Reduce-only tick-stop primitive exists; adaptive exit policy live wiring remains next. |
 | Delta/Bybit live adapters | Next | After one venue is proven. |

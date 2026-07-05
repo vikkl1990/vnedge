@@ -60,6 +60,13 @@ Compares: positions, open orders, balances, fills, fees, funding payments,
 **margin mode, and leverage setting** (drift in the last two silently changes
 liquidation math).
 
+Current implementation note: `vnedge.execution.private_stream` consumes
+CCXT-Pro private order/fill events, normalizes venue statuses/trades, dedupes
+fills by trade id, and applies them through `OrderManager` so every update is
+state-machine checked and journaled. This is the real-time order/fill input;
+positions, balances, margin mode, and leverage drift still require the
+periodic REST reconciliation path before live activation.
+
 Fail-closed rule on any mismatch:
 1. Stop opening new positions (risk gateway flag).
 2. Enter reduce-only mode.
