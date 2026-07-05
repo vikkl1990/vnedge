@@ -28,6 +28,7 @@ from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.live_feed import LiveMarketFeed
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
+from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
 from vnedge.paper.account_store import PaperAccountStore
 from vnedge.paper.fill_model import FillModel
 from vnedge.paper.paper_broker import PaperBroker
@@ -37,7 +38,12 @@ from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.composite import CompositeSignalStrategy
+from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.scalper_1m import Scalper1m
 from vnedge.strategy.trend_continuation import TrendContinuation
+from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 
 logger = logging.getLogger(__name__)
@@ -154,13 +160,85 @@ def _build_strategy(
 ) -> BaseStrategy:
     """Construct the live strategy a lane runs, keyed by strategy_id."""
     params = spec.strategy_params or {}
-    if spec.strategy_id == "funding_mean_reversion_v1":
+    if spec.strategy_id == "signal_arbiter_v1":
+        return _build_signal_arbiter_strategy(spec, seed_funding, feed)
+    return _build_single_strategy(spec.strategy_id, params, seed_funding, feed)
+
+
+def _build_single_strategy(
+    strategy_id: str,
+    params: dict,
+    seed_funding,
+    feed,
+) -> BaseStrategy:
+    """Construct one strategy implementation for a live-data lane."""
+    if strategy_id == "funding_mean_reversion_v1":
         # needs the funding stream augmented live off the feed
         return LiveFundingMR(seed_funding, feed, **params)
-    if spec.strategy_id == "trend_continuation_v1":
+    if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
-    raise ValueError(f"unsupported lane strategy_id: {spec.strategy_id!r}")
+    if strategy_id == "volatility_expansion_breakout_v1":
+        return VolatilityExpansionBreakout(seed_funding, **params)
+    if strategy_id == "panic_reversal_v1":
+        return PanicReversal(seed_funding, **params)
+    if strategy_id == "funding_squeeze_continuation_v1":
+        return FundingSqueezeContinuation(seed_funding, **params)
+    if strategy_id == "scalper_1m_v1":
+        return Scalper1m(seed_funding, **params)
+    raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
+
+
+def _build_signal_arbiter_strategy(spec: LaneSpec, seed_funding, feed) -> BaseStrategy:
+    params = spec.strategy_params or {}
+    children = params.get("strategies") or params.get("children")
+    if not isinstance(children, list) or not children:
+        raise ValueError("signal_arbiter_v1 requires a non-empty strategies list")
+
+    strategies: list[BaseStrategy] = []
+    candidate_defaults: dict[str, dict] = {}
+    edge_keys = {
+        "expected_edge_bps",
+        "expected_cost_bps",
+        "profit_factor",
+        "confidence",
+        "route",
+        "planned_notional_usd",
+        "metadata",
+    }
+
+    for index, child in enumerate(children):
+        if not isinstance(child, dict):
+            raise ValueError("signal_arbiter_v1 child entries must be objects")
+        child_strategy_id = str(child.get("strategy_id", ""))
+        if not child_strategy_id:
+            raise ValueError("signal_arbiter_v1 child missing strategy_id")
+        child_params = child.get("params", {})
+        if not isinstance(child_params, dict):
+            raise ValueError("signal_arbiter_v1 child params must be an object")
+
+        strategies.append(
+            _build_single_strategy(child_strategy_id, child_params, seed_funding, feed)
+        )
+        default_source_id = f"{child_strategy_id}#{index + 1}"
+        source_id = str(child.get("source_id", default_source_id))
+        candidate_defaults[default_source_id] = {"source_id": source_id}
+        candidate_defaults[source_id] = {
+            key: child[key]
+            for key in edge_keys
+            if key in child
+        }
+
+    arbiter_params = params.get("arbiter", {})
+    if not isinstance(arbiter_params, dict):
+        raise ValueError("signal_arbiter_v1 arbiter config must be an object")
+    return CompositeSignalStrategy(
+        strategies,
+        SignalArbiter(ArbiterConfig(**arbiter_params)),
+        symbol=spec.symbol,
+        candidate_defaults=candidate_defaults,
+        strategy_id=spec.strategy_id,
+    )
 
 
 async def build_lane(
