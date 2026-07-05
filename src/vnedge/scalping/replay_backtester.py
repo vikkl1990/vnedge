@@ -15,9 +15,18 @@ Fill model (conservative maker-in / taker-out):
   target or stop is reached. Maker fee on entry, taker fee on exit.
 - Unfilled entries expire after ttl_ms and are counted as MISSED.
 
-v1 scope (documented, not hidden): top-of-book only (no full L2 queue model),
-single position, no cancel/replace. It is deliberately harsh; a strategy that
-survives this has a real chance live. A strategy that dies here is dead.
+Fill models (choose via `queue_aware`):
+- default (trade-through): fills when a taker prints strictly THROUGH the
+  resting price — pessimistic, no queue assumption.
+- queue_aware=True (FIFO): the resting size at the touch when we joined is our
+  queue; same-side taker volume at-or-through our price clears that queue
+  first, and we fill only once it is exhausted. Uses the touch depth the L2
+  recorder banks; can be harsher (a queue that never clears never fills).
+
+v1 scope (documented, not hidden): single position, no cancel/replace, and the
+queue model uses top-of-book depth only (no walking deeper L2 for partials).
+Deliberately harsh; a strategy that survives has a real chance live, one that
+dies here is dead.
 """
 
 from __future__ import annotations
@@ -179,6 +188,8 @@ class _Resting:
     ttl_ms: int
     stop_bps: float
     target_bps: float
+    queue_ahead: float = 0.0      # size resting at our price when we joined (queue model)
+    queue_consumed: float = 0.0   # same-side taker volume that has cleared ahead of us
 
 
 @dataclass
@@ -193,9 +204,13 @@ class _Open:
 
 
 class TickReplayBacktester:
-    def __init__(self, fees: ReplayFees = ReplayFees(), notional_usd: float = 100.0) -> None:
+    def __init__(self, fees: ReplayFees = ReplayFees(), notional_usd: float = 100.0,
+                 *, queue_aware: bool = False) -> None:
         self.fees = fees
         self.notional_usd = notional_usd
+        # queue_aware=True uses the FIFO queue model (needs the touch depth the
+        # L2 recorder banks); default False keeps the strict trade-through model.
+        self.queue_aware = queue_aware
 
     def run(self, events, scalper: QuotingScalper) -> ReplayResult:
         engine = IncrementalFeatureEngine()
@@ -224,8 +239,11 @@ class TickReplayBacktester:
                     q = scalper.quote(feats, top)
                     if q is not None:
                         limit = top.bid if q.side == "buy" else top.ask
+                        queue_ahead = 0.0
+                        if self.queue_aware:
+                            queue_ahead = top.bid_size if q.side == "buy" else top.ask_size
                         resting = _Resting(q.side, limit, ts_ms, q.ttl_ms,
-                                           q.stop_bps, q.target_bps)
+                                           q.stop_bps, q.target_bps, queue_ahead=queue_ahead)
                         result.quotes_placed += 1
             else:  # trade
                 engine.on_trade(obj)
@@ -238,16 +256,37 @@ class TickReplayBacktester:
                 # queue. Both guards keep the engine honest about fills.
                 if (resting is not None and position is None
                         and ts_ms > resting.placed_ms):
-                    filled = (
-                        resting.side == "buy" and obj.taker_side == "sell"
-                        and obj.price < resting.limit_price
-                    ) or (
-                        resting.side == "sell" and obj.taker_side == "buy"
-                        and obj.price > resting.limit_price
-                    )
-                    if filled and top is not None:
-                        position = self._open(resting, top, ts_ms)
-                        resting = None
+                    if self.queue_aware:
+                        # FIFO queue model: same-side taker volume at OR through
+                        # our price first clears the size that was resting ahead
+                        # of us at placement; we fill only once that queue is
+                        # exhausted. More realistic than trade-through (and can
+                        # be harsher: if the queue never clears before the price
+                        # leaves or the TTL, we simply never fill).
+                        qualifies = (
+                            resting.side == "buy" and obj.taker_side == "sell"
+                            and obj.price <= resting.limit_price
+                        ) or (
+                            resting.side == "sell" and obj.taker_side == "buy"
+                            and obj.price >= resting.limit_price
+                        )
+                        if qualifies:
+                            resting.queue_consumed += obj.quantity
+                            if (resting.queue_consumed >= resting.queue_ahead
+                                    and top is not None):
+                                position = self._open(resting, top, ts_ms)
+                                resting = None
+                    else:
+                        filled = (
+                            resting.side == "buy" and obj.taker_side == "sell"
+                            and obj.price < resting.limit_price
+                        ) or (
+                            resting.side == "sell" and obj.taker_side == "buy"
+                            and obj.price > resting.limit_price
+                        )
+                        if filled and top is not None:
+                            position = self._open(resting, top, ts_ms)
+                            resting = None
 
         if resting is not None:
             if self._expired(resting, ts_ms):
