@@ -82,10 +82,42 @@ CANDIDATE_SHADOW_LANES = [
 ]
 
 
-def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
-    if environ.get("MULTI_LANE_CANDIDATES", "1").lower() not in ("1", "true", "yes", "on"):
+def _truthy(environ: Mapping[str, str], name: str, default: str) -> bool:
+    return environ.get(name, default).lower() in ("1", "true", "yes", "on")
+
+
+def manifest_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    """Shadow lanes auto-generated from research winners (shadow_lanes.json).
+
+    OFF by default (MULTI_LANE_MANIFEST_ENABLED): auto-spawning lanes from
+    research output changes the running workspace, so it's opt-in. Only lanes
+    with human-locked params reach the manifest; all are shadow-only.
+    """
+    if not _truthy(environ, "MULTI_LANE_MANIFEST_ENABLED", "0"):
         return []
-    return list(CANDIDATE_SHADOW_LANES)
+    from vnedge.research.shadow_manifest import load_shadow_manifest
+    out_dir = Path(environ.get("MULTI_LANE_RESEARCH_DIR", "research/live_research"))
+    specs: list[LaneSpec] = []
+    for lane in load_shadow_manifest(out_dir).get("lanes", []):
+        try:
+            specs.append(LaneSpec(
+                lane_id=lane["lane_id"], exchange=lane["exchange"],
+                symbol=lane["symbol"], timeframe=lane.get("timeframe", "1h"),
+                strategy_id=lane["strategy_id"],
+                strategy_params=lane.get("strategy_params") or {},
+                mode=RunnerMode.SHADOW,
+            ))
+        except (KeyError, TypeError):
+            continue
+    return specs
+
+
+def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    if not _truthy(environ, "MULTI_LANE_CANDIDATES", "1"):
+        return []
+    curated = list(CANDIDATE_SHADOW_LANES)
+    seen = {s.lane_id for s in curated}
+    return curated + [s for s in manifest_shadow_lanes(environ) if s.lane_id not in seen]
 
 
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:

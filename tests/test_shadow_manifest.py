@@ -1,0 +1,80 @@
+"""Research-winner -> shadow-lane manifest: locked-params guardrail, gated consume."""
+
+import json
+
+from vnedge.research.shadow_manifest import (
+    RUNTIME_LOCKED_PARAMS,
+    generate_shadow_manifest,
+    load_shadow_manifest,
+    write_shadow_manifest,
+)
+from vnedge.runtime.multi_lane_shadow import candidate_shadow_lanes, manifest_shadow_lanes
+
+
+def _pair(exchange, symbol, strategy, verdict="PASS", net=20.0):
+    return {"exchange": exchange, "symbol": symbol, "best_strategy": strategy,
+            "timeframe": "1h", "verdict": verdict, "oos_net_usd": net}
+
+
+def test_locked_strategy_becomes_a_shadow_lane():
+    m = generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")])
+    assert len(m["lanes"]) == 1
+    lane = m["lanes"][0]
+    assert lane["strategy_id"] == "trend_continuation_v1"
+    assert lane["mode"] == "shadow"
+    assert lane["strategy_params"] == RUNTIME_LOCKED_PARAMS["trend_continuation_v1"]
+    assert m["policy"] == {"can_trade": False, "can_promote": False,
+                           "requires_untouched_judgment": True, "shadow_only": True}
+
+
+def test_unlocked_strategy_is_blocked_not_run():
+    m = generate_shadow_manifest([_pair("binanceusdm", "SOL/USDT:USDT", "some_unvetted_v9")])
+    assert m["lanes"] == []                       # no locked params -> not runnable
+    assert len(m["blocked"]) == 1
+    assert m["blocked"][0]["strategy_id"] == "some_unvetted_v9"
+    assert "locked" in m["blocked"][0]["reason"]
+
+
+def test_manifest_dedupes_and_caps():
+    pairs = [_pair("binanceusdm", "BTC/USDT:USDT", "funding_mean_reversion_v1")] * 3
+    m = generate_shadow_manifest(pairs, max_lanes=5)
+    assert len(m["lanes"]) == 1                    # deduped by lane_id
+
+
+def test_write_and_load_roundtrip(tmp_path):
+    m = generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")])
+    write_shadow_manifest(m, tmp_path)
+    assert not list(tmp_path.glob("*.tmp"))        # atomic, no leftover
+    loaded = load_shadow_manifest(tmp_path)
+    assert loaded["lanes"][0]["lane_id"] == m["lanes"][0]["lane_id"]
+
+
+def test_consumption_is_off_by_default(tmp_path):
+    write_shadow_manifest(
+        generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")]),
+        tmp_path)
+    env = {"MULTI_LANE_RESEARCH_DIR": str(tmp_path)}   # MANIFEST_ENABLED unset -> off
+    assert manifest_shadow_lanes(env) == []
+
+
+def test_consumption_when_enabled_yields_shadow_lanespecs(tmp_path):
+    write_shadow_manifest(
+        generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "funding_mean_reversion_v1")]),
+        tmp_path)
+    env = {"MULTI_LANE_MANIFEST_ENABLED": "1", "MULTI_LANE_RESEARCH_DIR": str(tmp_path)}
+    specs = manifest_shadow_lanes(env)
+    assert len(specs) == 1
+    from vnedge.runtime.runner_config import RunnerMode
+    assert specs[0].mode is RunnerMode.SHADOW
+    assert specs[0].strategy_id == "funding_mean_reversion_v1"
+
+
+def test_curated_and_manifest_lanes_do_not_duplicate(tmp_path):
+    # a manifest lane matching a curated lane_id is not added twice
+    manifest = {"lanes": [{"lane_id": "trend_continuation_xrp_bybit_shadow",
+                           "exchange": "bybit", "symbol": "XRP/USDT:USDT",
+                           "strategy_id": "trend_continuation_v1", "mode": "shadow"}]}
+    (tmp_path / "shadow_lanes.json").write_text(json.dumps(manifest))
+    env = {"MULTI_LANE_MANIFEST_ENABLED": "1", "MULTI_LANE_RESEARCH_DIR": str(tmp_path)}
+    ids = [s.lane_id for s in candidate_shadow_lanes(env)]
+    assert ids.count("trend_continuation_xrp_bybit_shadow") == 1
