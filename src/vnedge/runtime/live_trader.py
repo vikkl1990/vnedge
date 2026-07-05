@@ -48,6 +48,12 @@ class AccountProvider(Protocol):
     async def open_positions(self) -> list[FlattenTarget]: ...
 
 
+class PrivateStreamHealthProvider(Protocol):
+    connected: bool
+
+    def age_seconds(self, now: datetime | None = None) -> float: ...
+
+
 class LiveTraderSession:
     def __init__(
         self,
@@ -63,6 +69,10 @@ class LiveTraderSession:
         symbol: str,
         limits: SymbolLimits,
         reconcile_every_bars: int = 1,
+        pre_live_report=None,
+        private_stream_health: PrivateStreamHealthProvider | None = None,
+        require_private_stream: bool = False,
+        max_private_stream_age_seconds: float = 5.0,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -73,6 +83,11 @@ class LiveTraderSession:
                 f"enabled={settings.live_trading_enabled}, "
                 f"phrase_ok={settings.confirm_live_trading != ''}"
             )
+        if pre_live_report is not None and not pre_live_report.cleared:
+            failures = ", ".join(f.name for f in pre_live_report.failures)
+            raise RuntimeError(f"pre-live checklist not cleared: {failures}")
+        if require_private_stream and private_stream_health is None:
+            raise RuntimeError("require_private_stream=True needs private_stream_health")
         self.strategy = strategy
         self.feed = feed
         self.candles = history.reset_index(drop=True)
@@ -84,6 +99,9 @@ class LiveTraderSession:
         self.symbol = symbol
         self.limits = limits
         self.reconcile_every_bars = reconcile_every_bars
+        self.private_stream_health = private_stream_health
+        self.require_private_stream = require_private_stream
+        self.max_private_stream_age_seconds = max_private_stream_age_seconds
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.recon_mismatches = 0
         self._plan: SignalIntent | None = None
@@ -95,6 +113,14 @@ class LiveTraderSession:
     def entries_allowed(self) -> bool:
         """emergency_reduce_only mode allows exits only."""
         return self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
+
+    def private_stream_ready(self, now: datetime | None = None) -> bool:
+        if not self.require_private_stream:
+            return True
+        health = self.private_stream_health
+        if health is None or not health.connected:
+            return False
+        return health.age_seconds(now) <= self.max_private_stream_age_seconds
 
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
         account = await self.accounts.account_state()
@@ -203,6 +229,7 @@ class LiveTraderSession:
             # entries only when allowed, flat, and nothing unresolved
             if (self.entries_allowed and self._plan is None
                     and not self.om.has_unresolved_orders
+                    and self.private_stream_ready(now)
                     and len(self.candles) > self.strategy.warmup_bars):
                 df = self.strategy.prepare(self.candles)
                 sig = self.strategy.signal(df, len(df) - 1)

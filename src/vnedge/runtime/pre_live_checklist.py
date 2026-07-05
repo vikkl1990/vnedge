@@ -66,6 +66,10 @@ def run_pre_live_checklist(
     journal_path: Path,
     credentials_present: bool,
     lower_rungs_validated: bool,
+    private_stream_required: bool = False,
+    private_stream_connected: bool | None = None,
+    private_stream_age_seconds: float | None = None,
+    max_private_stream_age_seconds: float = 5.0,
 ) -> ChecklistReport:
     """Evaluate every live precondition. Fail-closed: any critical red blocks."""
     r: list[CheckResult] = []
@@ -113,6 +117,27 @@ def run_pre_live_checklist(
         else "unresolved (timeout-unknown) orders present — reconcile to venue "
              "truth before live",
     ))
+
+    if private_stream_required:
+        connected = bool(private_stream_connected)
+        age = (
+            float("inf")
+            if private_stream_age_seconds is None
+            else float(private_stream_age_seconds)
+        )
+        stream_ok = connected and age <= max_private_stream_age_seconds
+        r.append(CheckResult(
+            "private_stream_fresh",
+            stream_ok,
+            (
+                f"private order/fill stream connected age={age:.2f}s "
+                f"(max {max_private_stream_age_seconds:.2f}s)"
+                if stream_ok else
+                f"private order/fill stream stale/disconnected "
+                f"(connected={connected}, age={age:.2f}s, "
+                f"max={max_private_stream_age_seconds:.2f}s)"
+            ),
+        ))
 
     writable = _journal_writable(journal_path)
     r.append(CheckResult(

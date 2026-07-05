@@ -88,6 +88,8 @@ class ManagedOrder:
     intent: OrderIntent
     state: OrderState = OrderState.SIGNAL_CREATED
     exchange_order_id: str | None = None
+    filled_quantity: float = 0.0
+    fees_paid: float = 0.0
     history: list[StateEvent] = field(default_factory=list)
 
     def transition(self, new_state: OrderState, note: str = "") -> None:

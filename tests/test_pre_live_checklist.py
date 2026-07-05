@@ -62,6 +62,31 @@ def test_unresolved_orders_block(tmp_path):
     assert any(f.name == "reconciliation_clean" for f in report.failures)
 
 
+def test_required_private_stream_freshness_blocks_when_stale(tmp_path):
+    report = _run(
+        _live_settings(),
+        tmp_path,
+        private_stream_required=True,
+        private_stream_connected=False,
+        private_stream_age_seconds=None,
+    )
+    assert not report.cleared
+    assert any(f.name == "private_stream_fresh" for f in report.failures)
+
+
+def test_required_private_stream_freshness_passes_when_connected(tmp_path):
+    report = _run(
+        _live_settings(),
+        tmp_path,
+        private_stream_required=True,
+        private_stream_connected=True,
+        private_stream_age_seconds=0.2,
+    )
+    check = next(c for c in report.results if c.name == "private_stream_fresh")
+    assert report.cleared
+    assert check.passed
+
+
 def test_unvalidated_ladder_blocks(tmp_path):
     report = _run(_live_settings(), tmp_path, lower_rungs_validated=False)
     assert not report.cleared

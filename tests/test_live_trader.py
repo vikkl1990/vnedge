@@ -11,9 +11,11 @@ from vnedge.data.schemas import normalize_candles
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
+from vnedge.execution.private_stream import PrivateStreamHealth
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.position_sizer import SymbolLimits
 from vnedge.risk.risk_manager import AccountState, MarketState, PreTradeRiskGateway
+from vnedge.runtime.pre_live_checklist import run_pre_live_checklist
 from vnedge.runtime.live_trader import LiveTraderSession
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
@@ -91,7 +93,7 @@ class FakeAccounts:
         return list(self._positions)
 
 
-def wire(settings, feed, adapter, accounts, tmp_path, strategy):
+def wire(settings, feed, adapter, accounts, tmp_path, strategy, **session_kw):
     journal = DecisionJournal(tmp_path / "j.jsonl")
     gateway = PreTradeRiskGateway(settings.risk, KillSwitch(kill_file=tmp_path / "K"))
     om = OrderManager(gateway, journal, adapter)
@@ -101,6 +103,7 @@ def wire(settings, feed, adapter, accounts, tmp_path, strategy):
     return LiveTraderSession(
         strategy, feed, hist, settings=settings, gateway=gateway, order_manager=om,
         reconciler=reconciler, account_provider=accounts, symbol=SYM, limits=LIMITS,
+        **session_kw,
     ), om
 
 
@@ -141,6 +144,30 @@ def test_constructs_when_all_gates_open(tmp_path):
     assert session.entries_allowed
 
 
+def test_refuses_failed_pre_live_report(tmp_path):
+    settings = live_settings()
+    report = run_pre_live_checklist(
+        settings=settings,
+        risk_config=settings.risk,
+        kill_switch_active=True,
+        has_unresolved_orders=False,
+        journal_path=tmp_path / "j.jsonl",
+        credentials_present=True,
+        lower_rungs_validated=True,
+    )
+    assert not report.cleared
+    with pytest.raises(RuntimeError, match="pre-live checklist"):
+        wire(
+            settings,
+            FakeFeed([]),
+            FakeLiveAdapter(),
+            FakeAccounts(),
+            tmp_path,
+            OneShotLong(),
+            pre_live_report=report,
+        )
+
+
 # --- Wiring -----------------------------------------------------------------------
 
 def bar(i, o=100.0, h=101.0, low=99.0, c=100.0):
@@ -174,6 +201,45 @@ async def test_capital_cap_refuses_entry(tmp_path):
                        tmp_path, OneShotLong(at_bar=6))
     await session.run(max_bars=1)
     assert adapter.submitted == []  # equity over cap -> no order
+
+
+async def test_required_private_stream_blocks_entries_when_stale(tmp_path):
+    adapter = FakeLiveAdapter()
+    health = PrivateStreamHealth(connected=False)
+    session, om = wire(
+        live_settings(),
+        FakeFeed([bar(0)]),
+        adapter,
+        FakeAccounts(),
+        tmp_path,
+        OneShotLong(at_bar=6),
+        require_private_stream=True,
+        private_stream_health=health,
+    )
+
+    await session.run(max_bars=1)
+
+    assert adapter.submitted == []
+    assert session.private_stream_ready() is False
+
+
+async def test_required_private_stream_allows_entries_when_fresh(tmp_path):
+    adapter = FakeLiveAdapter()
+    health = PrivateStreamHealth(connected=True, last_event_at=datetime.now(UTC))
+    session, om = wire(
+        live_settings(),
+        FakeFeed([bar(0)]),
+        adapter,
+        FakeAccounts(),
+        tmp_path,
+        OneShotLong(at_bar=6),
+        require_private_stream=True,
+        private_stream_health=health,
+    )
+
+    await session.run(max_bars=1)
+
+    assert len(adapter.submitted) == 1
 
 
 async def test_emergency_flatten_submits_reduce_only(tmp_path):
