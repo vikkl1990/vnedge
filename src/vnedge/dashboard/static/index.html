@@ -1324,6 +1324,20 @@
       <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
     </section>
 
+    <section class="agent-board" id="shadowManifestBoard">
+      <h2>Research &#8594; Shadow Lanes <span class="tag">shadow-only; cannot trade or promote; untouched-data judgment before any promotion</span></h2>
+      <div class="kv">
+        <span class="k">L2 discovery</span><span class="v" id="sd_discovery">awaiting first L2 mining pass</span>
+        <span class="k">Shadow manifest</span><span class="v" id="sd_manifest">--</span>
+      </div>
+      <div class="table-wrap">
+        <table id="sd_lanes"><thead><tr>
+          <th>Shadow lane</th><th>Venue</th><th>Symbol</th><th>Source verdict</th><th>OOS net</th><th>Status</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="sd_empty">no research winners with locked params yet -- winners without locked params are blocked, not run</div>
+    </section>
+
     <footer>
       <span class="legend">
         <span><span class="dot" style="background:var(--green)"></span>active</span>
@@ -2302,6 +2316,44 @@
     }else{drawEquity();}
   }).catch(()=>drawEquity());
 
+  function renderScalperDiscovery(d){
+    const sr=d.scalper_research||{}, af=d.alpha_factory||{}, sm=d.shadow_lanes||{};
+    const scans=Array.isArray(sr.scanner_results)?sr.scanner_results.length:0;
+    const cand=Array.isArray(sr.replay_candidates)?sr.replay_candidates.length:0;
+    const edge=Array.isArray(sr.edge_hypotheses)?sr.edge_hypotheses.length:0;
+    const alpha=Array.isArray(af.hypotheses)?af.hypotheses.length:0;
+    text("sd_discovery",(scans||cand||edge||alpha)
+      ?(scans+" scanner lanes, "+cand+" replay candidates, "+edge+" edge + "+alpha+" alpha hypotheses (replay-gated)")
+      :"awaiting first L2 mining pass (recorder still accumulating tick/L2)");
+    const lanes=Array.isArray(sm.lanes)?sm.lanes:[];
+    const blocked=Array.isArray(sm.blocked)?sm.blocked:[];
+    text("sd_manifest",lanes.length+" runnable shadow lane(s), "+blocked.length+" winner(s) blocked (no locked params)");
+    const body=$("sd_lanes").querySelector("tbody");
+    body.replaceChildren();
+    lanes.forEach((l,idx)=>{
+      const tr=body.insertRow();
+      const cell=appendCell(tr,"");
+      const rank=document.createElement("span");rank.className="lane-rank";rank.textContent=String(idx+1);
+      cell.appendChild(rank);cell.appendChild(document.createTextNode(l.strategy_id||l.lane_id||"--"));
+      appendCell(tr,String(l.exchange||"--").replace("usdm",""));
+      appendCell(tr,String(l.symbol||"--").split(":")[0]);
+      appendCell(tr,l.source_verdict||"--");
+      appendCell(tr,usd(l.oos_net_usd),classFor(l.oos_net_usd));
+      appendBadge(tr.insertCell(),"SHADOW","good");
+    });
+    for(const b of blocked){
+      const tr=body.insertRow();
+      appendCell(tr,(b.strategy_id||"--"),"clip",b.reason||"");
+      appendCell(tr,String(b.exchange||"--").replace("usdm",""));
+      appendCell(tr,String(b.symbol||"--").split(":")[0]);
+      appendCell(tr,"--");appendCell(tr,"--");
+      appendBadge(tr.insertCell(),"BLOCKED","warn");
+    }
+    const has=lanes.length||blocked.length;
+    $("sd_lanes").style.display=has?"table":"none";
+    $("sd_empty").style.display=has?"none":"block";
+  }
+
   function renderResearch(data){
     const d=data||{results:[]};
     lastResearch=d;
@@ -2345,6 +2397,7 @@
       text("rl_updated","updated "+String(d.generated_at).slice(11,19)+" UTC; hourly"+extra);
     }
     renderAgent(d.edge_agents||{}, d.universe||{});
+    renderScalperDiscovery(d);
     const note=$("rl_note");
     if(d.note){note.textContent=d.note;note.style.display="block";}else{note.style.display="none";}
     const drift=Array.isArray(d.drift_alerts)?d.drift_alerts:[];
