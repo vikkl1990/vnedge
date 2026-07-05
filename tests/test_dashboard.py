@@ -46,6 +46,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     r = client.get("/")
     assert r.status_code == 200
     html = r.text
+    assert "Commercial Operator Workstation" in html
+    assert "workspace navigation" in html
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html

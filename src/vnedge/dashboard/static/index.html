@@ -6,57 +6,57 @@
 <title>VN Edge Control Room</title>
 <style>
   :root{
-    --bg:#05080f;
-    --bg2:#07111c;
-    --panel:#0b1220;
-    --panel2:#0f1a2c;
-    --panel3:#101d24;
-    --line:#21324a;
-    --line2:#315070;
-    --text:#e6edf6;
-    --muted:#7f8ea3;
-    --quiet:#4f6179;
+    --bg:#070a0f;
+    --bg2:#0a1018;
+    --panel:#0d141f;
+    --panel2:#111a27;
+    --panel3:#13202a;
+    --line:#202b3a;
+    --line2:#35445a;
+    --text:#edf3fb;
+    --muted:#91a0b3;
+    --quiet:#5f7087;
     --green:#33d17a;
     --red:#ff5a68;
     --amber:#ffb84d;
     --blue:#4db2ff;
     --cyan:#3de6d3;
     --violet:#a98cff;
-    --shadow:0 18px 42px rgba(0,0,0,.28);
+    --shadow:0 12px 28px rgba(0,0,0,.24);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{min-height:100%;max-width:100%;overflow-x:hidden}
   body{
-    background:
-      radial-gradient(circle at 18% -8%, rgba(77,178,255,.16), transparent 34%),
-      radial-gradient(circle at 92% 4%, rgba(51,209,122,.12), transparent 30%),
-      linear-gradient(180deg, #06101b 0%, var(--bg) 45%, #04070d 100%);
+    background:linear-gradient(180deg, #0a0f17 0%, var(--bg) 42%, #05070b 100%);
     color:var(--text);
-    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
     font-size:13px;
-    padding:14px 18px 18px;
+    padding:10px 12px 16px;
   }
   ::-webkit-scrollbar{width:8px;height:8px}
   ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px}
 
-  .shell{width:min(1640px,100%);margin:0 auto}
+  .shell{width:min(1840px,100%);margin:0 auto}
   .topbar{
+    position:sticky;
+    top:10px;
+    z-index:20;
     display:grid;
     grid-template-columns:minmax(210px,.75fr) minmax(360px,1.35fr) minmax(240px,.9fr) auto;
     align-items:center;
     gap:12px;
-    margin-bottom:12px;
+    margin-bottom:10px;
     padding:10px 12px;
-    border:1px solid rgba(77,178,255,.3);
-    border-radius:8px;
-    background:linear-gradient(180deg, rgba(15,28,46,.96), rgba(8,14,25,.96));
+    border:1px solid rgba(53,68,90,.72);
+    border-radius:6px;
+    background:rgba(9,14,22,.98);
     box-shadow:var(--shadow);
     min-width:0;
+    backdrop-filter:blur(12px);
   }
   .brand{display:flex;align-items:center;gap:10px;min-width:0}
   .mark{
     width:34px;height:34px;position:relative;flex:0 0 auto;
-    filter:drop-shadow(0 0 10px rgba(77,178,255,.35));
   }
   .mark:before,.mark:after{
     content:"";position:absolute;inset:4px 10px 4px 5px;
@@ -67,19 +67,19 @@
     inset:4px 4px 4px 14px;border-color:var(--blue);
     transform:skewX(-18deg) rotate(45deg);
   }
-  .brand-name{font-size:20px;font-weight:800;letter-spacing:.02em;white-space:nowrap}
+  .brand-name{font-size:18px;font-weight:760;letter-spacing:0;white-space:nowrap}
   .brand-name span{color:var(--blue)}
-  .brand-sub{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.11em;white-space:nowrap}
+  .brand-sub{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
   .top-chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
   .chip,.badge{
     display:inline-flex;align-items:center;gap:5px;
     min-height:23px;
     padding:3px 8px;
     border:1px solid var(--line2);
-    border-radius:5px;
+    border-radius:4px;
     color:var(--muted);
     background:rgba(10,18,30,.74);
-    font-size:10.5px;
+    font-size:10px;
     line-height:1.2;
     text-transform:uppercase;
     letter-spacing:.08em;
@@ -102,6 +102,7 @@
     gap:2px 10px;
     align-items:end;
     min-width:0;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
   }
   .price-main{
     font-size:22px;
@@ -153,49 +154,148 @@
     line-height:1.7;
   }
   #locked code{color:var(--text)}
-  #content{display:none;flex-direction:column}
+  #content{display:none;width:100%}
+  .workstation-shell{
+    display:grid;
+    grid-template-columns:178px minmax(0,1fr);
+    gap:10px;
+    align-items:start;
+  }
+  .nav-rail{
+    position:sticky;
+    top:82px;
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:rgba(10,15,23,.96);
+    box-shadow:var(--shadow);
+    overflow:hidden;
+  }
+  .nav-title{
+    padding:11px 12px 9px;
+    border-bottom:1px solid var(--line);
+    color:var(--muted);
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+  }
+  .nav-link{
+    display:grid;
+    grid-template-columns:24px minmax(0,1fr);
+    gap:8px;
+    align-items:center;
+    min-height:38px;
+    padding:8px 10px;
+    border-bottom:1px solid rgba(32,43,58,.72);
+    color:#c5d1df;
+    text-decoration:none;
+    font-size:12px;
+  }
+  .nav-link:last-child{border-bottom:none}
+  .nav-link:hover,.nav-link.active{background:rgba(77,178,255,.08);color:var(--text)}
+  .nav-icon{
+    display:inline-flex;
+    width:24px;
+    height:24px;
+    align-items:center;
+    justify-content:center;
+    border:1px solid var(--line2);
+    border-radius:4px;
+    color:var(--blue);
+    font-size:11px;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    background:rgba(77,178,255,.06);
+  }
+  .workspace-main{min-width:0}
+  .workspace-header{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:12px;
+    align-items:end;
+    margin-bottom:10px;
+    padding:10px 12px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:rgba(11,17,26,.94);
+  }
+  .workspace-title{
+    font-size:18px;
+    font-weight:760;
+    letter-spacing:0;
+  }
+  .workspace-sub{
+    margin-top:3px;
+    color:var(--muted);
+    font-size:11px;
+  }
+  .workspace-tabs{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+    justify-content:flex-end;
+  }
+  .workspace-tabs a{
+    min-height:28px;
+    display:inline-flex;
+    align-items:center;
+    padding:5px 9px;
+    border:1px solid var(--line2);
+    border-radius:4px;
+    color:var(--muted);
+    text-decoration:none;
+    font-size:10.5px;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+    background:rgba(8,13,21,.7);
+  }
+  .workspace-tabs a.active,.workspace-tabs a:hover{color:var(--text);border-color:rgba(77,178,255,.52);background:rgba(77,178,255,.08)}
 
   section,.panel,.loop-board{
     border:1px solid var(--line);
-    border-radius:8px;
-    background:rgba(10,18,31,.9);
-    box-shadow:0 14px 34px rgba(0,0,0,.2);
+    border-radius:6px;
+    background:rgba(13,20,31,.94);
+    box-shadow:none;
     min-width:0;
   }
-  section,.loop-board{margin-bottom:12px;overflow:hidden}
+  section,.loop-board{margin-bottom:10px;overflow:hidden;scroll-margin-top:94px}
   section h2,.panel-title{
     min-height:35px;
     display:flex;
     align-items:center;
     justify-content:space-between;
     gap:10px;
-    padding:9px 12px;
+    padding:8px 11px;
     border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg, rgba(17,31,51,.92), rgba(13,22,36,.92));
+    background:rgba(15,23,35,.98);
     color:#dbe8f7;
-    font-size:11px;
+    font-size:10.5px;
     line-height:1.25;
-    letter-spacing:.11em;
+    letter-spacing:.08em;
     text-transform:uppercase;
   }
   .tag{color:var(--quiet);font-size:10px;letter-spacing:.02em;text-transform:none;font-weight:400;white-space:nowrap}
 
   .command-strip{
+    position:sticky;
+    top:82px;
+    z-index:12;
     order:1;
     display:grid;
     grid-template-columns:repeat(6,minmax(0,1fr));
     gap:8px;
-    margin-bottom:12px;
+    margin-bottom:10px;
+    padding-bottom:2px;
+    background:linear-gradient(180deg, rgba(7,10,15,.98), rgba(7,10,15,.88));
   }
   .gate{
     min-width:0;
     border:1px solid var(--line);
-    border-radius:8px;
-    background:linear-gradient(180deg, rgba(12,22,36,.98), rgba(8,14,24,.96));
-    padding:10px;
+    border-radius:6px;
+    background:rgba(13,20,31,.97);
+    padding:9px 10px;
   }
   .gate .label{color:var(--quiet);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
-  .gate .value{font-size:14px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gate .value{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gate .detail{margin-top:4px;color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .value.good,.text-good{color:var(--green)}
   .value.warn,.text-warn{color:var(--amber)}
@@ -203,7 +303,7 @@
   .value.info,.text-info{color:var(--blue)}
   .value.idle,.text-idle{color:var(--quiet)}
 
-  .operator-board{order:2;background:rgba(7,15,25,.96)}
+  .operator-board{order:2;background:rgba(11,17,26,.96)}
   .operator-head{
     display:grid;
     grid-template-columns:minmax(240px,1.05fr) minmax(0,1.7fr) auto;
@@ -211,7 +311,7 @@
     align-items:center;
     padding:12px;
     border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg, rgba(14,28,45,.96), rgba(8,15,25,.96));
+    background:rgba(12,19,29,.96);
   }
   .eyebrow{color:var(--quiet);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}
   .op-state{font-size:28px;font-weight:900;line-height:1;letter-spacing:.08em;text-transform:uppercase}
@@ -283,16 +383,16 @@
   .op-card{
     min-width:0;
     border:1px solid var(--line);
-    border-radius:8px;
-    background:rgba(8,15,25,.94);
+    border-radius:6px;
+    background:rgba(10,16,25,.94);
     padding:10px;
   }
-  .op-card.good{background:linear-gradient(180deg, rgba(13,36,27,.95), rgba(8,17,20,.96))}
-  .op-card.warn{background:linear-gradient(180deg, rgba(39,29,14,.95), rgba(18,16,13,.96))}
-  .op-card.bad{background:linear-gradient(180deg, rgba(43,17,23,.95), rgba(18,12,15,.96))}
-  .op-card.info{background:linear-gradient(180deg, rgba(13,29,48,.95), rgba(8,15,24,.96))}
+  .op-card.good{background:rgba(10,30,22,.88)}
+  .op-card.warn{background:rgba(36,26,12,.88)}
+  .op-card.bad{background:rgba(39,14,19,.88)}
+  .op-card.info{background:rgba(10,25,40,.88)}
   .op-card .label{color:var(--quiet);font-size:9.8px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
-  .op-card .metric{font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .op-card .metric{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .op-card .sub{margin-top:5px;color:var(--muted);font-size:10.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .truth-grid{
     display:grid;
@@ -303,7 +403,7 @@
   .truth-panel{
     min-width:0;
     border:1px solid var(--line);
-    border-radius:8px;
+    border-radius:6px;
     background:rgba(8,15,25,.86);
     overflow:hidden;
   }
@@ -322,7 +422,7 @@
   .latency-table th,.latency-table td{font-size:11px;padding:7px 10px}
   .latency-table td:nth-child(2),.latency-table td:nth-child(3){text-align:right}
 
-  .institutional-board{order:3;background:rgba(5,12,22,.96)}
+  .institutional-board{order:3;background:rgba(11,17,26,.96)}
   .workspace-grid{
     display:grid;
     grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);
@@ -332,11 +432,11 @@
   .terminal{
     min-width:0;
     border:1px solid rgba(77,178,255,.35);
-    border-radius:8px;
-    background:linear-gradient(180deg, rgba(7,16,27,.98), rgba(4,9,16,.98));
+    border-radius:6px;
+    background:rgba(9,15,23,.98);
     overflow:hidden;
   }
-  .terminal.purple{border-color:rgba(169,140,255,.48);background:linear-gradient(180deg, rgba(15,11,27,.98), rgba(7,7,15,.98))}
+  .terminal.purple{border-color:rgba(169,140,255,.42);background:rgba(13,12,24,.98)}
   .terminal-head{
     display:flex;
     justify-content:space-between;
@@ -362,11 +462,11 @@
   .mini-card .small-label{color:var(--quiet);font-size:9px;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .mini-card .big{margin-top:7px;font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .mini-card .tiny{margin-top:5px;color:var(--muted);font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .mini-card.good,.gov-card.good{background:linear-gradient(180deg, rgba(12,36,26,.92), rgba(7,17,19,.92))}
-  .mini-card.warn,.gov-card.warn{background:linear-gradient(180deg, rgba(42,30,13,.92), rgba(17,15,12,.92))}
-  .mini-card.bad,.gov-card.bad{background:linear-gradient(180deg, rgba(43,16,22,.92), rgba(18,11,14,.92))}
-  .mini-card.info,.gov-card.info{background:linear-gradient(180deg, rgba(12,28,47,.92), rgba(7,15,24,.92))}
-  .mini-card.plan,.gov-card.plan{background:linear-gradient(180deg, rgba(25,18,43,.92), rgba(13,11,22,.92))}
+  .mini-card.good,.gov-card.good{background:rgba(10,31,22,.86)}
+  .mini-card.warn,.gov-card.warn{background:rgba(36,26,12,.86)}
+  .mini-card.bad,.gov-card.bad{background:rgba(39,14,19,.86)}
+  .mini-card.info,.gov-card.info{background:rgba(10,25,41,.86)}
+  .mini-card.plan,.gov-card.plan{background:rgba(24,18,40,.86)}
   .terminal-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
   .dense-panel{
     min-width:0;
@@ -468,14 +568,14 @@
     position:relative;
     min-width:0;
     border:1px solid rgba(77,178,255,.35);
-    border-radius:7px;
-    background:linear-gradient(180deg, rgba(14,30,47,.95), rgba(8,16,27,.96));
+    border-radius:6px;
+    background:rgba(11,19,30,.95);
     padding:9px 10px;
   }
-  .loop-node.green{border-color:rgba(51,209,122,.42);background:linear-gradient(180deg, rgba(15,38,29,.95), rgba(8,19,21,.96))}
-  .loop-node.amber{border-color:rgba(255,184,77,.48);background:linear-gradient(180deg, rgba(42,31,16,.94), rgba(21,18,13,.96))}
-  .loop-node.red{border-color:rgba(255,90,104,.54);background:linear-gradient(180deg, rgba(46,19,26,.94), rgba(21,13,17,.96))}
-  .loop-node.violet{border-color:rgba(169,140,255,.44);background:linear-gradient(180deg, rgba(31,25,51,.94), rgba(17,15,29,.96))}
+  .loop-node.green{border-color:rgba(51,209,122,.42);background:rgba(10,31,22,.88)}
+  .loop-node.amber{border-color:rgba(255,184,77,.48);background:rgba(36,26,12,.88)}
+  .loop-node.red{border-color:rgba(255,90,104,.54);background:rgba(39,14,19,.88)}
+  .loop-node.violet{border-color:rgba(169,140,255,.44);background:rgba(24,18,40,.88)}
   .loop-node:after{
     content:"";
     position:absolute;
@@ -521,12 +621,13 @@
   .kpi{
     min-width:0;
     border:1px solid var(--line);
-    border-radius:8px;
+    border-radius:6px;
     background:rgba(10,18,31,.94);
     padding:10px 11px 7px;
   }
   .kpi .lbl{color:var(--quiet);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}
   .kpi .val{
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
     font-size:18px;
     line-height:1.15;
     font-variant-numeric:tabular-nums;
@@ -547,6 +648,7 @@
     width:100%;
     min-width:620px;
     border-collapse:collapse;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
   }
   #orders{min-width:980px}
   #positions{min-width:820px}
@@ -579,7 +681,7 @@
     font-size:12px;
   }
   .kv .k{color:var(--muted);min-width:0}
-  .kv .v{text-align:right;font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .kv .v{text-align:right;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .meter{height:5px;background:#162235;border-radius:4px;overflow:hidden;margin-top:4px}
   .meter i{display:block;height:100%;background:var(--blue)}
   .meter i.done{background:var(--green)}
@@ -663,6 +765,9 @@
   @media(max-width:1360px){
     .topbar{grid-template-columns:minmax(200px,.8fr) minmax(320px,1.2fr) minmax(220px,.8fr)}
     #clock{grid-column:1/-1;text-align:left}
+    .workstation-shell{grid-template-columns:148px minmax(0,1fr)}
+    .nav-link{grid-template-columns:20px minmax(0,1fr);font-size:11px;padding:8px}
+    .nav-icon{width:20px;height:20px;font-size:10px}
     .kpis{grid-template-columns:repeat(3,minmax(128px,1fr))}
     .operator-head{grid-template-columns:1fr}
     .op-clock{text-align:left}
@@ -676,9 +781,16 @@
   @media(max-width:1040px){
     body{padding:12px}
     .topbar{grid-template-columns:1fr}
+    .topbar{position:static}
+    .workstation-shell{grid-template-columns:1fr}
+    .nav-rail{position:static;display:flex;overflow-x:auto}
+    .nav-title{display:none}
+    .nav-link{min-width:max-content;border-bottom:none;border-right:1px solid rgba(32,43,58,.72)}
+    .workspace-header{grid-template-columns:1fr}
+    .workspace-tabs{justify-content:flex-start}
     .market-tape{grid-template-columns:auto 1fr}
     .price-symbol{text-align:left}
-    .command-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .command-strip{position:static;grid-template-columns:repeat(3,minmax(0,1fr))}
     .truth-grid{grid-template-columns:1fr}
     .terminal-split{grid-template-columns:1fr}
     .workbench{grid-template-columns:1fr}
@@ -752,6 +864,32 @@
   </div>
 
   <main id="content">
+    <div class="workstation-shell">
+      <aside class="nav-rail" aria-label="workspace navigation">
+        <div class="nav-title">Workspaces</div>
+        <a class="nav-link active" href="#tradeMonitor"><span class="nav-icon">01</span><span>Trade Monitor</span></a>
+        <a class="nav-link" href="#lanesBoard"><span class="nav-icon">02</span><span>Research Lanes</span></a>
+        <a class="nav-link" href="#microstructureWorkspace"><span class="nav-icon">03</span><span>Microstructure</span></a>
+        <a class="nav-link" href="#architectureMap"><span class="nav-icon">04</span><span>Architecture</span></a>
+        <a class="nav-link" href="#performanceWorkbench"><span class="nav-icon">05</span><span>Performance</span></a>
+        <a class="nav-link" href="#agentBoard"><span class="nav-icon">06</span><span>AI Research</span></a>
+      </aside>
+
+      <div class="workspace-main">
+        <div class="workspace-header">
+          <div>
+            <div class="workspace-title">Commercial Operator Workstation</div>
+            <div class="workspace-sub">Trade monitor, microstructure, research governance, and system health in one read-only control surface.</div>
+          </div>
+          <nav class="workspace-tabs" aria-label="workspace shortcuts">
+            <a class="active" href="#tradeMonitor">Monitor</a>
+            <a href="#microstructureWorkspace">Market</a>
+            <a href="#lanesBoard">Research</a>
+            <a href="#agentBoard">Agents</a>
+            <a href="#architectureMap">System</a>
+          </nav>
+        </div>
+
     <div class="command-strip" aria-label="operator gates">
       <div class="gate"><div class="label">Mode ladder</div><div class="value idle" id="gateMode">--</div><div class="detail" id="gateModeDetail">waiting</div></div>
       <div class="gate"><div class="label">Risk gateway</div><div class="value idle" id="gateRisk">--</div><div class="detail" id="gateRiskDetail">all orders gated</div></div>
@@ -761,7 +899,7 @@
       <div class="gate"><div class="label">Journal</div><div class="value idle" id="gateJournal">--</div><div class="detail" id="gateJournalDetail">WAL status</div></div>
     </div>
 
-    <section class="operator-board" aria-label="operator cockpit">
+    <section class="operator-board" id="tradeMonitor" aria-label="operator cockpit">
       <div class="operator-head">
         <div>
           <div class="eyebrow">Operator state</div>
@@ -833,7 +971,7 @@
       </div>
     </section>
 
-    <section class="institutional-board" aria-label="institutional workspace">
+    <section class="institutional-board" id="microstructureWorkspace" aria-label="institutional workspace">
       <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
       <div class="workspace-grid">
         <div class="terminal" aria-label="system telemetry and microstructure terminal">
@@ -991,7 +1129,7 @@
       </div>
     </section>
 
-    <details class="loop-board" open>
+    <details class="loop-board" id="architectureMap" open>
       <summary class="panel-title">
         <span>Execution Architecture</span>
         <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
@@ -1059,7 +1197,7 @@
       </div>
     </details>
 
-    <div class="workbench">
+    <div class="workbench" id="performanceWorkbench">
       <div class="main-column">
         <div class="kpis">
           <div class="kpi"><div class="lbl">Equity</div><div class="val neutral" id="equity">--</div><canvas id="sp_equity"></canvas></div>
@@ -1172,7 +1310,7 @@
       </aside>
     </div>
 
-    <section class="agent-board">
+    <section class="agent-board" id="agentBoard">
       <h2>Edge Research Agent <span class="tag" id="ea_policy">exploratory only; cannot trade or promote</span></h2>
       <div class="kv">
         <span class="k">Universe</span><span class="v" id="ea_universe">--</span>
@@ -1196,6 +1334,8 @@
       <span>read-only surface: no order, config, risk, or kill-switch controls</span>
       <span>crypto derivatives are high-risk; this is not financial advice</span>
     </footer>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -1220,7 +1360,7 @@
     $("conn").className="chip bad";
     return;
   }
-  $("content").style.display="flex";
+  $("content").style.display="block";
 
   const HMAX=240;
   const EQMAX=2000;
