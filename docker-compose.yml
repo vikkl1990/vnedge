@@ -89,6 +89,28 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Fast recent-slice scout for interactive edge hunting. It reads only the
+  # newest tick/L2 shards per lane and writes l2_scout_latest.json; the full
+  # l2-research-loop above remains the conservative replay/tournament source
+  # of truth. Research-only: no credentials, no orders, no promotion.
+  l2-fast-scout:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.fast_l2_scout",
+              "--interval-seconds", "${L2_SCOUT_INTERVAL_SECONDS:-900}",
+              "--lookback-minutes", "${L2_SCOUT_LOOKBACK_MINUTES:-30}",
+              "--max-shards", "${L2_SCOUT_MAX_SHARDS:-40}",
+              "--max-results", "${L2_SCOUT_MAX_RESULTS:-100}"]
+    environment:
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
+    volumes:
+      - ./data:/app/data
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.
