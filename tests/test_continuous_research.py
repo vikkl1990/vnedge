@@ -83,6 +83,29 @@ def test_run_walk_forwards_marks_delta_funding_lanes_untestable(monkeypatch, tmp
     assert by_strategy["trend_continuation_v1"]["verdict"] in {"PASS", "REJECT"}
 
 
+def test_run_walk_forwards_respects_strategy_allowlist(monkeypatch, tmp_path):
+    from vnedge.data.parquet_store import ParquetStore
+
+    store = ParquetStore(tmp_path)
+    candles = pd.DataFrame({
+        "timestamp": [ts(i) for i in range(2000)],
+        "open": [100.0] * 2000,
+        "high": [101.0] * 2000,
+        "low": [99.0] * 2000,
+        "close": [100.0] * 2000,
+        "volume": [10.0] * 2000,
+    })
+    store.upsert_candles("binanceusdm", "BTC/USDT:USDT", "1h", candles)
+    monkeypatch.setenv("RESEARCH_STRATEGIES", "quant_signal_pack_v1")
+    monkeypatch.setattr(cr, "walk_forward", lambda *a, **k: make_result())
+
+    records = cr.run_walk_forwards(
+        store, cr.ResearchTarget("binanceusdm", "BTC/USDT:USDT", "1h")
+    )
+
+    assert [record["strategy"] for record in records] == ["quant_signal_pack_v1"]
+
+
 def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
     records = [cr.wf_record("s", "BTC/USDT:USDT", make_result(), SPARSE_STRATEGY_GATES)]
@@ -201,6 +224,41 @@ def test_attribution_by_side():
     att = cr.side_attribution(WalkForwardResult(windows=windows))
     assert att["long"] == {"trades": 3, "net_usd": 30.0, "win_rate_pct": 100.0}
     assert att["short"]["trades"] == 3 and att["short"]["net_usd"] == -12.0
+
+
+def test_quant_family_attribution_from_entry_reason():
+    from vnedge.backtest.backtester import Trade
+
+    def trade(family, net):
+        return Trade(
+            side="long", quantity=1.0, entry_ts=ts(0), entry_price=100.0,
+            exit_ts=ts(1), exit_price=100.0 + net, exit_reason="take_profit",
+            gross_pnl_usd=net, fees_usd=0.0, funding_usd=0.0,
+            entry_reason=(
+                f"quant_signal_pack long {family} score L/S=6.0/3.0; "
+                "features=sweep_low"
+            ),
+        )
+
+    windows = (
+        WindowResult(0, ts(0), ts(1), ts(2), {}, metrics(), metrics(),
+                     test_trades=(
+                         trade("liquidity_sweep", 10.0),
+                         trade("liquidity_sweep", -4.0),
+                         trade("fvg_retest", 6.0),
+                     )),
+    )
+    result = WalkForwardResult(windows=windows)
+
+    att = cr.quant_family_attribution(result)
+    assert att["liquidity_sweep"]["trades"] == 2
+    assert att["liquidity_sweep"]["net_usd"] == 6.0
+    assert att["liquidity_sweep"]["profit_factor"] == 2.5
+    assert att["fvg_retest"]["trades"] == 1
+    record = cr.wf_record(
+        "quant_signal_pack_v1", "BTC/USDT:USDT", result, SPARSE_STRATEGY_GATES
+    )
+    assert record["family_attribution"]["liquidity_sweep"]["net_usd"] == 6.0
 
 
 def test_drift_verdict_flip_fires_once():

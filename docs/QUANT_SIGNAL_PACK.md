@@ -7,12 +7,13 @@ scripts. It converts the visual ideas into auditable research features.
 
 ## Included Families
 
-- SMC structure: break of structure and change of character proxies.
-- Liquidity: sweep/reclaim of prior liquidity pools.
-- Fair value gap: bullish/bearish FVG creation and later retest.
-- Order block proxy: opposite candle followed by displacement through its range.
-- Squeeze momentum: volatility compression followed by volume-backed release.
-- VWAP reversion: stretched move reclaiming rolling VWAP.
+- `structure_break`: break of structure and change of character proxies.
+- `liquidity_sweep`: sweep/reclaim of prior liquidity pools.
+- `fvg_retest`: bullish/bearish FVG creation and later retest.
+- `order_block`: opposite candle followed by displacement through its range.
+- `squeeze_release`: volatility compression followed by volume-backed release.
+- `vwap_reclaim`: stretched move reclaiming rolling VWAP.
+- `confluence`: fallback when no single dominant family owns the setup.
 - Multi-horizon bias: fast/mid/slow EMA alignment plus efficiency ratio.
 - Volume impulse and displacement filters.
 
@@ -36,6 +37,17 @@ The continuous research loop now sweeps `quant_signal_pack_v1` under
 `OFFENSIVE_GATES` across the configured universe. Runtime shadow lanes can be
 created only through the research-to-shadow manifest, and those lanes remain
 `can_trade=false` / `can_promote=false`.
+
+Each emitted reason contains the dominant family. Walk-forward records publish
+`family_attribution` with trades, net, PF, payoff, and win rate per family. The
+bounded research agent can then propose reviewable variants such as:
+
+- `allowed_families=["liquidity_sweep"]`
+- `allowed_families=["fvg_retest"]`
+- `allowed_sides=["long"]`
+
+These variants are exploratory only. A family-only rolling PASS is still a
+candidate for untouched-data judgment, not a promotion.
 
 Primary module:
 

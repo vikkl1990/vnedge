@@ -1,6 +1,7 @@
 """Quant Signal Pack — causal commercial-style confluence lane."""
 
 import pandas as pd
+import pytest
 
 from vnedge.data.schemas import normalize_candles
 from vnedge.strategy.quant_signal_pack import (
@@ -81,6 +82,59 @@ def test_quant_pack_fires_on_liquidity_sweep_reclaim():
     assert bool(df["sweep_low"].iloc[-1])
     assert intent.stop_price < float(df["close"].iloc[-1])
     assert intent.take_profit_price > float(df["close"].iloc[-1])
+
+
+def test_quant_pack_family_filter_blocks_mismatched_signal():
+    rows = trend_rows()
+    prior_pool = min(row[2] for row in rows[-20:-1])
+    prev_close = rows[-1][3]
+    rows.append((
+        prev_close - 1.2,
+        prev_close + 1.6,
+        prior_pool - 0.8,
+        prev_close + 1.3,
+        320.0,
+    ))
+    candles = make_candles(rows)
+    strategy = QuantSignalPack(
+        params=params(),
+        min_score=4.5,
+        structure_window=14,
+        allowed_families=["fvg_retest"],
+    )
+    df = strategy.prepare(candles)
+
+    assert strategy.signal(df, len(df) - 1) is None
+
+
+def test_quant_pack_side_filter_blocks_mismatched_signal():
+    rows = trend_rows()
+    prior_pool = min(row[2] for row in rows[-20:-1])
+    prev_close = rows[-1][3]
+    rows.append((
+        prev_close - 1.2,
+        prev_close + 1.6,
+        prior_pool - 0.8,
+        prev_close + 1.3,
+        320.0,
+    ))
+    candles = make_candles(rows)
+    strategy = QuantSignalPack(
+        params=params(),
+        min_score=4.5,
+        structure_window=14,
+        allowed_sides=["short"],
+    )
+    df = strategy.prepare(candles)
+
+    assert strategy.signal(df, len(df) - 1) is None
+
+
+def test_quant_pack_rejects_unknown_filters():
+    with pytest.raises(ValueError, match="allowed_families"):
+        QuantSignalPack(params=params(), allowed_families=["moon_phase"])
+    with pytest.raises(ValueError, match="allowed_sides"):
+        QuantSignalPack(params=params(), allowed_sides=["flat"])
 
 
 def test_quant_pack_fires_on_bullish_fvg_retest():

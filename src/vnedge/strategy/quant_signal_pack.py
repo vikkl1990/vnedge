@@ -29,6 +29,18 @@ from vnedge.strategy.indicators import (
 from vnedge.strategy.regime import merge_funding
 
 
+QUANT_SIGNAL_FAMILIES: tuple[str, ...] = (
+    "liquidity_sweep",
+    "fvg_retest",
+    "order_block",
+    "squeeze_release",
+    "vwap_reclaim",
+    "structure_break",
+    "confluence",
+)
+QUANT_SIGNAL_SIDES: tuple[str, ...] = ("long", "short")
+
+
 @dataclass(frozen=True)
 class QuantSignalPackParams:
     structure_window: int = 48
@@ -58,6 +70,8 @@ class QuantSignalPackParams:
     stop_buffer_atr: float = 0.15
     take_profit_r: float = 2.0
     max_funding_against: float = 0.0008
+    allowed_sides: tuple[str, ...] = ()
+    allowed_families: tuple[str, ...] = ()
 
 
 def quant_signal_pack_warmup_bars(params: QuantSignalPackParams) -> int:
@@ -265,9 +279,12 @@ class QuantSignalPack(BaseStrategy):
         structure_window: int = 48,
         min_score: float = 5.0,
         min_score_delta: float = 1.0,
+        min_volume_z: float | None = None,
         stop_atr_mult: float = 1.35,
         take_profit_r: float = 2.0,
         max_funding_against: float = 0.0008,
+        allowed_sides: tuple[str, ...] | list[str] | None = None,
+        allowed_families: tuple[str, ...] | list[str] | None = None,
         params: QuantSignalPackParams | None = None,
     ) -> None:
         base = params or QuantSignalPackParams()
@@ -276,9 +293,22 @@ class QuantSignalPack(BaseStrategy):
             structure_window=structure_window,
             min_score=min_score,
             min_score_delta=min_score_delta,
+            min_volume_z=base.min_volume_z if min_volume_z is None else min_volume_z,
             stop_atr_mult=stop_atr_mult,
             take_profit_r=take_profit_r,
             max_funding_against=max_funding_against,
+            allowed_sides=_validate_filter(
+                "allowed_sides",
+                base.allowed_sides if allowed_sides is None else tuple(allowed_sides),
+                QUANT_SIGNAL_SIDES,
+            ),
+            allowed_families=_validate_filter(
+                "allowed_families",
+                base.allowed_families
+                if allowed_families is None
+                else tuple(allowed_families),
+                QUANT_SIGNAL_FAMILIES,
+            ),
         )
         self.funding = funding
         self.warmup_bars = quant_signal_pack_warmup_bars(self.params)
@@ -305,10 +335,14 @@ class QuantSignalPack(BaseStrategy):
         short_score = float(row["short_score"])
 
         if (
-            long_score >= self.params.min_score
+            self._side_allowed("long")
+            and long_score >= self.params.min_score
             and long_score >= short_score + self.params.min_score_delta
             and funding_rate <= self.params.max_funding_against
         ):
+            family = _dominant_family("long", row)
+            if not self._family_allowed(family):
+                return None
             stop = self._long_stop(row, close, atr_value)
             if stop <= 0 or stop >= close:
                 return None
@@ -321,10 +355,14 @@ class QuantSignalPack(BaseStrategy):
             )
 
         if (
-            short_score >= self.params.min_score
+            self._side_allowed("short")
+            and short_score >= self.params.min_score
             and short_score >= long_score + self.params.min_score_delta
             and funding_rate >= -self.params.max_funding_against
         ):
+            family = _dominant_family("short", row)
+            if not self._family_allowed(family):
+                return None
             stop = self._short_stop(row, close, atr_value)
             if stop <= close:
                 return None
@@ -344,6 +382,15 @@ class QuantSignalPack(BaseStrategy):
     def _short_stop(self, row: pd.Series, close: float, atr_value: float) -> float:
         structure_stop = max(float(row["high"]), close + 0.5 * atr_value)
         return structure_stop + self.params.stop_buffer_atr * atr_value
+
+    def _side_allowed(self, side: str) -> bool:
+        return not self.params.allowed_sides or side in self.params.allowed_sides
+
+    def _family_allowed(self, family: str) -> bool:
+        return (
+            not self.params.allowed_families
+            or family in self.params.allowed_families
+        )
 
     @staticmethod
     def _reason(side: str, row: pd.Series, long_score: float, short_score: float) -> str:
@@ -393,3 +440,14 @@ def _dominant_family(side: str, row: pd.Series) -> str:
         if bool(row.get(column, False)):
             return label
     return "confluence"
+
+
+def _validate_filter(
+    name: str,
+    values: tuple[str, ...],
+    allowed: tuple[str, ...],
+) -> tuple[str, ...]:
+    unknown = sorted(set(values) - set(allowed))
+    if unknown:
+        raise ValueError(f"{name} contains unknown values: {unknown}")
+    return values
