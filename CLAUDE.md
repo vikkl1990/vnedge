@@ -5,8 +5,11 @@ profit, always. Nothing here is financial advice.
 
 ## Locked decisions (2026-07-02)
 
-- Exchanges: Binance Futures (dev/validation, testnet first), Delta Exchange
-  India (first live candidate), Bybit (third). Jurisdiction: India.
+- Exchanges: Binance Futures (dev/validation), Delta Exchange India (first
+  live candidate), Bybit (third). Jurisdiction: India. MAINNET-ONLY (user
+  decision 2026-07-06): no testnet anywhere — execution validation runs as a
+  bounded mainnet drill (runtime/execution_drill.py: three gates + checklist,
+  $25 hard notional cap, far-limit lifecycle, refuses if any exposure exists).
 - Hybrid framework: Freqtrade/FreqAI for strategy research; custom
   CCXT/asyncio stack (this repo) for execution.
 - Capital design point: < $1,000. Daily loss halt: fixed USD, default $20.
@@ -86,7 +89,8 @@ work, in priority order:
    image build validates on the VPS — no Docker on the dev Mac)
 2. ~~Alert rules engine + Telegram~~ ✅ (monitoring/: cooldown, severity,
    alerts.jsonl, guarded notifiers; wired into trial sessions; env-config)
-3. Live ExecutionAdapter on Binance testnet (last unbuilt execution piece)
+3. ~~Live ExecutionAdapter~~ ✅ built + mainnet drill runner (testnet
+   dropped by user decision 2026-07-06; validation = bounded mainnet drill)
 4. Second venue adapter — Bybit vs Delta India is a USER decision (live
    venue/compliance choice)
 5. Formally retire the Freqtrade research leg + sentiment/news ambitions
@@ -236,8 +240,8 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    data). NOTE: LiveMarketFeed/LivePaperSession are v1 — exits are
    bar-close granular (tick-level stop monitoring is a live-adapter-phase
    upgrade), and prepare() re-runs per bar (fine at 1m+, optimize later).
-   REMAINING before live trading: live ExecutionAdapter (real orders,
-   testnet first), pre-live checklist, a strategy that passes gates.
+   REMAINING before live trading: mainnet execution drill CLEARED on the
+   chosen venue (adapter + checklist built), a strategy that passes gates.
 7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (read-only FastAPI app:
    GET /state + 1-2Hz snapshot WS, bearer token mandatory, zero control
    routes — tested; vanilla single-page UI; demo replay via

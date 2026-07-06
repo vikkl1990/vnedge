@@ -55,11 +55,52 @@ class CcxtExecutionAdapter:
         else:  # pragma: no cover - network client construction
             import ccxt.async_support as ccxt_async
 
-            self._ex = getattr(ccxt_async, exchange_id)(
+            from vnedge.data.ccxt_client import (
+                _API_URL_OVERRIDES,
+                resolve_ccxt_exchange_id,
+            )
+
+            resolved = resolve_ccxt_exchange_id(exchange_id)
+            self._ex = getattr(ccxt_async, resolved)(
                 {"apiKey": api_key, "secret": api_secret, "enableRateLimit": True}
             )
+            overrides = _API_URL_OVERRIDES.get(exchange_id)
+            if overrides:
+                self._ex.urls["api"] = {**self._ex.urls.get("api", {}), **overrides}
             if testnet:
                 self._ex.set_sandbox_mode(True)
+
+    # --- read-only helpers (drill + reconciliation surface) -------------------
+    async def fetch_balance(self) -> dict:
+        bal = await self._ex.fetch_balance()
+        total = bal.get("total", {}) or {}
+        usd = sum(float(v or 0.0) for k, v in total.items()
+                  if k in ("USDT", "USD", "USDC"))
+        return {"total_usd": usd, **{k: float(v or 0.0) for k, v in total.items()}}
+
+    async def fetch_positions(self, symbol: str) -> list:
+        try:
+            positions = await self._ex.fetch_positions([symbol])
+        except Exception:  # noqa: BLE001 - venues vary; empty is the safe read
+            return []
+        return [p for p in positions or []
+                if abs(float(p.get("contracts") or p.get("contractSize") or 0.0)) > 0]
+
+    async def fetch_open_orders(self, symbol: str) -> list:
+        return await self._ex.fetch_open_orders(symbol) or []
+
+    async def fetch_mid_price(self, symbol: str) -> float:
+        book = await self._ex.fetch_order_book(symbol, limit=50)
+        bid, ask = float(book["bids"][0][0]), float(book["asks"][0][0])
+        return (bid + ask) / 2.0
+
+    def amount_to_precision(self, symbol: str, amount: float) -> float:
+        """Round DOWN to venue amount steps (never inflate to meet minimums)."""
+        try:
+            self._ex.options["truncate"] = True  # ccxt truncates by default
+            return float(self._ex.amount_to_precision(symbol, amount))
+        except Exception:  # noqa: BLE001 - markets not loaded yet
+            return amount
 
     async def close(self) -> None:
         await self._ex.close()
