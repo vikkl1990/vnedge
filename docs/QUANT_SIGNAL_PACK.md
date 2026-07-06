@@ -17,6 +17,11 @@ scripts. It converts the visual ideas into auditable research features.
 - Multi-horizon bias: fast/mid/slow EMA alignment plus efficiency ratio.
 - Volume impulse and displacement filters.
 
+See `docs/LUXALGO_EDGE_EXTRACTION.md` for the deeper LuxAlgo-derived research
+contract. The key extraction is not to clone visual indicators; it is to build
+a causal confluence state machine that proves which combinations add
+after-fee expectancy.
+
 ## Safety Line
 
 The pack emits normal `SignalIntent` objects only after closed-candle
