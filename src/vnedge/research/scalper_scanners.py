@@ -251,12 +251,23 @@ def render_scanner_report(scans: Iterable[ScalperLaneScan], *, limit: int = 50) 
 
 
 def scanner_policy() -> dict:
+    registry = DEFAULT_SCALPER_PARAMETER_REGISTRY
     return {
         "status": "research_only",
         "can_trade": False,
         "can_promote": False,
         "requires_untouched_judgment": True,
         "scanner_id": SCANNER_ID,
+        "active_research_families": [
+            family.family_id for family in registry.active_research_families()
+        ],
+        "tombstoned_families": [
+            {
+                "family_id": family.family_id,
+                "evidence": family.evidence,
+            }
+            for family in registry.tombstoned_families()
+        ],
         "profitability_rule": (
             "candidate only when sample, liquidity, flow, fill, edge, and adverse "
             "selection gates pass on recorded tick/L2 replay; maker/taker route is "

@@ -28,6 +28,26 @@ def test_registry_contains_scalper_timeframes_and_families():
         assert family in REGISTRY.families
         assert REGISTRY.family(family).horizons_ms
         assert REGISTRY.family_exit_policy(family).ttl_ms > 0
+    assert REGISTRY.family("book_imbalance_continuation").status == "tombstoned"
+    assert (
+        "all 120 configs"
+        in REGISTRY.family("book_imbalance_continuation").evidence
+    )
+    active_ids = {family.family_id for family in REGISTRY.active_research_families()}
+    assert "book_imbalance_continuation" not in active_ids
+    assert "forced_flow_continuation" in active_ids
+    assert REGISTRY.tombstoned_families()[0].family_id == "book_imbalance_continuation"
+    assert payload["families"]["book_imbalance_continuation"]["status"] == "tombstoned"
+    assert payload["family_lifecycle"]["active_research"] == [
+        "forced_flow_continuation",
+        "absorption_reversal",
+        "microprice_dislocation",
+        "liquidity_vacuum_continuation",
+        "volatility_impulse",
+    ]
+    assert payload["family_lifecycle"]["tombstoned"][0]["family_id"] == (
+        "book_imbalance_continuation"
+    )
 
 
 def test_exchange_fee_profiles_expose_cost_hurdles():
