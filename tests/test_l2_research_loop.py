@@ -40,10 +40,13 @@ def test_run_incremental_composes_and_promotes(monkeypatch, tmp_path):
     assert set(payload["scalper_research"]["edge_hypotheses"]) == labels   # accumulated
     assert set(payload["alpha_factory"]["hypotheses"]) == labels
     assert payload["scalper_parameter_registry"]["can_trade"] is False     # registry carried
+    assert payload["scalper_research"]["focus"]["focus_id"] == "scalper_focus_v1"
+    assert payload["scalper_research"]["focus"]["can_trade"] is False
     # promoted to the consumer-facing file only once the pass is complete
     latest = json.loads((tmp_path / "l2_latest.json").read_text())
     assert latest["complete"] is True
     assert len(latest["progress"]["completed_targets"]) == 2
+    assert latest["scalper_research"]["focus"]["can_promote"] is False
 
 
 def test_checkpoints_progress_after_each_symbol(monkeypatch, tmp_path):
@@ -80,6 +83,7 @@ def test_resumes_after_restart_skipping_completed_symbols(monkeypatch, tmp_path)
     assert mined == {targets[1].label}                    # only the pending symbol re-mined
     # the completed pass now covers both symbols (resumed + finished)
     assert set(payload["scalper_research"]["edge_hypotheses"]) == {t.label for t in targets}
+    assert payload["scalper_research"]["focus"]["summary"]["edge_hypotheses"] == 2
 
 
 def test_stale_progress_for_other_days_starts_fresh(monkeypatch, tmp_path):

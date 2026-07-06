@@ -62,6 +62,8 @@ Leave `RESEARCH_STRATEGIES` unset/empty to run every registered research lane.
   lanes. It includes `route_decision` (`BLOCKED`, `MAKER_ONLY`,
   `TAKER_ALLOWED`), blockers, score, fee drag, and a `promotion_queue`.
 - `scalper_research`: tick/L2 replay diagnostics and recorder targets.
+  Includes `focus`, a scalper-specific readiness drilldown that explains why
+  replay candidates are absent and which lanes deserve recorder/mining effort.
 - `alpha_factory`: structural alpha hypotheses and replay queue. See
   `docs/ALPHA_FACTORY.md`. Hypotheses are split by `4h/1h/15m/1m` context
   tags when those candle datasets are available.
@@ -136,6 +138,22 @@ It emits:
 Hard policy: `can_trade=false`, `can_promote=false`. A `REPLAY_CANDIDATE` still
 requires pre-registered untouched replay before paper/shadow discussion.
 Rows below PF/breakeven are `BLOCKED`; they are not weak signals.
+
+## Scalper Focus
+
+`scalper_research.focus` is the operator-facing drilldown for periods where
+scalping is not firing. It summarizes:
+
+- replay candidates and edge-hypothesis candidates;
+- missing tick/L2 data and under-recorded lanes;
+- cost-wall gaps (`avg_net_bps` and PF versus maker floors);
+- top recorder campaign lanes;
+- next actions such as `record tick/L2`, `run conservative replay`, or
+  `do not trade`.
+
+The focus report is not a signal. It always carries `can_trade=false` and
+`can_promote=false`. A scalper only advances after conservative replay,
+untouched judgment, and human approval.
 
 ## Scalper Edge Miner
 

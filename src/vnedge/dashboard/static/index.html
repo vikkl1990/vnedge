@@ -2323,16 +2323,23 @@
 
   function renderScalperDiscovery(d){
     const sr=d.scalper_research||{}, af=d.alpha_factory||{}, sm=d.shadow_lanes||{};
+    const focus=sr.focus||{};
+    const fs=focus.summary||{};
     const scans=Array.isArray(sr.scanner_results)?sr.scanner_results.length:0;
     const cand=Array.isArray(sr.replay_candidates)?sr.replay_candidates.length:0;
     const edge=Array.isArray(sr.edge_hypotheses)?sr.edge_hypotheses.length:0;
     const alpha=Array.isArray(af.hypotheses)?af.hypotheses.length:0;
-    text("sd_discovery",(scans||cand||edge||alpha)
+    text("sd_discovery",focus.status
+      ?(String(focus.status).replaceAll("_"," ")+"; "+num(fs.replay_candidates)+" replay candidates, "+num(fs.missing_tick_data)+" missing, "+num(fs.record_more)+" record-more, "+num(fs.cost_wall)+" cost-wall")
+      :(scans||cand||edge||alpha)
       ?(scans+" scanner lanes, "+cand+" replay candidates, "+edge+" edge + "+alpha+" alpha hypotheses (replay-gated)")
       :"awaiting first L2 mining pass (recorder still accumulating tick/L2)");
     const lanes=Array.isArray(sm.lanes)?sm.lanes:[];
     const blocked=Array.isArray(sm.blocked)?sm.blocked:[];
-    text("sd_manifest",lanes.length+" runnable shadow lane(s), "+blocked.length+" winner(s) blocked (no locked params)");
+    const actions=Array.isArray(focus.next_actions)?focus.next_actions:[];
+    text("sd_manifest",actions.length
+      ?actions[0]
+      :lanes.length+" runnable shadow lane(s), "+blocked.length+" winner(s) blocked (no locked params)");
     const body=$("sd_lanes").querySelector("tbody");
     body.replaceChildren();
     lanes.forEach((l,idx)=>{
