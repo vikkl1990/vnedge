@@ -46,6 +46,7 @@ def test_wf_record_pass():
     assert record["oos_trades"] == 30
     assert record["windows"] == 5
     assert record["reasons"] == []
+    assert record["profit_factor"] == 0.0
     for field in ("strategy", "symbol", "oos_net_usd",
                   "profitable_windows_pct", "traded_windows", "updated"):
         assert field in record
@@ -112,12 +113,15 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     scalper = {"flow": ["tick_l2_recorder"], "flow_guards": {"can_trade": False}}
     alpha = {"flow": ["mine_structural_hypotheses"], "flow_guards": {"can_trade": False}}
     params = {"version": "test", "can_trade": False}
+    leaderboard = {"summary": {"rows": 1}, "policy": {"can_trade": False}}
     cr.publish(records, started=0.0, universe={"targets": 1},
                agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
-               alpha_factory=alpha, scalper_parameter_registry=params)
+               alpha_factory=alpha, scalper_parameter_registry=params,
+               edge_leaderboard=leaderboard)
     cr.publish(records, started=0.0, universe={"targets": 1},
                agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
-               alpha_factory=alpha, scalper_parameter_registry=params)
+               alpha_factory=alpha, scalper_parameter_registry=params,
+               edge_leaderboard=leaderboard)
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["results"][0]["verdict"] == "PASS"
     assert latest["results"][0]["exchange"] == "binanceusdm"
@@ -128,6 +132,8 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     assert latest["alpha_factory"]["flow_guards"]["can_trade"] is False
     assert latest["scalper_parameter_registry"]["version"] == "test"
     assert latest["scalper_parameter_registry"]["can_trade"] is False
+    assert latest["edge_leaderboard"]["summary"]["rows"] == 1
+    assert latest["edge_leaderboard"]["policy"]["can_trade"] is False
     assert latest["edge_agents"]["policy"]["can_trade"] is False
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()
@@ -254,6 +260,7 @@ def test_quant_family_attribution_from_entry_reason():
     assert att["liquidity_sweep"]["trades"] == 2
     assert att["liquidity_sweep"]["net_usd"] == 6.0
     assert att["liquidity_sweep"]["profit_factor"] == 2.5
+    assert att["liquidity_sweep"]["total_fees_usd"] == 0.0
     assert att["fvg_retest"]["trades"] == 1
     record = cr.wf_record(
         "quant_signal_pack_v1", "BTC/USDT:USDT", result, SPARSE_STRATEGY_GATES

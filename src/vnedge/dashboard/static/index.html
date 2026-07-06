@@ -2401,7 +2401,7 @@
       const extra=ae.total_attempts?" ; auto-explore "+ae.total_attempts+" tried ("+ae.distinct_variants+" variants)":"";
       text("rl_updated","updated "+String(d.generated_at).slice(11,19)+" UTC; hourly"+extra);
     }
-    renderAgent(d.edge_agents||{}, d.universe||{});
+    renderAgent(d.edge_agents||{}, d.universe||{}, d.edge_leaderboard||{});
     renderScalperDiscovery(d);
     const note=$("rl_note");
     if(d.note){note.textContent=d.note;note.style.display="block";}else{note.style.display="none";}
@@ -2456,8 +2456,9 @@
     variant_backtest:"auto-uplift variant"
   };
 
-  function renderAgent(edgeAgents, universe){
+  function renderAgent(edgeAgents, universe, leaderboard){
     const uni=universe||{};
+    const lb=leaderboard||{};
     if(uni.targets){
       const exchanges=Array.isArray(uni.exchanges)?uni.exchanges.join(", "):"--";
       const symbolCount=Array.isArray(uni.symbols)?uni.symbols.length:0;
@@ -2466,23 +2467,51 @@
       text("ea_universe","--");
     }
 
-    const pairs=Array.isArray(edgeAgents.profitable_pairs)?edgeAgents.profitable_pairs:[];
-    if(pairs.length){
-      const summary=pairs.slice(0,6).map(p=>{
-        const sym=String(p.symbol||"--").split(":")[0];
-        const ex=String(p.exchange||"--").replace("usdm","");
-        const strategy=String(p.best_strategy||"--").replace(/_v1$/,"");
-        const net=finite(p.oos_net_usd)?usd(p.oos_net_usd):"--";
-        return sym+"/"+ex+" "+strategy+" "+net+(p.verdict==="PASS"?" PASS":"");
+    const lbRows=Array.isArray(lb.rows)?lb.rows:[];
+    const lbSummary=lb.summary||{};
+    if(lbRows.length){
+      const summary=lbRows.slice(0,5).map(r=>{
+        const sym=String(r.symbol||"--").split(":")[0];
+        const ex=String(r.exchange||"--").replace("usdm","");
+        const family=r.family?"/"+String(r.family).replace("_","-"):"";
+        const net=finite(r.oos_net_usd)?usd(r.oos_net_usd):"--";
+        return "#"+r.rank+" "+sym+"/"+ex+family+" "+r.route_decision+" "+net;
       }).join(" | ");
-      text("ea_pairs",summary);
+      text("ea_pairs",summary+" ; queue "+num(lbSummary.queued));
     }else{
-      text("ea_pairs","none currently profitable");
+      const pairs=Array.isArray(edgeAgents.profitable_pairs)?edgeAgents.profitable_pairs:[];
+      if(pairs.length){
+        const summary=pairs.slice(0,6).map(p=>{
+          const sym=String(p.symbol||"--").split(":")[0];
+          const ex=String(p.exchange||"--").replace("usdm","");
+          const strategy=String(p.best_strategy||"--").replace(/_v1$/,"");
+          const net=finite(p.oos_net_usd)?usd(p.oos_net_usd):"--";
+          return sym+"/"+ex+" "+strategy+" "+net+(p.verdict==="PASS"?" PASS":"");
+        }).join(" | ");
+        text("ea_pairs",summary);
+      }else{
+        text("ea_pairs","none currently profitable");
+      }
     }
 
     const proposals=Array.isArray(edgeAgents.proposals)?edgeAgents.proposals:[];
+    const queue=Array.isArray(lb.promotion_queue)?lb.promotion_queue:[];
     const body=$("ea_proposals").querySelector("tbody");
     body.replaceChildren();
+    for(const item of queue.slice(0,8)){
+      const tr=body.insertRow();
+      const target=String(item.symbol||"--").split(":")[0]+" / "+String(item.exchange||"--").replace("usdm","");
+      appendCell(tr,String(item.next_step||"--").replaceAll("_"," "),
+        item.promotion_tier==="JUDGMENT_READY"?"pos":item.promotion_tier==="VARIANT_RESEARCH_READY"?"text-info":"neutral");
+      appendCell(tr,target);
+      appendCell(tr,String(item.candidate_id||item.strategy||"--").replace(/_v1$/,""),"clip");
+      appendCell(tr,String(item.route_decision||"--").replace("_"," "),
+        item.route_decision==="TAKER_ALLOWED"?"pos":item.route_decision==="MAKER_ONLY"?"text-info":"warn");
+      appendCell(tr,
+        "score "+num(item.score).toFixed(1)+"; PF "+num(item.profit_factor).toFixed(2)+
+        "; "+num(item.oos_trades)+" trades; "+usd(item.oos_net_usd),
+        "clip");
+    }
     for(const proposal of proposals.slice(0,12)){
       const tr=body.insertRow();
       const action=AGENT_ACTION_LABEL[proposal.proposal_type]||proposal.proposal_type||"--";
@@ -2494,11 +2523,13 @@
         proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"neutral");
       appendCell(tr,String(proposal.rationale||"--").slice(0,110),"clip",proposal.rationale||"");
     }
-    $("ea_proposals").style.display=proposals.length?"table":"none";
-    $("ea_empty").style.display=proposals.length?"none":"block";
+    const hasActions=proposals.length||queue.length;
+    $("ea_proposals").style.display=hasActions?"table":"none";
+    $("ea_empty").style.display=hasActions?"none":"block";
     if(edgeAgents.policy){
+      const lbText=lbSummary.rows?"; leaderboard "+lbSummary.rows+" rows, "+lbSummary.blocked+" blocked":"";
       text("ea_policy","exploratory only; cannot trade or promote; "+
-        (edgeAgents.policy.max_variant_proposals||0)+" variant cap");
+        (edgeAgents.policy.max_variant_proposals||0)+" variant cap"+lbText);
     }
   }
 

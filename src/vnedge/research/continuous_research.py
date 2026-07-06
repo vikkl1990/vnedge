@@ -50,6 +50,7 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
+from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
 from vnedge.research.shadow_manifest import (
     generate_shadow_manifest,
@@ -144,6 +145,7 @@ def _trade_metrics(trades) -> dict:
         "win_rate_pct": round(len(wins) / len(trades) * 100.0, 1) if trades else 0.0,
         "profit_factor": profit_factor,
         "payoff_ratio": payoff,
+        "total_fees_usd": round(sum(t.fees_usd for t in trades), 2),
     }
 
 
@@ -179,6 +181,10 @@ def wf_record(
     payoff = round(
         (sum(wins) / len(wins)) / (sum(losses) / len(losses)), 2
     ) if wins and losses else 0.0
+    if losses:
+        profit_factor = round(sum(wins) / sum(losses), 2)
+    else:
+        profit_factor = 999.0 if wins else 0.0
     record = {
         "attribution": side_attribution(result),
         "exchange": exchange,
@@ -192,6 +198,7 @@ def wf_record(
         "oos_net_usd": round(result.oos_net_profit_usd, 2),
         "profitable_windows_pct": round(result.oos_profitable_window_pct, 1),
         "total_fees_usd": total_fees,
+        "profit_factor": profit_factor,
         "payoff_ratio": payoff,
         "verdict": "PASS" if decision.passed else "REJECT",
         "reasons": list(decision.reject_reasons),
@@ -670,6 +677,7 @@ def publish(records: list[dict], started: float,
             drift_alerts: list[dict] | None = None,
             auto_state: dict | None = None,
             agent_plan: dict | None = None,
+            edge_leaderboard: dict | None = None,
             universe: dict | None = None,
             scalper_research: dict | None = None,
             alpha_factory: dict | None = None,
@@ -691,6 +699,7 @@ def publish(records: list[dict], started: float,
         "scalper_parameter_registry": scalper_parameter_registry or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         "edge_agents": agent_plan or {},
+        "edge_leaderboard": edge_leaderboard or {},
         "auto_explore": {
             "total_attempts": (auto_state or {}).get("total_attempts", 0),
             "distinct_variants": len((auto_state or {}).get("tried", [])),
@@ -763,6 +772,11 @@ async def run_cycle() -> list[dict]:
         logger.exception("auto-explore failed: %s", exc)
 
     agent_plan = EdgeResearchAgent().plan(records, targets=targets)
+    edge_leaderboard = build_edge_leaderboard(
+        records,
+        max_rows=_env_int("EDGE_LEADERBOARD_MAX_ROWS", 50),
+        max_queue=_env_int("EDGE_PROMOTION_QUEUE_MAX_ROWS", 20),
+    )
     # research -> shadow bridge: turn profitable winners with locked params into
     # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
     try:
@@ -828,6 +842,7 @@ async def run_cycle() -> list[dict]:
             "proposals": list(agent_plan.proposals),
             "policy": agent_plan.policy,
         },
+        edge_leaderboard=edge_leaderboard,
         universe=summarize_universe(targets),
         scalper_research=scalper_research,
         alpha_factory=alpha_factory,
