@@ -52,6 +52,8 @@ services:
       # registered research strategies. Useful when splitting heavy Quant
       # sweeps into their own slower service without code changes.
       RESEARCH_STRATEGIES: "${RESEARCH_STRATEGIES:-}"
+      EDGE_LEADERBOARD_MAX_ROWS: "${EDGE_LEADERBOARD_MAX_ROWS:-50}"
+      EDGE_PROMOTION_QUEUE_MAX_ROWS: "${EDGE_PROMOTION_QUEUE_MAX_ROWS:-20}"
       # L2-mining passes run in the decoupled l2-research-loop below, NOT here,
       # so this hourly candle loop never scans the tick/L2 tape. It folds the
       # l2-research-loop's l2_latest.json into its dashboard latest.json. Flip
