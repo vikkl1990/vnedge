@@ -103,6 +103,7 @@ def _merge_stage(acc: dict, part: dict) -> None:
 
 def _refresh_scalper_focus(payload: dict) -> None:
     sr = payload.get("scalper_research") or {}
+    payload["scalper_research"] = sr
     sr["focus"] = build_scalper_focus(
         sr.get("scanner_results", []),
         sr.get("edge_hypotheses", []),
@@ -133,7 +134,21 @@ def run_incremental(data_root: str | Path = "data", out_dir: Path | None = None)
     prev = _read_json(out_dir / L2_PROGRESS)
     if prev.get("days") == list(days) and not prev.get("complete", True):
         payload = prev                     # resume the interrupted pass
+        payload.setdefault("progress", {}).setdefault("completed_targets", [])
         payload["progress"]["total"] = len(targets)
+        payload.setdefault(
+            "scalper_parameter_registry",
+            DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict(),
+        )
+        payload.setdefault("scalper_research", {})
+        payload.setdefault("alpha_factory", {})
+        payload["generated_at"] = datetime.now(UTC).isoformat()
+        _refresh_scalper_focus(payload)
+        _refresh_alpha_tournament(payload)
+        # A resumed checkpoint may come from an older build. Refresh derived
+        # telemetry before any expensive target finishes so the dashboard does
+        # not keep showing a stale focus/tournament view for another cycle.
+        _write_json(payload, out_dir / L2_PROGRESS)
     else:
         payload = _blank_pass(days, len(targets))
     done = set(payload["progress"]["completed_targets"])
