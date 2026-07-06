@@ -127,3 +127,35 @@ def test_memory_is_trimmed_but_disk_stays_complete(tmp_path, monkeypatch):
         strat.prepare(_candles(10 + i))
     assert len(strat.funding) <= 10               # in-memory bounded
     assert len(load_funding_store(store)) == 40    # disk complete
+
+
+def test_full_candle_window_with_sparse_real_samples_stays_silent(tmp_path):
+    # REGRESSION (VM 2026-07-06): 450+ seeded bars filled the 240-bar
+    # percentile window with anchor-propagated zeros, ranking the first real
+    # prints as "extreme" -> bogus shadow short. With real samples covering
+    # only the last few bars, funding_pct must stay NaN — everywhere.
+    feed = _FakeFeed(funding_rate=0.0001)
+    strat = LivePersistentFundingMR(
+        pd.DataFrame(columns=["timestamp", "funding_rate"]),
+        feed, store_path=tmp_path / "f.jsonl",
+        funding_pct_window=240, z_window=48,
+    )
+    df = strat.prepare(_candles(500))  # window CAN fill on bar count alone
+    assert df["funding_pct"].isna().all()
+    assert all(strat.signal(df, i) is None for i in range(len(df)))
+
+
+def test_mask_lifts_once_real_samples_span_the_window(tmp_path):
+    # store holds 300 hourly samples -> real coverage spans the 240 window;
+    # recent bars must get a REAL percentile again (not stay masked forever)
+    store = tmp_path / "f.jsonl"
+    start = 1_700_000_000_000
+    for i in range(300):
+        append_funding_sample(store, _ts(start + i * 3_600_000), 0.0001 + i * 1e-7)
+    feed = _FakeFeed(funding_rate=0.001)
+    strat = LivePersistentFundingMR(
+        pd.DataFrame(columns=["timestamp", "funding_rate"]),
+        feed, store_path=store, funding_pct_window=240, z_window=48,
+    )
+    df = strat.prepare(_candles(300, start_ms=start))
+    assert df["funding_pct"].iloc[-1] == df["funding_pct"].iloc[-1]  # not NaN
