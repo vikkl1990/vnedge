@@ -237,3 +237,41 @@ def test_reconciliation_mismatch_trips_live_session_fail_closed_once(tmp_path):
     ]
     assert len(records) == 1
     assert records[0]["payload"]["mismatches"] == ["internal vs venue"]
+
+
+async def test_lane_eval_journaled_for_every_evaluated_bar(tmp_path):
+    feed = FakeFeed(live_rows(n=2))
+    session, _ = build_session(tmp_path, feed)
+    await session.run(max_bars=2)
+
+    evals = [r for r in session.journal.read_all() if r["kind"] == "lane_eval"]
+    # paper mode: no prime; bar 1 evaluated (fires, opens a plan), bar 2 is
+    # in-position -> entry evaluation is skipped by design (exit mgmt runs)
+    assert len(evals) == 1
+    for r in evals:
+        assert r["payload"]["fired"] is True  # AlwaysLong fires every bar
+        assert r["payload"]["backfill"] is False
+        assert r["payload"]["strategy_id"] == "always_long"
+        assert "features" in r["payload"] and "thresholds" in r["payload"]
+    # the newest evaluation is surfaced for the dashboard snapshot
+    assert session.last_eval is not None
+    assert session.last_eval["fired"] is True
+
+
+async def test_shadow_prime_backfills_observability_records(tmp_path):
+    # 5 seeded bars, warmup 2 -> bars 2,3 backfill + bar 4 live prime
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    await session.run(max_bars=0)
+
+    evals = [r["payload"] for r in session.journal.read_all()
+             if r["kind"] == "lane_eval"]
+    assert len(evals) == 3
+    assert [e["backfill"] for e in evals] == [True, True, False]
+    assert all(e["fired"] for e in evals)     # AlwaysLong
+    # backfilled bars journal observations ONLY — a single intent, latest bar
+    intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    assert len(intents) == 1
+    assert exchange.get_positions() == []
+    # last_eval reflects the latest (non-backfill) bar
+    assert session.last_eval is not None and session.last_eval["backfill"] is False

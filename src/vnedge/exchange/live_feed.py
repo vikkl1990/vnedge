@@ -66,6 +66,11 @@ class LiveMarketFeed:
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote: tuple[float, float] | None = None  # (bid, ask)
         self.funding_rate: float = 0.0
+        # SETTLED funding prints [(ts_ms, rate), ...] refreshed with the rate.
+        # Strategies validated on settled-print series (funding-MR) must read
+        # THIS, not funding_rate: the predicted rate is a different series
+        # than research used, and mixing them silently shifts percentiles.
+        self.funding_events: list[tuple[int, float]] = []
         self.last_event_at: datetime | None = None
         self.healthy: bool = False
         self.candles_closed = 0
@@ -169,11 +174,33 @@ class LiveMarketFeed:
                 rate = data.get("fundingRate")
                 if rate is not None:
                     self.funding_rate = float(rate)
+                await _refresh_funding_events(self)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._mark_error("funding", exc)
             await asyncio.sleep(self.funding_refresh_seconds)
+
+
+async def _refresh_funding_events(feed) -> None:
+    """Refresh a feed's SETTLED funding prints (``funding_events``).
+
+    Best effort: venues without funding history simply keep an empty list
+    (their strategies use live accumulation instead). Only recent prints are
+    needed — the seed history covers the deep past; this keeps the tail fresh
+    so the live series matches the research construction print-for-print.
+    """
+    ex = feed._ex
+    if not ex.has.get("fetchFundingRateHistory"):
+        return
+    rows = await ex.fetch_funding_rate_history(feed.symbol, limit=10)
+    events: list[tuple[int, float]] = []
+    for row in rows or []:
+        ts, rate = row.get("timestamp"), row.get("fundingRate")
+        if ts is not None and rate is not None:
+            events.append((int(ts), float(rate)))
+    if events:
+        feed.funding_events = sorted(events)
 
 
 class RestPollingMarketFeed:
@@ -210,6 +237,7 @@ class RestPollingMarketFeed:
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote: tuple[float, float] | None = None
         self.funding_rate: float = 0.0
+        self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)
         self.last_event_at: datetime | None = None
         self.healthy: bool = False
         self.candles_closed = 0
@@ -317,6 +345,7 @@ class RestPollingMarketFeed:
                     rate = data.get("fundingRate")
                     if rate is not None:
                         self.funding_rate = float(rate)
+                await _refresh_funding_events(self)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
