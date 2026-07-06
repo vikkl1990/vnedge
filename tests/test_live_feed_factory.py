@@ -61,3 +61,46 @@ def test_rest_polling_latest_closed_row_uses_only_closed_candles():
     ]
 
     assert RestPollingMarketFeed._latest_closed_row(rows, now_ms, step_ms) == rows[1]
+
+
+class _HistExchange:
+    """Fake ccxt exchange: settled funding history support."""
+    has = {"fetchFundingRateHistory": True}
+
+    async def fetch_funding_rate_history(self, symbol, limit=10):
+        return [
+            {"timestamp": 2_000, "fundingRate": "0.0002"},
+            {"timestamp": 1_000, "fundingRate": "0.0001"},
+            {"timestamp": None, "fundingRate": "0.9"},      # dropped
+            {"timestamp": 3_000, "fundingRate": None},       # dropped
+        ]
+
+
+class _NoHistExchange:
+    has = {"fetchFundingRateHistory": False}
+
+
+async def test_refresh_funding_events_populates_sorted_settled_prints():
+    from vnedge.exchange.live_feed import _refresh_funding_events
+
+    class Feed:
+        _ex = _HistExchange()
+        symbol = "BTC/USDT:USDT"
+        funding_events: list = []
+
+    feed = Feed()
+    await _refresh_funding_events(feed)
+    assert feed.funding_events == [(1_000, 0.0001), (2_000, 0.0002)]
+
+
+async def test_refresh_funding_events_noop_without_venue_support():
+    from vnedge.exchange.live_feed import _refresh_funding_events
+
+    class Feed:
+        _ex = _NoHistExchange()
+        symbol = "BTC/USD:USD"
+        funding_events: list = []
+
+    feed = Feed()
+    await _refresh_funding_events(feed)
+    assert feed.funding_events == []

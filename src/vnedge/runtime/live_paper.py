@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
@@ -85,6 +86,7 @@ class LivePaperSession:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
+        self.last_eval: dict | None = None
         self._plan: _LivePlan | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
         self._orphan_position_guarded = False
@@ -283,6 +285,52 @@ class LivePaperSession:
             "mismatches": list(mismatches),
         })
 
+    # Feature columns worth surfacing per evaluation, when the strategy
+    # computes them. Signal proximity ("how close is this lane to firing")
+    # is unreadable from a binary fired/not-fired record; these make it visible.
+    _EVAL_FEATURES = ("funding_pct", "close_z", "er", "atr_pct")
+    _EVAL_THRESHOLDS = ("extreme_pct", "z_entry", "breakout_bars", "min_score")
+
+    def _record_eval(
+        self, df: pd.DataFrame, index: int, sig: SignalIntent | None,
+        *, backfill: bool = False,
+    ) -> None:
+        """Journal one strategy evaluation — fired or not — with the feature
+        values that drove it. This is the observability record that turns
+        'no signal for days' from a mystery into a measurement (how far from
+        each threshold every bar actually was)."""
+        row = df.iloc[index]
+        features = {}
+        for col in self._EVAL_FEATURES:
+            if col in df.columns:
+                val = float(row[col])
+                features[col] = None if math.isnan(val) else round(val, 6)
+        thresholds = {}
+        for attr in self._EVAL_THRESHOLDS:
+            val = getattr(self.strategy, attr, None)
+            if isinstance(val, (int, float)):
+                thresholds[attr] = val
+        record = {
+            "bar_ts": df["timestamp"].iloc[index].isoformat(),
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "mode": self.config.mode.value,
+            "fired": sig is not None,
+            "signal_reason": sig.reason if sig is not None else None,
+            "features": features,
+            "thresholds": thresholds,
+            "backfill": backfill,
+        }
+        self.journal.append("lane_eval", record)
+        if not backfill:
+            self.last_eval = record
+        if sig is not None:
+            logger.info(
+                "lane eval [%s %s]%s: FIRED %s — %s",
+                self.strategy.strategy_id, self.config.symbol,
+                " (backfill)" if backfill else "", sig.side, sig.reason,
+            )
+
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
@@ -316,6 +364,7 @@ class LivePaperSession:
                 "shadow_rejected": self.shadow_rejected,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
+                "last_eval": self.last_eval,
             },
             trial=self.trial_meta,
         )
@@ -325,17 +374,25 @@ class LivePaperSession:
             self.alert_engine.evaluate(snapshot)
 
     # --- Main loop -----------------------------------------------------------------
-    async def _shadow_prime(self) -> None:
-        """SHADOW lanes only: evaluate the latest already-closed (seeded) bar
-        once at startup.
+    # Seeded bars re-evaluated at shadow startup. 24 gives a full day of
+    # observability records after any restart, at negligible cost.
+    _SHADOW_PRIME_BACKFILL_BARS = 24
 
-        The live loop otherwise acts only on bars that close AFTER startup, so a
-        restart silently discards an already-armed condition while it waits up
-        to a full bar for the next close — with frequent restarts a slow-bar
-        strategy may never get a single decision opportunity. Shadow lanes never
-        fill, so re-evaluating a bar is safe: it only journals an observation.
-        Deliberately NOT done for paper/live modes, where re-entering the latest
-        bar on restart could double a position.
+    async def _shadow_prime(self) -> None:
+        """SHADOW lanes only: evaluate recent already-closed (seeded) bars
+        once at startup — the newest live (may submit a shadow intent), the
+        rest as backfill observability records.
+
+        The live loop otherwise acts only on bars that close AFTER startup, so
+        a restart silently discards an already-armed condition while it waits
+        up to a full bar for the next close — with frequent restarts a slow-bar
+        strategy may never get a single decision opportunity, and the bars a
+        restart skipped left no record at all (the 2026-07-04 signal cluster
+        was part-missed exactly this way). Shadow lanes never fill, so
+        re-evaluating bars is safe: backfilled bars journal lane_eval records
+        ONLY — an intent is submitted solely for the newest bar. Deliberately
+        NOT done for paper/live modes, where re-entering on restart could
+        double a position.
         """
         if self.config.mode is not RunnerMode.SHADOW:
             return
@@ -350,10 +407,20 @@ class LivePaperSession:
         if self.feed.quote is None:
             return
         df = self.strategy.prepare(self.candles)
-        sig = self.strategy.signal(df, len(df) - 1)
+        last = len(df) - 1
+        first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
+        backfill_fired = 0
+        for i in range(first, last):
+            sig_i = self.strategy.signal(df, i)
+            self._record_eval(df, i, sig_i, backfill=True)
+            backfill_fired += sig_i is not None
+        sig = self.strategy.signal(df, last)
+        self._record_eval(df, last, sig)
         logger.info(
-            "shadow prime [%s %s]: latest seeded bar -> %s",
+            "shadow prime [%s %s]: %d seeded bars backfilled (%d would have "
+            "fired), latest -> %s",
             self.strategy.strategy_id, self.config.symbol,
+            max(0, last - first), backfill_fired,
             f"{sig.side} intent" if sig is not None else "no signal",
         )
         if sig is not None:
@@ -396,6 +463,7 @@ class LivePaperSession:
             if self._plan is None and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
                 sig = self.strategy.signal(df, len(df) - 1)
+                self._record_eval(df, len(df) - 1, sig)
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)

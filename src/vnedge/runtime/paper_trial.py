@@ -98,28 +98,57 @@ class TrialManifest:
 class LiveFundingMR(FundingMeanReversion):
     """FundingMeanReversion whose funding series grows with the live feed.
 
-    The seed comes from REST history; each prepare() appends the feed's
-    current (predicted) funding rate at the newest bar timestamp, keeping the
-    percentile window honest across a multi-week trial. Backward as-of merge
+    The seed comes from REST history. Each prepare() extends it with the
+    feed's SETTLED funding prints (``feed.funding_events``, refreshed
+    periodically) so the live series is the exact construction research
+    validated — settled 8h prints, as-of merged. Backward as-of merge
     semantics are unchanged — still strictly causal.
+
+    Falling back to appending the feed's current rate at the newest bar
+    happens ONLY when the venue exposes no settled prints. That fallback is a
+    DIFFERENT series than research used (predicted, sampled per-bar): it kept
+    live funding_pct systematically off the researched values — replayed
+    signals from 2026-07-04 that never fired live traced back to exactly this
+    divergence. Venues with funding history must never take the fallback.
     """
 
     def __init__(self, seed_funding: pd.DataFrame, feed, **params) -> None:
         super().__init__(seed_funding, **params)
         self._feed = feed
 
+    def _merge_settled_events(self, events: list[tuple[int, float]]) -> bool:
+        """Fold fresh settled prints into the funding series; True if used."""
+        if not events:
+            return False
+        add = pd.DataFrame(events, columns=["ts_ms", "funding_rate"])
+        add["timestamp"] = pd.to_datetime(add["ts_ms"], unit="ms", utc=True).astype(
+            self.funding["timestamp"].dtype if not self.funding.empty else "datetime64[ms, UTC]"
+        )
+        merged = pd.concat(
+            [self.funding, add[["timestamp", "funding_rate"]]], ignore_index=True
+        )
+        self.funding = (
+            merged.drop_duplicates("timestamp", keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        return True
+
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
-        newest = candles["timestamp"].iloc[-1]
-        if (
-            self._feed.funding_rate is not None
-            and newest > self.funding["timestamp"].iloc[-1]
-        ):
-            self.funding = pd.concat(
-                [self.funding, pd.DataFrame(
-                    [{"timestamp": newest, "funding_rate": float(self._feed.funding_rate)}]
-                )],
-                ignore_index=True,
-            )
+        if not self._merge_settled_events(getattr(self._feed, "funding_events", [])):
+            # venue exposes no settled prints — accumulate the current rate
+            newest = candles["timestamp"].iloc[-1]
+            if (
+                self._feed.funding_rate is not None
+                and not self.funding.empty
+                and newest > self.funding["timestamp"].iloc[-1]
+            ):
+                self.funding = pd.concat(
+                    [self.funding, pd.DataFrame(
+                        [{"timestamp": newest, "funding_rate": float(self._feed.funding_rate)}]
+                    )],
+                    ignore_index=True,
+                )
         return super().prepare(candles)
 
 

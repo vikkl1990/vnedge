@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from vnedge.data.schemas import normalize_candles, normalize_funding
@@ -123,3 +124,54 @@ def test_trial_session_wiring_and_report(tmp_path):
     assert record["trial_id"] == "t1"
     assert record["promotion_source_commit"] == "3b56d20"
     assert record["report"]["mode"] == "paper_live"
+
+
+class SettledFundingFeedStub:
+    """Feed exposing SETTLED prints — the venue-with-history case."""
+    funding_rate = 0.0042          # predicted — must NOT enter the series
+    quote = (99.99, 100.01)
+
+    def __init__(self, events):
+        self.funding_events = events
+
+
+def test_live_funding_mr_prefers_settled_events_over_predicted():
+    from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
+
+    seed = [{"timestamp": BASE + i * 8 * HOUR, "fundingRate": 0.0001} for i in range(28)]
+    seed_funding = normalize_funding(seed)
+    candles = normalize_candles(
+        [[BASE + i * HOUR, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(400)]
+    )
+    # two settled prints newer than the seed tail (e.g. printed since lane build)
+    new_prints = [
+        (BASE + 28 * 8 * HOUR, 0.0007),
+        (BASE + 29 * 8 * HOUR, 0.0009),
+    ]
+    strategy = LiveFundingMR(
+        seed_funding, SettledFundingFeedStub(new_prints),
+        funding_pct_window=48, z_window=24,
+    )
+    df = strategy.prepare(candles)
+
+    # settled prints merged; the predicted 0.0042 must appear NOWHERE
+    assert strategy.funding["funding_rate"].iloc[-1] == pytest.approx(0.0009)
+    assert not (strategy.funding["funding_rate"] == pytest.approx(0.0042)).any()
+    assert len(strategy.funding) == len(seed_funding) + 2
+
+    # live construction == research construction, feature-for-feature
+    research_series = normalize_funding(
+        seed + [
+            {"timestamp": ts, "fundingRate": fr} for ts, fr in new_prints
+        ]
+    )
+    research = FundingMeanReversion(
+        research_series, funding_pct_window=48, z_window=24
+    )
+    df_research = research.prepare(candles)
+    pd.testing.assert_series_equal(df["funding_pct"], df_research["funding_pct"])
+
+    # idempotent: same events re-merged change nothing
+    n = len(strategy.funding)
+    strategy.prepare(candles)
+    assert len(strategy.funding) == n
