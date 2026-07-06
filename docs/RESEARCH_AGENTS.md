@@ -191,6 +191,12 @@ dislocation, liquidity-vacuum continuation, and volatility impulse families.
 Any positive result is a replay queue item, not a signal. Conservative replay,
 untouched judgment, and human paper/shadow approval remain mandatory.
 
+The factory also publishes `alpha_factory.tournament`, an event-family
+tournament that ranks active scalper premises by exchange, symbol, context
+tag, post-cost net bps, PF, route decision, and route gap. Tournament
+`REPLAY_*_CANDIDATE` rows are replay work orders only; `BLOCKED_FEE_WALL`
+rows must not be traded or parameter-rescued.
+
 ## Guardrails
 
 - A rolling PASS is only a candidate signal.
@@ -205,5 +211,7 @@ untouched judgment, and human paper/shadow approval remain mandatory.
 - The alpha factory creates structural hypotheses only; no hypothesis can trade
   without conservative replay, untouched judgment, paper, shadow, and gateway
   approval.
+- The alpha tournament ranks replay work only; no tournament row is an
+  executable signal.
 - AlphaStack emits ordinary strategy intents only after walk-forward scoring;
   it is not an indicator-alert import path and cannot bypass promotion gates.

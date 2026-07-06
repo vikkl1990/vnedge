@@ -12,7 +12,8 @@ flowchart LR
     Tape["Recorded tick/L2 tape"] --> Mine["Mine structural hypotheses"]
     Mine --> Tags["Split evidence by context tag"]
     Tags --> Cost["Score after maker-first costs"]
-    Cost --> Route["Route policy: blocked / maker / taker"]
+    Cost --> Tournament["Event-family tournament"]
+    Tournament --> Route["Route policy: blocked / maker / taker"]
     Route --> Queue["Replay queue"]
     Queue --> Replay["Conservative tick replay"]
     Replay --> Judgment["Untouched-data judgment"]
@@ -43,6 +44,36 @@ for contexts professional scalpers care about: forced flow, absorption,
 thin-book continuation, volatility impulse, and microprice dislocation. A
 family only enters the replay queue if conditional expectancy clears the
 maker-first cost floor and route policy.
+
+## Event Scalper Tournament
+
+The alpha factory now publishes `event_scalper_alpha_tournament_v1` under:
+
+```text
+alpha_factory.tournament
+```
+
+The tournament ranks active event families by exchange, symbol, and context
+tag. It does not create new entries; it only ranks already-mined hypotheses by:
+
+- replay state (`REPLAY_REQUIRED_TAKER`, `REPLAY_REQUIRED_MAKER`,
+  `UNDER_SAMPLED`, `BELOW_COST`)
+- route decision (`TAKER_ALLOWED`, `MAKER_ONLY`, `BLOCKED`)
+- post-cost average net bps
+- profit factor
+- sample count
+- route gap versus maker/taker breakeven
+
+Tournament decisions:
+
+- `REPLAY_TAKER_CANDIDATE`: taker route clears PF and net-bps floors, but
+  conservative replay is still mandatory.
+- `REPLAY_MAKER_CANDIDATE`: maker-first route clears PF and net-bps floors.
+- `RECORD_MORE`: something fired, but sample count is not enough.
+- `BLOCKED_FEE_WALL`: no replay priority; do not trade.
+
+Every tournament row remains `can_trade=false` and `can_promote=false`.
+The replay queue is a research queue only.
 
 ## Context Stack
 
