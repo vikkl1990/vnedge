@@ -148,6 +148,8 @@ class DailyScalperPack(BaseStrategy):
         return bool(one_aligned and not four_opposed and (four_aligned or not_extreme))
 
     def _trigger_allowed(self, side: str, row: pd.Series) -> bool:
+        if not self.require_1m_trigger:
+            return True
         col = "trigger_1m_long" if side == "long" else "trigger_1m_short"
         value = row.get(col)
         if isinstance(value, bool):

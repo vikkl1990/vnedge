@@ -52,14 +52,18 @@ def context_row(*, trigger=True):
 def test_daily_scalper_requires_context_and_trigger():
     strategy = DailyScalperPack()
     strategy._base = FakeBase()
+    relaxed = DailyScalperPack(require_1m_trigger=False)
+    relaxed._base = FakeBase()
 
     intent = strategy.signal(context_row(trigger=True), 0)
     blocked = strategy.signal(context_row(trigger=False), 0)
+    diagnostic = relaxed.signal(context_row(trigger=False), 0)
 
     assert intent is not None
     assert intent.side == "long"
     assert "daily_scalper_pack" in intent.reason
     assert blocked is None
+    assert diagnostic is not None
 
 
 def test_daily_scalper_research_marks_missing_lanes_untestable(tmp_path):
