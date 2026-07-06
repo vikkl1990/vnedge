@@ -71,6 +71,7 @@ class LiveMarketFeed:
         # THIS, not funding_rate: the predicted rate is a different series
         # than research used, and mixing them silently shifts percentiles.
         self.funding_events: list[tuple[int, float]] = []
+        self.book_metrics: dict | None = None  # live L2 metrics (fast loop)
         self.last_event_at: datetime | None = None
         self.healthy: bool = False
         self.candles_closed = 0
@@ -84,6 +85,7 @@ class LiveMarketFeed:
             asyncio.create_task(self._watch_candles(), name="feed-candles"),
             asyncio.create_task(self._watch_quotes(), name="feed-quotes"),
             asyncio.create_task(self._refresh_funding(), name="feed-funding"),
+            asyncio.create_task(self._watch_book(), name="feed-book"),
         ]
 
     async def stop(self) -> None:
@@ -181,6 +183,48 @@ class LiveMarketFeed:
                 self._mark_error("funding", exc)
             await asyncio.sleep(self.funding_refresh_seconds)
 
+    async def _watch_book(self) -> None:
+        """L2 builder for the fast loop: maintain live book metrics.
+
+        Uses the venue-safe depth limit (Bybit rejects anything but
+        {1,50,200,1000}); metrics are throttled to ~1/s — the consumers
+        (dashboard, future scalper gates) don't need more.
+        """
+        while True:
+            try:
+                ob = await self._ex.watch_order_book(self.symbol, limit=50)
+                if ob.get("bids") and ob.get("asks"):
+                    self.book_metrics = compute_book_metrics(
+                        self.symbol, ob["bids"], ob["asks"]
+                    )
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._mark_error("book", exc)
+                await asyncio.sleep(_BACKOFF_SECONDS)
+
+
+def compute_book_metrics(symbol: str, bids: list, asks: list) -> dict | None:
+    """Flatten a bids/asks ladder into the fast-loop L2 metrics dict."""
+    from vnedge.scalping.depth import OrderBookL2
+
+    try:
+        book = OrderBookL2(
+            symbol=symbol,
+            bids=tuple((float(p), float(q)) for p, q, *_ in bids[:10]),
+            asks=tuple((float(p), float(q)) for p, q, *_ in asks[:10]),
+            event_time=datetime.now(UTC),
+        )
+    except (ValueError, TypeError):
+        return None  # crossed/empty snapshot — keep the last good metrics
+    return {
+        "spread_bps": round(book.spread_bps, 4),
+        "imbalance": round(book.depth_imbalance(), 4),
+        "liq_usd_5bps": round(book.liquidity_usd_within_bps(5.0), 0),
+        "ts": datetime.now(UTC).isoformat(),
+    }
+
 
 async def _refresh_funding_events(feed) -> None:
     """Refresh a feed's SETTLED funding prints (``funding_events``).
@@ -238,6 +282,7 @@ class RestPollingMarketFeed:
         self.quote: tuple[float, float] | None = None
         self.funding_rate: float = 0.0
         self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)
+        self.book_metrics: dict | None = None  # L2 metrics (native-ws subclasses)
         self.last_event_at: datetime | None = None
         self.healthy: bool = False
         self.candles_closed = 0
@@ -410,6 +455,16 @@ class DeltaWsFeed(RestPollingMarketFeed):
                 fr = self._ws.funding_rate.get(self._native_symbol)
                 if fr is not None:
                     self.funding_rate = fr
+                book = self._ws.books.get(self._native_symbol)
+                if book:
+                    buy, sell = book
+                    metrics = compute_book_metrics(
+                        self.symbol,
+                        [[e["limit_price"], e["size"]] for e in buy[:10]],
+                        [[e["limit_price"], e["size"]] for e in sell[:10]],
+                    )
+                    if metrics is not None:
+                        self.book_metrics = metrics
                 # honest staleness/health: track the real stream, not this loop
                 if self._ws.last_event_at is not None:
                     self.last_event_at = self._ws.last_event_at

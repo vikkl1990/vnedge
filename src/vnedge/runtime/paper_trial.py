@@ -33,6 +33,7 @@ import pandas as pd
 import yaml
 
 from vnedge.config.risk_config import RiskConfig
+from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.account_store import PaperAccountStore
@@ -199,6 +200,7 @@ def build_trial_session(
         ),
         alert_engine=alert_engine,
         equity_history_path=journal_dir / f"{manifest.trial_id}.equity.jsonl",
+        fill_ledger=FillLedger(journal_dir / f"{manifest.trial_id}.fills.jsonl"),
         trial_meta={
             "trial_id": manifest.trial_id,
             "started": "2026-07-03",

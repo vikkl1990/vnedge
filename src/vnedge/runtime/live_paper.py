@@ -65,6 +65,7 @@ class LivePaperSession:
         alert_engine=None,  # optional AlertEngine — same snapshot, guarded fanout
         equity_history_path=None,  # optional JSONL of (ts, equity) per bar
         trial_meta=None,  # optional dict shown on the dashboard governance panel
+        fill_ledger=None,  # optional FillLedger — hash-chained execution record
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -78,6 +79,8 @@ class LivePaperSession:
         self.account_store = account_store
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
+        self.fill_ledger = fill_ledger
+        self._ledgered_fills = fill_ledger.records if fill_ledger is not None else 0
         self.trial_meta = trial_meta
         self.bars_processed = 0
         self._started_at = datetime.now(UTC)
@@ -331,6 +334,29 @@ class LivePaperSession:
                 " (backfill)" if backfill else "", sig.side, sig.reason,
             )
 
+    def _ledger_new_fills(self, now: datetime) -> None:
+        """Append any fills not yet chained. The ledger is resume-aware, so a
+        restart continues the chain rather than re-recording old fills."""
+        if self.fill_ledger is None:
+            return
+        fills = self.exchange.get_fills()
+        for fill in fills[self._ledgered_fills:]:
+            self.fill_ledger.append({
+                "ts": now.isoformat(),
+                "mode": self.config.mode.value,
+                "venue": getattr(self.feed, "exchange_id", "paper"),
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": fill.symbol,
+                "side": "buy" if fill.buy else "sell",
+                "quantity": fill.quantity,
+                "price": fill.price,
+                "fee_usd": fill.fee_usd,
+                "realized_pnl_usd": fill.realized_pnl_usd,
+                "client_order_id": fill.client_order_id,
+                "exchange_seq": fill.seq,
+            })
+        self._ledgered_fills = len(fills)
+
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
@@ -365,6 +391,11 @@ class LivePaperSession:
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 "last_eval": self.last_eval,
+                "fill_ledger": {
+                    "records": self.fill_ledger.records,
+                    "chained": True,
+                } if self.fill_ledger is not None else None,
+                "book_metrics": getattr(self.feed, "book_metrics", None),
             },
             trial=self.trial_meta,
         )
@@ -474,6 +505,8 @@ class LivePaperSession:
                 report = self._reconcile()
                 self.recon_mismatches += len(report.mismatches)
                 self._bars_since_reconcile = 0
+
+            self._ledger_new_fills(now)
 
             if self.account_store is not None:
                 self.account_store.save_from(self.exchange, self.tracker)
