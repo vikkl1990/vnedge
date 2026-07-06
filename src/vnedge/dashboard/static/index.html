@@ -1161,7 +1161,7 @@
             <div class="loop-node violet" id="nodeDrift"><span class="node-name">Drift Monitor</span><span class="node-status" id="nodeDriftStatus">research sync</span></div>
             <div class="loop-node" id="nodeAlerts"><span class="node-name">Alerts Engine</span><span class="node-status" id="nodeAlertsStatus">waiting</span></div>
             <div class="loop-node amber"><span class="node-name">Private Stream</span><span class="node-status">next live phase</span></div>
-            <div class="loop-node amber"><span class="node-name">L2 Builder</span><span class="node-status">scalper phase</span></div>
+            <div class="loop-node amber" id="nodeL2"><span class="node-name">L2 Builder</span><span class="node-status" id="nodeL2Status">scalper phase</span></div>
           </div>
         </div>
 
@@ -1191,7 +1191,7 @@
             <div class="loop-node" id="nodeSnapshot"><span class="node-name">Snapshot Stream</span><span class="node-status" id="nodeSnapshotStatus">waiting</span></div>
             <div class="loop-node violet"><span class="node-name">Governance Reports</span><span class="node-status">research linked</span></div>
             <div class="loop-node amber"><span class="node-name">Tax Metadata</span><span class="node-status">CA gated</span></div>
-            <div class="loop-node amber"><span class="node-name">Immutable Fill Ledger</span><span class="node-status">live phase</span></div>
+            <div class="loop-node amber" id="nodeLedger"><span class="node-name">Immutable Fill Ledger</span><span class="node-status" id="nodeLedgerStatus">live phase</span></div>
           </div>
         </div>
       </div>
@@ -1773,6 +1773,11 @@
     setNode("nodeJournal",journalTone,s.last_journal_write||"--");
     setNode("nodeExplain",s.last_risk_reject?"warn":"good",s.last_risk_reject?"latest rejection shown":"no rejection");
     setNode("nodeSnapshot","good",s.ts?String(s.ts).slice(11,19)+" UTC":"streaming");
+    const sess=s.session||{};
+    const bm=sess.book_metrics;
+    setNode("nodeL2",bm?"good":"warn",bm?("OBI "+(bm.imbalance>=0?"+":"")+num(bm.imbalance).toFixed(2)+" / $"+Math.round(num(bm.liq_usd_5bps)/1000)+"k@5bps"):"scalper phase");
+    const ledger=sess.fill_ledger;
+    setNode("nodeLedger",ledger?"good":"warn",ledger?(num(ledger.records)+" records, chained"):"live phase");
     renderInstitutional();
   }
 

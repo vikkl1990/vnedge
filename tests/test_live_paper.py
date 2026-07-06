@@ -275,3 +275,19 @@ async def test_shadow_prime_backfills_observability_records(tmp_path):
     assert exchange.get_positions() == []
     # last_eval reflects the latest (non-backfill) bar
     assert session.last_eval is not None and session.last_eval["backfill"] is False
+
+
+async def test_fills_are_chained_into_the_ledger(tmp_path):
+    from vnedge.execution.fill_ledger import FillLedger, verify_chain
+
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    session.fill_ledger = FillLedger(tmp_path / "fills.jsonl")
+    await session.run(max_bars=1)
+
+    assert len(exchange.get_fills()) == 1
+    report = verify_chain(tmp_path / "fills.jsonl")
+    assert report.ok and report.records == 1
+    rec = __import__("json").loads((tmp_path / "fills.jsonl").read_text())
+    assert rec["symbol"] == SYM and rec["mode"] == "paper"
+    assert rec["strategy_id"] == "always_long"

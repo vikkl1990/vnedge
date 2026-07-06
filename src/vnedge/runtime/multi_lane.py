@@ -33,6 +33,7 @@ from vnedge.exchange.live_feed import (
     RestPollingMarketFeed,
     create_market_feed,
 )
+from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
@@ -335,6 +336,7 @@ async def build_lane(
         account_store=PaperAccountStore(
             journal_dir / f"{spec.lane_id}.account.json", spec.lane_id),
         equity_history_path=journal_dir / f"{spec.lane_id}.equity.jsonl",
+        fill_ledger=FillLedger(journal_dir / f"{spec.lane_id}.fills.jsonl"),
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
