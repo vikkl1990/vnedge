@@ -163,7 +163,34 @@ class LivePersistentFundingMR(LiveFundingMR):
         out = super().prepare(candles)  # may append the live funding print
         self._persist_new()
         self._trim_memory()
+        self._mask_unwarmed(out)
         return out
+
+    def _mask_unwarmed(self, df: pd.DataFrame) -> None:
+        """NaN-out funding_pct on bars not covered by REAL funding samples.
+
+        The 1970 warmup anchor back-fills the as-of merge with zeros, so a
+        240-bar percentile window can "fill" with synthetic values and rank
+        the first real prints as extreme — the deployed Delta lane fired a
+        bogus short exactly this way (caught by shadow backfill telemetry on
+        2026-07-06). A bar's funding_pct is only meaningful once real samples
+        span the entire percentile window ending at that bar; until then it
+        must stay NaN, which signal() already treats as no-signal.
+        """
+        if "funding_pct" not in df.columns:
+            return
+        real = self.funding[self.funding["timestamp"] > _BOOTSTRAP_TS]
+        if real.empty:
+            df["funding_pct"] = float("nan")
+            return
+        first_real = real["timestamp"].min()
+        # bars whose 240-bar window reaches back before real coverage began
+        idx = df.index[df["timestamp"] < first_real]
+        window = self.funding_pct_window
+        if len(idx):
+            last_anchor_pos = int(df.index.get_indexer([idx[-1]])[0])
+            cutoff = last_anchor_pos + window
+            df.iloc[:cutoff, df.columns.get_loc("funding_pct")] = float("nan")
 
     def _persist_new(self) -> None:
         fresh = self.funding[self.funding["timestamp"] > self._persisted_through]
