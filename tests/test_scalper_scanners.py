@@ -10,6 +10,7 @@ from vnedge.research.scalper_scanners import (
     decide_execution_route,
     scan_diagnostics,
     select_recorder_targets,
+    scanner_policy,
 )
 
 
@@ -163,3 +164,16 @@ def test_route_decision_blocks_below_breakeven_even_with_fills():
 
     assert route.route == "BLOCKED"
     assert "breakeven" in route.reason
+
+
+def test_scanner_policy_exposes_family_lifecycle_without_trade_permission():
+    policy = scanner_policy()
+
+    assert policy["can_trade"] is False
+    assert policy["can_promote"] is False
+    assert "forced_flow_continuation" in policy["active_research_families"]
+    assert "book_imbalance_continuation" not in policy["active_research_families"]
+    assert policy["tombstoned_families"][0]["family_id"] == (
+        "book_imbalance_continuation"
+    )
+    assert "all 120 configs" in policy["tombstoned_families"][0]["evidence"]

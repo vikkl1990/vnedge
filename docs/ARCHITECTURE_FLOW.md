@@ -251,6 +251,7 @@ RESEARCH_TIMEFRAME=1h
 | Backtester and walk-forward gates | Current | OOS-only judgment, sparse/offensive gates. |
 | Strategy registry and current lanes | Current | Funding MR, trend, offensive lanes, AlphaStack. |
 | Quant Signal Pack lane | Branch | Non-proprietary Lux/Willy-style concepts: sweeps, FVG/order-block retests, squeeze release, VWAP reclaim, and multi-horizon bias. Walk-forward only; no auto-promotion. |
+| External TradingView signal intake | Branch | Parses Willy/FVG-style JSON alerts into blocked-by-default `SignalCandidate`s with TP metadata. No webhook bypass; source must be VNEDGE-verified before arbitration can select it. |
 | Order manager, idempotency, WAL | Current | Timeout and reconciliation semantics exist. |
 | Paper/shadow runner | Current | Uses same gateway/order manager path. |
 | Dashboard read-only snapshot | Current | No control routes. |

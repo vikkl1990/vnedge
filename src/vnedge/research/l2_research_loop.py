@@ -27,7 +27,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from vnedge.research.alpha_factory import run_alpha_factory
+from vnedge.research.alpha_factory import build_alpha_tournament, run_alpha_factory
 from vnedge.research.continuous_research import (
     OUT_DIR,
     _env_int,
@@ -91,7 +91,7 @@ def _merge_stage(acc: dict, part: dict) -> None:
     """Accumulate a per-symbol stage payload: extend list results, keep the
     constant/scalar keys from the first symbol."""
     for k, v in part.items():
-        if k == "focus":
+        if k in {"focus", "tournament"}:
             continue
         if k in _CONST_KEYS:
             acc.setdefault(k, v)
@@ -110,6 +110,15 @@ def _refresh_scalper_focus(payload: dict) -> None:
         days=sr.get("days") or payload.get("days") or [],
         max_lanes=_env_int("SCALPER_FOCUS_MAX_LANES", 12),
         max_hypotheses=_env_int("SCALPER_FOCUS_MAX_HYPOTHESES", 12),
+    )
+
+
+def _refresh_alpha_tournament(payload: dict) -> None:
+    af = payload.get("alpha_factory") or {}
+    payload["alpha_factory"] = af
+    af["tournament"] = build_alpha_tournament(
+        af.get("hypotheses", []),
+        max_rows=_env_int("ALPHA_TOURNAMENT_MAX_ROWS", 50),
     )
 
 
@@ -140,10 +149,12 @@ def run_incremental(data_root: str | Path = "data", out_dir: Path | None = None)
         payload["progress"]["completed_targets"].append(target.label)
         payload["generated_at"] = datetime.now(UTC).isoformat()
         _refresh_scalper_focus(payload)
+        _refresh_alpha_tournament(payload)
         _write_json(payload, out_dir / L2_PROGRESS)   # CHECKPOINT after each symbol
 
     payload["complete"] = True
     _refresh_scalper_focus(payload)
+    _refresh_alpha_tournament(payload)
     _write_json(payload, out_dir / L2_PROGRESS)
     publish_l2(payload, out_dir)           # promote the complete pass for consumers
     return payload

@@ -39,6 +39,10 @@ def test_run_incremental_composes_and_promotes(monkeypatch, tmp_path):
     labels = {t.label for t in targets}
     assert set(payload["scalper_research"]["edge_hypotheses"]) == labels   # accumulated
     assert set(payload["alpha_factory"]["hypotheses"]) == labels
+    assert payload["alpha_factory"]["tournament"]["tournament_id"] == (
+        "event_scalper_alpha_tournament_v1"
+    )
+    assert payload["alpha_factory"]["tournament"]["can_trade"] is False
     assert payload["scalper_parameter_registry"]["can_trade"] is False     # registry carried
     assert payload["scalper_research"]["focus"]["focus_id"] == "scalper_focus_v1"
     assert payload["scalper_research"]["focus"]["can_trade"] is False

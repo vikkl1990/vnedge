@@ -6,6 +6,7 @@ import pandas as pd
 
 from vnedge.research.alpha_factory import (
     AlphaFactoryConfig,
+    build_alpha_tournament,
     mine_structural_alpha_events,
     run_alpha_factory,
 )
@@ -145,6 +146,20 @@ def test_structural_alpha_routes_to_replay_but_never_trades():
     assert best.requires_conservative_replay is True
     assert best.requires_untouched_judgment is True
 
+    tournament = build_alpha_tournament(results)
+    assert tournament["tournament_id"] == "event_scalper_alpha_tournament_v1"
+    assert tournament["can_trade"] is False
+    assert tournament["can_promote"] is False
+    assert tournament["summary"]["replay_queue"] > 0
+    top = tournament["standings"][0]
+    assert top["decision"] in {"REPLAY_MAKER_CANDIDATE", "REPLAY_TAKER_CANDIDATE"}
+    assert top["family"] in tournament["policy"]["active_research_families"]
+    assert top["route_gap"]["maker_net_gap_bps"] is not None
+    assert tournament["replay_queue"][0]["requires_human_approval"] is True
+    assert tournament["policy"]["tombstoned_families"][0]["family_id"] == (
+        "book_imbalance_continuation"
+    )
+
 
 def test_structural_alpha_below_cost_stays_blocked():
     results = mine_structural_alpha_events(
@@ -160,6 +175,12 @@ def test_structural_alpha_below_cost_stays_blocked():
     assert results[0].state == "BELOW_COST"
     assert results[0].route_decision.route == "BLOCKED"
     assert results[0].can_trade is False
+
+    tournament = build_alpha_tournament(results)
+    assert tournament["summary"]["replay_queue"] == 0
+    assert tournament["replay_queue"] == []
+    assert tournament["standings"][0]["decision"] == "BLOCKED_FEE_WALL"
+    assert tournament["standings"][0]["route_gap"]["maker_net_gap_bps"] < 0
 
 
 def test_structural_alpha_mines_context_tagged_lanes():
@@ -187,6 +208,8 @@ def test_run_alpha_factory_without_tape_requests_recording(tmp_path):
     payload = run_alpha_factory(tmp_path, targets, days=())
 
     assert payload["hypotheses"] == []
+    assert payload["tournament"]["summary"]["lanes"] == 0
+    assert payload["tournament"]["summary"]["can_trade"] is False
     assert payload["replay_queue"] == []
     assert payload["flow_guards"]["raw_hypothesis_is_not_signal"] is True
     assert payload["flow_guards"]["can_trade"] is False

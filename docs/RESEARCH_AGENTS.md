@@ -173,6 +173,11 @@ It tests pressure continuation, absorption reversal, and microprice
 continuation across forward horizons. Results are still research-only and use
 the same route gate: below PF/breakeven means `BLOCKED`.
 
+The 2026-07-05 replay sweep tombstoned the continuous
+`book_imbalance_continuation` premise after all 120 configs lost after costs.
+Do not recycle that shape as "almost working." Treat it as an audit baseline
+unless a new premise is pre-registered.
+
 ## Alpha Factory
 
 Use the alpha factory to mine structural hypotheses from recorded tick/L2 tape:
@@ -185,6 +190,12 @@ It looks for forced-flow continuation, absorption reversal, microprice
 dislocation, liquidity-vacuum continuation, and volatility impulse families.
 Any positive result is a replay queue item, not a signal. Conservative replay,
 untouched judgment, and human paper/shadow approval remain mandatory.
+
+The factory also publishes `alpha_factory.tournament`, an event-family
+tournament that ranks active scalper premises by exchange, symbol, context
+tag, post-cost net bps, PF, route decision, and route gap. Tournament
+`REPLAY_*_CANDIDATE` rows are replay work orders only; `BLOCKED_FEE_WALL`
+rows must not be traded or parameter-rescued.
 
 ## Guardrails
 
@@ -200,5 +211,7 @@ untouched judgment, and human paper/shadow approval remain mandatory.
 - The alpha factory creates structural hypotheses only; no hypothesis can trade
   without conservative replay, untouched judgment, paper, shadow, and gateway
   approval.
+- The alpha tournament ranks replay work only; no tournament row is an
+  executable signal.
 - AlphaStack emits ordinary strategy intents only after walk-forward scoring;
   it is not an indicator-alert import path and cannot bypass promotion gates.

@@ -27,6 +27,7 @@ ExecutionTimeframeLabel = Literal[
 
 ContextTimeframeLabel = Literal["4h", "1h", "15m", "1m"]
 TimeframeLabel = ExecutionTimeframeLabel | ContextTimeframeLabel
+FamilyResearchStatus = Literal["active_research", "deprioritized", "tombstoned"]
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,8 @@ class ScalperFamilyParameters:
     microprice_dislocation_bps: float = 0.20
     liquidity_vacuum_depth_usd: float = 250_000.0
     min_realized_vol_bps: float = 0.08
+    status: FamilyResearchStatus = "active_research"
+    evidence: str = ""
 
     def __post_init__(self) -> None:
         if not self.horizons_ms:
@@ -203,6 +206,18 @@ class ScalperParameterRegistry:
 
     def family_exit_policy(self, family_id: str) -> ExitPolicy:
         return self.exit_policy(self.family(family_id).exit_policy_id)
+
+    def active_research_families(self) -> tuple[ScalperFamilyParameters, ...]:
+        return tuple(
+            family for family in self.families.values()
+            if family.status == "active_research"
+        )
+
+    def tombstoned_families(self) -> tuple[ScalperFamilyParameters, ...]:
+        return tuple(
+            family for family in self.families.values()
+            if family.status == "tombstoned"
+        )
 
     def replay_sweep_kwargs(
         self,
@@ -303,6 +318,18 @@ class ScalperParameterRegistry:
             "exchange_fees": {k: v.to_dict() for k, v in self.exchange_fees.items()},
             "exit_policies": {k: v.to_dict() for k, v in self.exit_policies.items()},
             "families": {k: v.to_dict() for k, v in self.families.items()},
+            "family_lifecycle": {
+                "active_research": [
+                    family.family_id for family in self.active_research_families()
+                ],
+                "tombstoned": [
+                    {
+                        "family_id": family.family_id,
+                        "evidence": family.evidence,
+                    }
+                    for family in self.tombstoned_families()
+                ],
+            },
             "exit_intelligence": self.exit_intelligence_summary(),
             "can_trade": False,
             "can_promote": False,
@@ -374,6 +401,13 @@ def _registry() -> ScalperParameterRegistry:
                 timeframes=("event", "1s", "3s", "5s", "1m_research_proxy"),
                 exit_policy_id="static_fast",
                 route_gate=route,
+                status="tombstoned",
+                evidence=(
+                    "2026-07-05 L2 replay: all 120 configs across 8 recorded "
+                    "lanes were negative after maker/taker/slippage costs; "
+                    "continuous top-of-book imbalance is a replay reference, "
+                    "not an active alpha premise."
+                ),
             ),
             "forced_flow_continuation": ScalperFamilyParameters(
                 family_id="forced_flow_continuation",

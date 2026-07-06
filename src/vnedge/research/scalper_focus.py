@@ -15,6 +15,8 @@ from collections import Counter
 from dataclasses import asdict
 from typing import Iterable, Mapping, Any
 
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
+
 
 FOCUS_ID = "scalper_focus_v1"
 
@@ -49,6 +51,7 @@ def build_scalper_focus(
     )
     blocker_counts = Counter(s.get("state", "UNKNOWN") for s in scan_rows)
     primary_counts = Counter(s.get("primary_blocker", "UNKNOWN") for s in scan_rows)
+    lifecycle = _family_lifecycle()
     return {
         "focus_id": FOCUS_ID,
         "status": status,
@@ -70,6 +73,8 @@ def build_scalper_focus(
             "by_state": dict(blocker_counts),
             "by_primary_blocker": dict(primary_counts),
         },
+        "family_lifecycle": lifecycle,
+        "next_family_priority": lifecycle["active_research"],
         "lane_focus": _lane_focus(scan_rows, max_rows=max_lanes),
         "hypothesis_focus": _hypothesis_focus(hypothesis_rows, max_rows=max_hypotheses),
         "recorder_campaign": _recorder_campaign(
@@ -82,6 +87,7 @@ def build_scalper_focus(
             scan_rows,
             hypothesis_rows,
             recorder_rows,
+            lifecycle,
         ),
     }
 
@@ -195,7 +201,14 @@ def _next_actions(
     scan_rows: list[dict],
     hypothesis_rows: list[dict],
     recorder_rows: list[dict],
+    lifecycle: dict,
 ) -> list[str]:
+    active = ", ".join(
+        item["family_id"] for item in lifecycle["active_research"][:5]
+    )
+    tombstoned = ", ".join(
+        item["family_id"] for item in lifecycle["tombstoned"]
+    ) or "none"
     if status == "REPLAY_CANDIDATE_READY":
         return [
             "pre-register untouched replay for the replay candidate; do not auto-promote",
@@ -212,17 +225,44 @@ def _next_actions(
         return [
             f"record tick/L2 for {missing} missing lane(s) and extend {record_more} under-sampled lane(s)",
             "do not tune thresholds while sample gates are open",
+            f"prioritize active event families next: {active}",
             "rerun scanner after the next L2 research pass",
         ]
     if hypothesis_rows or scan_rows:
         return [
             "current scalp shapes are below fee wall; do not trade",
-            "mine new microstructure families or longer context filters before replay",
+            f"do not spend replay priority on tombstoned families: {tombstoned}",
+            f"mine active event families with stronger structural premises: {active}",
             "keep maker-first as the default route until PF materially improves",
         ]
     if recorder_rows:
         return ["recorder campaign exists, but no scans are complete yet"]
     return ["start tick/L2 recorder; scalper cannot be proven from candles"]
+
+
+def _family_lifecycle() -> dict:
+    registry = DEFAULT_SCALPER_PARAMETER_REGISTRY
+    return {
+        "active_research": [
+            {
+                "family_id": family.family_id,
+                "description": family.description,
+                "exit_policy_id": family.exit_policy_id,
+                "horizons_ms": list(family.horizons_ms),
+            }
+            for family in registry.active_research_families()
+        ],
+        "tombstoned": [
+            {
+                "family_id": family.family_id,
+                "description": family.description,
+                "evidence": family.evidence,
+                "can_trade": False,
+                "can_promote": False,
+            }
+            for family in registry.tombstoned_families()
+        ],
+    }
 
 
 def _recorder_reason(row: dict) -> str:
