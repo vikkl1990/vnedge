@@ -211,3 +211,41 @@ best avg_net ~= -7.40bps
 
 Interpretation: there is microstructure movement, but not enough to clear the
 fee wall. This is the missing edge made measurable.
+
+## Replay verdict (2026-07-05): book imbalance is tombstoned
+
+The first full-day recorded L2 sweep ran the conservative
+`book_imbalance_continuation` family across 8 lanes and 120 parameter
+configurations. Every configuration was negative after costs.
+
+| Lane | Coverage | Best net on $100 notional | Verdict |
+|---|---:|---:|---|
+| Binance BTC | 24h, 846k books / 2.07M trades | -$23.62 | negative edge |
+| Binance ETH | 24h, 680k books / 2.57M trades | -$42.00 | negative edge |
+| Binance SOL | 24h, 626k books / 896k trades | -$35.07 | negative edge |
+| Binance XRP | 24h, 678k books / 675k trades | -$34.76 | negative edge |
+| Binance DOGE | 24h, 568k books / 559k trades | -$36.74 | negative edge |
+| Binance BNB | 24h, 606k books / 894k trades | -$46.84 | negative edge |
+| Delta BTC | 5.1h, 18k books | -$8.91 | negative edge |
+| Delta ETH | 5.1h, 18k books | -$17.03 | negative edge |
+
+The explanatory number is BTC's best row: roughly -8.4bps per fill, which is
+approximately the maker-entry + taker-exit + slippage toll in that replay. In
+other words, continuous top-of-book imbalance behaved like a near-zero-gross
+directional signal paying the fee wall on every flip.
+
+The registry now marks `book_imbalance_continuation` as `tombstoned`. It stays
+available as a replay/audit reference, but it is no longer an active alpha
+premise. Active scalper research should shift to event-driven families that
+can plausibly create enough displacement to beat 8-9bps:
+
+- `forced_flow_continuation`
+- `absorption_reversal`
+- `microprice_dislocation`
+- `liquidity_vacuum_continuation`
+- `volatility_impulse`
+
+This does not approve any scalper signal. It prevents repeat spending on a
+dead premise and keeps the next work focused on structural events: forced
+flow, absorption, liquidity vacuums, microprice displacement, and volatility
+impulses with 4h/1h/15m/1m context filters.

@@ -70,6 +70,11 @@ def test_focus_marks_data_collection_when_ticks_are_missing_or_short():
     assert focus["summary"]["missing_tick_data"] == 1
     assert focus["summary"]["record_more"] == 1
     assert "record tick/L2" in focus["next_actions"][0]
+    assert focus["family_lifecycle"]["tombstoned"][0]["family_id"] == (
+        "book_imbalance_continuation"
+    )
+    assert focus["next_family_priority"][0]["family_id"] == "forced_flow_continuation"
+    assert "forced_flow_continuation" in focus["next_actions"][2]
     assert focus["recorder_campaign"][0]["can_trade"] is False
 
 
@@ -98,6 +103,8 @@ def test_focus_exposes_cost_wall_gap_for_negative_replay():
     assert lane["maker_gap"]["net_gap_bps"] == -9.0
     assert lane["maker_gap"]["pf_gap"] == -1.11
     assert focus["summary"]["cost_wall"] == 1
+    assert "book_imbalance_continuation" in focus["next_actions"][1]
+    assert "liquidity_vacuum_continuation" in focus["next_actions"][2]
 
 
 def test_focus_handles_legacy_scalar_payloads():

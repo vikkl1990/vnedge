@@ -173,6 +173,11 @@ It tests pressure continuation, absorption reversal, and microprice
 continuation across forward horizons. Results are still research-only and use
 the same route gate: below PF/breakeven means `BLOCKED`.
 
+The 2026-07-05 replay sweep tombstoned the continuous
+`book_imbalance_continuation` premise after all 120 configs lost after costs.
+Do not recycle that shape as "almost working." Treat it as an audit baseline
+unless a new premise is pre-registered.
+
 ## Alpha Factory
 
 Use the alpha factory to mine structural hypotheses from recorded tick/L2 tape:

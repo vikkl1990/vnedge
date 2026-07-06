@@ -37,7 +37,6 @@ tick/L2 replay.
 
 V1 families:
 
-- `book_imbalance_continuation`
 - `forced_flow_continuation`
 - `absorption_reversal`
 - `microprice_dislocation`
@@ -47,6 +46,19 @@ V1 families:
 Each family owns its horizon set, flow thresholds, spread limits, sample
 requirements, route gates, and exit policy. Parameter changes should be code
 reviewed because they alter the research contract.
+
+Family lifecycle is explicit:
+
+- `active_research`: still eligible for mining, replay, and untouched
+  judgment if evidence appears.
+- `deprioritized`: kept visible, but not first in the recorder/replay queue.
+- `tombstoned`: failed a replay/research verdict and must not be treated as
+  an active alpha premise without a new pre-registered idea.
+
+`book_imbalance_continuation` is now `tombstoned`. The 2026-07-05 recorded L2
+sweep found all 120 configurations negative after costs across Binance and
+Delta lanes. It remains in the registry only as a replay reference and audit
+baseline.
 
 ## Fees And Route Hurdles
 
