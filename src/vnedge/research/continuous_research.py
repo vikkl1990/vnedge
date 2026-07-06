@@ -63,6 +63,7 @@ from vnedge.research.scalper_scanners import (
     scanner_policy,
     select_recorder_targets,
 )
+from vnedge.research.scalper_focus import build_scalper_focus
 from vnedge.research.strategy_diagnostics import diagnose
 from vnedge.research.universe import (
     ResearchTarget,
@@ -601,6 +602,14 @@ def run_scalper_research(
         for s in scans
         if s.state == "REPLAY_CANDIDATE"
     ][:max_rows]
+    payload["focus"] = build_scalper_focus(
+        scans,
+        edge_results,
+        recorder_targets=recorder_targets,
+        days=days,
+        max_lanes=_env_int("SCALPER_FOCUS_MAX_LANES", 12),
+        max_hypotheses=_env_int("SCALPER_FOCUS_MAX_HYPOTHESES", 12),
+    )
     return payload
 
 

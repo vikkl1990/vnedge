@@ -200,6 +200,8 @@ def test_scalper_research_flow_orders_discovery_before_replay(monkeypatch, tmp_p
     assert payload["replay_candidates"] == [
         {"lane": "replay-pass", "source": "conservative_replay"}
     ]
+    assert payload["focus"]["status"] == "REPLAY_CANDIDATE_READY"
+    assert payload["focus"]["can_trade"] is False
 
 
 def test_scalper_research_no_tick_days_requests_recorder(tmp_path):
@@ -211,6 +213,7 @@ def test_scalper_research_no_tick_days_requests_recorder(tmp_path):
     assert payload["scanner_results"] == []
     assert "recorder" in payload["note"]
     assert payload["flow_guards"]["can_trade"] is False
+    assert "focus" not in payload
 
 
 def test_attribution_by_side():

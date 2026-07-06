@@ -34,6 +34,7 @@ from vnedge.research.continuous_research import (
     _scalper_research_days,
     run_scalper_research,
 )
+from vnedge.research.scalper_focus import build_scalper_focus
 from vnedge.research.universe import load_research_targets
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
@@ -90,12 +91,26 @@ def _merge_stage(acc: dict, part: dict) -> None:
     """Accumulate a per-symbol stage payload: extend list results, keep the
     constant/scalar keys from the first symbol."""
     for k, v in part.items():
+        if k == "focus":
+            continue
         if k in _CONST_KEYS:
             acc.setdefault(k, v)
         elif isinstance(v, list):
             acc.setdefault(k, []).extend(v)
         else:
             acc.setdefault(k, v)
+
+
+def _refresh_scalper_focus(payload: dict) -> None:
+    sr = payload.get("scalper_research") or {}
+    sr["focus"] = build_scalper_focus(
+        sr.get("scanner_results", []),
+        sr.get("edge_hypotheses", []),
+        recorder_targets=sr.get("recorder_targets", []),
+        days=sr.get("days") or payload.get("days") or [],
+        max_lanes=_env_int("SCALPER_FOCUS_MAX_LANES", 12),
+        max_hypotheses=_env_int("SCALPER_FOCUS_MAX_HYPOTHESES", 12),
+    )
 
 
 def run_incremental(data_root: str | Path = "data", out_dir: Path | None = None) -> dict:
@@ -124,9 +139,11 @@ def run_incremental(data_root: str | Path = "data", out_dir: Path | None = None)
                      run_alpha_factory(data_root, one, days=days, max_rows=max_rows))
         payload["progress"]["completed_targets"].append(target.label)
         payload["generated_at"] = datetime.now(UTC).isoformat()
+        _refresh_scalper_focus(payload)
         _write_json(payload, out_dir / L2_PROGRESS)   # CHECKPOINT after each symbol
 
     payload["complete"] = True
+    _refresh_scalper_focus(payload)
     _write_json(payload, out_dir / L2_PROGRESS)
     publish_l2(payload, out_dir)           # promote the complete pass for consumers
     return payload
