@@ -58,6 +58,9 @@ Leave `RESEARCH_STRATEGIES` unset/empty to run every registered research lane.
 - `edge_agents.proposals`: exploratory follow-ups, including pre-registered
   judgment prompts, cross-exchange validation prompts, and whitelisted variant
   backtests.
+- `edge_leaderboard`: fee-aware ranked rows across strategy and Quant-family
+  lanes. It includes `route_decision` (`BLOCKED`, `MAKER_ONLY`,
+  `TAKER_ALLOWED`), blockers, score, fee drag, and a `promotion_queue`.
 - `scalper_research`: tick/L2 replay diagnostics and recorder targets.
 - `alpha_factory`: structural alpha hypotheses and replay queue. See
   `docs/ALPHA_FACTORY.md`. Hypotheses are split by `4h/1h/15m/1m` context
@@ -74,6 +77,27 @@ Leave `RESEARCH_STRATEGIES` unset/empty to run every registered research lane.
   exit policy contract. See `docs/SCALPER_PARAMETERS.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
   `can_promote=false`, and untouched-data judgment remains required.
+
+## Edge Leaderboard
+
+The leaderboard is the bridge from "signals exist" to "which signal deserves
+research capital next." It ranks:
+
+- normal rolling walk-forward strategy rows;
+- Quant Signal Pack family rows from `family_attribution`;
+- auto-explore variants, explicitly marked as requiring human review.
+
+Rows below net-positive after fees, minimum sample count, or maker PF are
+`BLOCKED`. Rows that clear maker policy but not promotion are `WATCHLIST` or
+`VARIANT_RESEARCH_READY`. Taker is only `TAKER_ALLOWED` when PF, payoff, and
+fee coverage are materially stronger than the maker floor.
+
+The `promotion_queue` never promotes or trades. Its allowed next steps are:
+
+- `pre_register_untouched_judgment`;
+- `human_review_auto_variant_then_pre_register`;
+- `run_isolated_family_variant`;
+- `collect_more_and_retest`.
 
 ## Scalper Scanners
 
