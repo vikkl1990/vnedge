@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -99,6 +100,10 @@ SCALPER_DISCOVERY_FLOW = (
     "untouched_judgment",
     "paper_shadow_after_human_approval",
 )
+_QUANT_ENTRY_RE = re.compile(
+    r"\bquant_signal_pack\s+(?P<side>long|short)\s+"
+    r"(?P<family>[a-z_]+)\s+score\b"
+)
 
 
 def side_attribution(result: WalkForwardResult) -> dict:
@@ -120,6 +125,46 @@ def side_attribution(result: WalkForwardResult) -> dict:
     return out
 
 
+def _trade_metrics(trades) -> dict:
+    trades = tuple(trades)
+    wins = [t.net_pnl_usd for t in trades if t.net_pnl_usd > 0]
+    losses = [-t.net_pnl_usd for t in trades if t.net_pnl_usd <= 0]
+    payoff = (
+        round((sum(wins) / len(wins)) / (sum(losses) / len(losses)), 2)
+        if wins and losses
+        else 0.0
+    )
+    if losses:
+        profit_factor = round(sum(wins) / sum(losses), 2)
+    else:
+        profit_factor = 999.0 if wins else 0.0
+    return {
+        "trades": len(trades),
+        "net_usd": round(sum(t.net_pnl_usd for t in trades), 2),
+        "win_rate_pct": round(len(wins) / len(trades) * 100.0, 1) if trades else 0.0,
+        "profit_factor": profit_factor,
+        "payoff_ratio": payoff,
+    }
+
+
+def quant_family_attribution(result: WalkForwardResult) -> dict:
+    """Break Quant Signal Pack OOS trades by the dominant signal family.
+
+    This is the feedback loop the scalper needs: if aggregate Quant rejects,
+    the agent can still discover whether one family is profitable while the
+    rest is fee/noise drag.
+    """
+    buckets: dict[str, list] = {}
+    for window in result.windows:
+        for trade in window.test_trades:
+            match = _QUANT_ENTRY_RE.search(trade.entry_reason)
+            if not match:
+                continue
+            family = match.group("family")
+            buckets.setdefault(family, []).append(trade)
+    return {family: _trade_metrics(trades) for family, trades in sorted(buckets.items())}
+
+
 def wf_record(
     strategy: str, symbol: str, result: WalkForwardResult, gates: PromotionGates,
     gates_label: str = "standard", exchange: str = EXCHANGE, timeframe: str = TIMEFRAME,
@@ -134,7 +179,7 @@ def wf_record(
     payoff = round(
         (sum(wins) / len(wins)) / (sum(losses) / len(losses)), 2
     ) if wins and losses else 0.0
-    return {
+    record = {
         "attribution": side_attribution(result),
         "exchange": exchange,
         "gates": gates_label,
@@ -152,6 +197,10 @@ def wf_record(
         "reasons": list(decision.reject_reasons),
         "updated": datetime.now(UTC).isoformat(),
     }
+    families = quant_family_attribution(result)
+    if families:
+        record["family_attribution"] = families
+    return record
 
 
 def read_feed_series(
@@ -310,7 +359,10 @@ def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list
                     take_profit_r=[1.5, 2.0]),
          720, OFFENSIVE_GATES, "offensive", False),
     ]
+    enabled = _enabled_research_strategies()
     for name, factory, grid, test_bars, gates, label, requires_funding in lanes:
+        if enabled is not None and name not in enabled:
+            continue
         if requires_funding and f.empty:
             records.append(
                 _skipped_record(
@@ -555,6 +607,11 @@ def _alpha_factory_enabled() -> bool:
     return os.environ.get("ALPHA_FACTORY_ENABLED", "1").lower() not in {
         "0", "false", "no", "off",
     }
+
+
+def _enabled_research_strategies() -> set[str] | None:
+    configured = set(_split_csv(os.environ.get("RESEARCH_STRATEGIES")))
+    return configured or None
 
 
 def _load_l2_latest() -> dict:

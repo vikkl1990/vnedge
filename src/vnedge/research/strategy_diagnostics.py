@@ -115,6 +115,69 @@ def _funding_mr_catalog(winning_side: str | None) -> dict[str, Suggestion]:
     return cat
 
 
+def _best_positive_family(record: dict) -> str | None:
+    families = record.get("family_attribution", {})
+    candidates = []
+    for family, stats in families.items():
+        trades = int(stats.get("trades", 0))
+        net = float(stats.get("net_usd", 0.0))
+        pf = float(stats.get("profit_factor", 0.0))
+        payoff = float(stats.get("payoff_ratio", 0.0))
+        if trades >= 5 and net > 0:
+            candidates.append((net, pf, payoff, trades, family))
+    if not candidates:
+        return None
+    return max(candidates)[-1]
+
+
+def _quant_signal_pack_catalog(
+    winning_side: str | None,
+    winning_family: str | None,
+) -> dict[str, Suggestion]:
+    sid, gates, tb = "quant_signal_pack_v1", "offensive", 720
+    cat: dict[str, Suggestion] = {
+        "increase_quality": _mk(
+            sid, "higher_confluence",
+            {"min_score": 6.0, "min_volume_z": 0.6},
+            {"structure_window": [24, 48], "take_profit_r": [2.0, 2.5]},
+            gates, tb, "increase_quality",
+            "raise the confluence and volume bar so visual-style marks do "
+            "not become low-quality fee churn"),
+        "reduce_risk": _mk(
+            sid, "tighter_stop",
+            {"stop_atr_mult": 1.1, "take_profit_r": 2.5},
+            {"structure_window": [24, 48], "min_score": [5.0, 6.0]},
+            gates, tb, "reduce_risk",
+            "tighten the structure stop and stretch reward; useful when "
+            "payoff ratio or drawdown is the failing gate"),
+        "macro_family_focus": _mk(
+            sid, "sweep_fvg_squeeze_only",
+            {"allowed_families": ["liquidity_sweep", "fvg_retest", "squeeze_release"]},
+            {"structure_window": [24, 48], "take_profit_r": [2.0, 2.5]},
+            gates, tb, "family_restrict",
+            "focus on the three families most likely to encode actual "
+            "forced-flow or displacement instead of passive trend marks"),
+    }
+    if winning_side:
+        cat["side_restrict"] = _mk(
+            sid, f"{winning_side}_only",
+            {"allowed_sides": [winning_side]},
+            {"structure_window": [24, 48], "take_profit_r": [2.0, 2.5]},
+            gates, tb, "side_restrict",
+            f"attribution shows the {winning_side} side carries the edge; "
+            "drop the drag side")
+    if winning_family:
+        cat["family_restrict"] = _mk(
+            sid, f"{winning_family}_only",
+            {"allowed_families": [winning_family]},
+            {"structure_window": [24, 48], "min_score": [5.0, 6.0],
+             "take_profit_r": [2.0, 2.5]},
+            gates, tb, "family_restrict",
+            f"family attribution shows {winning_family} is the carrying "
+            "sub-pattern; isolate it before wider mining")
+    return cat
+
+
 CATALOG: dict[str, dict[str, Suggestion]] = {
     "volatility_expansion_breakout_v1": {
         "increase_quality": _mk(
@@ -166,20 +229,7 @@ CATALOG: dict[str, dict[str, Suggestion]] = {
             "tighten ATR risk while keeping the structure stop; useful when "
             "payoff ratio is the limiting gate"),
     },
-    "quant_signal_pack_v1": {
-        "increase_quality": _mk(
-            "quant_signal_pack_v1", "higher_confluence",
-            {"min_score": 6.0}, {"structure_window": [24, 48], "take_profit_r": [2.0]},
-            "offensive", 720, "increase_quality",
-            "raise the confluence bar so Lux/Willy-style visual marks do not "
-            "become low-quality signal spam"),
-        "reduce_risk": _mk(
-            "quant_signal_pack_v1", "tighter_stop",
-            {"stop_atr_mult": 1.1, "take_profit_r": 2.5},
-            {"structure_window": [24, 48]}, "offensive", 720, "reduce_risk",
-            "tighten the structure stop and stretch reward; useful when payoff "
-            "ratio or drawdown is the failing gate"),
-    },
+    "quant_signal_pack_v1": _quant_signal_pack_catalog(None, None),
 }
 
 
@@ -215,6 +265,13 @@ def diagnose(record: dict) -> Diagnosis:
     if winning_side:
         goals.append("side_restrict")  # drop the drag side (pre-registered variant)
 
+    winning_family = None
+    if strategy == "quant_signal_pack_v1":
+        winning_family = _best_positive_family(record)
+        if winning_family:
+            notes.append(f"{winning_family} family carries; mixed families drag")
+            goals.append("family_restrict")
+
     # Map failure tags -> catalog goals (ordered by leverage).
     if {"low_pf", "low_payoff"} & tags:
         goals += ["increase_quality", "reduce_risk"]
@@ -228,6 +285,10 @@ def diagnose(record: dict) -> Diagnosis:
     catalog = CATALOG.get(strategy, {})
     if strategy == "funding_mean_reversion_v1":
         catalog = _funding_mr_catalog(winning_side)
+    elif strategy == "quant_signal_pack_v1":
+        catalog = _quant_signal_pack_catalog(winning_side, winning_family)
+        if "family_restrict" not in goals:
+            goals.append("macro_family_focus")
 
     seen, suggestions = set(), []
     for goal in goals:

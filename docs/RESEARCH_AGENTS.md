@@ -37,6 +37,16 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
 .venv/bin/python -m vnedge.research.continuous_research
 ```
 
+Optional strategy allowlists let operators split heavy candle lanes without a
+code change:
+
+```bash
+RESEARCH_STRATEGIES=quant_signal_pack_v1,alpha_stack_confluence_v1 \
+.venv/bin/python -m vnedge.research.continuous_research
+```
+
+Leave `RESEARCH_STRATEGIES` unset/empty to run every registered research lane.
+
 ## Output
 
 `research/live_research/latest.json` now includes:
@@ -56,8 +66,10 @@ RESEARCH_SYMBOLS_BYBIT=BTC/USDT:USDT,SOL/USDT:USDT \
   `docs/ALPHA_STACK.md`.
 - `quant_signal_pack_v1`: broader Lux/Willy-style concept pack covering
   structure, sweeps, FVG/order-block retests, squeeze release, VWAP reclaim,
-  multi-horizon bias, displacement, and volume impulse. See
-  `docs/QUANT_SIGNAL_PACK.md`.
+  multi-horizon bias, displacement, and volume impulse. Its walk-forward rows
+  include `family_attribution` so the agent can isolate carrying sub-patterns
+  such as `liquidity_sweep` or `fvg_retest` instead of tuning the blended pack.
+  See `docs/QUANT_SIGNAL_PACK.md`.
 - `scalper_parameter_registry`: frozen TF/horizon, family, fee, route, and
   exit policy contract. See `docs/SCALPER_PARAMETERS.md`.
 - `edge_agents.policy`: the hard safety policy. `can_trade=false`,
