@@ -90,6 +90,10 @@ class LivePaperSession:
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
         self.last_eval: dict | None = None
+        # chronological trade narrative for the dashboard journal panel:
+        # fired signals, gateway verdicts, submissions, fills, exits
+        from collections import deque
+        self.trade_log: deque = deque(maxlen=40)
         self._plan: _LivePlan | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
         self._orphan_position_guarded = False
@@ -125,6 +129,11 @@ class LivePaperSession:
         )
         return True
 
+    def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
+        self.trade_log.append({
+            "ts": now.isoformat(), "event": event, "detail": detail,
+        })
+
     def _mode_label(self) -> str:
         if self.config.mode is RunnerMode.SHADOW:
             return "shadow (live data)"
@@ -140,6 +149,7 @@ class LivePaperSession:
         )
         if not sizing.approved:
             self.sizing_skips += 1
+            self._log_trade_event("sizing_skip", f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140], now)
             return
         intent = OrderIntent(
             symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
@@ -166,16 +176,32 @@ class LivePaperSession:
             })
             if decision.approved:
                 self.shadow_approved += 1
+                self._log_trade_event(
+                    "shadow_approved",
+                    f"{sig.side} {intent.quantity:g} @ ~{ref_price:g} — {sig.reason}"[:140],
+                    now,
+                )
             else:
                 self.shadow_rejected += 1
+                self._log_trade_event(
+                    "shadow_rejected",
+                    f"{sig.side} — failed: {', '.join(decision.failed_checks)}"[:140],
+                    now,
+                )
             return
         order = await self.om.submit(
             intent, self.tracker.account_state(), self.feed.market_state(), key, now=now
         )
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
+            self._log_trade_event("risk_rejected", f"{sig.side} — gateway rejected entry"[:140], now)
         else:
             self.orders_submitted += 1
+            self._log_trade_event(
+                "order_submitted",
+                f"{sig.side} {intent.quantity:g} ({order.state.value}) — {sig.reason}"[:140],
+                now,
+            )
             plan = _LivePlan(sig, self.candles["timestamp"].iloc[-1])
             if order.state is OrderState.ACKNOWLEDGED:
                 self._plan = plan
@@ -218,6 +244,7 @@ class LivePaperSession:
         )
         self.orders_submitted += 1
         self.journal.append("live_paper_exit", {"reason": reason, "state": order.state.value})
+        self._log_trade_event("exit", f"{reason} ({order.state.value})"[:140], now)
         self._plan = None
 
     def _maybe_daily_report(self, now: datetime) -> None:
@@ -327,6 +354,11 @@ class LivePaperSession:
         self.journal.append("lane_eval", record)
         if not backfill:
             self.last_eval = record
+        if sig is not None and not backfill:
+            from datetime import datetime as _dt
+            self._log_trade_event(
+                "signal_fired", f"{sig.side} — {sig.reason}"[:140], _dt.now(UTC),
+            )
         if sig is not None:
             logger.info(
                 "lane eval [%s %s]%s: FIRED %s — %s",
@@ -341,6 +373,12 @@ class LivePaperSession:
             return
         fills = self.exchange.get_fills()
         for fill in fills[self._ledgered_fills:]:
+            self._log_trade_event(
+                "fill",
+                f"{'buy' if fill.buy else 'sell'} {fill.quantity:g} @ {fill.price:g} "
+                f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
+                now,
+            )
             self.fill_ledger.append({
                 "ts": now.isoformat(),
                 "mode": self.config.mode.value,
@@ -391,6 +429,7 @@ class LivePaperSession:
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 "last_eval": self.last_eval,
+                "trade_log": list(self.trade_log),
                 "fill_ledger": {
                     "records": self.fill_ledger.records,
                     "chained": True,
