@@ -16,15 +16,42 @@ sudo usermod -aG docker $USER   # re-login after this
 Recommended: AWS Mumbai / any region; latency barely matters for 1h-bar paper
 trading. 1 vCPU / 1–2 GB RAM is plenty.
 
-## 2. Ship the repo + trial state
+## 2. Deploy code with git provenance
+
+Deploy from a real git checkout on the VPS. Do not run production/shadow
+services from an rsynced tree without `.git`; that removes commit attribution,
+rollback, and a reliable `git rev-parse HEAD`.
+
+First install:
 
 ```bash
-# from the Mac — code. Excludes MUST be root-anchored (leading /):
-# a bare "data" would also exclude src/vnedge/data and break the install.
-rsync -av --exclude /.venv --exclude /data --exclude /logs \
-    --exclude /models --exclude /.git \
-    ~/Desktop/VNEDGE/ vps:~/vnedge/
+git clone https://github.com/vikkl1990/vnedge.git ~/vnedge
+cd ~/vnedge
+git checkout main
+git pull --ff-only
+git rev-parse HEAD
+```
 
+Update an existing deploy:
+
+```bash
+cd ~/vnedge
+git fetch --prune origin
+git checkout main
+git reset --hard origin/main
+git clean -fd --exclude=.env --exclude=data --exclude=logs \
+    --exclude=research/paper_trials --exclude=research/live_research \
+    --exclude=deploy/certs
+git rev-parse HEAD
+```
+
+Before restarting services, record the printed commit in the deploy log or
+operator notes. Rollback is the inverse: `git fetch`, then
+`git reset --hard <known-good-commit>`, followed by `docker compose up -d --build`.
+
+## 3. Ship trial/runtime state
+
+```bash
 # trial state (REQUIRED to continue the current trial, not restart it):
 # stop the local process FIRST so the account snapshot is final
 kill <local-trial-pid>
@@ -36,7 +63,11 @@ The account store (`logs/paper_trials/<lane>.account.json`) is what makes
 this a CONTINUATION for paper lanes and a stable audit trail for shadow
 lanes. Never run the same lane id on two machines at once.
 
-## 3. Configure and start
+Live research files under `research/live_research/` are generated runtime
+state, not source code. Preserve or archive them when they are evidence, but do
+not commit them.
+
+## 4. Configure and start
 
 ```bash
 cd ~/vnedge
@@ -55,7 +86,7 @@ docker compose logs -f multi-lane-shadow   # watch lane build/resume lines
 `restart: unless-stopped` + per-lane account stores = reboots continue the
 same governed workspace.
 
-## 4. Dashboard access (never public)
+## 5. Dashboard access (never public)
 
 The container port is mapped to the VPS loopback only. From the Mac:
 
@@ -64,7 +95,7 @@ ssh -N -L 8080:127.0.0.1:8080 vps
 open "http://127.0.0.1:8080/?token=<DASHBOARD_TOKEN from vps .env>"
 ```
 
-## 5. Daily checks (mostly automated now)
+## 6. Daily checks (mostly automated now)
 
 Telegram (if configured) pushes: fills, stale feed, kill switch, journal
 failures, daily-loss stop, loss streaks, drawdown-envelope breaches.
