@@ -174,14 +174,15 @@ def _journal_writable(path: Path) -> bool:
         return False
 
 
-def main(argv=None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    settings = Settings()
-    report = run_pre_live_checklist(
+def run_pre_live_checklist_from_env(settings: Settings | None = None) -> ChecklistReport:
+    """Standalone env-driven pre-flight, shared by the CLI and the mainnet
+    execution drill. The live session re-checks with live OM state."""
+    settings = settings or Settings()
+    return run_pre_live_checklist(
         settings=settings,
         risk_config=settings.risk,
         kill_switch_active=Path(os.environ.get("KILL_FILE", "KILL")).exists(),
-        has_unresolved_orders=False,  # standalone pre-flight; the session re-checks with live OM state
+        has_unresolved_orders=False,
         journal_path=Path(os.environ.get("DECISION_JOURNAL", "logs/decision_journal.jsonl")),
         credentials_present=bool(
             os.environ.get("VNEDGE_EXEC_API_KEY") and os.environ.get("VNEDGE_EXEC_API_SECRET")
@@ -189,6 +190,11 @@ def main(argv=None) -> int:
         lower_rungs_validated=os.environ.get("PRE_LIVE_LADDER_ATTESTED", "").lower()
         in {"1", "true", "yes", "on"},
     )
+
+
+def main(argv=None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    report = run_pre_live_checklist_from_env()
     for c in report.results:
         mark = "PASS" if c.passed else ("FAIL" if c.critical else "WARN")
         print(f"  [{mark}] {c.name}: {c.detail}")
