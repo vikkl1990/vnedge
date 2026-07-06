@@ -291,3 +291,28 @@ async def test_fills_are_chained_into_the_ledger(tmp_path):
     rec = __import__("json").loads((tmp_path / "fills.jsonl").read_text())
     assert rec["symbol"] == SYM and rec["mode"] == "paper"
     assert rec["strategy_id"] == "always_long"
+
+
+async def test_trade_log_narrates_signal_to_verdict(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, _ = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    await session.run(max_bars=1)
+
+    events = [e["event"] for e in session.trade_log]
+    # prime fires + live bar fires; each approved by the gateway in shadow
+    assert events.count("signal_fired") == 2
+    assert events.count("shadow_approved") == 2
+    assert all("ts" in e and "detail" in e for e in session.trade_log)
+
+
+async def test_trade_log_records_fills_in_paper(tmp_path):
+    from vnedge.execution.fill_ledger import FillLedger
+
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    session.fill_ledger = FillLedger(tmp_path / "fills.jsonl")
+    await session.run(max_bars=1)
+
+    events = [e["event"] for e in session.trade_log]
+    assert "order_submitted" in events
+    assert "fill" in events

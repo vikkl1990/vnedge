@@ -157,6 +157,18 @@ class MultiLaneProvider:
                 "risk_status": self._lanes[lid].get("risk_status", "?"),
                 "feed": self._lanes[lid].get("feed_health", {}).get("candles", "?"),
                 "positions": len(self._lanes[lid].get("positions", [])),
+                # signal funnel: evaluated -> fired -> approved/submitted -> filled
+                "funnel": {
+                    "bars": self._lanes[lid].get("session", {}).get("bars_processed", 0),
+                    "signals": self._lanes[lid].get("session", {}).get("signals", 0),
+                    "shadow_approved": self._lanes[lid].get("session", {}).get("shadow_approved", 0),
+                    "shadow_rejected": self._lanes[lid].get("session", {}).get("shadow_rejected", 0),
+                    "risk_rejects": self._lanes[lid].get("session", {}).get("risk_rejects", 0),
+                    "sizing_skips": self._lanes[lid].get("session", {}).get("sizing_skips", 0),
+                    "submitted": self._lanes[lid].get("session", {}).get("orders_submitted", 0),
+                    "fills": self._lanes[lid].get("fills", 0),
+                },
+                "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
             }
             for lid in self._order if lid in self._lanes
         ]

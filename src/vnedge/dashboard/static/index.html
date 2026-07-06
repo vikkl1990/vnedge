@@ -971,6 +971,25 @@
       </div>
     </section>
 
+    <section aria-label="signal funnel and trade journal">
+      <h2>Signal Funnel &amp; Trade Journal <span class="tag">per-lane conversion (evaluated &#8594; fired &#8594; approved &#8594; filled) and the chronological trade narrative</span></h2>
+      <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Lane</th><th>Bars Evaluated</th><th>Signals Fired</th><th>Approved</th>
+          <th>Rejected (risk)</th><th>Sizing Skips</th><th>Submitted</th><th>Fills</th><th>Conversion</th>
+        </tr></thead>
+        <tbody id="funnelBody"></tbody>
+      </table>
+      </div>
+      <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <thead><tr><th>Time (UTC)</th><th>Lane</th><th>Event</th><th>Detail</th></tr></thead>
+        <tbody id="tradeJournalBody"></tbody>
+      </table>
+      </div>
+    </section>
+
     <section class="institutional-board" id="microstructureWorkspace" aria-label="institutional workspace">
       <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
       <div class="workspace-grid">
@@ -1549,6 +1568,57 @@
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
+  function renderFunnelJournal(lanes){
+    const fb=$("funnelBody");
+    if(fb){
+      fb.innerHTML="";
+      lanes.forEach(l=>{
+        const f=l.funnel||{};
+        const approved=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
+        const rejected=num(f.shadow_rejected)+num(f.risk_rejects);
+        const conv=num(f.bars)>0?(num(f.signals)/num(f.bars)*100).toFixed(1)+"% fire":"--";
+        const tr=document.createElement("tr");
+        appendCell(tr,l.lane_id,"mono");
+        appendCell(tr,String(num(f.bars)));
+        appendCell(tr,String(num(f.signals)),num(f.signals)>0?"pos":"");
+        appendCell(tr,String(approved),approved>0?"pos":"");
+        appendCell(tr,String(rejected),rejected>0?"neg":"");
+        appendCell(tr,String(num(f.sizing_skips)));
+        appendCell(tr,String(num(f.submitted)));
+        appendCell(tr,String(num(f.fills)),num(f.fills)>0?"pos":"");
+        appendCell(tr,conv);
+        fb.appendChild(tr);
+      });
+      if(!lanes.length){
+        const tr=document.createElement("tr");
+        appendCell(tr,"no lanes reporting yet","muted");
+        fb.appendChild(tr);
+      }
+    }
+    const tj=$("tradeJournalBody");
+    if(tj){
+      tj.innerHTML="";
+      const events=[];
+      lanes.forEach(l=>(l.trade_log||[]).forEach(e=>events.push({lane:l.lane_id,...e})));
+      events.sort((a,b)=>String(b.ts).localeCompare(String(a.ts)));
+      events.slice(0,25).forEach(e=>{
+        const tr=document.createElement("tr");
+        appendCell(tr,String(e.ts||"").replace("T"," ").slice(0,19),"mono");
+        appendCell(tr,e.lane,"mono");
+        const tone=e.event==="fill"||e.event==="shadow_approved"||e.event==="order_submitted"?"pos":
+                   e.event==="shadow_rejected"||e.event==="risk_rejected"||e.event==="sizing_skip"?"neg":"";
+        appendCell(tr,e.event,tone);
+        appendCell(tr,e.detail||"");
+        tr.title=e.detail||"";
+        tj.appendChild(tr);
+      });
+      if(!events.length){
+        const tr=document.createElement("tr");
+        appendCell(tr,"no trade events yet — signals, gateway verdicts, fills and exits will appear here","muted");
+        tj.appendChild(tr);
+      }
+    }
+  }
   function renderLanes(lanes,snapshot){
     const s=snapshot||{};
     const feed=s.feed_health||{};
@@ -1635,6 +1705,7 @@
     const s=raw||{};
     lastSnapshot=s;
     renderLanes(s.lanes,s);
+    renderFunnelJournal(s.lanes||[]);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
