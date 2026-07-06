@@ -77,7 +77,9 @@ services:
     command: ["python", "-m", "vnedge.research.l2_research_loop"]
     environment:
       L2_RESEARCH_INTERVAL_SECONDS: "${L2_RESEARCH_INTERVAL_SECONDS:-21600}"
-      # only binanceusdm has recorded L2 today; the others are simply skipped.
+      # All recorder services below write to the same tick lake. Missing days
+      # are still skipped by the mining loop; coverage is a recorder concern,
+      # not a reason for the scanner to invent evidence.
       RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
       RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
     volumes:
@@ -87,7 +89,7 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
-  # Zero-risk tick + top-of-book recorder. No credentials, no execution —
+  # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.
   tick-recorder:
@@ -103,16 +105,32 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Zero-risk Bybit public L2/trade recorder. Same major universe as Binance,
+  # written into ticks/exchange=bybit/... for scanner + replay parity.
+  tick-recorder-bybit:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.exchange.tick_recorder",
+              "--exchange", "bybit",
+              "--symbols",
+              "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT",
+              "--data-root", "/app/data", "--levels", "10"]
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Delta India L2/trade recorder — native websocket (Delta has no CCXT Pro
-  # class), writing to the SAME atomic Parquet tick lake under
-  # ticks/exchange=delta_india/… so scalper discovery and the L2 research loop
-  # pick it up with no other changes.
+  # class), writing the same six-symbol campaign to the atomic Parquet tick
+  # lake under ticks/exchange=delta_india/… so scalper discovery and the L2
+  # research loop pick it up with no other changes.
   tick-recorder-delta:
     build: .
     restart: unless-stopped
     command: ["python", "-m", "vnedge.exchange.tick_recorder",
               "--exchange", "delta_india",
-              "--symbols", "BTC/USD:USD,ETH/USD:USD",
+              "--symbols", "BTC/USD:USD,ETH/USD:USD,SOL/USD:USD,BNB/USD:USD,XRP/USD:USD,DOGE/USD:USD",
               "--data-root", "/app/data", "--levels", "10"]
     volumes:
       - ./data:/app/data

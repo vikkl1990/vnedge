@@ -88,6 +88,38 @@ def test_resumes_after_restart_skipping_completed_symbols(monkeypatch, tmp_path)
     # the completed pass now covers both symbols (resumed + finished)
     assert set(payload["scalper_research"]["edge_hypotheses"]) == {t.label for t in targets}
     assert payload["scalper_research"]["focus"]["summary"]["edge_hypotheses"] == 2
+    assert payload["alpha_factory"]["tournament"]["tournament_id"] == (
+        "event_scalper_alpha_tournament_v1"
+    )
+
+
+def test_resume_refreshes_derived_views_before_next_symbol(monkeypatch, tmp_path):
+    targets = _two_targets()
+    done_label = targets[0].label
+    (tmp_path / l2.L2_PROGRESS).write_text(json.dumps({
+        "days": ["20260705"], "complete": False,
+        "progress": {"completed_targets": [done_label], "total": 2},
+        "scalper_research": {"edge_hypotheses": [done_label]},
+        "alpha_factory": {"hypotheses": [done_label]},
+    }))
+    _mock_mining(monkeypatch, targets)
+    progress_writes = []
+    orig = l2._write_json
+
+    def spy(payload, path):
+        if path.name == l2.L2_PROGRESS:
+            progress_writes.append(json.loads(json.dumps(payload)))
+        orig(payload, path)
+
+    monkeypatch.setattr(l2, "_write_json", spy)
+    l2.run_incremental(tmp_path, out_dir=tmp_path)
+
+    first_write = progress_writes[0]
+    assert first_write["progress"]["completed_targets"] == [done_label]
+    assert first_write["scalper_research"]["focus"]["focus_id"] == "scalper_focus_v1"
+    assert first_write["alpha_factory"]["tournament"]["tournament_id"] == (
+        "event_scalper_alpha_tournament_v1"
+    )
 
 
 def test_stale_progress_for_other_days_starts_fresh(monkeypatch, tmp_path):

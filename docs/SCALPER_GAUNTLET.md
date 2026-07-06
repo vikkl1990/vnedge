@@ -137,6 +137,22 @@ Use `--max-symbols-per-exchange N` for first-pass recorder allocation. Discovery
 still includes the long tail, but prioritizes the default major universe before
 obscure contracts when a cap is used.
 
+## VM recorder coverage (2026-07-06)
+
+The VPS scalper campaign records public L2/trade tapes for the same major
+universe across all three target venues:
+
+- Binance USD-M: BTC, ETH, SOL, BNB, XRP, DOGE USDT perps.
+- Bybit linear: BTC, ETH, SOL, BNB, XRP, DOGE USDT perps.
+- Delta India: BTC, ETH, SOL, BNB, XRP, DOGE USD contracts.
+
+All recorder services are zero-risk: no credentials, no order routes, and no
+control path into execution. They write only to the Parquet tick lake consumed
+by the scanner, edge miner, alpha tournament, and conservative replay engine.
+If a lane has missing or short tick coverage, the correct output is
+`MISSING_TICK_DATA` or `RECORD_MORE`; no threshold tuning or paper/shadow
+uplift is allowed while those gates are open.
+
 Scanner states:
 
 - `MISSING_TICK_DATA` - start the public tick/L2 recorder.
