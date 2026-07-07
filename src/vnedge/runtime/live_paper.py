@@ -13,6 +13,13 @@ naturally.
 
 Incremental data-quality gate at the boundary: candles must arrive strictly
 forward in time; anything else is dropped and counted, never processed.
+
+Stops additionally get TICK granularity: between bar closes the idle loop
+checks the live top-of-book against the open plan's stop and exits
+reduce-only on breach, through the exact same gateway/journal/OrderManager
+pipeline as bar-close exits. Take-profits deliberately remain bar-close —
+a stop is capital protection (delay is unbounded downside), a TP is
+strategy semantics that research models at bar granularity.
 """
 
 from __future__ import annotations
@@ -92,6 +99,7 @@ class LivePaperSession:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
+        self.tick_stop_exits = 0
         self.last_eval: dict | None = None
         # chronological trade narrative for the dashboard journal panel:
         # fired signals, gateway verdicts, submissions, fills, exits
@@ -229,11 +237,25 @@ class LivePaperSession:
                 reason = "take_profit"
         if reason is None:
             return
+        order = await self._submit_exit(reason, int(bar["timestamp"].value), now)
+        if order is None:
+            return
+        self.journal.append("live_paper_exit", {"reason": reason, "state": order.state.value})
+        self._log_trade_event("exit", f"{reason} ({order.state.value})"[:140], now)
+
+    async def _submit_exit(self, reason: str, key_ts: int, now: datetime):
+        """Shared reduce-only exit submission — the ONLY way a plan closes.
+
+        Both the bar-close path (_manage_exit) and the tick-stop path
+        (_check_tick_stop) flow through here, so every exit passes the same
+        gateway/journal/OrderManager pipeline and clears the plan the same
+        way. Returns the ManagedOrder, or None if no position existed (the
+        plan is cleared regardless)."""
         positions = {p.symbol: p for p in self.exchange.get_positions()}
         pos = positions.get(self.config.symbol)
         if pos is None:
             self._plan = None
-            return
+            return None
         intent = OrderIntent(
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
@@ -242,13 +264,75 @@ class LivePaperSession:
         )
         order = await self.om.submit(
             intent, self.tracker.account_state(), self.feed.market_state(),
-            intent_key=f"exit|{self.config.symbol}|{reason}|{int(bar['timestamp'].value)}",
+            intent_key=f"exit|{self.config.symbol}|{reason}|{key_ts}",
             now=now,
         )
         self.orders_submitted += 1
-        self.journal.append("live_paper_exit", {"reason": reason, "state": order.state.value})
-        self._log_trade_event("exit", f"{reason} ({order.state.value})"[:140], now)
         self._plan = None
+        return order
+
+    async def _check_tick_stop(self, now: datetime) -> None:
+        """Idle-tick STOP monitoring — capital protection at quote granularity.
+
+        Between bar closes, ONLY the stop is checked against the live
+        top-of-book (long: bid <= stop; short: ask >= stop — the side an exit
+        would actually fill on, the same trigger convention as
+        scalping.tick_stop). Take-profits deliberately stay bar-close: a stop
+        is capital protection where every bar of delay is unbounded downside
+        (measured 2026-07-06: a short's stop filled at 64,489 vs an intra-bar
+        breach much earlier), while a TP is strategy semantics — the
+        backtester models TPs at bar granularity, so tick TPs would make
+        paper results diverge from research.
+
+        Shadow lanes never hold fills/positions, so no plan is ever armed
+        there and this never triggers; the explicit mode guard documents that
+        and keeps it true even if a plan were ever armed by mistake.
+        """
+        if (
+            self._plan is None
+            or not self.config.tick_stops_enabled
+            or self.config.mode is RunnerMode.SHADOW
+            or self.feed.quote is None
+        ):
+            return
+        sig = self._plan.signal
+        entry_bar_ts = self._plan.entry_bar_ts
+        bid, ask = self.feed.quote
+        breached = bid <= sig.stop_price if sig.side == "long" else ask >= sig.stop_price
+        if not breached:
+            return
+        self._sync_quote()  # exit must fill at the breach quote, not the last bar's
+        # key_ts = entry bar: one tick-stop intent per plan, minted once —
+        # never re-derived from the (wall-clock) breach time
+        order = await self._submit_exit("tick_stop", int(entry_bar_ts.value), now)
+        if order is None:
+            return
+        self.tick_stop_exits += 1
+        trigger_px = bid if sig.side == "long" else ask
+        self.journal.append("tick_stop_exit", {
+            "reason": "tick_stop",
+            "state": order.state.value,
+            "side": sig.side,
+            "stop_price": sig.stop_price,
+            "take_profit_price": sig.take_profit_price,
+            "bid": bid,
+            "ask": ask,
+            "entry_bar_ts": entry_bar_ts.isoformat(),
+            "signal_reason": sig.reason,
+        })
+        self._log_trade_event(
+            "exit",
+            f"tick_stop {sig.side} — {'bid' if sig.side == 'long' else 'ask'} "
+            f"{trigger_px:g} breached stop {sig.stop_price:g} ({order.state.value})"[:140],
+            now,
+        )
+        # persist immediately — a crash before the next bar must not restore
+        # the already-closed position/plan
+        self._ledger_new_fills(now)
+        if self.account_store is not None:
+            self.account_store.save_from(
+                self.exchange, self.tracker, plan=self._serialize_plan()
+            )
 
     def _maybe_daily_report(self, now: datetime) -> None:
         """At each UTC day rollover, journal a summary of the finished day
@@ -477,6 +561,7 @@ class LivePaperSession:
                 "orders_submitted": self.orders_submitted,
                 "risk_rejects": self.risk_rejects,
                 "sizing_skips": self.sizing_skips,
+                "tick_stop_exits": self.tick_stop_exits,
                 "shadow_approved": self.shadow_approved,
                 "shadow_rejected": self.shadow_rejected,
                 "recon_mismatches": self.recon_mismatches,
@@ -500,6 +585,11 @@ class LivePaperSession:
     # Seeded bars re-evaluated at shadow startup. 24 gives a full day of
     # observability records after any restart, at negligible cost.
     _SHADOW_PRIME_BACKFILL_BARS = 24
+
+    # Idle tick cadence: while no closed candle is pending, the queue wait
+    # times out at this interval and the loop gets a tick — tick-stop check +
+    # snapshot publish. Tests shrink it via instance override.
+    _IDLE_TICK_SECONDS = 5.0
 
     async def _shadow_prime(self) -> None:
         """SHADOW lanes only: evaluate recent already-closed (seeded) bars
@@ -566,8 +656,13 @@ class LivePaperSession:
                 if elapsed >= deadline_seconds:
                     break
             try:
-                raw = await asyncio.wait_for(self.feed.closed_candles.get(), timeout=5.0)
+                raw = await asyncio.wait_for(
+                    self.feed.closed_candles.get(), timeout=self._IDLE_TICK_SECONDS
+                )
             except asyncio.TimeoutError:
+                # capital protection between bars: stops (and ONLY stops) are
+                # evaluated against the current quote on every idle tick
+                await self._check_tick_stop(datetime.now(UTC))
                 self._publish_snapshot()  # keep the dashboard honest while idle
                 continue
 
