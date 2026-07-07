@@ -316,3 +316,71 @@ async def test_trade_log_records_fills_in_paper(tmp_path):
     events = [e["event"] for e in session.trade_log]
     assert "order_submitted" in events
     assert "fill" in events
+
+
+async def test_plan_survives_restart_via_account_store(tmp_path):
+    from vnedge.paper.account_store import PaperAccountStore
+
+    # session 1: trade opens, plan saved with the account
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    session.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
+    await session.run(max_bars=1)
+    assert session._plan is not None
+    stored = session.account_store.load()
+    assert stored["plan"]["side"] == "long"
+    assert stored["plan"]["stop_price"] == session._plan.signal.stop_price
+
+    # session 2 (restart): restore -> plan re-armed, orphan guard NOT tripped
+    feed2 = FakeFeed([])
+    session2, exchange2 = build_session(tmp_path, feed2)
+    session2.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
+    resumed = session2.account_store.restore_into(exchange2, session2.tracker)
+    assert resumed and exchange2.get_positions()
+    session2.restore_plan(session2.account_store.load().get("plan"))
+    assert session2._plan is not None
+    await session2.run(max_bars=0)
+    assert not session2.gateway.kill_switch.is_active  # no orphan trip
+    records = [r["kind"] for r in session2.journal.read_all()]
+    assert "orphaned_paper_position" not in records
+
+
+async def test_legacy_snapshot_without_plan_synthesizes_for_funding_mr(tmp_path):
+    import pandas as pd
+    from vnedge.data.schemas import normalize_funding
+    from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
+
+    funding = normalize_funding(
+        [{"timestamp": BASE - i * 8 * 60 * MIN, "fundingRate": 0.0001} for i in range(40)][::-1]
+    )
+    strat = FundingMeanReversion(funding, funding_pct_window=24, z_window=8)
+    hist = normalize_candles(
+        [[BASE + i * MIN, 100.0, 100.5, 99.5, 100.0 + 0.01 * i, 5.0] for i in range(400)]
+    )
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, strategy=strat, mode=RunnerMode.PAPER)
+    session.candles = hist
+    # legacy restore: position exists, no plan stored
+    exchange.set_quote(SYM, 100.0, 100.1)
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+    exchange.submit_order(PaperOrderRequest("legacy", SYM, False, 0.5))
+    session.restore_plan(None)
+    assert session._plan is not None
+    assert session._plan.signal.side == "short"
+    assert session._plan.signal.stop_price > 100.0     # stop above short entry
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert "plan_rebuilt_on_resume" in kinds
+
+
+async def test_strategy_without_synthesis_still_orphans(tmp_path):
+    # AlwaysLong has no synthesize_exit_plan -> orphan guard semantics kept
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
+    exchange.set_quote(SYM, 100.0, 100.1)
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+    exchange.submit_order(PaperOrderRequest("orphan", SYM, True, 0.5))
+    session.restore_plan(None)
+    assert session._plan is None
+    await session.run(max_bars=0)
+    session._guard_orphaned_position()
+    assert session.gateway.kill_switch.is_active

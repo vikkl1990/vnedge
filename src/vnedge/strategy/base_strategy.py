@@ -49,3 +49,15 @@ class BaseStrategy(ABC):
     @abstractmethod
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         """Entry decision at the close of bar ``index``. Read rows <= index only."""
+
+    def synthesize_exit_plan(
+        self, df: pd.DataFrame, index: int, side: str, entry_price: float
+    ) -> SignalIntent | None:
+        """Rebuild a protective exit plan for a restored position whose
+        original plan was lost (legacy account snapshots predating plan
+        persistence). Return None (default) if the strategy cannot do this
+        honestly — the runner then falls back to the orphan guard (entries
+        halted, manual flatten). Implementations must use the SAME formulas
+        as signal() so the rebuilt stop/target match an uninterrupted run as
+        closely as the data allows."""
+        return None

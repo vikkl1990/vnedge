@@ -79,6 +79,30 @@ class FundingMeanReversion(BaseStrategy):
         df["close_mean"] = sma(df["close"], self.z_window)
         return df
 
+    def synthesize_exit_plan(
+        self, df: pd.DataFrame, index: int, side: str, entry_price: float
+    ) -> SignalIntent | None:
+        """Same exit geometry as signal(): stop = entry ± stop_atr_mult*ATR,
+        target = the rolling close mean (the reversion target refreshes with
+        the data, exactly as a fresh signal would compute it)."""
+        row = df.iloc[index]
+        atr = float(row["atr"])
+        mean = float(row["close_mean"])
+        if not (atr > 0) or not (mean > 0):
+            return None
+        stop_dist = self.stop_atr_mult * atr
+        if side == "short":
+            return SignalIntent(
+                "short", stop_price=entry_price + stop_dist,
+                take_profit_price=mean,
+                reason=f"exit plan rebuilt on resume: stop {entry_price + stop_dist:.2f}, target mean {mean:.2f}",
+            )
+        return SignalIntent(
+            "long", stop_price=max(entry_price - stop_dist, 1e-9),
+            take_profit_price=mean,
+            reason=f"exit plan rebuilt on resume: stop {entry_price - stop_dist:.2f}, target mean {mean:.2f}",
+        )
+
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         row = df.iloc[index]
         if any(math.isnan(float(row[c])) for c in _REQUIRED):
