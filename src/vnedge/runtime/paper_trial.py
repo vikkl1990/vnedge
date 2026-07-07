@@ -214,6 +214,9 @@ def build_trial_session(
     )
     # Resume: a restart must continue the trial's account, never reset it.
     resumed = session.account_store.restore_into(exchange, session.tracker)
+    if resumed:
+        state = session.account_store.load() or {}
+        session.restore_plan(state.get("plan"))
     journal.append("trial_session_start", {
         "trial_id": manifest.trial_id, "resumed": resumed,
         "balance_usd": exchange.balance_usd,

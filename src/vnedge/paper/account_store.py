@@ -30,7 +30,10 @@ class PaperAccountStore:
         self.path = Path(path)
         self.trial_id = trial_id
 
-    def save_from(self, exchange: SimulatedExchange, tracker: PortfolioTracker) -> None:
+    def save_from(
+        self, exchange: SimulatedExchange, tracker: PortfolioTracker,
+        *, plan: dict | None = None,
+    ) -> None:
         state = {
             "trial_id": self.trial_id,
             "saved_at": datetime.now(UTC).isoformat(),
@@ -41,6 +44,9 @@ class PaperAccountStore:
                 for p in exchange.get_positions()
             ],
             "tracker": tracker.export_state(),
+            # the active trade plan (stop/target) — without it a restart turns
+            # an open position into an orphan requiring manual flatten
+            "plan": plan,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".json.tmp")

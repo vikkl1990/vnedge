@@ -285,6 +285,56 @@ class LivePaperSession:
         self._day_open_equity = equity
         self._day_open_fills = fills
 
+    def _serialize_plan(self) -> dict | None:
+        if self._plan is None:
+            return None
+        sig = self._plan.signal
+        return {
+            "side": sig.side,
+            "stop_price": sig.stop_price,
+            "take_profit_price": sig.take_profit_price,
+            "reason": sig.reason,
+            "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
+        }
+
+    def restore_plan(self, stored: dict | None) -> None:
+        """Re-arm exit management for a restored position.
+
+        Preferred: the exact persisted plan. Legacy snapshots (no plan saved):
+        ask the strategy to rebuild one with its own signal() formulas; if it
+        cannot, the orphan guard keeps its manual-flatten semantics. Either
+        path is journaled — a resumed trade must be as explainable as a fresh
+        one."""
+        positions = self.exchange.get_positions()
+        if not positions or self._plan is not None:
+            return
+        if stored is not None:
+            sig = SignalIntent(
+                stored["side"], stop_price=float(stored["stop_price"]),
+                take_profit_price=(float(stored["take_profit_price"])
+                                   if stored.get("take_profit_price") is not None else None),
+                reason=stored.get("reason", "restored plan"),
+            )
+            self._plan = _LivePlan(sig, pd.Timestamp(stored["entry_bar_ts"]))
+            self.journal.append("plan_restored", dict(stored))
+            logger.info("trade plan restored from account store: %s", sig.reason)
+            return
+        pos = positions[0]
+        if len(self.candles) <= self.strategy.warmup_bars:
+            return
+        df = self.strategy.prepare(self.candles)
+        sig = self.strategy.synthesize_exit_plan(
+            df, len(df) - 1, pos.side, pos.entry_price
+        )
+        if sig is None:
+            return  # orphan guard will handle it (entries halted, manual flatten)
+        self._plan = _LivePlan(sig, df["timestamp"].iloc[-1])
+        self.journal.append("plan_rebuilt_on_resume", {
+            "side": sig.side, "stop_price": sig.stop_price,
+            "take_profit_price": sig.take_profit_price, "reason": sig.reason,
+        })
+        logger.info("trade plan REBUILT on resume: %s", sig.reason)
+
     def _guard_orphaned_position(self) -> None:
         if self._orphan_position_guarded or self._plan is not None or self._parked_entries:
             return
@@ -551,7 +601,9 @@ class LivePaperSession:
             self._ledger_new_fills(now)
 
             if self.account_store is not None:
-                self.account_store.save_from(self.exchange, self.tracker)
+                self.account_store.save_from(
+                    self.exchange, self.tracker, plan=self._serialize_plan()
+                )
             if self.equity_history_path is not None:
                 try:
                     import json as _json

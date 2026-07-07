@@ -355,6 +355,9 @@ async def build_lane(
                     "promotion_source": spec.exchange},
     )
     resumed = session.account_store.restore_into(exchange, session.tracker)
+    if resumed:
+        state = session.account_store.load() or {}
+        session.restore_plan(state.get("plan"))
     logger.info("lane %s (%s %s %s %s) built; resumed=%s",
                 spec.lane_id, spec.exchange, spec.symbol, spec.strategy_id,
                 spec.mode.value, resumed)
