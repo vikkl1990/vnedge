@@ -124,6 +124,16 @@ VNEDGE already covers part of the Lux-style stack:
   JSON alerts, blocked by default until VNEDGE verifies source edge.
 - Risk gateway, journal, loss-streak gate, route decisions, and replay gates.
 
+## Addressed 2026-07-07 (retest quality pack)
+
+`trend_retest_v1` implements the WillyAlgoTrader Liquidity Trail Matrix
+concepts as a causal research strategy: 4-band ratcheting ATR stack with
+self-referential trend flips, 5-factor retest quality score (depth / reclaim
+CLV / volume / bias / trend age), SATS-style efficiency gate, wick-anchored
+stops, optional strong-pool sweep bonus. `strategy/volume_profile.py` adds
+range-distributed trend-segment profiles (POC / VA / HVN / LVN) exposed as
+features. All research-only under OFFENSIVE_GATES.
+
 ## What Is Missing
 
 The gaps that matter most:
@@ -138,10 +148,11 @@ The gaps that matter most:
    - Missing: buy/sell volume split, total volume, percentage dominance,
      mitigation state, and mid-line reaction.
 
-3. **Liquidity-pool pressure**
-   - Current pack has sweeps.
-   - Missing: equal high/low clustering, prior day/week/month levels,
-     liquidity-grab classification, and whether the grab reclaimed or failed.
+3. **Liquidity-pool pressure** — PARTIALLY ADDRESSED 2026-07-07
+   (`strategy/liquidity_pools.py`): equal high/low clustering via ATR
+   tolerance, 4-factor pool strength (touches / recency half-life / volume /
+   HTF bonus), wick-pierce + close-back mitigation lifecycle, pivot
+   confirmation lag honoured. Still missing: prior day/week/month levels.
 
 4. **Overlay/regime permission matrix**
    - Current pack has EMA/ER bias.
