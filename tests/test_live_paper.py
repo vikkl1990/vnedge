@@ -346,7 +346,6 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
 
 
 async def test_legacy_snapshot_without_plan_synthesizes_for_funding_mr(tmp_path):
-    import pandas as pd
     from vnedge.data.schemas import normalize_funding
     from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 
