@@ -141,3 +141,27 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     )
     assert snap2["risk_status"] == "kill_switch_active"
     assert snap2["kill_switch_active"] is True
+
+
+def test_snapshot_marks_restored_position_at_entry_without_quote(tmp_path):
+    """Regression (2026-07-07): a resumed session holds a restored position
+    BEFORE the feed's first quote — build_snapshot must not KeyError (it
+    killed both position-holding lanes); it marks at entry until data."""
+    exchange = SimulatedExchange(FillModel(), 500.0)
+    exchange.set_quote(SYM, bid=100.0, ask=100.0)
+    exchange.submit_order(PaperOrderRequest("x1", SYM, False, 0.5))
+    exchange.quotes.clear()  # simulate restart: position restored, no quote yet
+
+    tracker = PortfolioTracker(exchange, 500.0)
+    kill = KillSwitch(kill_file=tmp_path / "KILL")
+    journal = DecisionJournal(tmp_path / "j.jsonl")
+    om = OrderManager(PreTradeRiskGateway(RiskConfig(), kill), journal, PaperBroker(exchange))
+
+    snap = build_snapshot(
+        mode="paper", live_trading_enabled=False, tracker=tracker,
+        exchange=exchange, kill_switch=kill, journal=journal,
+        order_manager=om, feed_health=FeedHealth(exchange="test"),
+    )
+    pos = snap["positions"][0]
+    assert pos["mark_price"] == pos["entry_price"]
+    assert pos["unrealized_usd"] == 0.0

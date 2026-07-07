@@ -118,8 +118,11 @@ class PortfolioTracker:
     def account_state(self) -> AccountState:
         exposure: dict[str, float] = {}
         for pos in self.exchange.get_positions():
-            bid, ask = self.exchange.quotes[pos.symbol]
-            exposure[pos.symbol] = abs(pos.quantity) * (bid + ask) / 2.0
+            # no quote yet (just-resumed session): expose at entry price so the
+            # gateway still sees honest notional instead of the lane crashing
+            quote = self.exchange.quotes.get(pos.symbol)
+            mark = (quote[0] + quote[1]) / 2.0 if quote else pos.entry_price
+            exposure[pos.symbol] = abs(pos.quantity) * mark
         equity = self.equity_usd()
         return AccountState(
             equity_usd=equity,

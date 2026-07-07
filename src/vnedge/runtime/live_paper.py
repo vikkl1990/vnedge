@@ -80,7 +80,10 @@ class LivePaperSession:
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
         self.fill_ledger = fill_ledger
-        self._ledgered_fills = fill_ledger.records if fill_ledger is not None else 0
+        # baseline against the EXCHANGE's fill list (resets each session), not
+        # the ledger's total record count (survives restarts) — else every
+        # post-restart fill would be sliced away and never chained/logged
+        self._ledgered_fills = len(exchange.get_fills())
         self.trial_meta = trial_meta
         self.bars_processed = 0
         self._started_at = datetime.now(UTC)
