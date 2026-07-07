@@ -70,8 +70,11 @@ def build_snapshot(
     now = datetime.now(UTC)
     positions = []
     for pos in exchange.get_positions():
-        bid, ask = exchange.quotes[pos.symbol]
-        mark = (bid + ask) / 2.0
+        # A just-resumed session can hold a restored position BEFORE the feed
+        # publishes its first quote; mark at entry until real data arrives
+        # (a raw lookup here killed both position-holding lanes on 2026-07-07).
+        quote = exchange.quotes.get(pos.symbol)
+        mark = (quote[0] + quote[1]) / 2.0 if quote else pos.entry_price
         notional = abs(pos.quantity) * mark
         positions.append(
             {
