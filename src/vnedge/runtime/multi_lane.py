@@ -46,6 +46,7 @@ from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
+from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
@@ -238,6 +239,8 @@ def _build_single_strategy(
         return AlphaStackConfluence(seed_funding, **params)
     if strategy_id == "quant_signal_pack_v1":
         return QuantSignalPack(seed_funding, **params)
+    if strategy_id == "alpha_distillation_pack_v1":
+        return AlphaDistillationPack(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 
