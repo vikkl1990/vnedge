@@ -32,7 +32,14 @@ git pull --ff-only
 git rev-parse HEAD
 ```
 
-Update an existing deploy:
+Update an existing deploy — ALWAYS via the lock-serialized script (two
+concurrent composes SIGKILLed the stack on 2026-07-07):
+
+```bash
+cd ~/vnedge && ./scripts/deploy.sh
+```
+
+Manual fallback (only if the script itself is broken):
 
 ```bash
 cd ~/vnedge
