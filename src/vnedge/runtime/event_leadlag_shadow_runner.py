@@ -1,0 +1,469 @@
+"""Research-only shadow runner for event lead-lag candidates.
+
+The event lead-lag miner can surface maker-only hypotheses, but those rows are
+not execution-ready. This runner bridges the observability gap: every minute it
+re-evaluates the approved Delta-follower hypotheses on stored 1m candles and
+journals either a shadow intent or an explicit "why no trade" record.
+
+No orders are submitted here. Candle data cannot prove maker fills, so every
+intent carries the maker-fill assumption that must be tested by L2 replay
+before any paper/live promotion.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Iterable
+
+import pandas as pd
+
+from vnedge.data.parquet_store import ParquetStore
+from vnedge.research.event_leadlag_alpha import (
+    LEAD_LAG_MINER_ID,
+    LeadLagFilter,
+    LeadLagMinerConfig,
+    prepare_lane,
+)
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
+
+RUNNER_ID = "event_leadlag_shadow_runner_v1"
+MAKER_FILL_ASSUMPTION = (
+    "MAKER_ONLY shadow: join/passive quote on the Delta follower after the "
+    "leader event candle closes; candle data does not prove queue position or "
+    "fill, so this must pass L2 replay before paper trading."
+)
+
+
+@dataclass(frozen=True)
+class EventLeadLagShadowSpec:
+    spec_id: str
+    leader_exchange: str
+    leader_symbol: str
+    follower_exchange: str
+    follower_symbol: str
+    side: str
+    horizon_min: int
+    event_filter: LeadLagFilter
+    route_decision: str = "MAKER_ONLY"
+    notional_usd: float = 100.0
+    leverage: float = 1.0
+    maker_join_bps: float = 0.5
+    source: str = LEAD_LAG_MINER_ID
+
+    @property
+    def sign(self) -> float:
+        return 1.0 if self.side == "long" else -1.0
+
+    def to_dict(self) -> dict:
+        row = asdict(self)
+        row["event_filter"] = asdict(self.event_filter)
+        return row
+
+
+@dataclass(frozen=True)
+class ShadowCycleConfig:
+    miner: LeadLagMinerConfig = field(
+        default_factory=lambda: LeadLagMinerConfig(
+            timeframe="1m",
+            lookback_days=60,
+            rolling_window=120,
+            horizons_min=(15,),
+        )
+    )
+    max_data_age_minutes: int = 180
+
+
+def default_specs() -> tuple[EventLeadLagShadowSpec, ...]:
+    """Pinned candidates from the 2026-07-07 event lead-lag sweep.
+
+    They are intentionally narrow: SOL/XRP Delta-follower, long-only, 15m
+    horizon, maker-only route. Any expansion should come from a fresh miner
+    result and a reviewed config change.
+    """
+    loose = LeadLagFilter(4.0, 1.8, -0.25, 0.50, 6.0)
+    strict = LeadLagFilter(8.0, 2.5, 0.50, 0.75, 10.0)
+    return (
+        EventLeadLagShadowSpec(
+            spec_id="sol_binanceusdm_to_delta_india_long_15m",
+            leader_exchange="binanceusdm",
+            leader_symbol="SOL/USDT:USDT",
+            follower_exchange="delta_india",
+            follower_symbol="SOL/USD:USD",
+            side="long",
+            horizon_min=15,
+            event_filter=loose,
+        ),
+        EventLeadLagShadowSpec(
+            spec_id="xrp_bybit_to_delta_india_long_15m",
+            leader_exchange="bybit",
+            leader_symbol="XRP/USDT:USDT",
+            follower_exchange="delta_india",
+            follower_symbol="XRP/USD:USD",
+            side="long",
+            horizon_min=15,
+            event_filter=strict,
+        ),
+        EventLeadLagShadowSpec(
+            spec_id="xrp_binanceusdm_to_delta_india_long_15m",
+            leader_exchange="binanceusdm",
+            leader_symbol="XRP/USDT:USDT",
+            follower_exchange="delta_india",
+            follower_symbol="XRP/USD:USD",
+            side="long",
+            horizon_min=15,
+            event_filter=strict,
+        ),
+    )
+
+
+def run_shadow_cycle(
+    data_root: Path | str,
+    *,
+    specs: Iterable[EventLeadLagShadowSpec] | None = None,
+    config: ShadowCycleConfig = ShadowCycleConfig(),
+    journal_path: Path | str | None = None,
+    out_path: Path | str | None = None,
+    now: datetime | None = None,
+) -> dict:
+    now = now or datetime.now(UTC)
+    selected = tuple(specs or default_specs())
+    store = ParquetStore(data_root)
+    evals = [evaluate_spec(store, spec, config=config, now=now) for spec in selected]
+    intents = [row["shadow_intent"] for row in evals if row.get("shadow_intent")]
+    payload = {
+        "generated_at": now.isoformat(),
+        "runner_id": RUNNER_ID,
+        "miner_id": LEAD_LAG_MINER_ID,
+        "mode": "shadow_research_only",
+        "can_trade": False,
+        "can_promote": False,
+        "requires_l2_replay": True,
+        "maker_fill_assumption": MAKER_FILL_ASSUMPTION,
+        "summary": {
+            "specs": len(selected),
+            "shadow_intents": len(intents),
+            "missed_opportunities": len(selected) - len(intents),
+            "states": _count_by(evals, "state"),
+        },
+        "specs": [spec.to_dict() for spec in selected],
+        "evaluations": evals,
+        "shadow_intents": intents,
+    }
+    if journal_path is not None:
+        append_cycle_journal(Path(journal_path), evals)
+    if out_path is not None:
+        atomic_write_json(Path(out_path), payload)
+    return payload
+
+
+def evaluate_spec(
+    store: ParquetStore,
+    spec: EventLeadLagShadowSpec,
+    *,
+    config: ShadowCycleConfig,
+    now: datetime,
+) -> dict:
+    base = _base_payload(spec, now)
+    try:
+        leader = _load_prepared(
+            store, spec.leader_exchange, spec.leader_symbol, config.miner
+        )
+        follower = _load_prepared(
+            store, spec.follower_exchange, spec.follower_symbol, config.miner
+        )
+    except FileNotFoundError as exc:
+        return _miss(base, "DATA_MISSING", [str(exc)])
+
+    merged = pd.merge(
+        leader,
+        follower,
+        on="timestamp",
+        how="inner",
+        suffixes=("_leader", "_follower"),
+    ).sort_values("timestamp").reset_index(drop=True)
+    if merged.empty:
+        return _miss(base, "NO_COMMON_CANDLE", ["leader and follower have no aligned 1m candles"])
+
+    row = merged.iloc[-1]
+    event_ts = _as_utc(row["timestamp"])
+    age_minutes = max((now - event_ts).total_seconds() / 60.0, 0.0)
+    metrics = _metrics(row, spec)
+    blockers = _event_blockers(row, spec)
+    if age_minutes > config.max_data_age_minutes:
+        blockers.append(
+            f"stale_data: latest aligned candle age {age_minutes:.1f}m "
+            f"> max {config.max_data_age_minutes}m"
+        )
+
+    base.update({
+        "event_ts": event_ts.isoformat(),
+        "data_age_minutes": round(age_minutes, 3),
+        "metrics": metrics,
+    })
+    if blockers:
+        return _miss(base, "NO_TRADE", blockers)
+
+    intent = _shadow_intent(spec, row, event_ts)
+    base.update({
+        "state": "SHADOW_INTENT",
+        "fired": True,
+        "why_no_trade": [],
+        "shadow_intent": intent,
+    })
+    return base
+
+
+def _load_prepared(
+    store: ParquetStore,
+    exchange: str,
+    symbol: str,
+    config: LeadLagMinerConfig,
+) -> pd.DataFrame:
+    candles = store.read_candles(exchange, symbol, config.timeframe)
+    cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=config.lookback_days)
+    frame = candles[candles["timestamp"] >= cutoff].copy().reset_index(drop=True)
+    prepared = prepare_lane(frame, config)
+    return prepared.dropna(subset=["ret_bps", "ret_z"]).reset_index(drop=True)
+
+
+def _event_blockers(row: pd.Series, spec: EventLeadLagShadowSpec) -> list[str]:
+    filt = spec.event_filter
+    signed_leader = spec.sign * float(row["ret_bps_leader"])
+    signed_leader_z = spec.sign * float(row["ret_z_leader"])
+    signed_follower = spec.sign * float(row["ret_bps_follower"])
+    leader_abs = abs(float(row["ret_bps_leader"]))
+    max_same = min(
+        leader_abs * filt.max_follower_same_min_ratio,
+        filt.max_follower_same_min_bps,
+    )
+    blockers: list[str] = []
+    if signed_leader < filt.min_abs_leader_bps:
+        blockers.append(
+            f"leader_move_below: {signed_leader:.3f}bps < "
+            f"{filt.min_abs_leader_bps:.3f}bps"
+        )
+    if signed_leader_z < filt.min_abs_leader_z:
+        blockers.append(
+            f"leader_z_below: {signed_leader_z:.3f} < {filt.min_abs_leader_z:.3f}"
+        )
+    volume_z = float(row["volume_z_leader"])
+    if volume_z < filt.min_volume_z:
+        blockers.append(f"volume_z_below: {volume_z:.3f} < {filt.min_volume_z:.3f}")
+    if signed_follower > max_same:
+        blockers.append(
+            f"follower_already_moved: {signed_follower:.3f}bps > "
+            f"{max_same:.3f}bps allowed"
+        )
+    if signed_follower < -filt.max_follower_same_min_bps:
+        blockers.append(
+            f"follower_moved_opposite: {signed_follower:.3f}bps < "
+            f"-{filt.max_follower_same_min_bps:.3f}bps"
+        )
+    return blockers
+
+
+def _shadow_intent(
+    spec: EventLeadLagShadowSpec,
+    row: pd.Series,
+    event_ts: datetime,
+) -> dict:
+    follower_close = float(row["close_follower"])
+    buy = spec.side == "long"
+    limit_price = follower_close * (
+        1.0 - spec.maker_join_bps / 10_000.0 if buy else 1.0 + spec.maker_join_bps / 10_000.0
+    )
+    quantity = spec.notional_usd / limit_price
+    fee = DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile(spec.follower_exchange)
+    intent_key = (
+        f"{RUNNER_ID}|{spec.spec_id}|{int(event_ts.timestamp() * 1000)}"
+    )
+    return {
+        "intent_key": intent_key,
+        "approved": False,
+        "approval_state": "RESEARCH_SHADOW_ONLY",
+        "route_decision": spec.route_decision,
+        "maker_fill_assumption": MAKER_FILL_ASSUMPTION,
+        "requires_l2_replay": True,
+        "missed_fill_policy": "log_only_no_fill_simulation",
+        "intent": {
+            "symbol": spec.follower_symbol,
+            "exchange": spec.follower_exchange,
+            "side": spec.side,
+            "quantity": quantity,
+            "notional_usd": spec.notional_usd,
+            "leverage": spec.leverage,
+            "reduce_only": False,
+            "strategy_id": RUNNER_ID,
+            "order_type": "limit",
+            "limit_price": limit_price,
+        },
+        "signal_reason": (
+            f"{spec.leader_exchange} {spec.leader_symbol} shock leads "
+            f"{spec.follower_exchange} {spec.follower_symbol}; "
+            f"{spec.horizon_min}m maker-only Delta-follower candidate"
+        ),
+        "costs": {
+            "exchange": fee.exchange,
+            "maker_first_cost_bps": fee.maker_first_cost_bps,
+            "taker_round_trip_cost_bps": fee.taker_round_trip_cost_bps,
+        },
+    }
+
+
+def _metrics(row: pd.Series, spec: EventLeadLagShadowSpec) -> dict:
+    filt = spec.event_filter
+    leader_abs = abs(float(row["ret_bps_leader"]))
+    max_same = min(
+        leader_abs * filt.max_follower_same_min_ratio,
+        filt.max_follower_same_min_bps,
+    )
+    signed_leader = spec.sign * float(row["ret_bps_leader"])
+    signed_leader_z = spec.sign * float(row["ret_z_leader"])
+    signed_follower = spec.sign * float(row["ret_bps_follower"])
+    return {
+        "leader_ret_bps": _round(float(row["ret_bps_leader"])),
+        "leader_abs_ret_bps": _round(leader_abs),
+        "signed_leader_bps": _round(signed_leader),
+        "signed_leader_z": _round(signed_leader_z),
+        "leader_volume_z": _round(float(row["volume_z_leader"])),
+        "signed_follower_same_min_bps": _round(signed_follower),
+        "max_follower_same_min_bps": _round(max_same),
+        "follower_close": _round(float(row["close_follower"]), digits=8),
+        "filter": asdict(filt),
+    }
+
+
+def _base_payload(spec: EventLeadLagShadowSpec, now: datetime) -> dict:
+    return {
+        "runner_id": RUNNER_ID,
+        "generated_at": now.isoformat(),
+        "spec_id": spec.spec_id,
+        "leader_exchange": spec.leader_exchange,
+        "leader_symbol": spec.leader_symbol,
+        "follower_exchange": spec.follower_exchange,
+        "follower_symbol": spec.follower_symbol,
+        "side": spec.side,
+        "horizon_min": spec.horizon_min,
+        "route_decision": spec.route_decision,
+        "maker_fill_assumption": MAKER_FILL_ASSUMPTION,
+        "fired": False,
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def _miss(base: dict, state: str, why: list[str]) -> dict:
+    base.update({
+        "state": state,
+        "fired": False,
+        "why_no_trade": why,
+        "missed_opportunity": {
+            "logged": True,
+            "reason_count": len(why),
+            "reasons": why,
+        },
+    })
+    return base
+
+
+def append_cycle_journal(path: Path, evaluations: Iterable[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for row in evaluations:
+            _write_jsonl(f, "event_leadlag_eval", row)
+            if row.get("shadow_intent"):
+                _write_jsonl(f, "shadow_intent", row["shadow_intent"])
+
+
+def _write_jsonl(handle, kind: str, payload: dict) -> None:
+    record = {
+        "ts": datetime.now(UTC).isoformat(),
+        "kind": kind,
+        "payload": payload,
+    }
+    handle.write(json.dumps(record, default=str) + "\n")
+    handle.flush()
+
+
+def atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, default=str))
+    tmp.replace(path)
+
+
+def _count_by(rows: Iterable[dict], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key, "UNKNOWN"))
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _as_utc(value) -> datetime:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.to_pydatetime().astimezone(UTC)
+
+
+def _round(value: float | None, *, digits: int = 3) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return round(value, digits)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run event lead-lag shadow journal")
+    parser.add_argument("--data-root", default="data")
+    parser.add_argument("--journal", default="logs/event_leadlag_shadow/events.jsonl")
+    parser.add_argument("--out", default="research/live_research/event_leadlag_shadow_latest.json")
+    parser.add_argument("--interval-seconds", type=int, default=60)
+    parser.add_argument("--lookback-days", type=int, default=60)
+    parser.add_argument("--max-data-age-minutes", type=int, default=180)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    config = ShadowCycleConfig(
+        miner=LeadLagMinerConfig(
+            timeframe="1m",
+            lookback_days=args.lookback_days,
+            rolling_window=120,
+            horizons_min=(15,),
+        ),
+        max_data_age_minutes=args.max_data_age_minutes,
+    )
+    while True:
+        payload = run_shadow_cycle(
+            args.data_root,
+            config=config,
+            journal_path=args.journal,
+            out_path=args.out,
+        )
+        if args.json:
+            print(json.dumps(payload, indent=2, default=str))
+        else:
+            summary = payload["summary"]
+            print(
+                f"{payload['generated_at']} {RUNNER_ID}: "
+                f"{summary['shadow_intents']} intents, "
+                f"{summary['missed_opportunities']} no-trade evals"
+            )
+        if args.once:
+            return 0
+        time.sleep(max(args.interval_seconds, 1))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
