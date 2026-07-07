@@ -7,6 +7,7 @@ visual toolkits.
 
 Primary sources:
 
+- LuxAlgo TradingView profile: https://in.tradingview.com/u/LuxAlgo/#published-scripts
 - LuxAlgo Library: https://www.luxalgo.com/library/
 - Smart Money Concept overview: https://www.luxalgo.com/blog/smart-money-concept-indicator-for-tradingview-free/
 - Price Action Concepts settings: https://docs.luxalgo.com/docs/algos/price-action-concepts/settings
@@ -123,6 +124,22 @@ VNEDGE already covers part of the Lux-style stack:
 - `external_tradingview_signal_v1`: safe intake for third-party TradingView
   JSON alerts, blocked by default until VNEDGE verifies source edge.
 - Risk gateway, journal, loss-streak gate, route decisions, and replay gates.
+
+## Implemented Profile Pass
+
+`alpha_distillation_pack_v1` now includes a LuxAlgo profile pass that extracts
+the public-script/library lesson into causal atoms:
+
+- `oscillator_divergence`: RSI-style divergence/overflow evidence.
+- `net_volume_flow`: signed candle-volume confirmation.
+- `activity_zone_reclaim`: reclaim/rejection around the last high-activity
+  price node.
+- `orthogonality_score`: forces setup evidence to come from distinct roles
+  such as location, structure, trend, momentum, and participation.
+- `regime_permission`: blocks hostile higher-level trend/volatility states
+  before a signal can become an intent.
+- Exit telemetry: proposed trailing ATR and breakeven-R metadata are attached
+  to reasons for later partial-exit wiring.
 
 ## What Is Missing
 
