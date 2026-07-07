@@ -111,6 +111,24 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Minute-level shadow journal for the SOL/XRP Delta-follower lead-lag
+  # candidates surfaced by event_leadlag_alpha. This is observability only:
+  # it writes event_leadlag_eval + shadow_intent records, logs why no trade,
+  # and never submits orders or simulates candle-only maker fills.
+  event-leadlag-shadow:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.runtime.event_leadlag_shadow_runner",
+              "--interval-seconds", "${EVENT_LEADLAG_SHADOW_INTERVAL_SECONDS:-60}",
+              "--max-data-age-minutes", "${EVENT_LEADLAG_SHADOW_MAX_DATA_AGE_MINUTES:-180}"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.
