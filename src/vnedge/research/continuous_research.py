@@ -76,6 +76,7 @@ from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.trend_continuation import TrendContinuation
+from vnedge.strategy.trend_retest import TrendRetest
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
@@ -365,6 +366,10 @@ def run_walk_forwards(store: ParquetStore, target: ResearchTarget | str) -> list
          lambda **p: QuantSignalPack(funding=f, **p),
          param_grid(structure_window=[24, 48], min_score=[5.0, 6.0],
                     take_profit_r=[1.5, 2.0]),
+         720, OFFENSIVE_GATES, "offensive", False),
+        ("trend_retest_v1",
+         lambda **p: TrendRetest(funding=f, **p),
+         param_grid(min_score=[70.0, 80.0], take_profit_r=[2.0, 3.0]),
          720, OFFENSIVE_GATES, "offensive", False),
     ]
     enabled = _enabled_research_strategies()
