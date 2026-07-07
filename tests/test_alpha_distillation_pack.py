@@ -64,6 +64,15 @@ def signal_row(**overrides):
         "short_exit_quality": 20.0,
         "long_context_score": 2.0,
         "short_context_score": -2.0,
+        "long_orthogonality_score": 4.0,
+        "short_orthogonality_score": 1.0,
+        "long_regime_permission": 1.0,
+        "short_regime_permission": -1.0,
+        "regime_tag": "trend_up",
+        "long_exit_trail_atr": 1.12,
+        "short_exit_trail_atr": 1.05,
+        "long_breakeven_r": 1.05,
+        "short_breakeven_r": 1.0,
         "trigger_1m_long": True,
         "trigger_1m_short": False,
         "long_primary_atom": "liquidity_sweep",
@@ -79,20 +88,25 @@ def signal_row(**overrides):
         "trend_trail_long": True,
         "profile_reclaim_long": False,
         "momentum_impulse_long": True,
+        "oscillator_divergence_long": False,
+        "net_volume_flow_long": True,
+        "activity_zone_reclaim_long": False,
     }
     row.update(overrides)
     return pd.DataFrame([row])
 
 
-def test_concept_inventory_covers_35_public_ideas_without_copying_scripts():
+def test_concept_inventory_covers_public_ideas_without_copying_scripts():
     inventory = concept_inventory()
     coverage = concept_coverage()
 
-    assert len(inventory) == 35
+    assert len(inventory) >= 35
     assert set(coverage).issuperset(FEATURE_ATOMS)
     assert "Liquidity Trail Matrix" in coverage["trend_trail"]
     assert "FVG Retest Engine / SMC Strategy" in coverage["fvg_retest"]
     assert "Squeeze Breakout Pro" in coverage["squeeze_release"]
+    assert "Oscillator Matrix" in coverage["oscillator_divergence"]
+    assert "High Activity Zones" in coverage["activity_zone_reclaim"]
     assert STRATEGIES["alpha_distillation_pack_v1"] is AlphaDistillationPack
 
 
@@ -114,8 +128,29 @@ def test_alpha_distillation_features_are_causal_when_future_changes():
         "long_expected_edge_bps",
         "long_exit_quality",
         "long_primary_atom",
+        "long_orthogonality_score",
+        "long_regime_permission",
+        "regime_tag",
     ]
     pd.testing.assert_frame_equal(a.loc[:90, cols], b.loc[:90, cols])
+
+
+def test_lux_profile_atoms_surface_divergence_flow_and_activity_zones():
+    rows = trend_rows(140, start=100.0, step=0.02, volume=100.0)
+    rows.extend(
+        [
+            (102.8, 103.2, 102.6, 103.0, 500.0),
+            (103.0, 103.1, 101.7, 102.1, 130.0),
+            (102.1, 103.4, 101.9, 103.3, 620.0),
+            (103.3, 103.5, 102.8, 103.4, 300.0),
+            (103.4, 103.6, 103.0, 103.5, 300.0),
+        ]
+    )
+    df = add_alpha_distillation_columns(make_candles(rows), default_alpha_distillation_params())
+
+    assert {"oscillator_divergence_long", "net_volume_flow_long", "activity_zone_reclaim_long"}.issubset(df.columns)
+    assert "mixed" in set(df["regime_tag"].dropna())
+    assert df["long_orthogonality_score"].max() >= 1.0
 
 
 def test_alpha_distillation_emits_only_after_fee_and_exit_gates():
@@ -155,7 +190,7 @@ def test_alpha_distillation_research_marks_missing_lanes_untestable(tmp_path):
     assert result["verdict"] == "UNTESTABLE"
     assert "missing data lane" in result["reasons"][0]
     assert report["policy"]["can_trade"] is False
-    assert report["policy"]["concept_count"] == 35
+    assert report["policy"]["concept_count"] >= 35
     assert report["summary"]["untestable"] == 1
 
 
