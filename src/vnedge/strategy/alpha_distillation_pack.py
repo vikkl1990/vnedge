@@ -31,6 +31,9 @@ FEATURE_ATOMS: tuple[str, ...] = (
     "trend_trail",
     "profile_reclaim",
     "momentum_impulse",
+    "oscillator_divergence",
+    "net_volume_flow",
+    "activity_zone_reclaim",
 )
 
 
@@ -79,6 +82,19 @@ INDICATOR_CONCEPTS: tuple[IndicatorConcept, ...] = (
     IndicatorConcept("Auto S/R Channels", "WillyAlgo", "profile_reclaim", "channel support/resistance", 2),
     IndicatorConcept("Automatic Fibonacci Levels", "WillyAlgo", "structure_break", "fib levels", 3),
     IndicatorConcept("FVG Retest Engine / SMC Strategy", "WillyAlgo", "fvg_retest", "FVG retest", 1),
+    IndicatorConcept("Price Action Concepts", "LuxAlgo", "structure_break", "market structure state machine", 1),
+    IndicatorConcept("Smart Money Concepts", "LuxAlgo", "liquidity_sweep", "liquidity grab plus structure", 1),
+    IndicatorConcept("Signals & Overlays", "LuxAlgo", "trend_trail", "confirmation and contrarian overlays", 1),
+    IndicatorConcept("Oscillator Matrix", "LuxAlgo", "oscillator_divergence", "flow divergence and overflow", 1),
+    IndicatorConcept("Volume Delta Methods", "LuxAlgo", "net_volume_flow", "participation confirmation", 1),
+    IndicatorConcept("High Activity Zones", "LuxAlgo", "activity_zone_reclaim", "volume node retest", 1),
+    IndicatorConcept("Order Blocks", "LuxAlgo", "order_block", "mitigated supply/demand blocks", 1),
+    IndicatorConcept("Fair Value Gaps", "LuxAlgo", "fvg_retest", "imbalance mitigation", 1),
+    IndicatorConcept("Liquidity Swings", "LuxAlgo", "liquidity_sweep", "equal high/low pools", 1),
+    IndicatorConcept("Trend Catcher / Tracer", "LuxAlgo", "trend_trail", "overlay trend permission", 2),
+    IndicatorConcept("Smart Trail", "LuxAlgo", "trend_trail", "adaptive trailing exit", 2),
+    IndicatorConcept("Reversal Zones", "LuxAlgo", "oscillator_divergence", "exhaustion reversal context", 2),
+    IndicatorConcept("Range Detector", "LuxAlgo", "squeeze_release", "compression and expansion regime", 2),
 )
 
 
@@ -98,6 +114,13 @@ class AlphaDistillationParams:
     max_take_profit_r: float = 2.30
     min_stop_bps: float = 12.0
     max_stop_bps: float = 180.0
+    rsi_window: int = 14
+    divergence_window: int = 48
+    min_flow_z: float = 0.55
+    activity_volume_z: float = 1.0
+    activity_zone_max_atr: float = 0.90
+    min_orthogonality: float = 2.25
+    min_regime_permission: float = 0.0
     require_context: bool = True
     require_1m_trigger: bool = True
     allowed_atoms: tuple[str, ...] = ()
@@ -115,6 +138,7 @@ def alpha_distillation_warmup_bars(params: AlphaDistillationParams) -> int:
         q.vwap_window + 1,
         q.volume_z_window + 1,
         q.squeeze_window + q.squeeze_pct_window,
+        params.rsi_window + params.divergence_window,
     )
 
 
@@ -156,6 +180,7 @@ def add_alpha_distillation_columns(
 ) -> pd.DataFrame:
     params = params or default_alpha_distillation_params()
     df = add_quant_signal_pack_columns(candles, params.quant_params)
+    df = _add_lux_profile_columns(df, params)
 
     df["trend_trail_long"] = (
         df["bias_long"]
@@ -190,12 +215,14 @@ def add_alpha_distillation_columns(
         | df["bullish_fvg_retest"]
         | df["bull_order_block_proxy"]
         | df["profile_reclaim_long"]
+        | df["activity_zone_reclaim_long"]
     )
     df["liquidity_cluster_short"] = (
         df["sweep_high"]
         | df["bearish_fvg_retest"]
         | df["bear_order_block_proxy"]
         | df["profile_reclaim_short"]
+        | df["activity_zone_reclaim_short"]
     )
 
     _score_side(df, "long", params)
@@ -269,6 +296,10 @@ class AlphaDistillationPack(BaseStrategy):
             "short_expected_edge_bps",
             "long_exit_quality",
             "short_exit_quality",
+            "long_orthogonality_score",
+            "short_orthogonality_score",
+            "long_regime_permission",
+            "short_regime_permission",
         )
         if any(_is_nan(row.get(col)) for col in required):
             return None
@@ -298,6 +329,10 @@ class AlphaDistillationPack(BaseStrategy):
         if edge < self.params.min_edge_bps or edge < self.params.maker_edge_floor_bps:
             return False
         if float(row[f"{side}_exit_quality"]) < self.params.min_exit_quality:
+            return False
+        if float(row.get(f"{side}_orthogonality_score", 0.0)) < self.params.min_orthogonality:
+            return False
+        if float(row.get(f"{side}_regime_permission", -1.0)) < self.params.min_regime_permission:
             return False
         atom = str(row.get(f"{side}_primary_atom", "confluence"))
         if self.params.allowed_atoms and atom not in self.params.allowed_atoms:
@@ -367,6 +402,11 @@ class AlphaDistillationPack(BaseStrategy):
             f"edge={float(row[f'{side}_expected_edge_bps']):.2f}bps; "
             f"exitQ={float(row[f'{side}_exit_quality']):.0f}; "
             f"risk={risk_bps:.1f}bps; "
+            f"ortho={float(row.get(f'{side}_orthogonality_score', 0.0)):.1f}; "
+            f"regime={str(row.get('regime_tag', 'unknown'))}"
+            f"/{float(row.get(f'{side}_regime_permission', 0.0)):+.1f}; "
+            f"trail={float(row.get(f'{side}_exit_trail_atr', self.params.stop_atr_mult)):.2f}atr; "
+            f"be={float(row.get(f'{side}_breakeven_r', 1.0)):.2f}R; "
             f"context={float(row.get(f'{side}_context_score', 0.0)):+.1f}; "
             f"atoms={','.join(active) or 'none'}; "
             "source=distilled_public_indicator_concepts"
@@ -393,6 +433,115 @@ def concept_coverage() -> dict:
     return coverage
 
 
+def _add_lux_profile_columns(
+    df: pd.DataFrame,
+    params: AlphaDistillationParams,
+) -> pd.DataFrame:
+    out = df.copy()
+    out["rsi"] = _rsi(out["close"], params.rsi_window)
+    prior_rsi_low = out["rsi"].rolling(params.divergence_window).min().shift(1)
+    prior_rsi_high = out["rsi"].rolling(params.divergence_window).max().shift(1)
+    out["oscillator_divergence_long"] = (
+        (out["low"] < out["prior_low"])
+        & (out["rsi"] > prior_rsi_low + 2.5)
+        & (out["close"] > out["open"])
+    )
+    out["oscillator_divergence_short"] = (
+        (out["high"] > out["prior_high"])
+        & (out["rsi"] < prior_rsi_high - 2.5)
+        & (out["close"] < out["open"])
+    )
+
+    candle_range = (out["high"] - out["low"]).replace(0.0, float("nan"))
+    close_location = ((out["close"] - out["low"]) / candle_range).clip(0.0, 1.0)
+    out["volume_delta_proxy"] = out["volume"] * (2.0 * close_location - 1.0)
+    out["net_volume_proxy"] = out["volume_delta_proxy"].rolling(
+        params.quant_params.volume_z_window
+    ).sum()
+    out["net_volume_z"] = zscore(out["net_volume_proxy"], params.quant_params.volume_z_window)
+    out["net_volume_flow_long"] = (
+        (out["net_volume_z"] >= params.min_flow_z)
+        & (out["close"] >= out["open"])
+    )
+    out["net_volume_flow_short"] = (
+        (out["net_volume_z"] <= -params.min_flow_z)
+        & (out["close"] <= out["open"])
+    )
+
+    typical = (out["high"] + out["low"] + out["close"]) / 3.0
+    active_zone = typical.where(out["volume_z"] >= params.activity_volume_z)
+    out["last_activity_zone"] = active_zone.ffill().shift(1)
+    out["activity_zone_distance_atr"] = (
+        (out["close"] - out["last_activity_zone"])
+        / out["atr"].replace(0.0, float("nan"))
+    )
+    near_zone = out["activity_zone_distance_atr"].abs() <= params.activity_zone_max_atr
+    out["activity_zone_reclaim_long"] = (
+        out["last_activity_zone"].notna()
+        & near_zone
+        & (out["low"] <= out["last_activity_zone"])
+        & (out["close"] > out["last_activity_zone"])
+        & (out["close"] > out["open"])
+    )
+    out["activity_zone_reclaim_short"] = (
+        out["last_activity_zone"].notna()
+        & near_zone
+        & (out["high"] >= out["last_activity_zone"])
+        & (out["close"] < out["last_activity_zone"])
+        & (out["close"] < out["open"])
+    )
+
+    trend_up = out["bias_long"].fillna(False).astype(bool)
+    trend_down = out["bias_short"].fillna(False).astype(bool)
+    compressed = out["squeeze_pct"].le(params.quant_params.squeeze_max_pct).fillna(False)
+    volatile = out["atr_pct"].ge(0.85).fillna(False)
+    out["regime_tag"] = _regime_tag_series(trend_up, trend_down, compressed, volatile)
+    out["long_regime_permission"] = (
+        1.10 * trend_up.astype(float)
+        - 1.20 * trend_down.astype(float)
+        + 0.45 * compressed.astype(float)
+        + 0.30 * out["squeeze_release_up"].fillna(False).astype(float)
+        + 0.20 * out["activity_zone_reclaim_long"].fillna(False).astype(float)
+        - 0.25 * volatile.astype(float)
+    )
+    out["short_regime_permission"] = (
+        1.10 * trend_down.astype(float)
+        - 1.20 * trend_up.astype(float)
+        + 0.45 * compressed.astype(float)
+        + 0.30 * out["squeeze_release_down"].fillna(False).astype(float)
+        + 0.20 * out["activity_zone_reclaim_short"].fillna(False).astype(float)
+        - 0.25 * volatile.astype(float)
+    )
+    return out
+
+
+def _rsi(close: pd.Series, window: int) -> pd.Series:
+    delta = close.diff()
+    gains = delta.clip(lower=0.0).rolling(window).mean()
+    losses = (-delta.clip(upper=0.0)).rolling(window).mean()
+    rs = gains / losses.replace(0.0, float("nan"))
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    rsi = rsi.mask((losses == 0.0) & (gains > 0.0), 100.0)
+    rsi = rsi.mask((gains == 0.0) & (losses > 0.0), 0.0)
+    return rsi.mask((gains == 0.0) & (losses == 0.0), 50.0)
+
+
+def _regime_tag_series(
+    trend_up: pd.Series,
+    trend_down: pd.Series,
+    compressed: pd.Series,
+    volatile: pd.Series,
+) -> pd.Series:
+    tag = pd.Series("mixed", index=trend_up.index, dtype="object")
+    tag.loc[compressed & ~(trend_up | trend_down)] = "compressed"
+    tag.loc[trend_up & ~volatile] = "trend_up"
+    tag.loc[trend_down & ~volatile] = "trend_down"
+    tag.loc[volatile & trend_up] = "volatile_trend_up"
+    tag.loc[volatile & trend_down] = "volatile_trend_down"
+    tag.loc[volatile & ~(trend_up | trend_down)] = "volatile_mixed"
+    return tag
+
+
 def _score_side(df: pd.DataFrame, side: str, params: AlphaDistillationParams) -> None:
     is_long = side == "long"
     atom_cols = _atom_columns(side)
@@ -409,17 +558,28 @@ def _score_side(df: pd.DataFrame, side: str, params: AlphaDistillationParams) ->
     trend = df[atom_cols["trend_trail"]].astype(float)
     momentum = df[atom_cols["momentum_impulse"]].astype(float)
     structure = df[atom_cols["structure_break"]].astype(float)
+    divergence = df[atom_cols["oscillator_divergence"]].astype(float)
+    volume_flow = df[atom_cols["net_volume_flow"]].astype(float)
+    activity = df[atom_cols["activity_zone_reclaim"]].astype(float)
+    orthogonality = _orthogonality_score(df, side, atom_cols)
+    regime_permission = df.get(f"{side}_regime_permission", pd.Series(0.0, index=df.index))
     df[f"{side}_atom_count"] = atom_count
+    df[f"{side}_orthogonality_score"] = orthogonality
     df[f"{side}_distilled_score"] = (
         base
         + 1.4 * liquidity
         + 1.2 * fvg
         + 1.0 * profile
         + 1.0 * squeeze
+        + 1.0 * divergence
+        + 0.9 * volume_flow
+        + 0.9 * activity
         + 0.8 * trend
         + 0.8 * momentum
         + 0.7 * structure
         + 0.3 * atom_count
+        + 0.35 * orthogonality
+        + 0.45 * regime_permission.clip(-1.0, 2.0)
     )
     df[f"{side}_primary_atom"] = _primary_atom_series(df, side)
     volatility_lift = (df["atr_pct"].clip(0.05, 0.95) - 0.05) * 1.5
@@ -429,17 +589,58 @@ def _score_side(df: pd.DataFrame, side: str, params: AlphaDistillationParams) ->
         * params.edge_bps_per_score
         + volatility_lift
         + er_lift
+        + 0.55 * orthogonality
+        + 0.75 * volume_flow
+        + 0.45 * divergence
+        + 0.40 * activity
+        + 0.60 * regime_permission.clip(-1.0, 2.0)
     )
     df[f"{side}_expected_edge_bps"] = raw_edge
     df[f"{side}_exit_quality"] = (
         35.0
         + 3.0 * df[f"{side}_distilled_score"].clip(0.0, 12.0)
         + 2.0 * df[f"{side}_expected_edge_bps"].clip(0.0, 15.0)
-        + 6.0 * (profile + liquidity + fvg).clip(0.0, 1.0)
+        + 5.0 * orthogonality.clip(0.0, 4.0)
+        + 6.0 * (profile + liquidity + fvg + activity).clip(0.0, 1.0)
+        + 4.0 * (divergence + volume_flow).clip(0.0, 1.0)
+        + 3.0 * regime_permission.clip(0.0, 2.0)
     ).clip(0.0, 100.0)
+    df[f"{side}_exit_trail_atr"] = (
+        params.stop_atr_mult
+        + 0.18 * trend
+        + 0.12 * squeeze
+        - 0.10 * divergence
+        + 0.08 * regime_permission.clip(0.0, 2.0)
+    ).clip(0.75, 1.80)
+    df[f"{side}_breakeven_r"] = (
+        0.85
+        + 0.06 * df[f"{side}_distilled_score"].clip(0.0, 12.0)
+        - 0.06 * divergence
+    ).clip(0.75, 1.35)
     df[f"{side}_route"] = [
         _route(edge, params) for edge in df[f"{side}_expected_edge_bps"]
     ]
+
+
+def _orthogonality_score(
+    df: pd.DataFrame,
+    side: str,
+    atom_cols: dict[str, str],
+) -> pd.Series:
+    roles = {
+        "location": ("liquidity_sweep", "fvg_retest", "order_block", "profile_reclaim", "activity_zone_reclaim"),
+        "structure": ("structure_break",),
+        "trend": ("trend_trail",),
+        "momentum": ("momentum_impulse", "squeeze_release", "oscillator_divergence"),
+        "participation": ("net_volume_flow",),
+    }
+    score = pd.Series(0.0, index=df.index)
+    for atoms in roles.values():
+        active = pd.Series(False, index=df.index)
+        for atom in atoms:
+            active = active | df[atom_cols[atom]].fillna(False).astype(bool)
+        score = score + active.astype(float)
+    return score
 
 
 def _merge_context(
@@ -585,6 +786,9 @@ def _atom_columns(side: str) -> dict[str, str]:
         "trend_trail": "trend_trail_long" if long else "trend_trail_short",
         "profile_reclaim": "profile_reclaim_long" if long else "profile_reclaim_short",
         "momentum_impulse": "momentum_impulse_long" if long else "momentum_impulse_short",
+        "oscillator_divergence": "oscillator_divergence_long" if long else "oscillator_divergence_short",
+        "net_volume_flow": "net_volume_flow_long" if long else "net_volume_flow_short",
+        "activity_zone_reclaim": "activity_zone_reclaim_long" if long else "activity_zone_reclaim_short",
     }
 
 
@@ -592,9 +796,12 @@ def _primary_atom(row: pd.Series, side: str) -> str:
     priority = (
         "liquidity_sweep",
         "fvg_retest",
+        "activity_zone_reclaim",
+        "oscillator_divergence",
         "profile_reclaim",
         "squeeze_release",
         "order_block",
+        "net_volume_flow",
         "structure_break",
         "trend_trail",
         "momentum_impulse",
@@ -611,9 +818,12 @@ def _primary_atom_series(df: pd.DataFrame, side: str) -> pd.Series:
     priority = (
         "liquidity_sweep",
         "fvg_retest",
+        "activity_zone_reclaim",
+        "oscillator_divergence",
         "profile_reclaim",
         "squeeze_release",
         "order_block",
+        "net_volume_flow",
         "structure_break",
         "trend_trail",
         "momentum_impulse",
