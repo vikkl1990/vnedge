@@ -65,6 +65,7 @@ class Trade:
     entry_reason: str
     mae_usd: float = 0.0  # max adverse excursion while open (<= 0)
     mfe_usd: float = 0.0  # max favorable excursion while open (>= 0)
+    symbol: str = ""  # set by the portfolio engine; single-symbol runs leave it empty
 
     @property
     def net_pnl_usd(self) -> float:
