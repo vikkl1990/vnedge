@@ -10,6 +10,10 @@ The workbench turns that answer into a restart-safe task:
 - `RUN_CONSERVATIVE_L2_REPLAY` -> conservative replay task
 - `PRE_REGISTER_UNTOUCHED_JUDGMENT` -> untouched judgment manifest task
 - `RECORD_MORE_TICKS` -> data collection task
+- `REPAIR_EXIT_PAYOFF` -> exit-only repair task for positive rejects
+- `CHECK_ZERO_WINDOW_STABILITY` -> sparse-window stability task
+- `PRE_REGISTER_NEAR_PASS_JUDGMENT` -> untouched judgment task for a close reject
+- `REFRESH_STALE_ARTIFACT` -> research producer refresh task
 
 It writes:
 
@@ -49,7 +53,9 @@ The workbench is research-only:
 
 Every task remains blocked by the explicit proof gate it needs next, such as
 `conservative_replay_result`, `human_approved_manifest`, or
-`sample_size_and_coverage`.
+`sample_size_and_coverage`. Repair tasks add their own blockers, for example
+`exit_repair_backtest`, `stability_resample_result`, or
+`fresh_artifact_publish`.
 
 ## Run It
 

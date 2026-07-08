@@ -141,6 +141,44 @@ def test_alpha_workbench_routes_judgment_and_recording_tasks(tmp_path):
     assert "sample_size_and_coverage" in report["tasks"][1]["blocked_by"]
 
 
+def test_alpha_workbench_routes_repair_and_refresh_tasks(tmp_path):
+    payload = council_payload(
+        debate(
+            "REPAIR_EXIT_PAYOFF",
+            "candle|bybit|ETH|1h|quant_signal_pack_v1",
+            source="rolling_walk_forward",
+            priority=67.0,
+            vetoes=["requires_untouched_judgment"],
+        ),
+        debate(
+            "CHECK_ZERO_WINDOW_STABILITY",
+            "candle|bybit|XRP|1h|trend_continuation_v1",
+            source="rolling_walk_forward",
+            priority=66.0,
+            vetoes=["requires_untouched_judgment"],
+        ),
+        debate(
+            "REFRESH_STALE_ARTIFACT",
+            "artifact_health|alpha_distillation_latest.json",
+            source="artifact_health",
+            priority=58.0,
+            vetoes=["requires_fresh_research_artifact"],
+        ),
+    )
+
+    report = run_alpha_workbench(tmp_path, store_dir=None, council_payload=payload)
+
+    assert report["summary"]["by_type"] == {
+        "exit_repair": 1,
+        "stability_check": 1,
+        "artifact_refresh": 1,
+    }
+    by_action = {task["next_action"]: task for task in report["tasks"]}
+    assert "exit_repair_backtest" in by_action["REPAIR_EXIT_PAYOFF"]["blocked_by"]
+    assert "stability_resample_result" in by_action["CHECK_ZERO_WINDOW_STABILITY"]["blocked_by"]
+    assert "fresh_artifact_publish" in by_action["REFRESH_STALE_ARTIFACT"]["blocked_by"]
+
+
 def test_alpha_workbench_publish_is_atomic_and_appends_feed(tmp_path):
     payload = run_alpha_workbench(
         tmp_path,

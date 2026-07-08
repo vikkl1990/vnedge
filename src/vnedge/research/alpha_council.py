@@ -22,6 +22,35 @@ DEFAULT_RESEARCH_DIR = Path("research/live_research")
 DEFAULT_LATEST = DEFAULT_RESEARCH_DIR / "alpha_council_latest.json"
 DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "alpha_council_feed.jsonl"
 
+SOURCE_QUOTAS = {
+    "rolling_walk_forward": 10,
+    "event_leadlag_alpha": 10,
+    "daily_scalper_pack": 6,
+    "alpha_distillation": 6,
+    "artifact_health": 6,
+    "fast_l2_scout": 4,
+    "l2_research_loop": 4,
+    "alpha_factory": 4,
+}
+
+ARTIFACT_MAX_AGE_SECONDS = {
+    "latest.json": 2 * 3600,
+    "event_leadlag_latest.json": 2 * 3600,
+    "l2_scout_latest.json": 45 * 60,
+    "l2_latest.json": 7 * 3600,
+    "daily_scalper_latest.json": 7 * 3600,
+    "alpha_distillation_latest.json": 7 * 3600,
+}
+
+ARTIFACT_PRODUCERS = {
+    "latest.json": "research-loop",
+    "event_leadlag_latest.json": "event-leadlag-miner",
+    "l2_scout_latest.json": "l2-fast-scout",
+    "l2_latest.json": "l2-research-loop",
+    "daily_scalper_latest.json": "daily-scalper-pack",
+    "alpha_distillation_latest.json": "alpha-distillation",
+}
+
 
 @dataclass(frozen=True)
 class AlphaCandidate:
@@ -122,7 +151,8 @@ def collect_candidates(
     candidates.extend(_alpha_distillation_candidates(
         _read_json(research / "alpha_distillation_latest.json")
     ))
-    return _dedupe_candidates(candidates)[:max_candidates]
+    candidates.extend(_artifact_health_candidates(research))
+    return _apply_source_quotas(_dedupe_candidates(candidates), max_candidates=max_candidates)
 
 
 def debate_candidate(candidate: AlphaCandidate) -> dict:
@@ -182,6 +212,7 @@ def _candle_candidates(payload: dict | None) -> list[AlphaCandidate]:
                 "payoff_ratio": _num(row.get("payoff_ratio")),
                 "profitable_windows_pct": _num(row.get("profitable_windows_pct")),
                 "total_fees_usd": _num(row.get("total_fees_usd")),
+                "repair_action": _candle_repair_action(row),
             },
             evidence=row,
         ))
@@ -344,11 +375,16 @@ def _daily_scalper_candidates(payload: dict | None) -> list[AlphaCandidate]:
 
 def _alpha_distillation_candidates(payload: dict | None) -> list[AlphaCandidate]:
     out: list[AlphaCandidate] = []
-    for row in (payload or {}).get("distilled_candidates", []):
+    rows = (payload or {}).get("distilled_candidates") or (payload or {}).get("results", [])
+    for row in rows:
         if not isinstance(row, dict):
             continue
-        score = _num(row.get("score"))
-        if score <= 0:
+        score = max(
+            _num(row.get("score")),
+            _num(row.get("oos_net_usd")) / 10.0,
+            _num(row.get("profit_factor")),
+        )
+        if score <= 0 and str(row.get("verdict", "")) != "PASS":
             continue
         exchange = str(row.get("exchange", "unknown"))
         symbol = str(row.get("symbol", "unknown"))
@@ -360,10 +396,63 @@ def _alpha_distillation_candidates(payload: dict | None) -> list[AlphaCandidate]
             exchange=exchange,
             symbol=symbol,
             timeframe=str(row.get("timeframe", "mixed")),
-            state=str(row.get("state", "CANDIDATE")),
+            state=str(row.get("state") or row.get("verdict") or "CANDIDATE"),
             route_decision=_route_label(row.get("route_decision")),
-            metrics={"score": score},
+            metrics={
+                "score": score,
+                "oos_net_usd": _num(row.get("oos_net_usd")),
+                "oos_trades": _num(row.get("oos_trades")),
+                "profit_factor": _num(row.get("profit_factor")),
+                "payoff_ratio": _num(row.get("payoff_ratio")),
+                "repair_action": _candle_repair_action(row),
+            },
             evidence=row,
+        ))
+    return out
+
+
+def _artifact_health_candidates(research: Path) -> list[AlphaCandidate]:
+    if not research.exists():
+        return []
+    now = time.time()
+    out: list[AlphaCandidate] = []
+    for filename, max_age in ARTIFACT_MAX_AGE_SECONDS.items():
+        path = research / filename
+        producer = ARTIFACT_PRODUCERS.get(filename, "unknown")
+        if not path.exists():
+            state = "MISSING_ARTIFACT"
+            age = 0.0
+            reason = f"{filename} is missing; expected producer={producer}"
+        else:
+            age = max(0.0, now - path.stat().st_mtime)
+            if age <= max_age:
+                continue
+            state = "STALE_ARTIFACT"
+            reason = (
+                f"{filename} age {age / 60:.1f}m exceeds "
+                f"{max_age / 60:.1f}m freshness budget; expected producer={producer}"
+            )
+        out.append(AlphaCandidate(
+            candidate_id=f"artifact_health|{filename}",
+            source="artifact_health",
+            family="research_artifact_refresh",
+            exchange="all",
+            symbol=filename,
+            timeframe="scheduled",
+            state=state,
+            route_decision="RESEARCH_REFRESH",
+            metrics={
+                "age_seconds": age,
+                "max_age_seconds": float(max_age),
+                "freshness_ratio": (age / max_age) if max_age else 0.0,
+            },
+            evidence={
+                "artifact": filename,
+                "expected_producer": producer,
+                "reason": reason,
+                "can_trade": False,
+                "can_promote": False,
+            },
         ))
     return out
 
@@ -376,9 +465,15 @@ def _edge_advocate(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.state == "PASS":
         delta += 28
         notes.append("rolling OOS gate currently marks this lane PASS")
+    if candidate.state == "REJECT" and _num(m.get("oos_net_usd")) > 0:
+        delta += 14
+        notes.append("positive-after-fees lane is blocked by repairable gates")
     if "EDGE_CANDIDATE" in candidate.state:
         delta += 30
         notes.append("research miner labels this as an edge candidate")
+    if candidate.source == "artifact_health":
+        delta += 18
+        notes.append("stale or missing research evidence is blocking the signal funnel")
     if samples >= 20 and _best_profit_factor(m) >= 1.5:
         delta += 12
         notes.append(f"profit factor is strong at {_best_profit_factor(m):.2f}")
@@ -412,8 +507,11 @@ def _skeptic(candidate: AlphaCandidate) -> AgentOpinion:
     vetoes: list[str] = []
     samples = max(_num(m.get("samples")), _num(m.get("oos_trades")))
     if candidate.state == "REJECT":
-        delta -= 25
+        delta -= 15 if _num(m.get("oos_net_usd")) > 0 else 25
         notes.append("rolling research verdict is REJECT")
+    if candidate.source == "artifact_health":
+        delta -= 4
+        notes.append("artifact health issue requires refresh before debate quality improves")
     if "UNDER_SAMPLED" in candidate.state or 0 < samples < 20:
         delta -= 24
         vetoes.append("needs_more_samples")
@@ -456,6 +554,8 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
         delta -= 4
         vetoes.append("execution_not_modeled_at_tick_level")
         notes.append("candle research does not prove intrabar execution")
+    elif route == "RESEARCH_REFRESH":
+        notes.append("research refresh task has no execution route")
     net_bps = _best_net_bps(m)
     if net_bps > 8:
         delta += 10
@@ -479,9 +579,12 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.source in {"event_leadlag_alpha", "fast_l2_scout", "l2_research_loop", "alpha_factory"}:
         vetoes.append("requires_conservative_l2_replay")
         notes.append("microstructure candidate requires conservative replay")
-    if candidate.source == "rolling_walk_forward":
+    if candidate.source in {"rolling_walk_forward", "daily_scalper_pack", "alpha_distillation"}:
         vetoes.append("requires_untouched_judgment")
         notes.append("rolling PASS still needs pre-registered untouched judgment")
+    if candidate.source == "artifact_health":
+        vetoes.append("requires_fresh_research_artifact")
+        notes.append("fresh artifact must be published before this lane can be judged")
     return AgentOpinion("risk_governor", "veto", delta, "; ".join(notes), tuple(vetoes))
 
 
@@ -498,6 +601,8 @@ def _research_director(candidate: AlphaCandidate) -> AgentOpinion:
 
 def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: float) -> str:
     veto_set = set(vetoes)
+    if candidate.source == "artifact_health":
+        return "REFRESH_STALE_ARTIFACT"
     if candidate.source in {"event_leadlag_alpha", "fast_l2_scout", "l2_research_loop", "alpha_factory"}:
         if "needs_more_samples" in veto_set:
             return "RECORD_MORE_TICKS"
@@ -511,7 +616,7 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
     if candidate.state == "PASS":
         return "PRE_REGISTER_UNTOUCHED_JUDGMENT"
     if _num(candidate.metrics.get("oos_net_usd")) > 0:
-        return "DIAGNOSE_CLOSE_REJECT"
+        return str(candidate.metrics.get("repair_action") or "DIAGNOSE_CLOSE_REJECT")
     return "RESEARCH_MORE"
 
 
@@ -579,8 +684,12 @@ def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
         state_score = 110.0
     elif candidate.state == "PASS":
         state_score = 100.0
+    elif candidate.source == "artifact_health":
+        state_score = 85.0 if candidate.state == "MISSING_ARTIFACT" else 70.0
     elif "UNDER_SAMPLED" in candidate.state:
         state_score = 20.0
+    elif candidate.state == "REJECT" and _num(m.get("oos_net_usd")) > 0:
+        state_score = 80.0
     elif candidate.state == "REJECT":
         state_score = -20.0
     score = (
@@ -591,6 +700,37 @@ def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
         + min(samples, 100.0) / 20
     )
     return (-score, candidate.candidate_id)
+
+
+def _apply_source_quotas(
+    candidates: list[AlphaCandidate],
+    *,
+    max_candidates: int,
+) -> list[AlphaCandidate]:
+    counts: dict[str, int] = {}
+    selected: list[AlphaCandidate] = []
+    for candidate in candidates:
+        quota = SOURCE_QUOTAS.get(candidate.source, max_candidates)
+        if counts.get(candidate.source, 0) >= quota:
+            continue
+        selected.append(candidate)
+        counts[candidate.source] = counts.get(candidate.source, 0) + 1
+        if len(selected) >= max_candidates:
+            break
+    return selected
+
+
+def _candle_repair_action(row: dict[str, Any]) -> str:
+    if _num(row.get("oos_net_usd")) <= 0 and str(row.get("verdict")) != "PASS":
+        return "RESEARCH_MORE"
+    reasons = " | ".join(str(reason).lower() for reason in row.get("reasons", []))
+    if any(term in reasons for term in ("payoff", "profit factor", "pf below", "avg win")):
+        return "REPAIR_EXIT_PAYOFF"
+    if any(term in reasons for term in ("zero-trade", "zero trade", "windows with", "traded windows")):
+        return "CHECK_ZERO_WINDOW_STABILITY"
+    if any(term in reasons for term in ("is/oos", "collapse", "concentration")):
+        return "PRE_REGISTER_NEAR_PASS_JUDGMENT"
+    return "DIAGNOSE_CLOSE_REJECT"
 
 
 def _read_json(path: Path) -> dict | None:

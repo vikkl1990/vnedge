@@ -231,6 +231,32 @@ _ACTION_CONTRACTS: dict[str, dict[str, str]] = {
         "task_type": "data_collection",
         "proof_step": "continue public tick/L2 recording until sample and coverage gates are met",
     },
+    "REPAIR_EXIT_PAYOFF": {
+        "task_type": "exit_repair",
+        "proof_step": (
+            "test exit-only variants against the same entry evidence; no entry "
+            "threshold changes and no promotion from seen data"
+        ),
+    },
+    "CHECK_ZERO_WINDOW_STABILITY": {
+        "task_type": "stability_check",
+        "proof_step": (
+            "pre-register a stability check with wider windows or longer horizon "
+            "to determine whether the positive reject is sparse or dead"
+        ),
+    },
+    "PRE_REGISTER_NEAR_PASS_JUDGMENT": {
+        "task_type": "near_pass_judgment",
+        "proof_step": "write fixed untouched-window manifest for a positive rejected lane",
+    },
+    "DIAGNOSE_CLOSE_REJECT": {
+        "task_type": "close_reject_diagnosis",
+        "proof_step": "classify the unresolved close-reject blocker before any tuning",
+    },
+    "REFRESH_STALE_ARTIFACT": {
+        "task_type": "artifact_refresh",
+        "proof_step": "refresh the missing or stale research artifact from its producer service",
+    },
 }
 
 
@@ -286,6 +312,11 @@ def _blocked_by(action: str, vetoes: tuple[str, ...]) -> tuple[str, ...]:
         "RUN_CONSERVATIVE_L2_REPLAY": ("conservative_replay_result",),
         "PRE_REGISTER_UNTOUCHED_JUDGMENT": ("human_approved_manifest",),
         "RECORD_MORE_TICKS": ("sample_size_and_coverage",),
+        "REPAIR_EXIT_PAYOFF": ("exit_repair_backtest", "unchanged_entry_manifest"),
+        "CHECK_ZERO_WINDOW_STABILITY": ("stability_resample_result", "pre_registered_window"),
+        "PRE_REGISTER_NEAR_PASS_JUDGMENT": ("human_approved_manifest",),
+        "DIAGNOSE_CLOSE_REJECT": ("diagnosis_report",),
+        "REFRESH_STALE_ARTIFACT": ("fresh_artifact_publish",),
     }.get(action, ())
     return tuple(dict.fromkeys((*vetoes, *required)))
 

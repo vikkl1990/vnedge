@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -509,12 +510,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate", type=parse_candidate, action="append", default=None)
     parser.add_argument("--no-context", action="store_true", help="diagnostic only")
     parser.add_argument("--no-1m-trigger", action="store_true", help="diagnostic only")
+    parser.add_argument("--interval-seconds", type=int, default=0)
+    parser.add_argument("--once", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    while True:
+        report = _run_and_publish(args)
+        if args.json:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            print(_format_summary(report))
+        if args.once or args.interval_seconds <= 0:
+            return 0
+        time.sleep(max(args.interval_seconds, 1))
+
+
+def _run_and_publish(args: argparse.Namespace) -> dict:
     report = run_alpha_distillation_research(
         args.data_root,
         candidates=tuple(args.candidate) if args.candidate else None,
@@ -530,11 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     tmp = out.with_suffix(out.suffix + ".tmp")
     tmp.write_text(json.dumps(report, indent=2, default=str))
     tmp.replace(out)
-    if args.json:
-        print(json.dumps(report, indent=2, default=str))
-    else:
-        print(_format_summary(report))
-    return 0
+    return report
 
 
 def _format_summary(report: dict) -> str:

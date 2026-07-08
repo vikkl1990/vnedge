@@ -34,6 +34,22 @@ durable replay, judgment, or recording tasks under
 `research/live_research/alpha_workbench/`. The council debates; the workbench
 remembers the work.
 
+The council also applies source quotas so one noisy feed cannot crowd out the
+rest of the signal funnel. Event lead-lag, candle walk-forward, daily scalper,
+alpha distillation, L2 scouts, and artifact-health rows each get bounded
+representation in the debate queue.
+
+Positive-after-fees lanes that still fail gates are not treated as generic
+rejects. They are routed into concrete repair work:
+
+- payoff / PF failures -> `REPAIR_EXIT_PAYOFF`
+- zero-trade-window / sparse-window failures -> `CHECK_ZERO_WINDOW_STABILITY`
+- close rejects without a clear class -> `DIAGNOSE_CLOSE_REJECT`
+
+Missing or stale artifacts become `REFRESH_STALE_ARTIFACT` tasks, which keeps
+the bot from confusing an empty signal funnel with an unhealthy research
+producer.
+
 ## What It Never Does
 
 - No orders
