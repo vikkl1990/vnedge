@@ -212,6 +212,39 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Zero-risk Binance USDT-M liquidation (forceOrder) recorder. Public stream,
+  # no credentials — captures the forced-liquidation events the event-scalper
+  # families key on most, into ticks/.../stream=liquidations/.
+  liquidation-recorder:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.exchange.liquidation_recorder",
+              "--symbols",
+              "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT",
+              "--data-root", "/app/data"]
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Zero-risk Bybit liquidation recorder (allLiquidation topic via CCXT Pro;
+  # position side is normalised to forced-order side on ingest). Same universe,
+  # written into ticks/exchange=bybit/.../stream=liquidations/ for parity.
+  liquidation-recorder-bybit:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.exchange.liquidation_recorder",
+              "--exchange", "bybit",
+              "--symbols",
+              "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT",
+              "--data-root", "/app/data"]
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Internet-facing TLS front (self-signed) so the read-only dashboard needs
   # no SSH tunnel. Port 8765 must be open in the cloud security list.
   dashboard-tls:
