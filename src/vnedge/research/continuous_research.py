@@ -52,6 +52,7 @@ from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
+from vnedge.research.shadow_perf_reader import DEFAULT_JOURNAL_DIR, read_shadow_perf
 from vnedge.research.shadow_manifest import (
     generate_shadow_manifest,
     load_shadow_manifest,
@@ -695,7 +696,8 @@ def publish(records: list[dict], started: float,
             universe: dict | None = None,
             scalper_research: dict | None = None,
             alpha_factory: dict | None = None,
-            scalper_parameter_registry: dict | None = None) -> None:
+            scalper_parameter_registry: dict | None = None,
+            live_shadow_perf: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -712,6 +714,9 @@ def publish(records: list[dict], started: float,
         "alpha_factory": alpha_factory or {},
         "scalper_parameter_registry": scalper_parameter_registry or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
+        # live virtual track record of the shadow lanes (read-only journal
+        # aggregation; observability evidence, never a gate)
+        "live_shadow_perf": live_shadow_perf or {},
         "edge_agents": agent_plan or {},
         "edge_leaderboard": edge_leaderboard or {},
         "auto_explore": {
@@ -786,10 +791,21 @@ async def run_cycle() -> list[dict]:
         logger.exception("auto-explore failed: %s", exc)
 
     agent_plan = EdgeResearchAgent().plan(records, targets=targets)
+    # Live shadow-lane virtual track record (read-only journal aggregation).
+    # Degrades to {} when the journals aren't mounted/present — the ranking
+    # then simply carries no live_shadow evidence.
+    live_shadow_perf: dict = {}
+    try:
+        live_shadow_perf = read_shadow_perf(
+            os.environ.get("SHADOW_PERF_JOURNAL_DIR", str(DEFAULT_JOURNAL_DIR))
+        )
+    except Exception as exc:  # noqa: BLE001 — observability must not kill a cycle
+        logger.exception("shadow perf read failed: %s", exc)
     edge_leaderboard = build_edge_leaderboard(
         records,
         max_rows=_env_int("EDGE_LEADERBOARD_MAX_ROWS", 50),
         max_queue=_env_int("EDGE_PROMOTION_QUEUE_MAX_ROWS", 20),
+        shadow_perf=live_shadow_perf,
     )
     # research -> shadow bridge: turn profitable winners with locked params into
     # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
@@ -861,6 +877,7 @@ async def run_cycle() -> list[dict]:
         scalper_research=scalper_research,
         alpha_factory=alpha_factory,
         scalper_parameter_registry=scalper_parameter_registry,
+        live_shadow_perf=live_shadow_perf,
     )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""

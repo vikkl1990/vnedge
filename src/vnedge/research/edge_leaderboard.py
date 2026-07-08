@@ -4,6 +4,16 @@ This is a research/governance view only. It ranks rolling walk-forward rows and
 Quant family attributions so operators can decide what deserves untouched-data
 judgment next. It never promotes, never places orders, and never bypasses the
 mode ladder.
+
+Live shadow evidence: when a ``shadow_perf`` payload (from
+``vnedge.research.shadow_perf_reader``) is supplied, strategy rows gain a
+``live_shadow`` sub-dict with the lane's virtual track record and — at
+``LIVE_SHADOW_MIN_TRADES`` or more virtual trades — an annotation:
+``LIVE_SHADOW_POSITIVE`` (positive virtual net) or ``LIVE_SHADOW_NEGATIVE``
+(an honest demotion signal for the human). The annotation adjusts the ranking
+score by ``LIVE_SHADOW_SCORE_BONUS`` in the matching direction but NEVER
+changes a promotion tier, never promotes, and never flips can_trade /
+can_promote — it is evidence for the human, not a gate.
 """
 
 from __future__ import annotations
@@ -11,12 +21,21 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
+from vnedge.research.shadow_perf_reader import index_shadow_perf, shadow_perf_key
 from vnedge.scalping.parameter_registry import (
     DEFAULT_SCALPER_PARAMETER_REGISTRY,
     ScalperParameterRegistry,
 )
 
 MIN_CANDIDATE_TRADES = 10
+
+# Live shadow annotation thresholds: below the minimum the track record is
+# shown but not annotated (too little evidence either way). The score bonus
+# is a ranking nudge only — annotation, not promotion.
+LIVE_SHADOW_MIN_TRADES = 5
+LIVE_SHADOW_SCORE_BONUS = 6.0
+LIVE_SHADOW_POSITIVE = "LIVE_SHADOW_POSITIVE"
+LIVE_SHADOW_NEGATIVE = "LIVE_SHADOW_NEGATIVE"
 
 
 def build_edge_leaderboard(
@@ -25,16 +44,22 @@ def build_edge_leaderboard(
     registry: ScalperParameterRegistry = DEFAULT_SCALPER_PARAMETER_REGISTRY,
     max_rows: int = 50,
     max_queue: int = 20,
+    shadow_perf: dict | None = None,
 ) -> dict:
     """Build a ranked research leaderboard from rolling records.
 
     Strategy rows are ranked directly. Quant rows with ``family_attribution``
     also emit family-probe rows, which can become isolated-variant candidates
-    but never direct promotion candidates.
+    but never direct promotion candidates. ``shadow_perf`` (the
+    shadow_perf_reader payload) joins each strategy row to its live shadow
+    lane's virtual track record — annotation-only evidence, never a gate.
     """
+    shadow_index = index_shadow_perf(shadow_perf)
     rows: list[dict] = []
     for record in records:
-        strategy_row = _row_from_record(record, registry=registry)
+        strategy_row = _row_from_record(
+            record, registry=registry, shadow_index=shadow_index
+        )
         if strategy_row is not None:
             rows.append(strategy_row)
         for family, stats in sorted(record.get("family_attribution", {}).items()):
@@ -43,6 +68,7 @@ def build_edge_leaderboard(
                 registry=registry,
                 family=family,
                 family_stats=stats,
+                shadow_index=shadow_index,
             )
             if family_row is not None:
                 rows.append(family_row)
@@ -67,6 +93,7 @@ def _row_from_record(
     registry: ScalperParameterRegistry,
     family: str | None = None,
     family_stats: dict | None = None,
+    shadow_index: dict[str, dict] | None = None,
 ) -> dict | None:
     verdict = str(record.get("verdict", "REJECT"))
     if verdict == "UNTESTABLE":
@@ -111,6 +138,15 @@ def _row_from_record(
     fee_multiple = round(net / fees, 2) if fees > 0 else None
     avg_net = round(net / trades, 4) if trades else 0.0
     fee_drag = _fee_drag_pct(net, fees)
+    # Live shadow evidence joins STRATEGY rows only: a family probe shares its
+    # parent's shadow lane, so attributing the whole lane's virtual PnL to one
+    # family would fabricate evidence.
+    live_shadow = None
+    if family is None and shadow_index:
+        live_shadow = _live_shadow_view(
+            shadow_index.get(shadow_perf_key(strategy, exchange, symbol))
+        )
+    live_shadow_annotation = _live_shadow_annotation(live_shadow)
     score = _score(
         verdict=verdict,
         tier=tier,
@@ -122,6 +158,10 @@ def _row_from_record(
         fee_multiple=fee_multiple,
         profitable_windows_pct=_finite_float(record.get("profitable_windows_pct", 0.0)),
     )
+    if live_shadow_annotation == LIVE_SHADOW_POSITIVE:
+        score = round(score + LIVE_SHADOW_SCORE_BONUS, 2)
+    elif live_shadow_annotation == LIVE_SHADOW_NEGATIVE:
+        score = round(score - LIVE_SHADOW_SCORE_BONUS, 2)
     candidate_id = (
         f"{strategy}__{family}_only"
         if family and strategy == "quant_signal_pack_v1"
@@ -153,11 +193,42 @@ def _row_from_record(
         "profitable_windows_pct": _finite_float(record.get("profitable_windows_pct", 0.0)),
         "gates": record.get("gates", "standard"),
         "blockers": blockers,
+        "live_shadow": live_shadow,
+        "live_shadow_annotation": live_shadow_annotation,
         "can_trade": False,
         "can_promote": False,
         "requires_human_approval": True,
         "requires_untouched_judgment": True,
     }
+
+
+def _live_shadow_view(lane: dict | None) -> dict | None:
+    """Compact live-shadow evidence for a leaderboard row (or None)."""
+    if not lane:
+        return None
+    return {
+        "virtual_trades": int(lane.get("virtual_trades", 0) or 0),
+        "net_usd": _finite_float(lane.get("net_usd", 0.0)),
+        "profit_factor": (
+            _finite_float(lane["profit_factor"])
+            if lane.get("profit_factor") is not None
+            else None
+        ),
+        "win_rate_pct": _finite_float(lane.get("win_rate_pct", 0.0)),
+        "span_days": _finite_float(lane.get("span_days", 0.0)),
+        "last_resolution_ts": lane.get("last_resolution_ts"),
+    }
+
+
+def _live_shadow_annotation(live_shadow: dict | None) -> str | None:
+    """Annotation only — never a tier change, never a promotion."""
+    if not live_shadow or live_shadow["virtual_trades"] < LIVE_SHADOW_MIN_TRADES:
+        return None
+    if live_shadow["net_usd"] > 0:
+        return LIVE_SHADOW_POSITIVE
+    if live_shadow["net_usd"] < 0:
+        return LIVE_SHADOW_NEGATIVE
+    return None
 
 
 def _route_and_blockers(
@@ -250,6 +321,8 @@ def _queue_entry(row: dict) -> dict:
         "oos_trades": row["oos_trades"],
         "profit_factor": row["profit_factor"],
         "payoff_ratio": row["payoff_ratio"],
+        "live_shadow": row["live_shadow"],
+        "live_shadow_annotation": row["live_shadow_annotation"],
         "can_trade": False,
         "can_promote": False,
         "requires_human_approval": True,
@@ -314,6 +387,13 @@ def _summary(rows: list[dict], queue: list[dict]) -> dict:
         "blocked": sum(1 for r in rows if r["promotion_tier"] == "BLOCKED"),
         "maker_only": sum(1 for r in rows if r["route_decision"] == "MAKER_ONLY"),
         "taker_allowed": sum(1 for r in rows if r["route_decision"] == "TAKER_ALLOWED"),
+        "live_shadow_tracked": sum(1 for r in rows if r["live_shadow"] is not None),
+        "live_shadow_positive": sum(
+            1 for r in rows if r["live_shadow_annotation"] == LIVE_SHADOW_POSITIVE
+        ),
+        "live_shadow_negative": sum(
+            1 for r in rows if r["live_shadow_annotation"] == LIVE_SHADOW_NEGATIVE
+        ),
     }
 
 
@@ -334,6 +414,14 @@ def _policy(registry: ScalperParameterRegistry) -> dict:
             "pre_registered_untouched_judgment",
             "paper_or_shadow_after_approval",
         ],
+        "live_shadow": {
+            "min_virtual_trades": LIVE_SHADOW_MIN_TRADES,
+            "score_bonus": LIVE_SHADOW_SCORE_BONUS,
+            "positive_annotation": LIVE_SHADOW_POSITIVE,
+            "negative_annotation": LIVE_SHADOW_NEGATIVE,
+            "annotation_only": True,
+            "never_auto_promotes": True,
+        },
     }
 
 

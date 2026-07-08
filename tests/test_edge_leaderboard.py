@@ -108,3 +108,108 @@ def test_auto_pass_requires_human_review_not_direct_judgment():
         == "human_review_auto_variant_then_pre_register"
     )
 
+
+
+def shadow_perf(
+    *,
+    trades=6,
+    net=12.0,
+    strategy="quant_signal_pack_v1",
+    exchange="binanceusdm",
+    symbol="BTC/USDT:USDT",
+):
+    return {
+        "available": True,
+        "journals_read": 1,
+        "lanes": [{
+            "strategy": strategy,
+            "exchange": exchange,
+            "symbol": symbol,
+            "virtual_trades": trades,
+            "wins": max(trades - 2, 0),
+            "win_rate_pct": 55.0,
+            "net_usd": net,
+            "profit_factor": 1.4 if net > 0 else 0.6,
+            "span_days": 3.5,
+            "last_resolution_ts": "2026-07-06T00:00:00+00:00",
+            "resolutions": {"stop": 2, "target": trades - 2, "timeout": 0},
+            "source_journals": ["lane_shadow.journal.jsonl"],
+        }],
+    }
+
+
+def test_live_shadow_positive_annotation_adds_score_bonus_only():
+    rec = record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)
+    base = build_edge_leaderboard([rec])["rows"][0]
+    board = build_edge_leaderboard([rec], shadow_perf=shadow_perf(trades=6, net=12.0))
+
+    row = board["rows"][0]
+    assert row["live_shadow_annotation"] == "LIVE_SHADOW_POSITIVE"
+    assert row["live_shadow"]["virtual_trades"] == 6
+    assert row["live_shadow"]["net_usd"] == 12.0
+    assert row["live_shadow"]["span_days"] == 3.5
+    assert row["score"] == base["score"] + 6.0
+    # annotation ONLY: tier + governance flags never move
+    assert row["promotion_tier"] == base["promotion_tier"] == "JUDGMENT_READY"
+    assert row["can_trade"] is False
+    assert row["can_promote"] is False
+    assert row["requires_untouched_judgment"] is True
+    queue = board["promotion_queue"][0]
+    assert queue["live_shadow_annotation"] == "LIVE_SHADOW_POSITIVE"
+    assert queue["live_shadow"]["virtual_trades"] == 6
+    assert queue["can_promote"] is False
+    assert board["summary"]["live_shadow_positive"] == 1
+    assert board["summary"]["live_shadow_tracked"] == 1
+
+
+def test_live_shadow_negative_annotation_is_honest_demotion_signal():
+    rec = record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)
+    base = build_edge_leaderboard([rec])["rows"][0]
+    board = build_edge_leaderboard([rec], shadow_perf=shadow_perf(trades=8, net=-9.0))
+
+    row = board["rows"][0]
+    assert row["live_shadow_annotation"] == "LIVE_SHADOW_NEGATIVE"
+    assert row["score"] == base["score"] - 6.0
+    assert row["promotion_tier"] == base["promotion_tier"]  # never a tier change
+    assert board["summary"]["live_shadow_negative"] == 1
+
+
+def test_live_shadow_below_min_trades_shows_track_record_without_annotation():
+    board = build_edge_leaderboard(
+        [record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)],
+        shadow_perf=shadow_perf(trades=4, net=50.0),
+    )
+    row = board["rows"][0]
+    assert row["live_shadow"]["virtual_trades"] == 4
+    assert row["live_shadow_annotation"] is None
+    assert board["summary"]["live_shadow_positive"] == 0
+
+
+def test_live_shadow_never_attributed_to_family_probe_rows():
+    board = build_edge_leaderboard(
+        [record(
+            net=-12.0, trades=40, pf=0.9,
+            family_attribution={
+                "liquidity_sweep": {
+                    "trades": 15, "net_usd": 22.0, "total_fees_usd": 9.0,
+                    "profit_factor": 1.45, "payoff_ratio": 1.7,
+                },
+            },
+        )],
+        shadow_perf=shadow_perf(trades=10, net=20.0),
+    )
+    family = next(r for r in board["rows"] if r["family"] == "liquidity_sweep")
+    assert family["live_shadow"] is None
+    assert family["live_shadow_annotation"] is None
+
+
+def test_no_shadow_perf_rows_carry_null_live_shadow():
+    board = build_edge_leaderboard(
+        [record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)]
+    )
+    row = board["rows"][0]
+    assert row["live_shadow"] is None
+    assert row["live_shadow_annotation"] is None
+    assert board["policy"]["live_shadow"]["annotation_only"] is True
+    assert board["policy"]["live_shadow"]["never_auto_promotes"] is True
+    assert board["policy"]["live_shadow"]["min_virtual_trades"] == 5
