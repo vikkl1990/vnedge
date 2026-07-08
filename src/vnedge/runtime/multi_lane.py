@@ -29,11 +29,8 @@ from ccxt.base.errors import NotSupported
 from vnedge.config.risk_config import RiskConfig
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.schemas import normalize_candles, normalize_funding
-from vnedge.exchange.live_feed import (
-    LiveMarketFeed,
-    RestPollingMarketFeed,
-    create_market_feed,
-)
+from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
+from vnedge.exchange.live_feed import LiveMarketFeed, RestPollingMarketFeed
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
@@ -80,7 +77,7 @@ class LaneSpec:
 class _LaneRuntime:
     spec: LaneSpec
     session: LivePaperSession
-    feed: LiveMarketFeed | RestPollingMarketFeed
+    feed: LiveMarketFeed | RestPollingMarketFeed | SharedFeedView
 
 
 # --- snapshot fan-in --------------------------------------------------------------
@@ -408,7 +405,11 @@ async def build_lane(
         else None
     )
 
-    feed = create_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
+    # Shared-feed registry: lanes on the same (exchange, symbol, timeframe) —
+    # e.g. the governed paper lane and its shadow twin — share ONE real feed;
+    # each lane gets a view with its own closed-candle queue (fan-out, not
+    # competition), and the last lane to stop tears the real feed down.
+    feed = acquire_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,

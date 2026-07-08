@@ -111,6 +111,84 @@ def test_handle_ignores_unknown_and_malformed():
     assert client.quote("BTCUSD") is None
 
 
+def _candle_msg(start_us, close, *, volume=10.0, resolution="1h"):
+    return {
+        "type": f"candlestick_{resolution}",
+        "symbol": "BTCUSD",
+        "resolution": resolution,
+        "open": 100.0,
+        "high": 110.0,
+        "low": 90.0,
+        "close": close,
+        "volume": volume,
+        "candle_start_time": start_us,  # microseconds (confirmed live)
+        "timestamp": start_us + 1,
+        "last_updated": start_us + 1,
+    }
+
+
+def test_candlestick_close_discipline_emits_prior_candle_once():
+    closed = []
+    client = DeltaPublicWsClient(
+        ["BTC/USD:USD"], candle_timeframes=("1h",),
+        on_candle=lambda sym, tf, row: closed.append((sym, tf, row)),
+    )
+    # candle channels are appended to the subscription list
+    assert "candlestick_1h" in client.channels
+
+    hour_us = 3_600_000_000
+    t0 = 1_783_530_000_000_000
+    # forming updates for the same interval: nothing closes yet
+    client._handle(_candle_msg(t0, 101.0, volume=5.0))
+    client._handle(_candle_msg(t0, 102.5, volume=8.0))
+    assert closed == []
+    assert client.last_closed_candle == {}
+
+    # a newer candle_start_time proves the prior candle closed
+    client._handle(_candle_msg(t0 + hour_us, 103.0, volume=1.0))
+    assert len(closed) == 1
+    sym, tf, row = closed[0]
+    assert (sym, tf) == ("BTCUSD", "1h")
+    # LAST forming values win, start time is microseconds -> ms
+    assert row == [t0 // 1000, 100.0, 110.0, 90.0, 102.5, 8.0]
+    assert client.last_closed_candle[("BTCUSD", "1h")] == row
+    assert client.healthy is True
+
+    # replayed/out-of-order message for the OLD interval never re-closes it
+    client._handle(_candle_msg(t0, 999.0))
+    client._handle(_candle_msg(t0 + hour_us, 104.0, volume=2.0))
+    assert len(closed) == 1  # same interval update, no new close
+    assert client._forming_candles[("BTCUSD", "1h")][4] == 104.0
+
+
+def test_candlestick_tracks_resolutions_independently():
+    closed = []
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], candle_timeframes=("1m", "1h"),
+        on_candle=lambda sym, tf, row: closed.append(tf),
+    )
+    minute_us = 60_000_000
+    t0 = 1_783_532_640_000_000
+    client._handle(_candle_msg(t0, 101.0, resolution="1m"))
+    client._handle(_candle_msg(t0, 101.0, resolution="1h"))
+    # the 1m candle rolls over; the 1h candle is still forming
+    client._handle(_candle_msg(t0 + minute_us, 102.0, resolution="1m"))
+    assert closed == ["1m"]
+
+
+def test_candlestick_malformed_messages_are_ignored():
+    closed = []
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], candle_timeframes=("1h",),
+        on_candle=lambda sym, tf, row: closed.append(row),
+    )
+    client._handle({"type": "candlestick_1h", "symbol": "BTCUSD"})  # no fields
+    client._handle(_candle_msg(1_000_000_000, None))  # close=None
+    client._handle({"type": "candlestick_1h", "resolution": "1h"})  # no symbol
+    assert closed == []
+    assert client._forming_candles == {}
+
+
 class _FakeWs:
     """Minimal async websocket: records sends, replays canned frames, then ends."""
 

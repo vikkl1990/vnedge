@@ -32,6 +32,17 @@ Protocol (confirmed by live probing against wss://socket.india.delta.exchange):
 - v2/ticker:
       {"type":"v2/ticker","symbol":"BTCUSD","mark_price":"62637.53",
        "close":62642.5,"oi":"1026.9130",...}
+- candlestick_<tf> (tf in 1m/5m/15m/30m/1h/... — confirmed live 2026-07-08):
+      {"type":"candlestick_1h","symbol":"BTCUSD","resolution":"1h",
+       "open":62092,"high":62379.5,"low":62010,"close":62240.5,
+       "volume":836519.0,"candle_start_time":1783530000000000,
+       "timestamp":1783532686647151,"last_updated":1783532686647151,...}
+      candle_start_time/timestamp are MICROSECONDS. The channel streams the
+      FORMING candle repeatedly (sub-second cadence); there is no explicit
+      "closed" flag. Closed-candle discipline therefore mirrors
+      ``LiveMarketFeed._watch_candles``: when a message arrives with a newer
+      ``candle_start_time``, the previously forming candle is proven closed
+      and is emitted via ``on_candle``.
 """
 
 from __future__ import annotations
@@ -75,17 +86,23 @@ class DeltaPublicWsClient:
         symbols: list[str],
         *,
         channels: tuple[str, ...] = DEFAULT_CHANNELS,
+        candle_timeframes: tuple[str, ...] = (),
         url: str = DELTA_INDIA_WS_URL,
         connect: Callable[..., object] | None = None,
         on_book: Callable[[str, list, list, dict], None] | None = None,
         on_trade: Callable[[str, dict], None] | None = None,
+        on_candle: Callable[[str, str, list], None] | None = None,
     ) -> None:
         self.symbols = [delta_native_symbol(s) for s in symbols]
-        self.channels = tuple(channels)
+        self.channels = tuple(channels) + tuple(
+            f"candlestick_{tf}" for tf in candle_timeframes
+        )
         self.url = url
         self._connect = connect  # injectable for tests; defaults to websockets.connect
         self.on_book = on_book
         self.on_trade = on_trade
+        # on_candle(symbol, timeframe, [ts_ms, o, h, l, c, v]) — CLOSED candles only
+        self.on_candle = on_candle
 
         # live per-symbol state (native symbol -> value)
         self.best_bid: dict[str, float] = {}
@@ -94,6 +111,9 @@ class DeltaPublicWsClient:
         self.mark_price: dict[str, float] = {}
         self.books: dict[str, tuple[list, list]] = {}
         self.last_trade: dict[str, dict] = {}
+        # candle state per (symbol, timeframe): forming candle + last closed
+        self._forming_candles: dict[tuple[str, str], list] = {}
+        self.last_closed_candle: dict[tuple[str, str], list] = {}
 
         self.last_event_at: datetime | None = None
         self.healthy: bool = False
@@ -167,6 +187,8 @@ class DeltaPublicWsClient:
             self._handle_funding(sym, msg)
         elif mtype == "v2/ticker":
             self._handle_ticker(sym, msg)
+        elif isinstance(mtype, str) and mtype.startswith("candlestick_"):
+            self._handle_candle(sym, mtype, msg)
         # subscriptions / heartbeat / errors and unknown types are ignored
 
     def _handle_book(self, sym: str | None, msg: dict) -> None:
@@ -218,6 +240,41 @@ class DeltaPublicWsClient:
             self.funding_rate[sym] = float(raw) / 100.0
         except (TypeError, ValueError):
             return
+        self._touch()
+
+    def _handle_candle(self, sym: str | None, mtype: str, msg: dict) -> None:
+        """Track the forming candle; emit it as CLOSED when the next one starts.
+
+        Same bar-close discipline as ``LiveMarketFeed._watch_candles``: Delta
+        streams only the forming candle, so a candle is proven closed exactly
+        when a message carries a newer ``candle_start_time``.
+        """
+        if not sym:
+            return
+        timeframe = str(msg.get("resolution") or mtype.removeprefix("candlestick_"))
+        try:
+            start_ms = int(msg["candle_start_time"]) // 1000  # microseconds -> ms
+            row = [
+                start_ms,
+                float(msg["open"]),
+                float(msg["high"]),
+                float(msg["low"]),
+                float(msg["close"]),
+                float(msg.get("volume") or 0.0),
+            ]
+        except (KeyError, TypeError, ValueError):
+            return
+        key = (sym, timeframe)
+        forming = self._forming_candles.get(key)
+        if forming is not None and row[0] > forming[0]:
+            # a newer interval started: the forming candle is closed
+            self.last_closed_candle[key] = forming
+            if self.on_candle is not None:
+                self.on_candle(sym, timeframe, forming)
+        if forming is None or row[0] >= forming[0]:
+            self._forming_candles[key] = row
+        # older-start messages (out-of-order replays) never regress the forming
+        # candle and never re-close an interval; they only count as liveness.
         self._touch()
 
     def _handle_ticker(self, sym: str | None, msg: dict) -> None:
