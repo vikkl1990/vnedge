@@ -647,6 +647,18 @@ def _load_l2_latest() -> dict:
         return {}
 
 
+def _load_event_taker_latest() -> dict:
+    """Last output of the taker-only aggTrades event replay
+    (vnedge.research.event_taker_replay), or {} if absent/unreadable."""
+    path = OUT_DIR / "event_taker_replay.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -697,7 +709,8 @@ def publish(records: list[dict], started: float,
             scalper_research: dict | None = None,
             alpha_factory: dict | None = None,
             scalper_parameter_registry: dict | None = None,
-            live_shadow_perf: dict | None = None) -> None:
+            live_shadow_perf: dict | None = None,
+            event_taker_replay: dict | None = None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -713,6 +726,7 @@ def publish(records: list[dict], started: float,
         "scalper_research": scalper_research or {},
         "alpha_factory": alpha_factory or {},
         "scalper_parameter_registry": scalper_parameter_registry or {},
+        "event_taker_replay": event_taker_replay or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         # live virtual track record of the shadow lanes (read-only journal
         # aggregation; observability evidence, never a gate)
@@ -878,6 +892,7 @@ async def run_cycle() -> list[dict]:
         alpha_factory=alpha_factory,
         scalper_parameter_registry=scalper_parameter_registry,
         live_shadow_perf=live_shadow_perf,
+        event_taker_replay=_load_event_taker_latest(),
     )
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
