@@ -88,13 +88,19 @@ class OrderManager:
         market: MarketState,
         intent_key: str,
         now: datetime | None = None,
+        *,
+        replaces: str | None = None,
     ) -> ManagedOrder:
         """Run one intent through the full pipeline. Always returns the
-        ManagedOrder — inspect .state and .history for the outcome."""
+        ManagedOrder — inspect .state and .history for the outcome.
+
+        ``replaces`` records cancel/replace lineage (the client_order_id of
+        the order this one replaces) in the journaled intent."""
         order = ManagedOrder(
             intent_key=intent_key,
             client_order_id=mint_client_order_id(),
             intent=intent,
+            replaces=replaces,
         )
 
         # --- Duplicate decision guard ---------------------------------------
@@ -143,11 +149,14 @@ class OrderManager:
 
         # --- Journal the intent BEFORE the venue can know about it ----------
         order.transition(OrderState.ORDER_INTENT_CREATED)
-        journaled = self._journal.append("order_intent", {
+        intent_record = {
             "intent_key": intent_key,
             "client_order_id": order.client_order_id,
             "intent": asdict(intent),
-        })
+        }
+        if replaces is not None:
+            intent_record["replaces"] = replaces
+        journaled = self._journal.append("order_intent", intent_record)
         if not journaled and not intent.reduce_only:
             # Journal died mid-pipeline: refuse to create unrecorded risk.
             order.transition(OrderState.SUBMITTING, "aborting — journal write failed")
@@ -258,31 +267,186 @@ class OrderManager:
                              f"cancel returned unknown venue state '{venue_state}'")
         else:
             order.transition(target, f"venue: {venue_state}")
+        # A cancel can land after partial (or full) fills — pull the venue's
+        # fill totals so remaining-quantity math downstream is honest.
+        await self._refresh_fill_state(order)
         self._journal.append("order_cancel", {
             "client_order_id": client_order_id, "venue_state": venue_state,
+            "filled_quantity": order.filled_quantity,
             "reason": reason,
         })
         return order
 
+    async def _refresh_fill_state(self, order: ManagedOrder) -> None:
+        """Refresh filled_quantity/fees from venue status when the adapter
+        exposes ``fetch_order_status``. Monotonic: a stale poll can never
+        regress a fresher private-stream update. Failure is non-fatal."""
+        fetch = getattr(self._adapter, "fetch_order_status", None)
+        if fetch is None:
+            return
+        try:
+            status = await fetch(order)
+        except Exception as exc:  # noqa: BLE001 — refresh is best-effort
+            logger.warning(
+                "fill-state refresh failed for %s: %s", order.client_order_id, exc
+            )
+            return
+        if not status:
+            return
+        filled = float(status.get("filled") or 0.0)
+        order.filled_quantity = max(order.filled_quantity, filled)
+        fee = status.get("fee") or {}
+        if isinstance(fee, dict):
+            fee_total = float(fee.get("cost") or 0.0)
+            order.fees_paid = max(order.fees_paid, fee_total)
+
+    def sync_fill_state(
+        self,
+        client_order_id: str,
+        *,
+        venue_state: str,
+        filled_quantity: float,
+        fees_total: float = 0.0,
+    ) -> bool:
+        """Update a working order's fill accounting from polled venue status
+        (reconciliation / REST status polling). Inputs are CUMULATIVE venue
+        totals; updates are monotonic. Returns True if anything changed."""
+        order = self.orders.get(client_order_id)
+        if order is None:
+            return False
+        changed = False
+        if filled_quantity > order.filled_quantity + 1e-12:
+            order.filled_quantity = float(filled_quantity)
+            changed = True
+        if fees_total > order.fees_paid + 1e-12:
+            order.fees_paid = float(fees_total)
+            changed = True
+        target: OrderState | None = None
+        if venue_state == "partially_filled" and order.state is OrderState.ACKNOWLEDGED:
+            target = OrderState.PARTIALLY_FILLED
+        elif venue_state == "filled" and order.state in (
+            OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED
+        ):
+            target = OrderState.FILLED
+        if target is not None:
+            order.transition(target, f"status poll: venue reports {venue_state}")
+            changed = True
+        if changed:
+            self._journal.append("order_fill_sync", {
+                "client_order_id": client_order_id,
+                "state": order.state.value,
+                "filled_quantity": order.filled_quantity,
+                "fees_paid": order.fees_paid,
+                "venue_state": venue_state,
+            })
+        return changed
+
     async def cancel_replace(
         self,
         client_order_id: str,
-        new_intent: OrderIntent,
+        *,
         account: AccountState,
         market: MarketState,
-        new_intent_key: str,
+        new_limit_price: float | None = None,
+        new_quantity: float | None = None,
         now: datetime | None = None,
     ) -> tuple[ManagedOrder, ManagedOrder | None]:
-        """Cancel then submit a replacement — ONLY if the cancel actually
-        cancelled. A fill that beat the cancel means the position already
-        changed; replacing on top would double up."""
+        """Cancel a working order and submit a replacement (new price and/or
+        quantity) with journaled lineage to the original.
+
+        Gateway rule (documented deliberately): EVERY replacement re-runs
+        the pre-trade risk gateway via the normal submit pipeline — including
+        reduce-only replaces and pure price improvements that a minimal rule
+        would allow to skip re-evaluation. This repo admits NO gateway bypass
+        path, so a risk-increasing replace always re-evaluates by
+        construction, and reduce-only replacements still flow because the
+        gateway itself permits reduce-only exits even under halts.
+
+        The replacement is a NEW order: a fresh client_order_id minted once,
+        an intent key derived deterministically from the original (never from
+        timestamps), and ``replaces=<old client_order_id>`` journaled with
+        the intent BEFORE the venue can know about it.
+
+        Raced fills: if the venue answers anything but 'cancelled' (filled,
+        still-working partial, unknown), NOTHING is resubmitted — the fill
+        already changed the position; replacing on top would double up.
+
+        Partial fills: the replacement covers ONLY the unfilled remainder;
+        a ``new_quantity`` above the remainder raises (the old order is
+        already cancelled at that point — fail closed, nothing at the venue).
+        """
+        old = self.orders[client_order_id]
+        self._journal.append("cancel_replace_requested", {
+            "client_order_id": client_order_id,
+            "intent_key": old.intent_key,
+            "new_limit_price": new_limit_price,
+            "new_quantity": new_quantity,
+        })
+
         old = await self.cancel_order(client_order_id, reason="cancel/replace")
         if old.state is not OrderState.CANCELLED:
-            self._journal.append("cancel_replace_aborted", {
-                "client_order_id": client_order_id, "old_state": old.state.value,
+            self._journal.append("cancel_replace_outcome", {
+                "client_order_id": client_order_id,
+                "outcome": "aborted_no_resubmit",
+                "old_state": old.state.value,
+                "filled_quantity": old.filled_quantity,
             })
             return old, None
-        replacement = await self.submit(new_intent, account, market, new_intent_key, now=now)
+
+        remaining = old.intent.quantity - old.filled_quantity
+        if remaining <= 0:
+            self._journal.append("cancel_replace_outcome", {
+                "client_order_id": client_order_id,
+                "outcome": "nothing_remaining",
+                "filled_quantity": old.filled_quantity,
+            })
+            return old, None
+        quantity = remaining if new_quantity is None else float(new_quantity)
+        if quantity > remaining + 1e-12:
+            self._journal.append("cancel_replace_outcome", {
+                "client_order_id": client_order_id,
+                "outcome": "rejected_quantity_exceeds_remaining",
+                "requested_quantity": quantity,
+                "remaining_quantity": remaining,
+            })
+            raise ValueError(
+                f"replacement quantity {quantity} exceeds unfilled remainder "
+                f"{remaining} of {client_order_id}"
+            )
+
+        prior = old.intent
+        limit_price = new_limit_price if new_limit_price is not None else prior.limit_price
+        if limit_price is not None:
+            notional_usd = quantity * limit_price
+        else:
+            notional_usd = prior.notional_usd * (quantity / prior.quantity)
+        replacement_intent = OrderIntent(
+            symbol=prior.symbol,
+            side=prior.side,
+            quantity=quantity,
+            notional_usd=notional_usd,
+            leverage=prior.leverage,
+            reduce_only=prior.reduce_only,
+            strategy_id=prior.strategy_id,
+            order_type=prior.order_type,
+            limit_price=limit_price,
+        )
+        # Minted once per (original intent, replaced order id) pair —
+        # deterministic lineage, never derived from timestamps.
+        replacement_key = f"{old.intent_key}|replace|{old.client_order_id}"
+        replacement = await self.submit(
+            replacement_intent, account, market, replacement_key,
+            now=now, replaces=old.client_order_id,
+        )
+        self._journal.append("cancel_replace_outcome", {
+            "client_order_id": client_order_id,
+            "outcome": "replaced",
+            "replaces": old.client_order_id,
+            "replacement_client_order_id": replacement.client_order_id,
+            "replacement_state": replacement.state.value,
+            "replacement_quantity": quantity,
+            "replacement_limit_price": limit_price,
+        })
         return old, replacement
 
     # --- Reconciliation hooks (driven by the reconciliation engine, m6) ------

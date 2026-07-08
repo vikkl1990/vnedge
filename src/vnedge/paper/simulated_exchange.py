@@ -21,7 +21,7 @@ by the risk gateway; the venue enforces order mechanics.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from vnedge.paper.fill_model import FillModel
 
@@ -47,6 +47,7 @@ class PaperOrderStatus:
     requested_qty: float
     filled_qty: float = 0.0
     avg_fill_price: float = 0.0
+    fee_usd: float = 0.0  # cumulative fees charged on this order's fills
     reason: str = ""
 
 
@@ -162,11 +163,36 @@ class SimulatedExchange:
             status.state = "filled"
 
     def _fill_limit(self, req: PaperOrderRequest) -> None:
-        status = self.orders[req.client_order_id]
+        # req.quantity is the REMAINING quantity (partial fills shrink it).
         self._apply_fill(req.client_order_id, req.symbol, req.buy, req.quantity, req.limit_price)
-        status.filled_qty = req.quantity
-        status.avg_fill_price = req.limit_price
+        status = self._record_limit_fill(req, req.quantity)
         status.state = "filled"
+
+    def _record_limit_fill(self, req: PaperOrderRequest, qty: float) -> PaperOrderStatus:
+        status = self.orders[req.client_order_id]
+        prev = status.filled_qty
+        status.avg_fill_price = (
+            status.avg_fill_price * prev + req.limit_price * qty
+        ) / (prev + qty)
+        status.filled_qty = prev + qty
+        return status
+
+    def partial_fill(self, client_order_id: str, quantity: float) -> PaperOrderStatus:
+        """Deterministically fill PART of a resting limit order at its limit
+        price; the remainder keeps resting. Venue-side test hook — no clock,
+        no randomness, mirrors a partial maker fill."""
+        req = self._resting.get(client_order_id)
+        if req is None:
+            raise KeyError(f"{client_order_id} is not a resting limit order")
+        if not 0 < quantity < req.quantity:
+            raise ValueError(
+                f"partial fill must be within (0, {req.quantity}), got {quantity}"
+            )
+        self._apply_fill(client_order_id, req.symbol, req.buy, quantity, req.limit_price)
+        status = self._record_limit_fill(req, quantity)
+        status.state = "partially_filled"
+        self._resting[client_order_id] = replace(req, quantity=req.quantity - quantity)
+        return status
 
     def _try_fill_resting(self, symbol: str) -> None:
         bid, ask = self.quotes[symbol]
@@ -186,6 +212,9 @@ class SimulatedExchange:
         signed = qty if buy else -qty
         fee = self.fill_model.fee_usd(qty * price)
         self.balance_usd -= fee
+        order_status = self.orders.get(client_order_id)
+        if order_status is not None:
+            order_status.fee_usd += fee
         realized = 0.0
 
         pos = self.positions.get(symbol)
@@ -220,7 +249,11 @@ class SimulatedExchange:
         return self.orders.get(client_order_id)
 
     def get_open_orders(self) -> list[PaperOrderStatus]:
-        return [s for s in self.orders.values() if s.state == "open"]
+        # A partially filled RESTING limit order is still working at the venue.
+        return [
+            s for s in self.orders.values()
+            if s.state == "open" or s.client_order_id in self._resting
+        ]
 
     def get_positions(self) -> list[PaperPosition]:
         return list(self.positions.values())

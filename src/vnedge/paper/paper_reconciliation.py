@@ -59,11 +59,35 @@ class PaperReconciler:
 
     def run(self) -> ReconciliationReport:
         resolved = self._resolve_unknown_orders()
+        self._sync_fills()
         mismatches = self._compare_orders()
         report = ReconciliationReport(tuple(resolved), tuple(mismatches))
         if not report.clean:
             logger.error("reconciliation mismatches: %s", report.mismatches)
         return report
+
+    def _sync_fills(self) -> list[str]:
+        """Push venue fill truth (filled qty, fees, partial/full fill state)
+        into working ManagedOrders. Polling counterpart of the private
+        stream: without it a partial fill on a resting limit order would
+        never reach filled_quantity/fees_paid in paper mode."""
+        synced = []
+        for order in list(self._om.orders.values()):
+            if order.state not in (
+                OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED
+            ):
+                continue
+            status = self._exchange.get_order_status(order.client_order_id)
+            if status is None:
+                continue
+            if self._om.sync_fill_state(
+                order.client_order_id,
+                venue_state=status.state,
+                filled_quantity=status.filled_qty,
+                fees_total=status.fee_usd,
+            ):
+                synced.append(order.client_order_id)
+        return synced
 
     def _resolve_unknown_orders(self) -> list[str]:
         resolved = []

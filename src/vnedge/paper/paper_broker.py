@@ -63,3 +63,22 @@ class PaperBroker:
         """Cancel at the venue; returns the venue's resulting state
         ('cancelled', or 'filled'/'partially_filled' if it beat the cancel)."""
         return self.exchange.cancel_order(order.client_order_id).state
+
+    async def fetch_order_status(self, order: ManagedOrder) -> dict | None:
+        """Venue truth in the same dict shape the live adapter returns
+        (ccxt-style status / filled / fee)."""
+        status = self.exchange.get_order_status(order.client_order_id)
+        if status is None:
+            return None
+        ccxt_state = {
+            "open": "open",
+            "partially_filled": "open",
+            "filled": "closed",
+            "cancelled": "canceled",
+            "rejected": "rejected",
+        }.get(status.state, status.state)
+        return {
+            "status": ccxt_state,
+            "filled": status.filled_qty,
+            "fee": {"cost": status.fee_usd},
+        }

@@ -92,20 +92,142 @@ async def test_cancel_replace_happy_path(world):
     order = await om.submit(
         intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
     old, new = await om.cancel_replace(
-        order.client_order_id, intent(order_type="limit", limit_price=96.0),
-        account(), market(), "k2")
+        order.client_order_id, account=account(), market=market(),
+        new_limit_price=96.0)
     assert old.state is S.CANCELLED
+    assert exchange.get_order_status(old.client_order_id).state == "cancelled"
     assert new is not None and new.state is S.ACKNOWLEDGED
+    assert new.client_order_id != old.client_order_id  # fresh id, minted once
+    assert new.replaces == old.client_order_id
+    assert new.intent.limit_price == 96.0
+    assert new.intent.quantity == pytest.approx(0.5)
     assert exchange.get_order_status(new.client_order_id).state == "open"
 
+    records = om._journal.read_all()
+    kinds = [r["kind"] for r in records]
+    assert "cancel_replace_requested" in kinds
+    outcome = [r for r in records if r["kind"] == "cancel_replace_outcome"][-1]
+    assert outcome["payload"]["outcome"] == "replaced"
+    assert outcome["payload"]["replaces"] == old.client_order_id
+    # lineage journaled WITH the intent, before the venue could know the order
+    intent_rec = [
+        r for r in records
+        if r["kind"] == "order_intent"
+        and r["payload"]["client_order_id"] == new.client_order_id
+    ][0]
+    assert intent_rec["payload"]["replaces"] == old.client_order_id
 
-async def test_cancel_replace_aborts_when_fill_won(world):
-    om, _ = world
-    order = await om.submit(intent(), account(), market(), "k1")  # filled
+
+async def test_cancel_replace_raced_fill_no_resubmit(world):
+    om, exchange = world
+    order = await om.submit(intent(), account(), market(), "k1")  # market: filled
     old, new = await om.cancel_replace(
-        order.client_order_id, intent(), account(), market(), "k2")
+        order.client_order_id, account=account(), market=market())
     assert old.state is S.FILLED
     assert new is None  # never double up on a filled order
+    assert old.filled_quantity == pytest.approx(0.5)  # fill accounted
+    [pos] = exchange.get_positions()
+    assert pos.quantity == pytest.approx(0.5)
+    outcome = [r for r in om._journal.read_all()
+               if r["kind"] == "cancel_replace_outcome"][-1]
+    assert outcome["payload"]["outcome"] == "aborted_no_resubmit"
+
+
+async def test_risk_increasing_replace_reevaluates_gateway(world):
+    om, exchange = world
+    order = await om.submit(
+        intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
+    # notional 0.5 * 1_000_000 blows through the exposure caps -> gateway must
+    # reject the replacement (every replace re-evaluates; no bypass path)
+    old, new = await om.cancel_replace(
+        order.client_order_id, account=account(), market=market(),
+        new_limit_price=1_000_000.0)
+    assert old.state is S.CANCELLED
+    assert new is not None and new.state is S.RISK_REJECTED
+    assert exchange.get_open_orders() == []  # rejected replace: NOTHING at venue
+    assert exchange.get_order_status(new.client_order_id) is None
+
+
+async def test_partial_fill_updates_order_position_and_fees(world):
+    om, exchange = world
+    from vnedge.paper.paper_reconciliation import PaperReconciler
+
+    order = await om.submit(
+        intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
+    exchange.partial_fill(order.client_order_id, 0.2)
+    [pos] = exchange.get_positions()
+    assert pos.quantity == pytest.approx(0.2)  # position = sum of fills
+
+    report = PaperReconciler(om, exchange).run()  # status polling / recon sync
+    assert report.clean
+    assert order.state is S.PARTIALLY_FILLED
+    assert order.filled_quantity == pytest.approx(0.2)
+    assert order.fees_paid == pytest.approx(0.2 * 95.0 * 5.0 / 10_000.0)
+    assert exchange.get_open_orders() != []  # remainder still working
+
+
+async def test_partial_fill_remainder_fills_on_cross(world):
+    _, exchange = world
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+
+    exchange.submit_order(PaperOrderRequest(
+        "c1", SYM, buy=True, quantity=0.5, order_type="limit", limit_price=95.0))
+    exchange.partial_fill("c1", 0.2)
+    exchange.set_quote(SYM, bid=94.8, ask=94.9)  # crosses: remainder fills
+    status = exchange.get_order_status("c1")
+    assert status.state == "filled"
+    assert status.filled_qty == pytest.approx(0.5)
+    assert status.avg_fill_price == pytest.approx(95.0)
+    [pos] = exchange.get_positions()
+    assert pos.quantity == pytest.approx(0.5)
+
+
+async def test_portfolio_tracker_accounts_partial_fills(world):
+    om, exchange = world
+    from vnedge.runtime.portfolio_tracker import PortfolioTracker
+
+    tracker = PortfolioTracker(exchange, starting_equity_usd=1_000.0)
+    order = await om.submit(
+        intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
+    exchange.partial_fill(order.client_order_id, 0.2)
+    tracker.on_bar(datetime.now(UTC))
+    state = tracker.account_state()
+    assert state.open_positions == 1
+    mid = (99.99 + 100.01) / 2.0
+    assert state.exposure_by_symbol_usd[SYM] == pytest.approx(0.2 * mid)
+
+
+async def test_partial_then_cancel_replace_uses_remaining_qty(world):
+    om, exchange = world
+    order = await om.submit(
+        intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
+    exchange.partial_fill(order.client_order_id, 0.2)
+    old, new = await om.cancel_replace(
+        order.client_order_id, account=account(), market=market(),
+        new_limit_price=96.0)
+    assert old.state is S.CANCELLED
+    assert old.filled_quantity == pytest.approx(0.2)  # refreshed at cancel time
+    assert new is not None and new.state is S.ACKNOWLEDGED
+    assert new.intent.quantity == pytest.approx(0.3)  # remaining ONLY
+    assert exchange.get_order_status(
+        new.client_order_id).requested_qty == pytest.approx(0.3)
+    [pos] = exchange.get_positions()
+    assert pos.quantity == pytest.approx(0.2)  # partial fill kept, not doubled
+
+
+async def test_replacement_quantity_never_exceeds_remaining(world):
+    om, exchange = world
+    order = await om.submit(
+        intent(order_type="limit", limit_price=95.0), account(), market(), "k1")
+    exchange.partial_fill(order.client_order_id, 0.2)
+    with pytest.raises(ValueError, match="exceeds unfilled remainder"):
+        await om.cancel_replace(
+            order.client_order_id, account=account(), market=market(),
+            new_quantity=0.4)  # > 0.3 remaining
+    assert exchange.get_open_orders() == []  # fail closed: nothing resubmitted
+    outcome = [r for r in om._journal.read_all()
+               if r["kind"] == "cancel_replace_outcome"][-1]
+    assert outcome["payload"]["outcome"] == "rejected_quantity_exceeds_remaining"
 
 
 # --- Live reconciler ------------------------------------------------------------
