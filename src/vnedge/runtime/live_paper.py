@@ -44,6 +44,7 @@ from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.shadow_outcomes import ShadowOutcomeTracker, VirtualOutcome
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,18 @@ class LivePaperSession:
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
         self.tick_stop_exits = 0
+        # SHADOW lanes never fill, so per-lane edge is invisible without
+        # virtual resolution: approved intents are resolved forward on
+        # closed bars with backtester semantics (journal = durable store).
+        self.shadow_outcomes: ShadowOutcomeTracker | None = (
+            ShadowOutcomeTracker(
+                journal,
+                fill_model=exchange.fill_model,
+                max_holding_bars=config.max_holding_bars,
+            )
+            if config.mode is RunnerMode.SHADOW
+            else None
+        )
         self.last_eval: dict | None = None
         # chronological trade narrative for the dashboard journal panel:
         # fired signals, gateway verdicts, submissions, fills, exits
@@ -168,9 +181,10 @@ class LivePaperSession:
             leverage=max(sizing.required_leverage, 1.0),
             reduce_only=False, strategy_id=self.strategy.strategy_id,
         )
+        decision_bar_ts = self.candles["timestamp"].iloc[-1]
         key = make_intent_key(
             self.strategy.strategy_id, self.config.symbol, sig.side,
-            self.candles["timestamp"].iloc[-1],
+            decision_bar_ts,
         )
         if self.config.mode is RunnerMode.SHADOW:
             decision = self.gateway.evaluate(
@@ -184,9 +198,24 @@ class LivePaperSession:
                 "explanation": decision.explanation,
                 "intent": asdict(intent),
                 "signal_reason": sig.reason,
+                # stop/target/decision bar make the intent resolvable into a
+                # virtual outcome later (and on restart, from the journal)
+                "stop_price": sig.stop_price,
+                "take_profit_price": sig.take_profit_price,
+                "bar_ts": decision_bar_ts.isoformat(),
             })
             if decision.approved:
                 self.shadow_approved += 1
+                if self.shadow_outcomes is not None:
+                    self.shadow_outcomes.track(
+                        intent_key=key, side=sig.side,
+                        quantity=intent.quantity,
+                        notional_usd=intent.notional_usd,
+                        stop_price=sig.stop_price,
+                        take_profit_price=sig.take_profit_price,
+                        decision_bar_ts=decision_bar_ts,
+                        signal_reason=sig.reason,
+                    )
                 self._log_trade_event(
                     "shadow_approved",
                     f"{sig.side} {intent.quantity:g} @ ~{ref_price:g} — {sig.reason}"[:140],
@@ -503,6 +532,17 @@ class LivePaperSession:
                 " (backfill)" if backfill else "", sig.side, sig.reason,
             )
 
+    def _log_shadow_outcomes(
+        self, outcomes: list[VirtualOutcome], now: datetime
+    ) -> None:
+        for outcome in outcomes:
+            self._log_trade_event(
+                "shadow_outcome",
+                f"virtual {outcome.resolution} {outcome.side} "
+                f"{outcome.virtual_net_usd:+.2f} USD after {outcome.bars_held} bars"[:140],
+                now,
+            )
+
     def _ledger_new_fills(self, now: datetime) -> None:
         """Append any fills not yet chained. The ledger is resume-aware, so a
         restart continues the chain rather than re-recording old fills."""
@@ -567,6 +607,8 @@ class LivePaperSession:
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 "last_eval": self.last_eval,
+                "shadow_perf": self.shadow_outcomes.stats()
+                if self.shadow_outcomes is not None else None,
                 "trade_log": list(self.trade_log),
                 "fill_ledger": {
                     "records": self.fill_ledger.records,
@@ -646,6 +688,14 @@ class LivePaperSession:
         bars = 0
         prepared_warmup = self.strategy.warmup_bars
 
+        if self.shadow_outcomes is not None and self.shadow_outcomes.has_pending:
+            # restart: intents journaled before the shutdown resolve against
+            # the seeded history first, so an already-hit stop or target is
+            # never mis-resolved later at live prices
+            self._log_shadow_outcomes(
+                self.shadow_outcomes.replay(self.candles), started
+            )
+
         await self._shadow_prime()
 
         while True:
@@ -685,6 +735,12 @@ class LivePaperSession:
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)
+
+            if self.shadow_outcomes is not None:
+                # resolve earlier shadow intents against this closed bar; the
+                # intent journaled above (bar_ts == this bar) is untouched —
+                # its virtual fill is the NEXT bar, like the backtester
+                self._log_shadow_outcomes(self.shadow_outcomes.resolve_bar(bar), now)
 
             self._bars_since_reconcile += 1
             if self._bars_since_reconcile >= self.config.reconcile_every_bars \
