@@ -6,6 +6,7 @@ from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.event_leadlag_alpha import (
     LeadLagFilter,
     LeadLagMinerConfig,
+    parse_args,
     run_event_leadlag_alpha,
 )
 from vnedge.research.universe import ResearchTarget
@@ -116,3 +117,13 @@ def test_event_leadlag_reports_missing_data_lanes(tmp_path):
     assert payload["summary"]["missing_lanes"] == 1
     assert "missing" in payload["data_lanes"]
     assert payload["can_trade"] is False
+
+
+def test_event_leadlag_cli_keeps_one_shot_default_but_supports_loop_mode():
+    default = parse_args([])
+    loop = parse_args(["--interval-seconds", "3600", "--once"])
+
+    assert default.interval_seconds == 0
+    assert default.once is False
+    assert loop.interval_seconds == 3600
+    assert loop.once is True

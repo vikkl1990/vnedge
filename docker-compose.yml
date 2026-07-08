@@ -115,6 +115,27 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Scheduled cross-venue event lead-lag miner. It refreshes
+  # event_leadlag_latest.json so the council/workbench do not keep debating
+  # stale candidate definitions. Research-only: no credentials, no orders.
+  event-leadlag-miner:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.event_leadlag_alpha",
+              "--interval-seconds", "${EVENT_LEADLAG_INTERVAL_SECONDS:-3600}",
+              "--lookback-days", "${EVENT_LEADLAG_LOOKBACK_DAYS:-60}",
+              "--min-samples", "${EVENT_LEADLAG_MIN_SAMPLES:-20}",
+              "--max-results", "${EVENT_LEADLAG_MAX_RESULTS:-100}"]
+    environment:
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Minute-level shadow journal for the SOL/XRP Delta-follower lead-lag
   # candidates surfaced by event_leadlag_alpha. This is observability only:
   # it writes event_leadlag_eval + shadow_intent records, logs why no trade,
@@ -129,7 +150,10 @@ services:
               "--refresh-overlap-minutes", "${EVENT_LEADLAG_SHADOW_REFRESH_OVERLAP_MINUTES:-30}",
               "--refresh-bootstrap-minutes", "${EVENT_LEADLAG_SHADOW_REFRESH_BOOTSTRAP_MINUTES:-360}"]
     volumes:
-      - ./data:/app/data:ro
+      # Writable because this runner refreshes public 1m candle context and the
+      # data-quality gate writes reports under data/reports/. Still no
+      # credentials and no execution path.
+      - ./data:/app/data
       - ./logs:/app/logs
       - ./research/live_research:/app/research/live_research
     logging:
