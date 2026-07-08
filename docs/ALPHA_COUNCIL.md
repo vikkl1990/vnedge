@@ -29,6 +29,11 @@ The output is written to:
 - `research/live_research/alpha_council_latest.json`
 - `research/live_research/alpha_council_feed.jsonl`
 
+The Alpha Workbench consumes this output and checkpoints each next-action into
+durable replay, judgment, or recording tasks under
+`research/live_research/alpha_workbench/`. The council debates; the workbench
+remembers the work.
+
 ## What It Never Does
 
 - No orders
