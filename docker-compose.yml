@@ -129,6 +129,21 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Research-only agent debate layer. Reads the published research artifacts,
+  # ranks candidates, and emits the next proof step. It has no data/execution
+  # mounts and cannot place or promote trades.
+  alpha-council:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.alpha_council",
+              "--interval-seconds", "${ALPHA_COUNCIL_INTERVAL_SECONDS:-900}",
+              "--max-candidates", "${ALPHA_COUNCIL_MAX_CANDIDATES:-30}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.
