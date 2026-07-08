@@ -1132,7 +1132,7 @@
       </div>
       <div class="table-wrap">
         <table id="ea_proposals"><thead><tr>
-          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Why</th>
+          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Live shadow</th><th>Why</th>
         </tr></thead><tbody></tbody></table>
       </div>
       <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
@@ -2779,6 +2779,12 @@
       appendCell(tr,String(item.candidate_id||item.strategy||"--").replace(/_v1$/,""),"clip");
       appendCell(tr,String(item.route_decision||"--").replace("_"," "),
         item.route_decision==="TAKER_ALLOWED"?"pos":item.route_decision==="MAKER_ONLY"?"text-info":"warn");
+      const ls=item.live_shadow;
+      appendCell(tr,
+        ls&&finite(ls.net_usd)?usd(ls.net_usd)+" ("+num(ls.virtual_trades)+")":"—",
+        item.live_shadow_annotation==="LIVE_SHADOW_POSITIVE"?"pos":
+          item.live_shadow_annotation==="LIVE_SHADOW_NEGATIVE"?"warn":"neutral",
+        ls?"live shadow virtual net over "+num(ls.span_days)+"d; annotation only, never promotes":"no live shadow lane");
       appendCell(tr,
         "score "+num(item.score).toFixed(1)+"; PF "+num(item.profit_factor).toFixed(2)+
         "; "+num(item.oos_trades)+" trades; "+usd(item.oos_net_usd),
@@ -2793,6 +2799,7 @@
       appendCell(tr,String(proposal.parent_strategy||proposal.strategy_id||"--").replace(/_v1$/,""),"clip");
       appendCell(tr,proposal.proposal_type==="pre_registered_judgment"?"human gate":proposal.proposal_type==="cross_exchange_validation"?"shadow check":"explore only",
         proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"neutral");
+      appendCell(tr,"—","neutral");
       appendCell(tr,String(proposal.rationale||"--").slice(0,110),"clip",proposal.rationale||"");
     }
     const hasActions=proposals.length||queue.length;

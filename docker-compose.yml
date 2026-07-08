@@ -63,6 +63,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./research/live_research:/app/research/live_research
+      # read-only view of the shadow-lane journals so the edge leaderboard can
+      # fold each lane's live virtual track record in (shadow_perf_reader);
+      # ro because research must never write runtime journals
+      - ./logs:/app/logs:ro
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
