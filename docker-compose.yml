@@ -120,7 +120,10 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "vnedge.runtime.event_leadlag_shadow_runner",
               "--interval-seconds", "${EVENT_LEADLAG_SHADOW_INTERVAL_SECONDS:-60}",
-              "--max-data-age-minutes", "${EVENT_LEADLAG_SHADOW_MAX_DATA_AGE_MINUTES:-180}"]
+              "--max-data-age-minutes", "${EVENT_LEADLAG_SHADOW_MAX_DATA_AGE_MINUTES:-180}",
+              "--scan-lookback-minutes", "${EVENT_LEADLAG_SHADOW_SCAN_LOOKBACK_MINUTES:-5}",
+              "--refresh-overlap-minutes", "${EVENT_LEADLAG_SHADOW_REFRESH_OVERLAP_MINUTES:-30}",
+              "--refresh-bootstrap-minutes", "${EVENT_LEADLAG_SHADOW_REFRESH_BOOTSTRAP_MINUTES:-360}"]
     volumes:
       - ./data:/app/data:ro
       - ./logs:/app/logs
