@@ -28,6 +28,11 @@ from vnedge.risk.kill_switch import KillSwitch
 
 logger = logging.getLogger(__name__)
 
+#: Time-in-force values the live execution adapter understands.
+#: "PO" = post-only (maker-or-cancel); the adapter maps it to ccxt's
+#: unified ``postOnly`` param rather than ``timeInForce``.
+ALLOWED_TIME_IN_FORCE = ("GTC", "IOC", "FOK", "PO")
+
 
 @dataclass(frozen=True)
 class OrderIntent:
@@ -40,6 +45,18 @@ class OrderIntent:
     strategy_id: str = "unknown"
     order_type: str = "market"  # "market" | "limit"
     limit_price: float | None = None
+    # Time-in-force for the live execution adapter: "GTC" | "IOC" | "FOK" |
+    # "PO" (post-only). None = venue default. NOTE: nothing sets this yet —
+    # it is live-phase preparation only; the paper/simulated venue maps
+    # intents field-by-field and ignores it harmlessly.
+    time_in_force: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.time_in_force is not None and self.time_in_force not in ALLOWED_TIME_IN_FORCE:
+            raise ValueError(
+                f"invalid time_in_force {self.time_in_force!r} "
+                f"(allowed: {', '.join(ALLOWED_TIME_IN_FORCE)}, or None for venue default)"
+            )
 
 
 @dataclass(frozen=True)

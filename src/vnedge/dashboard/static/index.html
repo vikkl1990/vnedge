@@ -142,6 +142,62 @@
   }
   #clock{color:var(--muted);font-size:11px;white-space:nowrap;text-align:right}
 
+  .whats-new{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:10px;
+    padding:6px 10px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    background:rgba(10,16,25,.94);
+    min-width:0;
+  }
+  .wn-label{
+    flex:0 0 auto;
+    color:var(--quiet);
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+    white-space:nowrap;
+  }
+  .wn-items{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    min-width:0;
+    overflow-x:auto;
+    padding-bottom:1px;
+  }
+  .wn-empty{color:var(--quiet);font-size:10.5px;white-space:nowrap}
+  .wn-item{
+    flex:0 0 auto;
+    display:inline-flex;
+    align-items:baseline;
+    gap:6px;
+    max-width:360px;
+    padding:3px 8px;
+    border:1px solid var(--line2);
+    border-radius:4px;
+    background:rgba(8,13,21,.7);
+    font-size:10.5px;
+    white-space:nowrap;
+  }
+  .wn-ts{color:var(--quiet);font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:9.5px}
+  .wn-lane{color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis}
+  .wn-event{font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:9.5px}
+  .wn-detail{color:var(--muted);max-width:170px;overflow:hidden;text-overflow:ellipsis}
+  .wn-item.pos .wn-event{color:var(--green)}
+  .wn-item.neg .wn-event{color:var(--red)}
+  .wn-item.info .wn-event{color:var(--blue)}
+  .wn-item.plan .wn-event{color:var(--violet)}
+  .wn-item.wn-new{animation:wnFlash 2.4s ease-out 1}
+  @keyframes wnFlash{
+    0%{background:rgba(77,178,255,.35);border-color:rgba(77,178,255,.9)}
+    60%{background:rgba(77,178,255,.12)}
+    100%{background:rgba(8,13,21,.7);border-color:var(--line2)}
+  }
+
   #locked{
     display:none;
     width:min(560px,100%);
@@ -905,6 +961,10 @@
   </div>
 
   <main id="content">
+    <div class="whats-new" id="whatsNew" aria-label="what changed — recent notable events">
+      <span class="wn-label">What changed</span>
+      <div class="wn-items" id="wnItems"><span class="wn-empty">watching for lane and research events&hellip;</span></div>
+    </div>
     <div class="workstation-shell">
       <aside class="nav-rail" aria-label="workspace navigation">
         <div class="nav-title">Workspaces</div>
@@ -1690,6 +1750,97 @@
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
 
+  // --- "What changed" strip -------------------------------------------------
+  // Client-side only: notable events distilled from snapshot lanes[].trade_log
+  // and /research results (PASS verdicts). Deduped by (lane, ts, event);
+  // events first seen after the initial render flash once, then settle.
+  const WN_MAX=8;
+  const WN_FLASH_MS=2600;
+  const WN_NOTABLE={signal_fired:"info",fill:"pos",shadow_approved:"pos",
+                    shadow_rejected:"neg",exit:"info",research_pass:"plan"};
+  const wnSeen=new Set();
+  const wnVerdicts={};
+  const wnEvents=[];
+  let wnLanesSeeded=false;
+  let wnResearchSeeded=false;
+
+  function wnAdd(lane,ts,event,detail,fresh){
+    const key=String(lane)+"|"+String(ts)+"|"+String(event);
+    if(wnSeen.has(key))return;
+    wnSeen.add(key);
+    wnEvents.push({key,lane:String(lane||"?"),ts:String(ts||""),event:String(event),
+                   detail:String(detail||""),tone:WN_NOTABLE[event]||"info",
+                   fresh:!!fresh,addedAt:Date.now()});
+    if(wnEvents.length>200)wnEvents.splice(0,wnEvents.length-100);
+  }
+
+  function wnCollectLanes(lanes){
+    (Array.isArray(lanes)?lanes:[]).forEach(l=>{
+      (l.trade_log||[]).forEach(e=>{
+        if(e&&Object.prototype.hasOwnProperty.call(WN_NOTABLE,e.event))
+          wnAdd(l.lane_id||"?",e.ts,e.event,e.detail,wnLanesSeeded);
+      });
+    });
+    wnLanesSeeded=true;
+  }
+
+  function wnCollectResearch(d){
+    const rows=Array.isArray(d&&d.results)?d.results:[];
+    rows.forEach(r=>{
+      const lane=String(r.exchange||r.venue||"?").replace("usdm","")+" "
+        +String(r.strategy||"?").replace(/_v1$/,"")+" "
+        +String(r.symbol||"?").split(":")[0];
+      const prev=wnVerdicts[lane];
+      wnVerdicts[lane]=r.verdict;
+      if(r.verdict==="PASS"&&prev!=="PASS")
+        wnAdd(lane,d.generated_at||"","research_pass",
+              "verdict PASS — OOS "+usd(r.oos_net_usd)+" ("+num(r.oos_trades)+" trades)",
+              wnResearchSeeded);
+    });
+    wnResearchSeeded=true;
+  }
+
+  function wnRender(){
+    const box=$("wnItems");
+    if(!box)return;
+    const view=wnEvents.slice()
+      .sort((a,b)=>b.ts.localeCompare(a.ts))
+      .slice(0,WN_MAX);
+    box.replaceChildren();
+    if(!view.length){
+      const e=document.createElement("span");
+      e.className="wn-empty";
+      e.textContent="watching for lane and research events…";
+      box.appendChild(e);
+      return;
+    }
+    view.forEach(ev=>{
+      const flash=ev.fresh&&(Date.now()-ev.addedAt)<WN_FLASH_MS;
+      const item=document.createElement("span");
+      item.className="wn-item "+ev.tone+(flash?" wn-new":"");
+      item.title=utcClock(ev.ts)+" "+ev.lane+" "+ev.event+(ev.detail?" — "+ev.detail:"");
+      const ts=document.createElement("span");
+      ts.className="wn-ts";
+      ts.textContent=String(ev.ts).slice(11,19)||"--:--:--";
+      const lane=document.createElement("span");
+      lane.className="wn-lane";
+      lane.textContent=ev.lane;
+      const name=document.createElement("span");
+      name.className="wn-event";
+      name.textContent=ev.event.replaceAll("_"," ");
+      item.appendChild(ts);
+      item.appendChild(lane);
+      item.appendChild(name);
+      if(ev.detail){
+        const detail=document.createElement("span");
+        detail.className="wn-detail";
+        detail.textContent=ev.detail;
+        item.appendChild(detail);
+      }
+      box.appendChild(item);
+    });
+  }
+
   function renderFunnelJournal(lanes){
     const fb=$("funnelBody");
     if(fb){
@@ -1896,6 +2047,8 @@
     lastSnapshot=s;
     renderLanes(s.lanes,s);
     renderFunnelJournal(s.lanes||[]);
+    wnCollectLanes(s.lanes||[]);
+    wnRender();
     renderConnections(s.lanes||[],s);
     const feed=s.feed_health||{};
     const price=s.price||null;
@@ -2634,6 +2787,8 @@
   function renderResearch(data){
     const d=data||{results:[]};
     lastResearch=d;
+    wnCollectResearch(d);
+    wnRender();
     const rows=Array.isArray(d.results)?d.results:[];
     const body=$("research").querySelector("tbody");
     body.replaceChildren();

@@ -28,10 +28,12 @@ class FakeCcxt:
         self.script = list(script)
         self.fetch_result = fetch_result
         self.create_calls = []
+        self.create_params = []
         self.fetch_calls = 0
 
     async def create_order(self, symbol, type_, side, amount, price, params):
         self.create_calls.append(params["newClientOrderId"])
+        self.create_params.append(dict(params))
         behavior = self.script.pop(0)
         if isinstance(behavior, Exception):
             raise behavior
@@ -100,3 +102,40 @@ async def test_exhausted_ambiguity_is_timeout_unknown():
     fake = FakeCcxt([NetworkError("t1"), NetworkError("t2")])
     with pytest.raises(AdapterTimeout, match="ambiguous"):
         await adapter(fake).submit_order(order())
+
+
+# --- time-in-force pass-through (live-phase prep; nothing sets it yet) ------
+
+def tif_order(tif: str | None) -> ManagedOrder:
+    return ManagedOrder(
+        intent_key="k", client_order_id="vne_test123",
+        intent=OrderIntent("BTC/USDT:USDT", "long", 0.01, 1000.0, 2.0,
+                           time_in_force=tif),
+    )
+
+
+async def test_time_in_force_passes_through_unified_params():
+    fake = FakeCcxt(["ex_1"])
+    assert await adapter(fake).submit_order(tif_order("IOC")) == "ex_1"
+    assert fake.create_params[0]["timeInForce"] == "IOC"
+    assert "postOnly" not in fake.create_params[0]
+
+
+async def test_post_only_maps_to_unified_postonly_flag():
+    fake = FakeCcxt(["ex_1"])
+    assert await adapter(fake).submit_order(tif_order("PO")) == "ex_1"
+    assert fake.create_params[0]["postOnly"] is True
+    assert "timeInForce" not in fake.create_params[0]
+
+
+async def test_default_tif_none_means_absent_from_params():
+    fake = FakeCcxt(["ex_1"])
+    assert await adapter(fake).submit_order(order()) == "ex_1"
+    assert "timeInForce" not in fake.create_params[0]
+    assert "postOnly" not in fake.create_params[0]
+
+
+def test_invalid_time_in_force_rejected_at_intent_construction():
+    with pytest.raises(ValueError, match="time_in_force"):
+        OrderIntent("BTC/USDT:USDT", "long", 0.01, 1000.0, 2.0,
+                    time_in_force="DAY")

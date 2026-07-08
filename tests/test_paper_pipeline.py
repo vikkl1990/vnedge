@@ -75,6 +75,17 @@ async def test_order_reaches_venue_and_fills(world):
     assert exchange.get_fills()[0].fee_usd > 0  # fees always charged
 
 
+async def test_time_in_force_is_ignored_harmlessly_by_paper_venue(world):
+    """time_in_force is live-adapter prep: the paper broker maps intent
+    fields explicitly and must fill exactly as if it were unset."""
+    om, exchange, _, _ = world
+    order = await om.submit(
+        intent(time_in_force="PO"), account(), market(), key(0)
+    )
+    assert order.state is S.ACKNOWLEDGED
+    assert exchange.get_order_status(order.client_order_id).state == "filled"
+
+
 async def test_timeout_reached_recovers_to_filled(tmp_path, world):
     om, exchange, _, _ = world
     om._adapter = PaperBroker(exchange, script=["timeout_reached"])
