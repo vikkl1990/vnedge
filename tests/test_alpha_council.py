@@ -109,12 +109,82 @@ def test_alpha_council_under_sampled_l2_candidate_records_more_ticks(tmp_path):
     candidates = collect_candidates(tmp_path)
     payload = run_alpha_council(tmp_path)
 
-    assert len(candidates) == 1
-    debate = payload["debates"][0]
+    assert any(candidate.source == "fast_l2_scout" for candidate in candidates)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "fast_l2_scout"
+    )
     assert debate["candidate"]["source"] == "fast_l2_scout"
     assert debate["next_action"] == "RECORD_MORE_TICKS"
     assert "needs_more_samples" in debate["vetoes"]
     assert debate["can_trade"] is False
+
+
+def test_alpha_council_routes_positive_rejects_to_specific_repair(tmp_path):
+    write_json(
+        tmp_path / "latest.json",
+        {
+            "generated_at": "2026-07-08T00:00:00Z",
+            "results": [
+                {
+                    "exchange": "bybit",
+                    "symbol": "XRP/USDT:USDT",
+                    "timeframe": "1h",
+                    "strategy": "trend_continuation_v1",
+                    "verdict": "REJECT",
+                    "oos_net_usd": 104.42,
+                    "oos_trades": 48,
+                    "profit_factor": 1.75,
+                    "payoff_ratio": 2.07,
+                    "profitable_windows_pct": 57.1,
+                    "reasons": [
+                        "one zero-trade test window",
+                        "IS/OOS collapse retention below gate",
+                    ],
+                },
+                {
+                    "exchange": "binanceusdm",
+                    "symbol": "ETH/USDT:USDT",
+                    "timeframe": "1h",
+                    "strategy": "quant_signal_pack_v1",
+                    "verdict": "REJECT",
+                    "oos_net_usd": 82.24,
+                    "oos_trades": 61,
+                    "profit_factor": 1.23,
+                    "payoff_ratio": 1.08,
+                    "reasons": ["aggregate OOS PF below gate", "payoff ratio below gate"],
+                },
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    actions = {
+        row["candidate"]["symbol"]: row["next_action"]
+        for row in payload["debates"]
+        if row["candidate"]["source"] == "rolling_walk_forward"
+    }
+
+    assert actions["XRP/USDT:USDT"] == "CHECK_ZERO_WINDOW_STABILITY"
+    assert actions["ETH/USDT:USDT"] == "REPAIR_EXIT_PAYOFF"
+    assert payload["summary"]["sources"]["rolling_walk_forward"] == 2
+
+
+def test_alpha_council_flags_missing_research_artifacts(tmp_path):
+    write_json(tmp_path / "latest.json", {"generated_at": "now", "results": []})
+
+    payload = run_alpha_council(tmp_path)
+
+    refreshes = [
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "artifact_health"
+    ]
+    assert refreshes
+    assert all(row["next_action"] == "REFRESH_STALE_ARTIFACT" for row in refreshes)
+    assert any(
+        row["candidate"]["symbol"] == "daily_scalper_latest.json"
+        for row in refreshes
+    )
 
 
 def test_alpha_council_publish_is_atomic_and_appends_feed(tmp_path):

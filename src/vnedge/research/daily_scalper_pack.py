@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,7 +29,8 @@ from vnedge.backtest.walk_forward import PromotionGates, param_grid, walk_forwar
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.continuous_research import wf_record
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
-from vnedge.strategy.daily_scalper_pack import DailyScalperPack
+from vnedge.research.universe import load_research_targets
+from vnedge.strategy.daily_scalper_pack import DAILY_SCALPER_FAMILIES, DailyScalperPack
 
 BASE_TIMEFRAME = "15m"
 CONTEXT_TIMEFRAMES = ("1h", "4h")
@@ -65,19 +67,25 @@ class DailyScalperCandidate:
         return f"daily_scalper_pack_v1__{self.exchange}__{safe_symbol}__{self.family}"
 
 
-DEFAULT_CANDIDATES: tuple[DailyScalperCandidate, ...] = (
-    DailyScalperCandidate("bybit", "DOGE/USDT:USDT", "structure_break"),
-    DailyScalperCandidate("delta_india", "BNB/USD:USD", "structure_break"),
-    DailyScalperCandidate("binanceusdm", "DOGE/USDT:USDT", "order_block"),
-    DailyScalperCandidate("binanceusdm", "XRP/USDT:USDT", "structure_break"),
-    DailyScalperCandidate("delta_india", "SOL/USD:USD", "squeeze_release"),
-)
+def default_candidates(*, max_candidates: int | None = None) -> tuple[DailyScalperCandidate, ...]:
+    """Build the full configured daily-scalper research universe.
+
+    This is still bounded by the repo's exchange/symbol environment variables,
+    but it no longer leaves most pairs/families invisible to the daily scalper
+    miner.
+    """
+    out: list[DailyScalperCandidate] = []
+    for target in load_research_targets(timeframe=BASE_TIMEFRAME):
+        for family in DAILY_SCALPER_FAMILIES:
+            out.append(DailyScalperCandidate(target.exchange, target.symbol, family))
+    return tuple(out[:max_candidates] if max_candidates is not None else out)
 
 
 def run_daily_scalper_research(
     data_root: Path | str,
     *,
-    candidates: Iterable[DailyScalperCandidate] = DEFAULT_CANDIDATES,
+    candidates: Iterable[DailyScalperCandidate] | None = None,
+    max_candidates: int | None = None,
     lookback_days: int = 120,
     train_days: int = 30,
     test_days: int = 7,
@@ -85,7 +93,12 @@ def run_daily_scalper_research(
 ) -> dict:
     store = ParquetStore(data_root)
     records: list[dict] = []
-    candidate_list = tuple(candidates)
+    candidate_list = (
+        tuple(candidates)
+        if candidates is not None else default_candidates(max_candidates=max_candidates)
+    )
+    if candidates is not None and max_candidates is not None:
+        candidate_list = candidate_list[:max_candidates]
     for candidate in candidate_list:
         records.append(
             run_candidate(
@@ -366,6 +379,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lookback-days", type=int, default=120)
     parser.add_argument("--train-days", type=int, default=30)
     parser.add_argument("--test-days", type=int, default=7)
+    parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument("--interval-seconds", type=int, default=0)
+    parser.add_argument("--once", action="store_true")
     parser.add_argument(
         "--no-1m-trigger",
         action="store_true",
@@ -384,9 +400,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    while True:
+        report = _run_and_publish(args)
+        if args.json:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            print(_format_summary(report))
+        if args.once or args.interval_seconds <= 0:
+            return 0
+        time.sleep(max(args.interval_seconds, 1))
+
+
+def _run_and_publish(args: argparse.Namespace) -> dict:
     report = run_daily_scalper_research(
         args.data_root,
-        candidates=tuple(args.candidate) if args.candidate else DEFAULT_CANDIDATES,
+        candidates=tuple(args.candidate) if args.candidate else None,
+        max_candidates=args.max_candidates,
         lookback_days=args.lookback_days,
         train_days=args.train_days,
         test_days=args.test_days,
@@ -397,11 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     tmp = out.with_suffix(out.suffix + ".tmp")
     tmp.write_text(json.dumps(report, indent=2, default=str))
     tmp.replace(out)
-    if args.json:
-        print(json.dumps(report, indent=2, default=str))
-    else:
-        print(_format_summary(report))
-    return 0
+    return report
 
 
 def _format_summary(report: dict) -> str:

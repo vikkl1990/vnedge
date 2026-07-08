@@ -5,6 +5,7 @@ import pandas as pd
 from vnedge.data.schemas import normalize_candles
 from vnedge.research.alpha_distillation import (
     AlphaDistillationCandidate,
+    parse_args,
     parse_candidate,
     run_alpha_distillation_research,
 )
@@ -192,6 +193,17 @@ def test_alpha_distillation_research_marks_missing_lanes_untestable(tmp_path):
     assert report["policy"]["can_trade"] is False
     assert report["policy"]["concept_count"] >= 35
     assert report["summary"]["untestable"] == 1
+
+
+def test_alpha_distillation_cli_supports_loop_mode():
+    default = parse_args([])
+    loop = parse_args(["--interval-seconds", "21600", "--once", "--max-candidates", "18"])
+
+    assert default.interval_seconds == 0
+    assert default.once is False
+    assert loop.interval_seconds == 21600
+    assert loop.once is True
+    assert loop.max_candidates == 18
 
 
 def test_parse_candidate_accepts_atom_and_side_filters():

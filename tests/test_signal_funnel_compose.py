@@ -31,3 +31,31 @@ def test_event_leadlag_shadow_can_refresh_public_candle_context():
     assert "--refresh-bootstrap-minutes" in service["command"]
     assert "./data:/app/data" in service["volumes"]
     assert "./data:/app/data:ro" not in service["volumes"]
+
+
+def test_daily_scalper_and_distillation_refresh_on_slow_interval():
+    services = compose_services()
+    daily = services["daily-scalper-pack"]
+    distill = services["alpha-distillation"]
+
+    assert daily["command"][:3] == ["python", "-m", "vnedge.research.daily_scalper_pack"]
+    assert "--interval-seconds" in daily["command"]
+    assert "--max-candidates" in daily["command"]
+    assert "./data:/app/data:ro" in daily["volumes"]
+    assert "./research/live_research:/app/research/live_research" in daily["volumes"]
+
+    assert distill["command"][:3] == ["python", "-m", "vnedge.research.alpha_distillation"]
+    assert "--interval-seconds" in distill["command"]
+    assert "--max-candidates" in distill["command"]
+    assert "./data:/app/data:ro" in distill["volumes"]
+    assert "./research/live_research:/app/research/live_research" in distill["volumes"]
+
+
+def test_alpha_council_waits_for_research_artifact_producers():
+    service = compose_services()["alpha-council"]
+
+    assert set(service["depends_on"]) >= {
+        "daily-scalper-pack",
+        "alpha-distillation",
+        "event-leadlag-miner",
+    }

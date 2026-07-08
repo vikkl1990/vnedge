@@ -4,6 +4,8 @@ import pandas as pd
 
 from vnedge.research.daily_scalper_pack import (
     DailyScalperCandidate,
+    default_candidates,
+    parse_args,
     parse_candidate,
     run_daily_scalper_research,
 )
@@ -76,6 +78,31 @@ def test_daily_scalper_research_marks_missing_lanes_untestable(tmp_path):
     assert "missing data lane" in result["reasons"][0]
     assert report["policy"]["can_trade"] is False
     assert report["summary"]["untestable"] == 1
+
+
+def test_daily_scalper_default_candidates_cover_configured_universe(monkeypatch):
+    monkeypatch.setenv("RESEARCH_EXCHANGES", "binanceusdm,delta_india")
+    monkeypatch.setenv("RESEARCH_SYMBOLS", "BTC/USDT:USDT,XRP/USDT:USDT")
+
+    candidates = default_candidates()
+
+    assert len(candidates) == 16  # 2 venues x 2 symbols x 4 families
+    assert {c.exchange for c in candidates} == {"binanceusdm", "delta_india"}
+    assert {"structure_break", "order_block", "squeeze_release", "fvg_retest"} == {
+        c.family for c in candidates
+    }
+    assert any(c.symbol == "XRP/USD:USD" for c in candidates)
+
+
+def test_daily_scalper_cli_supports_loop_mode():
+    default = parse_args([])
+    loop = parse_args(["--interval-seconds", "21600", "--once", "--max-candidates", "12"])
+
+    assert default.interval_seconds == 0
+    assert default.once is False
+    assert loop.interval_seconds == 21600
+    assert loop.once is True
+    assert loop.max_candidates == 12
 
 
 def test_parse_candidate_accepts_optional_side_filter():
