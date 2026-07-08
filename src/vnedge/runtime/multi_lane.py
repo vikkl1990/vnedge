@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 from ccxt.base.errors import NotSupported
 
 from vnedge.config.risk_config import RiskConfig
@@ -181,9 +182,59 @@ class MultiLaneProvider:
 
 _FUNDING_HISTORY_REQUIRED = {"funding_mean_reversion_v1"}
 
+# How far back the native Delta FUNDING: candle backfill reaches. 30 days of
+# hourly prints covers the 240-bar percentile window (~10d) with room to
+# spare, so a freshly built lane is warm on every bar of the candle warmup.
+_DELTA_FUNDING_BACKFILL_DAYS = 30
+
 
 def _requires_funding_history(strategy_id: str) -> bool:
     return strategy_id in _FUNDING_HISTORY_REQUIRED
+
+
+async def _delta_funding_seed(spec: LaneSpec, fallback: pd.DataFrame) -> pd.DataFrame:
+    """Backfill a funding seed from Delta's native ``FUNDING:`` candle API.
+
+    Delta has no CCXT funding history, but its candle endpoint serves settled
+    funding prints under the ``FUNDING:`` symbol prefix — seeding the
+    percentile window at build time instead of a ~10-day live warmup.
+
+    Failure posture: on ANY error (or an empty response) return ``fallback``
+    — today's behaviour: empty seed, live accumulation behind the warmup
+    mask. The backfill must never crash lane build.
+    """
+    from vnedge.data.delta_native_history import (
+        DELTA_NATIVE_EXCHANGE_IDS,
+        fetch_delta_funding_history,
+    )
+
+    if spec.exchange not in DELTA_NATIVE_EXCHANGE_IDS:
+        return fallback
+    try:
+        seed = await fetch_delta_funding_history(
+            spec.symbol, days=_DELTA_FUNDING_BACKFILL_DAYS
+        )
+    except Exception as exc:  # noqa: BLE001 — backfill is strictly best-effort
+        logger.warning(
+            "%s %s: native funding backfill failed (%s); lane keeps the "
+            "live-accumulation warmup path",
+            spec.exchange, spec.symbol, exc,
+        )
+        return fallback
+    if seed.empty:
+        logger.warning(
+            "%s %s: native funding backfill returned no data; lane keeps the "
+            "live-accumulation warmup path",
+            spec.exchange, spec.symbol,
+        )
+        return fallback
+    logger.info(
+        "%s %s: seeded %d settled funding prints (%s -> %s) from the native "
+        "FUNDING: candle API — percentile window warm from the start",
+        spec.exchange, spec.symbol, len(seed),
+        seed["timestamp"].iloc[0], seed["timestamp"].iloc[-1],
+    )
+    return seed
 
 
 def _build_strategy(
@@ -211,13 +262,13 @@ def _build_single_strategy(
 ) -> BaseStrategy:
     """Construct one strategy implementation for a live-data lane."""
     if strategy_id == "funding_mean_reversion_v1":
-        # No REST funding history (Delta) => accumulate the series live and
-        # persist it so a restart resumes the percentile window. Warming up is
-        # signal-safe (funding_pct is NaN until the window fills). Venues WITH
-        # history keep the proven REST-seeded path unchanged.
-        if funding_store_path is not None and (
-            seed_funding is None or getattr(seed_funding, "empty", True)
-        ):
+        # No CCXT funding history (Delta) => the persistent accumulator owns
+        # the series: seeded from the native FUNDING: candle backfill when
+        # available (warm immediately), building live behind the warmup mask
+        # otherwise; either way new prints keep appending to the fsync'd
+        # store. Venues WITH history keep the proven REST-seeded path
+        # unchanged (build_lane passes funding_store_path=None there).
+        if funding_store_path is not None:
             from vnedge.runtime.funding_accumulator import LivePersistentFundingMR
 
             return LivePersistentFundingMR(
@@ -311,17 +362,20 @@ async def build_lane(
     warmup_hours = 450
     until = int(time.time() * 1000)
     since = until - warmup_hours * 3_600_000
+    funding_history_unsupported = False
     async with CcxtPublicClient(spec.exchange) as rest:
         raw_c = await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
         except NotSupported:
+            funding_history_unsupported = True
             if _requires_funding_history(spec.strategy_id):
-                # No REST funding history (Delta). Don't fail the lane — build the
-                # percentile window live from the funding stream and persist it.
+                # No CCXT funding history (Delta). Don't fail the lane — try
+                # the native FUNDING: candle backfill below; failing that,
+                # build the window live from the funding stream and persist it.
                 logger.info(
-                    "%s %s: no funding history; %s will accumulate funding live "
-                    "and persist it (warming up until the window fills)",
+                    "%s %s: no CCXT funding history; %s will seed from the "
+                    "native backfill or accumulate funding live",
                     spec.exchange, spec.symbol, spec.strategy_id,
                 )
             else:
@@ -332,7 +386,17 @@ async def build_lane(
             raw_f = []
     history = normalize_candles(raw_c)
     seed_funding = normalize_funding(raw_f)
-    funding_store_path = journal_dir / f"{spec.lane_id}.funding.jsonl"
+    if funding_history_unsupported and _requires_funding_history(spec.strategy_id):
+        seed_funding = await _delta_funding_seed(spec, seed_funding)
+    # The persistent accumulator (live samples + fsync'd store + warmup mask)
+    # stays in charge whenever the venue can't REST-seed funding via CCXT —
+    # the native backfill only SEEDS it. Venues with CCXT funding history
+    # keep the proven REST-seeded LiveFundingMR path (store path None).
+    funding_store_path = (
+        journal_dir / f"{spec.lane_id}.funding.jsonl"
+        if funding_history_unsupported or seed_funding.empty
+        else None
+    )
 
     feed = create_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)

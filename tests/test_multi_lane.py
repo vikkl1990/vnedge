@@ -318,3 +318,112 @@ def test_candidate_shadow_lanes_can_be_disabled():
     from vnedge.runtime.multi_lane_shadow import candidate_shadow_lanes
 
     assert candidate_shadow_lanes({"MULTI_LANE_CANDIDATES": "0"}) == []
+
+
+# --- Delta native funding backfill wiring -----------------------------------------
+
+def _delta_spec():
+    return LaneSpec(lane_id="funding_mr_delta_india_btc_usd_usd_shadow",
+                    exchange="delta_india", symbol="BTC/USD:USD",
+                    strategy_id="funding_mean_reversion_v1")
+
+
+def _empty_funding():
+    import pandas as pd
+
+    return pd.DataFrame(
+        {
+            "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+            "funding_rate": pd.Series(dtype="float64"),
+        }
+    )
+
+
+async def test_delta_funding_seed_uses_native_backfill(monkeypatch):
+    import pandas as pd
+
+    import vnedge.data.delta_native_history as dnh
+
+    backfill = pd.DataFrame({
+        "timestamp": pd.to_datetime([1_000, 2_000], unit="s", utc=True),
+        "funding_rate": [0.0001, -0.0002],
+    })
+    seen = {}
+
+    async def fake_fetch(symbol, days=30, **kwargs):
+        seen["symbol"], seen["days"] = symbol, days
+        return backfill
+
+    monkeypatch.setattr(dnh, "fetch_delta_funding_history", fake_fetch)
+    out = await multi_lane._delta_funding_seed(_delta_spec(), _empty_funding())
+    assert out is backfill
+    assert seen == {"symbol": "BTC/USD:USD", "days": 30}
+
+
+async def test_delta_funding_seed_falls_back_on_fetch_failure(monkeypatch):
+    # failure posture: today's behaviour (empty seed -> live accumulation
+    # behind the warmup mask); the backfill must never crash lane build
+    import vnedge.data.delta_native_history as dnh
+
+    async def boom(symbol, days=30, **kwargs):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(dnh, "fetch_delta_funding_history", boom)
+    fallback = _empty_funding()
+    out = await multi_lane._delta_funding_seed(_delta_spec(), fallback)
+    assert out is fallback
+
+
+async def test_delta_funding_seed_falls_back_on_empty_backfill(monkeypatch):
+    import vnedge.data.delta_native_history as dnh
+
+    async def empty(symbol, days=30, **kwargs):
+        return _empty_funding()
+
+    monkeypatch.setattr(dnh, "fetch_delta_funding_history", empty)
+    fallback = _empty_funding()
+    out = await multi_lane._delta_funding_seed(_delta_spec(), fallback)
+    assert out is fallback
+
+
+async def test_delta_funding_seed_ignores_non_delta_exchanges(monkeypatch):
+    import vnedge.data.delta_native_history as dnh
+
+    called = []
+
+    async def fake_fetch(symbol, days=30, **kwargs):
+        called.append(symbol)
+        return _empty_funding()
+
+    monkeypatch.setattr(dnh, "fetch_delta_funding_history", fake_fetch)
+    spec = LaneSpec(lane_id="x", exchange="binanceusdm", symbol="BTC/USDT:USDT",
+                    strategy_id="funding_mean_reversion_v1")
+    fallback = _empty_funding()
+    out = await multi_lane._delta_funding_seed(spec, fallback)
+    assert out is fallback
+    assert called == []
+
+
+def test_build_strategy_backfilled_seed_keeps_persistent_accumulator(tmp_path):
+    # a NON-empty backfilled seed on a history-less venue must still get the
+    # persistent accumulator (store keeps appending live prints on top)
+    import pandas as pd
+
+    from vnedge.runtime.funding_accumulator import LivePersistentFundingMR
+    from vnedge.runtime.multi_lane import _build_strategy
+
+    seed = pd.DataFrame({
+        "timestamp": pd.to_datetime([1_000, 2_000], unit="s", utc=True),
+        "funding_rate": [0.0001, -0.0002],
+    })
+
+    class _Feed:
+        exchange_id = "delta_india"
+        funding_rate = 0.0001
+
+    strat = _build_strategy(
+        _delta_spec(), seed, feed=_Feed(),
+        funding_store_path=tmp_path / "lane.funding.jsonl",
+    )
+    assert isinstance(strat, LivePersistentFundingMR)
+    assert len(strat.funding) == 2  # seeded, not the synthetic 1970 anchor
