@@ -77,8 +77,10 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
     return [[BASE + (start + i) * MIN, 100.0, high, low, 100.0, 5.0] for i in range(n)]
 
 
-def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER):
-    config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2)
+def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
+                  tick_stops_enabled=True):
+    config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
+                          tick_stops_enabled=tick_stops_enabled)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
@@ -369,6 +371,179 @@ async def test_legacy_snapshot_without_plan_synthesizes_for_funding_mr(tmp_path)
     assert session._plan.signal.stop_price > 100.0     # stop above short entry
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert "plan_rebuilt_on_resume" in kinds
+
+
+# --- Tick-level stop monitoring ---------------------------------------------------
+# Stops get quote granularity between bar closes; take-profits stay bar-close.
+
+
+async def run_idle_ticks(session, seconds=0.15):
+    """Drive the run loop's idle (TimeoutError) branch with a shrunken tick."""
+    session._IDLE_TICK_SECONDS = 0.01
+    await session.run(deadline_seconds=seconds)
+
+
+async def test_tick_stop_breach_exits_between_bars(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    await session.run(max_bars=1)
+    assert session._plan is not None
+    assert len(exchange.get_positions()) == 1
+    stop = session._plan.signal.stop_price  # 100 * 0.95 = 95
+
+    feed.quote = (94.0, 94.02)  # bid pierces the stop between bars
+    await run_idle_ticks(session)
+
+    assert exchange.get_positions() == []      # flat — stopped out on the tick
+    assert session._plan is None               # plan cleared, entries re-enabled
+    assert session.tick_stop_exits == 1
+    fills = exchange.get_fills()
+    assert len(fills) == 2
+    exit_fill = fills[-1]
+    assert not exit_fill.buy
+    # filled at the BREACH quote (bid - slippage), not the last bar's close
+    assert exit_fill.price == pytest.approx(94.0 * (1 - 2 / 10_000))
+    records = [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+    assert len(records) == 1
+    payload = records[0]["payload"]
+    assert payload["side"] == "long"
+    assert payload["stop_price"] == pytest.approx(stop)
+    assert payload["bid"] == 94.0 and payload["ask"] == 94.02
+    assert payload["state"] == "acknowledged"
+    # the exit went through the FULL OrderManager pipeline as reduce-only
+    intents = [r for r in session.journal.read_all() if r["kind"] == "order_intent"]
+    assert intents[-1]["payload"]["intent"]["reduce_only"] is True
+    assert intents[-1]["payload"]["intent_key"].startswith(f"exit|{SYM}|tick_stop|")
+
+
+async def test_tick_quote_without_breach_does_not_exit(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    await session.run(max_bars=1)
+
+    feed.quote = (95.5, 95.52)  # drawdown, but still above the 95 stop
+    await run_idle_ticks(session, seconds=0.1)
+
+    assert len(exchange.get_positions()) == 1  # still in the trade
+    assert session._plan is not None
+    assert len(exchange.get_fills()) == 1      # entry fill only
+    assert session.tick_stop_exits == 0
+    assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+
+
+async def test_tick_stops_disabled_keeps_bar_close_behavior(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(
+        tmp_path, feed, strategy=LongOnce(), tick_stops_enabled=False
+    )
+    await session.run(max_bars=1)
+
+    feed.quote = (94.0, 94.02)  # breaches the stop, but tick stops are off
+    await run_idle_ticks(session, seconds=0.1)
+    assert len(exchange.get_positions()) == 1  # untouched between bars
+    assert session._plan is not None
+    assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+
+    # the NEXT closed bar still stops out — the pre-existing bar-close path
+    feed.closed_candles.put_nowait([BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0])
+    await session.run(max_bars=1)
+    assert exchange.get_positions() == []
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert "live_paper_exit" in kinds
+
+
+async def test_no_double_exit_when_next_bar_also_breaches(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    await session.run(max_bars=1)
+
+    feed.quote = (94.0, 94.02)
+    await run_idle_ticks(session)
+    assert exchange.get_positions() == []
+    assert session.orders_submitted == 2       # entry + tick stop
+
+    # the following bar shows the same breach inside its OHLC range
+    feed.closed_candles.put_nowait([BASE + 6 * MIN, 94.0, 94.5, 93.5, 94.0, 5.0])
+    await session.run(max_bars=1)
+
+    assert session.orders_submitted == 2       # no second exit submitted
+    assert len(exchange.get_fills()) == 2      # entry + single exit
+    assert exchange.get_positions() == []
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert kinds.count("tick_stop_exit") == 1
+    assert "live_paper_exit" not in kinds
+
+
+async def test_tick_stop_short_side_triggers_on_ask(tmp_path):
+    from vnedge.runtime.live_paper import _LivePlan
+
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed)
+    exchange.set_quote(SYM, 99.99, 100.01)
+    exchange.submit_order(PaperOrderRequest("seed-short", SYM, False, 1.0))
+    sig = SignalIntent("short", stop_price=105.0, take_profit_price=90.0)
+    session._plan = _LivePlan(sig, pd.Timestamp(BASE, unit="ms", tz="UTC"))
+
+    feed.quote = (105.3, 105.4)  # ask pierces the short's stop
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert exchange.get_positions() == []
+    assert session._plan is None
+    records = [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+    assert len(records) == 1
+    assert records[0]["payload"]["side"] == "short"
+    assert records[0]["payload"]["ask"] == 105.4
+
+
+async def test_shadow_lane_unaffected_by_tick_stops(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    await session.run(max_bars=1)
+    assert session._plan is None               # shadow never arms a plan
+
+    feed.quote = (10.0, 10.02)  # would breach any long stop if a plan existed
+    await run_idle_ticks(session, seconds=0.1)
+
+    assert exchange.get_positions() == []
+    assert session.orders_submitted == 0
+    assert session.tick_stop_exits == 0
+    assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+
+
+async def test_tick_stop_mode_guard_holds_even_with_forced_shadow_plan(tmp_path):
+    # belt and braces: even if a plan were ever armed in shadow by mistake,
+    # the explicit mode guard keeps tick stops from submitting anything
+    from vnedge.runtime.live_paper import _LivePlan
+
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    sig = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    session._plan = _LivePlan(sig, pd.Timestamp(BASE, unit="ms", tz="UTC"))
+    feed.quote = (94.0, 94.02)
+
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert session.orders_submitted == 0
+    assert session._plan is not None           # untouched
+    assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+
+
+async def test_tick_stop_persists_account_state_immediately(tmp_path):
+    from vnedge.paper.account_store import PaperAccountStore
+
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    session.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
+    await session.run(max_bars=1)
+    assert session.account_store.load()["plan"] is not None
+
+    feed.quote = (94.0, 94.02)
+    await run_idle_ticks(session)
+
+    # a crash before the next bar must not restore the closed position/plan
+    stored = session.account_store.load()
+    assert stored["plan"] is None
+    assert stored["positions"] == []
 
 
 async def test_strategy_without_synthesis_still_orphans(tmp_path):

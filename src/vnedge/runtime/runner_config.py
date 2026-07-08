@@ -26,6 +26,13 @@ class RunnerConfig(BaseModel):
     slippage_est_bps: float = Field(default=2.0, ge=0)
     max_holding_bars: int = Field(default=48, ge=1)
     reconcile_every_bars: int = Field(default=24, ge=1)
+    # Tick-granular STOP monitoring: between bar closes, the idle loop checks
+    # the live top-of-book against the open plan's stop and exits reduce-only
+    # on breach. STOPS ONLY — a stop is capital protection, so it gets the
+    # finest granularity available; take-profits stay bar-close because TP
+    # timing is strategy semantics that the backtester models at bar
+    # granularity (tick-level TPs would make paper diverge from research).
+    tick_stops_enabled: bool = True
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: SymbolLimits = Field(
         default=SymbolLimits(
