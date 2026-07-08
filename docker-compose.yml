@@ -144,6 +144,22 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Durable alpha proof-task queue. It consumes the alpha council verdicts and
+  # checkpoints replay/judgment/recording tasks into small chunks so restarts do
+  # not rediscover the same work. Research-only: no credentials, no orders.
+  alpha-workbench:
+    build: .
+    restart: unless-stopped
+    depends_on: [alpha-council]
+    command: ["python", "-m", "vnedge.research.alpha_workbench",
+              "--interval-seconds", "${ALPHA_WORKBENCH_INTERVAL_SECONDS:-900}",
+              "--max-tasks", "${ALPHA_WORKBENCH_MAX_TASKS:-50}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.
