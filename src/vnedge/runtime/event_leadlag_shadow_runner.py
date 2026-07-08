@@ -78,6 +78,13 @@ class ShadowCycleConfig:
         )
     )
     max_data_age_minutes: int = 180
+    scan_lookback_minutes: int = 5
+
+    def __post_init__(self) -> None:
+        if self.max_data_age_minutes <= 0:
+            raise ValueError("max_data_age_minutes must be positive")
+        if self.scan_lookback_minutes <= 0:
+            raise ValueError("scan_lookback_minutes must be positive")
 
 
 def default_specs() -> tuple[EventLeadLagShadowSpec, ...]:
@@ -135,7 +142,21 @@ def run_shadow_cycle(
     now = now or datetime.now(UTC)
     selected = tuple(specs or default_specs())
     store = ParquetStore(data_root)
-    evals = [evaluate_spec(store, spec, config=config, now=now) for spec in selected]
+    seen_intent_keys = (
+        load_journal_intent_keys(Path(journal_path)) if journal_path is not None else set()
+    )
+    evals = []
+    for spec in selected:
+        row = evaluate_spec(
+            store,
+            spec,
+            config=config,
+            now=now,
+            seen_intent_keys=seen_intent_keys,
+        )
+        if row.get("shadow_intent"):
+            seen_intent_keys.add(str(row["shadow_intent"]["intent_key"]))
+        evals.append(row)
     intents = [row["shadow_intent"] for row in evals if row.get("shadow_intent")]
     payload = {
         "generated_at": now.isoformat(),
@@ -169,7 +190,9 @@ def evaluate_spec(
     *,
     config: ShadowCycleConfig,
     now: datetime,
+    seen_intent_keys: set[str] | None = None,
 ) -> dict:
+    seen_intent_keys = seen_intent_keys or set()
     base = _base_payload(spec, now)
     try:
         leader = _load_prepared(
@@ -191,33 +214,95 @@ def evaluate_spec(
     if merged.empty:
         return _miss(base, "NO_COMMON_CANDLE", ["leader and follower have no aligned 1m candles"])
 
-    row = merged.iloc[-1]
-    event_ts = _as_utc(row["timestamp"])
-    age_minutes = max((now - event_ts).total_seconds() / 60.0, 0.0)
-    metrics = _metrics(row, spec)
-    blockers = _event_blockers(row, spec)
-    if age_minutes > config.max_data_age_minutes:
-        blockers.append(
-            f"stale_data: latest aligned candle age {age_minutes:.1f}m "
+    latest = merged.iloc[-1]
+    latest_ts = _as_utc(latest["timestamp"])
+    latest_age_minutes = max((now - latest_ts).total_seconds() / 60.0, 0.0)
+    latest_blockers = _event_blockers(latest, spec)
+    if latest_age_minutes > config.max_data_age_minutes:
+        latest_blockers.append(
+            f"stale_data: latest aligned candle age {latest_age_minutes:.1f}m "
             f"> max {config.max_data_age_minutes}m"
         )
 
     base.update({
-        "event_ts": event_ts.isoformat(),
-        "data_age_minutes": round(age_minutes, 3),
-        "metrics": metrics,
+        "event_ts": latest_ts.isoformat(),
+        "data_age_minutes": round(latest_age_minutes, 3),
+        "latest_aligned_ts": latest_ts.isoformat(),
+        "latest_data_age_minutes": round(latest_age_minutes, 3),
+        "metrics": _metrics(latest, spec),
+        "scan_window_minutes": config.scan_lookback_minutes,
     })
-    if blockers:
-        return _miss(base, "NO_TRADE", blockers)
+    if latest_age_minutes > config.max_data_age_minutes:
+        return _miss(base, "NO_TRADE", latest_blockers)
 
-    intent = _shadow_intent(spec, row, event_ts)
-    base.update({
-        "state": "SHADOW_INTENT",
-        "fired": True,
-        "why_no_trade": [],
-        "shadow_intent": intent,
-    })
-    return base
+    now_ts = pd.Timestamp(now)
+    if now_ts.tzinfo is None:
+        now_ts = now_ts.tz_localize("UTC")
+    cutoff = now_ts - pd.Timedelta(minutes=config.scan_lookback_minutes)
+    recent = merged[merged["timestamp"] >= cutoff].copy()
+    base["scan_rows_checked"] = int(len(recent))
+    if recent.empty:
+        return _miss(
+            base,
+            "NO_TRADE",
+            [
+                "no_aligned_candles_in_scan_window: "
+                f"latest={latest_ts.isoformat()} cutoff={cutoff.isoformat()}"
+            ],
+        )
+
+    blocked_samples: list[dict] = []
+    duplicate_keys: list[str] = []
+    for _, candidate in recent.iloc[::-1].iterrows():
+        event_ts = _as_utc(candidate["timestamp"])
+        age_minutes = max((now - event_ts).total_seconds() / 60.0, 0.0)
+        blockers = _event_blockers(candidate, spec)
+        if age_minutes > config.max_data_age_minutes:
+            blockers.append(
+                f"stale_data: event candle age {age_minutes:.1f}m "
+                f"> max {config.max_data_age_minutes}m"
+            )
+        if blockers:
+            if len(blocked_samples) < 3:
+                blocked_samples.append({
+                    "event_ts": event_ts.isoformat(),
+                    "data_age_minutes": round(age_minutes, 3),
+                    "why_no_trade": blockers,
+                    "metrics": _metrics(candidate, spec),
+                })
+            continue
+
+        intent = _shadow_intent(spec, candidate, event_ts)
+        intent_key = str(intent["intent_key"])
+        if intent_key in seen_intent_keys:
+            duplicate_keys.append(intent_key)
+            continue
+
+        base.update({
+            "event_ts": event_ts.isoformat(),
+            "data_age_minutes": round(age_minutes, 3),
+            "matched_event_offset_minutes": round(age_minutes, 3),
+            "metrics": _metrics(candidate, spec),
+            "state": "SHADOW_INTENT",
+            "fired": True,
+            "why_no_trade": [],
+            "shadow_intent": intent,
+        })
+        return base
+
+    if duplicate_keys:
+        return _miss(
+            base,
+            "DUPLICATE_SUPPRESSED",
+            [
+                "duplicate_intent_key: "
+                f"{duplicate_keys[-1]} already journaled in scan window"
+            ],
+        )
+
+    if blocked_samples:
+        base["recent_blocked_samples"] = blocked_samples
+    return _miss(base, "NO_TRADE", latest_blockers or ["no_candidate_in_scan_window"])
 
 
 def _load_prepared(
@@ -373,6 +458,29 @@ def _miss(base: dict, state: str, why: list[str]) -> dict:
     return base
 
 
+def load_journal_intent_keys(path: Path) -> set[str]:
+    keys: set[str] = set()
+    if not path.exists():
+        return keys
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = record.get("payload", {})
+            if record.get("kind") == "shadow_intent":
+                key = payload.get("intent_key")
+                if key:
+                    keys.add(str(key))
+            eval_intent = payload.get("shadow_intent")
+            if isinstance(eval_intent, dict) and eval_intent.get("intent_key"):
+                keys.add(str(eval_intent["intent_key"]))
+    return keys
+
+
 def append_cycle_journal(path: Path, evaluations: Iterable[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
@@ -428,6 +536,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--interval-seconds", type=int, default=60)
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--max-data-age-minutes", type=int, default=180)
+    parser.add_argument("--scan-lookback-minutes", type=int, default=5)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -443,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
             horizons_min=(15,),
         ),
         max_data_age_minutes=args.max_data_age_minutes,
+        scan_lookback_minutes=args.scan_lookback_minutes,
     )
     while True:
         payload = run_shadow_cycle(
