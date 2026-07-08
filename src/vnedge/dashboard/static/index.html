@@ -275,6 +275,45 @@
   }
   .tag{color:var(--quiet);font-size:10px;letter-spacing:.02em;text-transform:none;font-weight:400;white-space:nowrap}
 
+  .zone{border-left:3px solid var(--line2);border-radius:3px;padding-left:9px;margin-bottom:18px;min-width:0}
+  .zone-floor{border-left-color:var(--green)}
+  .zone-lab{border-left-color:var(--violet)}
+  .zone-infra{border-left-color:var(--blue)}
+  .zone-banner{
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-bottom:10px;
+    padding:9px 12px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    font-size:12.5px;
+    font-weight:900;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+  }
+  .zone-banner .zone-sub{color:var(--muted);font-weight:400;font-size:10px;letter-spacing:.05em;text-transform:none}
+  .zone-floor .zone-banner{color:var(--green);border-color:rgba(51,209,122,.42);background:rgba(51,209,122,.06)}
+  .zone-lab .zone-banner{color:var(--violet);border-color:rgba(169,140,255,.42);background:rgba(169,140,255,.06)}
+  .zone-infra .zone-banner{color:var(--blue);border-color:rgba(77,178,255,.42);background:rgba(77,178,255,.06)}
+  .infra-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 10px;align-items:start}
+  .lane-state-why{display:block;color:var(--muted);font-size:10px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v-badge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-width:14px;
+    padding:0 4px;
+    margin-left:6px;
+    border:1px solid rgba(169,140,255,.5);
+    border-radius:3px;
+    color:var(--violet);
+    font-size:9px;
+    line-height:1.4;
+  }
+  .virtual-pnl{color:var(--muted)}
+
   .command-strip{
     position:sticky;
     top:82px;
@@ -709,18 +748,19 @@
     overflow:hidden;
     text-overflow:ellipsis;
   }
-  .lane-board th:nth-child(1),.lane-board td:nth-child(1){width:12%}
-  .lane-board th:nth-child(2),.lane-board td:nth-child(2){width:8%}
-  .lane-board th:nth-child(3),.lane-board td:nth-child(3){width:10%}
-  .lane-board th:nth-child(4),.lane-board td:nth-child(4){width:9%}
-  .lane-board th:nth-child(5),.lane-board td:nth-child(5){width:11%}
-  .lane-board th:nth-child(6),.lane-board td:nth-child(6){width:7%}
-  .lane-board th:nth-child(7),.lane-board td:nth-child(7){width:8%}
+  .lane-board th:nth-child(1),.lane-board td:nth-child(1){width:11%}
+  .lane-board th:nth-child(2),.lane-board td:nth-child(2){width:6%}
+  .lane-board th:nth-child(3),.lane-board td:nth-child(3){width:7%}
+  .lane-board th:nth-child(4),.lane-board td:nth-child(4){width:8%}
+  .lane-board th:nth-child(5),.lane-board td:nth-child(5){width:10%}
+  .lane-board th:nth-child(6),.lane-board td:nth-child(6){width:14%}
+  .lane-board th:nth-child(7),.lane-board td:nth-child(7){width:7%}
   .lane-board th:nth-child(8),.lane-board td:nth-child(8){width:7%}
   .lane-board th:nth-child(9),.lane-board td:nth-child(9){width:6%}
-  .lane-board th:nth-child(10),.lane-board td:nth-child(10){width:7%}
+  .lane-board th:nth-child(10),.lane-board td:nth-child(10){width:5%}
   .lane-board th:nth-child(11),.lane-board td:nth-child(11){width:6%}
-  .lane-board th:nth-child(12),.lane-board td:nth-child(12){width:9%}
+  .lane-board th:nth-child(12),.lane-board td:nth-child(12){width:6%}
+  .lane-board th:nth-child(13),.lane-board td:nth-child(13){width:7%}
   .lane-rank{
     display:inline-flex;
     align-items:center;
@@ -795,6 +835,7 @@
     .terminal-split{grid-template-columns:1fr}
     .workbench{grid-template-columns:1fr}
     .side-column{order:-1}
+    .infra-grid{grid-template-columns:1fr}
     .loop-row{grid-template-columns:1fr}
     .loop-flow{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
@@ -899,6 +940,9 @@
       <div class="gate"><div class="label">Journal</div><div class="value idle" id="gateJournal">--</div><div class="detail" id="gateJournalDetail">WAL status</div></div>
     </div>
 
+    <div class="zone zone-floor" id="zoneTradingFloor" aria-label="trading floor zone">
+      <div class="zone-banner">Trading Floor <span class="zone-sub">live lanes &mdash; real + virtual money</span></div>
+
     <section class="operator-board" id="tradeMonitor" aria-label="operator cockpit">
       <div class="operator-head">
         <div>
@@ -964,6 +1008,7 @@
       <table>
         <thead><tr>
           <th>Rank / Lane</th><th>Venue</th><th>Mode</th><th>Symbol</th><th>Strategy</th>
+          <th>State / Why</th>
           <th>Equity</th><th>Net</th><th>Fees</th><th>Fills</th><th>Risk</th><th>Feed</th><th>Block / Next</th>
         </tr></thead>
         <tbody id="lanesBody"></tbody>
@@ -990,6 +1035,205 @@
       </table>
       </div>
     </section>
+
+    <div class="workbench" id="performanceWorkbench">
+      <div class="main-column">
+        <div class="kpis">
+          <div class="kpi"><div class="lbl">Equity</div><div class="val neutral" id="equity">--</div><canvas id="sp_equity"></canvas></div>
+          <div class="kpi"><div class="lbl">Daily PnL</div><div class="val neutral" id="daily">--</div><canvas id="sp_daily"></canvas></div>
+          <div class="kpi"><div class="lbl">Realized</div><div class="val neutral" id="realized">--</div><canvas id="sp_realized"></canvas></div>
+          <div class="kpi"><div class="lbl">Unrealized</div><div class="val neutral" id="unrealized">--</div><canvas id="sp_unrealized"></canvas></div>
+          <div class="kpi"><div class="lbl">Drawdown</div><div class="val neutral" id="dd">--</div><canvas id="sp_dd"></canvas></div>
+          <div class="kpi"><div class="lbl">Fees paid</div><div class="val dimval" id="fees">--</div></div>
+          <div class="kpi"><div class="lbl">Fills</div><div class="val neutral" id="fills">--</div></div>
+          <div class="kpi"><div class="lbl">Loss streak</div><div class="val neutral" id="streak">--</div></div>
+          <div class="kpi"><div class="lbl">Feed latency</div><div class="val neutral" id="feedlat">--</div><canvas id="sp_feed"></canvas></div>
+          <div class="kpi"><div class="lbl">Open orders</div><div class="val neutral" id="openOrderCount">--</div></div>
+        </div>
+
+        <section>
+          <h2>Equity Curve <span class="tag" id="eqrange">persisted history</span></h2>
+          <div class="chart-pad"><canvas id="eqchart"></canvas></div>
+        </section>
+
+        <section>
+          <h2>Positions <span class="tag" id="posmark">mark-to-market</span></h2>
+          <div class="table-wrap">
+            <table id="positions"><thead><tr>
+              <th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Entry</th><th>Mark</th><th>uPnL</th><th>Risk note</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+          <div class="empty" id="positions-empty">flat -- no open positions</div>
+        </section>
+
+        <section>
+          <h2>Execution Truth <span class="tag">state, venue, age</span></h2>
+          <div class="table-wrap">
+            <table id="orders"><thead><tr>
+              <th>Client order id</th><th>State</th><th>Side</th><th>Type</th><th>Requested</th><th>Filled</th><th>Venue</th><th>Age</th><th>Note</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+          <div class="empty" id="orders-empty">none working</div>
+        </section>
+
+      </div>
+
+      <aside class="side-column">
+
+        <section>
+          <h2>Governance <span class="tag" id="gv_trial"></span></h2>
+          <div class="kv">
+            <span class="k">Mode</span><span class="v" id="gv_mode">--</span>
+            <span class="k">Live trading</span><span class="v" id="gv_live">--</span>
+            <span class="k">Promotion</span><span class="v" id="gv_promo">--</span>
+            <span class="k">Daily stop</span><span class="v" id="gv_stop">--</span>
+            <span class="k">Peak equity</span><span class="v" id="gv_peak">--</span>
+            <span class="k">Snapshot</span><span class="v" id="gv_ts">--</span>
+          </div>
+          <div class="kv" id="trialmeters" style="display:none">
+            <span class="k">Trial days</span>
+            <span class="v"><span id="tm_days">--</span><div class="meter"><i id="tm_days_bar" style="width:0%"></i></div></span>
+            <span class="k">Round trips</span>
+            <span class="v"><span id="tm_trades">--</span><div class="meter"><i id="tm_trades_bar" style="width:0%"></i></div></span>
+          </div>
+        </section>
+
+
+        <section>
+          <h2>Last Risk Rejection <span class="tag">gateway explainability</span></h2>
+          <div class="empty" id="reject">none -- all submissions passed or none attempted</div>
+        </section>
+
+      </aside>
+    </div>
+
+    </div>
+
+    <div class="zone zone-lab" id="zoneResearchLab" aria-label="research lab zone">
+      <div class="zone-banner">Research Lab <span class="zone-sub">cannot trade, cannot promote</span></div>
+
+        <section>
+          <h2>Research Lab <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
+          <div class="table-wrap">
+            <table id="research"><thead><tr>
+              <th>Lane</th><th>Venue</th><th>Strategy</th><th>Symbol</th><th>OOS net</th><th>Fee wall</th><th>L / S</th><th>Trades</th><th>Windows</th><th>Gate</th><th>Action</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+          <div class="empty" id="research-empty">research loop has not published yet</div>
+          <div class="alerts" id="drift" style="display:none"></div>
+          <div class="empty" id="rl_note" style="display:none;font-size:10.5px"></div>
+        </section>
+
+    <section class="agent-board" id="agentBoard">
+      <h2>Edge Research Agent <span class="tag" id="ea_policy">exploratory only; cannot trade or promote</span></h2>
+      <div class="kv">
+        <span class="k">Universe</span><span class="v" id="ea_universe">--</span>
+        <span class="k">Candidate lanes</span><span class="v" id="ea_pairs">--</span>
+      </div>
+      <div class="table-wrap">
+        <table id="ea_proposals"><thead><tr>
+          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Why</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
+    </section>
+
+    <section class="agent-board" id="shadowManifestBoard">
+      <h2>Research &#8594; Shadow Lanes <span class="tag">shadow-only; cannot trade or promote; untouched-data judgment before any promotion</span></h2>
+      <div class="kv">
+        <span class="k">L2 discovery</span><span class="v" id="sd_discovery">awaiting first L2 mining pass</span>
+        <span class="k">Shadow manifest</span><span class="v" id="sd_manifest">--</span>
+      </div>
+      <div class="table-wrap">
+        <table id="sd_lanes"><thead><tr>
+          <th>Shadow lane</th><th>Venue</th><th>Symbol</th><th>Source verdict</th><th>OOS net</th><th>Status</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="sd_empty">no research winners with locked params yet -- winners without locked params are blocked, not run</div>
+    </section>
+
+    </div>
+
+    <div class="zone zone-infra" id="zoneInfrastructure" aria-label="infrastructure zone">
+      <div class="zone-banner">Infrastructure <span class="zone-sub">venues, feeds, pipes</span></div>
+
+    <section id="connectionsBoard" aria-label="venue connections">
+      <h2>Connections <span class="tag">one row per venue &mdash; transport, staleness, symbols, keys; from the /state snapshot only</span></h2>
+      <div class="table-wrap">
+        <table id="connections"><thead><tr>
+          <th>Venue</th><th>Transport</th><th>Staleness</th><th>Symbols</th><th>Keys</th>
+        </tr></thead><tbody id="connectionsBody"></tbody></table>
+      </div>
+      <div class="empty" id="connections-empty">no venue connections reported yet</div>
+    </section>
+
+    <details class="loop-board" id="architectureMap" open>
+      <summary class="panel-title">
+        <span>Execution Architecture</span>
+        <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
+      </summary>
+      <div class="loop-stack">
+        <div class="loop-row">
+          <div class="loop-label">
+            <strong>I. Fast Loop</strong>
+            <span>Market data, features, risk, order state</span>
+          </div>
+          <div class="loop-flow">
+            <div class="loop-node" id="nodeFeed"><span class="node-name">Native WS Feed</span><span class="node-status" id="nodeFeedStatus">waiting</span></div>
+            <div class="loop-node" id="nodeBook"><span class="node-name">Top-of-Book Cache</span><span class="node-status" id="nodeBookStatus">waiting</span></div>
+            <div class="loop-node violet" id="nodeModel"><span class="node-name">Strategy / Model Hook</span><span class="node-status" id="nodeModelStatus">registry gated</span></div>
+            <div class="loop-node" id="nodeRisk"><span class="node-name">Pre-Trade Risk Gateway</span><span class="node-status" id="nodeRiskStatus">waiting</span></div>
+            <div class="loop-node" id="nodeOrders"><span class="node-name">Order Manager</span><span class="node-status" id="nodeOrdersStatus">waiting</span></div>
+            <div class="loop-node amber" id="nodeExchange"><span class="node-name">Exchange Adapter</span><span class="node-status" id="nodeExchangeStatus">paper/shadow</span></div>
+          </div>
+        </div>
+
+        <div class="loop-row">
+          <div class="loop-label">
+            <strong>II. Medium Loop</strong>
+            <span>Fills, fees, telemetry, edge decay</span>
+          </div>
+          <div class="loop-flow">
+            <div class="loop-node green" id="nodeFills"><span class="node-name">Fills / Fees Normalizer</span><span class="node-status" id="nodeFillsStatus">waiting</span></div>
+            <div class="loop-node" id="nodeHistorian"><span class="node-name">Equity Historian</span><span class="node-status" id="nodeHistorianStatus">waiting</span></div>
+            <div class="loop-node violet" id="nodeDrift"><span class="node-name">Drift Monitor</span><span class="node-status" id="nodeDriftStatus">research sync</span></div>
+            <div class="loop-node" id="nodeAlerts"><span class="node-name">Alerts Engine</span><span class="node-status" id="nodeAlertsStatus">waiting</span></div>
+            <div class="loop-node amber"><span class="node-name">Private Stream</span><span class="node-status">next live phase</span></div>
+            <div class="loop-node amber" id="nodeL2"><span class="node-name">L2 Builder</span><span class="node-status" id="nodeL2Status">scalper phase</span></div>
+          </div>
+        </div>
+
+        <div class="loop-row">
+          <div class="loop-label">
+            <strong>III. Slow Lab</strong>
+            <span>Walk-forward gates, registry, promotion</span>
+          </div>
+          <div class="loop-flow">
+            <div class="loop-node" id="nodeResearch"><span class="node-name">Research Sweep</span><span class="node-status" id="nodeResearchStatus">waiting</span></div>
+            <div class="loop-node green" id="nodeTrial"><span class="node-name">Paper Trial</span><span class="node-status" id="nodeTrialStatus">not active</span></div>
+            <div class="loop-node violet"><span class="node-name">Model Registry</span><span class="node-status">required for ML</span></div>
+            <div class="loop-node amber"><span class="node-name">ONNX Runtime</span><span class="node-status">deferred</span></div>
+            <div class="loop-node amber"><span class="node-name">Multi-Exchange</span><span class="node-status">post V1</span></div>
+            <div class="loop-node amber"><span class="node-name">Service Bus</span><span class="node-status">post evidence</span></div>
+          </div>
+        </div>
+
+        <div class="loop-row">
+          <div class="loop-label">
+            <strong>IV. Audit Loop</strong>
+            <span>Explainability, immutable records, compliance</span>
+          </div>
+          <div class="loop-flow">
+            <div class="loop-node" id="nodeJournal"><span class="node-name">Decision Journal WAL</span><span class="node-status" id="nodeJournalStatus">waiting</span></div>
+            <div class="loop-node green" id="nodeExplain"><span class="node-name">Reject Reasons</span><span class="node-status" id="nodeExplainStatus">waiting</span></div>
+            <div class="loop-node" id="nodeSnapshot"><span class="node-name">Snapshot Stream</span><span class="node-status" id="nodeSnapshotStatus">waiting</span></div>
+            <div class="loop-node violet"><span class="node-name">Governance Reports</span><span class="node-status">research linked</span></div>
+            <div class="loop-node amber"><span class="node-name">Tax Metadata</span><span class="node-status">CA gated</span></div>
+            <div class="loop-node amber" id="nodeLedger"><span class="node-name">Immutable Fill Ledger</span><span class="node-status" id="nodeLedgerStatus">live phase</span></div>
+          </div>
+        </div>
+      </div>
+    </details>
 
     <section class="institutional-board" id="microstructureWorkspace" aria-label="institutional workspace">
       <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
@@ -1149,128 +1393,7 @@
       </div>
     </section>
 
-    <details class="loop-board" id="architectureMap" open>
-      <summary class="panel-title">
-        <span>Execution Architecture</span>
-        <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
-      </summary>
-      <div class="loop-stack">
-        <div class="loop-row">
-          <div class="loop-label">
-            <strong>I. Fast Loop</strong>
-            <span>Market data, features, risk, order state</span>
-          </div>
-          <div class="loop-flow">
-            <div class="loop-node" id="nodeFeed"><span class="node-name">Native WS Feed</span><span class="node-status" id="nodeFeedStatus">waiting</span></div>
-            <div class="loop-node" id="nodeBook"><span class="node-name">Top-of-Book Cache</span><span class="node-status" id="nodeBookStatus">waiting</span></div>
-            <div class="loop-node violet" id="nodeModel"><span class="node-name">Strategy / Model Hook</span><span class="node-status" id="nodeModelStatus">registry gated</span></div>
-            <div class="loop-node" id="nodeRisk"><span class="node-name">Pre-Trade Risk Gateway</span><span class="node-status" id="nodeRiskStatus">waiting</span></div>
-            <div class="loop-node" id="nodeOrders"><span class="node-name">Order Manager</span><span class="node-status" id="nodeOrdersStatus">waiting</span></div>
-            <div class="loop-node amber" id="nodeExchange"><span class="node-name">Exchange Adapter</span><span class="node-status" id="nodeExchangeStatus">paper/shadow</span></div>
-          </div>
-        </div>
-
-        <div class="loop-row">
-          <div class="loop-label">
-            <strong>II. Medium Loop</strong>
-            <span>Fills, fees, telemetry, edge decay</span>
-          </div>
-          <div class="loop-flow">
-            <div class="loop-node green" id="nodeFills"><span class="node-name">Fills / Fees Normalizer</span><span class="node-status" id="nodeFillsStatus">waiting</span></div>
-            <div class="loop-node" id="nodeHistorian"><span class="node-name">Equity Historian</span><span class="node-status" id="nodeHistorianStatus">waiting</span></div>
-            <div class="loop-node violet" id="nodeDrift"><span class="node-name">Drift Monitor</span><span class="node-status" id="nodeDriftStatus">research sync</span></div>
-            <div class="loop-node" id="nodeAlerts"><span class="node-name">Alerts Engine</span><span class="node-status" id="nodeAlertsStatus">waiting</span></div>
-            <div class="loop-node amber"><span class="node-name">Private Stream</span><span class="node-status">next live phase</span></div>
-            <div class="loop-node amber" id="nodeL2"><span class="node-name">L2 Builder</span><span class="node-status" id="nodeL2Status">scalper phase</span></div>
-          </div>
-        </div>
-
-        <div class="loop-row">
-          <div class="loop-label">
-            <strong>III. Slow Lab</strong>
-            <span>Walk-forward gates, registry, promotion</span>
-          </div>
-          <div class="loop-flow">
-            <div class="loop-node" id="nodeResearch"><span class="node-name">Research Sweep</span><span class="node-status" id="nodeResearchStatus">waiting</span></div>
-            <div class="loop-node green" id="nodeTrial"><span class="node-name">Paper Trial</span><span class="node-status" id="nodeTrialStatus">not active</span></div>
-            <div class="loop-node violet"><span class="node-name">Model Registry</span><span class="node-status">required for ML</span></div>
-            <div class="loop-node amber"><span class="node-name">ONNX Runtime</span><span class="node-status">deferred</span></div>
-            <div class="loop-node amber"><span class="node-name">Multi-Exchange</span><span class="node-status">post V1</span></div>
-            <div class="loop-node amber"><span class="node-name">Service Bus</span><span class="node-status">post evidence</span></div>
-          </div>
-        </div>
-
-        <div class="loop-row">
-          <div class="loop-label">
-            <strong>IV. Audit Loop</strong>
-            <span>Explainability, immutable records, compliance</span>
-          </div>
-          <div class="loop-flow">
-            <div class="loop-node" id="nodeJournal"><span class="node-name">Decision Journal WAL</span><span class="node-status" id="nodeJournalStatus">waiting</span></div>
-            <div class="loop-node green" id="nodeExplain"><span class="node-name">Reject Reasons</span><span class="node-status" id="nodeExplainStatus">waiting</span></div>
-            <div class="loop-node" id="nodeSnapshot"><span class="node-name">Snapshot Stream</span><span class="node-status" id="nodeSnapshotStatus">waiting</span></div>
-            <div class="loop-node violet"><span class="node-name">Governance Reports</span><span class="node-status">research linked</span></div>
-            <div class="loop-node amber"><span class="node-name">Tax Metadata</span><span class="node-status">CA gated</span></div>
-            <div class="loop-node amber" id="nodeLedger"><span class="node-name">Immutable Fill Ledger</span><span class="node-status" id="nodeLedgerStatus">live phase</span></div>
-          </div>
-        </div>
-      </div>
-    </details>
-
-    <div class="workbench" id="performanceWorkbench">
-      <div class="main-column">
-        <div class="kpis">
-          <div class="kpi"><div class="lbl">Equity</div><div class="val neutral" id="equity">--</div><canvas id="sp_equity"></canvas></div>
-          <div class="kpi"><div class="lbl">Daily PnL</div><div class="val neutral" id="daily">--</div><canvas id="sp_daily"></canvas></div>
-          <div class="kpi"><div class="lbl">Realized</div><div class="val neutral" id="realized">--</div><canvas id="sp_realized"></canvas></div>
-          <div class="kpi"><div class="lbl">Unrealized</div><div class="val neutral" id="unrealized">--</div><canvas id="sp_unrealized"></canvas></div>
-          <div class="kpi"><div class="lbl">Drawdown</div><div class="val neutral" id="dd">--</div><canvas id="sp_dd"></canvas></div>
-          <div class="kpi"><div class="lbl">Fees paid</div><div class="val dimval" id="fees">--</div></div>
-          <div class="kpi"><div class="lbl">Fills</div><div class="val neutral" id="fills">--</div></div>
-          <div class="kpi"><div class="lbl">Loss streak</div><div class="val neutral" id="streak">--</div></div>
-          <div class="kpi"><div class="lbl">Feed latency</div><div class="val neutral" id="feedlat">--</div><canvas id="sp_feed"></canvas></div>
-          <div class="kpi"><div class="lbl">Open orders</div><div class="val neutral" id="openOrderCount">--</div></div>
-        </div>
-
-        <section>
-          <h2>Equity Curve <span class="tag" id="eqrange">persisted history</span></h2>
-          <div class="chart-pad"><canvas id="eqchart"></canvas></div>
-        </section>
-
-        <section>
-          <h2>Positions <span class="tag" id="posmark">mark-to-market</span></h2>
-          <div class="table-wrap">
-            <table id="positions"><thead><tr>
-              <th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Entry</th><th>Mark</th><th>uPnL</th><th>Risk note</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="positions-empty">flat -- no open positions</div>
-        </section>
-
-        <section>
-          <h2>Execution Truth <span class="tag">state, venue, age</span></h2>
-          <div class="table-wrap">
-            <table id="orders"><thead><tr>
-              <th>Client order id</th><th>State</th><th>Side</th><th>Type</th><th>Requested</th><th>Filled</th><th>Venue</th><th>Age</th><th>Note</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="orders-empty">none working</div>
-        </section>
-
-        <section>
-          <h2>Research Lab <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
-          <div class="table-wrap">
-            <table id="research"><thead><tr>
-              <th>Lane</th><th>Venue</th><th>Strategy</th><th>Symbol</th><th>OOS net</th><th>Fee wall</th><th>L / S</th><th>Trades</th><th>Windows</th><th>Gate</th><th>Action</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="research-empty">research loop has not published yet</div>
-          <div class="alerts" id="drift" style="display:none"></div>
-          <div class="empty" id="rl_note" style="display:none;font-size:10.5px"></div>
-        </section>
-      </div>
-
-      <aside class="side-column">
+      <div class="infra-grid">
         <section>
           <h2>Market <span class="tag">feed health</span></h2>
           <div class="kv">
@@ -1284,25 +1407,6 @@
             <span class="k">Last event</span><span class="v" id="fh_last">--</span>
           </div>
         </section>
-
-        <section>
-          <h2>Governance <span class="tag" id="gv_trial"></span></h2>
-          <div class="kv">
-            <span class="k">Mode</span><span class="v" id="gv_mode">--</span>
-            <span class="k">Live trading</span><span class="v" id="gv_live">--</span>
-            <span class="k">Promotion</span><span class="v" id="gv_promo">--</span>
-            <span class="k">Daily stop</span><span class="v" id="gv_stop">--</span>
-            <span class="k">Peak equity</span><span class="v" id="gv_peak">--</span>
-            <span class="k">Snapshot</span><span class="v" id="gv_ts">--</span>
-          </div>
-          <div class="kv" id="trialmeters" style="display:none">
-            <span class="k">Trial days</span>
-            <span class="v"><span id="tm_days">--</span><div class="meter"><i id="tm_days_bar" style="width:0%"></i></div></span>
-            <span class="k">Round trips</span>
-            <span class="v"><span id="tm_trades">--</span><div class="meter"><i id="tm_trades_bar" style="width:0%"></i></div></span>
-          </div>
-        </section>
-
         <section>
           <h2>Session <span class="tag">runtime counters</span></h2>
           <div class="kv">
@@ -1316,47 +1420,13 @@
             <span class="k">Dropped candles</span><span class="v" id="ss_dropped">--</span>
           </div>
         </section>
-
-        <section>
-          <h2>Last Risk Rejection <span class="tag">gateway explainability</span></h2>
-          <div class="empty" id="reject">none -- all submissions passed or none attempted</div>
-        </section>
-
         <section>
           <h2>Alerts <span class="tag" id="alertcount"></span></h2>
           <div class="alerts" id="alerts"></div>
           <div class="empty" id="alerts-empty">no alerts fired</div>
         </section>
-      </aside>
+      </div>
     </div>
-
-    <section class="agent-board" id="agentBoard">
-      <h2>Edge Research Agent <span class="tag" id="ea_policy">exploratory only; cannot trade or promote</span></h2>
-      <div class="kv">
-        <span class="k">Universe</span><span class="v" id="ea_universe">--</span>
-        <span class="k">Candidate lanes</span><span class="v" id="ea_pairs">--</span>
-      </div>
-      <div class="table-wrap">
-        <table id="ea_proposals"><thead><tr>
-          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Why</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
-    </section>
-
-    <section class="agent-board" id="shadowManifestBoard">
-      <h2>Research &#8594; Shadow Lanes <span class="tag">shadow-only; cannot trade or promote; untouched-data judgment before any promotion</span></h2>
-      <div class="kv">
-        <span class="k">L2 discovery</span><span class="v" id="sd_discovery">awaiting first L2 mining pass</span>
-        <span class="k">Shadow manifest</span><span class="v" id="sd_manifest">--</span>
-      </div>
-      <div class="table-wrap">
-        <table id="sd_lanes"><thead><tr>
-          <th>Shadow lane</th><th>Venue</th><th>Symbol</th><th>Source verdict</th><th>OOS net</th><th>Status</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="sd_empty">no research winners with locked params yet -- winners without locked params are blocked, not run</div>
-    </section>
 
     <footer>
       <span class="legend">
@@ -1547,6 +1617,57 @@
     const t=Date.parse(ts||"");
     return Number.isFinite(t)?ageText(Math.max(0,Date.now()-t)):"--";
   }
+  function utcClock(ts){
+    const t=String(ts||"").slice(11,19);
+    return t?t+" UTC":"--";
+  }
+  function vBadge(){
+    const v=document.createElement("span");
+    v.className="v-badge";
+    v.textContent="V";
+    v.title="virtual PnL -- shadow lane, no real orders";
+    return v;
+  }
+  function isShadowLane(mode){
+    return String(mode||"").toLowerCase().includes("shadow");
+  }
+  // Lane state chip: HALTED > IN POSITION > WARMING > NEAR TRIGGER > WAITING,
+  // computed purely from lane summary fields already in the /state snapshot.
+  function laneStateChip(l){
+    const ev=l.last_eval||null;
+    const feats=(ev&&ev.features)||{};
+    const ths=(ev&&ev.thresholds)||{};
+    if(String(l.risk_status||"ok")!=="ok")
+      return {label:"HALTED",why:String(l.risk_status||"?"),tone:"bad"};
+    if(num(l.positions)>0)
+      return {label:"IN POSITION",why:num(l.positions)+" open",tone:"good"};
+    if(ev&&("funding_pct" in feats)&&feats.funding_pct==null)
+      return {label:"WARMING",why:"funding_pct null (window warming)",tone:"idle"};
+    const pairs=[];
+    if(finite(feats.funding_pct)&&finite(ths.extreme_pct)&&num(ths.extreme_pct)>0)
+      pairs.push({name:"funding",value:num(feats.funding_pct),threshold:num(ths.extreme_pct)});
+    if(finite(feats.close_z)&&finite(ths.z_entry)&&num(ths.z_entry)>0)
+      pairs.push({name:"|z|",value:Math.abs(num(feats.close_z)),threshold:num(ths.z_entry)});
+    if(!ev)
+      return {label:"WARMING",why:"no evaluation yet",tone:"idle"};
+    if(!pairs.length)
+      return {label:"WAITING",why:ev.fired?("fired: "+(ev.signal_reason||"signal")):"no threshold features",tone:"idle"};
+    pairs.forEach(p=>{p.ratio=p.value/p.threshold;});
+    pairs.sort((a,b)=>b.ratio-a.ratio); // closest to its trigger first
+    const near=pairs[0];
+    if(near.ratio>=0.9)
+      return {label:"NEAR TRIGGER",why:near.name+" "+near.value.toFixed(2)+"/"+near.threshold.toFixed(2),tone:"warn"};
+    const far=pairs[pairs.length-1]; // furthest-away feature
+    return {label:"WAITING",why:far.name+" "+far.value.toFixed(2)+"/"+far.threshold.toFixed(2),tone:"idle"};
+  }
+  function transportFrom(str){
+    const t=String(str||"").toLowerCase();
+    if(t.includes("native ws"))return "native ws";
+    if(t.includes("live ws"))return "live ws";
+    if(t.includes("rest polling"))return "rest polling";
+    const m=t.match(/\(([^)]+)\)/);
+    return m?m[1]:(t||"--");
+  }
   function shortName(value){
     return String(value||"--").replace(/_v1$/,"").replace(/_/g," ");
   }
@@ -1590,12 +1711,13 @@
         const sp=l.shadow_perf||null;
         const vtrades=sp?num(sp.virtual_trades):0;
         const vnet=sp?num(sp.net_usd):0;
-        appendCell(tr,vtrades>0?usd(vnet)+" ("+vtrades+")":"--",
+        const vCell=appendCell(tr,vtrades>0?usd(vnet)+" ("+vtrades+")":"--",
                    vtrades>0?(vnet>0?"pos":vnet<0?"neg":""):"muted",
                    sp?"virtual outcomes of approved shadow intents (backtester semantics): "
                      +num(sp.wins)+"/"+vtrades+" wins, PF "
                      +(sp.profit_factor==null?"--":sp.profit_factor)
                      +", open "+num(sp.open_intents):"");
+        if(isShadowLane(l.mode)&&vtrades>0)vCell.appendChild(vBadge());
         appendCell(tr,conv);
         fb.appendChild(tr);
       });
@@ -1700,9 +1822,20 @@
       appendCell(tr,l.mode||s.mode||"--");
       appendCell(tr,String(l.symbol||"").split(":")[0],"clip",l.symbol||"");
       appendCell(tr,String(l.strategy_id||l.strategy||"--").replace(/_v1$/,""),"clip",l.strategy_id||l.strategy||"");
+      const st=laneStateChip(l);
+      const stateCell=tr.insertCell();
+      appendBadge(stateCell,st.label,st.tone);
+      const why=document.createElement("span");
+      why.className="lane-state-why";
+      why.textContent=st.why||"--";
+      stateCell.appendChild(why);
+      stateCell.title=l.last_eval?JSON.stringify(l.last_eval,null,1):(st.why||"");
       appendCell(tr,l.equity==null?"--":"$"+(Number(l.equity)||0).toFixed(2));
       const net=num(l.realized_pnl)+num(l.unrealized_pnl);
-      appendCell(tr,money(net),cls(net));
+      const shadow=isShadowLane(l.mode);
+      const netCell=appendCell(tr,money(net),shadow?"virtual-pnl":cls(net),
+        shadow?"virtual (shadow) PnL -- no real money at risk":"");
+      if(shadow)netCell.appendChild(vBadge());
       appendCell(tr,"$"+(Number(l.fees_usd)||0).toFixed(2));
       appendCell(tr,l.fills||0);
       appendCell(tr,l.risk_status||"?",l.risk_status==="ok"?"pos":String(l.risk_status).includes("pending")||String(l.risk_status).includes("not")?"neutral":"neg");
@@ -1711,11 +1844,59 @@
     });
   }
 
+  // Connections panel: one row per unique lane exchange, built ONLY from the
+  // /state snapshot (lane feed_mode/staleness_ms when present; primary
+  // feed_health as the degraded single-venue fallback).
+  function renderConnections(lanes,snapshot){
+    const table=$("connections");
+    const body=$("connectionsBody");
+    if(!table||!body)return;
+    const s=snapshot||{};
+    const feed=s.feed_health||{};
+    const venues=new Map();
+    (Array.isArray(lanes)?lanes:[]).forEach(l=>{
+      const venue=String(l.exchange||"--");
+      const v=venues.get(venue)||{venue:venue,transports:new Set(),symbols:new Set(),staleness:null,live:false};
+      if(l.feed_mode)v.transports.add(transportFrom(l.feed_mode));
+      if(l.symbol)v.symbols.add(String(l.symbol));
+      if(finite(l.staleness_ms))
+        v.staleness=v.staleness==null?num(l.staleness_ms):Math.max(v.staleness,num(l.staleness_ms));
+      if(String(l.mode||"").toLowerCase().includes("live"))v.live=true;
+      venues.set(venue,v);
+    });
+    if(!venues.size&&feed.exchange){
+      venues.set(String(feed.exchange).split(" ")[0],{
+        venue:String(feed.exchange).split(" ")[0],
+        transports:new Set([transportFrom(feed.exchange)]),
+        symbols:new Set(s.symbol?[String(s.symbol)]:[]),
+        staleness:finite(feed.last_update_ms)?num(feed.last_update_ms):null,
+        live:!!s.live_trading_enabled
+      });
+    }
+    body.replaceChildren();
+    for(const v of venues.values()){
+      const tr=body.insertRow();
+      appendCell(tr,v.venue.replace("usdm",""));
+      appendCell(tr,v.transports.size?Array.from(v.transports).join(", "):"--");
+      const tone=v.staleness==null?"":latencyTone(v.staleness);
+      appendCell(tr,v.staleness==null?"--":Math.round(v.staleness).toLocaleString()+" ms",
+        tone==="bad"?"neg":tone==="warn"?"neutral":tone?"pos":"dimval");
+      appendCell(tr,String(v.symbols.size));
+      const armed=v.live&&s.live_trading_enabled;
+      appendCell(tr,armed?"live keys armed":"read-only",armed?"neg":"pos",
+        armed?"live trading enabled on this venue":"no trade keys in paper/shadow lanes");
+    }
+    table.style.display=venues.size?"table":"none";
+    const empty=$("connections-empty");
+    if(empty)empty.style.display=venues.size?"none":"block";
+  }
+
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
     renderLanes(s.lanes,s);
     renderFunnelJournal(s.lanes||[]);
+    renderConnections(s.lanes||[],s);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
@@ -2006,7 +2187,7 @@
       appendBadge(d,a.severity||"info",a.severity==="critical"?"bad":a.severity==="warning"?"warn":"info");
       const ts=document.createElement("span");
       ts.className="ats";
-      ts.textContent=(a.ts||"").slice(11,19)||"--";
+      ts.textContent=utcClock(a.ts);
       d.appendChild(ts);
       const msg=document.createElement("span");
       msg.className="msg";
@@ -2190,7 +2371,7 @@
       appendBadge(row,item.label,item.tone);
       const ts=document.createElement("span");
       ts.className="ats";
-      ts.textContent=(item.ts||"").slice(11,19)||"--";
+      ts.textContent=utcClock(item.ts);
       row.appendChild(ts);
       const msg=document.createElement("span");
       msg.className="msg";
@@ -2268,7 +2449,10 @@
     appendCell(tr,name,"clip",name);
     appendCell(tr,rows);
     appendCell(tr,state,cellTone(tone));
-    appendCell(tr,modified?String(modified).slice(0,19):"--","clip",modified||"");
+    const stamp=/^\d{4}-\d{2}-\d{2}T/.test(String(modified||""))
+      ?String(modified).slice(0,19).replace("T"," ")+" UTC"
+      :modified?String(modified):"--";
+    appendCell(tr,stamp,"clip",modified||"");
   }
 
   function renderFillMatrix(fills){
@@ -2315,7 +2499,7 @@
       row.className="trail";
       const ts=document.createElement("span");
       ts.className="time";
-      ts.textContent=(event.ts||"").slice(11,19)||"--";
+      ts.textContent=utcClock(event.ts);
       const what=document.createElement("span");
       what.className="what";
       what.textContent=event.what;
@@ -2502,7 +2686,7 @@
       appendBadge(e,"drift",a.severity==="critical"?"bad":a.severity==="warning"?"warn":"info");
       const ts=document.createElement("span");
       ts.className="ats";
-      ts.textContent=(a.ts||"").slice(11,19)||"--";
+      ts.textContent=utcClock(a.ts);
       e.appendChild(ts);
       const msg=document.createElement("span");
       msg.className="msg";

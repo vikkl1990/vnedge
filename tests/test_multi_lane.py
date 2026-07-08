@@ -51,6 +51,38 @@ def test_lanes_comparison_array():
             assert f in lane
 
 
+def test_lane_summary_carries_feed_and_eval_observability():
+    p = MultiLaneProvider("binance")
+    s = snap(505.0)
+    s["feed_health"] = {
+        "candles": "ok",
+        "exchange": "binanceusdm (live ws)",
+        "last_update_ms": 1234.0,
+    }
+    s["session"] = {
+        "last_eval": {
+            "fired": False,
+            "features": {"funding_pct": 0.62, "close_z": -0.4},
+            "thresholds": {"extreme_pct": 0.85, "z_entry": 1.5},
+        },
+    }
+    p.sink("binance", "binanceusdm").publish(s)
+    lane = p.latest()["lanes"][0]
+    assert lane["feed_mode"] == "binanceusdm (live ws)"
+    assert lane["staleness_ms"] == 1234.0
+    assert lane["last_eval"]["features"]["funding_pct"] == 0.62
+    assert lane["last_eval"]["thresholds"]["z_entry"] == 1.5
+
+
+def test_lane_summary_degrades_without_feed_or_eval():
+    p = MultiLaneProvider("binance")
+    p.sink("binance", "binanceusdm").publish(snap(505.0))
+    lane = p.latest()["lanes"][0]
+    assert lane["feed_mode"] == ""
+    assert lane["staleness_ms"] is None
+    assert lane["last_eval"] is None
+
+
 def test_lane_order_is_publish_order():
     p = MultiLaneProvider("binance")
     p.sink("bybit", "bybit").publish(snap(1.0))

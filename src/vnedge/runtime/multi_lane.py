@@ -159,6 +159,10 @@ class MultiLaneProvider:
                 "fees_usd": self._lanes[lid].get("fees_usd", 0.0),
                 "risk_status": self._lanes[lid].get("risk_status", "?"),
                 "feed": self._lanes[lid].get("feed_health", {}).get("candles", "?"),
+                # transport + staleness so the dashboard connections panel can
+                # show per-venue pipe health without new endpoints
+                "feed_mode": self._lanes[lid].get("feed_health", {}).get("exchange", ""),
+                "staleness_ms": self._lanes[lid].get("feed_health", {}).get("last_update_ms"),
                 "positions": len(self._lanes[lid].get("positions", [])),
                 # signal funnel: evaluated -> fired -> approved/submitted -> filled
                 "funnel": {
@@ -174,6 +178,9 @@ class MultiLaneProvider:
                 # virtual performance of a shadow lane's approved intents
                 # (resolved with backtester semantics; observability only)
                 "shadow_perf": self._lanes[lid].get("session", {}).get("shadow_perf"),
+                # latest strategy evaluation (features + thresholds) so the
+                # lane matrix can explain WHY a lane is waiting/near trigger
+                "last_eval": self._lanes[lid].get("session", {}).get("last_eval"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
             }
             for lid in self._order if lid in self._lanes
