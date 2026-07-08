@@ -159,3 +159,65 @@ def test_mask_lifts_once_real_samples_span_the_window(tmp_path):
     )
     df = strat.prepare(_candles(300, start_ms=start))
     assert df["funding_pct"].iloc[-1] == df["funding_pct"].iloc[-1]  # not NaN
+
+
+def _seed(n, start_ms=1_700_000_000_000, step_ms=3_600_000):
+    return pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [start_ms + i * step_ms for i in range(n)], unit="ms", utc=True
+            ),
+            "funding_rate": [0.0001 + i * 1e-7 for i in range(n)],
+        }
+    )
+
+
+def test_backfilled_seed_is_warm_immediately(tmp_path):
+    # Delta native FUNDING: backfill seeds 300h of settled prints -> real
+    # coverage spans the 240-bar percentile window, so recent bars get a REAL
+    # funding_pct on the very first prepare() — no ~10-day live warmup.
+    start = 1_700_000_000_000
+    feed = _FakeFeed(funding_rate=0.001)
+    strat = LivePersistentFundingMR(
+        _seed(300, start_ms=start), feed, store_path=tmp_path / "f.jsonl",
+        funding_pct_window=240, z_window=48,
+    )
+    df = strat.prepare(_candles(300, start_ms=start))
+    assert df["funding_pct"].iloc[-1] == df["funding_pct"].iloc[-1]  # not NaN
+    # every bar whose window is fully covered by the seed is warm
+    assert df["funding_pct"].iloc[-30:].notna().all()
+
+
+def test_seed_and_store_dedupe_by_timestamp(tmp_path):
+    # a prior run's live store overlaps the fresh backfill seed -> the
+    # in-memory series is the union, one row per timestamp (store wins on dup)
+    store = tmp_path / "f.jsonl"
+    start = 1_700_000_000_000
+    for i in range(5):  # hours 0..4 accumulated live earlier
+        append_funding_sample(store, _ts(start + i * 3_600_000), 0.001)
+    seed = _seed(8, start_ms=start)  # hours 0..7 from the backfill
+    feed = _FakeFeed(funding_rate=0.002)
+    strat = LivePersistentFundingMR(
+        seed, feed, store_path=store, funding_pct_window=5, z_window=3,
+    )
+    assert len(strat.funding) == 8
+    assert strat.funding["timestamp"].is_unique
+
+
+def test_seed_rows_never_persisted_but_live_samples_are(tmp_path):
+    # the backfill must not be re-written into the live store; only NEW live
+    # observations (newer than everything seeded) land there.
+    store = tmp_path / "f.jsonl"
+    start = 1_700_000_000_000
+    feed = _FakeFeed(funding_rate=0.003)
+    strat = LivePersistentFundingMR(
+        _seed(10, start_ms=start), feed, store_path=store,
+        funding_pct_window=5, z_window=3,
+    )
+    assert load_funding_store(store).empty  # construction persists nothing
+    # newest candle is past the seed -> one live sample appended + persisted
+    strat.prepare(_candles(12, start_ms=start))
+    persisted = load_funding_store(store)
+    assert len(persisted) == 1
+    assert persisted["timestamp"].iloc[0] > _ts(start + 9 * 3_600_000)
+    assert persisted["funding_rate"].iloc[0] == 0.003
