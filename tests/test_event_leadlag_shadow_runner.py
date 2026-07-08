@@ -10,7 +10,7 @@ from vnedge.runtime import event_leadlag_shadow_runner as runner
 from vnedge.runtime.event_leadlag_shadow_runner import EventLeadLagShadowSpec, ShadowCycleConfig
 
 
-def candles(*, event_latest: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
+def candles(*, event_latest: bool, event_offset: int = 0) -> tuple[pd.DataFrame, pd.DataFrame]:
     n = 180
     timestamps = pd.date_range("2026-07-07T00:00:00Z", periods=n, freq="1min")
     leader = [100.0]
@@ -22,9 +22,10 @@ def candles(*, event_latest: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
         leader.append(leader[-1] * noise)
         follower.append(follower[-1] * (1.0 + (0.00005 if i % 2 == 0 else -0.00004)))
     if event_latest:
-        leader[-1] = leader[-2] * 1.010
-        follower[-1] = follower[-2] * 1.0001
-        leader_volume[-1] = 900.0
+        event_idx = len(leader) - 1 - event_offset
+        leader[event_idx] = leader[event_idx - 1] * 1.010
+        follower[event_idx] = follower[event_idx - 1] * 1.0001
+        leader_volume[event_idx] = 900.0
 
     def frame(prices, volumes):
         opens = [prices[0], *prices[:-1]]
@@ -64,11 +65,17 @@ def config() -> ShadowCycleConfig:
             horizons_min=(15,),
         ),
         max_data_age_minutes=5,
+        scan_lookback_minutes=5,
     )
 
 
-def patch_lanes(monkeypatch, *, event_latest: bool) -> pd.Timestamp:
-    leader, follower = candles(event_latest=event_latest)
+def patch_lanes(
+    monkeypatch,
+    *,
+    event_latest: bool,
+    event_offset: int = 0,
+) -> pd.Timestamp:
+    leader, follower = candles(event_latest=event_latest, event_offset=event_offset)
     frames = {
         ("binanceusdm", "SOL/USDT:USDT", "1m"): leader,
         ("delta_india", "SOL/USD:USD", "1m"): follower,
@@ -140,3 +147,56 @@ def test_event_leadlag_shadow_runner_logs_why_no_trade(tmp_path, monkeypatch):
     records = journal_records(journal)
     assert [row["kind"] for row in records] == ["event_leadlag_eval"]
     assert records[0]["payload"]["missed_opportunity"]["logged"] is True
+
+
+def test_event_leadlag_shadow_runner_scans_recent_event_window(tmp_path, monkeypatch):
+    latest_ts = patch_lanes(monkeypatch, event_latest=True, event_offset=2)
+    journal = tmp_path / "logs" / "event_leadlag_shadow.jsonl"
+
+    payload = runner.run_shadow_cycle(
+        tmp_path,
+        specs=(spec(),),
+        config=config(),
+        journal_path=journal,
+        now=latest_ts.to_pydatetime().astimezone(UTC),
+    )
+
+    assert payload["summary"]["shadow_intents"] == 1
+    evaluation = payload["evaluations"][0]
+    assert evaluation["state"] == "SHADOW_INTENT"
+    assert evaluation["matched_event_offset_minutes"] == 2.0
+    assert evaluation["scan_rows_checked"] >= 3
+
+
+def test_event_leadlag_shadow_runner_suppresses_duplicate_intent(tmp_path, monkeypatch):
+    latest_ts = patch_lanes(monkeypatch, event_latest=True)
+    journal = tmp_path / "logs" / "event_leadlag_shadow.jsonl"
+    now = latest_ts.to_pydatetime().astimezone(UTC)
+
+    first = runner.run_shadow_cycle(
+        tmp_path,
+        specs=(spec(),),
+        config=config(),
+        journal_path=journal,
+        now=now,
+    )
+    second = runner.run_shadow_cycle(
+        tmp_path,
+        specs=(spec(),),
+        config=config(),
+        journal_path=journal,
+        now=now,
+    )
+
+    assert first["summary"]["shadow_intents"] == 1
+    assert second["summary"]["shadow_intents"] == 0
+    assert second["summary"]["states"] == {"DUPLICATE_SUPPRESSED": 1}
+    assert any(
+        "duplicate_intent_key" in reason
+        for reason in second["evaluations"][0]["why_no_trade"]
+    )
+    assert [row["kind"] for row in journal_records(journal)] == [
+        "event_leadlag_eval",
+        "shadow_intent",
+        "event_leadlag_eval",
+    ]
