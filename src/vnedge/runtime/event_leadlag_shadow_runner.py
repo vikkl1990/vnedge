@@ -13,7 +13,9 @@ before any paper/live promotion.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import math
 import sys
 import time
@@ -24,6 +26,8 @@ from typing import Iterable
 
 import pandas as pd
 
+from vnedge.data.candle_ingestor import ingest_candles
+from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.event_leadlag_alpha import (
     LEAD_LAG_MINER_ID,
@@ -39,6 +43,7 @@ MAKER_FILL_ASSUMPTION = (
     "leader event candle closes; candle data does not prove queue position or "
     "fill, so this must pass L2 replay before paper trading."
 )
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,12 +84,19 @@ class ShadowCycleConfig:
     )
     max_data_age_minutes: int = 180
     scan_lookback_minutes: int = 5
+    refresh_candles_before_eval: bool = False
+    refresh_overlap_minutes: int = 30
+    refresh_bootstrap_minutes: int = 360
 
     def __post_init__(self) -> None:
         if self.max_data_age_minutes <= 0:
             raise ValueError("max_data_age_minutes must be positive")
         if self.scan_lookback_minutes <= 0:
             raise ValueError("scan_lookback_minutes must be positive")
+        if self.refresh_overlap_minutes <= 0:
+            raise ValueError("refresh_overlap_minutes must be positive")
+        if self.refresh_bootstrap_minutes <= 0:
+            raise ValueError("refresh_bootstrap_minutes must be positive")
 
 
 def default_specs() -> tuple[EventLeadLagShadowSpec, ...]:
@@ -130,6 +142,98 @@ def default_specs() -> tuple[EventLeadLagShadowSpec, ...]:
     )
 
 
+async def refresh_shadow_candles(
+    store: ParquetStore,
+    specs: Iterable[EventLeadLagShadowSpec],
+    *,
+    config: ShadowCycleConfig,
+    now: datetime,
+) -> dict:
+    """Refresh only the public 1m lanes required by the pinned shadow specs."""
+    targets = sorted({
+        (spec.leader_exchange, spec.leader_symbol)
+        for spec in specs
+    } | {
+        (spec.follower_exchange, spec.follower_symbol)
+        for spec in specs
+    })
+    until_ms = int(now.timestamp() * 1000)
+    reports_dir = store.root / "reports" / "data_quality"
+    results: list[dict] = []
+    by_exchange: dict[str, list[str]] = {}
+    for exchange, symbol in targets:
+        by_exchange.setdefault(exchange, []).append(symbol)
+
+    for exchange, symbols in by_exchange.items():
+        try:
+            async with CcxtPublicClient(exchange) as client:
+                for symbol in symbols:
+                    since_ms = _refresh_since_ms(store, exchange, symbol, config, until_ms)
+                    try:
+                        result = await ingest_candles(
+                            client,
+                            store,
+                            symbol=symbol,
+                            timeframe=config.miner.timeframe,
+                            since_ms=since_ms,
+                            until_ms=until_ms,
+                            reports_dir=reports_dir,
+                        )
+                        results.append({
+                            "exchange": exchange,
+                            "symbol": symbol,
+                            "timeframe": config.miner.timeframe,
+                            "persisted": result.persisted,
+                            "rows_fetched": result.rows_fetched,
+                            "rows_added": result.rows_added,
+                            "summary": result.summary,
+                        })
+                    except Exception as exc:  # pragma: no cover - network/venue dependent
+                        logger.exception("shadow candle refresh failed for %s %s", exchange, symbol)
+                        results.append({
+                            "exchange": exchange,
+                            "symbol": symbol,
+                            "timeframe": config.miner.timeframe,
+                            "persisted": False,
+                            "error": str(exc),
+                        })
+        except Exception as exc:  # pragma: no cover - network/venue dependent
+            logger.exception("shadow candle refresh failed to open %s", exchange)
+            for symbol in symbols:
+                results.append({
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "timeframe": config.miner.timeframe,
+                    "persisted": False,
+                    "error": str(exc),
+                })
+
+    return {
+        "enabled": True,
+        "timeframe": config.miner.timeframe,
+        "targets": len(targets),
+        "persisted": sum(1 for row in results if row.get("persisted")),
+        "failed": sum(1 for row in results if not row.get("persisted")),
+        "rows_added": sum(int(row.get("rows_added", 0)) for row in results),
+        "results": results,
+    }
+
+
+def _refresh_since_ms(
+    store: ParquetStore,
+    exchange: str,
+    symbol: str,
+    config: ShadowCycleConfig,
+    until_ms: int,
+) -> int:
+    try:
+        candles = store.read_candles(exchange, symbol, config.miner.timeframe)
+        latest_ms = int(candles["timestamp"].iloc[-1].value // 1_000_000)
+        return max(latest_ms - config.refresh_overlap_minutes * 60_000, 0)
+    except FileNotFoundError:
+        return max(until_ms - config.refresh_bootstrap_minutes * 60_000, 0)
+
+
 def run_shadow_cycle(
     data_root: Path | str,
     *,
@@ -142,6 +246,9 @@ def run_shadow_cycle(
     now = now or datetime.now(UTC)
     selected = tuple(specs or default_specs())
     store = ParquetStore(data_root)
+    refresh = {"enabled": False}
+    if config.refresh_candles_before_eval:
+        refresh = asyncio.run(refresh_shadow_candles(store, selected, config=config, now=now))
     seen_intent_keys = (
         load_journal_intent_keys(Path(journal_path)) if journal_path is not None else set()
     )
@@ -167,6 +274,7 @@ def run_shadow_cycle(
         "can_promote": False,
         "requires_l2_replay": True,
         "maker_fill_assumption": MAKER_FILL_ASSUMPTION,
+        "candle_refresh": refresh,
         "summary": {
             "specs": len(selected),
             "shadow_intents": len(intents),
@@ -537,12 +645,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--max-data-age-minutes", type=int, default=180)
     parser.add_argument("--scan-lookback-minutes", type=int, default=5)
+    parser.add_argument("--refresh-overlap-minutes", type=int, default=30)
+    parser.add_argument("--refresh-bootstrap-minutes", type=int, default=360)
+    parser.add_argument(
+        "--skip-candle-refresh",
+        action="store_true",
+        help="do not refresh pinned public 1m candle lanes before evaluation",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args(argv)
     config = ShadowCycleConfig(
         miner=LeadLagMinerConfig(
@@ -553,6 +669,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
         max_data_age_minutes=args.max_data_age_minutes,
         scan_lookback_minutes=args.scan_lookback_minutes,
+        refresh_candles_before_eval=not args.skip_candle_refresh,
+        refresh_overlap_minutes=args.refresh_overlap_minutes,
+        refresh_bootstrap_minutes=args.refresh_bootstrap_minutes,
     )
     while True:
         payload = run_shadow_cycle(
