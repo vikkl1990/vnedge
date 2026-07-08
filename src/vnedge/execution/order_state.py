@@ -90,6 +90,8 @@ class ManagedOrder:
     exchange_order_id: str | None = None
     filled_quantity: float = 0.0
     fees_paid: float = 0.0
+    # Lineage: client_order_id of the order this one replaced (cancel/replace).
+    replaces: str | None = None
     history: list[StateEvent] = field(default_factory=list)
 
     def transition(self, new_state: OrderState, note: str = "") -> None:
