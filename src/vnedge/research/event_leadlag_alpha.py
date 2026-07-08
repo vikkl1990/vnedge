@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -527,6 +528,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lookback-days", type=int, default=60)
     parser.add_argument("--min-samples", type=int, default=20)
     parser.add_argument("--max-results", type=int, default=100)
+    parser.add_argument("--interval-seconds", type=int, default=0)
+    parser.add_argument("--once", action="store_true")
     parser.add_argument("--exchanges", default=None)
     parser.add_argument("--symbols", default=None)
     parser.add_argument("--json", action="store_true")
@@ -541,6 +544,18 @@ def _split_csv(raw: str | None) -> tuple[str, ...] | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    while True:
+        payload = _run_and_publish(args)
+        if args.json:
+            print(json.dumps(payload, indent=2, default=str))
+        else:
+            print(format_report(payload))
+        if args.once or args.interval_seconds <= 0:
+            return 0
+        time.sleep(max(args.interval_seconds, 1))
+
+
+def _run_and_publish(args: argparse.Namespace) -> dict:
     config = LeadLagMinerConfig(
         lookback_days=args.lookback_days,
         min_samples=args.min_samples,
@@ -557,11 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     tmp = out.with_suffix(out.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str))
     tmp.replace(out)
-    if args.json:
-        print(json.dumps(payload, indent=2, default=str))
-    else:
-        print(format_report(payload))
-    return 0
+    return payload
 
 
 def format_report(payload: dict) -> str:
