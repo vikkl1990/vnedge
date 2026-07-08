@@ -1,5 +1,8 @@
 """Market feed factory — websocket where possible, REST fallback where needed."""
 
+import asyncio
+from datetime import UTC, datetime, timedelta
+
 from vnedge.data.ccxt_client import create_ccxt_async_exchange, resolve_ccxt_exchange_id
 from vnedge.exchange.live_feed import (
     DeltaWsFeed,
@@ -47,6 +50,95 @@ async def test_feed_factory_routes_delta_to_native_websocket():
         assert feed.exchange_id == "delta_india"
         assert feed._native_symbol == "BTCUSD"
         assert "native ws" in feed.feed_mode
+    finally:
+        await feed.stop()
+
+
+async def test_delta_ws_candles_emit_closed_bars_with_monotonic_dedup():
+    feed = create_market_feed("delta_india", symbol="BTC/USD:USD", timeframe="1h")
+    try:
+        assert isinstance(feed, DeltaWsFeed)
+        # the native ws client subscribes the candle channel for OUR timeframe
+        assert "candlestick_1h" in feed._ws.channels
+        assert feed._ws_candles_fresh() is False  # nothing from ws yet
+
+        row = [1_000, 1.0, 2.0, 0.5, 1.5, 10.0]
+        feed._on_ws_candle("BTCUSD", "1h", row)
+        assert feed.closed_candles.get_nowait() == row
+        assert feed.candles_closed == 1
+        assert feed._ws_candles_fresh() is True
+
+        # same bar again (e.g. the REST fallback catching up) is deduplicated
+        assert feed._emit_closed(row) is False
+        # other symbols/timeframes never leak into this feed's queue
+        feed._on_ws_candle("ETHUSD", "1h", [3_601_000, 1, 1, 1, 1, 1])
+        feed._on_ws_candle("BTCUSD", "1m", [3_601_000, 1, 1, 1, 1, 1])
+        assert feed.closed_candles.empty()
+
+        # the next interval's close flows through
+        nxt = [3_601_000, 1.5, 2.5, 1.0, 2.0, 11.0]
+        feed._on_ws_candle("BTCUSD", "1h", nxt)
+        assert feed.closed_candles.get_nowait() == nxt
+        assert feed.candles_closed == 2
+    finally:
+        await feed.stop()
+
+
+class _FakeRestExchange:
+    has: dict = {}
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = 0
+
+    async def fetch_ohlcv(self, symbol, timeframe, since=None, limit=4):
+        self.calls += 1
+        return self.rows
+
+    async def close(self):
+        pass
+
+
+async def test_delta_rest_candle_fallback_only_when_ws_is_stale():
+    feed = create_market_feed("delta_india", symbol="BTC/USD:USD", timeframe="1m")
+    step_ms = 60_000
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    closed_ts = (now_ms // step_ms - 1) * step_ms  # latest fully closed minute
+    fake = _FakeRestExchange([
+        [closed_ts, 1.0, 2.0, 0.5, 1.5, 10.0],
+        [closed_ts + step_ms, 1.5, 1.6, 1.4, 1.5, 2.0],  # forming, never emitted
+    ])
+    await feed._ex.close()
+    feed._ex = fake
+    feed.candle_poll_seconds = 0.01
+    try:
+        # ws candles fresh -> the fallback loop never touches REST
+        feed._last_ws_candle_at = datetime.now(UTC)
+        task = asyncio.create_task(feed._poll_candles())
+        await asyncio.sleep(0.08)
+        assert fake.calls == 0
+        assert feed.closed_candles.empty()
+
+        # no ws candle for 2x the timeframe -> REST emits the closed bar
+        feed._last_ws_candle_at = datetime.now(UTC) - timedelta(seconds=121)
+        for _ in range(100):
+            if fake.calls:
+                break
+            await asyncio.sleep(0.01)
+        assert fake.calls >= 1
+        emitted = await asyncio.wait_for(feed.closed_candles.get(), timeout=1.0)
+        assert emitted[0] == closed_ts
+
+        # repeat polls do not re-emit the same bar (monotonic guard)
+        calls_before = fake.calls
+        for _ in range(100):
+            if fake.calls > calls_before:
+                break
+            await asyncio.sleep(0.01)
+        assert feed.closed_candles.empty()
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     finally:
         await feed.stop()
 

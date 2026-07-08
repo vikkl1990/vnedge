@@ -336,27 +336,43 @@ class RestPollingMarketFeed:
         )
 
     async def _poll_candles(self) -> None:
-        step_ms = TIMEFRAME_MS[self.timeframe]
         while True:
-            try:
-                now_ms = int(datetime.now(UTC).timestamp() * 1000)
-                since = now_ms - 4 * step_ms
-                rows = await self._ex.fetch_ohlcv(
-                    self.symbol, self.timeframe, since=since, limit=4
-                )
-                closed = self._latest_closed_row(rows, now_ms, step_ms)
-                if closed is not None and closed[0] != self._last_emitted_candle_ts:
-                    await self.closed_candles.put(closed)
-                    self._last_emitted_candle_ts = int(closed[0])
-                    self.candles_closed += 1
-                if rows:
-                    self._mark_ok()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                self._mark_error("candles", exc)
-                await asyncio.sleep(_BACKOFF_SECONDS)
+            await self._poll_candles_once()
             await asyncio.sleep(self.candle_poll_seconds)
+
+    async def _poll_candles_once(self) -> None:
+        """One REST poll: fetch recent bars, emit the latest CLOSED one (if new)."""
+        step_ms = TIMEFRAME_MS[self.timeframe]
+        try:
+            now_ms = int(datetime.now(UTC).timestamp() * 1000)
+            since = now_ms - 4 * step_ms
+            rows = await self._ex.fetch_ohlcv(
+                self.symbol, self.timeframe, since=since, limit=4
+            )
+            closed = self._latest_closed_row(rows, now_ms, step_ms)
+            if closed is not None:
+                self._emit_closed(closed)
+            if rows:
+                self._mark_ok()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._mark_error("candles", exc)
+            await asyncio.sleep(_BACKOFF_SECONDS)
+
+    def _emit_closed(self, row: list) -> bool:
+        """Queue a closed candle if it is newer than the last emitted one.
+
+        The monotonic guard deduplicates across sources (e.g. a websocket
+        candle stream and its REST fallback emitting the same bar).
+        """
+        ts = int(row[0])
+        if self._last_emitted_candle_ts is not None and ts <= self._last_emitted_candle_ts:
+            return False
+        self.closed_candles.put_nowait(list(row))
+        self._last_emitted_candle_ts = ts
+        self.candles_closed += 1
+        return True
 
     @staticmethod
     def _latest_closed_row(rows: list[list], now_ms: int, step_ms: int) -> list | None:
@@ -399,14 +415,22 @@ class RestPollingMarketFeed:
 
 
 class DeltaWsFeed(RestPollingMarketFeed):
-    """Delta India feed: REST closed candles + NATIVE websocket quotes/funding.
+    """Delta India feed: NATIVE websocket candles/quotes/funding, REST fallback.
 
-    Delta has no CCXT Pro class, so candles still come from REST (closed 1h
-    bars, same discipline as the polling feed). But quotes and funding no
-    longer poll every couple of seconds — they are pushed from Delta's native
-    public websocket (``DeltaPublicWsClient``): top-of-book from ``l2_orderbook``
-    and funding from the ``funding_rate`` channel. Staleness mirrors the last
-    websocket event, so the gateway's freshness check reflects the real stream.
+    Delta has no CCXT Pro class, but its native public websocket
+    (``DeltaPublicWsClient``) pushes everything the lane needs: top-of-book
+    from ``l2_orderbook``, funding from the ``funding_rate`` channel, and
+    closed candles from the ``candlestick_<timeframe>`` channel (verified
+    live 2026-07-08 — the channel streams the forming candle; the client
+    emits it as closed when a newer ``candle_start_time`` appears, the same
+    bar-close discipline as ``LiveMarketFeed``).
+
+    REST candle polling remains as a FALLBACK only: it emits a closed bar
+    when the websocket has not delivered one for 2x the timeframe (or has
+    not delivered any yet, e.g. right after startup mid-interval). The
+    monotonic ``_emit_closed`` guard deduplicates across the two sources.
+    Staleness mirrors the last websocket event, so the gateway's freshness
+    check reflects the real stream.
     """
 
     def __init__(
@@ -427,9 +451,14 @@ class DeltaWsFeed(RestPollingMarketFeed):
         )
         from vnedge.exchange.delta_ws import DeltaPublicWsClient, delta_native_symbol
 
-        self.feed_mode = "delta native ws + rest candles"
+        self.feed_mode = "delta native ws candles (rest fallback)"
         self._native_symbol = delta_native_symbol(symbol)
-        self._ws = DeltaPublicWsClient([self._native_symbol])
+        self._last_ws_candle_at: datetime | None = None
+        self._ws = DeltaPublicWsClient(
+            [self._native_symbol],
+            candle_timeframes=(timeframe,),
+            on_candle=self._on_ws_candle,
+        )
 
     async def start(self) -> None:
         await self._ws.start()
@@ -444,6 +473,28 @@ class DeltaWsFeed(RestPollingMarketFeed):
         await asyncio.gather(*self._tasks, return_exceptions=True)
         await self._ws.stop()
         await self._ex.close()
+
+    # --- websocket candles with REST fallback ------------------------------------
+    def _on_ws_candle(self, sym: str, timeframe: str, row: list) -> None:
+        """A candle CLOSED on the native websocket stream."""
+        if sym != self._native_symbol or timeframe != self.timeframe:
+            return
+        self._last_ws_candle_at = datetime.now(UTC)
+        self._emit_closed(row)
+
+    def _ws_candles_fresh(self, now: datetime | None = None) -> bool:
+        """Websocket candle stream considered alive: a close within 2x timeframe."""
+        if self._last_ws_candle_at is None:
+            return False
+        age = ((now or datetime.now(UTC)) - self._last_ws_candle_at).total_seconds()
+        return age < 2.0 * (TIMEFRAME_MS[self.timeframe] / 1000.0)
+
+    async def _poll_candles(self) -> None:
+        # FALLBACK-only loop: while websocket candles flow, REST stays quiet.
+        while True:
+            if not self._ws_candles_fresh():
+                await self._poll_candles_once()
+            await asyncio.sleep(self.candle_poll_seconds)
 
     async def _sync_ws_state(self) -> None:
         """Mirror native websocket state into the polling-feed surface."""
