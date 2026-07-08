@@ -185,10 +185,12 @@ async def discover_exchange_targets(
 ) -> tuple[ResearchTarget, ...]:
     """Discover active derivative research targets for one exchange via CCXT."""
     import ccxt.async_support as ccxt_async
+    from vnedge.data.ccxt_client import create_ccxt_async_exchange, resolve_ccxt_exchange_id
 
-    if not hasattr(ccxt_async, exchange):
+    ccxt_exchange_id = resolve_ccxt_exchange_id(exchange)
+    if not hasattr(ccxt_async, ccxt_exchange_id):
         raise ValueError(f"unknown CCXT exchange id: {exchange}")
-    ex = getattr(ccxt_async, exchange)({"enableRateLimit": True})
+    ex = create_ccxt_async_exchange(exchange)
     try:
         markets = await ex.load_markets()
     finally:
