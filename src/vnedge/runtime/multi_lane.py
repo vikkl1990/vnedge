@@ -170,6 +170,9 @@ class MultiLaneProvider:
                     "submitted": self._lanes[lid].get("session", {}).get("orders_submitted", 0),
                     "fills": self._lanes[lid].get("fills", 0),
                 },
+                # virtual performance of a shadow lane's approved intents
+                # (resolved with backtester semantics; observability only)
+                "shadow_perf": self._lanes[lid].get("session", {}).get("shadow_perf"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
             }
             for lid in self._order if lid in self._lanes

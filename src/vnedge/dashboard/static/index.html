@@ -977,7 +977,8 @@
       <table>
         <thead><tr>
           <th>Lane</th><th>Bars Evaluated</th><th>Signals Fired</th><th>Approved</th>
-          <th>Rejected (risk)</th><th>Sizing Skips</th><th>Submitted</th><th>Fills</th><th>Conversion</th>
+          <th>Rejected (risk)</th><th>Sizing Skips</th><th>Submitted</th><th>Fills</th>
+          <th>Virtual PnL</th><th>Conversion</th>
         </tr></thead>
         <tbody id="funnelBody"></tbody>
       </table>
@@ -1586,6 +1587,15 @@
         appendCell(tr,String(num(f.sizing_skips)));
         appendCell(tr,String(num(f.submitted)));
         appendCell(tr,String(num(f.fills)),num(f.fills)>0?"pos":"");
+        const sp=l.shadow_perf||null;
+        const vtrades=sp?num(sp.virtual_trades):0;
+        const vnet=sp?num(sp.net_usd):0;
+        appendCell(tr,vtrades>0?usd(vnet)+" ("+vtrades+")":"--",
+                   vtrades>0?(vnet>0?"pos":vnet<0?"neg":""):"muted",
+                   sp?"virtual outcomes of approved shadow intents (backtester semantics): "
+                     +num(sp.wins)+"/"+vtrades+" wins, PF "
+                     +(sp.profit_factor==null?"--":sp.profit_factor)
+                     +", open "+num(sp.open_intents):"");
         appendCell(tr,conv);
         fb.appendChild(tr);
       });
