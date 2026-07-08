@@ -121,6 +121,16 @@ class CcxtExecutionAdapter:
             "newClientOrderId": order.client_order_id,
             "reduceOnly": intent.reduce_only,
         }
+        # Time-in-force pass-through (ccxt unified params). Values are
+        # validated at OrderIntent construction; None = venue default, so
+        # neither key appears. "PO" (post-only) uses ccxt's unified
+        # ``postOnly`` flag, which each venue translates itself
+        # (binanceusdm -> timeInForce GTX, bybit -> PostOnly); the explicit
+        # TIFs go through ``timeInForce`` verbatim.
+        if intent.time_in_force == "PO":
+            params["postOnly"] = True
+        elif intent.time_in_force is not None:
+            params["timeInForce"] = intent.time_in_force
 
         for attempt in range(1, self.max_submit_attempts + 1):
             try:
