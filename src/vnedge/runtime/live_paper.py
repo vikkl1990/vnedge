@@ -40,6 +40,7 @@ from vnedge.execution.order_state import OrderState
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
+from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
@@ -123,7 +124,11 @@ class LivePaperSession:
         self._orphan_position_guarded = False
         self._reconciliation_fail_closed = False
         self._bars_since_reconcile = 0
-        self._entry_cooldown_bars = 0
+        # Entry protections (post-stop cooldown + stop-window guard) — the
+        # same state machine the backtester runs, fed with candle-frame row
+        # indexes. Consulted by the entry path ONLY; exits never touch it.
+        self.protections = ProtectionState(config.effective_protections())
+        self._protection_block_logged = False  # one trade_log event per episode
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
@@ -299,10 +304,12 @@ class LivePaperSession:
         )
         self.orders_submitted += 1
         self._plan = None
-        self._entry_cooldown_bars = max(
-            self._entry_cooldown_bars,
-            self.config.post_exit_cooldown_bars,
-        )
+        # A tick stop fires BETWEEN closes, so the exit belongs to the bar
+        # currently forming (index len(candles)): a 1-bar cooldown then blocks
+        # that bar's entry evaluation, exactly as a bar-close stop blocks its
+        # own bar's re-entry.
+        exit_bar = len(self.candles) - (0 if reason == "tick_stop" else 1)
+        self.protections.on_exit(reason, exit_bar)
         return order
 
     async def _check_tick_stop(self, now: datetime) -> None:
@@ -784,21 +791,20 @@ class LivePaperSession:
 
             if self._plan is None and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
-                if self._entry_cooldown_bars > 0:
+                idx = len(df) - 1
+                allowed, block_reason = self.protections.entries_allowed(idx)
+                if not allowed:
                     sig = None
-                    self._record_eval(
-                        df,
-                        len(df) - 1,
-                        sig,
-                        skip_reason=(
-                            "post_exit_cooldown: "
-                            f"{self._entry_cooldown_bars} bar(s) remaining"
-                        ),
-                    )
-                    self._entry_cooldown_bars -= 1
+                    self._record_eval(df, idx, sig, skip_reason=block_reason)
+                    if not self._protection_block_logged:
+                        self._log_trade_event(
+                            "protection_blocked", block_reason[:140], now
+                        )
+                        self._protection_block_logged = True
                 else:
-                    sig = self.strategy.signal(df, len(df) - 1)
-                    self._record_eval(df, len(df) - 1, sig)
+                    self._protection_block_logged = False
+                    sig = self.strategy.signal(df, idx)
+                    self._record_eval(df, idx, sig)
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)

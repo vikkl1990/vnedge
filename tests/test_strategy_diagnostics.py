@@ -130,3 +130,109 @@ def test_diagnosis_is_json_serializable():
     d = diagnose(record(short_net=40.0, long_net=-5.0, oos_net=-2.0,
                         reasons=["aggregate OOS net not positive"]))
     json.dumps(d.to_dict())  # must not raise
+
+
+# --- Consecutive-stop clustering -> engine-level protection proposals --------------
+
+
+def test_consecutive_stops_proposes_protection_variant():
+    payload = record(reasons=["aggregate OOS net not positive"])
+    payload["max_consecutive_stops"] = 4
+    payload["gates"] = "sparse"
+    d = diagnose(payload)
+
+    assert "consecutive_stops" in d.failure_tags
+    assert any("post-stop cooldown" in n for n in d.notes)
+    sug = next(s for s in d.suggestions if s.goal == "protect_after_stop")
+    assert sug.variant_id == "funding_mean_reversion_v1__stop_cooldown"
+    # whitelisted engine-config axes, namespaced so they can never be
+    # mistaken for strategy constructor params
+    assert sug.grid_axes == {"protections.cooldown_bars_after_stop": [3, 6]}
+    assert sug.fixed_params == {}
+    assert sug.gates_label == "sparse"
+    assert sug.auto_runnable is False  # research proposal ONLY
+    assert len(d.suggestions) <= 3
+
+
+def test_consecutive_stops_tag_also_parsed_from_reason_text():
+    d = diagnose(record(reasons=["4 consecutive stops in OOS trade sequence"]))
+    assert "consecutive_stops" in d.failure_tags
+    assert any(s.goal == "protect_after_stop" for s in d.suggestions)
+
+
+def test_short_stop_runs_do_not_propose_protections():
+    payload = record(reasons=["aggregate OOS net not positive"])
+    payload["max_consecutive_stops"] = 2  # below the threshold
+    d = diagnose(payload)
+    assert "consecutive_stops" not in d.failure_tags
+    assert all(s.goal != "protect_after_stop" for s in d.suggestions)
+
+
+def test_protection_variant_excluded_from_auto_explore():
+    from vnedge.research.edge_agents import (
+        EdgeResearchAgent,
+        runnable_variant_proposals,
+    )
+
+    payload = record(reasons=["aggregate OOS net not positive"])
+    payload["max_consecutive_stops"] = 5
+    plan = EdgeResearchAgent().plan([payload])
+
+    proposed = [p for p in plan.proposals
+                if p.get("goal") == "protect_after_stop"]
+    assert len(proposed) == 1  # visible to humans on the research feed
+    assert proposed[0]["auto_runnable"] is False
+    # ... but the auto-explorer never picks it up
+    runnable = runnable_variant_proposals(plan)
+    assert all(p["goal"] != "protect_after_stop" for p in runnable)
+
+
+def test_ordinary_variants_remain_auto_runnable():
+    from vnedge.research.edge_agents import (
+        EdgeResearchAgent,
+        runnable_variant_proposals,
+    )
+
+    plan = EdgeResearchAgent().plan(
+        [record(reasons=["payoff ratio 1.20 < 1.8 (avg win / avg loss)"],
+                strategy="volatility_expansion_breakout_v1")]
+    )
+    assert any(p["goal"] == "increase_quality"
+               for p in runnable_variant_proposals(plan))
+
+
+def test_wf_record_reports_max_consecutive_stops():
+    import pandas as pd
+
+    from vnedge.backtest.backtester import Trade
+    from vnedge.backtest.metrics import BacktestMetrics
+    from vnedge.backtest.walk_forward import WalkForwardResult, WindowResult
+    from vnedge.research import continuous_research as cr
+    from vnedge.backtest.walk_forward import SPARSE_STRATEGY_GATES
+
+    def ts(i):
+        return pd.Timestamp(1_750_000_000_000 + i * 3_600_000, unit="ms", tz="UTC")
+
+    def trade(exit_reason, net=1.0):
+        return Trade(side="long", quantity=1.0, entry_ts=ts(0), entry_price=100.0,
+                     exit_ts=ts(1), exit_price=100.0 + net, exit_reason=exit_reason,
+                     gross_pnl_usd=net, fees_usd=0.0, funding_usd=0.0,
+                     entry_reason="t")
+
+    def m():
+        return BacktestMetrics(
+            num_trades=6, skipped_by_sizing=0, net_profit_usd=15.0, return_pct=3.0,
+            max_drawdown_pct=2.0, sharpe=1.0, sortino=1.1, profit_factor=1.5,
+            win_rate_pct=60.0, avg_win_usd=6.0, avg_loss_usd=-4.0,
+            total_fees_usd=1.0, total_funding_usd=0.0, exit_reasons={},
+        )
+
+    windows = (
+        WindowResult(0, ts(0), ts(1), ts(2), {}, m(), m(), test_trades=(
+            trade("stop", -1.0), trade("stop", -1.0), trade("take_profit"),
+            trade("stop", -1.0), trade("tick_stop", -1.0), trade("stop", -1.0),
+        )),
+    )
+    rec = cr.wf_record("x", "BTC/USDT:USDT",
+                       WalkForwardResult(windows=windows), SPARSE_STRATEGY_GATES)
+    assert rec["max_consecutive_stops"] == 3  # stop, tick_stop, stop run

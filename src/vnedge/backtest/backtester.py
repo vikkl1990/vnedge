@@ -29,6 +29,7 @@ from vnedge.backtest.fee_model import FeeModel
 from vnedge.backtest.slippage_model import SlippageModel
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.position_sizer import SymbolLimits, size_position
+from vnedge.risk.protections import ProtectionConfig, ProtectionState
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,10 @@ class BacktestConfig(BaseModel):
             maintenance_margin_rate=0.005,
         )
     )
+    # Entry protections (risk/protections.py) — the SAME state machine the
+    # live paper/shadow runner consults, so research and operations block the
+    # same entry decisions. ALL DEFAULT OFF (zero behavior change).
+    protections: ProtectionConfig = Field(default_factory=ProtectionConfig)
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,10 @@ class BacktestResult:
     skipped_by_sizing: int
     final_equity_usd: float
     config: BacktestConfig = field(repr=False, default_factory=BacktestConfig)
+    # (timestamp, reason) for every entry decision the protections blocked —
+    # empty unless config.protections enables something. Mirrors the live
+    # runner's lane_eval skip_reason records for engine-parity checks.
+    protection_blocked: tuple[tuple[pd.Timestamp, str], ...] = ()
 
 
 def _unrealized(pos: _OpenPosition, price: float) -> float:
@@ -162,8 +171,15 @@ def run_backtest(
     trades: list[Trade] = []
     skipped = 0
     curve: list[float] = []
+    # Entry protections: identical state machine + bar-index semantics as the
+    # live runner (exit recorded at its bar, entries consulted at decision
+    # time). Exits below NEVER consult it — stops/TPs always close.
+    protections = ProtectionState(config.protections)
+    protection_blocked: list[tuple[pd.Timestamp, str]] = []
 
-    def close_position(pos: _OpenPosition, ts, raw_price: float, reason: str) -> None:
+    def close_position(
+        pos: _OpenPosition, ts, raw_price: float, reason: str, bar_index: int
+    ) -> None:
         nonlocal equity, position
         exit_side = "sell" if pos.intent.side == "long" else "buy"
         fill = config.slippage.fill_price(raw_price, exit_side)
@@ -184,6 +200,7 @@ def run_backtest(
             )
         )
         position = None
+        protections.on_exit(reason, bar_index)
 
     n = len(df)
     start = max(strategy.warmup_bars, 1)
@@ -231,13 +248,17 @@ def run_backtest(
             position.track_excursion(float(bar["high"]), float(bar["low"]))
             hit = _check_intrabar_exit(position, float(bar["high"]), float(bar["low"]))
             if hit is not None:
-                close_position(position, ts, hit[1], hit[0])
+                close_position(position, ts, hit[1], hit[0], j)
             elif j - position.entry_bar >= config.max_holding_bars:
-                close_position(position, ts, float(bar["close"]), "max_holding")
+                close_position(position, ts, float(bar["close"]), "max_holding", j)
 
         # 4) New entry decision at this bar's close (only when flat).
         if position is None and j < n - 1 and equity > 0:
-            pending = strategy.signal(df, j)
+            allowed, block_reason = protections.entries_allowed(j)
+            if allowed:
+                pending = strategy.signal(df, j)
+            else:
+                protection_blocked.append((ts, block_reason))
 
         # 5) Mark equity at bar close.
         mark = equity + (_unrealized(position, float(bar["close"])) if position else 0.0)
@@ -249,8 +270,11 @@ def run_backtest(
 
     # Force-close anything still open at the last processed bar.
     if position is not None:
-        last = df.iloc[start + len(curve) - 1]
-        close_position(position, last["timestamp"], float(last["close"]), "end_of_data")
+        last_j = start + len(curve) - 1
+        last = df.iloc[last_j]
+        close_position(
+            position, last["timestamp"], float(last["close"]), "end_of_data", last_j
+        )
         curve[-1] = equity
 
     equity_curve = pd.Series(
@@ -260,4 +284,5 @@ def run_backtest(
         symbol=symbol, timeframe=timeframe, trades=tuple(trades),
         equity_curve=equity_curve, skipped_by_sizing=skipped,
         final_equity_usd=equity, config=config,
+        protection_blocked=tuple(protection_blocked),
     )

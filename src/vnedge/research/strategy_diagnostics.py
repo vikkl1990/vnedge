@@ -35,6 +35,10 @@ class Suggestion:
     test_bars: int
     goal: str                # side_restrict | increase_quality | reduce_risk | ...
     rationale: str
+    # False = research PROPOSAL only: the auto-explorer must not run it
+    # (e.g. engine-level protection variants — their axes are not strategy
+    # constructor params). A human decides whether/how to test it.
+    auto_runnable: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -82,7 +86,43 @@ def _tags_from_reasons(reasons: list[str]) -> set[str]:
             tags.add("is_oos_collapse")
         if "zero oos trades" in low:
             tags.add("zero_trade_windows")
+        if "consecutive stop" in low:
+            tags.add("consecutive_stops")
     return tags
+
+
+# Stops clustering in runs of this length (or longer) tag the record as a
+# consecutive-stops failure — a candidate for the ENGINE-LEVEL post-stop
+# cooldown protection (risk/protections.py), not for strategy-param tuning.
+CONSECUTIVE_STOPS_MIN = 3
+
+# Whitelisted protection grid — the only cooldown values a diagnosis may
+# propose. Engine-config axes are namespaced "protections.<field>" so they
+# can never be mistaken for strategy constructor params.
+PROTECTION_COOLDOWN_GRID: tuple[int, ...] = (3, 6)
+
+
+def _protection_suggestion(strategy_id: str, gates_label: str) -> Suggestion:
+    return Suggestion(
+        variant_id=f"{strategy_id}__stop_cooldown",
+        strategy_id=strategy_id,
+        fixed_params={},
+        grid_axes={
+            "protections.cooldown_bars_after_stop": list(PROTECTION_COOLDOWN_GRID)
+        },
+        gates_label=gates_label,
+        test_bars=720,
+        goal="protect_after_stop",
+        rationale=(
+            "losses cluster in consecutive-stop runs; test an engine-level "
+            "post-stop entry cooldown (ProtectionConfig, default OFF). "
+            "Research proposal ONLY — not auto-runnable; enabling any "
+            "protection on a trial requires pre-registration "
+            "(docs/PROTECTIONS.md). Protections are hypotheses to test, "
+            "not obvious improvements."
+        ),
+        auto_runnable=False,
+    )
 
 
 # --- Per-strategy variant catalog (the whitelist) ---------------------------------
@@ -240,8 +280,17 @@ def diagnose(record: dict) -> Diagnosis:
         return Diagnosis(strategy, symbol, healthy=True)
 
     tags = _tags_from_reasons(record.get("reasons", []))
+    if int(record.get("max_consecutive_stops", 0)) >= CONSECUTIVE_STOPS_MIN:
+        tags.add("consecutive_stops")
     notes: list[str] = []
     goals: list[str] = []
+
+    if "consecutive_stops" in tags:
+        notes.append(
+            "stops cluster in consecutive runs — candidate for the "
+            "engine-level post-stop cooldown (default OFF, pre-registration "
+            "required; a hypothesis to test, not an obvious improvement)"
+        )
 
     # Some failures must NOT be "fixed" by tuning — say so and offer nothing.
     if "win_concentration" in tags:
@@ -296,9 +345,17 @@ def diagnose(record: dict) -> Diagnosis:
         if s and s.variant_id not in seen:
             seen.add(s.variant_id)
             suggestions.append(s)
+    suggestions = suggestions[:3]  # top 3, bounded
+
+    # Consecutive-stop clustering: reserve a slot for the (non-auto-runnable)
+    # protection proposal — strategy-agnostic, so it is not in the CATALOG.
+    if "consecutive_stops" in tags:
+        suggestions = suggestions[:2] + [
+            _protection_suggestion(strategy, record.get("gates", "standard"))
+        ]
 
     return Diagnosis(
         strategy, symbol, healthy=False,
         failure_tags=tuple(sorted(tags)), notes=tuple(notes),
-        suggestions=tuple(suggestions[:3]),  # top 3, bounded
+        suggestions=tuple(suggestions),
     )
