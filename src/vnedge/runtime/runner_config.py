@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.position_sizer import SymbolLimits
+from vnedge.risk.protections import ProtectionConfig
 
 
 class RunnerMode(str, Enum):
@@ -26,13 +27,18 @@ class RunnerConfig(BaseModel):
     slippage_est_bps: float = Field(default=2.0, ge=0)
     max_holding_bars: int = Field(default=48, ge=1)
     reconcile_every_bars: int = Field(default=24, ge=1)
-    # After any reduce-only exit, skip this many entry evaluations. The default
-    # prevents same-bar re-entry after a stop/TP, which otherwise lets a crowded
-    # condition immediately re-fire on the exact bar that proved the prior trade
-    # was wrong or complete.
+    # LEGACY ALIAS (PR #92) — maps into protections.cooldown_bars_after_stop
+    # via effective_protections(). Semantics were refined when the protections
+    # state machine landed: the cooldown now arms on STOP exits only (a winner
+    # closing is not evidence the entry condition went bad).
     # DEFAULT OFF: enabling this changes entry behavior — running trials are
     # frozen, so it may only be turned on via a pre-registered future protocol.
     post_exit_cooldown_bars: int = Field(default=0, ge=0)
+    # Entry protections (risk/protections.py): post-stop cooldown and the
+    # stop-window guard. ALL DEFAULT OFF; enabling any of them on a trial
+    # requires pre-registration (docs/PROTECTIONS.md). Exits are never
+    # affected — the state machine has no exit-blocking path at all.
+    protections: ProtectionConfig = Field(default_factory=ProtectionConfig)
     # Tick-granular STOP monitoring: between bar closes, the idle loop checks
     # the live top-of-book against the open plan's stop and exits reduce-only
     # on breach. STOPS ONLY — a stop is capital protection, so it gets the
@@ -47,3 +53,15 @@ class RunnerConfig(BaseModel):
             maintenance_margin_rate=0.005,
         )
     )
+
+    def effective_protections(self) -> ProtectionConfig:
+        """Protections with the legacy post_exit_cooldown_bars alias folded in.
+
+        The stricter of the two cooldown values wins, so a config that sets
+        either field keeps its protection.
+        """
+        if self.post_exit_cooldown_bars <= self.protections.cooldown_bars_after_stop:
+            return self.protections
+        return self.protections.model_copy(
+            update={"cooldown_bars_after_stop": self.post_exit_cooldown_bars}
+        )

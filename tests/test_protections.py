@@ -143,3 +143,148 @@ def test_on_exit_never_raises_while_blocked():
     s.on_exit("stop", 6)  # another exit while blocked: fine
     s.on_exit("take_profit", 7)
     assert s.entries_allowed(7)[0] is False
+
+
+# --- RunnerConfig legacy alias (PR #92 back-compat) --------------------------------
+
+
+def test_runner_config_alias_maps_into_protections():
+    from vnedge.runtime.runner_config import RunnerConfig
+
+    cfg = RunnerConfig(post_exit_cooldown_bars=2)
+    assert cfg.effective_protections().cooldown_bars_after_stop == 2
+
+    # stricter of the two cooldown values wins
+    cfg = RunnerConfig(
+        post_exit_cooldown_bars=1,
+        protections=ProtectionConfig(cooldown_bars_after_stop=3),
+    )
+    assert cfg.effective_protections().cooldown_bars_after_stop == 3
+
+    # window-guard fields survive the alias fold-in
+    cfg = RunnerConfig(
+        post_exit_cooldown_bars=4,
+        protections=ProtectionConfig(max_stops_per_window=2, stop_window_bars=8),
+    )
+    eff = cfg.effective_protections()
+    assert eff.cooldown_bars_after_stop == 4
+    assert eff.max_stops_per_window == 2 and eff.stop_window_bars == 8
+
+
+def test_runner_config_defaults_leave_protections_off():
+    from vnedge.runtime.runner_config import RunnerConfig
+
+    assert not RunnerConfig().effective_protections().enabled
+
+
+# --- Live runner integration -------------------------------------------------------
+
+from vnedge.execution.journal import DecisionJournal  # noqa: E402
+from vnedge.execution.order_manager import OrderManager  # noqa: E402
+from vnedge.paper.fill_model import FillModel  # noqa: E402
+from vnedge.paper.paper_broker import PaperBroker  # noqa: E402
+from vnedge.paper.simulated_exchange import SimulatedExchange  # noqa: E402
+from vnedge.risk.kill_switch import KillSwitch  # noqa: E402
+from vnedge.risk.risk_manager import PreTradeRiskGateway  # noqa: E402
+from vnedge.runtime.live_paper import LivePaperSession  # noqa: E402
+from vnedge.runtime.runner_config import RunnerConfig, RunnerMode  # noqa: E402
+from tests.test_live_paper import (  # noqa: E402
+    BASE, MIN, SYM, AlwaysLong, FakeFeed, history,
+)
+
+
+def build_protected_session(tmp_path, feed, *, protections, strategy=None,
+                            post_exit_cooldown_bars=0):
+    config = RunnerConfig(
+        mode=RunnerMode.PAPER, symbol=SYM, reconcile_every_bars=100,
+        protections=protections,
+        post_exit_cooldown_bars=post_exit_cooldown_bars,
+    )
+    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    journal = DecisionJournal(tmp_path / "journal.jsonl")
+    gateway = PreTradeRiskGateway(config.risk, KillSwitch(kill_file=tmp_path / "KILL"))
+    om = OrderManager(gateway, journal, PaperBroker(exchange))
+    session = LivePaperSession(
+        strategy or AlwaysLong(), feed, history(), config,
+        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+    )
+    return session, exchange
+
+
+def bar(i, *, low=99.5, high=100.5, close=100.0):
+    return [BASE + i * MIN, 100.0, high, low, close, 5.0]
+
+
+def blocked_evals(session):
+    return [r["payload"] for r in session.journal.read_all()
+            if r["kind"] == "lane_eval" and r["payload"]["skip_reason"]]
+
+
+async def test_live_protection_blocked_logged_once_per_episode(tmp_path):
+    # bar5 entry; bar6 stop (episode 1: bars 6,7 blocked); bar8 re-entry;
+    # bar9 stop (episode 2: bar 9 blocked) -> exactly TWO protection_blocked
+    # trade_log events despite three blocked evaluations.
+    rows = [bar(5), bar(6, low=94.0, close=96.0), bar(7), bar(8),
+            bar(9, low=90.0, close=96.0)]
+    feed = FakeFeed(rows)
+    session, _ = build_protected_session(
+        tmp_path, feed,
+        protections=ProtectionConfig(cooldown_bars_after_stop=2),
+    )
+
+    await session.run(max_bars=5)
+
+    skips = blocked_evals(session)
+    assert [s["skip_reason"] for s in skips] == [
+        "post_exit_cooldown: 2 bar(s) remaining",
+        "post_exit_cooldown: 1 bar(s) remaining",
+        "post_exit_cooldown: 2 bar(s) remaining",
+    ]
+    events = [e["event"] for e in session.trade_log]
+    assert events.count("protection_blocked") == 2
+    assert events.count("entry_skipped") == 3
+
+
+async def test_live_stop_window_guard_blocks_entries(tmp_path):
+    # two stops inside the window -> entries blocked with the guard's reason,
+    # and the guard outlasts any cooldown (cooldown deliberately off here).
+    rows = [bar(5), bar(6, low=94.0, close=96.0),  # stop 1 (95.0)
+            bar(7, low=91.0, close=92.0),          # stop 2 (91.2) same-bar entry
+            bar(8)]
+    feed = FakeFeed(rows)
+    session, exchange = build_protected_session(
+        tmp_path, feed,
+        protections=ProtectionConfig(max_stops_per_window=2, stop_window_bars=100),
+    )
+
+    await session.run(max_bars=4)
+
+    assert exchange.get_positions() == []  # blocked after the second stop
+    skips = blocked_evals(session)
+    assert [s["skip_reason"] for s in skips] == [
+        "stop_window_guard: 2 stops in last 100 bars (max 2)",
+        "stop_window_guard: 2 stops in last 100 bars (max 2)",
+    ]
+    events = [e["event"] for e in session.trade_log]
+    assert events.count("protection_blocked") == 1  # one contiguous episode
+
+
+async def test_live_take_profit_exit_does_not_arm_cooldown(tmp_path):
+    # Refinement vs PR #92's any-exit cooldown: a take-profit exit leaves the
+    # very same bar free to re-enter even with the legacy alias enabled.
+    rows = [bar(5), bar(6, high=110.5, close=104.0)]  # TP 110 hit at bar 6
+    feed = FakeFeed(rows)
+    session, exchange = build_protected_session(
+        tmp_path, feed,
+        protections=ProtectionConfig(),
+        post_exit_cooldown_bars=1,  # legacy alias, now stop-only
+    )
+
+    report = await session.run(max_bars=2)
+
+    exits = [r["payload"] for r in session.journal.read_all()
+             if r["kind"] == "live_paper_exit"]
+    assert [e["reason"] for e in exits] == ["take_profit"]
+    assert blocked_evals(session) == []          # no cooldown skip journaled
+    assert report.signals_generated == 2         # bar 5 entry + bar 6 re-entry
+    assert len(exchange.get_positions()) == 1    # re-entered on the TP bar
