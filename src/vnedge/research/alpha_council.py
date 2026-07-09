@@ -28,6 +28,7 @@ SOURCE_QUOTAS = {
     "daily_scalper_pack": 6,
     "alpha_distillation": 6,
     "artifact_health": 6,
+    "bitcoin_regime": 4,
     "fast_l2_scout": 4,
     "l2_research_loop": 4,
     "alpha_factory": 4,
@@ -40,6 +41,7 @@ ARTIFACT_MAX_AGE_SECONDS = {
     "l2_latest.json": 7 * 3600,
     "daily_scalper_latest.json": 7 * 3600,
     "alpha_distillation_latest.json": 7 * 3600,
+    "bitcoin_regime_latest.json": 2 * 3600,
 }
 
 ARTIFACT_PRODUCERS = {
@@ -49,6 +51,7 @@ ARTIFACT_PRODUCERS = {
     "l2_latest.json": "l2-research-loop",
     "daily_scalper_latest.json": "daily-scalper-pack",
     "alpha_distillation_latest.json": "alpha-distillation",
+    "bitcoin_regime_latest.json": "bitcoin-regime-sensor",
 }
 
 
@@ -150,6 +153,9 @@ def collect_candidates(
     candidates.extend(_daily_scalper_candidates(_read_json(research / "daily_scalper_latest.json")))
     candidates.extend(_alpha_distillation_candidates(
         _read_json(research / "alpha_distillation_latest.json")
+    ))
+    candidates.extend(_bitcoin_regime_candidates(
+        _read_json(research / "bitcoin_regime_latest.json")
     ))
     candidates.extend(_artifact_health_candidates(research))
     return _apply_source_quotas(_dedupe_candidates(candidates), max_candidates=max_candidates)
@@ -411,6 +417,49 @@ def _alpha_distillation_candidates(payload: dict | None) -> list[AlphaCandidate]
     return out
 
 
+def _bitcoin_regime_candidates(payload: dict | None) -> list[AlphaCandidate]:
+    if not payload:
+        return []
+    summary = payload.get("summary") or {}
+    source = payload.get("source") or {}
+    mempool = payload.get("mempool") or {}
+    features = payload.get("features") or {}
+    stress_state = str(
+        summary.get("stress_state") or mempool.get("stress_state") or "missing"
+    )
+    source_status = str(summary.get("source_status") or source.get("status") or "unknown")
+    if stress_state == "calm" and source_status == "ok":
+        return []
+    state = (
+        f"BTC_REGIME_{stress_state.upper()}"
+        if source_status == "ok" else f"BTC_SOURCE_{source_status.upper()}"
+    )
+    metrics = {
+        "stress_score": _num(summary.get("stress_score")),
+        "fee_pressure_score": _num(features.get("fee_pressure_score")),
+        "mempool_pressure_score": _num(features.get("mempool_pressure_score")),
+        "fastest_fee_sat_vb": _num(features.get("fastest_fee_sat_vb")),
+        "mempool_vsize_vb": _num(features.get("mempool_vsize_vb")),
+        "mempool_tx_count": _num(features.get("mempool_tx_count")),
+        "fee_spike_z": _num(features.get("fee_spike_z")),
+        "mempool_pressure_z": _num(features.get("mempool_pressure_z")),
+    }
+    return [
+        AlphaCandidate(
+            candidate_id=f"bitcoin_regime|BTC|{stress_state}|{source_status}",
+            source="bitcoin_regime",
+            family="bitcoin_network_regime_v1",
+            exchange="bitcoin_network",
+            symbol="BTC",
+            timeframe="network",
+            state=state,
+            route_decision="CONTEXT_ONLY",
+            metrics=metrics,
+            evidence=payload,
+        )
+    ]
+
+
 def _artifact_health_candidates(research: Path) -> list[AlphaCandidate]:
     if not research.exists():
         return []
@@ -474,6 +523,14 @@ def _edge_advocate(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.source == "artifact_health":
         delta += 18
         notes.append("stale or missing research evidence is blocking the signal funnel")
+    if candidate.source == "bitcoin_regime":
+        source_status = str(candidate.evidence.get("summary", {}).get("source_status") or "")
+        if source_status != "ok":
+            delta += 12
+            notes.append("Bitcoin telemetry health issue blocks regime-context confidence")
+        else:
+            delta += min(14.0, _num(m.get("stress_score")) * 2.0)
+            notes.append("Bitcoin fee-market context is abnormal enough to split research")
     if samples >= 20 and _best_profit_factor(m) >= 1.5:
         delta += 12
         notes.append(f"profit factor is strong at {_best_profit_factor(m):.2f}")
@@ -512,6 +569,10 @@ def _skeptic(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.source == "artifact_health":
         delta -= 4
         notes.append("artifact health issue requires refresh before debate quality improves")
+    if candidate.source == "bitcoin_regime":
+        delta -= 4
+        notes.append("network stress is context only and does not prove directional edge")
+        return AgentOpinion("skeptic", "challenge", delta, "; ".join(notes), tuple(vetoes))
     if "UNDER_SAMPLED" in candidate.state or 0 < samples < 20:
         delta -= 24
         vetoes.append("needs_more_samples")
@@ -539,7 +600,11 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
     delta = 0.0
     notes: list[str] = []
     vetoes: list[str] = []
-    if route == "BLOCKED":
+    if route == "CONTEXT_ONLY":
+        delta -= 2
+        vetoes.append("context_only_no_execution")
+        notes.append("network-regime context is not an executable route")
+    elif route == "BLOCKED":
         delta -= 28
         vetoes.append("execution_route_blocked")
         notes.append("route decision is BLOCKED")
@@ -576,7 +641,12 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     vetoes = ["research_only_no_auto_trade", "requires_human_promotion"]
     notes = ["council output is advisory only"]
     delta = -10.0
-    if candidate.source in {"event_leadlag_alpha", "fast_l2_scout", "l2_research_loop", "alpha_factory"}:
+    if candidate.source in {
+        "event_leadlag_alpha",
+        "fast_l2_scout",
+        "l2_research_loop",
+        "alpha_factory",
+    }:
         vetoes.append("requires_conservative_l2_replay")
         notes.append("microstructure candidate requires conservative replay")
     if candidate.source in {"rolling_walk_forward", "daily_scalper_pack", "alpha_distillation"}:
@@ -585,6 +655,9 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.source == "artifact_health":
         vetoes.append("requires_fresh_research_artifact")
         notes.append("fresh artifact must be published before this lane can be judged")
+    if candidate.source == "bitcoin_regime":
+        vetoes.extend(("context_only_no_trade", "requires_replay_context_split"))
+        notes.append("Bitcoin network regime may tag replay windows but cannot trade/promote")
     return AgentOpinion("risk_governor", "veto", delta, "; ".join(notes), tuple(vetoes))
 
 
@@ -603,7 +676,21 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
     veto_set = set(vetoes)
     if candidate.source == "artifact_health":
         return "REFRESH_STALE_ARTIFACT"
-    if candidate.source in {"event_leadlag_alpha", "fast_l2_scout", "l2_research_loop", "alpha_factory"}:
+    if candidate.source == "bitcoin_regime":
+        source_status = str(
+            candidate.evidence.get("summary", {}).get("source_status")
+            or candidate.evidence.get("source", {}).get("status")
+            or ""
+        )
+        if source_status != "ok":
+            return "REFRESH_BITCOIN_NODE_HEALTH"
+        return "SPLIT_REPLAY_BY_BTC_REGIME"
+    if candidate.source in {
+        "event_leadlag_alpha",
+        "fast_l2_scout",
+        "l2_research_loop",
+        "alpha_factory",
+    }:
         if "needs_more_samples" in veto_set:
             return "RECORD_MORE_TICKS"
         if "execution_route_blocked" in veto_set and priority < 55:
@@ -686,6 +773,8 @@ def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
         state_score = 100.0
     elif candidate.source == "artifact_health":
         state_score = 85.0 if candidate.state == "MISSING_ARTIFACT" else 70.0
+    elif candidate.source == "bitcoin_regime":
+        state_score = 78.0 + min(_num(m.get("stress_score")), 20.0)
     elif "UNDER_SAMPLED" in candidate.state:
         state_score = 20.0
     elif candidate.state == "REJECT" and _num(m.get("oos_net_usd")) > 0:
@@ -726,7 +815,10 @@ def _candle_repair_action(row: dict[str, Any]) -> str:
     reasons = " | ".join(str(reason).lower() for reason in row.get("reasons", []))
     if any(term in reasons for term in ("payoff", "profit factor", "pf below", "avg win")):
         return "REPAIR_EXIT_PAYOFF"
-    if any(term in reasons for term in ("zero-trade", "zero trade", "windows with", "traded windows")):
+    if any(
+        term in reasons
+        for term in ("zero-trade", "zero trade", "windows with", "traded windows")
+    ):
         return "CHECK_ZERO_WINDOW_STABILITY"
     if any(term in reasons for term in ("is/oos", "collapse", "concentration")):
         return "PRE_REGISTER_NEAR_PASS_JUDGMENT"
@@ -746,7 +838,12 @@ def _route_label(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        return str(value.get("route") or value.get("decision") or value.get("route_decision") or "UNKNOWN")
+        return str(
+            value.get("route")
+            or value.get("decision")
+            or value.get("route_decision")
+            or "UNKNOWN"
+        )
     if value is None:
         return "UNKNOWN"
     return str(value)

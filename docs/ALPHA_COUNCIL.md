@@ -15,6 +15,7 @@ research artifacts in `research/live_research/`:
 - `l2_latest.json`
 - `daily_scalper_latest.json`
 - `alpha_distillation_latest.json`
+- `bitcoin_regime_latest.json`
 
 It extracts candidates, then runs five deterministic agents:
 
@@ -36,8 +37,17 @@ remembers the work.
 
 The council also applies source quotas so one noisy feed cannot crowd out the
 rest of the signal funnel. Event lead-lag, candle walk-forward, daily scalper,
-alpha distillation, L2 scouts, and artifact-health rows each get bounded
-representation in the debate queue.
+alpha distillation, L2 scouts, Bitcoin network-regime context, and
+artifact-health rows each get bounded representation in the debate queue.
+
+Bitcoin regime rows are context-only. A calm/healthy BTC network is ignored.
+Stressed or unhealthy node/mempool state is routed into proof work:
+
+- healthy but stressed fee market -> `SPLIT_REPLAY_BY_BTC_REGIME`
+- missing, stale, or unsynced source -> `REFRESH_BITCOIN_NODE_HEALTH`
+
+This lets replay answer whether edges are conditional on Bitcoin fee-market
+stress without allowing mempool telemetry to create an order.
 
 Positive-after-fees lanes that still fail gates are not treated as generic
 rejects. They are routed into concrete repair work:

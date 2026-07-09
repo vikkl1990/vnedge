@@ -14,6 +14,8 @@ The workbench turns that answer into a restart-safe task:
 - `CHECK_ZERO_WINDOW_STABILITY` -> sparse-window stability task
 - `PRE_REGISTER_NEAR_PASS_JUDGMENT` -> untouched judgment task for a close reject
 - `REFRESH_STALE_ARTIFACT` -> research producer refresh task
+- `SPLIT_REPLAY_BY_BTC_REGIME` -> replay split by Bitcoin network/mempool regime
+- `REFRESH_BITCOIN_NODE_HEALTH` -> refresh read-only BTC node/mempool context
 
 It writes:
 
@@ -55,7 +57,10 @@ Every task remains blocked by the explicit proof gate it needs next, such as
 `conservative_replay_result`, `human_approved_manifest`, or
 `sample_size_and_coverage`. Repair tasks add their own blockers, for example
 `exit_repair_backtest`, `stability_resample_result`, or
-`fresh_artifact_publish`.
+`fresh_artifact_publish`. Bitcoin-regime context tasks are additionally blocked
+by `bitcoin_regime_artifact`, `per_regime_replay_report`, or
+`fresh_bitcoin_regime_artifact`; they are research context only, never trade
+permissions.
 
 ## Run It
 
