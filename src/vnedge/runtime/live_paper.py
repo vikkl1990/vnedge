@@ -421,6 +421,17 @@ class LivePaperSession:
         positions = self.exchange.get_positions()
         if not positions or self._plan is not None:
             return
+        pos = positions[0]
+        if stored is not None and not self._restored_stop_sane(
+            pos, stored["side"], float(stored["stop_price"])
+        ):
+            # corrupted/hand-edited store: refuse the plan; orphan-guard
+            # manual-flatten semantics are safer than a bad stop
+            self.journal.append("plan_restore_rejected", {
+                "reason": "stop fails sanity bounds", "stored": dict(stored),
+            })
+            logger.warning("restored plan REJECTED (insane stop)")
+            return
         if stored is not None:
             sig = SignalIntent(
                 stored["side"], stop_price=float(stored["stop_price"]),
@@ -432,7 +443,6 @@ class LivePaperSession:
             self.journal.append("plan_restored", dict(stored))
             logger.info("trade plan restored from account store: %s", sig.reason)
             return
-        pos = positions[0]
         if len(self.candles) <= self.strategy.warmup_bars:
             return
         df = self.strategy.prepare(self.candles)
@@ -441,12 +451,45 @@ class LivePaperSession:
         )
         if sig is None:
             return  # orphan guard will handle it (entries halted, manual flatten)
+        sig = self._clamp_synthesized_stop(pos, sig)
         self._plan = _LivePlan(sig, df["timestamp"].iloc[-1])
         self.journal.append("plan_rebuilt_on_resume", {
             "side": sig.side, "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price, "reason": sig.reason,
         })
         logger.info("trade plan REBUILT on resume: %s", sig.reason)
+
+    # A synthesized stop uses CURRENT ATR; after a volatile gap it could sit
+    # far wider than the original risk envelope (2026-07-09 audit finding).
+    # Cap rebuilt stop distance at this fraction of entry price — well above
+    # any normal 1.5-ATR distance, so it binds only in the pathological case.
+    _MAX_REBUILT_STOP_PCT = 0.03
+
+    def _restored_stop_sane(self, pos, side: str, stop: float) -> bool:
+        if not math.isfinite(stop) or stop <= 0:
+            return False
+        entry = pos.entry_price
+        if side == "long" and not stop < entry:
+            return False
+        if side == "short" and not stop > entry:
+            return False
+        return abs(stop - entry) / entry <= 3 * self._MAX_REBUILT_STOP_PCT
+
+    def _clamp_synthesized_stop(self, pos, sig: SignalIntent) -> SignalIntent:
+        entry = pos.entry_price
+        max_dist = self._MAX_REBUILT_STOP_PCT * entry
+        if abs(sig.stop_price - entry) <= max_dist:
+            return sig
+        clamped = entry - max_dist if sig.side == "long" else entry + max_dist
+        self.journal.append("plan_stop_clamped", {
+            "side": sig.side, "synthesized_stop": sig.stop_price,
+            "clamped_stop": clamped, "entry_price": entry,
+        })
+        logger.warning("synthesized stop %.6g beyond %.0f%% cap — clamped to %.6g",
+                       sig.stop_price, self._MAX_REBUILT_STOP_PCT * 100, clamped)
+        return SignalIntent(sig.side, stop_price=clamped,
+                            take_profit_price=sig.take_profit_price,
+                            reason=sig.reason + " [stop clamped on rebuild]")
 
     def _guard_orphaned_position(self) -> None:
         if self._orphan_position_guarded or self._plan is not None or self._parked_entries:
