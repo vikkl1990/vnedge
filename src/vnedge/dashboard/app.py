@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 from pathlib import Path
 
@@ -43,6 +44,8 @@ def create_app(
     snapshot_hz: float = 1.0,
     history_path: Path | None = None,
     research_path: Path | None = None,
+    alpha_council_path: Path | None = None,
+    alpha_workbench_path: Path | None = None,
 ) -> FastAPI:
     if not token or not token.strip():
         raise ValueError("DASHBOARD_TOKEN must be non-empty — no token, no dashboard")
@@ -55,6 +58,15 @@ def create_app(
         if not candidate:
             candidate = request.query_params.get("token", "")
         return hmac.compare_digest(candidate, token)
+
+    def _read_json_payload(path: Path | None, fallback: dict) -> dict:
+        if path is None or not path.exists():
+            return fallback
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return fallback  # mid-write race: serve a safe empty payload
+        return payload if isinstance(payload, dict) else fallback
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -92,14 +104,31 @@ def create_app(
         """Latest rolling walk-forward verdicts from the research loop."""
         if not _authorized(request):
             raise HTTPException(status_code=401, detail="missing or invalid token")
-        if research_path is None or not research_path.exists():
-            return JSONResponse({"results": []})
-        import json
+        return JSONResponse(_read_json_payload(research_path, {"results": []}))
 
-        try:
-            return JSONResponse(json.loads(research_path.read_text()))
-        except json.JSONDecodeError:
-            return JSONResponse({"results": []})  # mid-write race: serve empty
+    @app.get("/alpha-council")
+    async def alpha_council(request: Request) -> JSONResponse:
+        """Latest deterministic agent debate over research candidates."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        return JSONResponse(
+            _read_json_payload(
+                alpha_council_path,
+                {"summary": {}, "debates": [], "can_trade": False, "can_promote": False},
+            )
+        )
+
+    @app.get("/alpha-workbench")
+    async def alpha_workbench(request: Request) -> JSONResponse:
+        """Latest persistent proof-task backlog generated from the council."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        return JSONResponse(
+            _read_json_payload(
+                alpha_workbench_path,
+                {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False},
+            )
+        )
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

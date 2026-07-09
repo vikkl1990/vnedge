@@ -1,6 +1,7 @@
 """Dashboard — auth gates, snapshot schema, read-only surface."""
 
 import pytest
+import json
 from fastapi.testclient import TestClient
 
 from vnedge.config.risk_config import RiskConfig
@@ -51,6 +52,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html
+    assert "Alpha Council &amp; Proof Queue" in html
+    assert "Persistent Proof Queue" in html
     assert "LIVE ARMED" in html
 
 
@@ -90,6 +93,52 @@ def test_history_endpoint_auth_and_content(tmp_path):
 
 def test_history_without_file_is_empty(client):
     assert client.get("/history?token=t3st-token").json() == []
+
+
+def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
+    council = tmp_path / "alpha_council_latest.json"
+    workbench = tmp_path / "alpha_workbench_latest.json"
+    council.write_text(json.dumps({
+        "summary": {"debated": 2},
+        "debates": [{"next_action": "RUN_CONSERVATIVE_L2_REPLAY"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    workbench.write_text(json.dumps({
+        "summary": {"open_tasks": 1},
+        "tasks": [{"task_type": "conservative_replay"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(create_app(
+        provider,
+        token="t3st-token",
+        alpha_council_path=council,
+        alpha_workbench_path=workbench,
+    ))
+
+    assert client.get("/alpha-council").status_code == 401
+    assert client.get("/alpha-workbench").status_code == 401
+    assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
+    assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
+
+
+def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(create_app(
+        provider,
+        token="t3st-token",
+        alpha_council_path=tmp_path / "missing_council.json",
+        alpha_workbench_path=tmp_path / "missing_workbench.json",
+    ))
+
+    council = client.get("/alpha-council?token=t3st-token").json()
+    workbench = client.get("/alpha-workbench?token=t3st-token").json()
+    assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
+    assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
 
 
 def test_no_control_routes_exist(client):

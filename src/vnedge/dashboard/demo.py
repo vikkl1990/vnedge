@@ -91,6 +91,8 @@ async def main() -> None:
         token=TOKEN,
         snapshot_hz=2.0,
         research_path=Path("research/live_research/latest.json"),
+        alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
+        alpha_workbench_path=Path("research/live_research/alpha_workbench_latest.json"),
     )
     server = uvicorn.Server(
         uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")

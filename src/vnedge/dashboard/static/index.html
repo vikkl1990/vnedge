@@ -547,6 +547,11 @@
   .terminal.purple .terminal-head{border-bottom-color:rgba(169,140,255,.38)}
   .terminal-body{padding:10px;display:grid;gap:10px}
   .mini-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+  .council-grid{
+    padding:10px;
+    border-bottom:1px solid var(--line);
+    background:rgba(8,14,22,.72);
+  }
   .mini-card{
     min-width:0;
     border:1px solid var(--line);
@@ -749,6 +754,8 @@
   #positions{min-width:820px}
   #research{min-width:1180px}
   #ea_proposals{min-width:980px}
+  #council_debates{min-width:900px}
+  #workbench_tasks{min-width:920px}
   th,td{
     text-align:left;
     padding:7px 12px;
@@ -1185,17 +1192,65 @@
         </section>
 
     <section class="agent-board" id="agentBoard">
-      <h2>Edge Research Agent <span class="tag" id="ea_policy">exploratory only; cannot trade or promote</span></h2>
-      <div class="kv">
-        <span class="k">Universe</span><span class="v" id="ea_universe">--</span>
-        <span class="k">Candidate lanes</span><span class="v" id="ea_pairs">--</span>
+      <h2>Alpha Council &amp; Proof Queue <span class="tag" id="council_policy">research-only; agents cannot trade or promote</span></h2>
+      <div class="mini-grid council-grid" aria-label="agent council operating summary">
+        <div class="mini-card info">
+          <div class="small-label">Debated</div>
+          <div class="big" id="council_debated">--</div>
+          <div class="tiny" id="council_sources">candidate sources</div>
+        </div>
+        <div class="mini-card plan">
+          <div class="small-label">High Priority</div>
+          <div class="big" id="council_high">--</div>
+          <div class="tiny">research queue</div>
+        </div>
+        <div class="mini-card warn">
+          <div class="small-label">Blocked</div>
+          <div class="big" id="council_blocked">--</div>
+          <div class="tiny">needs proof</div>
+        </div>
+        <div class="mini-card info">
+          <div class="small-label">Open Tasks</div>
+          <div class="big" id="workbench_open">--</div>
+          <div class="tiny" id="workbench_delta">persistent backlog</div>
+        </div>
+        <div class="mini-card">
+          <div class="small-label">Top Action</div>
+          <div class="big" id="council_top_action">--</div>
+          <div class="tiny">next proof step</div>
+        </div>
+        <div class="mini-card">
+          <div class="small-label">Freshness</div>
+          <div class="big" id="council_freshness">--</div>
+          <div class="tiny">latest artifact age</div>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table id="ea_proposals"><thead><tr>
-          <th>Agent action</th><th>Target</th><th>Strategy</th><th>Status</th><th>Live shadow</th><th>Why</th>
-        </tr></thead><tbody></tbody></table>
+      <div class="terminal-split">
+        <div class="dense-panel">
+          <div class="dense-title">
+            <span>Live Agent Debate</span>
+            <span id="council_age">waiting</span>
+          </div>
+          <div class="table-wrap">
+            <table id="council_debates"><thead><tr>
+              <th>Priority</th><th>Candidate</th><th>Source</th><th>Action</th><th>Verdict</th><th>Primary blocker</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+          <div class="empty" id="council_empty">council artifact has not published yet</div>
+        </div>
+        <div class="dense-panel">
+          <div class="dense-title">
+            <span>Persistent Proof Queue</span>
+            <span id="workbench_age">waiting</span>
+          </div>
+          <div class="table-wrap">
+            <table id="workbench_tasks"><thead><tr>
+              <th>Priority</th><th>Task</th><th>Candidate</th><th>Route</th><th>Blocked by</th><th>Status</th>
+            </tr></thead><tbody></tbody></table>
+          </div>
+          <div class="empty" id="workbench_empty">proof queue is empty or awaiting council output</div>
+        </div>
       </div>
-      <div class="empty" id="ea_empty">agent has no open proposals -- all lanes either passing or awaiting data</div>
     </section>
 
     <section class="agent-board" id="shadowManifestBoard">
@@ -1531,6 +1586,8 @@
   const hist={};
   let eq=[];
   let lastResearch={results:[],drift_alerts:[]};
+  let lastCouncil={summary:{},debates:[]};
+  let lastWorkbench={summary:{},tasks:[]};
   let lastSnapshot=null;
 
   function finite(v){return Number.isFinite(Number(v));}
@@ -1757,12 +1814,14 @@
   const WN_MAX=8;
   const WN_FLASH_MS=2600;
   const WN_NOTABLE={signal_fired:"info",fill:"pos",shadow_approved:"pos",
-                    shadow_rejected:"neg",exit:"info",research_pass:"plan"};
+                    shadow_rejected:"neg",exit:"info",research_pass:"plan",
+                    council_high:"plan",proof_task:"info"};
   const wnSeen=new Set();
   const wnVerdicts={};
   const wnEvents=[];
   let wnLanesSeeded=false;
   let wnResearchSeeded=false;
+  let wnCouncilSeeded=false;
 
   function wnAdd(lane,ts,event,detail,fresh){
     const key=String(lane)+"|"+String(ts)+"|"+String(event);
@@ -1798,6 +1857,25 @@
               wnResearchSeeded);
     });
     wnResearchSeeded=true;
+  }
+
+  function wnCollectCouncil(council,workbench){
+    const debates=Array.isArray(council&&council.debates)?council.debates:[];
+    debates.slice(0,6).forEach(row=>{
+      if(num(row.priority_score)<75)return;
+      const c=row.candidate||{};
+      const lane=compactCandidate(c);
+      wnAdd(lane,council.generated_at||"","council_high",
+            councilAction(row.next_action)+" — "+String(row.council_verdict||""),
+            wnCouncilSeeded);
+    });
+    const ws=(workbench&&workbench.summary)||{};
+    if(num(ws.new_tasks)>0){
+      wnAdd("alpha workbench",workbench.generated_at||"","proof_task",
+            num(ws.new_tasks)+" new proof task(s); "+num(ws.open_tasks)+" open",
+            wnCouncilSeeded);
+    }
+    wnCouncilSeeded=true;
   }
 
   function wnRender(){
@@ -2873,8 +2951,153 @@
     return "collect more data / reject";
   }
 
+  function compactCandidate(c){
+    const sym=String((c&&c.symbol)||"--").split(":")[0];
+    const ex=String((c&&c.exchange)||"--").replace("usdm","");
+    const tf=String((c&&c.timeframe)||"").replace("unknown","");
+    const fam=String((c&&c.family)||"--").replace(/_v1$/,"").replaceAll("_"," ");
+    return sym+" / "+ex+(tf?" / "+tf:"")+" / "+fam;
+  }
+
+  function councilAction(action){
+    return String(action||"--").toLowerCase().replaceAll("_"," ");
+  }
+
+  function shortCouncilAction(action){
+    const a=String(action||"");
+    const labels={
+      RUN_CONSERVATIVE_L2_REPLAY:"L2 replay",
+      PRE_REGISTER_UNTOUCHED_JUDGMENT:"judgment",
+      PRE_REGISTER_NEAR_PASS_JUDGMENT:"near-pass",
+      REPAIR_EXIT_PAYOFF:"exit repair",
+      RECORD_MORE_TICKS:"record ticks",
+      REFRESH_STALE_ARTIFACT:"refresh",
+      CHECK_ZERO_WINDOW_STABILITY:"stability",
+      DIAGNOSE_CLOSE_REJECT:"diagnose",
+      QUEUE_SHADOW_TRIAL_AFTER_REPLAY:"shadow queue",
+      RESEARCH_MORE:"research"
+    };
+    return labels[a]||councilAction(a);
+  }
+
+  function topMapKey(map){
+    const entries=Object.entries(map||{});
+    if(!entries.length)return "--";
+    entries.sort((a,b)=>num(b[1])-num(a[1])||String(a[0]).localeCompare(String(b[0])));
+    return shortCouncilAction(entries[0][0])+" ("+num(entries[0][1])+")";
+  }
+
+  function councilVerdictTone(v){
+    const s=String(v||"");
+    if(s==="HIGH_PRIORITY_RESEARCH")return "pos";
+    if(s==="WATCHLIST")return "text-info";
+    if(s==="BLOCKED")return "neutral";
+    return "dimval";
+  }
+
+  function priorityTone(score){
+    const p=num(score);
+    if(p>=75)return "pos";
+    if(p>=55)return "text-info";
+    if(p>=40)return "neutral";
+    return "dimval";
+  }
+
+  function routeTone(route){
+    const r=String(route||"");
+    if(r.includes("TAKER_ALLOWED")||r.includes("MAKER_ONLY")||r.includes("CANDLE"))return "text-info";
+    if(r.includes("BLOCK"))return "neg";
+    return "neutral";
+  }
+
+  function firstBlocker(items){
+    const list=Array.isArray(items)?items:[];
+    if(!list.length)return "--";
+    return String(list[0]).replaceAll("_"," ");
+  }
+
+  function debateTitle(row){
+    const parts=(Array.isArray(row&&row.debate)?row.debate:[])
+      .map(o=>String(o.agent_id||"agent")+": "+String(o.argument||""))
+      .filter(Boolean);
+    return parts.join(" | ");
+  }
+
+  function setMiniCardTone(id,tone){
+    const e=$(id);
+    const card=e?e.closest(".mini-card"):null;
+    if(card)card.className="mini-card "+(tone||"");
+  }
+
+  function renderCouncil(council,workbench){
+    const c=council||{summary:{},debates:[]};
+    const w=workbench||{summary:{},tasks:[]};
+    lastCouncil=c;
+    lastWorkbench=w;
+    wnCollectCouncil(c,w);
+    wnRender();
+
+    const cs=c.summary||{};
+    const ws=w.summary||{};
+    const debates=Array.isArray(c.debates)?c.debates:[];
+    const tasks=Array.isArray(w.tasks)?w.tasks:[];
+
+    text("council_debated",num(cs.debated));
+    text("council_high",num(cs.high_priority));
+    text("council_blocked",num(cs.blocked));
+    text("workbench_open",num(ws.open_tasks));
+    text("workbench_delta",num(ws.new_tasks)+" new / "+num(ws.unchanged_tasks)+" unchanged");
+    text("council_top_action",topMapKey(cs.actions));
+    text("council_sources",Object.keys(cs.sources||{}).length+" sources");
+    text("council_freshness",c.generated_at?timeAgoFromIso(c.generated_at):"--");
+    text("council_age",c.generated_at?"updated "+utcClock(c.generated_at):"waiting");
+    text("workbench_age",w.generated_at?"updated "+utcClock(w.generated_at):"waiting");
+    text("council_policy",
+      (c.can_trade===false&&c.can_promote===false)
+        ?"research-only; agents cannot trade or promote"
+        :"policy unknown -- treat as research-only");
+    setMiniCardTone("council_high",num(cs.high_priority)>0?"plan":"idle");
+    setMiniCardTone("council_blocked",num(cs.blocked)>0?"warn":"good");
+    setMiniCardTone("workbench_open",num(ws.open_tasks)>0?"info":"idle");
+
+    const body=$("council_debates").querySelector("tbody");
+    body.replaceChildren();
+    debates.slice(0,14).forEach(row=>{
+      const candidate=row.candidate||{};
+      const tr=body.insertRow();
+      appendCell(tr,num(row.priority_score).toFixed(1),priorityTone(row.priority_score),debateTitle(row));
+      appendCell(tr,compactCandidate(candidate),"clip",candidate.candidate_id||"");
+      appendCell(tr,String(candidate.source||"--").replaceAll("_"," "));
+      appendCell(tr,shortCouncilAction(row.next_action),"clip",councilAction(row.next_action));
+      appendCell(tr,String(row.council_verdict||"--").replaceAll("_"," "),councilVerdictTone(row.council_verdict));
+      appendCell(tr,firstBlocker(row.vetoes),"clip",(Array.isArray(row.vetoes)?row.vetoes:[]).join(", "));
+    });
+    $("council_debates").style.display=debates.length?"table":"none";
+    $("council_empty").style.display=debates.length?"none":"block";
+
+    const tb=$("workbench_tasks").querySelector("tbody");
+    tb.replaceChildren();
+    tasks.slice(0,14).forEach(task=>{
+      const tr=tb.insertRow();
+      appendCell(tr,num(task.priority_score).toFixed(1),priorityTone(task.priority_score),task.rationale||"");
+      appendCell(tr,String(task.task_type||"--").replaceAll("_"," "),"clip",task.proof_step||"");
+      appendCell(tr,compactCandidate(task),"clip",task.candidate_id||"");
+      appendCell(tr,String(task.route_decision||"--").replaceAll("_"," "),routeTone(task.route_decision));
+      appendCell(tr,firstBlocker(task.blocked_by),"clip",(Array.isArray(task.blocked_by)?task.blocked_by:[]).join(", "));
+      appendBadge(tr.insertCell(),"OPEN",num(task.priority_score)>=75?"plan":"info");
+    });
+    $("workbench_tasks").style.display=tasks.length?"table":"none";
+    $("workbench_empty").style.display=tasks.length?"none":"block";
+  }
+
   function loadResearch(){
     fetchJSON("/research").then(renderResearch).catch(()=>{});
+  }
+
+  function loadCouncil(){
+    Promise.all([fetchJSON("/alpha-council"),fetchJSON("/alpha-workbench")])
+      .then(([c,w])=>renderCouncil(c,w))
+      .catch(()=>{});
   }
 
   const AGENT_ACTION_LABEL={
@@ -2884,6 +3107,7 @@
   };
 
   function renderAgent(edgeAgents, universe, leaderboard){
+    if(!$("ea_proposals"))return;
     const uni=universe||{};
     const lb=leaderboard||{};
     if(uni.targets){
@@ -2968,7 +3192,9 @@
   }
 
   loadResearch();
+  loadCouncil();
   setInterval(loadResearch,60000);
+  setInterval(loadCouncil,60000);
 
   let backoff=500;
   function connect(){
