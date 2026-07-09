@@ -49,6 +49,7 @@ from vnedge.data.candle_ingestor import ingest_candles
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
+from vnedge.research import data_burn
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
@@ -481,16 +482,26 @@ def auto_explore(
     *,
     targets: tuple[ResearchTarget, ...] = (),
     max_variants: int = 2,
+    burn_registry_path: Path | str | None = None,
 ) -> list[dict]:
     """Bounded auto-uplift: for the closest-to-passing failing lanes, run
     their top diagnostic suggestion as an EXPLORATORY variant. Results are
     labeled auto=true; a rolling PASS here is a candidate, never a promotion.
-    Already-tried variants are skipped so the search can't inflate the
-    multiple-comparisons count by re-running the same idea hourly."""
+
+    Attempts are keyed by proposal_id + the OOS data-window fingerprint
+    (window end day + params hash): the same variant is never re-run on a
+    materially-same window, and every run is recorded in the data-burn
+    registry as an exploratory_burn — the mechanical trail that judgment
+    rounds check before touching a window. Legacy (pre-fingerprint) keys in
+    auto_explore.json are still honored and skipped."""
     state = _load_auto_state()
     tried = set(state["tried"])
     config = BacktestConfig()
     variants: list[dict] = []
+    registry_path = (
+        Path(burn_registry_path) if burn_registry_path is not None
+        else data_burn.DEFAULT_REGISTRY_PATH
+    )
     plan = EdgeResearchAgent(max_variant_proposals=max_variants).plan(
         records, targets=targets
     )
@@ -498,8 +509,8 @@ def auto_explore(
     for proposal in runnable_variant_proposals(plan):
         if len(variants) >= max_variants:
             break
-        key = proposal["proposal_id"]
-        if key in tried:
+        legacy_key = proposal["proposal_id"]
+        if legacy_key in tried:  # backward compat: old permanent keys
             continue
         target = ResearchTarget(
             exchange=proposal["exchange"],
@@ -512,15 +523,25 @@ def auto_explore(
         except FileNotFoundError:
             funding = _empty_funding_frame()
         if proposal["strategy_id"] in _FUNDING_HISTORY_REQUIRED and funding.empty:
-            tried.add(key)
+            tried.add(legacy_key)  # venue-level gap — permanent skip
             logger.info(
                 "auto-explore %s skipped: funding history unavailable for %s",
-                key, target.label,
+                legacy_key, target.label,
             )
             continue
         cutoff = candles["timestamp"].iloc[-1] - pd.Timedelta(days=LOOKBACK_DAYS)
         c = candles[candles["timestamp"] >= cutoff].reset_index(drop=True)
         f = funding[funding["timestamp"] >= cutoff].reset_index(drop=True)
+        key = legacy_key + "|" + data_burn.window_fingerprint(
+            c["timestamp"].iloc[-1],
+            {
+                "fixed_params": proposal["fixed_params"],
+                "grid_axes": proposal["grid_axes"],
+                "test_bars": proposal["test_bars"],
+            },
+        )
+        if key in tried:  # same variant on a materially-same window
+            continue
         factory = (lambda proposal=proposal, f=f: (
             lambda **p: _build_strategy(
                 proposal["strategy_id"], f,
@@ -536,7 +557,7 @@ def auto_explore(
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("auto-explore %s failed: %s", key, exc)
-            tried.add(key)
+            tried.add(legacy_key)  # deterministic failure — permanent skip
             continue
         rec = wf_record(
             proposal["variant_id"], target.symbol, result,
@@ -552,6 +573,21 @@ def auto_explore(
         variants.append(rec)
         tried.add(key)
         state["total_attempts"] += 1
+        # Mechanical burn trail: the variant saw the full lookback range
+        # (train + test), so the whole range is burned for judgment purposes.
+        try:
+            data_burn.record_burn(
+                strategy_id=proposal["variant_id"],
+                symbol=target.symbol,
+                exchange=target.exchange,
+                window_start=c["timestamp"].iloc[0],
+                window_end=c["timestamp"].iloc[-1],
+                verdict=rec["verdict"],
+                note=f"auto_explore {key} (parent {proposal['parent_strategy']})",
+                path=registry_path,
+            )
+        except Exception as exc:  # noqa: BLE001 — trail must not kill the cycle
+            logger.warning("auto-explore burn record failed for %s: %s", key, exc)
         logger.info("auto-explore %s: %s (oos $%+.2f) — %s",
                     key, rec["verdict"], rec["oos_net_usd"], proposal["goal"])
 
