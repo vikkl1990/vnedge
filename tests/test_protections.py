@@ -269,6 +269,149 @@ async def test_live_stop_window_guard_blocks_entries(tmp_path):
     assert events.count("protection_blocked") == 1  # one contiguous episode
 
 
+# --- Backtester integration --------------------------------------------------------
+
+from vnedge.backtest.backtester import BacktestConfig, run_backtest  # noqa: E402
+from vnedge.data.schemas import normalize_candles  # noqa: E402
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent  # noqa: E402
+
+
+class FixedStopLong(BaseStrategy):
+    """Fires long on every flat bar with a FIXED stop/TP — identical decisions
+    regardless of fill prices, so both engines see the same exit sequence."""
+
+    strategy_id = "fixed_stop_long"
+    warmup_bars = 2
+
+    def prepare(self, candles):
+        return candles.copy()
+
+    def signal(self, df, index):
+        return SignalIntent("long", stop_price=95.0, take_profit_price=200.0)
+
+
+def frame(rows):
+    return normalize_candles(rows)
+
+
+def test_backtest_defaults_off_zero_behavior_change():
+    # Default config: a stop still allows the same-bar re-entry decision
+    # (filled next open) and the blocked list stays empty — the engine is
+    # bit-identical to its pre-protections behavior.
+    rows = [bar(i) for i in range(5)] + [bar(5, low=94.0, close=96.0)] \
+        + [bar(i) for i in range(6, 9)]
+    result = run_backtest(frame(rows), None, FixedStopLong(), BacktestConfig())
+
+    assert result.protection_blocked == ()
+    assert not result.config.protections.enabled
+    assert [t.exit_reason for t in result.trades] == ["stop", "end_of_data"]
+    ts = frame(rows)["timestamp"]
+    assert result.trades[0].exit_ts == ts.iloc[5]
+    assert result.trades[1].entry_ts == ts.iloc[6]  # re-entry decided ON the stop bar
+
+
+def test_backtest_cooldown_blocks_reentry_decisions():
+    rows = [bar(i) for i in range(5)] + [bar(5, low=94.0, close=96.0)] \
+        + [bar(i) for i in range(6, 11)]
+    config = BacktestConfig(protections=ProtectionConfig(cooldown_bars_after_stop=2))
+    result = run_backtest(frame(rows), None, FixedStopLong(), config)
+
+    ts = frame(rows)["timestamp"]
+    assert list(result.protection_blocked) == [
+        (ts.iloc[5], "post_exit_cooldown: 2 bar(s) remaining"),
+        (ts.iloc[6], "post_exit_cooldown: 1 bar(s) remaining"),
+    ]
+    # re-entry decided at bar 7, filled at bar 8's open
+    assert result.trades[1].entry_ts == ts.iloc[8]
+
+
+def test_backtest_exits_never_blocked_by_protections():
+    # While the window guard is saturated, an open position's stop still
+    # closes it — protections gate entries only (reduce-only invariant).
+    rows = [bar(i) for i in range(5)] + [bar(5, low=94.0, close=96.0),
+                                         bar(6), bar(7, low=94.0, close=96.0)] \
+        + [bar(i) for i in range(8, 11)]
+    config = BacktestConfig(
+        protections=ProtectionConfig(max_stops_per_window=1, stop_window_bars=50)
+    )
+    result = run_backtest(frame(rows), None, FixedStopLong(), config)
+
+    # guard armed by the FIRST stop; the position opened before it cannot
+    # exist (entries blocked), so exactly one stop trade — but crucially the
+    # stop exit at bar 5 itself went through while the guard was arming.
+    assert [t.exit_reason for t in result.trades] == ["stop"]
+    reasons = {r for _, r in result.protection_blocked}
+    assert reasons == {"stop_window_guard: 1 stops in last 50 bars (max 1)"}
+
+
+# --- Engine parity: identical blocked decisions in backtest and live runner --------
+
+
+PARITY_PROTECTIONS = ProtectionConfig(
+    cooldown_bars_after_stop=2, max_stops_per_window=2, stop_window_bars=8
+)
+
+
+def parity_rows():
+    """Bars 0..16 @ ~100 with stop-piercing lows (94 < 95) at bars 5 and 9."""
+    return [
+        bar(i, low=94.0, close=96.0) if i in (5, 9) else bar(i)
+        for i in range(17)
+    ]
+
+
+async def test_engine_parity_same_blocked_decisions(tmp_path):
+    rows = parity_rows()
+
+    # Backtest: full frame, decisions at close, fills next open.
+    result = run_backtest(
+        frame(rows), None, FixedStopLong(),
+        BacktestConfig(protections=PARITY_PROTECTIONS),
+    )
+    bt_blocked = [(ts.isoformat(), reason) for ts, reason in result.protection_blocked]
+
+    # Live runner: seed exactly the warmup bars, stream the rest — the first
+    # evaluated bar index matches the backtester's loop start.
+    feed = FakeFeed([r for r in rows[2:]])
+    config = RunnerConfig(
+        mode=RunnerMode.PAPER, symbol=SYM, reconcile_every_bars=100,
+        tick_stops_enabled=False, protections=PARITY_PROTECTIONS,
+    )
+    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    journal = DecisionJournal(tmp_path / "journal.jsonl")
+    gateway = PreTradeRiskGateway(config.risk, KillSwitch(kill_file=tmp_path / "KILL"))
+    om = OrderManager(gateway, journal, PaperBroker(exchange))
+    session = LivePaperSession(
+        FixedStopLong(), feed, frame(rows[:2]), config,
+        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+    )
+    await session.run(max_bars=15)
+    live_blocked = [
+        (s["bar_ts"], s["skip_reason"]) for s in blocked_evals(session)
+    ]
+
+    assert bt_blocked == live_blocked
+    # the sequence exercises cooldown-only, combined, and guard-only blocks
+    expected_ts = frame(rows)["timestamp"]
+    assert bt_blocked == [
+        (expected_ts.iloc[5].isoformat(), "post_exit_cooldown: 2 bar(s) remaining"),
+        (expected_ts.iloc[6].isoformat(), "post_exit_cooldown: 1 bar(s) remaining"),
+        (expected_ts.iloc[9].isoformat(),
+         "post_exit_cooldown: 2 bar(s) remaining; "
+         "stop_window_guard: 2 stops in last 8 bars (max 2)"),
+        (expected_ts.iloc[10].isoformat(),
+         "post_exit_cooldown: 1 bar(s) remaining; "
+         "stop_window_guard: 2 stops in last 8 bars (max 2)"),
+        (expected_ts.iloc[11].isoformat(),
+         "stop_window_guard: 2 stops in last 8 bars (max 2)"),
+        (expected_ts.iloc[12].isoformat(),
+         "stop_window_guard: 2 stops in last 8 bars (max 2)"),
+    ]
+    # both engines re-entered after release: two stops then a live position
+    assert [t.exit_reason for t in result.trades[:2]] == ["stop", "stop"]
+    assert len(exchange.get_positions()) == 1
+
+
 async def test_live_take_profit_exit_does_not_arm_cooldown(tmp_path):
     # Refinement vs PR #92's any-exit cooldown: a take-profit exit leaves the
     # very same bar free to re-enter even with the legacy alias enabled.
