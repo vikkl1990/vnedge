@@ -3,7 +3,6 @@
 import json
 
 import pytest
-import json
 from fastapi.testclient import TestClient
 
 from vnedge.config.risk_config import RiskConfig
