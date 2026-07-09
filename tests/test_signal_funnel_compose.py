@@ -51,6 +51,18 @@ def test_daily_scalper_and_distillation_refresh_on_slow_interval():
     assert "./research/live_research:/app/research/live_research" in distill["volumes"]
 
 
+def test_orderflow_footprint_miner_refreshes_replay_required_artifact():
+    services = compose_services()
+    service = services["orderflow-footprint-miner"]
+
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.orderflow_footprint"]
+    assert "--interval-seconds" in service["command"]
+    assert "--bar-seconds" in service["command"]
+    assert "--max-candidates" in service["command"]
+    assert "./data:/app/data:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+
+
 def test_alpha_council_waits_for_research_artifact_producers():
     service = compose_services()["alpha-council"]
 
@@ -58,6 +70,7 @@ def test_alpha_council_waits_for_research_artifact_producers():
         "daily-scalper-pack",
         "alpha-distillation",
         "event-leadlag-miner",
+        "orderflow-footprint-miner",
         "bitcoin-regime-sensor",
     }
 

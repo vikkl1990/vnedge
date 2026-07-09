@@ -30,6 +30,7 @@ SOURCE_QUOTAS = {
     "artifact_health": 6,
     "bitcoin_regime": 4,
     "fast_l2_scout": 4,
+    "orderflow_footprint": 4,
     "l2_research_loop": 4,
     "alpha_factory": 4,
 }
@@ -38,6 +39,7 @@ ARTIFACT_MAX_AGE_SECONDS = {
     "latest.json": 2 * 3600,
     "event_leadlag_latest.json": 2 * 3600,
     "l2_scout_latest.json": 45 * 60,
+    "orderflow_footprint_latest.json": 2 * 3600,
     "l2_latest.json": 7 * 3600,
     "daily_scalper_latest.json": 7 * 3600,
     "alpha_distillation_latest.json": 7 * 3600,
@@ -48,6 +50,7 @@ ARTIFACT_PRODUCERS = {
     "latest.json": "research-loop",
     "event_leadlag_latest.json": "event-leadlag-miner",
     "l2_scout_latest.json": "l2-fast-scout",
+    "orderflow_footprint_latest.json": "orderflow-footprint-miner",
     "l2_latest.json": "l2-research-loop",
     "daily_scalper_latest.json": "daily-scalper-pack",
     "alpha_distillation_latest.json": "alpha-distillation",
@@ -149,6 +152,9 @@ def collect_candidates(
     candidates.extend(_candle_candidates(_read_json(research / "latest.json")))
     candidates.extend(_event_leadlag_candidates(_read_json(research / "event_leadlag_latest.json")))
     candidates.extend(_fast_l2_candidates(_read_json(research / "l2_scout_latest.json")))
+    candidates.extend(_orderflow_footprint_candidates(
+        _read_json(research / "orderflow_footprint_latest.json")
+    ))
     candidates.extend(_l2_loop_candidates(_read_json(research / "l2_latest.json")))
     candidates.extend(_daily_scalper_candidates(_read_json(research / "daily_scalper_latest.json")))
     candidates.extend(_alpha_distillation_candidates(
@@ -286,6 +292,52 @@ def _fast_l2_candidates(payload: dict | None) -> list[AlphaCandidate]:
                 "avg_forward_bps": _num(row.get("avg_forward_bps")),
                 "avg_net_bps": avg_net,
                 "profit_factor": pf,
+            },
+            evidence=row,
+        ))
+    return out
+
+
+def _orderflow_footprint_candidates(payload: dict | None) -> list[AlphaCandidate]:
+    out: list[AlphaCandidate] = []
+    rows = (
+        (payload or {}).get("candidates")
+        or (payload or {}).get("top_candidates")
+        or []
+    )
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        state = str(row.get("state", "UNKNOWN"))
+        if "ORDERFLOW" not in state and _num(row.get("score")) <= 0:
+            continue
+        exchange = str(row.get("exchange", "unknown"))
+        symbol = str(row.get("symbol", "unknown"))
+        day = str(row.get("day", "unknown_day"))
+        side = str(row.get("side", "unknown"))
+        start = str(row.get("start_ts_ms", "unknown_start"))
+        candidate_id = str(
+            row.get("candidate_id")
+            or f"orderflow_footprint|{exchange}|{symbol}|{day}|{start}|{side}"
+        )
+        out.append(AlphaCandidate(
+            candidate_id=candidate_id,
+            source="orderflow_footprint",
+            family=str(row.get("family") or "orderflow_footprint_v1"),
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=str(row.get("timeframe", "60s")),
+            state=state,
+            route_decision=_route_label(row.get("route_decision") or "REPLAY_REQUIRED"),
+            metrics={
+                "samples": _num(row.get("samples") or row.get("trade_count")),
+                "score": _num(row.get("score")),
+                "stacked_run_length": _num(row.get("stacked_run_length")),
+                "delta_ratio": _num(row.get("delta_ratio")),
+                "price_change_bps": _num(row.get("price_change_bps")),
+                "cvd_notional_usd": _num(row.get("cvd_notional_usd")),
+                "total_notional_usd": _num(row.get("total_notional_usd")),
+                "avg_spread_bps": _num(row.get("avg_spread_bps")),
             },
             evidence=row,
         ))
@@ -520,6 +572,9 @@ def _edge_advocate(candidate: AlphaCandidate) -> AgentOpinion:
     if "EDGE_CANDIDATE" in candidate.state:
         delta += 30
         notes.append("research miner labels this as an edge candidate")
+    if "ORDERFLOW_CANDIDATE" in candidate.state:
+        delta += 18
+        notes.append("public-flow footprint shows a stacked orderflow anomaly")
     if candidate.source == "artifact_health":
         delta += 18
         notes.append("stale or missing research evidence is blocking the signal funnel")
@@ -625,7 +680,12 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
     if net_bps > 8:
         delta += 10
         notes.append(f"net bps appears above scalper fee wall: {net_bps:.2f}")
-    elif candidate.source in {"fast_l2_scout", "l2_research_loop", "alpha_factory"}:
+    elif candidate.source in {
+        "fast_l2_scout",
+        "orderflow_footprint",
+        "l2_research_loop",
+        "alpha_factory",
+    }:
         delta -= 10
         notes.append(f"net bps buffer is weak for scalping: {net_bps:.2f}")
     return AgentOpinion(
@@ -644,6 +704,7 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     if candidate.source in {
         "event_leadlag_alpha",
         "fast_l2_scout",
+        "orderflow_footprint",
         "l2_research_loop",
         "alpha_factory",
     }:
@@ -688,6 +749,7 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
     if candidate.source in {
         "event_leadlag_alpha",
         "fast_l2_scout",
+        "orderflow_footprint",
         "l2_research_loop",
         "alpha_factory",
     }:
@@ -769,6 +831,8 @@ def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
         state_score = 120.0
     elif "EDGE_CANDIDATE_MAKER" in candidate.state:
         state_score = 110.0
+    elif "ORDERFLOW_CANDIDATE" in candidate.state:
+        state_score = 92.0
     elif candidate.state == "PASS":
         state_score = 100.0
     elif candidate.source == "artifact_health":

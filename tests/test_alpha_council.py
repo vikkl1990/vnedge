@@ -120,6 +120,83 @@ def test_alpha_council_under_sampled_l2_candidate_records_more_ticks(tmp_path):
     assert debate["can_trade"] is False
 
 
+def test_alpha_council_routes_orderflow_candidates_to_replay(tmp_path):
+    write_json(
+        tmp_path / "orderflow_footprint_latest.json",
+        {
+            "miner_id": "orderflow_footprint_v1",
+            "can_trade": False,
+            "candidates": [
+                {
+                    "candidate_id": "orderflow_footprint|delta|SOL|20260706|1|buy",
+                    "exchange": "delta_india",
+                    "symbol": "SOL/USD:USD",
+                    "day": "20260706",
+                    "family": "orderflow_footprint_v1",
+                    "side": "buy",
+                    "timeframe": "60s",
+                    "state": "ORDERFLOW_CANDIDATE",
+                    "route_decision": "REPLAY_REQUIRED",
+                    "samples": 42,
+                    "stacked_run_length": 4,
+                    "score": 88.2,
+                    "delta_ratio": 0.82,
+                    "price_change_bps": 9.4,
+                    "cvd_notional_usd": 125_000.0,
+                    "total_notional_usd": 22_000.0,
+                    "trade_count": 42,
+                    "can_trade": False,
+                    "can_promote": False,
+                }
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "orderflow_footprint"
+    )
+
+    assert debate["candidate"]["family"] == "orderflow_footprint_v1"
+    assert debate["next_action"] == "RUN_CONSERVATIVE_L2_REPLAY"
+    assert "requires_conservative_l2_replay" in debate["vetoes"]
+    assert debate["can_trade"] is False
+    assert debate["can_promote"] is False
+
+
+def test_alpha_council_records_more_ticks_for_under_sampled_orderflow(tmp_path):
+    write_json(
+        tmp_path / "orderflow_footprint_latest.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": "orderflow_footprint|bybit|XRP|20260706|1|sell",
+                    "exchange": "bybit",
+                    "symbol": "XRP/USDT:USDT",
+                    "family": "orderflow_footprint_v1",
+                    "timeframe": "60s",
+                    "state": "UNDER_SAMPLED_ORDERFLOW",
+                    "route_decision": "REPLAY_REQUIRED",
+                    "samples": 4,
+                    "score": 72.0,
+                    "can_trade": False,
+                }
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "orderflow_footprint"
+    )
+
+    assert debate["next_action"] == "RECORD_MORE_TICKS"
+    assert "needs_more_samples" in debate["vetoes"]
+    assert debate["can_trade"] is False
+
+
 def test_alpha_council_routes_positive_rejects_to_specific_repair(tmp_path):
     write_json(
         tmp_path / "latest.json",
