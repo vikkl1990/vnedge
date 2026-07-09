@@ -558,3 +558,45 @@ async def test_strategy_without_synthesis_still_orphans(tmp_path):
     await session.run(max_bars=0)
     session._guard_orphaned_position()
     assert session.gateway.kill_switch.is_active
+
+
+async def test_synthesized_stop_clamped_after_volatility_gap(tmp_path):
+    """Audit finding 2026-07-09: a rebuilt stop uses CURRENT ATR and could sit
+    far wider than the original envelope after a volatile restart — it must be
+    clamped to the max rebuilt-stop distance and journaled."""
+    from vnedge.strategy.base_strategy import SignalIntent as SI
+
+    class WideStopStrategy(AlwaysLong):
+        def synthesize_exit_plan(self, df, index, side, entry_price):
+            return SI("long", stop_price=entry_price * 0.80,  # 20% away — insane
+                      take_profit_price=entry_price * 1.1, reason="wide rebuild")
+
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, strategy=WideStopStrategy(),
+                                      mode=RunnerMode.PAPER)
+    exchange.set_quote(SYM, 100.0, 100.1)
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+    exchange.submit_order(PaperOrderRequest("x", SYM, True, 0.5))
+    session.restore_plan(None)
+    assert session._plan is not None
+    entry = exchange.get_positions()[0].entry_price
+    dist = abs(session._plan.signal.stop_price - entry) / entry
+    assert dist <= 0.03 + 1e-9
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert "plan_stop_clamped" in kinds
+
+
+async def test_corrupted_persisted_plan_rejected(tmp_path):
+    """A hand-edited/corrupted store plan (stop on wrong side / absurd) must be
+    refused — orphan-guard semantics beat a bad stop."""
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
+    exchange.set_quote(SYM, 100.0, 100.1)
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+    exchange.submit_order(PaperOrderRequest("x", SYM, True, 0.5))
+    session.restore_plan({"side": "long", "stop_price": 1.0,   # 99% away
+                          "take_profit_price": None,
+                          "entry_bar_ts": "2026-07-09T00:00:00+00:00"})
+    assert session._plan is None
+    kinds = [r["kind"] for r in session.journal.read_all()]
+    assert "plan_restore_rejected" in kinds
