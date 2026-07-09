@@ -66,7 +66,9 @@ class AgentProposal:
             test_bars=suggestion.test_bars,
             goal=suggestion.goal,
             rationale=suggestion.rationale,
-            auto_runnable=True,
+            # engine-level proposals (e.g. protections) are research-only:
+            # the auto-explorer must never run them
+            auto_runnable=suggestion.auto_runnable,
         )
 
 

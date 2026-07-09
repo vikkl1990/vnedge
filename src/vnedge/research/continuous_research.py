@@ -50,6 +50,7 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research import data_burn
+from vnedge.risk.protections import STOP_EXIT_REASONS
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
@@ -189,6 +190,16 @@ def wf_record(
         profit_factor = round(sum(wins) / sum(losses), 2)
     else:
         profit_factor = 999.0 if wins else 0.0
+    # Longest run of consecutive stop exits across the OOS trade sequence —
+    # feeds the diagnostics' consecutive_stops tag (engine-level protection
+    # proposals, never strategy-param tuning).
+    stop_streak = streak = 0
+    for t in all_trades:
+        if t.exit_reason in STOP_EXIT_REASONS:
+            streak += 1
+            stop_streak = max(stop_streak, streak)
+        else:
+            streak = 0
     record = {
         "attribution": side_attribution(result),
         "exchange": exchange,
@@ -204,6 +215,7 @@ def wf_record(
         "total_fees_usd": total_fees,
         "profit_factor": profit_factor,
         "payoff_ratio": payoff,
+        "max_consecutive_stops": stop_streak,
         "verdict": "PASS" if decision.passed else "REJECT",
         "reasons": list(decision.reject_reasons),
         "updated": datetime.now(UTC).isoformat(),
