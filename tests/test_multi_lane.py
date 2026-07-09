@@ -246,6 +246,56 @@ async def test_runner_continues_when_one_lane_build_fails(monkeypatch, tmp_path)
     assert faulted and faulted[0]["risk_status"] == "lane_error"
 
 
+async def test_build_lane_refuses_wrong_symbol_account(monkeypatch, tmp_path):
+    """build_lane passes the spec's symbol/equity expectations to restore_into."""
+    import json
+
+    import pytest
+
+    class FakeFeed:
+        quote = (100.0, 100.5)
+        funding_rate = 0.0001
+
+    monkeypatch.setattr(
+        multi_lane, "acquire_market_feed",
+        lambda exchange_id, *, symbol, timeframe="1m": FakeFeed(),
+    )
+
+    class FakeRest:  # skip the network warmup
+        def __init__(self, exchange):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetch_candles(self, *a, **k):
+            return []
+
+        async def fetch_funding_history(self, *a, **k):
+            return []
+
+    monkeypatch.setattr(multi_lane, "CcxtPublicClient", FakeRest)
+
+    # a moved/edited store holding a position in a DIFFERENT symbol
+    (tmp_path / "x.account.json").write_text(json.dumps({
+        "trial_id": "x", "saved_at": "2026-07-08T00:00:00+00:00",
+        "starting_equity": 500.0, "balance_usd": 500.0,
+        "positions": [
+            {"symbol": "ETH/USDT:USDT", "quantity": 1.0, "entry_price": 100.0}
+        ],
+        "tracker": {}, "plan": None,
+    }))
+    spec = LaneSpec(lane_id="x", exchange="bybit", symbol="BTC/USDT:USDT",
+                    timeframe="1h", strategy_id="trend_continuation_v1")
+    provider = MultiLaneProvider("x")
+
+    with pytest.raises(ValueError, match="wrong-symbol"):
+        await multi_lane.build_lane(spec, provider, journal_dir=tmp_path)
+
+
 def test_build_strategy_selects_trend_continuation():
     import pandas as pd
 

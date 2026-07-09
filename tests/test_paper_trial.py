@@ -126,6 +126,33 @@ def test_trial_session_wiring_and_report(tmp_path):
     assert record["report"]["mode"] == "paper_live"
 
 
+def test_trial_session_refuses_wrong_symbol_account(tmp_path):
+    """build_trial_session passes manifest expectations to restore_into."""
+    from tests.test_live_paper import FakeFeed
+
+    manifest = TrialManifest.load(write_manifest(tmp_path))
+    history = normalize_candles(
+        [[BASE + i * HOUR, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(400)]
+    )
+    seed_funding = normalize_funding(
+        [{"timestamp": BASE + i * 8 * HOUR, "fundingRate": 0.0001} for i in range(30)]
+    )
+    feed = FakeFeed([[BASE + 400 * HOUR, 100.0, 100.5, 99.5, 100.0, 5.0]])
+    # a moved/edited store holding a position in a DIFFERENT symbol
+    (tmp_path / "t1.account.json").write_text(json.dumps({
+        "trial_id": "t1", "saved_at": "2026-07-08T00:00:00+00:00",
+        "starting_equity": 500.0, "balance_usd": 500.0,
+        "positions": [
+            {"symbol": "ETH/USDT:USDT", "quantity": 1.0, "entry_price": 100.0}
+        ],
+        "tracker": {}, "plan": None,
+    }))
+    with pytest.raises(ValueError, match="wrong-symbol"):
+        build_trial_session(
+            manifest, feed, history, seed_funding, journal_dir=tmp_path
+        )
+
+
 class SettledFundingFeedStub:
     """Feed exposing SETTLED prints — the venue-with-history case."""
     funding_rate = 0.0042          # predicted — must NOT enter the series
