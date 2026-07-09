@@ -76,6 +76,10 @@ cp .env.example .env      # then edit — never commit .env
 pytest
 ```
 
+Tests marked `network` construct real exchange clients (ccxt / ccxt.pro /
+native websockets). They run in the default suite; for a fully offline
+environment deselect them with `pytest -m "not network"`.
+
 ## Non-negotiable safety rules
 
 - API keys are trade-only. Withdrawal permission is never enabled. IP whitelist on.

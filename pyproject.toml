@@ -42,6 +42,9 @@ vnedge = ["dashboard/static/*.html"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "network: constructs real exchange clients (ccxt / ccxt.pro / native ws); deselect with -m 'not network' for fully offline runs",
+]
 
 [tool.ruff]
 line-length = 100

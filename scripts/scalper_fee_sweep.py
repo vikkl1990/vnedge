@@ -1,6 +1,10 @@
-"""Scalper gauntlet — the 1-minute fee-wall test.
+"""Scalper fee sweep (formerly the "scalper gauntlet") — the 1-minute fee-wall test.
 
-    python -m vnedge.research.scalper_gauntlet --days 45
+    python scripts/scalper_fee_sweep.py --days 45
+
+Standalone research CLI, not an importable library module — it moved here
+from src/vnedge/research/scalper_gauntlet.py (nothing imports it). Requires
+the vnedge package on the path (pip install -e . or PYTHONPATH=src).
 
 Downloads 1m candles, runs the candle-approximation scalper through
 walk-forward at a SWEEP of fee levels, and reports out-of-sample net at

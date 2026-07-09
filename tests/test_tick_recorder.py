@@ -41,6 +41,7 @@ def test_levels_must_be_positive(tmp_path):
         TickRecorder("binanceusdm", ["BTC/USDT:USDT"], tmp_path, levels=0)
 
 
+@pytest.mark.network
 def test_book_limit_is_venue_safe():
     # 50 is the smallest depth Bybit swaps accept AND Binance USDT-M accepts;
     # limit=5 (the old value) errored on Bybit.
