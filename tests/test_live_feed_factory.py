@@ -3,6 +3,8 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from vnedge.data.ccxt_client import create_ccxt_async_exchange, resolve_ccxt_exchange_id
 from vnedge.exchange.live_feed import (
     DeltaWsFeed,
@@ -13,6 +15,7 @@ from vnedge.exchange.live_feed import (
 )
 
 
+@pytest.mark.network
 async def test_delta_india_uses_india_rest_host():
     assert resolve_ccxt_exchange_id("delta_india") == "delta"
     exchange = create_ccxt_async_exchange("delta_india")
@@ -23,6 +26,7 @@ async def test_delta_india_uses_india_rest_host():
         await exchange.close()
 
 
+@pytest.mark.network
 async def test_feed_factory_routes_validated_websocket_venues():
     assert supports_ccxt_pro_feed("binanceusdm") is True
     assert supports_ccxt_pro_feed("bybit") is True
@@ -38,6 +42,7 @@ async def test_feed_factory_routes_validated_websocket_venues():
         await bybit.stop()
 
 
+@pytest.mark.network
 async def test_feed_factory_routes_delta_to_native_websocket():
     # Delta has no CCXT Pro class, but it does have a native public websocket.
     assert supports_ccxt_pro_feed("delta_india") is False
@@ -54,6 +59,7 @@ async def test_feed_factory_routes_delta_to_native_websocket():
         await feed.stop()
 
 
+@pytest.mark.network
 async def test_delta_ws_candles_emit_closed_bars_with_monotonic_dedup():
     feed = create_market_feed("delta_india", symbol="BTC/USD:USD", timeframe="1h")
     try:
@@ -99,6 +105,7 @@ class _FakeRestExchange:
         pass
 
 
+@pytest.mark.network
 async def test_delta_rest_candle_fallback_only_when_ws_is_stale():
     feed = create_market_feed("delta_india", symbol="BTC/USD:USD", timeframe="1m")
     step_ms = 60_000

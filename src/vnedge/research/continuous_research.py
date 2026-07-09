@@ -28,7 +28,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -700,49 +700,62 @@ def _stream_days(stream_root: Path) -> set[str]:
     return {d for d in days if len(d) == 8 and d.isdigit()}
 
 
-def publish(records: list[dict], started: float,
-            drift_alerts: list[dict] | None = None,
-            auto_state: dict | None = None,
-            agent_plan: dict | None = None,
-            edge_leaderboard: dict | None = None,
-            universe: dict | None = None,
-            scalper_research: dict | None = None,
-            alpha_factory: dict | None = None,
-            scalper_parameter_registry: dict | None = None,
-            live_shadow_perf: dict | None = None,
-            event_taker_replay: dict | None = None) -> None:
+@dataclass(frozen=True)
+class ResearchPayload:
+    """Everything one research cycle publishes to latest.json / feed.jsonl.
+
+    Fields mirror the published document's sections; all are optional so
+    partial publishers (tests, degraded cycles) get the same empty-section
+    placeholders the dashboard expects.
+    """
+
+    records: list[dict] = field(default_factory=list)
+    started: float = field(default_factory=time.time)
+    drift_alerts: list[dict] = field(default_factory=list)
+    auto_state: dict = field(default_factory=dict)
+    agent_plan: dict = field(default_factory=dict)
+    edge_leaderboard: dict = field(default_factory=dict)
+    universe: dict = field(default_factory=dict)
+    scalper_research: dict = field(default_factory=dict)
+    alpha_factory: dict = field(default_factory=dict)
+    scalper_parameter_registry: dict = field(default_factory=dict)
+    live_shadow_perf: dict = field(default_factory=dict)
+    event_taker_replay: dict = field(default_factory=dict)
+
+
+def publish(payload: ResearchPayload) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
+    doc = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "cycle_seconds": round(time.time() - started, 1),
+        "cycle_seconds": round(time.time() - payload.started, 1),
         "lookback_days": LOOKBACK_DAYS,
         "note": "rolling exploratory walk-forward — a PASS is a candidate "
                 "signal, not a promotion; judgment requires untouched data. "
                 "auto=true rows are machine-proposed uplift variants, "
                 "exploratory only.",
-        "results": records,
-        "drift_alerts": drift_alerts or [],
-        "universe": universe or {},
-        "scalper_research": scalper_research or {},
-        "alpha_factory": alpha_factory or {},
-        "scalper_parameter_registry": scalper_parameter_registry or {},
-        "event_taker_replay": event_taker_replay or {},
+        "results": payload.records,
+        "drift_alerts": payload.drift_alerts or [],
+        "universe": payload.universe or {},
+        "scalper_research": payload.scalper_research or {},
+        "alpha_factory": payload.alpha_factory or {},
+        "scalper_parameter_registry": payload.scalper_parameter_registry or {},
+        "event_taker_replay": payload.event_taker_replay or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         # live virtual track record of the shadow lanes (read-only journal
         # aggregation; observability evidence, never a gate)
-        "live_shadow_perf": live_shadow_perf or {},
-        "edge_agents": agent_plan or {},
-        "edge_leaderboard": edge_leaderboard or {},
+        "live_shadow_perf": payload.live_shadow_perf or {},
+        "edge_agents": payload.agent_plan or {},
+        "edge_leaderboard": payload.edge_leaderboard or {},
         "auto_explore": {
-            "total_attempts": (auto_state or {}).get("total_attempts", 0),
-            "distinct_variants": len((auto_state or {}).get("tried", [])),
+            "total_attempts": (payload.auto_state or {}).get("total_attempts", 0),
+            "distinct_variants": len((payload.auto_state or {}).get("tried", [])),
         },
     }
     tmp = OUT_DIR / "latest.json.tmp"
-    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.write_text(json.dumps(doc, indent=2))
     tmp.replace(OUT_DIR / "latest.json")
     with open(OUT_DIR / "feed.jsonl", "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload) + "\n")
+        fh.write(json.dumps(doc) + "\n")
 
 
 async def run_cycle() -> list[dict]:
@@ -879,8 +892,11 @@ async def run_cycle() -> list[dict]:
         l2.get("scalper_parameter_registry")
         or DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict()
     )
-    publish(
-        records, started, drift, _load_auto_state(),
+    publish(ResearchPayload(
+        records=records,
+        started=started,
+        drift_alerts=drift,
+        auto_state=_load_auto_state(),
         agent_plan={
             "profitable_pairs": list(agent_plan.profitable_pairs),
             "proposals": list(agent_plan.proposals),
@@ -893,7 +909,7 @@ async def run_cycle() -> list[dict]:
         scalper_parameter_registry=scalper_parameter_registry,
         live_shadow_perf=live_shadow_perf,
         event_taker_replay=_load_event_taker_latest(),
-    )
+    ))
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
         logger.info("%s %s %s: %s (oos $%+.2f, %d trades, %d windows)%s",

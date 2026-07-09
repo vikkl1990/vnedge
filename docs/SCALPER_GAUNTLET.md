@@ -1,8 +1,15 @@
 # Scalper research gauntlet
 
+> **Note (2026-07-09):** the step-1 gauntlet script moved from
+> `src/vnedge/research/scalper_gauntlet.py` to `scripts/scalper_fee_sweep.py`
+> (it is a standalone research CLI with no importers, not a library module).
+> Run it as `python scripts/scalper_fee_sweep.py --days 45`. Commands and
+> results below that mention `vnedge.research.scalper_gauntlet` are the
+> historical record of the original runs.
+
 The user-endorsed proof path for scalping (do not skip steps):
 
-1. **1-minute candle approximation** with harsh fees — `scalper_gauntlet.py`
+1. **1-minute candle approximation** with harsh fees — `scripts/scalper_fee_sweep.py`
 2. **Tick/L2 recorder** — zero-risk data collection (`tick_recorder.py`, deployed)
 3. **True microstructure backtest** — replay recorded ticks through
    `replay_backtester.py`

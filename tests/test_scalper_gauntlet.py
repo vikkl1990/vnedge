@@ -1,6 +1,10 @@
 """1m scalper strategy signal logic + tick recorder buffer/flush."""
 
 import asyncio
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -69,6 +73,23 @@ def test_stop_required_by_construction():
         s = strat.signal(df, i)
         if s is not None:
             assert s.stop_price > 0
+
+
+def test_fee_sweep_script_still_runs_from_scripts_dir():
+    """The fee-wall sweep CLI moved out of the package to scripts/; it must
+    stay runnable as `python scripts/scalper_fee_sweep.py --help`."""
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "scalper_fee_sweep.py"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(repo_root / "src"), env.get("PYTHONPATH")) if p
+    )
+    proc = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "fee-wall" in proc.stdout
 
 
 # --- tick recorder buffer ---------------------------------------------------------

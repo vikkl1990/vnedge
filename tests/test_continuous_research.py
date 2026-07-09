@@ -114,14 +114,13 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     alpha = {"flow": ["mine_structural_hypotheses"], "flow_guards": {"can_trade": False}}
     params = {"version": "test", "can_trade": False}
     leaderboard = {"summary": {"rows": 1}, "policy": {"can_trade": False}}
-    cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
-               alpha_factory=alpha, scalper_parameter_registry=params,
-               edge_leaderboard=leaderboard)
-    cr.publish(records, started=0.0, universe={"targets": 1},
-               agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
-               alpha_factory=alpha, scalper_parameter_registry=params,
-               edge_leaderboard=leaderboard)
+    payload = cr.ResearchPayload(
+        records=records, started=0.0, universe={"targets": 1},
+        agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
+        alpha_factory=alpha, scalper_parameter_registry=params,
+        edge_leaderboard=leaderboard)
+    cr.publish(payload)
+    cr.publish(payload)
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["results"][0]["verdict"] == "PASS"
     assert latest["results"][0]["exchange"] == "binanceusdm"
@@ -138,6 +137,54 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     assert "not a promotion" in latest["note"]
     feed = (tmp_path / "live_research" / "feed.jsonl").read_text().strip().splitlines()
     assert len(feed) == 2
+
+
+def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch):
+    """The ResearchPayload refactor must not change the latest.json contract:
+    the file must be byte-identical to what the old kwargs-style publish wrote
+    (same keys, same order, same values, same formatting)."""
+    monkeypatch.setattr(cr, "OUT_DIR", tmp_path / "live_research")
+    records = [{"strategy": "s", "symbol": "BTC/USDT:USDT", "verdict": "PASS"}]
+    cr.publish(cr.ResearchPayload(
+        records=records,
+        started=0.0,
+        drift_alerts=[{"rule_id": "drift_verdict_flip"}],
+        auto_state={"tried": ["a", "b"], "total_attempts": 5},
+        agent_plan={"policy": {"can_trade": False}},
+        edge_leaderboard={"summary": {"rows": 1}},
+        universe={"targets": 2},
+        scalper_research={"flow": ["tick_l2_recorder"]},
+        alpha_factory={"flow": ["mine_structural_hypotheses"]},
+        scalper_parameter_registry={"version": "test"},
+        live_shadow_perf={"available": False},
+        event_taker_replay={"rows": []},
+    ))
+    text = (tmp_path / "live_research" / "latest.json").read_text()
+    written = json.loads(text)
+    legacy = {  # exactly what the pre-dataclass publish() kwargs produced
+        "generated_at": written["generated_at"],      # wall clock, not schema
+        "cycle_seconds": written["cycle_seconds"],    # wall clock, not schema
+        "lookback_days": cr.LOOKBACK_DAYS,
+        "note": "rolling exploratory walk-forward — a PASS is a candidate "
+                "signal, not a promotion; judgment requires untouched data. "
+                "auto=true rows are machine-proposed uplift variants, "
+                "exploratory only.",
+        "results": records,
+        "drift_alerts": [{"rule_id": "drift_verdict_flip"}],
+        "universe": {"targets": 2},
+        "scalper_research": {"flow": ["tick_l2_recorder"]},
+        "alpha_factory": {"flow": ["mine_structural_hypotheses"]},
+        "scalper_parameter_registry": {"version": "test"},
+        "event_taker_replay": {"rows": []},
+        "shadow_lanes": {"lanes": [], "blocked": []},
+        "live_shadow_perf": {"available": False},
+        "edge_agents": {"policy": {"can_trade": False}},
+        "edge_leaderboard": {"summary": {"rows": 1}},
+        "auto_explore": {"total_attempts": 5, "distinct_variants": 2},
+    }
+    assert text == json.dumps(legacy, indent=2)
+    feed_line = (tmp_path / "live_research" / "feed.jsonl").read_text().strip()
+    assert feed_line == json.dumps(legacy)
 
 
 def make_record(verdict="PASS", net=20.0, trades=6):

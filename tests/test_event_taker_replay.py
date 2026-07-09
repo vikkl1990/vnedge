@@ -284,7 +284,8 @@ def test_folding_hook_into_continuous_research(tmp_path, monkeypatch):
     assert not list(out_dir.glob("*.tmp"))              # atomic publish
     assert cr._load_event_taker_latest() == payload
 
-    cr.publish([], started=0.0, event_taker_replay=cr._load_event_taker_latest())
+    cr.publish(cr.ResearchPayload(
+        started=0.0, event_taker_replay=cr._load_event_taker_latest()))
     latest = json.loads((out_dir / "latest.json").read_text())
     assert latest["event_taker_replay"]["policy"]["can_trade"] is False
     assert latest["event_taker_replay"]["policy"]["execution_model"] == "taker_only"

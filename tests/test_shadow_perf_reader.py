@@ -187,11 +187,11 @@ def test_publish_folds_live_shadow_perf_into_latest(tmp_path, monkeypatch):
         "lanes": [{"strategy": STRATEGY, "exchange": "binanceusdm",
                    "symbol": SYMBOL, "virtual_trades": 6, "net_usd": 9.5}],
     }
-    cr.publish([], started=0.0, live_shadow_perf=perf)
+    cr.publish(cr.ResearchPayload(started=0.0, live_shadow_perf=perf))
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["live_shadow_perf"]["available"] is True
     assert latest["live_shadow_perf"]["lanes"][0]["virtual_trades"] == 6
 
-    cr.publish([], started=0.0)  # absent -> {} placeholder, never a crash
+    cr.publish(cr.ResearchPayload(started=0.0))  # absent -> {} placeholder, never a crash
     latest = json.loads((tmp_path / "live_research" / "latest.json").read_text())
     assert latest["live_shadow_perf"] == {}
