@@ -50,6 +50,11 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     html = r.text
     assert "Commercial Operator Workstation" in html
     assert "workspace navigation" in html
+    assert "Quant Command Deck" in html
+    assert "why no trade console" in html
+    assert "Maker fee wall" in html
+    assert "Route Radar" in html
+    assert "Signal Pressure" in html
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html

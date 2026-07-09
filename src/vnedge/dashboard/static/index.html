@@ -425,7 +425,321 @@
   .value.warn,.text-warn{color:var(--amber)}
   .value.bad,.text-bad{color:var(--red)}
   .value.info,.text-info{color:var(--blue)}
+  .value.plan,.text-plan{color:var(--violet)}
   .value.idle,.text-idle{color:var(--quiet)}
+
+  .quant-deck{
+    order:1;
+    margin-bottom:10px;
+    border-color:rgba(61,230,211,.28);
+    background:
+      linear-gradient(180deg, rgba(12,19,29,.99), rgba(7,11,17,.99)),
+      repeating-linear-gradient(90deg, rgba(61,230,211,.05) 0, rgba(61,230,211,.05) 1px, transparent 1px, transparent 88px);
+    position:relative;
+  }
+  .quant-deck:before{
+    content:"";
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    background:
+      linear-gradient(90deg, rgba(51,209,122,.08), transparent 24%, transparent 70%, rgba(255,184,77,.07)),
+      radial-gradient(circle at 18% 0%, rgba(61,230,211,.12), transparent 30%),
+      radial-gradient(circle at 84% 16%, rgba(255,90,104,.08), transparent 26%);
+    opacity:.86;
+  }
+  .quant-deck > *{position:relative}
+  .quant-deck h2{
+    min-height:42px;
+    border-bottom-color:rgba(61,230,211,.2);
+    background:linear-gradient(90deg, rgba(8,15,23,.98), rgba(9,16,24,.94), rgba(18,16,22,.94));
+  }
+  .deck-title{
+    display:flex;
+    align-items:center;
+    gap:9px;
+    min-width:0;
+  }
+  .deck-title:before{
+    content:"";
+    width:9px;
+    height:9px;
+    border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 16px rgba(61,230,211,.78);
+    flex:0 0 auto;
+  }
+  .deck-status{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    min-width:0;
+    color:var(--quiet);
+    font-family:var(--mono);
+    font-size:10px;
+    letter-spacing:0;
+    text-transform:none;
+  }
+  .deck-status span{
+    display:inline-flex;
+    align-items:center;
+    min-height:22px;
+    padding:3px 7px;
+    border:1px solid rgba(58,78,107,.72);
+    border-radius:var(--radius);
+    background:rgba(4,9,14,.74);
+    white-space:nowrap;
+  }
+  .quant-grid{
+    display:grid;
+    grid-template-columns:minmax(245px,1.12fr) minmax(245px,1.02fr) minmax(280px,1.25fr) minmax(225px,.9fr);
+    border-top:1px solid rgba(255,255,255,.035);
+  }
+  .quant-panel{
+    min-width:0;
+    padding:10px 12px 12px;
+    border-right:1px solid rgba(58,78,107,.44);
+  }
+  .quant-panel:last-child{border-right:none}
+  .qp-head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:10px;
+    min-height:34px;
+    margin-bottom:8px;
+  }
+  .qp-title{
+    color:#dfeaf7;
+    font-size:10px;
+    font-weight:900;
+    letter-spacing:.09em;
+    line-height:1.25;
+    text-transform:uppercase;
+  }
+  .qp-sub{
+    margin-top:3px;
+    color:var(--quiet);
+    font-size:9.5px;
+    line-height:1.25;
+  }
+  .qp-chip{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:22px;
+    padding:3px 7px;
+    border:1px solid rgba(58,78,107,.68);
+    border-radius:var(--radius);
+    color:var(--muted);
+    background:rgba(6,11,18,.78);
+    font-family:var(--mono);
+    font-size:10px;
+    font-weight:800;
+    white-space:nowrap;
+  }
+  .qp-metric{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:8px;
+    align-items:end;
+    padding:7px 0;
+    border-top:1px solid rgba(58,78,107,.32);
+  }
+  .qp-metric:first-of-type{border-top:none}
+  .qp-label{
+    color:var(--quiet);
+    font-size:9px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .qp-value{
+    font-family:var(--mono);
+    font-size:19px;
+    font-weight:900;
+    line-height:1.05;
+    text-align:right;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+  }
+  .qp-note{
+    grid-column:1/-1;
+    color:var(--muted);
+    font-size:9.5px;
+    line-height:1.3;
+  }
+  .deck-depth{
+    margin-top:8px;
+    border:1px solid rgba(58,78,107,.36);
+    background:rgba(3,8,13,.52);
+  }
+  .depth-row{
+    display:grid;
+    grid-template-columns:54px minmax(58px,1fr) minmax(0,1.1fr) minmax(58px,1fr);
+    gap:6px;
+    align-items:center;
+    min-height:22px;
+    padding:3px 6px;
+    border-bottom:1px solid rgba(58,78,107,.2);
+    font-family:var(--mono);
+    font-size:9.5px;
+    color:var(--muted);
+  }
+  .depth-row:last-child{border-bottom:none}
+  .depth-row.midline{
+    color:var(--text);
+    background:rgba(61,230,211,.07);
+    border-color:rgba(61,230,211,.2);
+  }
+  .depth-price{text-align:right;color:#dfeaf7}
+  .depth-bar{
+    position:relative;
+    height:7px;
+    min-width:24px;
+    overflow:hidden;
+    border-radius:0;
+    background:rgba(255,255,255,.04);
+  }
+  .depth-bar span{
+    display:block;
+    height:100%;
+    width:0%;
+    background:currentColor;
+    opacity:.8;
+  }
+  .depth-bar.bid{color:var(--green)}
+  .depth-bar.ask{color:var(--red)}
+  .decision-readout{
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    gap:8px;
+    align-items:center;
+    padding:9px;
+    margin-bottom:8px;
+    border:1px solid rgba(58,78,107,.42);
+    background:rgba(3,8,13,.55);
+  }
+  .decision-code{
+    font-family:var(--mono);
+    font-size:26px;
+    font-weight:950;
+    line-height:1;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+  }
+  .decision-detail{
+    min-width:0;
+    color:var(--muted);
+    font-size:11px;
+    line-height:1.35;
+  }
+  .why-list{
+    display:grid;
+    gap:4px;
+    min-height:102px;
+  }
+  .why-item{
+    display:grid;
+    grid-template-columns:58px minmax(0,1fr);
+    gap:7px;
+    align-items:center;
+    min-height:23px;
+    padding:4px 6px;
+    border:1px solid rgba(58,78,107,.32);
+    background:rgba(5,10,16,.48);
+    color:var(--muted);
+    font-size:10px;
+    line-height:1.25;
+  }
+  .why-item strong{
+    color:var(--text);
+    font-size:9px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+  .why-item.good{border-color:rgba(51,209,122,.34);background:rgba(51,209,122,.045)}
+  .why-item.warn{border-color:rgba(255,184,77,.38);background:rgba(255,184,77,.052)}
+  .why-item.bad{border-color:rgba(255,90,104,.4);background:rgba(255,90,104,.055)}
+  .why-item.idle{border-color:rgba(95,112,135,.38)}
+  .lane-radar{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:5px;
+  }
+  .lane-radar-row{
+    min-width:0;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:5px 8px;
+    align-items:center;
+    padding:6px 7px;
+    border:1px solid rgba(58,78,107,.34);
+    background:rgba(5,10,16,.5);
+  }
+  .lane-radar-row .lane-name{
+    min-width:0;
+    color:var(--text);
+    font-family:var(--mono);
+    font-size:10px;
+    font-weight:800;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-radar-row .lane-meta{
+    grid-column:1/-1;
+    min-width:0;
+    color:var(--quiet);
+    font-size:9.5px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-radar-row.good{border-color:rgba(51,209,122,.32)}
+  .lane-radar-row.warn{border-color:rgba(255,184,77,.34)}
+  .lane-radar-row.bad{border-color:rgba(255,90,104,.38)}
+  .lane-radar-row.plan{border-color:rgba(169,140,255,.33)}
+  .lane-radar-row .lane-state{
+    font-family:var(--mono);
+    font-size:9.5px;
+    font-weight:900;
+    white-space:nowrap;
+  }
+  .signal-bars{
+    display:grid;
+    gap:8px;
+  }
+  .signal-meter{
+    display:grid;
+    grid-template-columns:68px minmax(0,1fr) 48px;
+    gap:8px;
+    align-items:center;
+    color:var(--muted);
+    font-size:9.5px;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+  }
+  .signal-meter .bar{
+    height:8px;
+    border:1px solid rgba(58,78,107,.46);
+    background:rgba(255,255,255,.035);
+    overflow:hidden;
+  }
+  .signal-meter .bar span{display:block;height:100%;width:0%;background:var(--blue)}
+  .signal-meter.good .bar span{background:var(--green)}
+  .signal-meter.warn .bar span{background:var(--amber)}
+  .signal-meter.bad .bar span{background:var(--red)}
+  .signal-meter.info .bar span{background:var(--blue)}
+  .signal-meter.idle .bar span{background:var(--quiet)}
+  .signal-meter .val{
+    font-family:var(--mono);
+    font-size:10px;
+    color:var(--text);
+    text-align:right;
+  }
 
   .operator-board{order:2;background:rgba(7,12,20,.97)}
   .operator-head{
@@ -980,6 +1294,10 @@
     .market-tape{grid-template-columns:auto 1fr}
     .price-symbol{text-align:left}
     .command-strip{position:static;grid-template-columns:repeat(3,minmax(0,1fr))}
+    .quant-grid{grid-template-columns:1fr}
+    .quant-panel{border-right:none;border-top:1px solid rgba(58,78,107,.44)}
+    .quant-panel:first-child{border-top:none}
+    .deck-status{width:100%;overflow-x:auto;justify-content:flex-start}
     .truth-grid{grid-template-columns:1fr}
     .terminal-split{grid-template-columns:1fr}
     .workbench{grid-template-columns:1fr}
@@ -993,6 +1311,12 @@
     .brand-name{font-size:18px}
     .brand-sub{display:none}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .quant-deck h2{align-items:flex-start}
+    .deck-title{width:100%}
+    .qp-metric{grid-template-columns:1fr}
+    .qp-value{text-align:left;font-size:18px}
+    .depth-row{grid-template-columns:38px minmax(42px,1fr) minmax(0,.9fr) minmax(42px,1fr);gap:4px}
+    .lane-radar{grid-template-columns:1fr}
     .action-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .funnel-deck{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -1100,6 +1424,94 @@
       <div class="gate"><div class="label">Market feed</div><div class="value idle" id="gateFeed">--</div><div class="detail" id="gateFeedDetail">last event --</div></div>
       <div class="gate"><div class="label">Journal</div><div class="value idle" id="gateJournal">--</div><div class="detail" id="gateJournalDetail">WAL status</div></div>
     </div>
+
+    <section class="quant-deck" id="quantDeck" aria-label="Quant Command Deck">
+      <h2>
+        <span class="deck-title">Quant Command Deck</span>
+        <span class="deck-status">
+          <span id="qd_mode">mode --</span>
+          <span id="qd_clock">snapshot --</span>
+          <span>read-only terminal</span>
+        </span>
+      </h2>
+      <div class="quant-grid">
+        <div class="quant-panel" aria-label="market microstructure tape">
+          <div class="qp-head">
+            <div>
+              <div class="qp-title">Market Tape</div>
+              <div class="qp-sub">L1 proxy, fee wall, funding pulse</div>
+            </div>
+            <span class="qp-chip info" id="qd_symbol">--</span>
+          </div>
+          <div class="qp-metric">
+            <div class="qp-label">Mid price</div>
+            <div class="qp-value" id="qd_mid">--</div>
+            <div class="qp-note" id="qd_quote">bid / ask pending</div>
+          </div>
+          <div class="qp-metric">
+            <div class="qp-label">Maker fee wall</div>
+            <div class="qp-value text-warn" id="qd_fee_wall">8 bps</div>
+            <div class="qp-note" id="qd_fee_detail">maker entry + taker exit + slippage floor</div>
+          </div>
+          <div class="qp-metric">
+            <div class="qp-label">Funding</div>
+            <div class="qp-value" id="qd_funding">--</div>
+            <div class="qp-note" id="qd_feed_note">feed age --</div>
+          </div>
+          <div class="deck-depth" id="qd_ladder_rows" aria-label="top-of-book ladder proxy"></div>
+        </div>
+
+        <div class="quant-panel" aria-label="why no trade console">
+          <div class="qp-head">
+            <div>
+              <div class="qp-title">Why No Trade Console</div>
+              <div class="qp-sub">gateway truth before signal emotion</div>
+            </div>
+            <span class="qp-chip idle" id="qd_decision_chip">WAIT</span>
+          </div>
+          <div class="decision-readout">
+            <div class="decision-code value idle" id="qd_state">WAIT</div>
+            <div class="decision-detail">
+              <div id="qd_state_detail">awaiting snapshot</div>
+              <div id="qd_next_action">next action pending</div>
+            </div>
+          </div>
+          <div class="why-list" id="qd_why_list"></div>
+        </div>
+
+        <div class="quant-panel" aria-label="multi exchange route radar">
+          <div class="qp-head">
+            <div>
+              <div class="qp-title">Route Radar</div>
+              <div class="qp-sub">Binance, Bybit, Delta India lane pressure</div>
+            </div>
+            <span class="qp-chip plan" id="qd_lane_count">0 lanes</span>
+          </div>
+          <div class="qp-metric">
+            <div class="qp-label">Closest lane</div>
+            <div class="qp-value" id="qd_lane_focus">--</div>
+            <div class="qp-note" id="qd_lane_reason">waiting for scanner state</div>
+          </div>
+          <div class="lane-radar" id="qd_lanes"></div>
+        </div>
+
+        <div class="quant-panel" aria-label="signal pressure tape">
+          <div class="qp-head">
+            <div>
+              <div class="qp-title">Signal Pressure</div>
+              <div class="qp-sub">fire rate, approvals, fills, virtual edge</div>
+            </div>
+            <span class="qp-chip good" id="qd_shadow_state">SHADOW SAFE</span>
+          </div>
+          <div class="signal-bars">
+            <div class="signal-meter idle" id="qd_signal_meter"><span>Fire</span><div class="bar"><span id="qd_signal_bar"></span></div><span class="val" id="qd_signal_val">--</span></div>
+            <div class="signal-meter idle" id="qd_approval_meter"><span>Approve</span><div class="bar"><span id="qd_approval_bar"></span></div><span class="val" id="qd_approval_val">--</span></div>
+            <div class="signal-meter idle" id="qd_fill_meter"><span>Fill</span><div class="bar"><span id="qd_fill_bar"></span></div><span class="val" id="qd_fill_val">--</span></div>
+            <div class="signal-meter idle" id="qd_virtual_meter"><span>Virtual</span><div class="bar"><span id="qd_virtual_bar"></span></div><span class="val" id="qd_virtual_val">--</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <div class="zone zone-floor" id="zoneTradingFloor" aria-label="trading floor zone">
       <div class="zone-banner">Trading Floor <span class="zone-sub">live lanes &mdash; real + virtual money</span></div>
@@ -2029,9 +2441,8 @@
     });
   }
 
-  function renderFunnelJournal(lanes){
-    const laneRows=Array.isArray(lanes)?lanes:[];
-    const totals=laneRows.reduce((acc,l)=>{
+  function laneFunnelTotals(laneRows){
+    return (Array.isArray(laneRows)?laneRows:[]).reduce((acc,l)=>{
       const f=l.funnel||{};
       const sp=l.shadow_perf||null;
       acc.bars+=num(f.bars);
@@ -2045,6 +2456,11 @@
       acc.virtualNet+=sp?num(sp.net_usd):0;
       return acc;
     },{bars:0,signals:0,approved:0,rejected:0,sizing:0,submitted:0,fills:0,virtualTrades:0,virtualNet:0});
+  }
+
+  function renderFunnelJournal(lanes){
+    const laneRows=Array.isArray(lanes)?lanes:[];
+    const totals=laneFunnelTotals(laneRows);
     renderFunnelSummary(laneRows.length,totals);
     const fb=$("funnelBody");
     if(fb){
@@ -2130,6 +2546,202 @@
     setPressure("funnel_submit_bar",totals.signals?Math.min(100,totals.submitted/Math.max(1,totals.signals)*100):0,totals.submitted?"info":"idle");
     setPressure("funnel_fill_bar",fillRate==null?0:fillRate,fillRate==null?"idle":fillRate>=60?"good":fillRate>=20?"warn":"bad");
     setPressure("funnel_virtual_bar",totals.virtualTrades?Math.min(100,Math.abs(totals.virtualNet)*8):0,totals.virtualNet>0?"good":totals.virtualNet<0?"bad":"idle");
+  }
+
+  function deckPrice(v){
+    if(!finite(v))return "--";
+    const n=Math.abs(Number(v));
+    const d=n>=1000?1:n>=1?4:7;
+    return Number(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+  }
+  function setDeckChip(id,label,tone){
+    const e=$(id);
+    if(!e)return;
+    e.textContent=label||"--";
+    e.className="qp-chip "+(tone||"idle");
+  }
+  function setDeckMeter(meterId,barId,valueId,width,label,tone){
+    const meter=$(meterId);
+    const bar=$(barId);
+    if(meter)meter.className="signal-meter "+(tone||"idle");
+    if(bar)bar.style.width=Math.max(0,Math.min(100,num(width))).toFixed(1)+"%";
+    text(valueId,label);
+  }
+  function laneRank(chip){
+    const order={bad:0,warn:1,good:2,plan:3,info:4,idle:5};
+    return order[chip.tone]??6;
+  }
+  function deckFocusLane(lanes){
+    const rows=(Array.isArray(lanes)?lanes:[])
+      .map(l=>({lane:l,chip:laneStateChip(l)}));
+    rows.sort((a,b)=>{
+      const tone=laneRank(a.chip)-laneRank(b.chip);
+      if(tone)return tone;
+      return num(b.lane.positions)-num(a.lane.positions)
+        || num((b.lane.funnel||{}).signals)-num((a.lane.funnel||{}).signals);
+    });
+    return rows[0]||null;
+  }
+  function renderDeckLadder(price){
+    const box=$("qd_ladder_rows");
+    if(!box)return;
+    box.replaceChildren();
+    if(!price||!finite(price.mid)){
+      const row=document.createElement("div");
+      row.className="depth-row midline";
+      row.textContent="top-of-book proxy waiting for live feed";
+      box.appendChild(row);
+      return;
+    }
+    const bid=num(price.bid);
+    const ask=num(price.ask);
+    const mid=num(price.mid,(bid+ask)/2);
+    const spread=Math.max(Math.abs(ask-bid),mid*0.00001);
+    const step=Math.max(spread,mid*0.000055);
+    const rows=[];
+    for(let i=3;i>=1;i--)rows.push({side:"ask",level:"A"+i,price:ask+step*(i-1),width:32+i*15});
+    rows.push({side:"mid",level:"MID",price:mid,width:100});
+    for(let i=1;i<=3;i++)rows.push({side:"bid",level:"B"+i,price:bid-step*(i-1),width:80-i*13});
+    rows.forEach(r=>{
+      const row=document.createElement("div");
+      row.className="depth-row"+(r.side==="mid"?" midline":"");
+      const level=document.createElement("span");
+      level.textContent=r.level;
+      const left=document.createElement("div");
+      left.className="depth-bar "+(r.side==="ask"?"ask":r.side==="bid"?"bid":"");
+      const leftFill=document.createElement("span");
+      leftFill.style.width=(r.side==="ask"?r.width:0)+"%";
+      left.appendChild(leftFill);
+      const priceCell=document.createElement("span");
+      priceCell.className="depth-price";
+      priceCell.textContent=deckPrice(r.price);
+      const right=document.createElement("div");
+      right.className="depth-bar "+(r.side==="bid"?"bid":r.side==="ask"?"ask":"");
+      const rightFill=document.createElement("span");
+      rightFill.style.width=(r.side==="bid"?r.width:0)+"%";
+      right.appendChild(rightFill);
+      row.appendChild(level);
+      row.appendChild(left);
+      row.appendChild(priceCell);
+      row.appendChild(right);
+      box.appendChild(row);
+    });
+  }
+  function renderDeckWhy(items){
+    const box=$("qd_why_list");
+    if(!box)return;
+    box.replaceChildren();
+    const rows=items.length?items:[{tag:"CLEAR",text:"risk, journal, feed, and order state are clean"}];
+    rows.slice(0,4).forEach(item=>{
+      const row=document.createElement("div");
+      row.className="why-item "+(item.tone||"");
+      const tag=document.createElement("strong");
+      tag.textContent=item.tag;
+      const textNode=document.createElement("span");
+      textNode.textContent=item.text;
+      row.appendChild(tag);
+      row.appendChild(textNode);
+      box.appendChild(row);
+    });
+  }
+  function renderDeckLanes(lanes,s){
+    const box=$("qd_lanes");
+    if(!box)return;
+    box.replaceChildren();
+    const rows=(Array.isArray(lanes)&&lanes.length?lanes:[
+      {lane_id:"binance-primary",exchange:(s.feed_health||{}).exchange||"binance",symbol:s.symbol||"BTC/USDT:USDT",mode:s.mode||"paper",risk_status:s.risk_status||"ok"},
+      {lane_id:"bybit-shadow",exchange:"bybit",symbol:"BTC/ETH majors",mode:"planned shadow",risk_status:"not armed"},
+      {lane_id:"delta-india",exchange:"delta_india",symbol:"INR compliant perps",mode:"planned research",risk_status:"not armed"},
+    ]).map(l=>({lane:l,chip:laneStateChip(l)}));
+    rows.sort((a,b)=>laneRank(a.chip)-laneRank(b.chip));
+    rows.slice(0,6).forEach(({lane,chip})=>{
+      const row=document.createElement("div");
+      row.className="lane-radar-row "+chip.tone;
+      const name=document.createElement("div");
+      name.className="lane-name";
+      name.textContent=lane.lane_id||lane.exchange||"--";
+      const state=document.createElement("div");
+      state.className="lane-state text-"+(chip.tone||"idle");
+      state.textContent=chip.label;
+      const meta=document.createElement("div");
+      meta.className="lane-meta";
+      meta.textContent=[lane.exchange, lane.symbol, shortName(lane.strategy_id||lane.mode), chip.why].filter(Boolean).join(" / ");
+      row.appendChild(name);
+      row.appendChild(state);
+      row.appendChild(meta);
+      box.appendChild(row);
+    });
+  }
+  function renderQuantDeck(ctx){
+    const {
+      s, price, lat, feedTone, riskTone, journalTone, liveTone, dd,
+      exposure, unresolved, dailyStop, dailyLeft, entriesAllowed,
+      positions, orders
+    }=ctx;
+    const lanes=Array.isArray(s.lanes)?s.lanes:[];
+    const totals=laneFunnelTotals(lanes);
+    const fireRate=totals.bars>0?totals.signals/totals.bars*100:null;
+    const approvalRate=totals.signals>0?totals.approved/totals.signals*100:null;
+    const fillRate=totals.submitted>0?totals.fills/totals.submitted*100:null;
+    const focus=deckFocusLane(lanes);
+    const reasons=[];
+    if(s.kill_switch_active)reasons.push({tag:"BLOCK",text:"kill switch active; exits only",tone:"bad"});
+    if(journalTone==="bad")reasons.push({tag:"BLOCK",text:"journal unavailable; no new entries",tone:"bad"});
+    if(riskTone==="bad"&&s.risk_status!=="kill_switch_active")reasons.push({tag:"RISK",text:String(s.risk_status||"risk gateway blocked"),tone:"bad"});
+    if(feedTone==="bad")reasons.push({tag:"FEED",text:"market data stale: "+ageText(lat),tone:"bad"});
+    if(unresolved>0)reasons.push({tag:"ORDER",text:unresolved+" unresolved order"+(unresolved===1?"":"s"),tone:"bad"});
+    if(dailyLeft!=null&&dailyLeft<=0)reasons.push({tag:"STOP",text:"daily loss stop consumed",tone:"bad"});
+    if(!totals.signals)reasons.push({tag:"SCAN",text:"no lane has fired a signal in the current funnel",tone:"idle"});
+    else if(!totals.approved)reasons.push({tag:"GATE",text:"signals fired but none cleared shadow/risk approval",tone:"warn"});
+    if(focus&&focus.chip.tone==="warn")reasons.push({tag:"NEAR",text:(focus.lane.lane_id||"lane")+" close: "+focus.chip.why,tone:"warn"});
+    if(liveTone==="warn")reasons.push({tag:"LIVE",text:"live lock is enabled; verify venue and size",tone:"warn"});
+    if(dd>3)reasons.push({tag:"DD",text:"drawdown watch "+dd.toFixed(1)+"%",tone:"warn"});
+
+    const hardBlocked=reasons.some(r=>r.tone==="bad");
+    const state=hardBlocked?"BLOCK":totals.signals&&entriesAllowed?"ARMED":focus&&focus.chip.tone==="warn"?"SETUP":"SCAN";
+    const tone=hardBlocked?"bad":state==="ARMED"?"good":state==="SETUP"?"warn":"idle";
+    text("qd_mode",String(s.mode||"--").toUpperCase());
+    text("qd_clock",s.ts?("snapshot "+timeAgoFromIso(s.ts)):"snapshot --");
+    setDeckChip("qd_symbol",s.symbol||"--","info");
+    if(price){
+      text("qd_mid","$"+deckPrice(price.mid));
+      text("qd_quote","bid "+deckPrice(price.bid)+" / ask "+deckPrice(price.ask)+" / spread "+bps(price.spread_bps,2));
+    }else{
+      text("qd_mid","--");
+      text("qd_quote","bid / ask pending");
+    }
+    text("qd_funding",(num(s.funding_rate)*100).toFixed(4)+"%");
+    text("qd_feed_note","feed "+ageText(lat)+" / "+toneText(feedTone).toLowerCase());
+    renderDeckLadder(price);
+
+    setPlainTone("qd_state",state,"decision-code value "+tone);
+    setDeckChip("qd_decision_chip",state,tone);
+    text("qd_state_detail",hardBlocked?reasons.find(r=>r.tone==="bad").text:entriesAllowed?"entries can be evaluated by the gateway":"waiting for scanner quality");
+    text("qd_next_action",totals.signals?totals.signals+" signal(s), "+totals.approved+" approved, "+totals.fills+" fill(s)":"keep mining lanes; no capital action");
+    renderDeckWhy(reasons);
+
+    setDeckChip("qd_lane_count",lanes.length+" lane"+(lanes.length===1?"":"s"),lanes.length?"plan":"idle");
+    text("qd_lane_focus",focus?(focus.lane.lane_id||focus.lane.exchange||"--"):"--");
+    text("qd_lane_reason",focus?(focus.chip.label+" / "+focus.chip.why):"waiting for scanner state");
+    renderDeckLanes(lanes,s);
+
+    setDeckChip("qd_shadow_state",s.live_trading_enabled?"LIVE ARMED":"SHADOW SAFE",s.live_trading_enabled?"warn":"good");
+    setDeckMeter("qd_signal_meter","qd_signal_bar","qd_signal_val",
+      fireRate==null?0:Math.min(100,fireRate*20),
+      fireRate==null?"--":fireRate.toFixed(2)+"%",
+      totals.signals?"good":"idle");
+    setDeckMeter("qd_approval_meter","qd_approval_bar","qd_approval_val",
+      approvalRate==null?0:approvalRate,
+      approvalRate==null?"--":approvalRate.toFixed(1)+"%",
+      approvalRate==null?"idle":approvalRate>=60?"good":approvalRate>=25?"warn":"bad");
+    setDeckMeter("qd_fill_meter","qd_fill_bar","qd_fill_val",
+      fillRate==null?0:fillRate,
+      fillRate==null?"--":fillRate.toFixed(1)+"%",
+      fillRate==null?"idle":fillRate>=60?"good":fillRate>=20?"warn":"bad");
+    setDeckMeter("qd_virtual_meter","qd_virtual_bar","qd_virtual_val",
+      totals.virtualTrades?Math.min(100,Math.abs(totals.virtualNet)*8):0,
+      totals.virtualTrades?usd(totals.virtualNet):"--",
+      totals.virtualNet>0?"good":totals.virtualNet<0?"bad":"idle");
   }
   function renderLanes(lanes,snapshot){
     const s=snapshot||{};
@@ -2365,11 +2977,13 @@
     spark("sp_dd","dd","#ffb84d");
     spark("sp_feed","feed","#a98cff");
 
-    renderOperator({
+    const operatorCtx={
       s, feed, lat, feedTone, riskTone, journalTone, liveTone, dd,
       exposure, unresolved, dailyStop, dailyLeft, dailyLossUsed, entriesAllowed,
-      positions, orders, session
-    });
+      positions, orders, session, price
+    };
+    renderQuantDeck(operatorCtx);
+    renderOperator(operatorCtx);
     renderPositions(positions);
     renderOrders(orders);
     renderAlerts(alerts);
