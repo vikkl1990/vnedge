@@ -325,6 +325,8 @@ async def main() -> None:
             provider, token=token,
             history_path=journal_dir / f"{primary}.equity.jsonl",
             research_path=Path("research/live_research/latest.json"),
+            alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
+            alpha_workbench_path=Path("research/live_research/alpha_workbench_latest.json"),
         )
         server = uvicorn.Server(uvicorn.Config(
             app, host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),

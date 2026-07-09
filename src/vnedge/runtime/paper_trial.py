@@ -288,6 +288,8 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
             provider, token=os.environ["DASHBOARD_TOKEN"],
             history_path=Path("logs/paper_trials") / f"{manifest.trial_id}.equity.jsonl",
             research_path=Path("research/live_research/latest.json"),
+            alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
+            alpha_workbench_path=Path("research/live_research/alpha_workbench_latest.json"),
         )
         server = uvicorn.Server(
             uvicorn.Config(
