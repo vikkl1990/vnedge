@@ -115,6 +115,26 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Public trade footprint/CVD miner. It compresses recorded trade tape into
+  # delta/CVD/stacked-imbalance research artifacts and queues replay-required
+  # anomalies for the council. Research-only: no credentials, no orders.
+  orderflow-footprint-miner:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.orderflow_footprint",
+              "--interval-seconds", "${ORDERFLOW_FOOTPRINT_INTERVAL_SECONDS:-1800}",
+              "--bar-seconds", "${ORDERFLOW_FOOTPRINT_BAR_SECONDS:-60}",
+              "--max-candidates", "${ORDERFLOW_FOOTPRINT_MAX_CANDIDATES:-100}"]
+    environment:
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Scheduled cross-venue event lead-lag miner. It refreshes
   # event_leadlag_latest.json so the council/workbench do not keep debating
   # stale candidate definitions. Research-only: no credentials, no orders.
@@ -229,7 +249,7 @@ services:
   alpha-council:
     build: .
     restart: unless-stopped
-    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, bitcoin-regime-sensor]
+    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, orderflow-footprint-miner, bitcoin-regime-sensor]
     command: ["python", "-m", "vnedge.research.alpha_council",
               "--interval-seconds", "${ALPHA_COUNCIL_INTERVAL_SECONDS:-900}",
               "--max-candidates", "${ALPHA_COUNCIL_MAX_CANDIDATES:-40}"]
