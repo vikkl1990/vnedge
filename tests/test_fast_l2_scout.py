@@ -33,6 +33,16 @@ def _book(ts_ms: int, mid: float) -> dict:
     }
 
 
+def _thin_book(ts_ms: int, mid: float) -> dict:
+    return {
+        "ts_ms": ts_ms,
+        "bid": mid - 0.10,
+        "bid_qty": 0.01,
+        "ask": mid + 0.10,
+        "ask_qty": 0.01,
+    }
+
+
 def _trade(ts_ms: int, price: float, side: str = "buy") -> dict:
     return {"ts_ms": ts_ms, "price": price, "amount": 1.0, "side": side}
 
@@ -50,6 +60,19 @@ def _rising_recent_lake(tmp_path: Path) -> None:
         mid = 100.0 + i * 0.04
         trades.append(_trade(ts - 2, mid + 0.01, "buy"))
         books.append(_book(ts, mid))
+    _write_shard(tmp_path, "book", f"{recent}-000001.parquet", books)
+    _write_shard(tmp_path, "trades", f"{recent}-000001.parquet", trades)
+
+
+def _thin_recent_lake(tmp_path: Path) -> None:
+    recent = 1_783_003_600_000
+    books: list[dict] = []
+    trades: list[dict] = []
+    for i in range(40):
+        ts = recent + i * 100
+        mid = 100.0 + i * 0.04
+        trades.append(_trade(ts - 2, mid + 0.01, "buy"))
+        books.append(_thin_book(ts, mid))
     _write_shard(tmp_path, "book", f"{recent}-000001.parquet", books)
     _write_shard(tmp_path, "trades", f"{recent}-000001.parquet", trades)
 
@@ -88,8 +111,32 @@ def test_fast_l2_scout_is_research_only(tmp_path):
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
     assert payload["policy"]["can_trade"] is False
+    assert payload["policy"]["lane_filters"]["can_trade"] is False
     assert payload["summary"]["lanes"] == 1
+    assert payload["summary"]["filtered_lanes"] == 0
+    assert payload["lanes"][0]["filter_decision"]["passed"] is True
     assert payload["summary"]["results"] > 0
     assert payload["summary"]["best"]["avg_forward_bps"] is not None
     assert payload["top_results"][0]["can_trade"] is False
     assert payload["top_results"][0]["requires_untouched_judgment"] is True
+
+
+def test_fast_l2_scout_filters_bad_lanes_before_mining(tmp_path):
+    _thin_recent_lake(tmp_path)
+    payload = run_fast_l2_scout(
+        tmp_path,
+        targets=(ResearchTarget("binanceusdm", SYM),),
+        days=(DAY,),
+        lookback_minutes=1,
+        max_shards=2,
+        max_results=10,
+    )
+
+    lane = payload["lanes"][0]
+    assert payload["summary"]["filtered_lanes"] == 1
+    assert payload["summary"]["results"] == 0
+    assert payload["top_results"] == []
+    assert lane["state"] == "FILTERED_LANE"
+    assert lane["filter_decision"]["passed"] is False
+    assert lane["filter_decision"]["primary_blocker"] == "spread"
+    assert lane["can_trade"] is False
