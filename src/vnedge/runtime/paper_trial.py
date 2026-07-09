@@ -213,7 +213,13 @@ def build_trial_session(
         },
     )
     # Resume: a restart must continue the trial's account, never reset it.
-    resumed = session.account_store.restore_into(exchange, session.tracker)
+    # Expectations make a moved/edited store fail closed instead of injecting
+    # a wrong-symbol position or absurd balance into the trial.
+    resumed = session.account_store.restore_into(
+        exchange, session.tracker,
+        expected_symbol=manifest.symbol,
+        expected_starting_equity=manifest.starting_equity,
+    )
     if resumed:
         state = session.account_store.load() or {}
         session.restore_plan(state.get("plan"))

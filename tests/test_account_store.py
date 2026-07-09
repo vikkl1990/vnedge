@@ -1,7 +1,9 @@
 """Cross-session paper account persistence — crash and resume."""
 
 import asyncio
-from datetime import UTC, datetime
+import json
+import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -62,6 +64,99 @@ def test_trial_id_mismatch_refused(tmp_path):
     store_b = PaperAccountStore(tmp_path / "acct.json", "trial_b")
     with pytest.raises(ValueError, match="refusing to mix trials"):
         store_b.restore_into(ex, tracker)
+
+
+# --- Consistency validation: a moved/edited store must fail closed ----------------
+
+
+def _mutate_state(path, **changes):
+    """Simulate a hand-edited/corrupted store file."""
+    state = json.loads(path.read_text())
+    state.update(changes)
+    path.write_text(json.dumps(state))
+
+
+def _saved_store(tmp_path, *, open_position=True):
+    store = PaperAccountStore(tmp_path / "acct.json", "t1")
+    ex, tracker = world()
+    if open_position:
+        ex.submit_order(PaperOrderRequest("o1", SYM, True, 1.0))
+    store.save_from(ex, tracker)
+    return store
+
+
+def test_happy_path_with_expectations(tmp_path):
+    store = _saved_store(tmp_path)
+    ex, tracker = world()
+    assert store.restore_into(
+        ex, tracker, expected_symbol=SYM, expected_starting_equity=500.0
+    ) is True
+    assert ex.get_positions()[0].symbol == SYM
+
+
+def test_wrong_symbol_position_refused(tmp_path):
+    store = _saved_store(tmp_path)
+    ex, tracker = world()
+    with pytest.raises(ValueError, match="wrong-symbol"):
+        store.restore_into(ex, tracker, expected_symbol="ETH/USDT:USDT")
+    # fail closed: nothing was injected into the fresh world
+    assert ex.get_positions() == []
+    assert ex.balance_usd == pytest.approx(500.0)
+
+
+def test_starting_equity_mismatch_refused(tmp_path):
+    store = _saved_store(tmp_path, open_position=False)
+    ex, tracker = world()
+    with pytest.raises(ValueError, match="differently-funded"):
+        store.restore_into(ex, tracker, expected_starting_equity=1000.0)
+
+
+def test_starting_equity_within_tolerance_accepted(tmp_path):
+    store = _saved_store(tmp_path, open_position=False)
+    _mutate_state(store.path, starting_equity=502.0)  # 0.4% off — fine
+    ex, tracker = world()
+    assert store.restore_into(ex, tracker, expected_starting_equity=500.0) is True
+
+
+@pytest.mark.parametrize("balance", [0.0, -25.0, 50_000.0, float("nan")])
+def test_absurd_balance_refused(tmp_path, balance):
+    store = _saved_store(tmp_path, open_position=False)
+    _mutate_state(store.path, balance_usd=balance)
+    ex, tracker = world()
+    with pytest.raises(ValueError, match="absurd balance"):
+        store.restore_into(ex, tracker, expected_starting_equity=500.0)
+
+
+def test_absurd_balance_refused_even_without_expectations(tmp_path):
+    """The stored starting_equity anchors the sanity check for legacy callers."""
+    store = _saved_store(tmp_path, open_position=False)
+    _mutate_state(store.path, balance_usd=50_000.0)
+    ex, tracker = world()
+    with pytest.raises(ValueError, match="absurd balance"):
+        store.restore_into(ex, tracker)
+
+
+def test_stale_snapshot_warns_but_restores(tmp_path, caplog):
+    store = _saved_store(tmp_path)
+    old = (datetime.now(UTC) - timedelta(days=8)).isoformat()
+    _mutate_state(store.path, saved_at=old)
+    ex, tracker = world()
+    with caplog.at_level(logging.WARNING, logger="vnedge.paper.account_store"):
+        assert store.restore_into(
+            ex, tracker, expected_symbol=SYM, expected_starting_equity=500.0
+        ) is True
+    assert any("STALE ACCOUNT SNAPSHOT" in r.message for r in caplog.records)
+    assert len(ex.get_positions()) == 1  # warned, not refused
+
+
+def test_fresh_snapshot_does_not_warn(tmp_path, caplog):
+    store = _saved_store(tmp_path)
+    ex, tracker = world()
+    with caplog.at_level(logging.WARNING, logger="vnedge.paper.account_store"):
+        assert store.restore_into(
+            ex, tracker, expected_symbol=SYM, expected_starting_equity=500.0
+        ) is True
+    assert not any("STALE" in r.message for r in caplog.records)
 
 
 def test_session_persists_each_bar(tmp_path):

@@ -435,7 +435,13 @@ async def build_lane(
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
                     "promotion_source": spec.exchange},
     )
-    resumed = session.account_store.restore_into(exchange, session.tracker)
+    # Expectations make a moved/edited store fail closed instead of injecting
+    # a wrong-symbol position or absurd balance into the lane.
+    resumed = session.account_store.restore_into(
+        exchange, session.tracker,
+        expected_symbol=spec.symbol,
+        expected_starting_equity=spec.starting_equity,
+    )
     if resumed:
         state = session.account_store.load() or {}
         session.restore_plan(state.get("plan"))
