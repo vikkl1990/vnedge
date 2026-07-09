@@ -29,6 +29,14 @@ from vnedge.research.scalper_edge_miner import (
     EdgeMinerConfig,
     mine_events,
 )
+from vnedge.research.scalper_lane_filters import (
+    LaneFilterConfig,
+    LaneFilterDecision,
+    LaneFilterEvidence,
+    evaluate_lane_filters,
+    lane_filter_policy,
+    summarize_filter_decisions,
+)
 from vnedge.research.universe import ResearchTarget, load_research_targets
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
@@ -147,7 +155,7 @@ def load_recent_tick_events(
     }
 
 
-def scout_policy() -> dict:
+def scout_policy(filter_config: LaneFilterConfig = LaneFilterConfig()) -> dict:
     registry = DEFAULT_SCALPER_PARAMETER_REGISTRY
     return {
         "status": "research_only",
@@ -166,6 +174,7 @@ def scout_policy() -> dict:
             {"family_id": f.family_id, "evidence": f.evidence}
             for f in registry.tombstoned_families()
         ],
+        "lane_filters": lane_filter_policy(filter_config),
     }
 
 
@@ -178,6 +187,7 @@ def run_fast_l2_scout(
     max_shards: int = 40,
     max_results: int = 100,
     config: EdgeMinerConfig = EdgeMinerConfig(),
+    filter_config: LaneFilterConfig = LaneFilterConfig(),
 ) -> dict:
     root = Path(data_root)
     targets = targets or load_research_targets()
@@ -185,6 +195,7 @@ def run_fast_l2_scout(
 
     results: list[EdgeHypothesisResult] = []
     lanes: list[dict] = []
+    filter_decisions: list[LaneFilterDecision] = []
     for target in targets:
         for day in days:
             events, stats = load_recent_tick_events(
@@ -195,6 +206,16 @@ def run_fast_l2_scout(
                 lookback_minutes=lookback_minutes,
                 max_shards=max_shards,
             )
+            evidence = LaneFilterEvidence.from_events(
+                events,
+                exchange=target.exchange,
+                symbol=target.symbol,
+                day=day,
+                timeframe=target.timeframe,
+                stats=stats,
+            )
+            filter_decision = evaluate_lane_filters(evidence, filter_config)
+            filter_decisions.append(filter_decision)
             lane_results = list(
                 mine_events(
                     events,
@@ -203,7 +224,7 @@ def run_fast_l2_scout(
                     day=day,
                     config=config,
                 )
-            ) if events else []
+            ) if events and filter_decision.passed else []
             results.extend(lane_results)
             best = lane_results[0].to_dict() if lane_results else None
             lanes.append({
@@ -212,20 +233,28 @@ def run_fast_l2_scout(
                 "timeframe": target.timeframe,
                 "day": day,
                 "stats": stats,
+                "filter_evidence": evidence.to_dict(),
+                "filter_decision": filter_decision.to_dict(),
                 "best": best,
-                "state": best["state"] if best else (
-                    "MISSING_TICK_DATA" if stats.get("missing_stream") else "NO_EDGE_OBSERVED"
+                "state": (
+                    "FILTERED_LANE"
+                    if not filter_decision.passed else (
+                        best["state"] if best else (
+                            "MISSING_TICK_DATA"
+                            if stats.get("missing_stream") else "NO_EDGE_OBSERVED"
+                        )
+                    )
                 ),
                 "can_trade": False,
             })
 
     results = sorted(results, key=_result_sort_key)
     top = [r.to_dict() for r in results[:max_results]]
-    summary = _summary(top, lanes)
+    summary = _summary(top, lanes, tuple(filter_decisions))
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "scout_id": "fast_l2_scout_v1",
-        "policy": scout_policy(),
+        "policy": scout_policy(filter_config),
         "days": list(days),
         "lookback_minutes": lookback_minutes,
         "max_shards": max_shards,
@@ -245,7 +274,11 @@ def publish_scout(payload: dict, out: Path) -> None:
     tmp.replace(out)
 
 
-def _summary(results: list[dict], lanes: list[dict]) -> dict:
+def _summary(
+    results: list[dict],
+    lanes: list[dict],
+    filter_decisions: tuple[LaneFilterDecision, ...] = (),
+) -> dict:
     states: dict[str, int] = {}
     routes: dict[str, int] = {}
     for r in results:
@@ -258,6 +291,10 @@ def _summary(results: list[dict], lanes: list[dict]) -> dict:
         "lanes_with_data": sum(
             1 for lane in lanes if not lane["stats"].get("missing_stream")
         ),
+        "filtered_lanes": sum(
+            1 for decision in filter_decisions if not decision.passed
+        ),
+        "lane_filters": summarize_filter_decisions(filter_decisions),
         "results": len(results),
         "states": states,
         "routes": routes,
@@ -298,7 +335,11 @@ def _result_sort_key(r: EdgeHypothesisResult) -> tuple[int, float, float, int, s
     )
 
 
-def _parse_days(raw: str | None, data_root: Path, targets: tuple[ResearchTarget, ...]) -> tuple[str, ...]:
+def _parse_days(
+    raw: str | None,
+    data_root: Path,
+    targets: tuple[ResearchTarget, ...],
+) -> tuple[str, ...]:
     if not raw or raw.lower() == "latest":
         return _scalper_research_days(data_root, targets)
     return _split_csv(raw)
