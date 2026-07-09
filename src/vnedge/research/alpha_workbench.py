@@ -108,7 +108,11 @@ def alpha_workbench_policy() -> dict[str, Any]:
     }
 
 
-def build_proof_tasks(council_payload: Mapping[str, Any], *, max_tasks: int = 50) -> tuple[ProofTask, ...]:
+def build_proof_tasks(
+    council_payload: Mapping[str, Any],
+    *,
+    max_tasks: int = 50,
+) -> tuple[ProofTask, ...]:
     tasks: list[ProofTask] = []
     debates = council_payload.get("debates", [])
     if not isinstance(debates, list):
@@ -257,6 +261,20 @@ _ACTION_CONTRACTS: dict[str, dict[str, str]] = {
         "task_type": "artifact_refresh",
         "proof_step": "refresh the missing or stale research artifact from its producer service",
     },
+    "SPLIT_REPLAY_BY_BTC_REGIME": {
+        "task_type": "regime_replay_split",
+        "proof_step": (
+            "split replay and strategy research by Bitcoin network/mempool "
+            "regime tags before judging whether an edge is conditional"
+        ),
+    },
+    "REFRESH_BITCOIN_NODE_HEALTH": {
+        "task_type": "bitcoin_node_health",
+        "proof_step": (
+            "refresh the Bitcoin regime artifact from read-only node and "
+            "mempool telemetry before using network context"
+        ),
+    },
 }
 
 
@@ -317,6 +335,11 @@ def _blocked_by(action: str, vetoes: tuple[str, ...]) -> tuple[str, ...]:
         "PRE_REGISTER_NEAR_PASS_JUDGMENT": ("human_approved_manifest",),
         "DIAGNOSE_CLOSE_REJECT": ("diagnosis_report",),
         "REFRESH_STALE_ARTIFACT": ("fresh_artifact_publish",),
+        "SPLIT_REPLAY_BY_BTC_REGIME": (
+            "bitcoin_regime_artifact",
+            "per_regime_replay_report",
+        ),
+        "REFRESH_BITCOIN_NODE_HEALTH": ("fresh_bitcoin_regime_artifact",),
     }.get(action, ())
     return tuple(dict.fromkeys((*vetoes, *required)))
 

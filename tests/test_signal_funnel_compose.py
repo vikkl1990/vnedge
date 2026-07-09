@@ -58,4 +58,16 @@ def test_alpha_council_waits_for_research_artifact_producers():
         "daily-scalper-pack",
         "alpha-distillation",
         "event-leadlag-miner",
+        "bitcoin-regime-sensor",
     }
+
+
+def test_bitcoin_regime_sensor_is_context_only():
+    service = compose_services()["bitcoin-regime-sensor"]
+
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.bitcoin_regime"]
+    assert "--interval-seconds" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert all("/app/data" not in volume for volume in service["volumes"])
+    assert all("/app/logs" not in volume for volume in service["volumes"])
+    assert "MEMPOOL_API_BASE" in service["environment"]

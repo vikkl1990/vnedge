@@ -179,6 +179,35 @@ def test_alpha_workbench_routes_repair_and_refresh_tasks(tmp_path):
     assert "fresh_artifact_publish" in by_action["REFRESH_STALE_ARTIFACT"]["blocked_by"]
 
 
+def test_alpha_workbench_routes_bitcoin_regime_tasks():
+    payload = council_payload(
+        debate(
+            "SPLIT_REPLAY_BY_BTC_REGIME",
+            "bitcoin_regime|BTC|stressed|ok",
+            source="bitcoin_regime",
+            priority=63.0,
+            vetoes=["context_only_no_trade", "requires_replay_context_split"],
+        ),
+        debate(
+            "REFRESH_BITCOIN_NODE_HEALTH",
+            "bitcoin_regime|BTC|missing|node_unsynced",
+            source="bitcoin_regime",
+            priority=61.0,
+            vetoes=["context_only_no_trade"],
+        ),
+    )
+
+    report = run_alpha_workbench(".", store_dir=None, council_payload=payload)
+    by_action = {task["next_action"]: task for task in report["tasks"]}
+
+    assert by_action["SPLIT_REPLAY_BY_BTC_REGIME"]["task_type"] == "regime_replay_split"
+    assert "bitcoin_regime_artifact" in by_action["SPLIT_REPLAY_BY_BTC_REGIME"]["blocked_by"]
+    assert "per_regime_replay_report" in by_action["SPLIT_REPLAY_BY_BTC_REGIME"]["blocked_by"]
+    assert by_action["REFRESH_BITCOIN_NODE_HEALTH"]["task_type"] == "bitcoin_node_health"
+    assert "fresh_bitcoin_regime_artifact" in by_action["REFRESH_BITCOIN_NODE_HEALTH"]["blocked_by"]
+    assert report["policy"]["can_trade"] is False
+
+
 def test_alpha_workbench_publish_is_atomic_and_appends_feed(tmp_path):
     payload = run_alpha_workbench(
         tmp_path,

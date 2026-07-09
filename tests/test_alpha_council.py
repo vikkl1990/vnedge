@@ -187,6 +187,72 @@ def test_alpha_council_flags_missing_research_artifacts(tmp_path):
     )
 
 
+def test_alpha_council_routes_stressed_bitcoin_regime_to_replay_split(tmp_path):
+    write_json(
+        tmp_path / "bitcoin_regime_latest.json",
+        {
+            "schema_version": "bitcoin_regime_v1",
+            "source": {"status": "ok"},
+            "policy": {"can_trade": False, "can_promote": False},
+            "summary": {
+                "stress_state": "stressed",
+                "stress_score": 6.75,
+                "source_status": "ok",
+            },
+            "mempool": {"stress_state": "stressed"},
+            "features": {
+                "fee_pressure_score": 3.0,
+                "mempool_pressure_score": 3.0,
+                "fastest_fee_sat_vb": 85.0,
+                "mempool_vsize_vb": 420_000_000,
+                "mempool_tx_count": 240_000,
+                "fee_spike_z": 2.4,
+                "mempool_pressure_z": 1.2,
+            },
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "bitcoin_regime"
+    )
+
+    assert debate["candidate"]["route_decision"] == "CONTEXT_ONLY"
+    assert debate["next_action"] == "SPLIT_REPLAY_BY_BTC_REGIME"
+    assert debate["can_trade"] is False
+    assert "context_only_no_trade" in debate["vetoes"]
+    assert "context_only_no_execution" in debate["vetoes"]
+    assert "requires_replay_context_split" in debate["vetoes"]
+
+
+def test_alpha_council_routes_bad_bitcoin_source_to_health_refresh(tmp_path):
+    write_json(
+        tmp_path / "bitcoin_regime_latest.json",
+        {
+            "schema_version": "bitcoin_regime_v1",
+            "source": {"status": "node_unsynced"},
+            "summary": {
+                "stress_state": "missing",
+                "stress_score": 0.0,
+                "source_status": "node_unsynced",
+            },
+            "mempool": {"stress_state": "missing"},
+            "features": {},
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["source"] == "bitcoin_regime"
+    )
+
+    assert debate["candidate"]["state"] == "BTC_SOURCE_NODE_UNSYNCED"
+    assert debate["next_action"] == "REFRESH_BITCOIN_NODE_HEALTH"
+    assert debate["can_promote"] is False
+
+
 def test_alpha_council_publish_is_atomic_and_appends_feed(tmp_path):
     payload = run_alpha_council(tmp_path)
     out = tmp_path / "alpha_council_latest.json"

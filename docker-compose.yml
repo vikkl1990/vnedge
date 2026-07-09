@@ -204,13 +204,32 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Bitcoin-native regime sensor: read-only node/mempool/fee telemetry that
+  # tags research windows as calm/building/stressed/panic. It is context only:
+  # no wallet RPCs, no exchange credentials, no data/execution mounts.
+  bitcoin-regime-sensor:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.bitcoin_regime",
+              "--interval-seconds", "${BITCOIN_REGIME_INTERVAL_SECONDS:-900}"]
+    environment:
+      BITCOIN_RPC_URL: "${BITCOIN_RPC_URL:-}"
+      BITCOIN_RPC_USER: "${BITCOIN_RPC_USER:-}"
+      BITCOIN_RPC_PASSWORD: "${BITCOIN_RPC_PASSWORD:-}"
+      MEMPOOL_API_BASE: "${MEMPOOL_API_BASE:-https://mempool.space}"
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Research-only agent debate layer. Reads the published research artifacts,
   # ranks candidates, and emits the next proof step. It has no data/execution
   # mounts and cannot place or promote trades.
   alpha-council:
     build: .
     restart: unless-stopped
-    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner]
+    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, bitcoin-regime-sensor]
     command: ["python", "-m", "vnedge.research.alpha_council",
               "--interval-seconds", "${ALPHA_COUNCIL_INTERVAL_SECONDS:-900}",
               "--max-candidates", "${ALPHA_COUNCIL_MAX_CANDIDATES:-40}"]
