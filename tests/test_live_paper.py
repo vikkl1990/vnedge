@@ -78,9 +78,10 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
 
 
 def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
-                  tick_stops_enabled=True):
+                  tick_stops_enabled=True, post_exit_cooldown_bars=1):
     config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
-                          tick_stops_enabled=tick_stops_enabled)
+                          tick_stops_enabled=tick_stops_enabled,
+                          post_exit_cooldown_bars=post_exit_cooldown_bars)
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
@@ -191,6 +192,36 @@ async def test_stop_exit_on_live_bar(tmp_path):
     assert report.fills == 2
     assert report.realized_pnl_usd < 0
     assert report.reconciliation_mismatches == 0
+
+
+async def test_post_exit_cooldown_blocks_same_bar_reentry(tmp_path):
+    rows = live_rows(n=1) + [[BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0]]
+    feed = FakeFeed(rows)
+    session, exchange = build_session(tmp_path, feed, strategy=AlwaysLong())
+
+    report = await session.run(max_bars=2)
+
+    assert exchange.get_positions() == []
+    assert report.orders_submitted == 2  # entry + stop, no same-bar re-entry
+    assert report.signals_generated == 1
+    evals = [r["payload"] for r in session.journal.read_all() if r["kind"] == "lane_eval"]
+    assert evals[-1]["fired"] is False
+    assert evals[-1]["skip_reason"] == "post_exit_cooldown: 1 bar(s) remaining"
+    assert "entry_skipped" in [row["event"] for row in session.trade_log]
+
+
+async def test_zero_post_exit_cooldown_keeps_legacy_reentry_behavior(tmp_path):
+    rows = live_rows(n=1) + [[BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0]]
+    feed = FakeFeed(rows)
+    session, exchange = build_session(
+        tmp_path, feed, strategy=AlwaysLong(), post_exit_cooldown_bars=0
+    )
+
+    report = await session.run(max_bars=2)
+
+    assert len(exchange.get_positions()) == 1
+    assert report.orders_submitted == 3  # entry + stop + immediate re-entry
+    assert report.signals_generated == 2
 
 
 async def test_timeout_reached_entry_activates_plan_after_reconciliation(tmp_path):

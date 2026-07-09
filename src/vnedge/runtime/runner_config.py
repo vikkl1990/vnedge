@@ -26,6 +26,13 @@ class RunnerConfig(BaseModel):
     slippage_est_bps: float = Field(default=2.0, ge=0)
     max_holding_bars: int = Field(default=48, ge=1)
     reconcile_every_bars: int = Field(default=24, ge=1)
+    # After any reduce-only exit, skip this many entry evaluations. The default
+    # prevents same-bar re-entry after a stop/TP, which otherwise lets a crowded
+    # condition immediately re-fire on the exact bar that proved the prior trade
+    # was wrong or complete.
+    # DEFAULT OFF: enabling this changes entry behavior — running trials are
+    # frozen, so it may only be turned on via a pre-registered future protocol.
+    post_exit_cooldown_bars: int = Field(default=0, ge=0)
     # Tick-granular STOP monitoring: between bar closes, the idle loop checks
     # the live top-of-book against the open plan's stop and exits reduce-only
     # on breach. STOPS ONLY — a stop is capital protection, so it gets the
