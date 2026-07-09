@@ -123,6 +123,7 @@ class LivePaperSession:
         self._orphan_position_guarded = False
         self._reconciliation_fail_closed = False
         self._bars_since_reconcile = 0
+        self._entry_cooldown_bars = 0
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
@@ -298,6 +299,10 @@ class LivePaperSession:
         )
         self.orders_submitted += 1
         self._plan = None
+        self._entry_cooldown_bars = max(
+            self._entry_cooldown_bars,
+            self.config.post_exit_cooldown_bars,
+        )
         return order
 
     async def _check_tick_stop(self, now: datetime) -> None:
@@ -489,7 +494,7 @@ class LivePaperSession:
 
     def _record_eval(
         self, df: pd.DataFrame, index: int, sig: SignalIntent | None,
-        *, backfill: bool = False,
+        *, backfill: bool = False, skip_reason: str | None = None,
     ) -> None:
         """Journal one strategy evaluation — fired or not — with the feature
         values that drove it. This is the observability record that turns
@@ -513,6 +518,7 @@ class LivePaperSession:
             "mode": self.config.mode.value,
             "fired": sig is not None,
             "signal_reason": sig.reason if sig is not None else None,
+            "skip_reason": skip_reason,
             "features": features,
             "thresholds": thresholds,
             "backfill": backfill,
@@ -530,6 +536,11 @@ class LivePaperSession:
                 "lane eval [%s %s]%s: FIRED %s — %s",
                 self.strategy.strategy_id, self.config.symbol,
                 " (backfill)" if backfill else "", sig.side, sig.reason,
+            )
+        elif skip_reason and not backfill:
+            from datetime import datetime as _dt
+            self._log_trade_event(
+                "entry_skipped", skip_reason[:140], _dt.now(UTC),
             )
 
     def _log_shadow_outcomes(
@@ -730,8 +741,21 @@ class LivePaperSession:
 
             if self._plan is None and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
-                sig = self.strategy.signal(df, len(df) - 1)
-                self._record_eval(df, len(df) - 1, sig)
+                if self._entry_cooldown_bars > 0:
+                    sig = None
+                    self._record_eval(
+                        df,
+                        len(df) - 1,
+                        sig,
+                        skip_reason=(
+                            "post_exit_cooldown: "
+                            f"{self._entry_cooldown_bars} bar(s) remaining"
+                        ),
+                    )
+                    self._entry_cooldown_bars -= 1
+                else:
+                    sig = self.strategy.signal(df, len(df) - 1)
+                    self._record_eval(df, len(df) - 1, sig)
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)
