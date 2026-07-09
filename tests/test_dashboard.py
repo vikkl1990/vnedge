@@ -1,7 +1,8 @@
 """Dashboard — auth gates, snapshot schema, read-only surface."""
 
-import pytest
 import json
+
+import pytest
 from fastapi.testclient import TestClient
 
 from vnedge.config.risk_config import RiskConfig
@@ -52,6 +53,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html
+    assert "Signal Pressure &amp; Trade Journal" in html
+    assert "scanner-style hot/cold pressure" in html
     assert "Alpha Council &amp; Proof Queue" in html
     assert "Persistent Proof Queue" in html
     assert "LIVE ARMED" in html

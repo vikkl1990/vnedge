@@ -22,16 +22,21 @@
     --blue:#4db2ff;
     --cyan:#3de6d3;
     --violet:#a98cff;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --radius:3px;
     --shadow:0 12px 28px rgba(0,0,0,.24);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{min-height:100%;max-width:100%;overflow-x:hidden}
   body{
-    background:linear-gradient(180deg, #0a0f17 0%, var(--bg) 42%, #05070b 100%);
+    background:
+      linear-gradient(180deg, rgba(20,29,42,.38) 0%, rgba(5,8,13,0) 260px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0, rgba(255,255,255,.018) 1px, transparent 1px, transparent 24px),
+      var(--bg);
     color:var(--text);
     font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
-    font-size:13px;
-    padding:10px 12px 16px;
+    font-size:12px;
+    padding:8px 10px 14px;
   }
   ::-webkit-scrollbar{width:8px;height:8px}
   ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px}
@@ -39,18 +44,18 @@
   .shell{width:min(1840px,100%);margin:0 auto}
   .topbar{
     position:sticky;
-    top:10px;
+    top:8px;
     z-index:20;
     display:grid;
-    grid-template-columns:minmax(210px,.75fr) minmax(360px,1.35fr) minmax(240px,.9fr) auto;
+    grid-template-columns:minmax(190px,.62fr) minmax(260px,.92fr) minmax(480px,1.7fr) auto;
     align-items:center;
-    gap:12px;
-    margin-bottom:10px;
-    padding:10px 12px;
-    border:1px solid rgba(53,68,90,.72);
-    border-radius:6px;
-    background:rgba(9,14,22,.98);
-    box-shadow:var(--shadow);
+    gap:10px;
+    margin-bottom:8px;
+    padding:8px 10px;
+    border:1px solid rgba(58,78,107,.78);
+    border-radius:var(--radius);
+    background:linear-gradient(180deg, rgba(11,17,27,.99), rgba(7,11,18,.99));
+    box-shadow:0 10px 24px rgba(0,0,0,.22);
     min-width:0;
     backdrop-filter:blur(12px);
   }
@@ -67,16 +72,16 @@
     inset:4px 4px 4px 14px;border-color:var(--blue);
     transform:skewX(-18deg) rotate(45deg);
   }
-  .brand-name{font-size:18px;font-weight:760;letter-spacing:0;white-space:nowrap}
+  .brand-name{font-size:17px;font-weight:760;letter-spacing:0;white-space:nowrap}
   .brand-name span{color:var(--blue)}
-  .brand-sub{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+  .brand-sub{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
   .top-chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
   .chip,.badge{
     display:inline-flex;align-items:center;gap:5px;
     min-height:23px;
     padding:3px 8px;
     border:1px solid var(--line2);
-    border-radius:4px;
+    border-radius:var(--radius);
     color:var(--muted);
     background:rgba(10,18,30,.74);
     font-size:10px;
@@ -98,14 +103,19 @@
   @keyframes pulse{50%{opacity:.35}}
   .market-tape{
     display:grid;
-    grid-template-columns:1fr auto;
-    gap:2px 10px;
-    align-items:end;
+    grid-template-columns:minmax(170px,.72fr) minmax(0,1.6fr);
+    gap:6px 10px;
+    align-items:stretch;
     min-width:0;
-    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-family:var(--mono);
+  }
+  .price-cluster{
+    min-width:0;
+    border-left:2px solid rgba(77,178,255,.58);
+    padding-left:9px;
   }
   .price-main{
-    font-size:22px;
+    font-size:24px;
     line-height:1;
     font-variant-numeric:tabular-nums;
     white-space:nowrap;
@@ -114,31 +124,50 @@
   }
   .price-symbol{
     color:var(--muted);
-    font-size:11px;
-    text-align:right;
+    font-size:10px;
+    margin-top:4px;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
   }
-  .price-meta{grid-column:1/-1;color:var(--quiet);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .price-meta{color:var(--quiet);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tape-stats{
-    grid-column:1/-1;
     display:grid;
     grid-template-columns:repeat(4,minmax(0,1fr));
     gap:4px;
     min-width:0;
   }
   .tape-stats span{
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    gap:6px;
+    align-items:center;
     min-width:0;
-    border:1px solid rgba(49,80,112,.55);
-    border-radius:4px;
-    padding:3px 5px;
-    color:var(--muted);
-    font-size:9.5px;
+    min-height:25px;
+    border:1px solid rgba(58,78,107,.68);
+    border-radius:var(--radius);
+    padding:3px 6px;
+    color:var(--text);
+    font-size:10px;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
-    background:rgba(7,13,22,.6);
+    background:rgba(6,11,18,.82);
+  }
+  .tape-stats b{
+    color:var(--quiet);
+    font-size:8.5px;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+  }
+  .tape-stats i{
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    font-style:normal;
+    text-align:right;
+    font-variant-numeric:tabular-nums;
   }
   #clock{color:var(--muted);font-size:11px;white-space:nowrap;text-align:right}
 
@@ -268,14 +297,14 @@
     grid-template-columns:minmax(0,1fr) auto;
     gap:12px;
     align-items:end;
-    margin-bottom:10px;
-    padding:10px 12px;
-    border:1px solid var(--line);
-    border-radius:6px;
-    background:rgba(11,17,26,.94);
+    margin-bottom:8px;
+    padding:9px 11px;
+    border:1px solid rgba(58,78,107,.66);
+    border-radius:var(--radius);
+    background:linear-gradient(180deg, rgba(10,16,24,.96), rgba(7,12,19,.96));
   }
   .workspace-title{
-    font-size:18px;
+    font-size:17px;
     font-weight:760;
     letter-spacing:0;
   }
@@ -296,7 +325,7 @@
     align-items:center;
     padding:5px 9px;
     border:1px solid var(--line2);
-    border-radius:4px;
+    border-radius:var(--radius);
     color:var(--muted);
     text-decoration:none;
     font-size:10.5px;
@@ -308,12 +337,12 @@
 
   section,.panel,.loop-board{
     border:1px solid var(--line);
-    border-radius:6px;
-    background:rgba(13,20,31,.94);
+    border-radius:var(--radius);
+    background:rgba(8,14,22,.96);
     box-shadow:none;
     min-width:0;
   }
-  section,.loop-board{margin-bottom:10px;overflow:hidden;scroll-margin-top:94px}
+  section,.loop-board{margin-bottom:8px;overflow:hidden;scroll-margin-top:94px}
   section h2,.panel-title{
     min-height:35px;
     display:flex;
@@ -322,7 +351,7 @@
     gap:10px;
     padding:8px 11px;
     border-bottom:1px solid var(--line);
-    background:rgba(15,23,35,.98);
+    background:rgba(10,16,25,.99);
     color:#dbe8f7;
     font-size:10.5px;
     line-height:1.25;
@@ -331,7 +360,7 @@
   }
   .tag{color:var(--quiet);font-size:10px;letter-spacing:.02em;text-transform:none;font-weight:400;white-space:nowrap}
 
-  .zone{border-left:3px solid var(--line2);border-radius:3px;padding-left:9px;margin-bottom:18px;min-width:0}
+  .zone{border-left:2px solid var(--line2);border-radius:0;padding-left:8px;margin-bottom:14px;min-width:0}
   .zone-floor{border-left-color:var(--green)}
   .zone-lab{border-left-color:var(--violet)}
   .zone-infra{border-left-color:var(--blue)}
@@ -340,10 +369,10 @@
     align-items:baseline;
     gap:10px;
     flex-wrap:wrap;
-    margin-bottom:10px;
-    padding:9px 12px;
+    margin-bottom:8px;
+    padding:7px 10px;
     border:1px solid var(--line);
-    border-radius:6px;
+    border-radius:var(--radius);
     font-size:12.5px;
     font-weight:900;
     letter-spacing:.14em;
@@ -377,39 +406,39 @@
     order:1;
     display:grid;
     grid-template-columns:repeat(6,minmax(0,1fr));
-    gap:8px;
-    margin-bottom:10px;
+    gap:5px;
+    margin-bottom:8px;
     padding-bottom:2px;
     background:linear-gradient(180deg, rgba(7,10,15,.98), rgba(7,10,15,.88));
   }
   .gate{
     min-width:0;
-    border:1px solid var(--line);
-    border-radius:6px;
-    background:rgba(13,20,31,.97);
-    padding:9px 10px;
+    border:1px solid rgba(58,78,107,.62);
+    border-radius:var(--radius);
+    background:rgba(6,11,18,.95);
+    padding:7px 8px;
   }
-  .gate .label{color:var(--quiet);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
-  .gate .value{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;font-weight:800;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .gate .detail{margin-top:4px;color:var(--muted);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gate .label{color:var(--quiet);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px}
+  .gate .value{font-family:var(--mono);font-size:13px;font-weight:800;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gate .detail{margin-top:3px;color:var(--muted);font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .value.good,.text-good{color:var(--green)}
   .value.warn,.text-warn{color:var(--amber)}
   .value.bad,.text-bad{color:var(--red)}
   .value.info,.text-info{color:var(--blue)}
   .value.idle,.text-idle{color:var(--quiet)}
 
-  .operator-board{order:2;background:rgba(11,17,26,.96)}
+  .operator-board{order:2;background:rgba(7,12,20,.97)}
   .operator-head{
     display:grid;
-    grid-template-columns:minmax(240px,1.05fr) minmax(0,1.7fr) auto;
-    gap:12px;
+    grid-template-columns:minmax(220px,.82fr) minmax(0,1.9fr) auto;
+    gap:10px;
     align-items:center;
-    padding:12px;
+    padding:10px 12px;
     border-bottom:1px solid var(--line);
-    background:rgba(12,19,29,.96);
+    background:linear-gradient(180deg, rgba(9,15,24,.98), rgba(6,11,18,.98));
   }
   .eyebrow{color:var(--quiet);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}
-  .op-state{font-size:28px;font-weight:900;line-height:1;letter-spacing:.08em;text-transform:uppercase}
+  .op-state{font-size:30px;font-weight:920;line-height:1;letter-spacing:.08em;text-transform:uppercase}
   .op-detail{color:var(--muted);font-size:11px;line-height:1.4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .op-clock{
     color:var(--quiet);
@@ -421,22 +450,22 @@
   .operator-grid{
     display:grid;
     grid-template-columns:repeat(6,minmax(0,1fr));
-    gap:8px;
-    padding:12px;
+    gap:5px;
+    padding:8px 10px 10px;
     border-bottom:1px solid var(--line);
   }
   .action-matrix{
     display:grid;
     grid-template-columns:repeat(6,minmax(0,1fr));
-    gap:8px;
-    padding:10px 12px 0;
+    gap:5px;
+    padding:8px 10px 0;
   }
   .action-cell{
     min-width:0;
-    border:1px solid var(--line);
-    border-radius:7px;
-    background:rgba(6,13,22,.88);
-    padding:8px 9px;
+    border:1px solid rgba(58,78,107,.58);
+    border-radius:var(--radius);
+    background:rgba(5,10,17,.9);
+    padding:7px 8px;
   }
   .action-cell .label{
     color:var(--quiet);
@@ -448,7 +477,7 @@
     text-overflow:ellipsis;
   }
   .action-cell .state{
-    margin-top:5px;
+    margin-top:4px;
     font-size:13px;
     font-weight:900;
     text-transform:uppercase;
@@ -477,18 +506,18 @@
   .action-cell.idle .state{color:var(--quiet)}
   .op-card{
     min-width:0;
-    border:1px solid var(--line);
-    border-radius:6px;
-    background:rgba(10,16,25,.94);
-    padding:10px;
+    border:1px solid rgba(58,78,107,.58);
+    border-radius:var(--radius);
+    background:rgba(5,10,17,.9);
+    padding:8px;
   }
   .op-card.good{background:rgba(10,30,22,.88)}
   .op-card.warn{background:rgba(36,26,12,.88)}
   .op-card.bad{background:rgba(39,14,19,.88)}
   .op-card.info{background:rgba(10,25,40,.88)}
-  .op-card .label{color:var(--quiet);font-size:9.8px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
-  .op-card .metric{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:18px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .op-card .sub{margin-top:5px;color:var(--muted);font-size:10.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .op-card .label{color:var(--quiet);font-size:8.8px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}
+  .op-card .metric{font-family:var(--mono);font-size:17px;font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .op-card .sub{margin-top:4px;color:var(--muted);font-size:9.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .truth-grid{
     display:grid;
     grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);
@@ -802,6 +831,64 @@
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
   .agent-board{order:6}
+  .funnel-deck{
+    display:grid;
+    grid-template-columns:repeat(8,minmax(0,1fr));
+    gap:5px;
+    padding:8px 10px;
+    border-bottom:1px solid var(--line);
+    background:rgba(5,10,17,.92);
+  }
+  .funnel-tile{
+    min-width:0;
+    border:1px solid rgba(58,78,107,.58);
+    border-radius:var(--radius);
+    background:rgba(8,14,22,.95);
+    padding:7px 8px;
+  }
+  .funnel-tile .label{
+    color:var(--quiet);
+    font-size:8.5px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .funnel-tile .value{
+    margin-top:5px;
+    font-family:var(--mono);
+    font-size:17px;
+    font-weight:900;
+    line-height:1;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .funnel-tile .sub{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:9.5px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .pressure-track{
+    height:4px;
+    margin-top:6px;
+    background:#111c2a;
+    overflow:hidden;
+  }
+  .pressure-track i{
+    display:block;
+    width:0%;
+    height:100%;
+    background:var(--blue);
+  }
+  .pressure-track i.good{background:var(--green)}
+  .pressure-track i.warn{background:var(--amber)}
+  .pressure-track i.bad{background:var(--red)}
   .lane-board table{
     min-width:100%;
     table-layout:fixed;
@@ -866,7 +953,7 @@
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:1px}
 
   @media(max-width:1360px){
-    .topbar{grid-template-columns:minmax(200px,.8fr) minmax(320px,1.2fr) minmax(220px,.8fr)}
+    .topbar{grid-template-columns:minmax(170px,.48fr) minmax(260px,.72fr) minmax(520px,1.55fr)}
     #clock{grid-column:1/-1;text-align:left}
     .workstation-shell{grid-template-columns:148px minmax(0,1fr)}
     .nav-link{grid-template-columns:20px minmax(0,1fr);font-size:11px;padding:8px}
@@ -874,8 +961,7 @@
     .kpis{grid-template-columns:repeat(3,minmax(128px,1fr))}
     .operator-head{grid-template-columns:1fr}
     .op-clock{text-align:left}
-    .action-matrix{grid-template-columns:repeat(3,minmax(0,1fr))}
-    .operator-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .funnel-deck{grid-template-columns:repeat(4,minmax(0,1fr))}
     .workspace-grid{grid-template-columns:1fr}
     .mini-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -909,6 +995,7 @@
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
     .action-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .funnel-deck{grid-template-columns:repeat(2,minmax(0,1fr))}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .gate-line{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -921,6 +1008,7 @@
   }
   @media(max-width:430px){
     .kpis{grid-template-columns:1fr}
+    .funnel-deck{grid-template-columns:1fr}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:1fr}
     .price-main{font-size:19px}
     .tape-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -949,14 +1037,20 @@
       <span class="chip idle" id="conn">connecting</span>
     </div>
     <div class="market-tape">
-      <div class="price-main" id="priceMain">--</div>
-      <div class="price-symbol" id="priceSymbol">--</div>
-      <div class="price-meta" id="priceMeta">bid / ask --</div>
+      <div class="price-cluster">
+        <div class="price-main" id="priceMain">--</div>
+        <div class="price-symbol" id="priceSymbol">--</div>
+        <div class="price-meta" id="priceMeta">bid / ask --</div>
+      </div>
       <div class="tape-stats" aria-label="market tape">
-        <span id="tape_spread">spread --</span>
-        <span id="tape_funding">funding --</span>
-        <span id="tape_feed">feed --</span>
-        <span id="tape_edge">fee wall --</span>
+        <span><b>Bid</b><i id="tape_bid">--</i></span>
+        <span><b>Ask</b><i id="tape_ask">--</i></span>
+        <span><b>Spread</b><i id="tape_spread">--</i></span>
+        <span><b>Funding</b><i id="tape_funding">--</i></span>
+        <span><b>Feed</b><i id="tape_feed">--</i></span>
+        <span><b>Fee wall</b><i id="tape_edge">10 bps</i></span>
+        <span><b>Lanes</b><i id="tape_lanes">--</i></span>
+        <span><b>Mode</b><i id="tape_mode">--</i></span>
       </div>
     </div>
     <div id="clock">--:--:-- UTC</div>
@@ -1084,7 +1178,17 @@
     </section>
 
     <section aria-label="signal funnel and trade journal">
-      <h2>Signal Funnel &amp; Trade Journal <span class="tag">per-lane conversion (evaluated &#8594; fired &#8594; approved &#8594; filled) and the chronological trade narrative</span></h2>
+      <h2>Signal Pressure &amp; Trade Journal <span class="tag">scanner-style hot/cold pressure, approval quality, and chronological execution narrative</span></h2>
+      <div class="funnel-deck" aria-label="signal pressure summary">
+        <div class="funnel-tile"><div class="label">Lanes</div><div class="value" id="funnel_lanes">--</div><div class="sub">reporting</div><div class="pressure-track"><i id="funnel_lanes_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Evaluated</div><div class="value" id="funnel_evaluated">--</div><div class="sub">bars scanned</div><div class="pressure-track"><i id="funnel_eval_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Signals</div><div class="value" id="funnel_signals">--</div><div class="sub" id="funnel_signal_rate">-- fire rate</div><div class="pressure-track"><i id="funnel_signal_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Approved</div><div class="value" id="funnel_approved">--</div><div class="sub" id="funnel_approval_rate">-- approval</div><div class="pressure-track"><i id="funnel_approval_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Rejected</div><div class="value" id="funnel_rejected">--</div><div class="sub">risk / shadow</div><div class="pressure-track"><i id="funnel_reject_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Submitted</div><div class="value" id="funnel_submitted">--</div><div class="sub">order intents</div><div class="pressure-track"><i id="funnel_submit_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Fills</div><div class="value" id="funnel_fills">--</div><div class="sub" id="funnel_fill_rate">-- fill rate</div><div class="pressure-track"><i id="funnel_fill_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Virtual Net</div><div class="value" id="funnel_virtual">--</div><div class="sub">shadow outcomes</div><div class="pressure-track"><i id="funnel_virtual_bar"></i></div></div>
+      </div>
       <div class="table-wrap">
       <table>
         <thead><tr>
@@ -1730,6 +1834,12 @@
     const e=$(id);
     if(e)e.className=base+(tone?" "+tone:"");
   }
+  function setPressure(id,value,tone){
+    const e=$(id);
+    if(!e)return;
+    e.style.width=Math.max(0,Math.min(100,num(value))).toFixed(1)+"%";
+    e.className=tone==="good"?"good":tone==="warn"?"warn":tone==="bad"?"bad":"";
+  }
   function timeAgoFromIso(ts){
     const t=Date.parse(ts||"");
     return Number.isFinite(t)?ageText(Math.max(0,Date.now()-t)):"--";
@@ -1920,10 +2030,26 @@
   }
 
   function renderFunnelJournal(lanes){
+    const laneRows=Array.isArray(lanes)?lanes:[];
+    const totals=laneRows.reduce((acc,l)=>{
+      const f=l.funnel||{};
+      const sp=l.shadow_perf||null;
+      acc.bars+=num(f.bars);
+      acc.signals+=num(f.signals);
+      acc.approved+=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
+      acc.rejected+=num(f.shadow_rejected)+num(f.risk_rejects);
+      acc.sizing+=num(f.sizing_skips);
+      acc.submitted+=num(f.submitted);
+      acc.fills+=num(f.fills);
+      acc.virtualTrades+=sp?num(sp.virtual_trades):0;
+      acc.virtualNet+=sp?num(sp.net_usd):0;
+      return acc;
+    },{bars:0,signals:0,approved:0,rejected:0,sizing:0,submitted:0,fills:0,virtualTrades:0,virtualNet:0});
+    renderFunnelSummary(laneRows.length,totals);
     const fb=$("funnelBody");
     if(fb){
       fb.innerHTML="";
-      lanes.forEach(l=>{
+      laneRows.forEach(l=>{
         const f=l.funnel||{};
         const approved=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
         const rejected=num(f.shadow_rejected)+num(f.risk_rejects);
@@ -1960,7 +2086,7 @@
     if(tj){
       tj.innerHTML="";
       const events=[];
-      lanes.forEach(l=>(l.trade_log||[]).forEach(e=>events.push({lane:l.lane_id,...e})));
+      laneRows.forEach(l=>(l.trade_log||[]).forEach(e=>events.push({lane:l.lane_id,...e})));
       events.sort((a,b)=>String(b.ts).localeCompare(String(a.ts)));
       events.slice(0,25).forEach(e=>{
         const tr=document.createElement("tr");
@@ -1979,6 +2105,31 @@
         tj.appendChild(tr);
       }
     }
+  }
+
+  function renderFunnelSummary(laneCount,totals){
+    const fireRate=totals.bars>0?totals.signals/totals.bars*100:null;
+    const approvalRate=totals.signals>0?totals.approved/totals.signals*100:null;
+    const fillRate=totals.submitted>0?totals.fills/totals.submitted*100:null;
+    text("funnel_lanes",laneCount);
+    text("funnel_evaluated",totals.bars.toLocaleString());
+    text("funnel_signals",totals.signals.toLocaleString());
+    text("funnel_signal_rate",fireRate==null?"no bars yet":fireRate.toFixed(2)+"% fire rate");
+    text("funnel_approved",totals.approved.toLocaleString());
+    text("funnel_approval_rate",approvalRate==null?"no signals yet":approvalRate.toFixed(1)+"% approval");
+    text("funnel_rejected",totals.rejected.toLocaleString());
+    text("funnel_submitted",totals.submitted.toLocaleString());
+    text("funnel_fills",totals.fills.toLocaleString());
+    text("funnel_fill_rate",fillRate==null?"no submits yet":fillRate.toFixed(1)+"% fill rate");
+    text("funnel_virtual",totals.virtualTrades?usd(totals.virtualNet):"--");
+    setPressure("funnel_lanes_bar",Math.min(100,laneCount*16),laneCount?"info":"idle");
+    setPressure("funnel_eval_bar",Math.min(100,totals.bars/20),totals.bars?"info":"idle");
+    setPressure("funnel_signal_bar",fireRate==null?0:Math.min(100,fireRate*20),totals.signals?"good":"idle");
+    setPressure("funnel_approval_bar",approvalRate==null?0:approvalRate,approvalRate==null?"idle":approvalRate>=60?"good":approvalRate>=25?"warn":"bad");
+    setPressure("funnel_reject_bar",totals.signals?Math.min(100,totals.rejected/Math.max(1,totals.signals)*100):0,totals.rejected?"warn":"idle");
+    setPressure("funnel_submit_bar",totals.signals?Math.min(100,totals.submitted/Math.max(1,totals.signals)*100):0,totals.submitted?"info":"idle");
+    setPressure("funnel_fill_bar",fillRate==null?0:fillRate,fillRate==null?"idle":fillRate>=60?"good":fillRate>=20?"warn":"bad");
+    setPressure("funnel_virtual_bar",totals.virtualTrades?Math.min(100,Math.abs(totals.virtualNet)*8):0,totals.virtualNet>0?"good":totals.virtualNet<0?"bad":"idle");
   }
   function renderLanes(lanes,snapshot){
     const s=snapshot||{};
@@ -2172,17 +2323,23 @@
       text("priceMain","$"+num(price.mid).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1}));
       text("priceSymbol",s.symbol||"--");
       text("priceMeta","bid "+num(price.bid).toFixed(1)+" / ask "+num(price.ask).toFixed(1)+" / spread "+num(price.spread_bps).toFixed(2)+" bps");
-      text("tape_spread","spread "+num(price.spread_bps).toFixed(2)+" bps");
+      text("tape_bid",num(price.bid).toFixed(1));
+      text("tape_ask",num(price.ask).toFixed(1));
+      text("tape_spread",num(price.spread_bps).toFixed(2)+" bps");
       text("mk_ba",num(price.bid).toFixed(1)+" / "+num(price.ask).toFixed(1));
       text("mk_spread",num(price.spread_bps).toFixed(2)+" bps");
     }else{
       text("priceMain","--");text("priceSymbol",s.symbol||"--");text("priceMeta","bid / ask --");
-      text("tape_spread","spread --");
+      text("tape_bid","--");
+      text("tape_ask","--");
+      text("tape_spread","--");
       text("mk_ba","--");text("mk_spread","--");
     }
-    text("tape_funding","funding "+((num(s.funding_rate)*100).toFixed(4))+"% / 8h");
-    text("tape_feed","feed "+ageText(lat));
-    text("tape_edge","wall 10bps");
+    text("tape_funding",((num(s.funding_rate)*100).toFixed(4))+"% / 8h");
+    text("tape_feed",ageText(lat));
+    text("tape_edge","10 bps");
+    text("tape_lanes",Array.isArray(s.lanes)?s.lanes.length:0);
+    text("tape_mode",String(s.mode||"--").toUpperCase());
 
     setValue("equity",moneyAbs(s.equity),"neutral");
     setValue("daily",usd(s.daily_pnl),classFor(s.daily_pnl));
