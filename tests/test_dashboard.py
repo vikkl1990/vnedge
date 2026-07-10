@@ -48,21 +48,23 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     r = client.get("/")
     assert r.status_code == 200
     html = r.text
-    assert "Commercial Operator Workstation" in html
-    assert "workspace navigation" in html
-    assert "Quant Command Deck" in html
-    assert "why no trade console" in html
-    assert "Maker fee wall" in html
-    assert "Route Radar" in html
-    assert "Signal Pressure" in html
-    assert "operator actionability matrix" in html
-    assert "Multi-exchange Lane Matrix" in html
-    assert "Fee Wall" in html
-    assert "Signal Pressure &amp; Trade Journal" in html
-    assert "scanner-style hot/cold pressure" in html
-    assert "Alpha Council &amp; Proof Queue" in html
-    assert "Persistent Proof Queue" in html
-    assert "LIVE ARMED" in html
+    assert "VNEDGE Operator Cockpit" in html
+    assert "institutional scalper and research cockpit" in html
+    assert "Portfolio Command" in html
+    assert "Sharpe" in html
+    assert "Profit Factor" in html
+    assert "Data Lanes" in html
+    assert "Signal Funnel" in html
+    assert "evaluated -> fired -> approved -> submitted -> filled" in html
+    assert "Active Lane Matrix" in html
+    assert "Execution Truth" in html
+    assert "Research Lanes" in html
+    assert "Agent Council" in html
+    assert "Governance Rail" in html
+    assert "Trade Journal" in html
+    assert "Research Proof Queue" in html
+    assert "Model And Edge Health" in html
+    assert "TAKER IF EDGE CLEARS" in html
 
 
 def test_no_snapshot_yet_is_503():
