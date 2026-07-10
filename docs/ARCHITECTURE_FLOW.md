@@ -255,6 +255,7 @@ RESEARCH_TIMEFRAME=1h
 | Order manager, idempotency, WAL | Current | Timeout and reconciliation semantics exist. |
 | Maker/taker executor runtime | Current | Maker-first post-only workflow with fee-aware taker fallback for remaining quantity; still uses OrderManager only. |
 | Paper/shadow runner | Current | Uses same gateway/order manager path. |
+| Live promotion ladder | Current | `live_ladder.py` enforces one-rung-at-a-time promotion evidence before live. |
 | Dashboard read-only snapshot | Current | No control routes. |
 | Multi-exchange research universe | Branch | Offline research only; execution remains V1 scoped. |
 | Bounded edge research agents | Branch | Propose/rank/explain only. |
@@ -290,4 +291,6 @@ flowchart LR
 ```
 
 No branch in this flow is automatic. Every promotion step is gated by evidence,
-human approval, and the execution safety layer.
+human approval, and the execution safety layer. The concrete live promotion
+contract is documented in `docs/LIVE_LADDER.md` and implemented in
+`src/vnedge/runtime/live_ladder.py`.
