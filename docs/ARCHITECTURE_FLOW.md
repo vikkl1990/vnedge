@@ -253,6 +253,7 @@ RESEARCH_TIMEFRAME=1h
 | Quant Signal Pack lane | Branch | Non-proprietary Lux/Willy-style concepts: sweeps, FVG/order-block retests, squeeze release, VWAP reclaim, and multi-horizon bias. Walk-forward only; no auto-promotion. |
 | External TradingView signal intake | Branch | Parses Willy/FVG-style JSON alerts into blocked-by-default `SignalCandidate`s with TP metadata. No webhook bypass; source must be VNEDGE-verified before arbitration can select it. |
 | Order manager, idempotency, WAL | Current | Timeout and reconciliation semantics exist. |
+| Maker/taker executor runtime | Current | Maker-first post-only workflow with fee-aware taker fallback for remaining quantity; still uses OrderManager only. |
 | Paper/shadow runner | Current | Uses same gateway/order manager path. |
 | Dashboard read-only snapshot | Current | No control routes. |
 | Multi-exchange research universe | Branch | Offline research only; execution remains V1 scoped. |
