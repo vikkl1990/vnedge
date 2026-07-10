@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from collections.abc import Iterable
 from pathlib import Path
 
 # Strategy runtime params a human has locked as safe to run as a SHADOW lane.
@@ -40,16 +41,31 @@ def _lane_id(exchange: str, symbol: str, strategy: str) -> str:
     return f"{strategy}_{exchange}_{s}_shadow"
 
 
-def generate_shadow_manifest(profitable_pairs, *, max_lanes: int = 12) -> dict:
+def generate_shadow_manifest(
+    profitable_pairs,
+    *,
+    max_lanes: int = 12,
+    judgment_records: Iterable[dict] | None = None,
+) -> dict:
     """Turn research `profitable_pairs` (dicts) into a shadow-lane manifest.
     Runnable lanes require locked params; the rest are surfaced as blocked."""
     lanes: list[dict] = []
     blocked: list[dict] = []
     seen: set[str] = set()
+    judgments = _latest_judgments(judgment_records or ())
     for p in profitable_pairs:
         strat = p.get("best_strategy") or p.get("strategy")
         exchange, symbol = p.get("exchange"), p.get("symbol")
         if not (strat and exchange and symbol):
+            continue
+        latest = judgments.get((exchange, symbol, strat))
+        if latest and latest.get("verdict") == "REJECT":
+            blocked.append({
+                "exchange": exchange, "symbol": symbol, "strategy_id": strat,
+                "reason": "latest untouched judgment rejected — requires a fresh "
+                          "approved judgment before shadow expansion",
+                "latest_judgment": latest,
+            })
             continue
         if strat not in RUNTIME_LOCKED_PARAMS:
             blocked.append({
@@ -70,6 +86,7 @@ def generate_shadow_manifest(profitable_pairs, *, max_lanes: int = 12) -> dict:
             "mode": "shadow",
             "source_verdict": p.get("verdict"),
             "oos_net_usd": p.get("oos_net_usd"),
+            "latest_judgment": latest,
         })
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -80,6 +97,25 @@ def generate_shadow_manifest(profitable_pairs, *, max_lanes: int = 12) -> dict:
         "lanes": lanes[:max_lanes],
         "blocked": blocked,
     }
+
+
+def _latest_judgments(records: Iterable[dict]) -> dict[tuple[str, str, str], dict]:
+    latest: dict[tuple[str, str, str], dict] = {}
+    for record in records:
+        if record.get("kind") != "judgment":
+            continue
+        exchange = record.get("exchange")
+        symbol = record.get("symbol")
+        strategy = record.get("strategy_id")
+        if not (exchange and symbol and strategy):
+            continue
+        latest[(str(exchange), str(symbol), str(strategy))] = {
+            "verdict": record.get("verdict"),
+            "window_start": record.get("window_start"),
+            "window_end": record.get("window_end"),
+            "note": record.get("note", ""),
+        }
+    return latest
 
 
 def write_shadow_manifest(manifest: dict, out_dir: Path) -> None:

@@ -876,17 +876,28 @@ async def run_cycle() -> list[dict]:
         )
     except Exception as exc:  # noqa: BLE001 — observability must not kill a cycle
         logger.exception("shadow perf read failed: %s", exc)
+    judgment_records: list[dict] = []
+    try:
+        judgment_records = data_burn.read_records()
+    except Exception as exc:  # noqa: BLE001 — governance overlay must not kill research
+        logger.exception("burn registry read failed: %s", exc)
     edge_leaderboard = build_edge_leaderboard(
         records,
         max_rows=_env_int("EDGE_LEADERBOARD_MAX_ROWS", 50),
         max_queue=_env_int("EDGE_PROMOTION_QUEUE_MAX_ROWS", 20),
         shadow_perf=live_shadow_perf,
+        judgment_records=judgment_records,
     )
     # research -> shadow bridge: turn profitable winners with locked params into
     # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
     try:
         write_shadow_manifest(
-            generate_shadow_manifest(list(agent_plan.profitable_pairs)), OUT_DIR)
+            generate_shadow_manifest(
+                list(agent_plan.profitable_pairs),
+                judgment_records=judgment_records,
+            ),
+            OUT_DIR,
+        )
     except Exception as exc:  # noqa: BLE001 — manifest gen must not kill research
         logger.exception("shadow manifest generation failed: %s", exc)
     scalper_research: dict = {}
