@@ -156,8 +156,10 @@ def run_pre_live_checklist(
 
     r.append(CheckResult(
         "mode_ladder_validated", lower_rungs_validated,
-        "lower ladder rungs (paper, shadow) attested validated" if lower_rungs_validated
-        else "paper/shadow rungs not attested — validate the mode ladder before live",
+        "lower ladder rungs validated by live_ladder evidence"
+        if lower_rungs_validated
+        else "paper/shadow rungs not validated — run the live_ladder evidence check "
+             "before live",
     ))
 
     return ChecklistReport(tuple(r))

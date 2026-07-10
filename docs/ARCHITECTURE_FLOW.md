@@ -254,6 +254,7 @@ RESEARCH_TIMEFRAME=1h
 | External TradingView signal intake | Branch | Parses Willy/FVG-style JSON alerts into blocked-by-default `SignalCandidate`s with TP metadata. No webhook bypass; source must be VNEDGE-verified before arbitration can select it. |
 | Order manager, idempotency, WAL | Current | Timeout and reconciliation semantics exist. |
 | Paper/shadow runner | Current | Uses same gateway/order manager path. |
+| Live promotion ladder | Current | `live_ladder.py` enforces one-rung-at-a-time promotion evidence before live. |
 | Dashboard read-only snapshot | Current | No control routes. |
 | Multi-exchange research universe | Branch | Offline research only; execution remains V1 scoped. |
 | Bounded edge research agents | Branch | Propose/rank/explain only. |
@@ -289,4 +290,6 @@ flowchart LR
 ```
 
 No branch in this flow is automatic. Every promotion step is gated by evidence,
-human approval, and the execution safety layer.
+human approval, and the execution safety layer. The concrete live promotion
+contract is documented in `docs/LIVE_LADDER.md` and implemented in
+`src/vnedge/runtime/live_ladder.py`.
