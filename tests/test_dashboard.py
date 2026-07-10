@@ -65,6 +65,26 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "LIVE ARMED" in html
 
 
+def test_dashboard_shell_preserves_operator_instruments(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    # Acceptance guard for the #116 fix-forward restyle: visual polish must
+    # keep the operator instruments wired into the current dashboard.
+    assert "What changed" in html
+    assert 'id="funnelBody"' in html
+    assert 'id="tradeJournalBody"' in html
+    assert 'id="mode"' in html and 'id="symbol"' in html and 'id="strategy"' in html
+    assert 'id="risk"' in html and 'id="kill"' in html and 'id="conn"' in html
+    assert 'id="connectionsBoard"' in html
+    assert 'id="zoneTradingFloor"' in html
+    assert 'id="zoneResearchLab"' in html
+    assert 'id="zoneInfrastructure"' in html
+    assert 'className="v-badge"' in html
+    assert "virtual PnL -- shadow lane, no real orders" in html
+    assert 'id="laneHealthBadge"' in html
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")
