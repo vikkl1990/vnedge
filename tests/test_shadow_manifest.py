@@ -41,6 +41,55 @@ def test_manifest_dedupes_and_caps():
     assert len(m["lanes"]) == 1                    # deduped by lane_id
 
 
+def test_latest_rejected_judgment_blocks_shadow_lane():
+    judgments = [{
+        "kind": "judgment",
+        "exchange": "bybit",
+        "symbol": "XRP/USDT:USDT",
+        "strategy_id": "trend_continuation_v1",
+        "verdict": "REJECT",
+        "window_start": "2024-07-10",
+        "window_end": "2025-07-10",
+    }]
+    m = generate_shadow_manifest(
+        [_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")],
+        judgment_records=judgments,
+    )
+    assert m["lanes"] == []
+    assert m["blocked"][0]["strategy_id"] == "trend_continuation_v1"
+    assert "judgment rejected" in m["blocked"][0]["reason"]
+    assert m["blocked"][0]["latest_judgment"]["verdict"] == "REJECT"
+
+
+def test_latest_pass_after_prior_reject_allows_shadow_lane():
+    judgments = [
+        {
+            "kind": "judgment",
+            "exchange": "binanceusdm",
+            "symbol": "BTC/USDT:USDT",
+            "strategy_id": "funding_mean_reversion_v1",
+            "verdict": "REJECT",
+            "window_start": "2025-07-02",
+            "window_end": "2026-07-02",
+        },
+        {
+            "kind": "judgment",
+            "exchange": "binanceusdm",
+            "symbol": "BTC/USDT:USDT",
+            "strategy_id": "funding_mean_reversion_v1",
+            "verdict": "PASS",
+            "window_start": "2024-07-03",
+            "window_end": "2025-07-03",
+        },
+    ]
+    m = generate_shadow_manifest(
+        [_pair("binanceusdm", "BTC/USDT:USDT", "funding_mean_reversion_v1")],
+        judgment_records=judgments,
+    )
+    assert len(m["lanes"]) == 1
+    assert m["lanes"][0]["latest_judgment"]["verdict"] == "PASS"
+
+
 def test_write_and_load_roundtrip(tmp_path):
     m = generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")])
     write_shadow_manifest(m, tmp_path)

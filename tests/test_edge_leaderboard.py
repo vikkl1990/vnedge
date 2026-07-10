@@ -50,6 +50,41 @@ def test_passed_strategy_enters_judgment_queue_with_taker_route():
     assert board["policy"]["can_promote"] is False
 
 
+def test_latest_rejected_judgment_blocks_rolling_pass_from_queue():
+    rec = record(
+        strategy="trend_continuation_v1",
+        verdict="PASS",
+        net=140.0,
+        trades=51,
+        fees=20.0,
+        pf=2.0,
+        payoff=2.2,
+    )
+    rec["exchange"] = "bybit"
+    rec["symbol"] = "XRP/USDT:USDT"
+    board = build_edge_leaderboard(
+        [rec],
+        judgment_records=[{
+            "kind": "judgment",
+            "exchange": "bybit",
+            "symbol": "XRP/USDT:USDT",
+            "strategy_id": "trend_continuation_v1",
+            "verdict": "REJECT",
+            "window_start": "2024-07-10",
+            "window_end": "2025-07-10",
+        }],
+    )
+
+    row = board["rows"][0]
+    assert row["promotion_tier"] == "BLOCKED"
+    assert row["route_decision"] == "BLOCKED"
+    assert "latest_untouched_judgment_rejected" in row["blockers"]
+    assert row["latest_judgment"]["verdict"] == "REJECT"
+    assert board["promotion_queue"] == []
+    assert board["summary"]["judgment_rejected"] == 1
+    assert board["policy"]["judgment_overlay"]["latest_reject_blocks_queue"] is True
+
+
 def test_quant_family_attribution_creates_isolated_variant_queue_item():
     board = build_edge_leaderboard([
         record(

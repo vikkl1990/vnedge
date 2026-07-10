@@ -45,6 +45,7 @@ def build_edge_leaderboard(
     max_rows: int = 50,
     max_queue: int = 20,
     shadow_perf: dict | None = None,
+    judgment_records: Iterable[dict] | None = None,
 ) -> dict:
     """Build a ranked research leaderboard from rolling records.
 
@@ -55,10 +56,14 @@ def build_edge_leaderboard(
     lane's virtual track record — annotation-only evidence, never a gate.
     """
     shadow_index = index_shadow_perf(shadow_perf)
+    judgment_index = _latest_judgments(judgment_records or ())
     rows: list[dict] = []
     for record in records:
         strategy_row = _row_from_record(
-            record, registry=registry, shadow_index=shadow_index
+            record,
+            registry=registry,
+            shadow_index=shadow_index,
+            judgment_index=judgment_index,
         )
         if strategy_row is not None:
             rows.append(strategy_row)
@@ -69,6 +74,7 @@ def build_edge_leaderboard(
                 family=family,
                 family_stats=stats,
                 shadow_index=shadow_index,
+                judgment_index=judgment_index,
             )
             if family_row is not None:
                 rows.append(family_row)
@@ -94,6 +100,7 @@ def _row_from_record(
     family: str | None = None,
     family_stats: dict | None = None,
     shadow_index: dict[str, dict] | None = None,
+    judgment_index: dict[tuple[str, str, str], dict] | None = None,
 ) -> dict | None:
     verdict = str(record.get("verdict", "REJECT"))
     if verdict == "UNTESTABLE":
@@ -127,6 +134,12 @@ def _row_from_record(
         payoff=payoff,
         trades=trades,
     )
+    latest_judgment = None
+    if family is None and judgment_index:
+        latest_judgment = judgment_index.get((exchange, symbol, strategy))
+        if latest_judgment and latest_judgment.get("verdict") == "REJECT":
+            blockers = [*blockers, "latest_untouched_judgment_rejected"]
+            route = "BLOCKED"
     tier = _promotion_tier(
         scope=scope,
         verdict=verdict,
@@ -193,6 +206,7 @@ def _row_from_record(
         "profitable_windows_pct": _finite_float(record.get("profitable_windows_pct", 0.0)),
         "gates": record.get("gates", "standard"),
         "blockers": blockers,
+        "latest_judgment": latest_judgment,
         "live_shadow": live_shadow,
         "live_shadow_annotation": live_shadow_annotation,
         "can_trade": False,
@@ -323,6 +337,7 @@ def _queue_entry(row: dict) -> dict:
         "payoff_ratio": row["payoff_ratio"],
         "live_shadow": row["live_shadow"],
         "live_shadow_annotation": row["live_shadow_annotation"],
+        "latest_judgment": row["latest_judgment"],
         "can_trade": False,
         "can_promote": False,
         "requires_human_approval": True,
@@ -385,6 +400,10 @@ def _summary(rows: list[dict], queue: list[dict]) -> dict:
         "variant_ready": sum(1 for r in rows if r["promotion_tier"] == "VARIANT_RESEARCH_READY"),
         "watchlist": sum(1 for r in rows if r["promotion_tier"] == "WATCHLIST"),
         "blocked": sum(1 for r in rows if r["promotion_tier"] == "BLOCKED"),
+        "judgment_rejected": sum(
+            1 for r in rows
+            if (r.get("latest_judgment") or {}).get("verdict") == "REJECT"
+        ),
         "maker_only": sum(1 for r in rows if r["route_decision"] == "MAKER_ONLY"),
         "taker_allowed": sum(1 for r in rows if r["route_decision"] == "TAKER_ALLOWED"),
         "live_shadow_tracked": sum(1 for r in rows if r["live_shadow"] is not None),
@@ -422,7 +441,30 @@ def _policy(registry: ScalperParameterRegistry) -> dict:
             "annotation_only": True,
             "never_auto_promotes": True,
         },
+        "judgment_overlay": {
+            "enabled": True,
+            "latest_reject_blocks_queue": True,
+        },
     }
+
+
+def _latest_judgments(records: Iterable[dict]) -> dict[tuple[str, str, str], dict]:
+    latest: dict[tuple[str, str, str], dict] = {}
+    for record in records:
+        if record.get("kind") != "judgment":
+            continue
+        exchange = record.get("exchange")
+        symbol = record.get("symbol")
+        strategy = record.get("strategy_id")
+        if not (exchange and symbol and strategy):
+            continue
+        latest[(str(exchange), str(symbol), str(strategy))] = {
+            "verdict": record.get("verdict"),
+            "window_start": record.get("window_start"),
+            "window_end": record.get("window_end"),
+            "note": record.get("note", ""),
+        }
+    return latest
 
 
 def _fee_drag_pct(net: float, fees: float) -> float:
