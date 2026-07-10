@@ -96,10 +96,51 @@ class MultiLaneProvider:
     """Holds each lane's latest snapshot. latest() returns the primary lane
     (flat, backward-compatible) with a `lanes` array appended for comparison."""
 
-    def __init__(self, primary_lane_id: str) -> None:
+    # Lane-health audit cadence: recompute at most every 5 minutes — the
+    # audit reads file tails, so it must stay off the per-snapshot hot path.
+    LANE_HEALTH_INTERVAL_SECONDS = 300.0
+
+    def __init__(
+        self,
+        primary_lane_id: str,
+        *,
+        lane_specs: list[LaneSpec] | None = None,
+        journal_dir: Path | None = None,
+    ) -> None:
         self.primary = primary_lane_id
         self._lanes: dict[str, dict] = {}
         self._order: list[str] = []
+        # optional lane-health audit (desired-vs-active); off unless both
+        # the desired spec list and the journal dir are provided
+        self._health_specs = list(lane_specs) if lane_specs is not None else None
+        self._health_journal_dir = Path(journal_dir) if journal_dir is not None else None
+        self._health_cache: dict | None = None
+        self._health_at = 0.0
+
+    def _lane_health(self) -> dict | None:
+        """Cached desired-vs-active audit for the snapshot (never raises).
+
+        The auditor cross-checks the configured spec list against the lane
+        journal/equity files on disk; any exception is swallowed (keeping the
+        previous result) — lane health must never take down the snapshot."""
+        if self._health_specs is None or self._health_journal_dir is None:
+            return None
+        now = time.monotonic()
+        if self._health_cache is not None and (
+            now - self._health_at < self.LANE_HEALTH_INTERVAL_SECONDS
+        ):
+            return self._health_cache
+        self._health_at = now  # even on failure: don't re-fail on every snapshot
+        try:
+            from vnedge.runtime.lane_health import audit_lanes
+
+            report = audit_lanes(
+                self._health_journal_dir, desired=self._health_specs
+            )
+            self._health_cache = report.to_snapshot()
+        except Exception as exc:  # noqa: BLE001 — observability must not crash lanes
+            logger.warning("lane-health audit failed: %s", exc)
+        return self._health_cache
 
     def sink(self, lane_id: str, exchange: str) -> _LaneSink:
         return _LaneSink(self, lane_id, exchange)
@@ -182,6 +223,9 @@ class MultiLaneProvider:
             }
             for lid in self._order if lid in self._lanes
         ]
+        health = self._lane_health()
+        if health is not None:
+            out["lane_health"] = health
         return out
 
 

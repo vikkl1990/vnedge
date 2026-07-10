@@ -336,15 +336,27 @@ def build_lane_specs_from_env(
     return specs
 
 
+def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    """The full deduped spec list the runner is SUPPOSED to run.
+
+    Single source of truth shared by main() and the lane-health auditor
+    (vnedge.runtime.lane_health), so "desired" can never silently diverge
+    from what the runner actually launches.
+    """
+    return dedupe_lane_specs(
+        build_lane_specs_from_env(environ)
+        + candidate_shadow_lanes(environ)
+        + delta_funding_mr_lanes(environ)
+    )
+
+
 async def main() -> None:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
-    lanes = dedupe_lane_specs(
-        build_lane_specs_from_env()
-        + candidate_shadow_lanes()
-        + delta_funding_mr_lanes()
-    )
+    lanes = desired_lane_specs()
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
-    provider = MultiLaneProvider(primary_lane_id=primary)
+    provider = MultiLaneProvider(
+        primary_lane_id=primary, lane_specs=lanes, journal_dir=journal_dir
+    )
 
     server_task = None
     token = os.environ.get("DASHBOARD_TOKEN")
