@@ -8,7 +8,13 @@ from vnedge.research.shadow_manifest import (
     load_shadow_manifest,
     write_shadow_manifest,
 )
-from vnedge.runtime.multi_lane_shadow import candidate_shadow_lanes, manifest_shadow_lanes
+from vnedge.runtime.multi_lane_shadow import (
+    candidate_shadow_lanes,
+    dedupe_lane_specs,
+    manifest_shadow_lanes,
+)
+from vnedge.runtime.multi_lane import LaneSpec
+from vnedge.runtime.runner_config import RunnerMode
 
 
 def _pair(exchange, symbol, strategy, verdict="PASS", net=20.0):
@@ -98,11 +104,23 @@ def test_write_and_load_roundtrip(tmp_path):
     assert loaded["lanes"][0]["lane_id"] == m["lanes"][0]["lane_id"]
 
 
-def test_consumption_is_off_by_default(tmp_path):
+def test_consumption_is_on_by_default_for_shadow_only_locked_lanes(tmp_path):
     write_shadow_manifest(
         generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")]),
         tmp_path)
-    env = {"MULTI_LANE_RESEARCH_DIR": str(tmp_path)}   # MANIFEST_ENABLED unset -> off
+    env = {"MULTI_LANE_RESEARCH_DIR": str(tmp_path)}   # MANIFEST_ENABLED unset -> on
+    specs = manifest_shadow_lanes(env)
+    assert len(specs) == 1
+    assert specs[0].mode is RunnerMode.SHADOW
+    assert specs[0].exchange == "bybit"
+    assert specs[0].symbol == "XRP/USDT:USDT"
+
+
+def test_consumption_can_be_disabled(tmp_path):
+    write_shadow_manifest(
+        generate_shadow_manifest([_pair("bybit", "XRP/USDT:USDT", "trend_continuation_v1")]),
+        tmp_path)
+    env = {"MULTI_LANE_RESEARCH_DIR": str(tmp_path), "MULTI_LANE_MANIFEST_ENABLED": "0"}
     assert manifest_shadow_lanes(env) == []
 
 
@@ -113,7 +131,6 @@ def test_consumption_when_enabled_yields_shadow_lanespecs(tmp_path):
     env = {"MULTI_LANE_MANIFEST_ENABLED": "1", "MULTI_LANE_RESEARCH_DIR": str(tmp_path)}
     specs = manifest_shadow_lanes(env)
     assert len(specs) == 1
-    from vnedge.runtime.runner_config import RunnerMode
     assert specs[0].mode is RunnerMode.SHADOW
     assert specs[0].strategy_id == "funding_mean_reversion_v1"
 
@@ -127,3 +144,40 @@ def test_curated_and_manifest_lanes_do_not_duplicate(tmp_path):
     env = {"MULTI_LANE_MANIFEST_ENABLED": "1", "MULTI_LANE_RESEARCH_DIR": str(tmp_path)}
     ids = [s.lane_id for s in candidate_shadow_lanes(env)]
     assert ids.count("trend_continuation_xrp_bybit_shadow") == 1
+
+
+def test_curated_and_manifest_semantic_twins_do_not_duplicate(tmp_path):
+    # same exchange/symbol/timeframe/strategy/mode as curated XRP, but the
+    # research manifest names it with its generated lane id.
+    manifest = {"lanes": [{"lane_id": "trend_continuation_v1_bybit_xrpusdt_shadow",
+                           "exchange": "bybit", "symbol": "XRP/USDT:USDT",
+                           "strategy_id": "trend_continuation_v1", "mode": "shadow"}]}
+    (tmp_path / "shadow_lanes.json").write_text(json.dumps(manifest))
+    env = {"MULTI_LANE_RESEARCH_DIR": str(tmp_path)}
+    lanes = candidate_shadow_lanes(env)
+    twins = [
+        s for s in lanes
+        if s.exchange == "bybit"
+        and s.symbol == "XRP/USDT:USDT"
+        and s.strategy_id == "trend_continuation_v1"
+        and s.mode is RunnerMode.SHADOW
+    ]
+    assert len(twins) == 1
+
+
+def test_dedupe_lane_specs_preserves_first_and_blocks_duplicate_id_or_identity():
+    base = LaneSpec(
+        "a", "bybit", "XRP/USDT:USDT", strategy_id="trend_continuation_v1"
+    )
+    duplicate_id = LaneSpec("a", "binanceusdm", "BTC/USDT:USDT")
+    semantic_twin = LaneSpec(
+        "b", "bybit", "XRP/USDT:USDT", strategy_id="trend_continuation_v1"
+    )
+    distinct = LaneSpec(
+        "c", "bybit", "SOL/USDT:USDT", strategy_id="trend_continuation_v1"
+    )
+
+    assert dedupe_lane_specs([base, duplicate_id, semantic_twin, distinct]) == [
+        base,
+        distinct,
+    ]

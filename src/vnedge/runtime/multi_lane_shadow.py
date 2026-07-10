@@ -95,11 +95,12 @@ def _truthy(environ: Mapping[str, str], name: str, default: str) -> bool:
 def manifest_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """Shadow lanes auto-generated from research winners (shadow_lanes.json).
 
-    OFF by default (MULTI_LANE_MANIFEST_ENABLED): auto-spawning lanes from
-    research output changes the running workspace, so it's opt-in. Only lanes
-    with human-locked params reach the manifest; all are shadow-only.
+    ON by default (MULTI_LANE_MANIFEST_ENABLED=0 opts out): only lanes with
+    human-locked params reach the manifest; all are shadow-only, can_trade=false
+    research candidates. Paper/live promotion still needs explicit human
+    approval and untouched-data judgment.
     """
-    if not _truthy(environ, "MULTI_LANE_MANIFEST_ENABLED", "0"):
+    if not _truthy(environ, "MULTI_LANE_MANIFEST_ENABLED", "1"):
         return []
     from vnedge.research.shadow_manifest import load_shadow_manifest
     out_dir = Path(environ.get("MULTI_LANE_RESEARCH_DIR", "research/live_research"))
@@ -118,12 +119,41 @@ def manifest_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneS
     return specs
 
 
+def _lane_identity(spec: LaneSpec) -> tuple[str, str, str, str, RunnerMode]:
+    """Semantic lane key; protects against duplicate ids for the same lane."""
+    return (
+        spec.exchange,
+        spec.symbol,
+        spec.timeframe,
+        spec.strategy_id,
+        spec.mode,
+    )
+
+
+def dedupe_lane_specs(specs: list[LaneSpec]) -> list[LaneSpec]:
+    """Preserve first occurrence, dropping duplicate ids or semantic twins."""
+    out: list[LaneSpec] = []
+    seen_ids: set[str] = set()
+    seen_identities: set[tuple[str, str, str, str, RunnerMode]] = set()
+    for spec in specs:
+        identity = _lane_identity(spec)
+        if spec.lane_id in seen_ids or identity in seen_identities:
+            logger.info(
+                "skipping duplicate lane %s (%s %s %s %s)",
+                spec.lane_id, spec.exchange, spec.symbol,
+                spec.strategy_id, spec.mode.value,
+            )
+            continue
+        out.append(spec)
+        seen_ids.add(spec.lane_id)
+        seen_identities.add(identity)
+    return out
+
+
 def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     if not _truthy(environ, "MULTI_LANE_CANDIDATES", "1"):
         return []
-    curated = list(CANDIDATE_SHADOW_LANES)
-    seen = {s.lane_id for s in curated}
-    return curated + [s for s in manifest_shadow_lanes(environ) if s.lane_id not in seen]
+    return dedupe_lane_specs(list(CANDIDATE_SHADOW_LANES) + manifest_shadow_lanes(environ))
 
 
 def delta_funding_mr_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
@@ -308,9 +338,11 @@ def build_lane_specs_from_env(
 
 async def main() -> None:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
-    lanes = build_lane_specs_from_env() + candidate_shadow_lanes()
-    seen = {spec.lane_id for spec in lanes}
-    lanes += [s for s in delta_funding_mr_lanes() if s.lane_id not in seen]
+    lanes = dedupe_lane_specs(
+        build_lane_specs_from_env()
+        + candidate_shadow_lanes()
+        + delta_funding_mr_lanes()
+    )
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
     provider = MultiLaneProvider(primary_lane_id=primary)
 
