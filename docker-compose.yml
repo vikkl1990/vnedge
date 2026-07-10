@@ -22,6 +22,10 @@ services:
       MULTI_LANE_PRIMARY_EXCHANGE: "${MULTI_LANE_PRIMARY_EXCHANGE:-binanceusdm}"
       MULTI_LANE_PRIMARY_SYMBOL: "${MULTI_LANE_PRIMARY_SYMBOL:-BTC/USDT:USDT}"
       MULTI_LANE_PRIMARY_MODE: "${MULTI_LANE_PRIMARY_MODE:-paper}"
+      # Promote research-approved, locked-parameter candidates into SHADOW
+      # observation lanes by default. These are never paper/live lanes and
+      # still require untouched judgment + human approval before capital.
+      MULTI_LANE_MANIFEST_ENABLED: "${MULTI_LANE_MANIFEST_ENABLED:-1}"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
