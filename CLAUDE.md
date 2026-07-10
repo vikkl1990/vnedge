@@ -80,6 +80,20 @@ trades, <=6% DD. NO parameter changes mid-trial. NO live orders (manifest
 validation refuses live_orders_enabled). Reports append to
 research/paper_trials/<id>.reports.jsonl with commit attribution.
 
+## XRP trend judgment (2026-07-10, pre-registered, verdict stands)
+
+Triple-venue rolling PASS (XRP trend_continuation_v1, +$117-141 OOS) earned a
+human-approved pre-registered judgment on untouched data (2024-07-10 ->
+2025-07-10, exact rolling-lane config, one run, recorded in
+research/judgments/burn_registry.jsonl). VERDICT: REJECT on all three venues
+— but OOS-POSITIVE on all three (binance +$85.34, bybit +$107.76, delta
++$62.05, 18-19 windows), each failing the zero-trade-window gate (delta also
+IS/OOS collapse 19%<25%). Same failure signature funding-MR had in rounds
+1-2 before passing under pre-registered SPARSE_STRATEGY_GATES. LEGITIMATE
+NEXT STEP (needs fresh human approval, never automatic): a sparse-gates
+round on the NEXT untouched window (XRP 2023-07-10 -> 2024-07-10). The
+2024-2025 XRP window is now BURNED for this strategy on all venues.
+
 ## Charter convergence (2026-07-03)
 
 Deviation audit vs the original architecture found 3 classes: deliberate
