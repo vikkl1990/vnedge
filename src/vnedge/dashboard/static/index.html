@@ -1790,6 +1790,9 @@
 
     <section id="connectionsBoard" aria-label="venue connections">
       <h2>Connections <span class="tag">one row per venue &mdash; transport, staleness, symbols, keys; from the /state snapshot only</span></h2>
+      <div id="laneHealthLine" style="display:none;margin:0 0 8px">
+        <span class="chip idle" id="laneHealthBadge" title="desired vs active lane journals; from lane_health in the /state snapshot">lane health</span>
+      </div>
       <div class="table-wrap">
         <table id="connections"><thead><tr>
           <th>Venue</th><th>Transport</th><th>Staleness</th><th>Symbols</th><th>Keys</th>
@@ -2883,6 +2886,24 @@
     if(empty)empty.style.display=venues.size?"none":"block";
   }
 
+  // Lane Health badge: desired-vs-active journal audit (snapshot.lane_health,
+  // computed by the multi-lane provider) — "18/18 OK" green, or the problem
+  // counts ("2 STALE, 1 MISSING") red when MISSING/STALE (the cron-unhealthy
+  // verdicts), amber when only SILENT/ORPHAN. Hidden when the snapshot has none.
+  function renderLaneHealth(lh){
+    const line=$("laneHealthLine");
+    const badge=$("laneHealthBadge");
+    if(!line||!badge)return;
+    if(!lh||!lh.summary){line.style.display="none";return;}
+    const t=lh.totals||{};
+    const tone=(num(t.missing)||num(t.stale))?"bad":(num(t.silent)||num(t.orphan))?"warn":"good";
+    badge.className="chip "+tone;
+    badge.textContent="lane health: "+lh.summary;
+    badge.title=(Array.isArray(lh.problems)?lh.problems:[]).map(p=>p.verdict+" "+p.lane_id).join(", ")
+      ||"all desired lanes journaling, fresh, evaluating";
+    line.style.display="";
+  }
+
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
@@ -2891,6 +2912,7 @@
     wnCollectLanes(s.lanes||[]);
     wnRender();
     renderConnections(s.lanes||[],s);
+    renderLaneHealth(s.lane_health);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
