@@ -169,6 +169,122 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
 
 
+def _write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def _incident_world(tmp_path):
+    """alerts.jsonl + one lane journal with a mix of incident and routine kinds."""
+    alerts = tmp_path / "alerts.jsonl"
+    _write_jsonl(alerts, [
+        {"ts": "2026-07-10T02:00:00+00:00", "rule_id": "feed_stale",
+         "severity": "critical", "message": "feed stale: 130s since last event"},
+        {"ts": "2026-07-10T03:00:00+00:00", "rule_id": "new_fill",
+         "severity": "info", "message": "fill #1"},  # notification, not incident
+        {"ts": "2026-07-10T04:00:00+00:00", "rule_id": "loss_streak",
+         "severity": "warning", "message": "3 consecutive losing round trips"},
+    ])
+    _write_jsonl(tmp_path / "btc_lane.journal.jsonl", [
+        {"ts": "2026-07-10T01:00:00+00:00", "kind": "order_intent",
+         "payload": {"client_order_id": "x"}},  # routine, not incident
+        {"ts": "2026-07-10T05:00:00+00:00", "kind": "reconciliation_fail_closed",
+         "payload": {"mismatches": ["position drift"]}},
+        {"ts": "2026-07-10T00:30:00+00:00", "kind": "orphaned_paper_position",
+         "payload": {"symbol": SYM}},
+        {"ts": "2026-07-10T00:15:00+00:00", "kind": "plan_restore_rejected",
+         "payload": {"reason": "wrong symbol"}},
+        {"ts": "2026-07-10T06:00:00+00:00", "kind": "emergency_flatten_started",
+         "payload": {"flatten_id": "f1"}},
+    ])
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    return TestClient(create_app(
+        provider, token="t3st-token", alerts_path=alerts, journal_dir=tmp_path
+    ))
+
+
+def test_incidents_requires_token(tmp_path):
+    client = _incident_world(tmp_path)
+    assert client.get("/incidents").status_code == 401
+    assert client.get("/incidents?token=wrong").status_code == 401
+
+
+def test_incidents_merges_orders_and_maps_severity(tmp_path):
+    client = _incident_world(tmp_path)
+    incidents = client.get("/incidents?token=t3st-token").json()
+
+    # merged from both sources, reverse-chronological
+    stamps = [i["ts"] for i in incidents]
+    assert stamps == sorted(stamps, reverse=True)
+    by_source = {i["source"]: i for i in incidents}
+    assert "alert:feed_stale" in by_source
+    assert "journal:btc_lane" in {i["source"] for i in incidents}
+
+    # routine records are excluded from the incident timeline
+    assert not any("new_fill" in i["source"] for i in incidents)
+    assert not any(i["message"].startswith("order_intent") for i in incidents)
+
+    # severity mapping: journal kinds carry hard-coded severities
+    sev = {i["message"].split(" — ")[0]: i["severity"] for i in incidents
+           if i["source"].startswith("journal:")}
+    assert sev["reconciliation_fail_closed"] == "critical"
+    assert sev["orphaned_paper_position"] == "warning"
+    assert sev["plan_restore_rejected"] == "warning"
+    assert sev["emergency_flatten_started"] == "critical"
+
+    # every incident links a runbook anchor
+    assert all(i["runbook"].startswith("/runbooks#") for i in incidents)
+    kill = next(i for i in incidents if "emergency_flatten" in i["message"])
+    assert kill["runbook"] == "/runbooks#kill-switch-and-flatten"
+
+
+def test_incidents_limit_param_and_missing_files(tmp_path):
+    client = _incident_world(tmp_path)
+    assert len(client.get("/incidents?token=t3st-token&limit=2").json()) == 2
+    assert client.get("/incidents?token=t3st-token&limit=nope").status_code == 400
+
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    bare = TestClient(create_app(
+        provider, token="t3st-token",
+        alerts_path=tmp_path / "missing" / "alerts.jsonl",
+        journal_dir=tmp_path / "missing",
+    ))
+    assert bare.get("/incidents?token=t3st-token").json() == []
+
+
+def test_runbooks_route_is_auth_gated_and_anchored(client):
+    assert client.get("/runbooks").status_code == 401
+    r = client.get("/runbooks?token=t3st-token")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    # anchors the incident links point at, from the real docs/RUNBOOKS.md
+    for anchor in ("kill-switch-and-flatten", "reconciliation-fail-closed",
+                   "orphaned-paper-position", "plan-restore-rejected",
+                   "general-triage"):
+        assert f"id='{anchor}'" in r.text
+    assert "NEVER auto-resets" in r.text
+
+
+def test_runbooks_custom_path_and_missing_file(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    doc = tmp_path / "RUNBOOKS.md"
+    doc.write_text("# Title\n\n## My Incident Type\n\n- check <thing> & act\n")
+    client = TestClient(create_app(
+        provider, token="t3st-token", runbooks_path=doc
+    ))
+    r = client.get("/runbooks?token=t3st-token")
+    assert "id='my-incident-type'" in r.text
+    assert "&lt;thing&gt; &amp; act" in r.text  # body is escaped, not interpreted
+
+    gone = TestClient(create_app(
+        provider, token="t3st-token", runbooks_path=tmp_path / "nope.md"
+    ))
+    assert gone.get("/runbooks?token=t3st-token").status_code == 404
+
+
 def test_no_control_routes_exist(client):
     """Read-only invariant: nothing accepts POST/PUT/DELETE."""
     for method in ("post", "put", "delete"):

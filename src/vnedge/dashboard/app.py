@@ -12,16 +12,159 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import html
 import json
 import logging
+import os
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# --- incident timeline --------------------------------------------------------
+# Journal kinds that are operator incidents (not routine order flow), mapped to
+# a severity and a runbook anchor in docs/RUNBOOKS.md.
+_INCIDENT_JOURNAL_KINDS: dict[str, tuple[str, str]] = {
+    "reconciliation_fail_closed": ("critical", "reconciliation-fail-closed"),
+    "orphaned_paper_position": ("warning", "orphaned-paper-position"),
+    "plan_restore_rejected": ("warning", "plan-restore-rejected"),
+    "emergency_flatten_started": ("critical", "kill-switch-and-flatten"),
+    "emergency_flatten_finished": ("info", "kill-switch-and-flatten"),
+}
+
+# Alert rule_ids -> runbook anchors. Anything unmapped gets general triage.
+_ALERT_RUNBOOKS: dict[str, str] = {
+    "feed_stale": "feed-stale",
+    "kill_switch": "kill-switch-and-flatten",
+    "journal_unhealthy": "journal-unavailable",
+    "risk_status": "risk-status-degraded",
+    "daily_loss": "daily-loss-stop",
+    "loss_streak": "loss-streak",
+    "drawdown": "drawdown",
+}
+_GENERAL_RUNBOOK = "general-triage"
+
+# Alert rule_ids that are trade notifications, not incidents.
+_NON_INCIDENT_ALERTS = frozenset({"new_fill"})
+
+_LANE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _tail_lines(path: Path, max_bytes: int = 512_000) -> list[str]:
+    """Bounded tail read: journals grow unbounded; never load them whole."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if size > max_bytes and lines:
+        lines = lines[1:]  # first line is almost certainly partial
+    return [line for line in lines if line.strip()]
+
+
+def _iter_jsonl(path: Path, max_bytes: int = 512_000):
+    for line in _tail_lines(path, max_bytes=max_bytes):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            yield record
+
+
+def _summarize_payload(payload: dict) -> str:
+    return ", ".join(f"{key}={value}" for key, value in list(payload.items())[:6])
+
+
+def _alert_incidents(paths: list[Path]) -> list[dict]:
+    out: list[dict] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        for record in _iter_jsonl(path):
+            rule_id = str(record.get("rule_id", ""))
+            if rule_id in _NON_INCIDENT_ALERTS:
+                continue
+            anchor = _ALERT_RUNBOOKS.get(rule_id, _GENERAL_RUNBOOK)
+            out.append({
+                "ts": str(record.get("ts", "")),
+                "severity": str(record.get("severity", "info")),
+                "source": f"alert:{rule_id or 'unknown'}",
+                "message": str(record.get("message", "")),
+                "runbook": f"/runbooks#{anchor}",
+            })
+    return out
+
+
+def _journal_incidents(journal_dir: Path | None) -> list[dict]:
+    out: list[dict] = []
+    if journal_dir is None or not journal_dir.is_dir():
+        return out
+    for path in sorted(journal_dir.glob("*.journal.jsonl")):
+        lane = path.name.removesuffix(".journal.jsonl")
+        for record in _iter_jsonl(path):
+            kind = str(record.get("kind", ""))
+            mapped = _INCIDENT_JOURNAL_KINDS.get(kind)
+            if mapped is None:
+                continue
+            severity, anchor = mapped
+            payload = record.get("payload")
+            summary = _summarize_payload(payload) if isinstance(payload, dict) else ""
+            out.append({
+                "ts": str(record.get("ts", "")),
+                "severity": severity,
+                "source": f"journal:{lane}",
+                "message": kind + (f" — {summary}" if summary else ""),
+                "runbook": f"/runbooks#{anchor}",
+            })
+    return out
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _render_runbooks_html(markdown: str) -> str:
+    """Minimal, dependency-free markdown: headings become anchored <h1..h3>,
+    everything else is escaped verbatim inside <pre> blocks."""
+    parts: list[str] = [
+        "<!doctype html><meta charset='utf-8'><title>VNEDGE runbooks</title>",
+        "<style>body{background:#05070a;color:#e8eef6;font:14px/1.55 ui-monospace,"
+        "SFMono-Regular,Menlo,Consolas,monospace;max-width:860px;margin:24px auto;"
+        "padding:0 16px}h1,h2,h3{color:#4cb7ff;scroll-margin-top:12px}"
+        "h2{border-top:1px solid #263241;padding-top:18px}"
+        "pre{white-space:pre-wrap;margin:4px 0}:target{color:#f7bd54}</style>",
+    ]
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if buffer:
+            parts.append("<pre>" + html.escape("\n".join(buffer)) + "</pre>")
+            buffer.clear()
+
+    for line in markdown.splitlines():
+        heading = re.match(r"^(#{1,3})\s+(.*)$", line)
+        if heading:
+            flush()
+            level = len(heading.group(1))
+            title = heading.group(2).strip()
+            parts.append(
+                f"<h{level} id='{_slug(title)}'>{html.escape(title)}</h{level}>"
+            )
+        else:
+            buffer.append(line)
+    flush()
+    return "".join(parts)
 
 
 class SnapshotProvider:
@@ -46,11 +189,19 @@ def create_app(
     research_path: Path | None = None,
     alpha_council_path: Path | None = None,
     alpha_workbench_path: Path | None = None,
+    alerts_path: Path | None = None,
+    journal_dir: Path | None = None,
+    runbooks_path: Path | None = None,
 ) -> FastAPI:
     if not token or not token.strip():
         raise ValueError("DASHBOARD_TOKEN must be non-empty — no token, no dashboard")
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
+
+    # Per-lane files (equity/fills/journals/alerts) live next to the primary
+    # equity history unless a journal dir is given explicitly.
+    lane_dir = journal_dir or (history_path.parent if history_path is not None else None)
+    runbooks_file = runbooks_path or (_REPO_ROOT / "docs" / "RUNBOOKS.md")
 
     def _authorized(request: Request) -> bool:
         header = request.headers.get("authorization", "")
@@ -98,6 +249,40 @@ def create_app(
                 except json.JSONDecodeError:
                     continue
         return JSONResponse(points)
+
+    @app.get("/incidents")
+    async def incidents(request: Request) -> JSONResponse:
+        """Merged reverse-chronological incident timeline: fired alerts plus
+        incident-class decision-journal records, each with a runbook link."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="limit must be an integer")
+        limit = max(1, min(limit, 500))
+        alert_files: list[Path] = []
+        if alerts_path is not None:
+            alert_files.append(alerts_path)
+        if lane_dir is not None and lane_dir.is_dir():
+            alert_files.extend(
+                p for p in sorted(lane_dir.glob("*.alerts.jsonl")) if p != alerts_path
+            )
+        merged = _alert_incidents(alert_files) + _journal_incidents(lane_dir)
+        merged.sort(key=lambda record: record["ts"], reverse=True)
+        return JSONResponse(merged[:limit])
+
+    @app.get("/runbooks")
+    async def runbooks(request: Request) -> HTMLResponse:
+        """docs/RUNBOOKS.md rendered minimally so incident links can anchor
+        into it. Read-only, token-gated like every data route."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        try:
+            markdown = runbooks_file.read_text(encoding="utf-8")
+        except OSError:
+            raise HTTPException(status_code=404, detail="runbooks document not found")
+        return HTMLResponse(_render_runbooks_html(markdown))
 
     @app.get("/research")
     async def research(request: Request) -> JSONResponse:
