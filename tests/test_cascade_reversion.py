@@ -486,6 +486,34 @@ def test_scanner_on_empty_root(tmp_path):
     assert "no liquidation stream" in render_report(empty)
 
 
+def test_loaders_drop_zero_price_rows(tmp_path):
+    """Real recorded tapes contain occasional zero-price rows; against a 0.0
+    print a short trivially 'hits target' for ~10000 bps and a 0.0 cascade
+    extreme produces a negative stop. Loaders must drop them (found on the
+    VM's live tape, 2026-07-11)."""
+    from vnedge.research.cascade_reversion import (
+        load_liquidation_events,
+        load_trade_prints,
+    )
+
+    liq_df = _liq_df(_warmup_liqs()[:2])
+    liq_df.loc[len(liq_df)] = {"ts_ms": C0, "price": 0.0, "amount": 1.0,
+                               "side": "sell", "notional_usd": 0.0}
+    _write_shard(tmp_path, EX, "liquidations", "20260708", liq_df)
+    trade_df = _trade_df(_pre_trades()[:2])
+    trade_df.loc[len(trade_df)] = {"ts_ms": C0, "price": 0.0, "amount": 1.0,
+                                   "side": "buy"}
+    trade_df.loc[len(trade_df)] = {"ts_ms": C0 + 1, "price": 100.0, "amount": 0.0,
+                                   "side": "buy"}
+    _write_shard(tmp_path, EX, "trades", "20260708", trade_df)
+
+    liqs = load_liquidation_events(tmp_path, EX, SYM, "20260708")
+    assert len(liqs) == 2 and all(e.price > 0 for e in liqs)
+    trades, source = load_trade_prints(tmp_path, EX, SYM, "20260708")
+    assert source == EX
+    assert len(trades) == 2 and all(t.price > 0 and t.amount > 0 for t in trades)
+
+
 def test_discover_days_both_layouts(tmp_path):
     _write_shard(tmp_path, EX, "liquidations", "20260708", _liq_df(_warmup_liqs()[:2]))
     legacy = (tmp_path / "ticks" / f"exchange={EX}" / "symbol=BTCUSDT"

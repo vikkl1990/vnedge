@@ -642,12 +642,18 @@ def load_liquidation_events(data_root: Path | str, exchange: str, symbol: str,
     events: list[LiquidationEvent] = []
     for r in frame.itertuples():
         try:
-            events.append(LiquidationEvent(
+            ev = LiquidationEvent(
                 ts_ms=int(r.ts_ms), price=float(r.price), amount=float(r.amount),
                 side=str(r.side), notional_usd=float(r.notional_usd),
-            ))
+            )
         except (TypeError, ValueError, AttributeError):
             continue
+        # recorded lakes contain occasional zero-price/zero-size rows; a 0.0
+        # print would poison the extreme/stop, so they are dropped like the
+        # TradeTick validation drops them on the scalping path
+        if ev.price <= 0 or ev.notional_usd <= 0:
+            continue
+        events.append(ev)
     events.sort(key=lambda e: e.ts_ms)
     return events
 
@@ -665,10 +671,16 @@ def load_trade_prints(data_root: Path | str, exchange: str, symbol: str,
         prints: list[TradePrint] = []
         for r in frame.itertuples():
             try:
-                prints.append(TradePrint(
-                    ts_ms=int(r.ts_ms), price=float(r.price), amount=float(r.amount)))
+                tr = TradePrint(
+                    ts_ms=int(r.ts_ms), price=float(r.price), amount=float(r.amount))
             except (TypeError, ValueError, AttributeError):
                 continue
+            # zero-price prints exist in the recorded tape; against a 0.0
+            # print any short "hits target" for ~10000 bps — drop them, same
+            # rule as TradeTick's validation on the scalping path
+            if tr.price <= 0 or tr.amount <= 0:
+                continue
+            prints.append(tr)
         if prints:
             prints.sort(key=lambda t: t.ts_ms)
             return prints, source
