@@ -46,6 +46,7 @@ def create_app(
     research_path: Path | None = None,
     alpha_council_path: Path | None = None,
     alpha_workbench_path: Path | None = None,
+    lane_readiness_path: Path | None = None,
 ) -> FastAPI:
     if not token or not token.strip():
         raise ValueError("DASHBOARD_TOKEN must be non-empty — no token, no dashboard")
@@ -127,6 +128,24 @@ def create_app(
             _read_json_payload(
                 alpha_workbench_path,
                 {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False},
+            )
+        )
+
+    @app.get("/lane-readiness")
+    async def lane_readiness(request: Request) -> JSONResponse:
+        """Latest lane firing/promotability report."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        return JSONResponse(
+            _read_json_payload(
+                lane_readiness_path,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "lane readiness report unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
             )
         )
 

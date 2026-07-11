@@ -686,31 +686,22 @@ def _enabled_research_strategies() -> set[str] | None:
 
 def _load_l2_latest() -> dict:
     """Last output of the decoupled l2-research-loop, or {} if absent/unreadable."""
-    path = OUT_DIR / "l2_latest.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    return _read_optional_json(OUT_DIR / "l2_latest.json")
 
 
 def _load_event_taker_latest() -> dict:
     """Last output of the taker-only aggTrades event replay
     (vnedge.research.event_taker_replay), or {} if absent/unreadable."""
-    path = OUT_DIR / "event_taker_replay.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
+    return _read_optional_json(OUT_DIR / "event_taker_replay.json")
 
 
 def _load_cascade_reversion_latest() -> dict:
     """Last output of the liquidation-cascade reversion replay
     (vnedge.research.cascade_reversion), or {} if absent/unreadable."""
-    path = OUT_DIR / "cascade_reversion.json"
+    return _read_optional_json(OUT_DIR / "cascade_reversion.json")
+
+
+def _read_optional_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
@@ -909,6 +900,9 @@ async def run_cycle() -> list[dict]:
             generate_shadow_manifest(
                 list(agent_plan.profitable_pairs),
                 judgment_records=judgment_records,
+                filtered_replay_payload=_read_optional_json(
+                    OUT_DIR / "filtered_replay_latest.json"
+                ),
             ),
             OUT_DIR,
         )
