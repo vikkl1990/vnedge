@@ -239,7 +239,14 @@ def create_app(
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.
     lane_dir = journal_dir or (history_path.parent if history_path is not None else None)
-    runbooks_file = runbooks_path or (_REPO_ROOT / "docs" / "RUNBOOKS.md")
+    # Resolve the runbooks doc across both layouts: dev (repo checkout, where
+    # _REPO_ROOT/docs works) and the container (pip-installed package, where
+    # __file__ points into site-packages but docs/ is COPYed to the WORKDIR).
+    runbooks_file = runbooks_path or next(
+        (c for c in (_REPO_ROOT / "docs" / "RUNBOOKS.md",
+                     Path.cwd() / "docs" / "RUNBOOKS.md") if c.exists()),
+        _REPO_ROOT / "docs" / "RUNBOOKS.md",
+    )
 
     def _authorized(request: Request) -> AuthResult:
         """Authenticate the request; raise 401 (with the store's reason —
