@@ -112,7 +112,9 @@ daemons — a small FastAPI app.
   No build step. Telegram alerts (already planned) remain the primary
   operator channel; the dashboard is for inspection, not operation.
 - Config (env): `DASHBOARD_HOST=127.0.0.1`, `DASHBOARD_PORT=8080`,
-  `DASHBOARD_TOKEN` (required non-empty — no token, no dashboard),
+  `DASHBOARD_TOKEN` (back-compat shared token) and/or `DASHBOARD_USERS`
+  (per-user tokens with roles + expiry — see docs/DASHBOARD_AUTH.md; at
+  least one user required — no token, no dashboard),
   `DASHBOARD_SNAPSHOT_HZ=1`.
 - Snapshot DTO fields: ts, mode, live_trading_enabled, kill_switch_active,
   equity, realized_pnl, unrealized_pnl, daily_loss, consecutive_losses,
