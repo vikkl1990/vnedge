@@ -433,9 +433,12 @@ def _proposal(
         return {
             **base,
             "filter": "require_pre_event_trade_through_proxy",
-            "min_through_notional_usd": config.min_through_notional_usd,
+            "min_pre_signed_notional_usd": config.min_through_notional_usd,
             "observed_through_notional_usd": round(
                 float(features["through_notional_usd"]), 6
+            ),
+            "observed_pre_signed_notional_usd": round(
+                float(features["pre_signed_notional_usd"]), 6
             ),
             "rationale": "maker entry needs evidence that touch liquidity can clear",
         }

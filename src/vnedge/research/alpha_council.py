@@ -44,6 +44,9 @@ ARTIFACT_MAX_AGE_SECONDS = {
     "daily_scalper_latest.json": 7 * 3600,
     "alpha_distillation_latest.json": 7 * 3600,
     "bitcoin_regime_latest.json": 2 * 3600,
+    "candidate_replay_latest.json": 2 * 3600,
+    "execution_condition_latest.json": 2 * 3600,
+    "filtered_replay_latest.json": 2 * 3600,
 }
 
 ARTIFACT_PRODUCERS = {
@@ -55,6 +58,9 @@ ARTIFACT_PRODUCERS = {
     "daily_scalper_latest.json": "daily-scalper-pack",
     "alpha_distillation_latest.json": "alpha-distillation",
     "bitcoin_regime_latest.json": "bitcoin-regime-sensor",
+    "candidate_replay_latest.json": "candidate-replay-executor",
+    "execution_condition_latest.json": "execution-condition-miner",
+    "filtered_replay_latest.json": "filtered-replay-executor",
 }
 
 
@@ -172,6 +178,10 @@ def collect_candidates(
     candidates = _apply_execution_condition_labels(
         candidates,
         _read_json(research / "execution_condition_latest.json"),
+    )
+    candidates = _apply_filtered_replay_labels(
+        candidates,
+        _read_json(research / "filtered_replay_latest.json"),
     )
     return _apply_source_quotas(
         sorted(candidates, key=_candidate_sort_key),
@@ -687,8 +697,30 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
     notes: list[str] = []
     vetoes: list[str] = []
     replay_verdict = str(m.get("replay_verdict") or "")
+    filtered_verdict = str(m.get("filtered_replay_verdict") or "")
     condition_bucket = str(m.get("execution_condition_bucket") or "")
-    if replay_verdict:
+    if filtered_verdict:
+        fills = _num(m.get("filtered_replay_fills"))
+        quotes = _num(m.get("filtered_replay_quotes"))
+        net = _num(m.get("filtered_replay_net_usd"))
+        avg = _num(m.get("filtered_replay_avg_net_bps"))
+        if filtered_verdict == "REPLAY_CANDIDATE":
+            delta += 42
+            notes.append(
+                f"filtered fresh replay passed: fills={fills:.0f}/{quotes:.0f}, "
+                f"net=${net:+.4f}, avg={avg:+.2f}bps"
+            )
+        elif filtered_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            delta += 10
+            vetoes.append("needs_more_replay_samples")
+            notes.append(
+                f"filtered replay positive but under-sampled: fills={fills:.0f}/{quotes:.0f}"
+            )
+        elif _is_bad_replay_verdict(filtered_verdict):
+            delta -= 36
+            vetoes.append("filtered_replay_failed")
+            notes.append(f"filtered replay still failed: {filtered_verdict}")
+    if replay_verdict and filtered_verdict != "REPLAY_CANDIDATE":
         fills = _num(m.get("replay_fills"))
         quotes = _num(m.get("replay_quotes"))
         net = _num(m.get("replay_net_usd"))
@@ -785,6 +817,7 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     notes = ["council output is advisory only"]
     delta = -10.0
     replay_verdict = str(candidate.metrics.get("replay_verdict") or "")
+    filtered_verdict = str(candidate.metrics.get("filtered_replay_verdict") or "")
     if candidate.source in {
         "event_leadlag_alpha",
         "fast_l2_scout",
@@ -792,7 +825,16 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
         "l2_research_loop",
         "alpha_factory",
     }:
-        if not replay_verdict:
+        if filtered_verdict == "REPLAY_CANDIDATE":
+            vetoes.append("requires_shadow_trial_after_replay")
+            notes.append("filtered replay passed; governed shadow/paper trial still required")
+        elif filtered_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            vetoes.append("requires_more_replay_evidence")
+            notes.append("filtered replay is positive but under-sampled")
+        elif _is_bad_replay_verdict(filtered_verdict):
+            vetoes.append("execution_replay_failed")
+            notes.append("filtered replay failed conservative execution proof")
+        elif not replay_verdict:
             vetoes.append("requires_conservative_l2_replay")
             notes.append("microstructure candidate requires conservative replay")
         elif replay_verdict == "REPLAY_CANDIDATE":
@@ -847,6 +889,13 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
         "l2_research_loop",
         "alpha_factory",
     }:
+        filtered_verdict = str(candidate.metrics.get("filtered_replay_verdict") or "")
+        if filtered_verdict == "REPLAY_CANDIDATE":
+            return "QUEUE_SHADOW_TRIAL_AFTER_REPLAY"
+        if filtered_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            return "RECORD_MORE_TICKS"
+        if _is_bad_replay_verdict(filtered_verdict):
+            return "MINE_PRE_EVENT_EXECUTION_CONDITIONS"
         condition_action = str(candidate.metrics.get("execution_condition_action") or "")
         if veto_set & {
             "no_quote_after_event",
@@ -1033,12 +1082,69 @@ def _execution_condition_index(payload: dict | None) -> dict[str, dict[str, Any]
     return out
 
 
+def _apply_filtered_replay_labels(
+    candidates: list[AlphaCandidate],
+    payload: dict | None,
+) -> list[AlphaCandidate]:
+    filtered = _filtered_replay_index(payload)
+    if not filtered:
+        return candidates
+    out: list[AlphaCandidate] = []
+    for candidate in candidates:
+        row = filtered.get(candidate.candidate_id)
+        if row is None and candidate.source == "event_leadlag_alpha":
+            raw_id = str(candidate.evidence.get("hypothesis_id") or "")
+            row = filtered.get(raw_id)
+        if row is None:
+            out.append(candidate)
+            continue
+        metrics = dict(candidate.metrics)
+        metrics.update({
+            "filtered_replay_verdict": str(row.get("verdict") or "UNKNOWN"),
+            "filtered_replay_quotes": _num(row.get("quotes")),
+            "filtered_replay_fills": _num(row.get("fills")),
+            "filtered_replay_fill_rate_pct": _num(row.get("fill_rate_pct")),
+            "filtered_replay_net_usd": _num(row.get("net_usd")),
+            "filtered_replay_avg_net_bps": _num(row.get("avg_net_bps")),
+            "filtered_replay_profit_factor": _num(row.get("profit_factor")),
+            "filtered_replay_filter": str(row.get("filter_name") or ""),
+            "filtered_replay_condition_bucket": str(row.get("condition_bucket") or ""),
+        })
+        evidence = dict(candidate.evidence)
+        evidence["filtered_replay"] = row
+        out.append(replace(candidate, metrics=metrics, evidence=evidence))
+    return out
+
+
+def _filtered_replay_index(payload: dict | None) -> dict[str, dict[str, Any]]:
+    rows = (payload or {}).get("rows") or []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_id = str(row.get("candidate_id") or "")
+        if not candidate_id:
+            continue
+        out[candidate_id] = row
+        source = str(row.get("source") or "")
+        if source == "event_leadlag_alpha":
+            out[f"event_leadlag|{candidate_id}"] = row
+    return out
+
+
 def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
     m = candidate.metrics
     samples = _sample_count(candidate)
     replay_score = 0.0
+    filtered_verdict = str(m.get("filtered_replay_verdict") or "")
     replay_verdict = str(m.get("replay_verdict") or "")
-    if replay_verdict == "REPLAY_CANDIDATE":
+    if filtered_verdict == "REPLAY_CANDIDATE":
+        replay_score = 190.0
+    elif filtered_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+        replay_score = 55.0
+    elif _is_bad_replay_verdict(filtered_verdict):
+        replay_score = -200.0
+    elif replay_verdict == "REPLAY_CANDIDATE":
         replay_score = 160.0
     elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
         replay_score = 45.0
@@ -1142,6 +1248,7 @@ def _num(value: Any) -> float:
 
 def _best_profit_factor(metrics: dict[str, Any]) -> float:
     return max(
+        _num(metrics.get("filtered_replay_profit_factor")),
         _num(metrics.get("replay_profit_factor")),
         _num(metrics.get("profit_factor")),
         _num(metrics.get("maker_profit_factor")),
@@ -1151,6 +1258,7 @@ def _best_profit_factor(metrics: dict[str, Any]) -> float:
 
 def _best_net_bps(metrics: dict[str, Any]) -> float:
     return max(
+        _num(metrics.get("filtered_replay_avg_net_bps")),
         _num(metrics.get("replay_avg_net_bps")),
         _num(metrics.get("avg_net_bps")),
         _num(metrics.get("maker_avg_net_bps")),
@@ -1160,6 +1268,7 @@ def _best_net_bps(metrics: dict[str, Any]) -> float:
 
 def _sample_count(candidate: AlphaCandidate) -> float:
     return max(
+        _num(candidate.metrics.get("filtered_replay_fills")),
         _num(candidate.metrics.get("replay_fills")),
         _num(candidate.metrics.get("samples")),
         _num(candidate.metrics.get("oos_trades")),
