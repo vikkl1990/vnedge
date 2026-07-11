@@ -288,10 +288,12 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
         import uvicorn
 
         from vnedge.dashboard.app import SnapshotProvider, create_app
+        from vnedge.dashboard.auth import TokenStore
 
         provider = SnapshotProvider()
         app = create_app(
-            provider, token=os.environ["DASHBOARD_TOKEN"],
+            # DASHBOARD_USERS (per-user tokens) + legacy DASHBOARD_TOKEN
+            provider, token_store=TokenStore.from_env(),
             history_path=Path("logs/paper_trials") / f"{manifest.trial_id}.equity.jsonl",
             research_path=Path("research/live_research/latest.json"),
             alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
@@ -335,7 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("manifest", type=Path)
     p.add_argument("--hours", type=float, default=24.0, help="session length")
     p.add_argument("--dashboard", action="store_true",
-                   help="serve the read-only dashboard (DASHBOARD_TOKEN required)")
+                   help="serve the read-only dashboard "
+                        "(DASHBOARD_TOKEN or DASHBOARD_USERS required)")
     args = p.parse_args(argv)
     return asyncio.run(run_trial(args.manifest, args.hours, args.dashboard))
 
