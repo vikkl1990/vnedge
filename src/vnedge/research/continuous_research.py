@@ -707,6 +707,18 @@ def _load_event_taker_latest() -> dict:
         return {}
 
 
+def _load_cascade_reversion_latest() -> dict:
+    """Last output of the liquidation-cascade reversion replay
+    (vnedge.research.cascade_reversion), or {} if absent/unreadable."""
+    path = OUT_DIR / "cascade_reversion.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -769,6 +781,7 @@ class ResearchPayload:
     scalper_parameter_registry: dict = field(default_factory=dict)
     live_shadow_perf: dict = field(default_factory=dict)
     event_taker_replay: dict = field(default_factory=dict)
+    cascade_reversion: dict = field(default_factory=dict)
 
 
 def publish(payload: ResearchPayload) -> None:
@@ -788,6 +801,7 @@ def publish(payload: ResearchPayload) -> None:
         "alpha_factory": payload.alpha_factory or {},
         "scalper_parameter_registry": payload.scalper_parameter_registry or {},
         "event_taker_replay": payload.event_taker_replay or {},
+        "cascade_reversion": payload.cascade_reversion or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         # live virtual track record of the shadow lanes (read-only journal
         # aggregation; observability evidence, never a gate)
@@ -968,6 +982,7 @@ async def run_cycle() -> list[dict]:
         scalper_parameter_registry=scalper_parameter_registry,
         live_shadow_perf=live_shadow_perf,
         event_taker_replay=_load_event_taker_latest(),
+        cascade_reversion=_load_cascade_reversion_latest(),
     ))
     for r in records:
         tag = " [auto]" if r.get("auto") else ""

@@ -349,6 +349,27 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Liquidation-cascade reversion replay (research only, can_trade/can_promote
+  # false). Every 6h it rescans the recorded liquidation days against the
+  # trade tape, reports taker-taker AND maker-first cost models side by side
+  # (maker numbers flagged ASSUMED_MAKER_FILL), and publishes
+  # cascade_reversion.json for the continuous-research folding hook.
+  cascade-reversion:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.cascade_reversion",
+              "--interval-seconds", "${CASCADE_REVERSION_INTERVAL_SECONDS:-21600}",
+              "--exchanges", "binanceusdm,bybit",
+              "--symbols",
+              "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT",
+              "--data-root", "/app/data"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Bybit liquidation recorder (allLiquidation topic via CCXT Pro;
   # position side is normalised to forced-order side on ingest). Same universe,
   # written into ticks/exchange=bybit/.../stream=liquidations/ for parity.

@@ -158,6 +158,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         scalper_parameter_registry={"version": "test"},
         live_shadow_perf={"available": False},
         event_taker_replay={"rows": []},
+        cascade_reversion={"targets": []},
     ))
     text = (tmp_path / "live_research" / "latest.json").read_text()
     written = json.loads(text)
@@ -176,6 +177,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         "alpha_factory": {"flow": ["mine_structural_hypotheses"]},
         "scalper_parameter_registry": {"version": "test"},
         "event_taker_replay": {"rows": []},
+        "cascade_reversion": {"targets": []},
         "shadow_lanes": {"lanes": [], "blocked": []},
         "live_shadow_perf": {"available": False},
         "edge_agents": {"policy": {"can_trade": False}},
