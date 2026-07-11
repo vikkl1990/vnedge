@@ -23,6 +23,8 @@ driven (MULTI_LANE_MODES, MULTI_LANE_EXCHANGES, MULTI_LANE_SYMBOLS).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from collections.abc import Mapping
@@ -66,6 +68,8 @@ _MODES: dict[str, RunnerMode] = {
     "paper": RunnerMode.PAPER,
     "shadow": RunnerMode.SHADOW,
 }
+
+MANIFEST_RELOAD_EXIT_CODE = 75
 
 # Exploratory candidate lanes surfaced by the edge-research agent — run in
 # SHADOW only (gateway-evaluated intents journaled, NEVER a fill) so their live
@@ -350,12 +354,80 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     )
 
 
-async def main() -> None:
+def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
+    """Stable digest of the loaded runtime lane set.
+
+    The research loop rewrites ``shadow_lanes.json`` atomically. A running
+    multi-lane process cannot hot-add/remove per-lane feeds safely without
+    duplicating a second execution path, so it watches this digest and exits
+    deliberately when the desired set changes. Docker then restarts it into
+    the fresh lane set.
+    """
+    payload = [
+        {
+            "lane_id": spec.lane_id,
+            "exchange": spec.exchange,
+            "symbol": spec.symbol,
+            "timeframe": spec.timeframe,
+            "mode": spec.mode.value,
+            "strategy_id": spec.strategy_id,
+            "strategy_params": spec.strategy_params or {},
+            "starting_equity": spec.starting_equity,
+            "daily_loss_usd": spec.daily_loss_usd,
+            "is_primary": spec.is_primary,
+        }
+        for spec in specs
+    ]
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _manifest_path(environ: Mapping[str, str]) -> Path:
+    out_dir = Path(environ.get("MULTI_LANE_RESEARCH_DIR", "research/live_research"))
+    return out_dir / "shadow_lanes.json"
+
+
+class LaneSetChanged(RuntimeError):
+    """Raised by the control-plane watcher to trigger a managed restart."""
+
+
+async def _watch_lane_set(
+    initial_fingerprint: str,
+    environ: Mapping[str, str],
+    *,
+    interval_seconds: float,
+) -> None:
+    """Exit-on-drift watcher for the dynamic research -> shadow manifest bridge."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        current = lane_specs_fingerprint(desired_lane_specs(environ))
+        if current != initial_fingerprint:
+            raise LaneSetChanged(
+                "desired lane set changed "
+                f"({initial_fingerprint} -> {current}); restarting to reload lanes"
+            )
+
+
+async def main() -> int:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
     lanes = desired_lane_specs()
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
+    lane_set_hash = lane_specs_fingerprint(lanes)
+    reload_enabled = _truthy(os.environ, "MULTI_LANE_MANIFEST_RELOAD", "1")
+    reload_interval = float(os.environ.get("MULTI_LANE_MANIFEST_RELOAD_SECONDS", "60"))
     provider = MultiLaneProvider(
-        primary_lane_id=primary, lane_specs=lanes, journal_dir=journal_dir
+        primary_lane_id=primary, lane_specs=lanes, journal_dir=journal_dir,
+        runtime_control={
+            "lane_set_hash": lane_set_hash,
+            "configured_lanes": len(lanes),
+            "manifest_reload_enabled": reload_enabled,
+            "manifest_reload_seconds": reload_interval if reload_enabled else None,
+            "manifest_path": str(_manifest_path(os.environ)),
+            "mode_ladder": "paper/shadow only; live orders remain gated elsewhere",
+            "real_time_trade_compatible": True,
+            "orders_allowed": False,
+            "safety": "same strategy -> gateway -> journal -> order-manager path; no live adapter mounted",
+        },
     )
 
     server_task = None
@@ -383,12 +455,31 @@ async def main() -> None:
     logger.info("configured %d lanes (%s); primary=%s", len(lanes),
                 ", ".join(f"{n} {m}" for m, n in sorted(by_mode.items())), primary)
     runner = MultiLaneShadowRunner(lanes, journal_dir, provider)
+    tasks = [asyncio.create_task(runner.run(), name="multi-lane-runner")]
+    if reload_enabled:
+        tasks.append(asyncio.create_task(
+            _watch_lane_set(
+                lane_set_hash, os.environ, interval_seconds=reload_interval
+            ),
+            name="lane-set-watch",
+        ))
     try:
-        await runner.run()
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            exc = task.exception()
+            if isinstance(exc, LaneSetChanged):
+                logger.warning("%s", exc)
+                return MANIFEST_RELOAD_EXIT_CODE
+            if exc is not None:
+                raise exc
+        return 0
     finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
         if server_task is not None:
             server_task.cancel()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

@@ -2,7 +2,7 @@
 
 from vnedge.runtime import multi_lane
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
-from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env
+from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env, lane_specs_fingerprint
 from vnedge.runtime.runner_config import RunnerMode
 
 
@@ -60,6 +60,11 @@ def test_lane_summary_carries_feed_and_eval_observability():
         "last_update_ms": 1234.0,
     }
     s["session"] = {
+        "evals": 8,
+        "live_evals": 5,
+        "backfill_evals": 3,
+        "live_signals": 2,
+        "backfill_signals": 1,
         "last_eval": {
             "fired": False,
             "features": {"funding_pct": 0.62, "close_z": -0.4},
@@ -72,6 +77,11 @@ def test_lane_summary_carries_feed_and_eval_observability():
     assert lane["staleness_ms"] == 1234.0
     assert lane["last_eval"]["features"]["funding_pct"] == 0.62
     assert lane["last_eval"]["thresholds"]["z_entry"] == 1.5
+    assert lane["funnel"]["live_evals"] == 5
+    assert lane["funnel"]["backfill_evals"] == 3
+    assert lane["funnel"]["live_signals"] == 2
+    assert lane["funnel"]["backfill_signals"] == 1
+    assert lane["trade_compatibility"]["gateway_required"] is True
 
 
 def test_lane_summary_degrades_without_feed_or_eval():
@@ -120,6 +130,48 @@ def test_publish_error_adds_faulted_lane():
     out = p.latest()
     assert out["risk_status"] == "lane_error"
     assert out["lanes"][0]["feed"] == "error"
+    assert out["lanes"][0]["trade_compatibility"]["state"] == "BLOCKED"
+
+
+def test_runtime_control_metadata_reaches_snapshot():
+    p = MultiLaneProvider(
+        "binance",
+        runtime_control={"lane_set_hash": "abc123", "orders_allowed": False},
+    )
+    p.sink("binance", "binanceusdm").publish(snap(505.0))
+    out = p.latest()
+    assert out["runtime_control"]["lane_set_hash"] == "abc123"
+    assert out["runtime_control"]["orders_allowed"] is False
+
+
+def test_negative_shadow_perf_marks_lane_probation():
+    p = MultiLaneProvider("lane")
+    s = snap(500.0)
+    s["mode"] = "shadow (live data)"
+    s["session"] = {
+        "shadow_perf": {
+            "virtual_trades": 2,
+            "wins": 0,
+            "losses": 2,
+            "net_usd": -10.0,
+            "profit_factor": 0.0,
+            "open_intents": 0,
+            "resolutions": {"stop": 2, "target": 0, "timeout": 0},
+            "status": "SHADOW_PROBATION",
+            "trade_compatible": False,
+        }
+    }
+    p.sink("lane", "bybit").publish(s)
+    compat = p.latest()["lanes"][0]["trade_compatibility"]
+    assert compat["state"] == "SHADOW_PROBATION"
+    assert compat["real_orders_allowed"] is False
+
+
+def test_lane_specs_fingerprint_changes_when_manifest_set_changes():
+    a = [LaneSpec("a", "binanceusdm", "BTC/USDT:USDT")]
+    b = [LaneSpec("a", "binanceusdm", "ETH/USDT:USDT")]
+    assert lane_specs_fingerprint(a) == lane_specs_fingerprint(a)
+    assert lane_specs_fingerprint(a) != lane_specs_fingerprint(b)
 
 
 def test_lane_specs_expand_from_env():

@@ -22,6 +22,8 @@ Per-lane verdicts:
 - MISSING — desired but no journal file at all (never started / renamed).
 - ORPHAN  — journal file with no desired spec (left behind by a config
   change; consuming attention/disk while representing nothing).
+- SHADOW_PROBATION — desired shadow lane is fresh/evaluating, but its
+  resolved virtual outcomes are net-negative; it is not paper/live compatible.
 
 The auditor is read-only and side-effect free. Exit-code contract for cron:
 ``python -m vnedge.runtime.lane_health`` returns 1 if any lane is MISSING or
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
 VERDICT_MISSING = "MISSING"
 VERDICT_STALE = "STALE"
 VERDICT_SILENT = "SILENT"
+VERDICT_PROBATION = "SHADOW_PROBATION"
 VERDICT_ORPHAN = "ORPHAN"
 VERDICT_OK = "OK"
 
@@ -82,6 +85,11 @@ class LaneHealthRow:
     evaluating: bool = False
     stale: bool = False
     detail: str = ""
+    shadow_virtual_trades: int = 0
+    shadow_net_usd: float = 0.0
+    shadow_wins: int = 0
+    shadow_losses: int = 0
+    trade_compatible: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +105,11 @@ class LaneHealthRow:
             "evaluating": self.evaluating,
             "stale": self.stale,
             "detail": self.detail,
+            "shadow_virtual_trades": self.shadow_virtual_trades,
+            "shadow_net_usd": round(self.shadow_net_usd, 4),
+            "shadow_wins": self.shadow_wins,
+            "shadow_losses": self.shadow_losses,
+            "trade_compatible": self.trade_compatible,
         }
 
 
@@ -116,13 +129,27 @@ class LaneHealthReport:
 
     def summary(self) -> str:
         """Dashboard badge text: '18/18 OK' or '2 STALE, 1 MISSING'."""
-        problems = [
-            f"{self.totals.get(verdict.lower(), 0)} {verdict}"
-            for verdict in (VERDICT_MISSING, VERDICT_STALE, VERDICT_SILENT, VERDICT_ORPHAN)
-            if self.totals.get(verdict.lower(), 0)
-        ]
-        if problems:
-            return ", ".join(problems)
+        if any(
+            self.totals.get(_total_key(verdict), 0)
+            for verdict in (
+                VERDICT_MISSING,
+                VERDICT_STALE,
+                VERDICT_PROBATION,
+                VERDICT_SILENT,
+                VERDICT_ORPHAN,
+            )
+        ):
+            return ", ".join(
+                f"{self.totals.get(_total_key(verdict), 0)} {verdict}"
+                for verdict in (
+                    VERDICT_MISSING,
+                    VERDICT_STALE,
+                    VERDICT_PROBATION,
+                    VERDICT_SILENT,
+                    VERDICT_ORPHAN,
+                )
+                if self.totals.get(_total_key(verdict), 0)
+            )
         return f"{self.totals.get('ok', 0)}/{self.totals.get('desired', 0)} OK"
 
     def to_dict(self) -> dict:
@@ -147,6 +174,8 @@ class LaneHealthReport:
                     "lane_id": row.lane_id,
                     "verdict": row.verdict,
                     "age_seconds": _round(row.last_record_age_seconds),
+                    "detail": row.detail,
+                    "trade_compatible": row.trade_compatible,
                 }
                 for row in self.rows
                 if row.verdict != VERDICT_OK
@@ -159,6 +188,10 @@ class LaneHealthReport:
 
 def _round(value: float | None) -> float | None:
     return None if value is None else round(value, 1)
+
+
+def _total_key(verdict: str) -> str:
+    return "probation" if verdict == VERDICT_PROBATION else verdict.lower()
 
 
 def _timeframe_seconds(timeframe: str) -> float:
@@ -232,6 +265,43 @@ def _scan_tail(path: Path) -> tuple[float | None, float | None]:
             last_eval_ts = ts
             break  # newest of each found; nothing older can be newer
     return last_ts, last_eval_ts
+
+
+def _scan_shadow_outcomes(path: Path) -> tuple[int, float, int, int]:
+    """Full-file shadow outcome summary: (trades, net, wins, losses).
+
+    Lane-health runs on a slow cadence, so scanning the small per-lane journals
+    is acceptable. This makes probation persistent even when the losing outcome
+    has scrolled out of the normal freshness tail.
+    """
+    trades = wins = losses = 0
+    net = 0.0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("kind") != "shadow_outcome":
+                    continue
+                payload = record.get("payload") or {}
+                try:
+                    value = float(payload.get("virtual_net_usd") or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                trades += 1
+                net += value
+                if value > 0:
+                    wins += 1
+                else:
+                    losses += 1
+    except OSError:
+        return 0, 0.0, 0, 0
+    return trades, net, wins, losses
 
 
 def _mtime(path: Path) -> float | None:
@@ -309,6 +379,12 @@ def audit_lanes(
         from vnedge.runtime.multi_lane_shadow import desired_lane_specs
 
         desired = desired_lane_specs(environ)
+    try:
+        shadow_probation_min_trades = int(
+            environ.get("LANE_HEALTH_SHADOW_PROBATION_MIN_TRADES", "1")
+        )
+    except ValueError:
+        shadow_probation_min_trades = 1
 
     rows: list[LaneHealthRow] = []
     desired_ids: set[str] = set()
@@ -320,6 +396,12 @@ def audit_lanes(
             journal_path, equity_path, spec.timeframe, now
         )
         mode = getattr(spec.mode, "value", str(spec.mode))
+        shadow_trades = shadow_wins = shadow_losses = 0
+        shadow_net = 0.0
+        if mode == "shadow" and exists:
+            shadow_trades, shadow_net, shadow_wins, shadow_losses = _scan_shadow_outcomes(
+                journal_path
+            )
         if not exists:
             verdict, detail = VERDICT_MISSING, "desired lane has no journal file"
         elif stale:
@@ -333,6 +415,16 @@ def audit_lanes(
             detail = (
                 "journaling but no lane_eval in "
                 f"{_fmt_age(SILENT_EVAL_SECONDS)} — strategy loop not evaluating"
+            )
+        elif (
+            mode == "shadow"
+            and shadow_trades >= shadow_probation_min_trades
+            and shadow_net < 0
+        ):
+            verdict = VERDICT_PROBATION
+            detail = (
+                f"shadow outcomes net ${shadow_net:+.2f} across "
+                f"{shadow_trades} virtual trade(s); not paper/live compatible"
             )
         else:
             verdict, detail = VERDICT_OK, ""
@@ -349,6 +441,11 @@ def audit_lanes(
             evaluating=evaluating,
             stale=stale,
             detail=detail,
+            shadow_virtual_trades=shadow_trades,
+            shadow_net_usd=shadow_net,
+            shadow_wins=shadow_wins,
+            shadow_losses=shadow_losses,
+            trade_compatible=verdict == VERDICT_OK,
         ))
 
     # Orphans: journal files nothing in the desired list accounts for.
@@ -367,6 +464,7 @@ def audit_lanes(
                 last_record_age_seconds=record_age,
                 last_eval_age_seconds=eval_age,
                 detail="journal file has no desired lane spec (config change leftover?)",
+                trade_compatible=False,
             ))
 
     totals = {
@@ -374,6 +472,7 @@ def audit_lanes(
         "active": sum(1 for r in rows if r.exists_active and r.verdict != VERDICT_ORPHAN),
         "ok": sum(1 for r in rows if r.verdict == VERDICT_OK),
         "stale": sum(1 for r in rows if r.verdict == VERDICT_STALE),
+        "probation": sum(1 for r in rows if r.verdict == VERDICT_PROBATION),
         "silent": sum(1 for r in rows if r.verdict == VERDICT_SILENT),
         "missing": sum(1 for r in rows if r.verdict == VERDICT_MISSING),
         "orphan": sum(1 for r in rows if r.verdict == VERDICT_ORPHAN),
@@ -423,7 +522,8 @@ def _print_table(report: LaneHealthReport) -> None:
     totals = report.totals
     print(
         f"desired={totals['desired']} active={totals['active']} ok={totals['ok']} "
-        f"stale={totals['stale']} silent={totals['silent']} "
+        f"stale={totals['stale']} probation={totals.get('probation', 0)} "
+        f"silent={totals['silent']} "
         f"missing={totals['missing']} orphan={totals['orphan']}"
     )
     print(f"lane health: {report.summary()}")

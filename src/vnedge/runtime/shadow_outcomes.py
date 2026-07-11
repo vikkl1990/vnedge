@@ -298,11 +298,15 @@ class ShadowOutcomeTracker:
             pf = round(self._gross_win_usd / self._gross_loss_usd, 3)
         else:
             pf = None  # no losing virtual trades yet — PF undefined, not infinite
+        status = "SHADOW_PROBATION" if self._trades > 0 and self._net_usd < 0 else "OBSERVE"
         return {
             "virtual_trades": self._trades,
             "wins": self._wins,
+            "losses": self._trades - self._wins,
             "net_usd": round(self._net_usd, 4),
             "profit_factor": pf,
             "open_intents": len(self._pending),
             "resolutions": dict(self._resolutions),
+            "status": status,
+            "trade_compatible": status != "SHADOW_PROBATION",
         }
