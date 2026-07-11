@@ -297,8 +297,6 @@ def test_alpha_council_routes_condition_mined_failure_to_filtered_replay(tmp_pat
     assert debate["can_trade"] is False
 
 
-<<<<<<< HEAD
-=======
 def test_alpha_council_routes_filtered_replay_pass_to_shadow_queue(tmp_path):
     candidate_id = "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy"
     write_json(
@@ -387,7 +385,6 @@ def test_alpha_council_routes_filtered_replay_pass_to_shadow_queue(tmp_path):
     assert debate["can_trade"] is False
 
 
->>>>>>> a505c5ce25ea821870a15a6eb798a7fe329a9aca
 def test_alpha_council_replay_pass_queues_shadow_trial(tmp_path):
     candidate_id = "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy"
     write_json(
