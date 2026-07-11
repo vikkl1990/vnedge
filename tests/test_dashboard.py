@@ -85,6 +85,27 @@ def test_dashboard_shell_preserves_operator_instruments(client):
     assert 'id="laneHealthBadge"' in html
 
 
+def test_dashboard_shell_service_ui(client):
+    """Acceptance guard for the service-shell UI batch: incident timeline,
+    history range selector + CSV export, and the mobile summary strip."""
+    html = client.get("/").text
+    # incidents panel in the infrastructure zone, runbook-linked
+    assert 'id="incidentsBoard"' in html
+    assert 'id="incidentsList"' in html
+    assert "loadIncidents" in html and "/incidents" in html
+    assert "/runbooks?token=" in html
+    # equity range selector + export
+    assert 'data-days="7"' in html and 'data-days="30"' in html
+    assert 'id="exportCsv"' in html
+    assert "/export.csv?token=" in html
+    # mobile summary strip, desktop-hidden via the 520px media query
+    assert 'id="mobileStrip"' in html
+    for el in ("ms_equity", "ms_daily", "ms_lanes", "ms_positions", "ms_incident"):
+        assert f'id="{el}"' in html
+    assert "@media(max-width:520px)" in html
+    assert "renderMobileStrip" in html
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")

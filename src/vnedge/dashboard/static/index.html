@@ -1144,6 +1144,57 @@
   .alert:first-child{border-top:none}
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
+
+  /* incident timeline rows: badge, time, source, message, runbook link */
+  .alert.incident{grid-template-columns:auto auto auto minmax(0,1fr) auto}
+  .alert.incident .src{color:var(--muted);font-size:10.5px;white-space:nowrap}
+  .alert.incident a.runbook{
+    color:var(--blue);
+    font-size:10px;
+    white-space:nowrap;
+    text-decoration:none;
+    border:1px solid var(--line2);
+    border-radius:4px;
+    padding:1px 6px;
+  }
+  .alert.incident a.runbook:hover{border-color:var(--blue)}
+
+  /* equity date-range selector + CSV export */
+  .range-picker{display:inline-flex;gap:4px;margin-left:auto;align-items:center}
+  .range-btn{
+    border:1px solid var(--line2);
+    background:transparent;
+    color:var(--muted);
+    font:inherit;
+    font-size:10px;
+    line-height:1.4;
+    padding:2px 8px;
+    border-radius:4px;
+    cursor:pointer;
+    text-decoration:none;
+    white-space:nowrap;
+  }
+  .range-btn:hover{color:var(--text)}
+  .range-btn.active{color:var(--blue);border-color:var(--blue);background:rgba(77,178,255,.08)}
+
+  /* mobile summary strip: hidden on desktop, the ONLY surface at <=520px */
+  #mobileStrip{
+    display:none;
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    background:var(--panel);
+    padding:12px;
+    gap:10px;
+  }
+  #mobileStrip .ms-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  #mobileStrip .ms-label{color:var(--quiet);font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+  #mobileStrip .ms-value{font-family:var(--mono);font-size:17px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+  #mobileStrip .ms-incident{color:var(--muted);font-size:11px;border-top:1px solid var(--line);padding-top:9px;overflow-wrap:anywhere}
+  @media(max-width:520px){
+    #mobileStrip{display:grid}
+    #content>.whats-new,#content>.workstation-shell{display:none}
+    .topbar .market-tape,.topbar .top-chips{display:none}
+  }
   .agent-board{order:6}
   .funnel-deck{
     display:grid;
@@ -1914,6 +1965,17 @@
   </div>
 
   <main id="content">
+    <div id="mobileStrip" aria-label="mobile summary strip">
+      <div class="ms-row">
+        <div class="ms-cell"><div class="ms-label">Equity</div><div class="ms-value neutral" id="ms_equity">--</div></div>
+        <div class="ms-cell"><div class="ms-label">Daily PnL</div><div class="ms-value neutral" id="ms_daily">--</div></div>
+      </div>
+      <div class="ms-row">
+        <div class="ms-cell"><div class="ms-label">Lanes healthy</div><div class="ms-value neutral" id="ms_lanes">--</div></div>
+        <div class="ms-cell"><div class="ms-label">Open positions</div><div class="ms-value neutral" id="ms_positions">--</div></div>
+      </div>
+      <div class="ms-incident" id="ms_incident">no incidents recorded</div>
+    </div>
     <div class="whats-new" id="whatsNew" aria-label="what changed — recent notable events">
       <span class="wn-label">What changed</span>
       <div class="wn-items" id="wnItems"><span class="wn-empty">watching for lane and research events&hellip;</span></div>
@@ -2163,7 +2225,13 @@
         </div>
 
         <section>
-          <h2>Equity Curve <span class="tag" id="eqrange">persisted history</span></h2>
+          <h2>Equity Curve <span class="tag" id="eqrange">persisted history</span>
+            <span class="range-picker" aria-label="equity date range">
+              <button type="button" class="range-btn" data-days="7">7d</button>
+              <button type="button" class="range-btn" data-days="30">30d</button>
+              <button type="button" class="range-btn active" data-days="">all</button>
+              <a id="exportCsv" class="range-btn" href="#" target="_blank" rel="noopener" title="download equity + trade log + fills as CSV">Export CSV</a>
+            </span></h2>
           <div class="chart-pad"><canvas id="eqchart"></canvas></div>
         </section>
 
@@ -2327,6 +2395,12 @@
         </tr></thead><tbody id="connectionsBody"></tbody></table>
       </div>
       <div class="empty" id="connections-empty">no venue connections reported yet</div>
+    </section>
+
+    <section id="incidentsBoard" aria-label="incident timeline">
+      <h2>Incidents <span class="tag" id="incidents_meta">merged alerts + journal incidents; newest 20</span></h2>
+      <div class="alerts" id="incidentsList" style="display:none"></div>
+      <div class="empty" id="incidents-empty">no incidents recorded</div>
     </section>
 
     <details class="loop-board" id="architectureMap" open>
@@ -3555,6 +3629,7 @@
     renderPositions(positions);
     renderOrders(orders);
     renderAlerts(alerts);
+    renderMobileStrip(s);
 
     text("reject",s.last_risk_reject||"none -- all submissions passed or none attempted");
     text("fh_ex",feed.exchange||"--");
@@ -3768,6 +3843,83 @@
     text("alertcount",alerts.length?alerts.length+" recent":"");
     $("alerts").style.display=alerts.length?"block":"none";
     $("alerts-empty").style.display=alerts.length?"none":"block";
+  }
+
+  // --- mobile summary strip (<=520px): equity, daily PnL, lane health,
+  // open positions, last incident — all from fields already rendered above.
+  function renderMobileStrip(s){
+    if(!$("ms_equity"))return;
+    text("ms_equity",moneyAbs(s.equity));
+    const daily=$("ms_daily");
+    if(daily){
+      daily.textContent=usd(s.daily_pnl);
+      daily.className="ms-value "+classFor(s.daily_pnl);
+    }
+    const lanes=Array.isArray(s.lanes)?s.lanes:[];
+    const healthy=lanes.filter(l=>String(l.risk_status||"ok")==="ok").length;
+    const lanesEl=$("ms_lanes");
+    if(lanesEl){
+      lanesEl.textContent=lanes.length?healthy+" / "+lanes.length:(s.risk_status||"--");
+      lanesEl.className="ms-value "+(lanes.length
+        ?(healthy===lanes.length?"pos":healthy===0?"neg":"neutral")
+        :(s.risk_status==="ok"?"pos":"neg"));
+    }
+    const positions=Array.isArray(s.positions)?s.positions.length:0;
+    const posEl=$("ms_positions");
+    if(posEl){
+      posEl.textContent=String(positions);
+      posEl.className="ms-value "+(positions?"neutral":"pos");
+    }
+  }
+
+  // --- incident timeline: merged alerts + journal incidents from /incidents,
+  // newest 20, each linking its runbook section.
+  function renderIncidents(list){
+    const items=Array.isArray(list)?list:[];
+    const box=$("incidentsList");
+    if(box){
+      box.replaceChildren();
+      items.slice(0,20).forEach(i=>{
+        const d=document.createElement("div");
+        d.className="alert incident";
+        appendBadge(d,i.severity||"info",i.severity==="critical"?"bad":i.severity==="warning"?"warn":"info");
+        const ts=document.createElement("span");
+        ts.className="ats";
+        ts.textContent=utcClock(i.ts);
+        d.appendChild(ts);
+        const src=document.createElement("span");
+        src.className="src";
+        src.textContent=i.source||"--";
+        d.appendChild(src);
+        const msg=document.createElement("span");
+        msg.className="msg";
+        msg.textContent=i.message||"--";
+        d.appendChild(msg);
+        const hash=String(i.runbook||"").split("#")[1]||"";
+        const a=document.createElement("a");
+        a.className="runbook";
+        a.target="_blank";
+        a.rel="noopener";
+        a.href="/runbooks?token="+encodeURIComponent(token)+(hash?"#"+hash:"");
+        a.textContent="runbook";
+        d.appendChild(a);
+        box.appendChild(d);
+      });
+      box.style.display=items.length?"block":"none";
+    }
+    const empty=$("incidents-empty");
+    if(empty)empty.style.display=items.length?"none":"block";
+    text("incidents_meta",items.length
+      ?(items.length+" merged; newest "+Math.min(20,items.length)+" shown")
+      :"merged alerts + journal incidents");
+    const mi=$("ms_incident");
+    if(mi)mi.textContent=items.length
+      ?(String(items[0].severity||"info").toUpperCase()+" "+utcClock(items[0].ts)+" — "+(items[0].message||""))
+      :"no incidents recorded";
+  }
+
+  function loadIncidents(){
+    fetchJSON("/incidents").then(renderIncidents).catch(()=>{});
   }
 
   function renderTrial(t,fills){
@@ -4149,12 +4301,34 @@
       .then(r=>r.ok?r.json():null);
   }
 
-  fetchJSON("/history").then(pts=>{
-    if(Array.isArray(pts)){
-      eq=pts.concat(eq).slice(-EQMAX);
-      drawEquity();
-    }else{drawEquity();}
-  }).catch(()=>drawEquity());
+  // Date-range selector (7d / 30d / all) + CSV export share the same params.
+  let eqDays="";
+  function loadHistory(){
+    fetchJSON("/history"+(eqDays?"?days="+encodeURIComponent(eqDays):"")).then(pts=>{
+      if(Array.isArray(pts)){
+        // keep live ws points newer than the persisted tail
+        const last=pts.length?String(pts[pts.length-1].ts||""):"";
+        eq=pts.concat(eq.filter(p=>String(p.ts||"")>last)).slice(-EQMAX);
+        drawEquity();
+      }else{drawEquity();}
+    }).catch(()=>drawEquity());
+  }
+  function updateExportLink(){
+    const a=$("exportCsv");
+    if(a)a.href="/export.csv?token="+encodeURIComponent(token)
+      +(eqDays?"&days="+encodeURIComponent(eqDays):"");
+  }
+  document.querySelectorAll(".range-picker .range-btn[data-days]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      eqDays=btn.dataset.days||"";
+      document.querySelectorAll(".range-picker .range-btn[data-days]")
+        .forEach(b=>b.classList.toggle("active",b===btn));
+      loadHistory();
+      updateExportLink();
+    });
+  });
+  updateExportLink();
+  loadHistory();
 
   function renderScalperDiscovery(d){
     const sr=d.scalper_research||{}, af=d.alpha_factory||{}, sm=d.shadow_lanes||{};
@@ -4534,8 +4708,10 @@
 
   loadResearch();
   loadCouncil();
+  loadIncidents();
   setInterval(loadResearch,60000);
   setInterval(loadCouncil,60000);
+  setInterval(loadIncidents,60000);
 
   let backoff=500;
   function connect(){
