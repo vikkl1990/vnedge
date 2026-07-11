@@ -101,6 +101,8 @@ class LivePaperSession:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
+        self.evals = self.live_evals = self.backfill_evals = 0
+        self.live_signals = self.backfill_signals = 0
         self.tick_stop_exits = 0
         # SHADOW lanes never fill, so per-lane edge is invisible without
         # virtual resolution: approved intents are resolved forward on
@@ -573,6 +575,15 @@ class LivePaperSession:
             "thresholds": thresholds,
             "backfill": backfill,
         }
+        self.evals += 1
+        if backfill:
+            self.backfill_evals += 1
+            if sig is not None:
+                self.backfill_signals += 1
+        else:
+            self.live_evals += 1
+            if sig is not None:
+                self.live_signals += 1
         self.journal.append("lane_eval", record)
         if not backfill:
             self.last_eval = record
@@ -658,7 +669,12 @@ class LivePaperSession:
             session_stats={
                 "started_at": self._started_at.isoformat(),
                 "bars_processed": self.bars_processed,
+                "evals": self.evals,
+                "live_evals": self.live_evals,
+                "backfill_evals": self.backfill_evals,
                 "signals": self.signals,
+                "live_signals": self.live_signals,
+                "backfill_signals": self.backfill_signals,
                 "orders_submitted": self.orders_submitted,
                 "risk_rejects": self.risk_rejects,
                 "sizing_skips": self.sizing_skips,

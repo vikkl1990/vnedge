@@ -20,6 +20,7 @@ from vnedge.runtime.lane_health import (
     VERDICT_MISSING,
     VERDICT_OK,
     VERDICT_ORPHAN,
+    VERDICT_PROBATION,
     VERDICT_SILENT,
     VERDICT_STALE,
     LaneHealthReport,
@@ -28,6 +29,7 @@ from vnedge.runtime.lane_health import (
 )
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider
 from vnedge.runtime.multi_lane_shadow import desired_lane_specs
+from vnedge.runtime.runner_config import RunnerMode
 
 NOW = 1_751_900_000.0  # fixed 'now' for deterministic ages
 
@@ -97,7 +99,7 @@ def test_verdict_ok(tmp_path):
     assert report.summary() == "1/1 OK"
     assert report.totals == {
         "desired": 1, "active": 1, "ok": 1,
-        "stale": 0, "silent": 0, "missing": 0, "orphan": 0,
+        "stale": 0, "probation": 0, "silent": 0, "missing": 0, "orphan": 0,
     }
 
 
@@ -178,6 +180,30 @@ def test_verdict_orphan_journal_without_desired_spec(tmp_path):
     assert report.totals["active"] == 1  # orphans not counted as active desired lanes
 
 
+def test_shadow_probation_when_virtual_outcomes_are_net_negative(tmp_path):
+    lane = LaneSpec(
+        lane_id="shadow_lane",
+        exchange="bybit",
+        symbol="BTC/USDT:USDT",
+        mode=RunnerMode.SHADOW,
+    )
+    write_journal(tmp_path, "shadow_lane", ok_records())
+    with open(tmp_path / "shadow_lane.journal.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "ts": _iso(NOW - 10.0),
+            "kind": "shadow_outcome",
+            "payload": {"virtual_net_usd": -5.25, "resolution": "stop"},
+        }) + "\n")
+    report = audit_lanes(tmp_path, desired=[lane], now=NOW)
+    row = report.rows[0]
+    assert row.verdict == VERDICT_PROBATION
+    assert row.shadow_virtual_trades == 1
+    assert row.shadow_net_usd == -5.25
+    assert row.trade_compatible is False
+    assert report.healthy  # warning, not a missing/stale process failure
+    assert report.summary() == "1 SHADOW_PROBATION"
+
+
 def test_equity_file_freshness_counts_for_staleness(tmp_path):
     # Journal tail is 5h old but the equity historian is still writing:
     # the lane is alive, not STALE (newest of journal/equity wins).
@@ -240,7 +266,13 @@ def test_report_dict_and_snapshot_shapes(tmp_path):
     assert snap["totals"]["ok"] == 1
     # only problem lanes are listed, keeping the dashboard payload small
     assert snap["problems"] == [
-        {"lane_id": "gone", "verdict": VERDICT_MISSING, "age_seconds": None}
+        {
+            "lane_id": "gone",
+            "verdict": VERDICT_MISSING,
+            "age_seconds": None,
+            "detail": "desired lane has no journal file",
+            "trade_compatible": False,
+        }
     ]
     json.dumps(full), json.dumps(snap)  # both must be JSON-serializable
 
@@ -255,6 +287,7 @@ def test_healthy_property_contract():
 
     assert report_with(VERDICT_OK).healthy
     assert report_with(VERDICT_SILENT).healthy
+    assert report_with(VERDICT_PROBATION).healthy
     assert report_with(VERDICT_ORPHAN).healthy
     assert not report_with(VERDICT_STALE).healthy
     assert not report_with(VERDICT_MISSING).healthy

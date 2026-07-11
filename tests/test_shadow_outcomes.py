@@ -207,9 +207,12 @@ def test_stats_aggregate_wins_net_and_profit_factor(tmp_path):
     stats = tracker.stats()
     assert stats["virtual_trades"] == 2
     assert stats["wins"] == 2
+    assert stats["losses"] == 0
     assert stats["open_intents"] == 1
     assert stats["profit_factor"] is None  # no losses yet — undefined, not inf
     assert stats["resolutions"]["target"] == 2
+    assert stats["status"] == "OBSERVE"
+    assert stats["trade_compatible"] is True
 
 
 def test_profit_factor_with_mixed_outcomes(tmp_path):
@@ -223,6 +226,7 @@ def test_profit_factor_with_mixed_outcomes(tmp_path):
     assert stats["virtual_trades"] == 2 and stats["wins"] == 1
     assert stats["net_usd"] == pytest.approx(9.895 - 5.0975, abs=1e-4)
     assert stats["profit_factor"] == pytest.approx(9.895 / 5.0975, abs=1e-3)
+    assert stats["status"] == "OBSERVE"
 
 
 def test_replay_resolves_against_seen_history(tmp_path):
@@ -334,6 +338,8 @@ async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
     stats = session.shadow_outcomes.stats()
     assert stats["virtual_trades"] == 2 and stats["wins"] == 0
     assert stats["net_usd"] < 0
+    assert stats["status"] == "SHADOW_PROBATION"
+    assert stats["trade_compatible"] is False
     assert stats["open_intents"] == 1
     # surfaced to the dashboard through session_stats
     assert provider.snapshots[-1]["session"]["shadow_perf"] == stats
@@ -348,8 +354,10 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
     )
     await session1.run(max_bars=1)
     assert session1.shadow_outcomes.stats() == {
-        "virtual_trades": 0, "wins": 0, "net_usd": 0.0, "profit_factor": None,
-        "open_intents": 2, "resolutions": {"stop": 0, "target": 0, "timeout": 0},
+        "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
+        "profit_factor": None, "open_intents": 2,
+        "resolutions": {"stop": 0, "target": 0, "timeout": 0},
+        "status": "OBSERVE", "trade_compatible": True,
     }
 
     # restart: seeded history now includes bar 6, which broke the stops while
@@ -398,9 +406,10 @@ async def test_paper_mode_has_no_virtual_outcome_tracking(tmp_path):
 
 
 def test_multi_lane_summary_exposes_shadow_perf():
-    perf = {"virtual_trades": 3, "wins": 2, "net_usd": 12.4,
+    perf = {"virtual_trades": 3, "wins": 2, "losses": 1, "net_usd": 12.4,
             "profit_factor": 2.1, "open_intents": 1,
-            "resolutions": {"stop": 1, "target": 2, "timeout": 0}}
+            "resolutions": {"stop": 1, "target": 2, "timeout": 0},
+            "status": "OBSERVE", "trade_compatible": True}
     provider = MultiLaneProvider("lane_a")
     provider.sink("lane_a", "binanceusdm").publish({
         "mode": "shadow (live data)", "symbol": SYM, "equity": 500.0,

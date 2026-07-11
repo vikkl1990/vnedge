@@ -106,6 +106,7 @@ class MultiLaneProvider:
         *,
         lane_specs: list[LaneSpec] | None = None,
         journal_dir: Path | None = None,
+        runtime_control: dict | None = None,
     ) -> None:
         self.primary = primary_lane_id
         self._lanes: dict[str, dict] = {}
@@ -116,6 +117,7 @@ class MultiLaneProvider:
         self._health_journal_dir = Path(journal_dir) if journal_dir is not None else None
         self._health_cache: dict | None = None
         self._health_at = 0.0
+        self._runtime_control = dict(runtime_control or {})
 
     def _lane_health(self) -> dict | None:
         """Cached desired-vs-active audit for the snapshot (never raises).
@@ -205,7 +207,12 @@ class MultiLaneProvider:
                 # signal funnel: evaluated -> fired -> approved/submitted -> filled
                 "funnel": {
                     "bars": self._lanes[lid].get("session", {}).get("bars_processed", 0),
+                    "evals": self._lanes[lid].get("session", {}).get("evals", 0),
+                    "live_evals": self._lanes[lid].get("session", {}).get("live_evals", 0),
+                    "backfill_evals": self._lanes[lid].get("session", {}).get("backfill_evals", 0),
                     "signals": self._lanes[lid].get("session", {}).get("signals", 0),
+                    "live_signals": self._lanes[lid].get("session", {}).get("live_signals", 0),
+                    "backfill_signals": self._lanes[lid].get("session", {}).get("backfill_signals", 0),
                     "shadow_approved": self._lanes[lid].get("session", {}).get("shadow_approved", 0),
                     "shadow_rejected": self._lanes[lid].get("session", {}).get("shadow_rejected", 0),
                     "risk_rejects": self._lanes[lid].get("session", {}).get("risk_rejects", 0),
@@ -220,16 +227,52 @@ class MultiLaneProvider:
                 # lane matrix can explain WHY a lane is waiting/near trigger
                 "last_eval": self._lanes[lid].get("session", {}).get("last_eval"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
+                "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),
             }
             for lid in self._order if lid in self._lanes
         ]
         health = self._lane_health()
         if health is not None:
             out["lane_health"] = health
+        if self._runtime_control:
+            out["runtime_control"] = dict(self._runtime_control)
         return out
 
 
 # --- lane construction ------------------------------------------------------------
+
+def _lane_trade_compatibility(snapshot: dict) -> dict:
+    """Operator-facing state: whether this lane is clean enough to discuss promotion.
+
+    This does not grant permissions and never bypasses the gateway. It only
+    prevents exploratory/negative shadow evidence from looking like a healthy
+    paper/live candidate in the cockpit.
+    """
+    mode = str(snapshot.get("mode", "")).lower()
+    risk_status = str(snapshot.get("risk_status", ""))
+    feed = snapshot.get("feed_health", {})
+    session = snapshot.get("session", {})
+    shadow_perf = session.get("shadow_perf") or {}
+    is_shadow = "shadow" in mode
+    virtual_trades = int(shadow_perf.get("virtual_trades") or 0)
+    virtual_net = float(shadow_perf.get("net_usd") or 0.0)
+    if risk_status != "ok":
+        state, reason = "BLOCKED", f"risk status {risk_status}"
+    elif feed.get("candles") != "ok":
+        state, reason = "BLOCKED", f"feed {feed.get('candles', '?')}"
+    elif is_shadow and virtual_trades > 0 and virtual_net < 0:
+        state, reason = "SHADOW_PROBATION", f"virtual net {virtual_net:+.2f} USD"
+    elif is_shadow:
+        state, reason = "SHADOW_ONLY", "observability only; no fills/live orders"
+    else:
+        state, reason = "PAPER_COMPATIBLE", "simulated fills through live-data path"
+    return {
+        "state": state,
+        "reason": reason,
+        "real_orders_allowed": False,
+        "gateway_required": True,
+        "journal_required": True,
+    }
 
 _FUNDING_HISTORY_REQUIRED = {"funding_mean_reversion_v1"}
 

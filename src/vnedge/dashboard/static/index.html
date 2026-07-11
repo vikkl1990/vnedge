@@ -2121,7 +2121,7 @@
       <h2>Signal Pressure &amp; Trade Journal <span class="tag">scanner-style hot/cold pressure, approval quality, and chronological execution narrative</span></h2>
       <div class="funnel-deck" aria-label="signal pressure summary">
         <div class="funnel-tile"><div class="label">Lanes</div><div class="value" id="funnel_lanes">--</div><div class="sub">reporting</div><div class="pressure-track"><i id="funnel_lanes_bar"></i></div></div>
-        <div class="funnel-tile"><div class="label">Evaluated</div><div class="value" id="funnel_evaluated">--</div><div class="sub">bars scanned</div><div class="pressure-track"><i id="funnel_eval_bar"></i></div></div>
+        <div class="funnel-tile"><div class="label">Evaluated</div><div class="value" id="funnel_evaluated">--</div><div class="sub" id="funnel_eval_sub">live bars</div><div class="pressure-track"><i id="funnel_eval_bar"></i></div></div>
         <div class="funnel-tile"><div class="label">Signals</div><div class="value" id="funnel_signals">--</div><div class="sub" id="funnel_signal_rate">-- fire rate</div><div class="pressure-track"><i id="funnel_signal_bar"></i></div></div>
         <div class="funnel-tile"><div class="label">Approved</div><div class="value" id="funnel_approved">--</div><div class="sub" id="funnel_approval_rate">-- approval</div><div class="pressure-track"><i id="funnel_approval_bar"></i></div></div>
         <div class="funnel-tile"><div class="label">Rejected</div><div class="value" id="funnel_rejected">--</div><div class="sub">risk / shadow</div><div class="pressure-track"><i id="funnel_reject_bar"></i></div></div>
@@ -2132,7 +2132,7 @@
       <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Lane</th><th>Bars Evaluated</th><th>Signals Fired</th><th>Approved</th>
+          <th>Lane</th><th>Live Evals</th><th>Live Signals</th><th>Backfill</th><th>Approved</th>
           <th>Rejected (risk)</th><th>Sizing Skips</th><th>Submitted</th><th>Fills</th>
           <th>Virtual PnL</th><th>Conversion</th>
         </tr></thead>
@@ -2807,6 +2807,10 @@
     const ev=l.last_eval||null;
     const feats=(ev&&ev.features)||{};
     const ths=(ev&&ev.thresholds)||{};
+    const tc=l.trade_compatibility||{};
+    const sp=l.shadow_perf||null;
+    if(tc.state==="SHADOW_PROBATION"||(sp&&sp.status==="SHADOW_PROBATION"))
+      return {label:"PROBATION",why:tc.reason||"negative shadow outcomes",tone:"bad"};
     if(String(l.risk_status||"ok")!=="ok")
       return {label:"HALTED",why:String(l.risk_status||"?"),tone:"bad"};
     if(num(l.positions)>0)
@@ -2976,8 +2980,13 @@
     return (Array.isArray(laneRows)?laneRows:[]).reduce((acc,l)=>{
       const f=l.funnel||{};
       const sp=l.shadow_perf||null;
-      acc.bars+=num(f.bars);
-      acc.signals+=num(f.signals);
+      const liveEvals=finite(f.live_evals)?num(f.live_evals):(finite(f.evals)?num(f.evals):num(f.bars));
+      const liveSignals=finite(f.live_signals)?num(f.live_signals):num(f.signals);
+      acc.bars+=liveEvals;
+      acc.evals+=finite(f.evals)?num(f.evals):liveEvals;
+      acc.backfillEvals+=num(f.backfill_evals);
+      acc.signals+=liveSignals;
+      acc.backfillSignals+=num(f.backfill_signals);
       acc.approved+=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
       acc.rejected+=num(f.shadow_rejected)+num(f.risk_rejects);
       acc.sizing+=num(f.sizing_skips);
@@ -2986,7 +2995,7 @@
       acc.virtualTrades+=sp?num(sp.virtual_trades):0;
       acc.virtualNet+=sp?num(sp.net_usd):0;
       return acc;
-    },{bars:0,signals:0,approved:0,rejected:0,sizing:0,submitted:0,fills:0,virtualTrades:0,virtualNet:0});
+    },{bars:0,evals:0,backfillEvals:0,signals:0,backfillSignals:0,approved:0,rejected:0,sizing:0,submitted:0,fills:0,virtualTrades:0,virtualNet:0});
   }
 
   function renderFunnelJournal(lanes){
@@ -3000,11 +3009,16 @@
         const f=l.funnel||{};
         const approved=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
         const rejected=num(f.shadow_rejected)+num(f.risk_rejects);
-        const conv=num(f.bars)>0?(num(f.signals)/num(f.bars)*100).toFixed(1)+"% fire":"--";
+        const liveEvals=finite(f.live_evals)?num(f.live_evals):(finite(f.evals)?num(f.evals):num(f.bars));
+        const liveSignals=finite(f.live_signals)?num(f.live_signals):num(f.signals);
+        const conv=liveEvals>0?(liveSignals/liveEvals*100).toFixed(1)+"% live fire":"--";
         const tr=document.createElement("tr");
         appendCell(tr,l.lane_id,"mono");
-        appendCell(tr,String(num(f.bars)));
-        appendCell(tr,String(num(f.signals)),num(f.signals)>0?"pos":"");
+        appendCell(tr,String(liveEvals));
+        appendCell(tr,String(liveSignals),liveSignals>0?"pos":"");
+        appendCell(tr,String(num(f.backfill_evals))+" / "+String(num(f.backfill_signals)),
+          num(f.backfill_signals)>0?"warn":"muted",
+          "startup backfill evals/signals; observability only, not live intents");
         appendCell(tr,String(approved),approved>0?"pos":"");
         appendCell(tr,String(rejected),rejected>0?"neg":"");
         appendCell(tr,String(num(f.sizing_skips)));
@@ -3060,6 +3074,9 @@
     const fillRate=totals.submitted>0?totals.fills/totals.submitted*100:null;
     text("funnel_lanes",laneCount);
     text("funnel_evaluated",totals.bars.toLocaleString());
+    text("funnel_eval_sub",totals.backfillEvals
+      ?("live bars; +"+totals.backfillEvals.toLocaleString()+" backfill")
+      :"live bars");
     text("funnel_signals",totals.signals.toLocaleString());
     text("funnel_signal_rate",fireRate==null?"no bars yet":fireRate.toFixed(2)+"% fire rate");
     text("funnel_approved",totals.approved.toLocaleString());
@@ -3418,7 +3435,7 @@
   // computed by the multi-lane provider) — "18/18 OK" green, or the problem
   // counts ("2 STALE, 1 MISSING") red when MISSING/STALE (the cron-unhealthy
   // verdicts), amber when only SILENT/ORPHAN. Hidden when the snapshot has none.
-  function renderLaneHealth(lh){
+  function renderLaneHealth(lh,rc){
     const line=$("laneHealthLine");
     const badge=$("laneHealthBadge");
     if(!line||!badge)return;
@@ -3427,8 +3444,9 @@
     const tone=(num(t.missing)||num(t.stale))?"bad":(num(t.silent)||num(t.orphan))?"warn":"good";
     badge.className="chip "+tone;
     badge.textContent="lane health: "+lh.summary;
-    badge.title=(Array.isArray(lh.problems)?lh.problems:[]).map(p=>p.verdict+" "+p.lane_id).join(", ")
-      ||"all desired lanes journaling, fresh, evaluating";
+    const loaded=rc&&rc.lane_set_hash?("loaded lane set "+rc.lane_set_hash+"; "):"";
+    badge.title=loaded+((Array.isArray(lh.problems)?lh.problems:[]).map(p=>p.verdict+" "+p.lane_id+(p.detail?": "+p.detail:"")).join(", ")
+      ||"all desired lanes journaling, fresh, evaluating");
     line.style.display="";
   }
 
@@ -3440,7 +3458,7 @@
     wnCollectLanes(s.lanes||[]);
     wnRender();
     renderConnections(s.lanes||[],s);
-    renderLaneHealth(s.lane_health);
+    renderLaneHealth(s.lane_health,s.runtime_control);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
