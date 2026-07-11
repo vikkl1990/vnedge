@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .claude/
 tests/
-docs/
+# docs/ is NOT ignored: the dashboard's /runbooks route serves docs/RUNBOOKS.md
+# at runtime, and the Dockerfile COPYs docs/ into the image (2026-07-11).
 .env
 KILL
