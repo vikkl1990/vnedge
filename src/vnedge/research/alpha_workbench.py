@@ -227,6 +227,21 @@ _ACTION_CONTRACTS: dict[str, dict[str, str]] = {
         "task_type": "conservative_replay",
         "proof_step": "run conservative tick/L2 replay with maker/taker route audit",
     },
+    "QUEUE_SHADOW_TRIAL_AFTER_REPLAY": {
+        "task_type": "shadow_trial_after_replay",
+        "proof_step": (
+            "open a governed shadow-trial manifest only for replay-passed "
+            "candidates; every order intent still traverses the risk gateway"
+        ),
+    },
+    "MINE_PRE_EVENT_EXECUTION_CONDITIONS": {
+        "task_type": "execution_condition_mining",
+        "proof_step": (
+            "mine pre-event quoteability, fillability, adverse-selection, and "
+            "fee-wall filters for replay-failed candidates without promoting "
+            "from the seen replay window"
+        ),
+    },
     "PRE_REGISTER_UNTOUCHED_JUDGMENT": {
         "task_type": "untouched_judgment",
         "proof_step": "write fixed manifest for an untouched out-of-sample judgment window",
@@ -328,6 +343,16 @@ def _task_id(action: str, candidate_id: str) -> str:
 def _blocked_by(action: str, vetoes: tuple[str, ...]) -> tuple[str, ...]:
     required = {
         "RUN_CONSERVATIVE_L2_REPLAY": ("conservative_replay_result",),
+        "QUEUE_SHADOW_TRIAL_AFTER_REPLAY": (
+            "human_approved_shadow_manifest",
+            "risk_gateway_path",
+            "shadow_intent_journal",
+        ),
+        "MINE_PRE_EVENT_EXECUTION_CONDITIONS": (
+            "candidate_replay_failure",
+            "pre_event_feature_report",
+            "no_seen_window_promotion",
+        ),
         "PRE_REGISTER_UNTOUCHED_JUDGMENT": ("human_approved_manifest",),
         "RECORD_MORE_TICKS": ("sample_size_and_coverage",),
         "REPAIR_EXIT_PAYOFF": ("exit_repair_backtest", "unchanged_entry_manifest"),
