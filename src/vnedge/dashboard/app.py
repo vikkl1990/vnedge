@@ -11,16 +11,18 @@ Hard invariants, enforced structurally:
 from __future__ import annotations
 
 import asyncio
+import csv
 import hmac
 import html
+import io
 import json
 import logging
 import os
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +132,22 @@ def _journal_incidents(journal_dir: Path | None) -> list[dict]:
     return out
 
 
+def _snapshot_trade_log(snapshot: dict | None, lane: str) -> list[dict]:
+    """The trade log lives in the coalesced snapshot (multi-lane snapshots
+    carry a per-lane tail; the primary lane's session carries the full one)."""
+    if not isinstance(snapshot, dict):
+        return []
+    if lane:
+        for entry in snapshot.get("lanes") or []:
+            if isinstance(entry, dict) and entry.get("lane_id") == lane:
+                return [e for e in entry.get("trade_log") or [] if isinstance(e, dict)]
+        if snapshot.get("lane_id") != lane:
+            return []
+    session = snapshot.get("session")
+    log = session.get("trade_log") if isinstance(session, dict) else None
+    return [e for e in log or [] if isinstance(e, dict)]
+
+
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
@@ -233,22 +251,125 @@ def create_app(
             return JSONResponse({"status": "no snapshot yet"}, status_code=503)
         return JSONResponse(snapshot)
 
+    def _query_lane(request: Request) -> str:
+        lane = request.query_params.get("lane", "").strip()
+        if lane and not _LANE_ID_RE.match(lane):
+            raise HTTPException(status_code=400, detail="invalid lane id")
+        return lane
+
+    def _query_days(request: Request) -> float | None:
+        raw = request.query_params.get("days", "").strip()
+        if not raw:
+            return None
+        try:
+            days = float(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="days must be a number")
+        if days <= 0:
+            raise HTTPException(status_code=400, detail="days must be positive")
+        return days
+
+    def _since_iso(days: float | None) -> str | None:
+        if days is None:
+            return None
+        from datetime import UTC, datetime, timedelta
+
+        return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+
+    def _lane_file(lane: str, suffix: str) -> Path | None:
+        """Resolve a per-lane data file; empty lane means the primary lane."""
+        if lane and lane_dir is not None:
+            return lane_dir / f"{lane}{suffix}"
+        if suffix == ".equity.jsonl":
+            return history_path
+        if history_path is not None and history_path.name.endswith(".equity.jsonl"):
+            primary = history_path.name.removesuffix(".equity.jsonl")
+            return history_path.parent / f"{primary}{suffix}"
+        return None
+
+    def _equity_points(lane: str, since: str | None) -> list[dict]:
+        path = _lane_file(lane, ".equity.jsonl")
+        points: list[dict] = []
+        if path is not None and path.exists():
+            for record in _iter_jsonl(path, max_bytes=4_000_000):
+                if since is not None and str(record.get("ts", "")) < since:
+                    continue
+                points.append(record)
+        return points[-2000:]
+
     @app.get("/history")
     async def history(request: Request) -> JSONResponse:
-        """Persisted equity curve (survives restarts and page reloads)."""
+        """Persisted equity curve (survives restarts and page reloads).
+
+        Optional filters: ?days=N (recent window) and ?lane=<id> (any lane's
+        equity file next to the primary one)."""
         if not _authorized(request):
             raise HTTPException(status_code=401, detail="missing or invalid token")
-        points: list[dict] = []
-        if history_path is not None and history_path.exists():
-            import json
+        lane = _query_lane(request)
+        since = _since_iso(_query_days(request))
+        return JSONResponse(_equity_points(lane, since))
 
-            lines = history_path.read_text().strip().splitlines()[-2000:]
-            for line in lines:
-                try:
-                    points.append(json.loads(line))
-                except json.JSONDecodeError:
+    @app.get("/export.csv")
+    async def export_csv(request: Request) -> Response:
+        """Per-lane CSV export: equity curve + trade log + fills, one flat
+        table keyed by record_type. Same filters as /history."""
+        if not _authorized(request):
+            raise HTTPException(status_code=401, detail="missing or invalid token")
+        lane = _query_lane(request)
+        since = _since_iso(_query_days(request))
+        lane_label = lane
+        if not lane_label and history_path is not None:
+            lane_label = history_path.name.removesuffix(".equity.jsonl")
+        lane_label = lane_label or "primary"
+
+        fields = ["record_type", "ts", "lane", "equity", "event", "detail",
+                  "symbol", "side", "quantity", "price", "fee_usd",
+                  "realized_pnl_usd", "client_order_id"]
+
+        def rows():
+            for point in _equity_points(lane, since):
+                yield {"record_type": "equity", "ts": point.get("ts", ""),
+                       "equity": point.get("equity", "")}
+            for event in _snapshot_trade_log(provider.latest(), lane):
+                ts = str(event.get("ts", ""))
+                if since is not None and ts < since:
                     continue
-        return JSONResponse(points)
+                yield {"record_type": "trade_log", "ts": ts,
+                       "event": event.get("event", ""),
+                       "detail": event.get("detail", "")}
+            fills_path = _lane_file(lane, ".fills.jsonl")
+            if fills_path is not None and fills_path.exists():
+                for fill in _iter_jsonl(fills_path, max_bytes=4_000_000):
+                    ts = str(fill.get("ts", ""))
+                    if since is not None and ts < since:
+                        continue
+                    yield {"record_type": "fill", "ts": ts,
+                           "symbol": fill.get("symbol", ""),
+                           "side": fill.get("side", ""),
+                           "quantity": fill.get("quantity", ""),
+                           "price": fill.get("price", ""),
+                           "fee_usd": fill.get("fee_usd", ""),
+                           "realized_pnl_usd": fill.get("realized_pnl_usd", ""),
+                           "client_order_id": fill.get("client_order_id", "")}
+
+        def stream():
+            buffer = io.StringIO()
+            writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows():
+                writer.writerow({"lane": lane_label, **row})
+                if buffer.tell() > 64_000:
+                    yield buffer.getvalue()
+                    buffer.seek(0)
+                    buffer.truncate()
+            yield buffer.getvalue()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="vnedge_{lane_label}.csv"'},
+        )
 
     @app.get("/incidents")
     async def incidents(request: Request) -> JSONResponse:

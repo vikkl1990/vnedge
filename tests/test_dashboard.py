@@ -169,6 +169,112 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
 
 
+def _history_world(tmp_path):
+    """Two lanes' equity files + fills + a snapshot trade log, all exportable."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    old = (now - timedelta(days=10)).isoformat()
+    recent = (now - timedelta(hours=2)).isoformat()
+    _write_jsonl(tmp_path / "alpha.equity.jsonl", [
+        {"ts": old, "equity": 500.0},
+        {"ts": recent, "equity": 510.0},
+    ])
+    _write_jsonl(tmp_path / "beta.equity.jsonl", [
+        {"ts": recent, "equity": 250.0},
+    ])
+    _write_jsonl(tmp_path / "beta.fills.jsonl", [
+        {"ts": recent, "symbol": SYM, "side": "buy", "quantity": 0.01,
+         "price": 100.0, "fee_usd": 0.02, "realized_pnl_usd": 0.0,
+         "client_order_id": "c1", "prev_hash": "0" * 64, "hash": "aa"},
+    ])
+    provider = SnapshotProvider()
+    provider.publish({
+        "mode": "shadow", "lane_id": "alpha",
+        "session": {"trade_log": [
+            {"ts": recent, "event": "signal_fired", "detail": "primary lane log"},
+        ]},
+        "lanes": [
+            {"lane_id": "alpha", "trade_log": []},
+            {"lane_id": "beta", "trade_log": [
+                {"ts": old, "event": "fill", "detail": "old fill"},
+                {"ts": recent, "event": "exit", "detail": "flat"},
+            ]},
+        ],
+    })
+    client = TestClient(create_app(
+        provider, token="t3st-token",
+        history_path=tmp_path / "alpha.equity.jsonl", journal_dir=tmp_path,
+    ))
+    return client, old, recent
+
+
+def test_history_lane_and_days_params(tmp_path):
+    client, old, recent = _history_world(tmp_path)
+
+    # default: primary lane (alpha), full history
+    points = client.get("/history?token=t3st-token").json()
+    assert [p["equity"] for p in points] == [500.0, 510.0]
+
+    # lane switch
+    beta = client.get("/history?token=t3st-token&lane=beta").json()
+    assert [p["equity"] for p in beta] == [250.0]
+
+    # days filter drops the 10-day-old point
+    fresh = client.get("/history?token=t3st-token&days=7").json()
+    assert [p["equity"] for p in fresh] == [510.0]
+    assert client.get("/history?token=t3st-token&days=30&lane=alpha").json() == points
+
+    # invalid params are rejected, not swallowed
+    assert client.get("/history?token=t3st-token&lane=../evil").status_code == 400
+    assert client.get("/history?token=t3st-token&days=soon").status_code == 400
+    assert client.get("/history?token=t3st-token&days=-1").status_code == 400
+
+    # unknown lane is empty, not an error
+    assert client.get("/history?token=t3st-token&lane=ghost").json() == []
+
+
+def test_export_csv_shape_and_auth(tmp_path):
+    import csv
+    import io
+
+    client, old, recent = _history_world(tmp_path)
+    assert client.get("/export.csv").status_code == 401
+    assert client.get("/export.csv?token=wrong").status_code == 401
+    assert client.get("/export.csv?token=t3st-token&lane=../evil").status_code == 400
+
+    r = client.get("/export.csv?token=t3st-token&lane=beta")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="vnedge_beta.csv"' in r.headers["content-disposition"]
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert set(rows[0]) == {"record_type", "ts", "lane", "equity", "event",
+                            "detail", "symbol", "side", "quantity", "price",
+                            "fee_usd", "realized_pnl_usd", "client_order_id"}
+    by_type = {}
+    for row in rows:
+        by_type.setdefault(row["record_type"], []).append(row)
+    assert all(row["lane"] == "beta" for row in rows)
+    assert [e["equity"] for e in by_type["equity"]] == ["250.0"]
+    assert {t["event"] for t in by_type["trade_log"]} == {"fill", "exit"}
+    fill = by_type["fill"][0]
+    assert (fill["symbol"], fill["side"], fill["client_order_id"]) == (SYM, "buy", "c1")
+    assert fill["fee_usd"] == "0.02"
+
+    # default lane = primary (alpha): its equity + the primary session log
+    primary = list(csv.DictReader(io.StringIO(
+        client.get("/export.csv?token=t3st-token").text)))
+    assert all(row["lane"] == "alpha" for row in primary)
+    assert {row["record_type"] for row in primary} == {"equity", "trade_log"}
+    assert any(row["detail"] == "primary lane log" for row in primary)
+
+    # days filter applies to every record type
+    windowed = list(csv.DictReader(io.StringIO(
+        client.get("/export.csv?token=t3st-token&lane=beta&days=7").text)))
+    assert all(row["ts"] >= old for row in windowed)
+    assert not any(row["detail"] == "old fill" for row in windowed)
+
+
 def _write_jsonl(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
