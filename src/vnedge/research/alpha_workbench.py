@@ -242,6 +242,13 @@ _ACTION_CONTRACTS: dict[str, dict[str, str]] = {
             "from the seen replay window"
         ),
     },
+    "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS": {
+        "task_type": "filtered_conservative_replay",
+        "proof_step": (
+            "freeze the execution-condition filter and run conservative replay "
+            "on a fresh or explicitly governed slice before any shadow trial"
+        ),
+    },
     "PRE_REGISTER_UNTOUCHED_JUDGMENT": {
         "task_type": "untouched_judgment",
         "proof_step": "write fixed manifest for an untouched out-of-sample judgment window",
@@ -351,6 +358,12 @@ def _blocked_by(action: str, vetoes: tuple[str, ...]) -> tuple[str, ...]:
         "MINE_PRE_EVENT_EXECUTION_CONDITIONS": (
             "candidate_replay_failure",
             "pre_event_feature_report",
+            "no_seen_window_promotion",
+        ),
+        "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS": (
+            "frozen_execution_condition_filter",
+            "fresh_replay_slice",
+            "conservative_replay_result",
             "no_seen_window_promotion",
         ),
         "PRE_REGISTER_UNTOUCHED_JUDGMENT": ("human_approved_manifest",),

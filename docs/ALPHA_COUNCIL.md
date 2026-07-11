@@ -16,6 +16,8 @@ research artifacts in `research/live_research/`:
 - `daily_scalper_latest.json`
 - `alpha_distillation_latest.json`
 - `bitcoin_regime_latest.json`
+- `candidate_replay_latest.json`
+- `execution_condition_latest.json`
 
 It extracts candidates, then runs five deterministic agents:
 
@@ -59,6 +61,17 @@ rejects. They are routed into concrete repair work:
 Missing or stale artifacts become `REFRESH_STALE_ARTIFACT` tasks, which keeps
 the bot from confusing an empty signal funnel with an unhealthy research
 producer.
+
+Microstructure candidates are not allowed to jump from scanner output to
+shadow. They first require `candidate_replay_latest.json`, which proves the
+event through passive quote placement, conservative maker fill, taker exit, and
+fees. If that replay fails, `execution_condition_latest.json` can turn the
+failure into a concrete next experiment:
+
+- no replay yet -> `RUN_CONSERVATIVE_L2_REPLAY`
+- replay passed -> `QUEUE_SHADOW_TRIAL_AFTER_REPLAY`
+- replay failed without condition report -> `MINE_PRE_EVENT_EXECUTION_CONDITIONS`
+- replay failed with a filter proposal -> `RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS`
 
 ## What It Never Does
 

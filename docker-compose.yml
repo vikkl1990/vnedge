@@ -189,6 +189,41 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Conservative event-to-quote replay for mined microstructure candidates.
+  # This is the execution-native proof step between a research anomaly and any
+  # shadow/paper discussion: passive maker quote, conservative trade-through
+  # fill, taker exit, honest fees. Research-only; no credentials, no orders.
+  candidate-replay-executor:
+    build: .
+    restart: unless-stopped
+    depends_on: [event-leadlag-miner, orderflow-footprint-miner]
+    command: ["python", "-m", "vnedge.research.candidate_replay_executor",
+              "--interval-seconds", "${CANDIDATE_REPLAY_INTERVAL_SECONDS:-1800}",
+              "--max-event-leadlag", "${CANDIDATE_REPLAY_MAX_EVENT_LEADLAG:-12}",
+              "--max-orderflow", "${CANDIDATE_REPLAY_MAX_ORDERFLOW:-60}"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Post-mortem miner for replay failures. It classifies why candidates fail
+  # (spread, stale book, no trade-through, queue risk, adverse selection, fee
+  # wall) and emits filter hypotheses that must be replayed fresh. Research-only.
+  execution-condition-miner:
+    build: .
+    restart: unless-stopped
+    depends_on: [candidate-replay-executor]
+    command: ["python", "-m", "vnedge.research.execution_condition_miner",
+              "--interval-seconds", "${EXECUTION_CONDITION_INTERVAL_SECONDS:-1800}"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Daily scalper miner: 4h/1h context, 15m setup, 1m trigger across all
   # configured exchanges/symbols/families. Slow cadence by design: it is
   # research-only and feeds the council/workbench, never execution.
@@ -258,7 +293,7 @@ services:
   alpha-council:
     build: .
     restart: unless-stopped
-    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, orderflow-footprint-miner, bitcoin-regime-sensor]
+    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, orderflow-footprint-miner, candidate-replay-executor, execution-condition-miner, bitcoin-regime-sensor]
     command: ["python", "-m", "vnedge.research.alpha_council",
               "--interval-seconds", "${ALPHA_COUNCIL_INTERVAL_SECONDS:-900}",
               "--max-candidates", "${ALPHA_COUNCIL_MAX_CANDIDATES:-40}"]
