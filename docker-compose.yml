@@ -485,12 +485,42 @@ services:
 
   # Internet-facing TLS front (self-signed) so the read-only dashboard needs
   # no SSH tunnel. Port 8765 must be open in the cloud security list.
+  # Edge hardening lives in deploy/Caddyfile + docs/DEPLOY.md §7:
+  # DASHBOARD_ALLOWLIST restricts source IPs; empty = allow-all (token-only).
   dashboard-tls:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on: [multi-lane-shadow]
+    environment:
+      # Comma-separated client CIDRs/IPs allowed through the TLS front,
+      # e.g. "203.0.113.7/32,198.51.100.0/24". EMPTY = every source IP is
+      # allowed and DASHBOARD_TOKEN is the only protection.
+      DASHBOARD_ALLOWLIST: "${DASHBOARD_ALLOWLIST:-}"
+      # Only used once the ACME block in deploy/Caddyfile is uncommented.
+      DASHBOARD_DOMAIN: "${DASHBOARD_DOMAIN:-}"
+    # Same process the stock image runs, prefixed by one translation step:
+    # Caddy's remote_ip matcher wants space-separated ranges while .env keeps
+    # the ergonomic comma-separated form. An empty/blank allowlist is UNSET so
+    # the Caddyfile's {$DASHBOARD_ALLOWLIST:allow-all-default} takes over
+    # (Caddy only applies the default when the variable is absent).
+    command:
+      - sh
+      - -c
+      - |
+        DASHBOARD_ALLOWLIST="$$(printf '%s' "$$DASHBOARD_ALLOWLIST" | tr ',' ' ')"
+        if [ -z "$$(printf '%s' "$$DASHBOARD_ALLOWLIST" | tr -d ' ')" ]; then
+            unset DASHBOARD_ALLOWLIST
+        else
+            export DASHBOARD_ALLOWLIST
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
       - "8765:8765"
+      # Uncomment for the real-certificate (ACME) upgrade path — see
+      # deploy/Caddyfile and docs/DEPLOY.md §7. Both ports must also be
+      # opened in the cloud security list.
+      # - "80:80"
+      # - "443:443"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./deploy/certs:/certs:ro
