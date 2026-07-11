@@ -12,7 +12,7 @@ import argparse
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -164,7 +164,15 @@ def collect_candidates(
         _read_json(research / "bitcoin_regime_latest.json")
     ))
     candidates.extend(_artifact_health_candidates(research))
-    return _apply_source_quotas(_dedupe_candidates(candidates), max_candidates=max_candidates)
+    candidates = _dedupe_candidates(candidates)
+    candidates = _apply_replay_labels(
+        candidates,
+        _read_json(research / "candidate_replay_latest.json"),
+    )
+    return _apply_source_quotas(
+        sorted(candidates, key=_candidate_sort_key),
+        max_candidates=max_candidates,
+    )
 
 
 def debate_candidate(candidate: AlphaCandidate) -> dict:
@@ -563,6 +571,16 @@ def _edge_advocate(candidate: AlphaCandidate) -> AgentOpinion:
     delta = 0.0
     notes: list[str] = []
     samples = _sample_count(candidate)
+    replay_verdict = str(m.get("replay_verdict") or "")
+    if replay_verdict == "REPLAY_CANDIDATE":
+        delta += 36
+        notes.append("candidate survived conservative execution replay")
+    elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+        delta += 10
+        notes.append("positive replay exists but needs more fills before trust")
+    elif _is_bad_replay_verdict(replay_verdict):
+        delta -= 28
+        notes.append(f"conservative replay rejected execution edge: {replay_verdict}")
     if candidate.state == "PASS":
         delta += 28
         notes.append("rolling OOS gate currently marks this lane PASS")
@@ -618,6 +636,15 @@ def _skeptic(candidate: AlphaCandidate) -> AgentOpinion:
     notes: list[str] = []
     vetoes: list[str] = []
     samples = max(_num(m.get("samples")), _num(m.get("oos_trades")))
+    replay_verdict = str(m.get("replay_verdict") or "")
+    if replay_verdict in {"NO_QUOTE", "NO_FILLS"}:
+        delta -= 22
+        vetoes.append("no_executable_replay_sample")
+        notes.append(f"replay produced no executable sample: {replay_verdict}")
+    elif replay_verdict == "NEGATIVE_EDGE_AFTER_REPLAY":
+        delta -= 30
+        vetoes.append("replay_negative_edge")
+        notes.append("replay fill was negative after fees/slippage")
     if candidate.state == "REJECT":
         delta -= 15 if _num(m.get("oos_net_usd")) > 0 else 25
         notes.append("rolling research verdict is REJECT")
@@ -655,6 +682,44 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
     delta = 0.0
     notes: list[str] = []
     vetoes: list[str] = []
+    replay_verdict = str(m.get("replay_verdict") or "")
+    if replay_verdict:
+        fills = _num(m.get("replay_fills"))
+        quotes = _num(m.get("replay_quotes"))
+        net = _num(m.get("replay_net_usd"))
+        avg = _num(m.get("replay_avg_net_bps"))
+        if replay_verdict == "REPLAY_CANDIDATE":
+            delta += 36
+            notes.append(
+                f"execution replay passed: fills={fills:.0f}/{quotes:.0f}, "
+                f"net=${net:+.4f}, avg={avg:+.2f}bps"
+            )
+        elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            delta += 8
+            vetoes.append("needs_more_replay_samples")
+            notes.append(
+                f"positive replay is under-sampled: fills={fills:.0f}/{quotes:.0f}, "
+                f"net=${net:+.4f}"
+            )
+        elif replay_verdict == "NO_QUOTE":
+            delta -= 42
+            vetoes.append("no_quote_after_event")
+            notes.append("candidate event could not place a timely passive quote")
+        elif replay_verdict == "NO_FILLS":
+            delta -= 38
+            vetoes.append("maker_fill_failed")
+            notes.append("passive quote did not fill under conservative replay")
+        elif replay_verdict == "NEGATIVE_EDGE_AFTER_REPLAY":
+            delta -= 48
+            vetoes.append("replay_negative_edge")
+            notes.append(
+                f"replay filled but lost after costs: net=${net:+.4f}, "
+                f"avg={avg:+.2f}bps"
+            )
+        elif replay_verdict.startswith("REJECT_"):
+            delta -= 34
+            vetoes.append("execution_replay_rejected")
+            notes.append(f"execution replay rejected candidate: {replay_verdict}")
     if route == "CONTEXT_ONLY":
         delta -= 2
         vetoes.append("context_only_no_execution")
@@ -668,8 +733,16 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
         notes.append("taker route is allowed by current evidence")
     elif route == "MAKER_ONLY":
         delta += 8
-        vetoes.append("maker_fill_unproven")
-        notes.append("maker-only route needs queue/fill proof")
+        if replay_verdict == "REPLAY_CANDIDATE":
+            notes.append("maker-only route has conservative replay fill proof")
+        elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            vetoes.append("needs_more_replay_samples")
+            notes.append("maker-only route has positive but under-sampled fill proof")
+        elif not replay_verdict:
+            vetoes.append("maker_fill_unproven")
+            notes.append("maker-only route needs queue/fill proof")
+        else:
+            notes.append("maker-only route failed conservative fill proof")
     elif route == "CANDLE_RESEARCH":
         delta -= 4
         vetoes.append("execution_not_modeled_at_tick_level")
@@ -701,6 +774,7 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
     vetoes = ["research_only_no_auto_trade", "requires_human_promotion"]
     notes = ["council output is advisory only"]
     delta = -10.0
+    replay_verdict = str(candidate.metrics.get("replay_verdict") or "")
     if candidate.source in {
         "event_leadlag_alpha",
         "fast_l2_scout",
@@ -708,8 +782,18 @@ def _risk_governor(candidate: AlphaCandidate) -> AgentOpinion:
         "l2_research_loop",
         "alpha_factory",
     }:
-        vetoes.append("requires_conservative_l2_replay")
-        notes.append("microstructure candidate requires conservative replay")
+        if not replay_verdict:
+            vetoes.append("requires_conservative_l2_replay")
+            notes.append("microstructure candidate requires conservative replay")
+        elif replay_verdict == "REPLAY_CANDIDATE":
+            vetoes.append("requires_shadow_trial_after_replay")
+            notes.append("positive replay still needs governed shadow/paper trial")
+        elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+            vetoes.append("requires_more_replay_evidence")
+            notes.append("positive replay is under-sampled")
+        else:
+            vetoes.append("execution_replay_failed")
+            notes.append("candidate failed conservative execution replay")
     if candidate.source in {"rolling_walk_forward", "daily_scalper_pack", "alpha_distillation"}:
         vetoes.append("requires_untouched_judgment")
         notes.append("rolling PASS still needs pre-registered untouched judgment")
@@ -753,6 +837,19 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
         "l2_research_loop",
         "alpha_factory",
     }:
+        if veto_set & {
+            "no_quote_after_event",
+            "maker_fill_failed",
+            "replay_negative_edge",
+            "execution_replay_rejected",
+            "execution_replay_failed",
+            "no_executable_replay_sample",
+        }:
+            return "MINE_PRE_EVENT_EXECUTION_CONDITIONS"
+        if "needs_more_replay_samples" in veto_set or "requires_more_replay_evidence" in veto_set:
+            return "RECORD_MORE_TICKS"
+        if candidate.metrics.get("replay_verdict") == "REPLAY_CANDIDATE":
+            return "QUEUE_SHADOW_TRIAL_AFTER_REPLAY"
         if "needs_more_samples" in veto_set:
             return "RECORD_MORE_TICKS"
         if "execution_route_blocked" in veto_set and priority < 55:
@@ -771,6 +868,8 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
 
 def _verdict(priority: float, vetoes: Iterable[str]) -> str:
     veto_set = set(vetoes)
+    if "execution_replay_failed" in veto_set or "replay_negative_edge" in veto_set:
+        return "EXECUTION_REPLAY_FAILED"
     if "execution_route_blocked" in veto_set and priority < 55:
         return "BLOCKED"
     if priority >= 75:
@@ -823,9 +922,66 @@ def _dedupe_candidates(candidates: list[AlphaCandidate]) -> list[AlphaCandidate]
     return unique
 
 
+def _apply_replay_labels(
+    candidates: list[AlphaCandidate],
+    payload: dict | None,
+) -> list[AlphaCandidate]:
+    replay = _candidate_replay_index(payload)
+    if not replay:
+        return candidates
+    out: list[AlphaCandidate] = []
+    for candidate in candidates:
+        row = replay.get(candidate.candidate_id)
+        if row is None and candidate.source == "event_leadlag_alpha":
+            raw_id = str(candidate.evidence.get("hypothesis_id") or "")
+            row = replay.get(raw_id)
+        if row is None:
+            out.append(candidate)
+            continue
+        metrics = dict(candidate.metrics)
+        metrics.update({
+            "replay_verdict": str(row.get("verdict") or "UNKNOWN"),
+            "replay_quotes": _num(row.get("quotes")),
+            "replay_fills": _num(row.get("fills")),
+            "replay_fill_rate_pct": _num(row.get("fill_rate_pct")),
+            "replay_net_usd": _num(row.get("net_usd")),
+            "replay_avg_net_bps": _num(row.get("avg_net_bps")),
+            "replay_profit_factor": _num(row.get("profit_factor")),
+            "replay_avg_adverse_bps": _num(row.get("avg_adverse_bps")),
+        })
+        evidence = dict(candidate.evidence)
+        evidence["execution_replay"] = row
+        out.append(replace(candidate, metrics=metrics, evidence=evidence))
+    return out
+
+
+def _candidate_replay_index(payload: dict | None) -> dict[str, dict[str, Any]]:
+    rows = (payload or {}).get("rows") or []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_id = str(row.get("candidate_id") or "")
+        if not candidate_id:
+            continue
+        out[candidate_id] = row
+        source = str(row.get("source") or "")
+        if source == "event_leadlag_alpha":
+            out[f"event_leadlag|{candidate_id}"] = row
+    return out
+
+
 def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
     m = candidate.metrics
     samples = _sample_count(candidate)
+    replay_score = 0.0
+    replay_verdict = str(m.get("replay_verdict") or "")
+    if replay_verdict == "REPLAY_CANDIDATE":
+        replay_score = 160.0
+    elif replay_verdict == "UNDER_SAMPLED_POSITIVE_REPLAY":
+        replay_score = 45.0
+    elif _is_bad_replay_verdict(replay_verdict):
+        replay_score = -180.0
     state_score = 0.0
     if "EDGE_CANDIDATE_TAKER" in candidate.state:
         state_score = 120.0
@@ -846,7 +1002,8 @@ def _candidate_sort_key(candidate: AlphaCandidate) -> tuple[float, str]:
     elif candidate.state == "REJECT":
         state_score = -20.0
     score = (
-        state_score
+        replay_score
+        + state_score
         + min(_best_profit_factor(m), 5.0)
         + _best_net_bps(m) / 10
         + _num(m.get("oos_net_usd")) / 100
@@ -923,6 +1080,7 @@ def _num(value: Any) -> float:
 
 def _best_profit_factor(metrics: dict[str, Any]) -> float:
     return max(
+        _num(metrics.get("replay_profit_factor")),
         _num(metrics.get("profit_factor")),
         _num(metrics.get("maker_profit_factor")),
         _num(metrics.get("taker_profit_factor")),
@@ -931,6 +1089,7 @@ def _best_profit_factor(metrics: dict[str, Any]) -> float:
 
 def _best_net_bps(metrics: dict[str, Any]) -> float:
     return max(
+        _num(metrics.get("replay_avg_net_bps")),
         _num(metrics.get("avg_net_bps")),
         _num(metrics.get("maker_avg_net_bps")),
         _num(metrics.get("taker_avg_net_bps")),
@@ -939,10 +1098,23 @@ def _best_net_bps(metrics: dict[str, Any]) -> float:
 
 def _sample_count(candidate: AlphaCandidate) -> float:
     return max(
+        _num(candidate.metrics.get("replay_fills")),
         _num(candidate.metrics.get("samples")),
         _num(candidate.metrics.get("oos_trades")),
         _num(candidate.metrics.get("trades")),
     )
+
+
+def _is_bad_replay_verdict(verdict: str) -> bool:
+    return verdict in {
+        "NO_QUOTE",
+        "NO_FILLS",
+        "NEGATIVE_EDGE_AFTER_REPLAY",
+        "REJECT_LOW_FILL_RATE",
+        "REJECT_BELOW_NET_BPS",
+        "REJECT_BELOW_PF",
+        "REJECT_ADVERSE_SELECTION",
+    }
 
 
 def _clamp(value: float, low: float, high: float) -> float:

@@ -165,6 +165,124 @@ def test_alpha_council_routes_orderflow_candidates_to_replay(tmp_path):
     assert debate["can_promote"] is False
 
 
+def test_alpha_council_replay_failure_blocks_event_candidate(tmp_path):
+    hypothesis_id = (
+        "cross_venue_event_leadlag_v1|SOL|binanceusdm->delta_india|"
+        "long|15m|ret>=4bps|z>=1.8|volZ>=-0.25|lag<=0.5x/6bps"
+    )
+    write_json(
+        tmp_path / "event_leadlag_latest.json",
+        {
+            "hypotheses": [
+                {
+                    "hypothesis_id": hypothesis_id,
+                    "state": "EDGE_CANDIDATE_MAKER",
+                    "follower_exchange": "delta_india",
+                    "follower_symbol": "SOL/USD:USD",
+                    "horizon_min": 15,
+                    "route_decision": "MAKER_ONLY",
+                    "samples": 36,
+                    "maker_avg_net_bps": 10.4,
+                    "maker_profit_factor": 1.91,
+                    "win_rate_pct": 30.0,
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "candidate_replay_latest.json",
+        {
+            "rows": [
+                {
+                    "candidate_id": hypothesis_id,
+                    "source": "event_leadlag_alpha",
+                    "verdict": "NO_FILLS",
+                    "quotes": 5,
+                    "fills": 0,
+                    "fill_rate_pct": 0.0,
+                    "net_usd": 0.0,
+                    "avg_net_bps": 0.0,
+                    "profit_factor": 0.0,
+                }
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["candidate_id"] == f"event_leadlag|{hypothesis_id}"
+    )
+
+    assert debate["candidate"]["metrics"]["replay_verdict"] == "NO_FILLS"
+    assert debate["candidate"]["evidence"]["execution_replay"]["quotes"] == 5
+    assert debate["next_action"] == "MINE_PRE_EVENT_EXECUTION_CONDITIONS"
+    assert debate["council_verdict"] == "EXECUTION_REPLAY_FAILED"
+    assert "maker_fill_failed" in debate["vetoes"]
+    assert "execution_replay_failed" in debate["vetoes"]
+    assert "requires_conservative_l2_replay" not in debate["vetoes"]
+    assert debate["can_trade"] is False
+
+
+def test_alpha_council_replay_pass_queues_shadow_trial(tmp_path):
+    candidate_id = "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy"
+    write_json(
+        tmp_path / "orderflow_footprint_latest.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "exchange": "delta_india",
+                    "symbol": "SOL/USD:USD",
+                    "day": "20260706",
+                    "family": "orderflow_footprint_v1",
+                    "side": "buy",
+                    "timeframe": "60s",
+                    "state": "ORDERFLOW_CANDIDATE",
+                    "route_decision": "REPLAY_REQUIRED",
+                    "samples": 42,
+                    "score": 91.0,
+                    "stacked_run_length": 5,
+                    "delta_ratio": 0.83,
+                    "price_change_bps": 11.2,
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "candidate_replay_latest.json",
+        {
+            "rows": [
+                {
+                    "candidate_id": candidate_id,
+                    "source": "orderflow_footprint",
+                    "verdict": "REPLAY_CANDIDATE",
+                    "quotes": 30,
+                    "fills": 18,
+                    "fill_rate_pct": 60.0,
+                    "net_usd": 3.25,
+                    "avg_net_bps": 12.4,
+                    "profit_factor": 1.82,
+                    "avg_adverse_bps": 0.6,
+                }
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["candidate_id"] == candidate_id
+    )
+
+    assert debate["candidate"]["metrics"]["replay_verdict"] == "REPLAY_CANDIDATE"
+    assert debate["next_action"] == "QUEUE_SHADOW_TRIAL_AFTER_REPLAY"
+    assert "requires_shadow_trial_after_replay" in debate["vetoes"]
+    assert "requires_conservative_l2_replay" not in debate["vetoes"]
+    assert debate["can_trade"] is False
+    assert debate["can_promote"] is False
+
+
 def test_alpha_council_records_more_ticks_for_under_sampled_orderflow(tmp_path):
     write_json(
         tmp_path / "orderflow_footprint_latest.json",

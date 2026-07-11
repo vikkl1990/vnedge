@@ -76,6 +76,45 @@ def test_alpha_workbench_turns_council_debate_into_research_task(tmp_path):
     assert task.evidence_digest
 
 
+def test_alpha_workbench_routes_execution_replay_followups(tmp_path):
+    payload = council_payload(
+        debate(
+            "QUEUE_SHADOW_TRIAL_AFTER_REPLAY",
+            "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy",
+            source="orderflow_footprint",
+            priority=91.0,
+            vetoes=["requires_shadow_trial_after_replay"],
+        ),
+        debate(
+            "MINE_PRE_EVENT_EXECUTION_CONDITIONS",
+            "event_leadlag|SOL|binanceusdm->delta_india|15m",
+            priority=35.0,
+            vetoes=["maker_fill_failed", "execution_replay_failed"],
+        ),
+    )
+
+    report = run_alpha_workbench(tmp_path, store_dir=None, council_payload=payload)
+    by_action = {task["next_action"]: task for task in report["tasks"]}
+
+    assert by_action["QUEUE_SHADOW_TRIAL_AFTER_REPLAY"]["task_type"] == (
+        "shadow_trial_after_replay"
+    )
+    assert "human_approved_shadow_manifest" in (
+        by_action["QUEUE_SHADOW_TRIAL_AFTER_REPLAY"]["blocked_by"]
+    )
+    assert "risk_gateway_path" in by_action["QUEUE_SHADOW_TRIAL_AFTER_REPLAY"]["blocked_by"]
+    assert by_action["MINE_PRE_EVENT_EXECUTION_CONDITIONS"]["task_type"] == (
+        "execution_condition_mining"
+    )
+    assert "candidate_replay_failure" in (
+        by_action["MINE_PRE_EVENT_EXECUTION_CONDITIONS"]["blocked_by"]
+    )
+    assert "no_seen_window_promotion" in (
+        by_action["MINE_PRE_EVENT_EXECUTION_CONDITIONS"]["blocked_by"]
+    )
+    assert report["policy"]["can_trade"] is False
+
+
 def test_alpha_workbench_persists_chunks_idempotently(tmp_path):
     write_json(
         tmp_path / "alpha_council_latest.json",
