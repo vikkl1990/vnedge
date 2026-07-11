@@ -178,7 +178,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         "scalper_parameter_registry": {"version": "test"},
         "event_taker_replay": {"rows": []},
         "cascade_reversion": {"targets": []},
-        "shadow_lanes": {"lanes": [], "blocked": []},
+        "shadow_lanes": {"lanes": [], "shadow_trials": [], "blocked": []},
         "live_shadow_perf": {"available": False},
         "edge_agents": {"policy": {"can_trade": False}},
         "edge_leaderboard": {"summary": {"rows": 1}},

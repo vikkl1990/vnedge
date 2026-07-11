@@ -242,6 +242,26 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Operator truth table for "what is firing and what can be promoted?" It
+  # joins the shadow-lane manifest, filtered replay trials, and live shadow
+  # outcome journals into lane_promotion_readiness_latest.json. Read-only:
+  # can_trade=false/can_promote=false on every row.
+  lane-promotion-readiness:
+    build: .
+    restart: unless-stopped
+    depends_on: [multi-lane-shadow, filtered-replay-executor]
+    command: ["python", "-m", "vnedge.research.lane_promotion_readiness",
+              "--interval-seconds", "${LANE_PROMOTION_READINESS_INTERVAL_SECONDS:-300}",
+              "--min-shadow-trades", "${LANE_PROMOTION_MIN_SHADOW_TRADES:-10}",
+              "--min-shadow-span-days", "${LANE_PROMOTION_MIN_SHADOW_SPAN_DAYS:-7}",
+              "--min-shadow-profit-factor", "${LANE_PROMOTION_MIN_SHADOW_PROFIT_FACTOR:-1.25}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Daily scalper miner: 4h/1h context, 15m setup, 1m trigger across all
   # configured exchanges/symbols/families. Slow cadence by design: it is
   # research-only and feeds the council/workbench, never execution.

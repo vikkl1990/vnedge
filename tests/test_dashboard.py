@@ -126,6 +126,7 @@ def test_history_without_file_is_empty(client):
 def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     council = tmp_path / "alpha_council_latest.json"
     workbench = tmp_path / "alpha_workbench_latest.json"
+    readiness = tmp_path / "lane_promotion_readiness_latest.json"
     council.write_text(json.dumps({
         "summary": {"debated": 2},
         "debates": [{"next_action": "RUN_CONSERVATIVE_L2_REPLAY"}],
@@ -138,6 +139,12 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    readiness.write_text(json.dumps({
+        "summary": {"paper_review_ready": 1},
+        "rows": [{"status": "PAPER_REVIEW_READY"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -145,12 +152,17 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         token="t3st-token",
         alpha_council_path=council,
         alpha_workbench_path=workbench,
+        lane_readiness_path=readiness,
     ))
 
     assert client.get("/alpha-council").status_code == 401
     assert client.get("/alpha-workbench").status_code == 401
+    assert client.get("/lane-readiness").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
+    lane_payload = client.get("/lane-readiness?token=t3st-token").json()
+    assert lane_payload["summary"]["paper_review_ready"] == 1
+    assert lane_payload["can_promote"] is False
 
 
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
@@ -161,12 +173,21 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         token="t3st-token",
         alpha_council_path=tmp_path / "missing_council.json",
         alpha_workbench_path=tmp_path / "missing_workbench.json",
+        lane_readiness_path=tmp_path / "missing_readiness.json",
     ))
 
     council = client.get("/alpha-council?token=t3st-token").json()
     workbench = client.get("/alpha-workbench?token=t3st-token").json()
+    readiness = client.get("/lane-readiness?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
+    assert readiness == {
+        "summary": {},
+        "rows": [],
+        "operator_answer": "lane readiness report unavailable",
+        "can_trade": False,
+        "can_promote": False,
+    }
 
 
 def test_no_control_routes_exist(client):

@@ -41,6 +41,49 @@ def test_unlocked_strategy_is_blocked_not_run():
     assert "locked" in m["blocked"][0]["reason"]
 
 
+def test_filtered_replay_candidates_become_shadow_trials_not_runtime_lanes():
+    payload = {
+        "rows": [
+            {
+                "candidate_id": "orderflow_footprint|binanceusdm|SOL/USDT:USDT|20260710|1|buy",
+                "source": "orderflow_footprint",
+                "family": "orderflow_footprint_v1",
+                "exchange": "binanceusdm",
+                "symbol": "SOL/USDT:USDT",
+                "day": "20260710",
+                "side": "buy",
+                "trigger_ts": "2026-07-10T00:00:00+00:00",
+                "verdict": "REPLAY_CANDIDATE",
+                "quotes": 3,
+                "fills": 2,
+                "net_usd": 1.25,
+                "avg_net_bps": 6.4,
+                "profit_factor": 2.2,
+                "filter_name": "require_pre_event_trade_through_proxy",
+                "condition_bucket": "TOUCH_ONLY_QUEUE_RISK",
+            },
+            {
+                "candidate_id": "loser",
+                "exchange": "binanceusdm",
+                "symbol": "BTC/USDT:USDT",
+                "verdict": "NEGATIVE_EDGE_AFTER_REPLAY",
+            },
+        ]
+    }
+
+    manifest = generate_shadow_manifest([], filtered_replay_payload=payload)
+
+    assert manifest["lanes"] == []
+    assert len(manifest["shadow_trials"]) == 1
+    trial = manifest["shadow_trials"][0]
+    assert trial["status"] == "REPLAY_POSITIVE_NEEDS_SHADOW_ADAPTER"
+    assert trial["runtime_strategy_id"] is None
+    assert trial["policy"]["can_trade"] is False
+    assert trial["policy"]["can_promote"] is False
+    assert trial["policy"]["requires_runtime_shadow_adapter"] is True
+    assert trial["replay"]["verdict"] == "REPLAY_CANDIDATE"
+
+
 def test_manifest_dedupes_and_caps():
     pairs = [_pair("binanceusdm", "BTC/USDT:USDT", "funding_mean_reversion_v1")] * 3
     m = generate_shadow_manifest(pairs, max_lanes=5)
