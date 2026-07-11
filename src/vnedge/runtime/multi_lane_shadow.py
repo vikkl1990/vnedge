@@ -431,14 +431,16 @@ async def main() -> int:
     )
 
     server_task = None
-    token = os.environ.get("DASHBOARD_TOKEN")
-    if token:
+    from vnedge.dashboard.auth import TokenStore
+
+    token_store = TokenStore.from_env()  # DASHBOARD_USERS + legacy DASHBOARD_TOKEN
+    if len(token_store):
         import uvicorn
 
         from vnedge.dashboard.app import create_app
 
         app = create_app(
-            provider, token=token,
+            provider, token_store=token_store,
             history_path=journal_dir / f"{primary}.equity.jsonl",
             research_path=Path("research/live_research/latest.json"),
             alpha_council_path=Path("research/live_research/alpha_council_latest.json"),

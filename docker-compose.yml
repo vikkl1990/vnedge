@@ -13,6 +13,9 @@ services:
       # exposes it only on the host's loopback — SSH-tunnel to reach it.
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?set DASHBOARD_TOKEN in .env}
+      # Optional per-user tokens: "name:token:role[:expiry_iso];..."
+      # (docs/DASHBOARD_AUTH.md). DASHBOARD_TOKEN keeps working unchanged.
+      DASHBOARD_USERS: ${DASHBOARD_USERS:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit,delta_india}"
