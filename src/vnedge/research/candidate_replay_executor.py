@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import math
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -654,12 +655,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-publish", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--interval-seconds", type=int, default=0)
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    args = parse_args(argv)
+def _run_once(args: argparse.Namespace) -> None:
     config = CandidateReplayConfig(
         max_event_leadlag_specs=args.max_event_leadlag,
         max_orderflow_specs=args.max_orderflow,
@@ -677,6 +677,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, default=str))
     else:
         print(render_report(payload, limit=args.limit))
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    args = parse_args(argv)
+    while True:
+        _run_once(args)
+        if args.interval_seconds <= 0:
+            break
+        time.sleep(args.interval_seconds)
     return 0
 
 

@@ -169,6 +169,10 @@ def collect_candidates(
         candidates,
         _read_json(research / "candidate_replay_latest.json"),
     )
+    candidates = _apply_execution_condition_labels(
+        candidates,
+        _read_json(research / "execution_condition_latest.json"),
+    )
     return _apply_source_quotas(
         sorted(candidates, key=_candidate_sort_key),
         max_candidates=max_candidates,
@@ -683,6 +687,7 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
     notes: list[str] = []
     vetoes: list[str] = []
     replay_verdict = str(m.get("replay_verdict") or "")
+    condition_bucket = str(m.get("execution_condition_bucket") or "")
     if replay_verdict:
         fills = _num(m.get("replay_fills"))
         quotes = _num(m.get("replay_quotes"))
@@ -720,6 +725,11 @@ def _execution_specialist(candidate: AlphaCandidate) -> AgentOpinion:
             delta -= 34
             vetoes.append("execution_replay_rejected")
             notes.append(f"execution replay rejected candidate: {replay_verdict}")
+    if condition_bucket:
+        notes.append(
+            "execution-condition miner bucket="
+            f"{condition_bucket}, action={m.get('execution_condition_action')}"
+        )
     if route == "CONTEXT_ONLY":
         delta -= 2
         vetoes.append("context_only_no_execution")
@@ -837,6 +847,7 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
         "l2_research_loop",
         "alpha_factory",
     }:
+        condition_action = str(candidate.metrics.get("execution_condition_action") or "")
         if veto_set & {
             "no_quote_after_event",
             "maker_fill_failed",
@@ -845,6 +856,10 @@ def _next_action(candidate: AlphaCandidate, vetoes: Iterable[str], priority: flo
             "execution_replay_failed",
             "no_executable_replay_sample",
         }:
+            if condition_action == "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS":
+                return "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS"
+            if condition_action == "RECORD_MORE_TICKS":
+                return "RECORD_MORE_TICKS"
             return "MINE_PRE_EVENT_EXECUTION_CONDITIONS"
         if "needs_more_replay_samples" in veto_set or "requires_more_replay_evidence" in veto_set:
             return "RECORD_MORE_TICKS"
@@ -957,6 +972,53 @@ def _apply_replay_labels(
 
 def _candidate_replay_index(payload: dict | None) -> dict[str, dict[str, Any]]:
     rows = (payload or {}).get("rows") or []
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_id = str(row.get("candidate_id") or "")
+        if not candidate_id:
+            continue
+        out[candidate_id] = row
+        source = str(row.get("source") or "")
+        if source == "event_leadlag_alpha":
+            out[f"event_leadlag|{candidate_id}"] = row
+    return out
+
+
+def _apply_execution_condition_labels(
+    candidates: list[AlphaCandidate],
+    payload: dict | None,
+) -> list[AlphaCandidate]:
+    conditions = _execution_condition_index(payload)
+    if not conditions:
+        return candidates
+    out: list[AlphaCandidate] = []
+    for candidate in candidates:
+        row = conditions.get(candidate.candidate_id)
+        if row is None and candidate.source == "event_leadlag_alpha":
+            raw_id = str(candidate.evidence.get("hypothesis_id") or "")
+            row = conditions.get(raw_id)
+        if row is None:
+            out.append(candidate)
+            continue
+        proposal = row.get("filter_proposal") if isinstance(row.get("filter_proposal"), dict) else {}
+        metrics = dict(candidate.metrics)
+        metrics.update({
+            "execution_condition_bucket": str(row.get("primary_bucket") or "UNKNOWN"),
+            "execution_condition_action": str(row.get("recommended_action") or "UNKNOWN"),
+            "execution_condition_confidence": _num(row.get("confidence")),
+            "execution_condition_rows": _num(row.get("rows")),
+            "execution_condition_filter": str(proposal.get("filter") or ""),
+        })
+        evidence = dict(candidate.evidence)
+        evidence["execution_condition"] = row
+        out.append(replace(candidate, metrics=metrics, evidence=evidence))
+    return out
+
+
+def _execution_condition_index(payload: dict | None) -> dict[str, dict[str, Any]]:
+    rows = (payload or {}).get("candidate_conditions") or []
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):

@@ -16,6 +16,9 @@ The workbench turns that answer into a restart-safe task:
 - `REFRESH_STALE_ARTIFACT` -> research producer refresh task
 - `SPLIT_REPLAY_BY_BTC_REGIME` -> replay split by Bitcoin network/mempool regime
 - `REFRESH_BITCOIN_NODE_HEALTH` -> refresh read-only BTC node/mempool context
+- `QUEUE_SHADOW_TRIAL_AFTER_REPLAY` -> governed shadow-manifest task after replay pass
+- `MINE_PRE_EVENT_EXECUTION_CONDITIONS` -> post-mortem task for replay failures
+- `RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS` -> fresh filtered replay task
 
 It writes:
 
@@ -60,7 +63,9 @@ Every task remains blocked by the explicit proof gate it needs next, such as
 `fresh_artifact_publish`. Bitcoin-regime context tasks are additionally blocked
 by `bitcoin_regime_artifact`, `per_regime_replay_report`, or
 `fresh_bitcoin_regime_artifact`; they are research context only, never trade
-permissions.
+permissions. Execution-condition tasks are blocked by
+`no_seen_window_promotion`; a filter mined from a failed replay can only create
+a fresh replay task, not a promotion.
 
 ## Run It
 

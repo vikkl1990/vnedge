@@ -91,6 +91,12 @@ def test_alpha_workbench_routes_execution_replay_followups(tmp_path):
             priority=35.0,
             vetoes=["maker_fill_failed", "execution_replay_failed"],
         ),
+        debate(
+            "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS",
+            "event_leadlag|XRP|binanceusdm->delta_india|15m",
+            priority=42.0,
+            vetoes=["maker_fill_failed", "execution_replay_failed"],
+        ),
     )
 
     report = run_alpha_workbench(tmp_path, store_dir=None, council_payload=payload)
@@ -111,6 +117,15 @@ def test_alpha_workbench_routes_execution_replay_followups(tmp_path):
     )
     assert "no_seen_window_promotion" in (
         by_action["MINE_PRE_EVENT_EXECUTION_CONDITIONS"]["blocked_by"]
+    )
+    assert by_action["RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS"]["task_type"] == (
+        "filtered_conservative_replay"
+    )
+    assert "fresh_replay_slice" in (
+        by_action["RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS"]["blocked_by"]
+    )
+    assert "no_seen_window_promotion" in (
+        by_action["RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS"]["blocked_by"]
     )
     assert report["policy"]["can_trade"] is False
 
