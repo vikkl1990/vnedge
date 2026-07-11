@@ -362,7 +362,8 @@ class _ActiveCascade:
     peak_notional: float
     last_significant_ms: int
     extreme_price: float
-    pre_vwap: float
+    pre_vwap: float | None
+    evaluable: bool = True   # False: tracked through exhaustion, never entered
 
 
 @dataclass
@@ -447,40 +448,50 @@ class CascadeReversionReplayer:
                 assert isinstance(ev, LiquidationEvent)
                 fired = detector.on_liquidation(ev)
                 if active is not None:
+                    # same cascade continuing — repeated fires are absorbed
                     self._feed_active(active, ev)
                     continue
                 if fired is not None:
+                    # a non-evaluable cascade is STILL tracked through
+                    # exhaustion, so counters count cascades, not prints
+                    evaluable = True
+                    pre_vwap: float | None = None
                     if open_eval is not None:
                         result.overlapping_cascades += 1
-                        continue
-                    result.cascades_detected += 1
-                    pre_vwap = self._pre_vwap(vwap_buf, fired.start_ms)
-                    if pre_vwap is None:
-                        result.skipped_no_pre_vwap += 1
-                        continue
+                        evaluable = False
+                    else:
+                        result.cascades_detected += 1
+                        pre_vwap = self._pre_vwap(vwap_buf, fired.start_ms)
+                        if pre_vwap is None:
+                            result.skipped_no_pre_vwap += 1
+                            evaluable = False
                     active = _ActiveCascade(
                         start=fired,
                         peak_notional=fired.peak_notional_usd,
                         last_significant_ms=ev.ts_ms,
                         extreme_price=fired.extreme_price,
                         pre_vwap=pre_vwap,
+                        evaluable=evaluable,
                     )
                 continue
 
             trade = obj
             assert isinstance(trade, TradePrint)
             last_trade = trade
+            entered_this_print = False
             if active is not None:
                 quiet = ts_ms - active.last_significant_ms
                 if quiet >= params.exhaustion_quiet_ms:
-                    open_eval = self._enter(active, trade, result)
+                    if active.evaluable and open_eval is None:
+                        open_eval = self._enter(active, trade, result)
+                        entered_this_print = open_eval is not None
                     active = None
                 else:
                     if active.start.side == "sell":
                         active.extreme_price = min(active.extreme_price, trade.price)
                     else:
                         active.extreme_price = max(active.extreme_price, trade.price)
-            elif open_eval is not None:
+            if open_eval is not None and not entered_this_print:
                 reason = self._exit_reason(open_eval, trade)
                 if reason is not None:
                     self._close(open_eval, trade, reason,
@@ -531,6 +542,7 @@ class CascadeReversionReplayer:
                result: CascadeDayResult) -> _OpenEvaluation | None:
         direction = _FLIP_ENTRY[active.start.side]
         target = active.pre_vwap
+        assert target is not None    # only evaluable cascades reach entry
         extreme = active.extreme_price
         buffer_ = self.params.stop_buffer_frac * abs(extreme - target)
         if direction == "buy":
