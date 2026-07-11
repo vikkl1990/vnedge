@@ -18,6 +18,7 @@ research artifacts in `research/live_research/`:
 - `bitcoin_regime_latest.json`
 - `candidate_replay_latest.json`
 - `execution_condition_latest.json`
+- `filtered_replay_latest.json`
 
 It extracts candidates, then runs five deterministic agents:
 
@@ -72,6 +73,7 @@ failure into a concrete next experiment:
 - replay passed -> `QUEUE_SHADOW_TRIAL_AFTER_REPLAY`
 - replay failed without condition report -> `MINE_PRE_EVENT_EXECUTION_CONDITIONS`
 - replay failed with a filter proposal -> `RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS`
+- filtered replay passed on a fresh slice -> `QUEUE_SHADOW_TRIAL_AFTER_REPLAY`
 
 ## What It Never Does
 

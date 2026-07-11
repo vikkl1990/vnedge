@@ -224,6 +224,24 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Fresh filtered replay for execution-condition hypotheses. It excludes
+  # already-seen candidate replay days by default, applies only causal/pre-entry
+  # filters, then reruns the same conservative replay engine. Research-only.
+  filtered-replay-executor:
+    build: .
+    restart: unless-stopped
+    depends_on: [execution-condition-miner]
+    command: ["python", "-m", "vnedge.research.filtered_replay_executor",
+              "--interval-seconds", "${FILTERED_REPLAY_INTERVAL_SECONDS:-1800}",
+              "--max-event-leadlag", "${FILTERED_REPLAY_MAX_EVENT_LEADLAG:-12}",
+              "--max-orderflow", "${FILTERED_REPLAY_MAX_ORDERFLOW:-60}"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Daily scalper miner: 4h/1h context, 15m setup, 1m trigger across all
   # configured exchanges/symbols/families. Slow cadence by design: it is
   # research-only and feeds the council/workbench, never execution.
@@ -293,7 +311,7 @@ services:
   alpha-council:
     build: .
     restart: unless-stopped
-    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, orderflow-footprint-miner, candidate-replay-executor, execution-condition-miner, bitcoin-regime-sensor]
+    depends_on: [daily-scalper-pack, alpha-distillation, event-leadlag-miner, orderflow-footprint-miner, candidate-replay-executor, execution-condition-miner, filtered-replay-executor, bitcoin-regime-sensor]
     command: ["python", "-m", "vnedge.research.alpha_council",
               "--interval-seconds", "${ALPHA_COUNCIL_INTERVAL_SECONDS:-900}",
               "--max-candidates", "${ALPHA_COUNCIL_MAX_CANDIDATES:-40}"]

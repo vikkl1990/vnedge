@@ -297,6 +297,97 @@ def test_alpha_council_routes_condition_mined_failure_to_filtered_replay(tmp_pat
     assert debate["can_trade"] is False
 
 
+<<<<<<< HEAD
+=======
+def test_alpha_council_routes_filtered_replay_pass_to_shadow_queue(tmp_path):
+    candidate_id = "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy"
+    write_json(
+        tmp_path / "orderflow_footprint_latest.json",
+        {
+            "candidates": [
+                {
+                    "candidate_id": candidate_id,
+                    "exchange": "delta_india",
+                    "symbol": "SOL/USD:USD",
+                    "day": "20260706",
+                    "family": "orderflow_footprint_v1",
+                    "side": "buy",
+                    "timeframe": "60s",
+                    "state": "ORDERFLOW_CANDIDATE",
+                    "route_decision": "REPLAY_REQUIRED",
+                    "samples": 42,
+                    "score": 91.0,
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "candidate_replay_latest.json",
+        {
+            "rows": [
+                {
+                    "candidate_id": candidate_id,
+                    "source": "orderflow_footprint",
+                    "verdict": "NO_FILLS",
+                    "quotes": 5,
+                    "fills": 0,
+                    "net_usd": 0.0,
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "execution_condition_latest.json",
+        {
+            "candidate_conditions": [
+                {
+                    "candidate_id": candidate_id,
+                    "source": "orderflow_footprint",
+                    "primary_bucket": "TOUCH_ONLY_QUEUE_RISK",
+                    "recommended_action": "RUN_FILTERED_REPLAY_FROM_EXECUTION_CONDITIONS",
+                    "confidence": 1.0,
+                    "rows": 5,
+                    "filter_proposal": {"filter": "require_pre_event_trade_through_proxy"},
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "filtered_replay_latest.json",
+        {
+            "rows": [
+                {
+                    "candidate_id": candidate_id,
+                    "source": "orderflow_footprint",
+                    "verdict": "REPLAY_CANDIDATE",
+                    "quotes": 12,
+                    "fills": 8,
+                    "fill_rate_pct": 66.7,
+                    "net_usd": 2.5,
+                    "avg_net_bps": 11.4,
+                    "profit_factor": 1.7,
+                    "filter_name": "require_pre_event_trade_through_proxy",
+                    "condition_bucket": "TOUCH_ONLY_QUEUE_RISK",
+                }
+            ],
+        },
+    )
+
+    payload = run_alpha_council(tmp_path)
+    debate = next(
+        row for row in payload["debates"]
+        if row["candidate"]["candidate_id"] == candidate_id
+    )
+
+    assert debate["candidate"]["metrics"]["filtered_replay_verdict"] == "REPLAY_CANDIDATE"
+    assert debate["next_action"] == "QUEUE_SHADOW_TRIAL_AFTER_REPLAY"
+    assert debate["council_verdict"] == "HIGH_PRIORITY_RESEARCH"
+    assert "requires_shadow_trial_after_replay" in debate["vetoes"]
+    assert "execution_replay_failed" not in debate["vetoes"]
+    assert debate["can_trade"] is False
+
+
+>>>>>>> a505c5ce25ea821870a15a6eb798a7fe329a9aca
 def test_alpha_council_replay_pass_queues_shadow_trial(tmp_path):
     candidate_id = "orderflow_footprint|delta_india|SOL/USD:USD|20260706|1000|buy"
     write_json(
