@@ -1,12 +1,15 @@
 """Dashboard — auth gates, snapshot schema, read-only surface."""
 
 import json
+import logging
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from vnedge.config.risk_config import RiskConfig
 from vnedge.dashboard.app import SnapshotProvider, create_app
+from vnedge.dashboard.auth import DashboardUser, TokenStore, parse_users_env
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
@@ -218,6 +221,169 @@ def test_snapshot_schema_from_wired_world(tmp_path):
     )
     assert snap2["risk_status"] == "kill_switch_active"
     assert snap2["kill_switch_active"] is True
+
+
+# ---------------------------------------------------------------------------
+# Per-user auth: token store, roles, expiry, back-compat (auth.py)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_users_env_roles_and_expiry():
+    users = parse_users_env(
+        "alice:tok-a:viewer;bob:tok-b:OPERATOR:2027-01-01T00:00:00+00:00"
+    )
+    assert [u.name for u in users] == ["alice", "bob"]
+    assert users[0].role == "viewer" and users[0].expires_at is None
+    assert users[1].role == "operator"  # role is case-insensitive
+    assert users[1].expires_at is not None
+    assert users[1].expires_at.tzinfo is not None
+    assert users[1].expires_at.year == 2027
+
+
+def test_parse_users_env_naive_expiry_assumed_utc():
+    (user,) = parse_users_env("carol:tok-c:viewer:2027-06-01T12:00:00")
+    assert user.expires_at == datetime(2027, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_parse_users_env_malformed_entries_skipped_loudly(caplog):
+    raw = (
+        "good:tok-good:viewer"          # valid
+        ";too-short"                    # < 3 fields
+        ";badrole:tok-role:admin"       # unknown role
+        ";:tok-empty:viewer"            # empty name
+        ";badexp:tok-exp:viewer:not-a-date"  # unparseable expiry
+        ";good:tok-dupe:operator"       # duplicate name
+        ";;"                            # blank entries ignored quietly
+    )
+    with caplog.at_level(logging.WARNING, logger="vnedge.dashboard.auth"):
+        users = parse_users_env(raw)
+    assert [u.name for u in users] == ["good"]
+    skipped = [r for r in caplog.records if "skipped" in r.getMessage()]
+    assert len(skipped) == 5  # every malformed entry is called out loudly
+    # Token values must never appear in logs.
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    for secret in ("tok-good", "tok-role", "tok-empty", "tok-exp", "tok-dupe"):
+        assert secret not in logged
+
+
+def test_token_store_from_env_back_compat_single_token():
+    store = TokenStore.from_env({"DASHBOARD_TOKEN": "legacy-secret"})
+    assert len(store) == 1
+    result = store.authenticate("legacy-secret")
+    assert result.authorized
+    assert result.name == "operator" and result.role == "operator"
+    assert result.expires_at is None
+    assert not store.authenticate("wrong").authorized
+
+
+def test_token_store_from_env_merges_users_and_legacy_token():
+    store = TokenStore.from_env({
+        "DASHBOARD_USERS": "alice:tok-a:viewer",
+        "DASHBOARD_TOKEN": "legacy-secret",
+    })
+    assert len(store) == 2
+    assert store.authenticate("tok-a").name == "alice"
+    assert store.authenticate("legacy-secret").name == "operator"
+
+
+def test_token_store_expired_token_rejected_with_reason(caplog):
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    store = TokenStore([DashboardUser("eve", "tok-e", "viewer", expires_at=past)])
+    with caplog.at_level(logging.WARNING, logger="vnedge.dashboard.auth"):
+        result = store.authenticate("tok-e")
+    assert not result.authorized
+    assert result.name == "eve"
+    assert "expired" in (result.reason or "")
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "eve" in logged and "tok-e" not in logged
+
+
+def test_token_store_future_expiry_still_valid():
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    store = TokenStore([DashboardUser("dan", "tok-d", "operator", expires_at=future)])
+    result = store.authenticate("tok-d")
+    assert result.authorized and result.name == "dan" and result.expires_at == future
+
+
+def test_token_store_auth_events_logged_without_tokens(caplog):
+    store = TokenStore([DashboardUser("alice", "tok-a", "viewer")])
+    with caplog.at_level(logging.INFO, logger="vnedge.dashboard.auth"):
+        assert store.authenticate("tok-a").authorized
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "alice" in logged and "viewer" in logged and "tok-a" not in logged
+
+
+# ---------------------------------------------------------------------------
+# Per-user auth wired into the app: identity header, expiry, WS
+# ---------------------------------------------------------------------------
+
+
+def _multi_user_client() -> TestClient:
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    store = TokenStore([
+        DashboardUser("alice", "tok-alice", "viewer"),
+        DashboardUser("bob", "tok-bob", "operator"),
+        DashboardUser(
+            "expired-carl", "tok-carl", "viewer",
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        ),
+    ])
+    return TestClient(create_app(provider, token_store=store))
+
+
+def test_multi_user_tokens_accepted_with_identity_header():
+    client = _multi_user_client()
+    r = client.get("/state", headers={"Authorization": "Bearer tok-alice"})
+    assert r.status_code == 200
+    assert r.headers["X-Dashboard-User"] == "alice"
+    r2 = client.get("/state?token=tok-bob")
+    assert r2.status_code == 200
+    assert r2.headers["X-Dashboard-User"] == "bob"
+
+
+def test_multi_user_wrong_token_rejected():
+    client = _multi_user_client()
+    r = client.get("/state?token=not-a-token")
+    assert r.status_code == 401
+    assert r.json()["detail"] == "missing or invalid token"
+    assert "X-Dashboard-User" not in r.headers
+
+
+def test_expired_token_rejected_with_clear_reason_over_http():
+    client = _multi_user_client()
+    r = client.get("/state?token=tok-carl")
+    assert r.status_code == 401
+    assert "expired" in r.json()["detail"]
+
+
+def test_identity_header_on_all_data_routes():
+    client = _multi_user_client()
+    for path in ("/state", "/history", "/research", "/alpha-council", "/alpha-workbench"):
+        r = client.get(f"{path}?token=tok-alice")
+        assert r.status_code in (200, 503), path
+        assert r.headers["X-Dashboard-User"] == "alice", path
+
+
+def test_back_compat_shared_token_is_operator_identity(client):
+    r = client.get("/state?token=t3st-token")
+    assert r.status_code == 200
+    assert r.headers["X-Dashboard-User"] == "operator"
+
+
+def test_websocket_multi_user_snapshot_carries_connection_count():
+    client = _multi_user_client()
+    with client.websocket_connect("/ws?token=tok-alice") as ws:
+        payload = ws.receive_json()
+        assert payload["equity"] == 500.0
+        assert payload["dashboard_connections"] == 1
+
+
+def test_websocket_expired_token_rejected():
+    client = _multi_user_client()
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?token=tok-carl") as ws:
+            ws.receive_json()
 
 
 def test_snapshot_marks_restored_position_at_entry_without_quote(tmp_path):
