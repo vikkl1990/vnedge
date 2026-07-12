@@ -66,6 +66,14 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "Alpha Council &amp; Proof Queue" in html
     assert "Persistent Proof Queue" in html
     assert "LIVE ARMED" in html
+    assert "Live Readiness Ladder" in html
+    assert 'id="rd_state"' in html
+    assert 'id="rd_capital"' in html
+    assert 'id="rd_data"' in html
+    assert 'id="rd_execution"' in html
+    assert 'id="rd_research"' in html
+    assert 'id="rd_cost"' in html
+    assert 'id="rd_governance"' in html
 
 
 def test_dashboard_shell_preserves_operator_instruments(client):
