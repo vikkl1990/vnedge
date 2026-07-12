@@ -2288,6 +2288,26 @@
       </div>
     </section>
 
+    <section id="realtimeScannerBoard" aria-label="real-time scanner">
+      <h2>Real-Time Scanner <span class="tag" id="rt_policy">live journals only; not replay</span></h2>
+      <div class="mini-grid" aria-label="real-time scanner summary">
+        <div class="mini-card good"><div class="small-label">Firing Now</div><div class="big" id="rt_firing">--</div><div class="tiny">shadow / paper signals</div></div>
+        <div class="mini-card warn"><div class="small-label">Near Trigger</div><div class="big" id="rt_near">--</div><div class="tiny">&gt;= 90% pressure</div></div>
+        <div class="mini-card"><div class="small-label">Waiting</div><div class="big" id="rt_waiting">--</div><div class="tiny">below thresholds</div></div>
+        <div class="mini-card"><div class="small-label">Rows</div><div class="big" id="rt_rows">--</div><div class="tiny" id="rt_age">scanner age --</div></div>
+      </div>
+      <div class="empty" id="rt_answer">real-time scanner has not published yet</div>
+      <div class="table-wrap">
+      <table id="rtScanner">
+        <thead><tr>
+          <th>State</th><th>Lane</th><th>Venue</th><th>Symbol</th><th>Strategy</th><th>Why / Pressure</th><th>Live Evals</th><th>Signals</th>
+        </tr></thead>
+        <tbody id="rtScannerBody"></tbody>
+      </table>
+      </div>
+      <div class="empty" id="rtScannerEmpty">live scanner is waiting for lane journals</div>
+    </section>
+
     <section aria-label="signal funnel and trade journal">
       <h2>Signal Pressure &amp; Trade Journal <span class="tag">scanner-style hot/cold pressure, approval quality, and chronological execution narrative</span></h2>
       <div class="funnel-deck" aria-label="signal pressure summary">
@@ -2818,6 +2838,7 @@
   let lastResearch={results:[],drift_alerts:[]};
   let lastCouncil={summary:{},debates:[]};
   let lastWorkbench={summary:{},tasks:[]};
+  let lastRealtimeScanner={summary:{},rows:[]};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
 
@@ -4796,6 +4817,64 @@
     $("workbench_empty").style.display=tasks.length?"none":"block";
   }
 
+  function scannerTone(state){
+    const s=String(state||"");
+    if(s==="FIRING")return "good";
+    if(s==="NEAR_TRIGGER")return "warn";
+    if(s==="STALE")return "bad";
+    if(s==="WARMING")return "info";
+    return "idle";
+  }
+
+  function scannerPressure(row){
+    const prox=Array.isArray(row&&row.proximity)?row.proximity:[];
+    if(!prox.length)return "";
+    const best=prox.slice().sort((a,b)=>num(b.ratio)-num(a.ratio))[0];
+    if(!best)return "";
+    return String(best.name||"pressure")+" "+(num(best.ratio)*100).toFixed(0)+"%";
+  }
+
+  function renderRealtimeScanner(payload){
+    const d=payload||{summary:{},rows:[]};
+    lastRealtimeScanner=d;
+    const s=d.summary||{};
+    const rows=Array.isArray(d.rows)?d.rows:[];
+    text("rt_firing",num(s.firing));
+    text("rt_near",num(s.near_trigger));
+    text("rt_waiting",num(s.waiting));
+    text("rt_rows",num(s.total_rows));
+    text("rt_age",d.generated_at?timeAgoFromIso(d.generated_at):"scanner age --");
+    text("rt_answer",d.operator_answer||"real-time scanner has not published yet");
+    text("rt_policy",
+      d.mode==="live_observation_not_replay"
+        ?"live journals only; not replay"
+        :"scanner policy unknown -- do not promote");
+    const body=$("rtScannerBody");
+    if(body){
+      body.replaceChildren();
+      rows.slice(0,18).forEach(row=>{
+        const tr=body.insertRow();
+        const stateCell=tr.insertCell();
+        appendBadge(stateCell,String(row.state||"WAITING").replaceAll("_"," "),scannerTone(row.state));
+        appendCell(tr,row.lane_id||"--","mono clip",row.journal||"");
+        appendCell(tr,String(row.exchange||"--").replace("usdm",""));
+        appendCell(tr,String(row.symbol||"--").split(":")[0]);
+        appendCell(tr,shortName(row.strategy_id||row.runner_id||"--"),"clip");
+        const pressure=scannerPressure(row);
+        appendCell(tr,[row.why,pressure].filter(Boolean).join(" / "),"clip",row.why||"");
+        const f=row.funnel||{};
+        appendCell(tr,num(f.live_evals||f.evals).toLocaleString());
+        appendCell(tr,num(f.live_signals||f.signals).toLocaleString(),
+          num(f.live_signals||f.signals)>0?"pos":"");
+      });
+    }
+    const has=rows.length>0;
+    const table=$("rtScanner");
+    if(table)table.style.display=has?"table":"none";
+    const empty=$("rtScannerEmpty");
+    if(empty)empty.style.display=has?"none":"block";
+  }
+
   function loadResearch(){
     fetchJSON("/research").then(renderResearch).catch(()=>{});
   }
@@ -4804,6 +4883,10 @@
     Promise.all([fetchJSON("/alpha-council"),fetchJSON("/alpha-workbench")])
       .then(([c,w])=>renderCouncil(c,w))
       .catch(()=>{});
+  }
+
+  function loadRealtimeScanner(){
+    fetchJSON("/realtime-scanner").then(renderRealtimeScanner).catch(()=>{});
   }
 
   const AGENT_ACTION_LABEL={
@@ -4899,9 +4982,11 @@
 
   loadResearch();
   loadCouncil();
+  loadRealtimeScanner();
   loadIncidents();
   setInterval(loadResearch,60000);
   setInterval(loadCouncil,60000);
+  setInterval(loadRealtimeScanner,30000);
   setInterval(loadIncidents,60000);
 
   let backoff=500;

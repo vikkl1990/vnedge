@@ -265,6 +265,22 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Live scanner: answers "what is firing now / near trigger / waiting why?"
+  # from current runtime journals only. It deliberately does NOT read replay
+  # artifacts, and it cannot trade or promote.
+  realtime-scanner:
+    build: .
+    restart: unless-stopped
+    depends_on: [multi-lane-shadow, event-leadlag-shadow]
+    command: ["python", "-m", "vnedge.research.realtime_scanner",
+              "--interval-seconds", "${REALTIME_SCANNER_INTERVAL_SECONDS:-60}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Daily scalper miner: 4h/1h context, 15m setup, 1m trigger across all
   # configured exchanges/symbols/families. Slow cadence by design: it is
   # research-only and feeds the council/workbench, never execution.

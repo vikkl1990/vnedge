@@ -298,6 +298,7 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
             research_path=Path("research/live_research/latest.json"),
             alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
             alpha_workbench_path=Path("research/live_research/alpha_workbench_latest.json"),
+            realtime_scanner_path=Path("research/live_research/realtime_scanner_latest.json"),
             alerts_path=Path("logs/alerts.jsonl"),
             journal_dir=Path("logs/paper_trials"),
         )
