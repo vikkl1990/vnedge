@@ -215,6 +215,7 @@ def create_app(
     journal_dir: Path | None = None,
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
+    realtime_scanner_path: Path | None = None,
     token_store: TokenStore | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
@@ -483,6 +484,29 @@ def create_app(
                     "summary": {},
                     "rows": [],
                     "operator_answer": "lane readiness report unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/realtime-scanner")
+    async def realtime_scanner(request: Request) -> JSONResponse:
+        """Latest live scanner pressure report.
+
+        This is intentionally separate from replay/candidate-replay reports:
+        it reads current runtime journals only and cannot trade or promote.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                realtime_scanner_path,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "real-time scanner report unavailable",
+                    "mode": "live_observation_not_replay",
                     "can_trade": False,
                     "can_promote": False,
                 },

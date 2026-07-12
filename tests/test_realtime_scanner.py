@@ -1,0 +1,174 @@
+import json
+from datetime import UTC, datetime, timedelta
+
+from vnedge.research.realtime_scanner import (
+    STATE_FIRING,
+    STATE_NEAR_TRIGGER,
+    STATE_WAITING,
+    RealtimeScannerConfig,
+    build_realtime_scanner,
+    publish_realtime_scanner,
+)
+
+
+NOW = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
+
+
+def write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, default=str) + "\n")
+
+
+def record(kind, payload, minutes_ago=1):
+    return {
+        "ts": (NOW - timedelta(minutes=minutes_ago)).isoformat(),
+        "kind": kind,
+        "payload": payload,
+    }
+
+
+def lane_eval(*, fired=False, funding=0.62, z=0.4):
+    return {
+        "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+        "strategy_id": "funding_mean_reversion",
+        "symbol": "BTC/USDT:USDT",
+        "mode": "shadow",
+        "fired": fired,
+        "signal_reason": "funding stretched" if fired else None,
+        "skip_reason": None,
+        "features": {"funding_pct": funding, "close_z": z},
+        "thresholds": {"extreme_pct": 0.85, "z_entry": 1.5},
+        "backfill": False,
+    }
+
+
+def test_runtime_lane_waiting_with_threshold_gap(tmp_path):
+    journal = tmp_path / "logs" / "funding_mr_binanceusdm_btc_shadow.journal.jsonl"
+    write_jsonl(journal, [record("lane_eval", lane_eval(funding=0.62, z=-0.4))])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    assert payload["mode"] == "live_observation_not_replay"
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert payload["summary"]["waiting"] == 1
+    row = payload["rows"][0]
+    assert row["state"] == STATE_WAITING
+    assert row["exchange"] == "binanceusdm"
+    assert "funding" in row["why"]
+    assert row["proximity"][0]["name"] == "funding"
+    assert row["requires_replay_for_promotion"] is True
+
+
+def test_runtime_lane_near_trigger(tmp_path):
+    journal = tmp_path / "logs" / "funding_mr_bybit_btc_shadow.journal.jsonl"
+    write_jsonl(journal, [record("lane_eval", lane_eval(funding=0.82, z=0.2))])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        config=RealtimeScannerConfig(near_trigger_ratio=0.90),
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["state"] == STATE_NEAR_TRIGGER
+    assert payload["summary"]["near_trigger"] == 1
+    assert "96%" in row["why"]
+
+
+def test_runtime_lane_firing_counts_shadow_intent(tmp_path):
+    journal = tmp_path / "logs" / "funding_mr_delta_india_btc_shadow.journal.jsonl"
+    write_jsonl(
+        journal,
+        [
+            record("lane_eval", lane_eval(fired=True, funding=0.91, z=0.1)),
+            record(
+                "shadow_intent",
+                {
+                    "intent_key": "k1",
+                    "approved": True,
+                    "intent": {
+                        "exchange": "delta_india",
+                        "symbol": "BTC/USD:USD",
+                        "side": "long",
+                        "notional_usd": 500.0,
+                        "strategy_id": "funding_mean_reversion",
+                    },
+                    "signal_reason": "funding stretched",
+                },
+            ),
+        ],
+    )
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["state"] == STATE_FIRING
+    assert row["funnel"]["live_signals"] == 1
+    assert row["funnel"]["shadow_intents"] == 1
+    assert row["latest_shadow_intent"]["approved"] is True
+    assert payload["summary"]["firing"] == 1
+
+
+def test_event_leadlag_shadow_artifact_is_live_scanner_row(tmp_path):
+    research = tmp_path / "research"
+    research.mkdir()
+    (research / "event_leadlag_shadow_latest.json").write_text(json.dumps({
+        "generated_at": NOW.isoformat(),
+        "evaluations": [{
+            "runner_id": "event_leadlag_shadow_runner",
+            "spec_id": "sol_binance_to_delta_long",
+            "leader_exchange": "binanceusdm",
+            "leader_symbol": "SOL/USDT:USDT",
+            "follower_exchange": "delta_india",
+            "follower_symbol": "SOL/USD:USD",
+            "fired": False,
+            "state": "NO_TRADE",
+            "why_no_trade": ["leader_move_below: 3bps < 20bps"],
+            "metrics": {
+                "signed_leader_bps": 3.0,
+                "signed_leader_z": 0.5,
+                "leader_volume_z": 0.7,
+                "filter": {
+                    "min_abs_leader_bps": 20.0,
+                    "min_abs_leader_z": 1.0,
+                    "min_volume_z": 1.0,
+                },
+            },
+        }],
+    }))
+
+    payload = build_realtime_scanner(
+        research_dir=research,
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["row_type"] == "event_leadlag_shadow"
+    assert row["state"] == STATE_WAITING
+    assert row["exchange"] == "delta_india"
+    assert "leader_move_below" in row["why"]
+    assert payload["summary"]["event_lanes"] == 1
+
+
+def test_publish_realtime_scanner_atomic(tmp_path):
+    payload = {"summary": {"total_rows": 0}, "can_trade": False, "can_promote": False}
+    out = tmp_path / "research" / "realtime_scanner_latest.json"
+    feed = tmp_path / "research" / "realtime_scanner_feed.jsonl"
+
+    publish_realtime_scanner(payload, out, feed)
+
+    assert json.loads(out.read_text())["can_trade"] is False
+    assert json.loads(feed.read_text().splitlines()[0])["can_promote"] is False

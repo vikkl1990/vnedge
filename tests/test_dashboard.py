@@ -58,6 +58,7 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "Maker fee wall" in html
     assert "Route Radar" in html
     assert "Signal Pressure" in html
+    assert "Real-Time Scanner" in html
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html
@@ -85,6 +86,8 @@ def test_dashboard_shell_preserves_operator_instruments(client):
     assert "What changed" in html
     assert 'id="funnelBody"' in html
     assert 'id="tradeJournalBody"' in html
+    assert 'id="rtScannerBody"' in html
+    assert "/realtime-scanner" in html
     assert 'id="mode"' in html and 'id="symbol"' in html and 'id="strategy"' in html
     assert 'id="risk"' in html and 'id="kill"' in html and 'id="conn"' in html
     assert 'id="connectionsBoard"' in html
@@ -159,6 +162,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     council = tmp_path / "alpha_council_latest.json"
     workbench = tmp_path / "alpha_workbench_latest.json"
     readiness = tmp_path / "lane_promotion_readiness_latest.json"
+    scanner = tmp_path / "realtime_scanner_latest.json"
     council.write_text(json.dumps({
         "summary": {"debated": 2},
         "debates": [{"next_action": "RUN_CONSERVATIVE_L2_REPLAY"}],
@@ -177,6 +181,13 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    scanner.write_text(json.dumps({
+        "mode": "live_observation_not_replay",
+        "summary": {"near_trigger": 1},
+        "rows": [{"state": "NEAR_TRIGGER"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -185,16 +196,22 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         alpha_council_path=council,
         alpha_workbench_path=workbench,
         lane_readiness_path=readiness,
+        realtime_scanner_path=scanner,
     ))
 
     assert client.get("/alpha-council").status_code == 401
     assert client.get("/alpha-workbench").status_code == 401
     assert client.get("/lane-readiness").status_code == 401
+    assert client.get("/realtime-scanner").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     lane_payload = client.get("/lane-readiness?token=t3st-token").json()
     assert lane_payload["summary"]["paper_review_ready"] == 1
     assert lane_payload["can_promote"] is False
+    scanner_payload = client.get("/realtime-scanner?token=t3st-token").json()
+    assert scanner_payload["summary"]["near_trigger"] == 1
+    assert scanner_payload["mode"] == "live_observation_not_replay"
+    assert scanner_payload["can_trade"] is False
 
 
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
@@ -206,17 +223,27 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         alpha_council_path=tmp_path / "missing_council.json",
         alpha_workbench_path=tmp_path / "missing_workbench.json",
         lane_readiness_path=tmp_path / "missing_readiness.json",
+        realtime_scanner_path=tmp_path / "missing_scanner.json",
     ))
 
     council = client.get("/alpha-council?token=t3st-token").json()
     workbench = client.get("/alpha-workbench?token=t3st-token").json()
     readiness = client.get("/lane-readiness?token=t3st-token").json()
+    scanner = client.get("/realtime-scanner?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
     assert readiness == {
         "summary": {},
         "rows": [],
         "operator_answer": "lane readiness report unavailable",
+        "can_trade": False,
+        "can_promote": False,
+    }
+    assert scanner == {
+        "summary": {},
+        "rows": [],
+        "operator_answer": "real-time scanner report unavailable",
+        "mode": "live_observation_not_replay",
         "can_trade": False,
         "can_promote": False,
     }
@@ -631,7 +658,15 @@ def test_expired_token_rejected_with_clear_reason_over_http():
 
 def test_identity_header_on_all_data_routes():
     client = _multi_user_client()
-    for path in ("/state", "/history", "/research", "/alpha-council", "/alpha-workbench"):
+    for path in (
+        "/state",
+        "/history",
+        "/research",
+        "/alpha-council",
+        "/alpha-workbench",
+        "/lane-readiness",
+        "/realtime-scanner",
+    ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path
         assert r.headers["X-Dashboard-User"] == "alice", path
