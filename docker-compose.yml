@@ -281,6 +281,34 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Real-time shadow scalp: drives the cascade + lead-lag echo detectors on the
+  # LIVE tick stream (Binance USDM trades + liquidations, Delta native L2), firing
+  # shadow intents the instant a setup forms and resolving them into virtual PnL.
+  # Fast live track record + maker-vs-taker split at the scalp's native timescale.
+  # STRICTLY SHADOW: public streams only, NO credentials, NO order path, NO
+  # gateway; can_trade=false/can_promote=false on every payload. A feed drop
+  # reconnects with backoff; it never trades. Promotion still requires the
+  # replay families' pre-registered judgment + human approval.
+  realtime-shadow-scalp:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.runtime.realtime_shadow_scalp",
+              "--publish-interval-seconds", "${SCALP_PUBLISH_INTERVAL_SECONDS:-30}"]
+    environment:
+      SCALP_CASCADE_VENUE: "${SCALP_CASCADE_VENUE:-binanceusdm}"
+      SCALP_CASCADE_SYMBOLS: "${SCALP_CASCADE_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
+      # Lead-lag echo pairs by base (default: all configured Binance->Delta pairs)
+      SCALP_ECHO_PAIRS: "${SCALP_ECHO_PAIRS:-}"
+      SCALP_NOTIONAL_USD: "${SCALP_NOTIONAL_USD:-100}"
+    volumes:
+      # writable: it owns its scalp_shadow journals and publishes the artifact.
+      # NO credentials mounted — public websocket streams only.
+      - ./logs:/app/logs
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
   # Daily scalper miner: 4h/1h context, 15m setup, 1m trigger across all
   # configured exchanges/symbols/families. Slow cadence by design: it is
   # research-only and feeds the council/workbench, never execution.
