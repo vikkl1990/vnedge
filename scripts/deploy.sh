@@ -72,8 +72,17 @@ for _ in $(seq 1 60); do
     sleep 5
 done
 if [ "$LANES_OK" != 1 ]; then
-    echo "lanes did not report running within 5 minutes — investigate" >&2
-    exit 1
+    # No FRESH "lanes running" line. If we didn't rebuild, nothing was
+    # recreated, so the absence just means the already-running lanes weren't
+    # restarted — confirm they're still up rather than false-failing.
+    if [ "$NEED_BUILD" = 0 ] \
+        && docker inspect --format '{{.State.Running}}' \
+            "$(docker compose ps -q multi-lane-shadow)" 2>/dev/null | grep -q true; then
+        echo "no rebuild; existing lanes still running (not restarted)"
+    else
+        echo "lanes did not report running within 5 minutes — investigate" >&2
+        exit 1
+    fi
 fi
 
 # Freshness assertion: if we built, the running container MUST have been
