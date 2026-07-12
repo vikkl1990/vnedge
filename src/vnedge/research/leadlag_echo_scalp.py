@@ -585,8 +585,7 @@ class EchoScalpReplayer:
             result.unresolved_at_end += 1
             if book is not None:
                 self._force_close(scalp, book)
-            if scalp.maker.state == "missed":
-                result.maker_missed += 1
+            # _emit is the single place maker_missed is counted (see below)
             self._emit(scalp, result, base=base, leader_exchange=leader_exchange,
                        follower_exchange=follower_exchange,
                        follower_symbol=follower_symbol, day=day)
