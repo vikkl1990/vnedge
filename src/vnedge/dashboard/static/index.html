@@ -335,6 +335,89 @@
   }
   .workspace-tabs a.active,.workspace-tabs a:hover{color:var(--text);border-color:rgba(77,178,255,.52);background:rgba(77,178,255,.08)}
 
+  .readiness-ribbon{
+    margin-bottom:8px;
+    border-color:rgba(77,178,255,.34);
+    background:linear-gradient(180deg, rgba(9,15,24,.98), rgba(6,11,18,.98));
+  }
+  .readiness-head{
+    display:grid;
+    grid-template-columns:minmax(190px,.7fr) minmax(0,1fr);
+    gap:10px;
+    align-items:center;
+    padding:9px 11px;
+    border-bottom:1px solid var(--line);
+  }
+  .readiness-state{
+    font-family:var(--mono);
+    font-size:21px;
+    font-weight:920;
+    letter-spacing:.07em;
+    line-height:1;
+    text-transform:uppercase;
+  }
+  .readiness-detail{
+    min-width:0;
+    color:var(--muted);
+    font-size:11px;
+    line-height:1.35;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .readiness-grid{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:5px;
+    padding:8px 10px 10px;
+  }
+  .readiness-cell{
+    min-width:0;
+    border:1px solid rgba(58,78,107,.62);
+    border-radius:var(--radius);
+    background:rgba(5,10,17,.9);
+    padding:7px 8px;
+  }
+  .readiness-cell.good{border-color:rgba(51,209,122,.42);background:rgba(9,30,22,.72)}
+  .readiness-cell.warn{border-color:rgba(255,184,77,.46);background:rgba(35,25,10,.72)}
+  .readiness-cell.bad{border-color:rgba(255,90,104,.5);background:rgba(37,13,18,.72)}
+  .readiness-cell.info{border-color:rgba(77,178,255,.42);background:rgba(9,24,40,.72)}
+  .readiness-cell.idle{border-color:rgba(79,97,121,.55);background:rgba(8,13,21,.72)}
+  .rd-label{
+    color:var(--quiet);
+    font-size:8.8px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .rd-value{
+    margin-top:5px;
+    font-family:var(--mono);
+    font-size:14px;
+    font-weight:900;
+    line-height:1.12;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .readiness-cell.good .rd-value{color:var(--green)}
+  .readiness-cell.warn .rd-value{color:var(--amber)}
+  .readiness-cell.bad .rd-value{color:var(--red)}
+  .readiness-cell.info .rd-value{color:var(--blue)}
+  .readiness-cell.idle .rd-value{color:var(--quiet)}
+  .rd-detail{
+    margin-top:4px;
+    color:var(--muted);
+    font-size:9.5px;
+    line-height:1.25;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+
   section,.panel,.loop-board{
     border:1px solid var(--line);
     border-radius:var(--radius);
@@ -1344,6 +1427,7 @@
     .workspace-tabs{justify-content:flex-start}
     .market-tape{grid-template-columns:auto 1fr}
     .price-symbol{text-align:left}
+    .readiness-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .command-strip{position:static;grid-template-columns:repeat(3,minmax(0,1fr))}
     .quant-grid{grid-template-columns:1fr}
     .quant-panel{border-right:none;border-top:1px solid rgba(58,78,107,.44)}
@@ -1361,6 +1445,8 @@
     body{padding:10px;font-size:12px}
     .brand-name{font-size:18px}
     .brand-sub{display:none}
+    .readiness-head{grid-template-columns:1fr}
+    .readiness-grid{grid-template-columns:1fr}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
     .quant-deck h2{align-items:flex-start}
     .deck-title{width:100%}
@@ -1901,6 +1987,9 @@
     .command-strip{
       position:static;
     }
+    .readiness-grid{
+      grid-template-columns:repeat(3,minmax(0,1fr));
+    }
     .quant-grid{
       grid-template-columns:repeat(2,minmax(0,1fr));
     }
@@ -1912,6 +2001,8 @@
     body{padding:8px}
     .market-tape{grid-template-columns:1fr}
     .tape-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .readiness-head{grid-template-columns:1fr}
+    .readiness-grid{grid-template-columns:1fr}
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
     .quant-grid{grid-template-columns:1fr}
     .operator-head{grid-template-columns:1fr}
@@ -2005,6 +2096,24 @@
             <a href="#architectureMap">System</a>
           </nav>
         </div>
+
+    <section class="readiness-ribbon" id="readinessRibbon" aria-label="live readiness ladder">
+      <div class="readiness-head">
+        <div>
+          <div class="eyebrow">Live Readiness Ladder</div>
+          <div class="readiness-state value idle" id="rd_state">WAITING</div>
+        </div>
+        <div class="readiness-detail" id="rd_detail">awaiting coalesced risk, data, execution, research, cost, and governance state</div>
+      </div>
+      <div class="readiness-grid">
+        <div class="readiness-cell idle" id="rd_capital"><div class="rd-label">Capital</div><div class="rd-value" id="rd_capital_value">--</div><div class="rd-detail" id="rd_capital_detail">daily stop pending</div></div>
+        <div class="readiness-cell idle" id="rd_data"><div class="rd-label">Data</div><div class="rd-value" id="rd_data_value">--</div><div class="rd-detail" id="rd_data_detail">public/private freshness</div></div>
+        <div class="readiness-cell idle" id="rd_execution"><div class="rd-label">Execution</div><div class="rd-value" id="rd_execution_value">--</div><div class="rd-detail" id="rd_execution_detail">orders and reconciliation</div></div>
+        <div class="readiness-cell idle" id="rd_research"><div class="rd-label">Research</div><div class="rd-value" id="rd_research_value">--</div><div class="rd-detail" id="rd_research_detail">promotion gates</div></div>
+        <div class="readiness-cell idle" id="rd_cost"><div class="rd-label">Cost Wall</div><div class="rd-value" id="rd_cost_value">--</div><div class="rd-detail" id="rd_cost_detail">spread, fees, slippage</div></div>
+        <div class="readiness-cell idle" id="rd_governance"><div class="rd-label">Governance</div><div class="rd-value" id="rd_governance_value">--</div><div class="rd-detail" id="rd_governance_detail">human-gated promotion</div></div>
+      </div>
+    </section>
 
     <div class="command-strip" aria-label="operator gates">
       <div class="gate"><div class="label">Mode ladder</div><div class="value idle" id="gateMode">--</div><div class="detail" id="gateModeDetail">waiting</div></div>
@@ -2710,6 +2819,7 @@
   let lastCouncil={summary:{},debates:[]};
   let lastWorkbench={summary:{},tasks:[]};
   let lastSnapshot=null;
+  let lastOperatorCtx=null;
 
   function finite(v){return Number.isFinite(Number(v));}
   function num(v,def=0){return finite(v)?Number(v):def;}
@@ -2934,6 +3044,84 @@
     if(cell)cell.className="action-cell "+(tone||"idle");
     text("act_"+id+"_state",state);
     text("act_"+id+"_why",why);
+  }
+  function setReadinessCell(id,value,detail,tone){
+    const cell=$("rd_"+id);
+    if(cell)cell.className="readiness-cell "+(tone||"idle");
+    text("rd_"+id+"_value",value);
+    text("rd_"+id+"_detail",detail);
+  }
+
+  function renderReadiness(ctx){
+    if(!ctx)return;
+    const {
+      s, feed, lat, feedTone, riskTone, journalTone, liveTone, dd,
+      exposure, unresolved, dailyStop, dailyLeft, entriesAllowed, orders, price
+    }=ctx;
+    const rows=Array.isArray(lastResearch.results)?lastResearch.results:[];
+    const passRows=rows.filter(r=>r.verdict==="PASS");
+    const generatedAt=lastResearch.generated_at||"";
+    const researchAgeMs=Date.parse(generatedAt);
+    const researchFresh=Number.isFinite(researchAgeMs)&&Date.now()-researchAgeMs<90*60*1000;
+    const feePct=num(s.equity)>0?num(s.fees_usd)/num(s.equity)*100:0;
+    const spread=price&&finite(price.spread_bps)?num(price.spread_bps):null;
+
+    const capitalTone=dd>6||(dailyLeft!=null&&dailyLeft<=0)?"bad":dailyLeft==null||dailyLeft<=Math.max(1,num(dailyStop)*0.25)||dd>3?"warn":"good";
+    setReadinessCell("capital",
+      dailyLeft==null?"NO STOP":moneyAbs(Math.max(0,dailyLeft)),
+      dailyLeft==null?"daily stop absent from snapshot":"daily PnL "+usd(s.daily_pnl)+" / DD "+dd.toFixed(2)+"%",
+      capitalTone);
+
+    const dataProblems=[];
+    if(feedTone==="bad")dataProblems.push("public stale");
+    if(feed.candles&&feed.candles!=="ok")dataProblems.push("candles "+feed.candles);
+    if(feed.funding&&feed.funding!=="ok")dataProblems.push("funding "+feed.funding);
+    if(feed.open_interest&&feed.open_interest!=="ok")dataProblems.push("OI "+feed.open_interest);
+    const dataTone=dataProblems.length?"bad":feedTone==="warn"?"warn":"good";
+    setReadinessCell("data",
+      dataTone==="good"?"FRESH":dataTone==="warn"?"WATCH":"STALE",
+      dataProblems[0]||("pub "+ageText(lat)+"; priv "+(s.live_trading_enabled?"verify":"n/a")),
+      dataTone);
+
+    const executionTone=unresolved?"bad":orders.length?"warn":"good";
+    setReadinessCell("execution",
+      unresolved?"FAIL CLOSED":orders.length+" WORKING",
+      unresolved?unresolved+" unresolved order(s)":orders.length?"venue state age visible":"state machine idle",
+      executionTone);
+
+    const researchTone=passRows.length?"warn":rows.length?(researchFresh?"info":"warn"):"idle";
+    setReadinessCell("research",
+      passRows.length?"HUMAN GATE":rows.length?"SCANNING":"WAITING",
+      passRows.length?passRows.length+" PASS candidate(s); untouched/paper approval required":
+        rows.length?(rows.length+" rows; latest "+(generatedAt?timeAgoFromIso(generatedAt):"--")):"no published research payload",
+      researchTone);
+
+    const costTone=spread!=null&&spread>8?"bad":feePct>2||(spread!=null&&spread>3)?"warn":"good";
+    setReadinessCell("cost",
+      spread==null?"UNKNOWN":spread>8?"WIDE":spread>3?"MAKER ONLY":"OK",
+      (spread==null?"spr --":"spr "+num(spread).toFixed(2)+"bps")+"; fee "+feePct.toFixed(2)+"%",
+      costTone);
+
+    const governanceTone=s.kill_switch_active||journalTone==="bad"?"bad":s.live_trading_enabled?"warn":"good";
+    setReadinessCell("governance",
+      s.kill_switch_active?"KILL":s.live_trading_enabled?"LIVE ARMED":"READ ONLY",
+      s.kill_switch_active?"reduce-only exits":s.live_trading_enabled?"confirm venue, size, checklist":"no dashboard control route",
+      governanceTone);
+
+    const cells=[
+      ["capital",capitalTone],["data",dataTone],["execution",executionTone],
+      ["research",researchTone],["cost",costTone],["governance",governanceTone],
+      ["risk",riskTone],["journal",journalTone]
+    ];
+    const blockers=cells.filter(([,tone])=>tone==="bad").map(([name])=>name);
+    const warnings=cells.filter(([,tone])=>tone==="warn").map(([name])=>name);
+    const state=blockers.length?"BLOCKED":warnings.length?"REVIEW":"OBSERVE";
+    const tone=blockers.length?"bad":warnings.length?"warn":"good";
+    setPlainTone("rd_state",state,"readiness-state value "+tone);
+    const path=entriesAllowed?"entries may be evaluated; live capital still human-gated":"new entries blocked or waiting; reduce-only exits remain visible";
+    text("rd_detail",blockers.length?("blockers: "+blockers.join(", ")+"; "+path):
+      warnings.length?("review: "+warnings.join(", ")+"; "+path):
+      ("risk/data/execution clean; "+path));
   }
 
   setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
@@ -3624,7 +3812,9 @@
       exposure, unresolved, dailyStop, dailyLeft, dailyLossUsed, entriesAllowed,
       positions, orders, session, price
     };
+    lastOperatorCtx=operatorCtx;
     renderQuantDeck(operatorCtx);
+    renderReadiness(operatorCtx);
     renderOperator(operatorCtx);
     renderPositions(positions);
     renderOrders(orders);
@@ -4421,6 +4611,7 @@
     }
     renderAgent(d.edge_agents||{}, d.universe||{}, d.edge_leaderboard||{});
     renderScalperDiscovery(d);
+    if(lastOperatorCtx)renderReadiness(lastOperatorCtx);
     const note=$("rl_note");
     if(d.note){note.textContent=d.note;note.style.display="block";}else{note.style.display="none";}
     const drift=Array.isArray(d.drift_alerts)?d.drift_alerts:[];
