@@ -36,11 +36,21 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 
 from vnedge.config.settings import Settings
 from vnedge.execution.journal import DecisionJournal
-from vnedge.execution.order_state import ManagedOrder
-from vnedge.risk.risk_manager import OrderIntent
+from vnedge.execution.live_reconciliation import LiveReconciler
+from vnedge.execution.order_manager import OrderManager
+from vnedge.execution.order_state import OrderState
+from vnedge.risk.kill_switch import KillSwitch
+from vnedge.risk.risk_manager import (
+    AccountState,
+    MarketState,
+    OrderIntent,
+    PreTradeRiskGateway,
+)
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
 
 logger = logging.getLogger(__name__)
@@ -146,7 +156,7 @@ async def run_execution_drill(
             return report
         report.add("flat_precondition", True, "no positions, no open orders")
 
-        # --- Step 2: far-limit order lifecycle ---
+        # --- Step 2: far-limit order lifecycle through the normal pipeline ---
         mid = await adapter.fetch_mid_price(config.symbol)
         limit_price = mid * (1 - config.far_offset_pct / 100.0)
         quantity = adapter.amount_to_precision(config.symbol, notional / limit_price)
@@ -163,21 +173,51 @@ async def run_execution_drill(
             symbol=config.symbol, side="long", quantity=quantity,
             notional_usd=quantity * limit_price, leverage=1.0,
             reduce_only=False, strategy_id="execution_drill",
-            order_type="limit", limit_price=limit_price,
+            order_type="limit", limit_price=limit_price, time_in_force="PO",
         )
-        order = ManagedOrder(
-            intent_key=f"drill|{config.exchange_id}|{config.symbol}|{int(time.time())}",
-            client_order_id=f"drill{int(time.time() * 1000) % 10_000_000_000}",
-            intent=intent,
+
+        gateway = PreTradeRiskGateway(
+            settings.risk,
+            KillSwitch(kill_file=Path(os.environ.get("KILL_FILE", "KILL"))),
         )
-        journal.append("execution_drill_order", {
-            "client_order_id": order.client_order_id, "intent": vars(intent).copy()
-            if not hasattr(intent, "__dataclass_fields__") else {
-                k: getattr(intent, k) for k in intent.__dataclass_fields__},
-        })
-        exchange_id_str = await adapter.submit_order(order)
-        order.exchange_order_id = exchange_id_str
-        report.add("submit", True, f"venue accepted, id={exchange_id_str}")
+        order_manager = OrderManager(gateway, journal, adapter)
+        reconciler = LiveReconciler(order_manager, adapter)
+        account = AccountState(
+            equity_usd=equity,
+            daily_pnl_usd=0.0,
+            peak_equity_usd=equity,
+            open_positions=0,
+            exposure_by_symbol_usd={},
+            total_exposure_usd=0.0,
+        )
+        market = MarketState(
+            symbol=config.symbol,
+            last_update=datetime.now(UTC),
+            spread_bps=0.0,
+            estimated_slippage_bps=0.0,
+            funding_rate=0.0,
+            exchange_healthy=True,
+        )
+        intent_key = (
+            f"drill|{config.exchange_id}|{config.symbol}|post_only_far_limit|"
+            f"offset={config.far_offset_pct:g}|notional={notional:.2f}"
+        )
+        order = await order_manager.submit(
+            intent, account, market, intent_key, now=datetime.now(UTC)
+        )
+        if order.state is OrderState.RISK_REJECTED:
+            report.add("risk_gateway", False, order.history[-1].note)
+            journal.append("execution_drill", {"report": _to_dict(report)})
+            return report
+        report.add("risk_gateway", True, "order approved by PreTradeRiskGateway")
+
+        if order.state is OrderState.TIMEOUT_UNKNOWN:
+            await reconciler.resolve_unknown_orders()
+        if order.exchange_order_id is None:
+            report.add("submit", False, f"order state={order.state.value}, no venue id")
+            journal.append("execution_drill", {"report": _to_dict(report)})
+            return report
+        report.add("submit", True, f"venue accepted, id={order.exchange_order_id}")
 
         # --- Step 3: poll until visible/open ---
         deadline = time.monotonic() + _POLL_TIMEOUT
@@ -198,9 +238,15 @@ async def run_execution_drill(
                        f"state={state} filled={filled} (far limit must not fill)")
 
         # --- Step 4: cancel + verify ---
-        result_state = await adapter.cancel_order(order)
-        cancelled = str(result_state).lower() in ("canceled", "cancelled", "closed")
-        report.add("cancel", cancelled, f"venue state after cancel: {result_state}")
+        cancelled_order = await order_manager.cancel_order(
+            order.client_order_id, reason="execution drill cleanup"
+        )
+        cancelled = cancelled_order.state is OrderState.CANCELLED
+        report.add(
+            "cancel",
+            cancelled,
+            f"order manager state after cancel: {cancelled_order.state.value}",
+        )
 
         # --- Step 5: end flat ---
         positions = await adapter.fetch_positions(config.symbol)

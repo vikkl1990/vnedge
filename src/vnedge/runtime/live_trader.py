@@ -86,8 +86,16 @@ class LiveTraderSession:
         if pre_live_report is not None and not pre_live_report.cleared:
             failures = ", ".join(f.name for f in pre_live_report.failures)
             raise RuntimeError(f"pre-live checklist not cleared: {failures}")
+        live_capital_mode = settings.trading_mode in (
+            TradingMode.LIVE_SMALL,
+            TradingMode.LIVE_FULL,
+        )
+        require_private_stream = require_private_stream or live_capital_mode
         if require_private_stream and private_stream_health is None:
-            raise RuntimeError("require_private_stream=True needs private_stream_health")
+            raise RuntimeError(
+                "live_small/live_full require a private order/fill stream health "
+                "provider; REST polling alone is not a production live path"
+            )
         self.strategy = strategy
         self.feed = feed
         self.candles = history.reset_index(drop=True)

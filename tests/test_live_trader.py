@@ -100,6 +100,13 @@ def wire(settings, feed, adapter, accounts, tmp_path, strategy, **session_kw):
     reconciler = LiveReconciler(om, adapter)
     hist = normalize_candles([[BASE + i * HOUR, 100.0, 101.0, 99.0, 100.0, 10.0]
                               for i in range(5)])
+    if (
+        "private_stream_health" not in session_kw
+        and settings.trading_mode in (TradingMode.LIVE_SMALL, TradingMode.LIVE_FULL)
+    ):
+        session_kw["private_stream_health"] = PrivateStreamHealth(
+            connected=True, last_event_at=datetime.now(UTC)
+        )
     return LiveTraderSession(
         strategy, feed, hist, settings=settings, gateway=gateway, order_manager=om,
         reconciler=reconciler, account_provider=accounts, symbol=SYM, limits=LIMITS,
@@ -142,6 +149,20 @@ def test_constructs_when_all_gates_open(tmp_path):
     session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
                       FakeAccounts(), tmp_path, OneShotLong())
     assert session.entries_allowed
+    assert session.require_private_stream
+
+
+def test_live_small_requires_private_stream_health(tmp_path):
+    with pytest.raises(RuntimeError, match="private order/fill stream"):
+        wire(
+            live_settings(),
+            FakeFeed([]),
+            FakeLiveAdapter(),
+            FakeAccounts(),
+            tmp_path,
+            OneShotLong(),
+            private_stream_health=None,
+        )
 
 
 def test_refuses_failed_pre_live_report(tmp_path):
@@ -203,7 +224,7 @@ async def test_capital_cap_refuses_entry(tmp_path):
     assert adapter.submitted == []  # equity over cap -> no order
 
 
-async def test_required_private_stream_blocks_entries_when_stale(tmp_path):
+async def test_default_private_stream_requirement_blocks_entries_when_stale(tmp_path):
     adapter = FakeLiveAdapter()
     health = PrivateStreamHealth(connected=False)
     session, om = wire(
@@ -213,7 +234,6 @@ async def test_required_private_stream_blocks_entries_when_stale(tmp_path):
         FakeAccounts(),
         tmp_path,
         OneShotLong(at_bar=6),
-        require_private_stream=True,
         private_stream_health=health,
     )
 
@@ -223,7 +243,7 @@ async def test_required_private_stream_blocks_entries_when_stale(tmp_path):
     assert session.private_stream_ready() is False
 
 
-async def test_required_private_stream_allows_entries_when_fresh(tmp_path):
+async def test_default_private_stream_requirement_allows_entries_when_fresh(tmp_path):
     adapter = FakeLiveAdapter()
     health = PrivateStreamHealth(connected=True, last_event_at=datetime.now(UTC))
     session, om = wire(
@@ -233,7 +253,6 @@ async def test_required_private_stream_allows_entries_when_fresh(tmp_path):
         FakeAccounts(),
         tmp_path,
         OneShotLong(at_bar=6),
-        require_private_stream=True,
         private_stream_health=health,
     )
 

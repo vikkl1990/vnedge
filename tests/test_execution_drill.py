@@ -20,16 +20,17 @@ LIVE_ENV = {
 class FakeAdapter:
     """Happy-path venue: accepts, shows open, cancels clean, stays flat."""
 
-    def __init__(self, *, positions=(), open_orders=(), mid=0.08):
+    def __init__(self, *, positions=(), open_orders=(), mid=0.08, equity=500.0):
         self._positions = list(positions)
         self._open_orders = list(open_orders)
         self._mid = mid
+        self._equity = equity
         self.submitted = []
         self.cancelled = []
         self.closed = False
 
     async def fetch_balance(self):
-        return {"total_usd": 42.0, "USDT": 42.0}
+        return {"total_usd": self._equity, "USDT": self._equity}
 
     async def fetch_positions(self, symbol):
         return self._positions
@@ -52,7 +53,7 @@ class FakeAdapter:
 
     async def cancel_order(self, order):
         self.cancelled.append(order)
-        return "canceled"
+        return "cancelled"
 
     async def close(self):
         self.closed = True
@@ -83,20 +84,30 @@ async def test_drill_happy_path_clears(tmp_path, monkeypatch):
     _env(monkeypatch, tmp_path)
     settings = Settings(**LIVE_ENV)
     fake = FakeAdapter()
+    journal = DecisionJournal(tmp_path / "drill.jsonl")
     report = await run_execution_drill(
         settings, DrillConfig(exchange_id="binanceusdm", order_notional_usd=8.0),
         adapter_factory=lambda: fake,
-        journal=DecisionJournal(tmp_path / "drill.jsonl"),
+        journal=journal,
     )
     assert report.cleared, [s for s in report.steps if not s.ok]
     assert len(fake.submitted) == 1
     order = fake.submitted[0]
     assert order.intent.order_type == "limit"
+    assert order.intent.time_in_force == "PO"
     assert order.intent.limit_price == pytest.approx(0.08 * 0.85)  # 15% below mid
     assert order.intent.notional_usd <= _HARD_MAX_DRILL_NOTIONAL
     assert order.intent.leverage == 1.0
+    assert order.client_order_id.startswith("vne_")
+    assert not order.client_order_id.startswith("drill")
     assert fake.cancelled == fake.submitted
     assert fake.closed
+    records = journal.read_all()
+    kinds = [r["kind"] for r in records]
+    assert "risk_decision" in kinds
+    assert "order_intent" in kinds
+    assert "order_acknowledged" in kinds
+    assert "execution_drill_order" not in kinds
 
 
 async def test_drill_notional_hard_cap(tmp_path, monkeypatch):
@@ -111,6 +122,21 @@ async def test_drill_notional_hard_cap(tmp_path, monkeypatch):
     )
     assert report.cleared
     assert fake.submitted[0].intent.notional_usd <= _HARD_MAX_DRILL_NOTIONAL
+
+
+async def test_drill_uses_gateway_and_blocks_when_risk_fails(tmp_path, monkeypatch):
+    _env(monkeypatch, tmp_path)
+    settings = Settings(**LIVE_ENV)
+    fake = FakeAdapter(equity=42.0)
+    report = await run_execution_drill(
+        settings,
+        DrillConfig(exchange_id="binanceusdm", order_notional_usd=8.0),
+        adapter_factory=lambda: fake,
+        journal=DecisionJournal(tmp_path / "drill.jsonl"),
+    )
+    assert not report.cleared
+    assert any(s.name == "risk_gateway" and not s.ok for s in report.steps)
+    assert fake.submitted == []
 
 
 async def test_drill_refuses_on_existing_exposure(tmp_path, monkeypatch):
