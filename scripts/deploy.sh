@@ -7,6 +7,11 @@
 # trees, resets to origin/main, builds THEN recreates (never both at once, to
 # avoid the 2026-07-11 swap-thrash), and verifies lanes resume.
 set -euo pipefail
+
+# Read the whole body into memory before running it: `git reset` below can
+# rewrite THIS file mid-deploy, and bash reads scripts lazily — a brace
+# group forces a full parse first, so no old/new line mixing (2026-07-11).
+{
 cd "$(dirname "$0")/.."
 
 exec 9>/tmp/vnedge-deploy.lock
@@ -100,3 +105,4 @@ if [ "$NEED_BUILD" = 1 ]; then
     echo "freshness OK: container recreated at $started"
 fi
 exit 0
+}
