@@ -701,6 +701,12 @@ def _load_cascade_reversion_latest() -> dict:
     return _read_optional_json(OUT_DIR / "cascade_reversion.json")
 
 
+def _load_leadlag_echo_scalp_latest() -> dict:
+    """Last output of the cross-venue lead-lag echo scalp replay
+    (vnedge.research.leadlag_echo_scalp), or {} if absent/unreadable."""
+    return _read_optional_json(OUT_DIR / "leadlag_echo_scalp.json")
+
+
 def _read_optional_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -773,6 +779,7 @@ class ResearchPayload:
     live_shadow_perf: dict = field(default_factory=dict)
     event_taker_replay: dict = field(default_factory=dict)
     cascade_reversion: dict = field(default_factory=dict)
+    leadlag_echo_scalp: dict = field(default_factory=dict)
 
 
 def publish(payload: ResearchPayload) -> None:
@@ -793,6 +800,7 @@ def publish(payload: ResearchPayload) -> None:
         "scalper_parameter_registry": payload.scalper_parameter_registry or {},
         "event_taker_replay": payload.event_taker_replay or {},
         "cascade_reversion": payload.cascade_reversion or {},
+        "leadlag_echo_scalp": payload.leadlag_echo_scalp or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         # live virtual track record of the shadow lanes (read-only journal
         # aggregation; observability evidence, never a gate)
@@ -977,6 +985,7 @@ async def run_cycle() -> list[dict]:
         live_shadow_perf=live_shadow_perf,
         event_taker_replay=_load_event_taker_latest(),
         cascade_reversion=_load_cascade_reversion_latest(),
+        leadlag_echo_scalp=_load_leadlag_echo_scalp_latest(),
     ))
     for r in records:
         tag = " [auto]" if r.get("auto") else ""

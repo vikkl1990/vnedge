@@ -446,6 +446,26 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Cross-venue lead-lag echo scalp replay (research only, can_trade/can_promote
+  # false). Every 6h it rescans the recorded leader (binanceusdm trades) vs
+  # follower (delta_india L2 book) overlap days, estimates the cross-venue lag,
+  # replays a maker-first echo scalp with a queue-aware follower fill against a
+  # strict taker_taker floor (maker numbers flagged ASSUMED_QUEUE_FILL), and
+  # publishes leadlag_echo_scalp.json for the continuous-research folding hook.
+  leadlag-echo-scalp:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.leadlag_echo_scalp",
+              "--interval-seconds", "${LEADLAG_ECHO_SCALP_INTERVAL_SECONDS:-21600}",
+              "--pairs", "BTC,ETH",
+              "--data-root", "/app/data"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Bybit liquidation recorder (allLiquidation topic via CCXT Pro;
   # position side is normalised to forced-order side on ingest). Same universe,
   # written into ticks/exchange=bybit/.../stream=liquidations/ for parity.
