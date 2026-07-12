@@ -707,6 +707,12 @@ def _load_leadlag_echo_scalp_latest() -> dict:
     return _read_optional_json(OUT_DIR / "leadlag_echo_scalp.json")
 
 
+def _load_realtime_shadow_scalp_latest() -> dict:
+    """Last output of the real-time shadow scalp runner
+    (vnedge.runtime.realtime_shadow_scalp), or {} if absent/unreadable."""
+    return _read_optional_json(OUT_DIR / "realtime_shadow_scalp.json")
+
+
 def _read_optional_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -780,6 +786,7 @@ class ResearchPayload:
     event_taker_replay: dict = field(default_factory=dict)
     cascade_reversion: dict = field(default_factory=dict)
     leadlag_echo_scalp: dict = field(default_factory=dict)
+    realtime_shadow_scalp: dict = field(default_factory=dict)
 
 
 def publish(payload: ResearchPayload) -> None:
@@ -801,6 +808,9 @@ def publish(payload: ResearchPayload) -> None:
         "event_taker_replay": payload.event_taker_replay or {},
         "cascade_reversion": payload.cascade_reversion or {},
         "leadlag_echo_scalp": payload.leadlag_echo_scalp or {},
+        # live-tick firing of the scalp detectors (real-time shadow, never a
+        # trade); real-time only accelerates evidence, it does not gate.
+        "realtime_shadow_scalp": payload.realtime_shadow_scalp or {},
         "shadow_lanes": load_shadow_manifest(OUT_DIR),
         # live virtual track record of the shadow lanes (read-only journal
         # aggregation; observability evidence, never a gate)
@@ -885,7 +895,10 @@ async def run_cycle() -> list[dict]:
     live_shadow_perf: dict = {}
     try:
         live_shadow_perf = read_shadow_perf(
-            os.environ.get("SHADOW_PERF_JOURNAL_DIR", str(DEFAULT_JOURNAL_DIR))
+            os.environ.get("SHADOW_PERF_JOURNAL_DIR", str(DEFAULT_JOURNAL_DIR)),
+            scalp_journal_dir=os.environ.get(
+                "SCALP_SHADOW_JOURNAL_DIR", "logs/scalp_shadow"
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — observability must not kill a cycle
         logger.exception("shadow perf read failed: %s", exc)
@@ -986,6 +999,7 @@ async def run_cycle() -> list[dict]:
         event_taker_replay=_load_event_taker_latest(),
         cascade_reversion=_load_cascade_reversion_latest(),
         leadlag_echo_scalp=_load_leadlag_echo_scalp_latest(),
+        realtime_shadow_scalp=_load_realtime_shadow_scalp_latest(),
     ))
     for r in records:
         tag = " [auto]" if r.get("auto") else ""
