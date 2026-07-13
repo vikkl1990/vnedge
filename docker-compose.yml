@@ -331,6 +331,32 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Cadence refactor smoke miner: quickly answers "which 4h/1h/15m/1m lane
+  # profiles fire more often without immediately losing to fees?" It runs a
+  # cheap baseline-parameter, fee-aware smoke backtest for strict/balanced/active
+  # trigger profiles and writes daily_scalper_cadence_latest.json. Full
+  # walk-forward remains the proof layer for any row this surfaces.
+  daily-scalper-cadence:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.daily_scalper_pack",
+              "--cadence-sweep",
+              "--fast-smoke",
+              "--interval-seconds", "${DAILY_SCALPER_CADENCE_INTERVAL_SECONDS:-21600}",
+              "--lookback-days", "${DAILY_SCALPER_CADENCE_LOOKBACK_DAYS:-45}",
+              "--train-days", "${DAILY_SCALPER_CADENCE_TRAIN_DAYS:-14}",
+              "--test-days", "${DAILY_SCALPER_CADENCE_TEST_DAYS:-3}",
+              "--max-candidates", "${DAILY_SCALPER_CADENCE_MAX_CANDIDATES:-24}"]
+    environment:
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Public-indicator distillation miner: Lux/Willy-style ideas reduced to
   # causal VNEDGE atoms, then walk-forwarded with realistic fees. Research-only
   # proof feed for the Alpha Council.
