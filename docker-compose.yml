@@ -31,6 +31,14 @@ services:
       # observation lanes by default. These are never paper/live lanes and
       # still require untouched judgment + human approval before capital.
       MULTI_LANE_MANIFEST_ENABLED: "${MULTI_LANE_MANIFEST_ENABLED:-1}"
+      # Mirror shadow-only lanes into ISOLATED simulated-paper observation
+      # ledgers (<lane_id>_paper_observation). Simulated fills only — never a
+      # real order, never a promotion — and the human-approved funding-MR paper
+      # trials are left untouched, not duplicated. Code default is OFF; this
+      # deployment opts in. Set to 0 to disable, or drop just Delta with
+      # MULTI_LANE_DELTA_PAPER_OBSERVE=0.
+      MULTI_LANE_PAPER_OBSERVE_ALL: "${MULTI_LANE_PAPER_OBSERVE_ALL:-1}"
+      MULTI_LANE_DELTA_PAPER_OBSERVE: "${MULTI_LANE_DELTA_PAPER_OBSERVE:-1}"
       # Runtime control-plane guard: if research/live_research/shadow_lanes.json
       # changes after startup, exit deliberately so Docker reloads the exact
       # desired lane set. This prevents MISSING/STALE/ORPHAN drift.
