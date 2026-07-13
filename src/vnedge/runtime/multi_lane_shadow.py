@@ -18,11 +18,15 @@ NO live orders.
 
 Neither mode ever submits to a real exchange. Modes/venues/symbols are env
 driven (MULTI_LANE_MODES, MULTI_LANE_EXCHANGES, MULTI_LANE_SYMBOLS).
+Set MULTI_LANE_PAPER_OBSERVE_ALL=1 to mirror shadow-only lanes into isolated
+PAPER observation ledgers. That is still simulated execution only; it is not a
+strategy promotion and never relaxes live-order gates.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Mapping
@@ -124,6 +128,69 @@ def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[Lane
     curated = list(CANDIDATE_SHADOW_LANES)
     seen = {s.lane_id for s in curated}
     return curated + [s for s in manifest_shadow_lanes(environ) if s.lane_id not in seen]
+
+
+def _strategy_params_key(params: dict | None) -> str:
+    return json.dumps(params or {}, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _paper_identity(spec: LaneSpec) -> tuple[str, str, str, str, str]:
+    return (
+        spec.exchange,
+        spec.symbol,
+        spec.timeframe,
+        spec.strategy_id,
+        _strategy_params_key(spec.strategy_params),
+    )
+
+
+def _paper_observation_lane_id(spec: LaneSpec) -> str:
+    if spec.lane_id.endswith("_shadow"):
+        return f"{spec.lane_id.removesuffix('_shadow')}_paper_observation"
+    return f"{spec.lane_id}_paper_observation"
+
+
+def paper_observation_lanes(
+    specs: list[LaneSpec],
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Mirror shadow-only lanes into PAPER observation ledgers.
+
+    This is deliberately separate from governed paper-trial promotion. If an
+    equivalent PAPER lane already exists, such as the human-approved BTC
+    funding-MR trials, it is not duplicated. Delta India is enabled by default
+    here because PAPER observation remains a simulated exchange; operators can
+    still disable it with MULTI_LANE_DELTA_PAPER_OBSERVE=0.
+    """
+    if not _truthy(environ, "MULTI_LANE_PAPER_OBSERVE_ALL", "0"):
+        return []
+
+    allow_delta = _truthy(environ, "MULTI_LANE_DELTA_PAPER_OBSERVE", "1")
+    existing_ids = {spec.lane_id for spec in specs}
+    paper_identities = {
+        _paper_identity(spec) for spec in specs if spec.mode is RunnerMode.PAPER
+    }
+    mirrors: list[LaneSpec] = []
+    for spec in specs:
+        if spec.mode is not RunnerMode.SHADOW:
+            continue
+        if spec.exchange == DELTA_EXCHANGE and not allow_delta:
+            continue
+        identity = _paper_identity(spec)
+        if identity in paper_identities:
+            continue
+        lane_id = _paper_observation_lane_id(spec)
+        if lane_id in existing_ids:
+            continue
+        mirrors.append(replace(
+            spec,
+            lane_id=lane_id,
+            mode=RunnerMode.PAPER,
+            is_primary=False,
+        ))
+        existing_ids.add(lane_id)
+        paper_identities.add(identity)
+    return mirrors
 
 
 def delta_funding_mr_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
@@ -306,11 +373,28 @@ def build_lane_specs_from_env(
     return specs
 
 
+def dedupe_lane_specs(specs: list[LaneSpec]) -> list[LaneSpec]:
+    deduped: list[LaneSpec] = []
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.lane_id in seen:
+            continue
+        seen.add(spec.lane_id)
+        deduped.append(spec)
+    return deduped
+
+
+def build_all_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    lanes = dedupe_lane_specs(
+        build_lane_specs_from_env(environ) + candidate_shadow_lanes(environ)
+    )
+    lanes = dedupe_lane_specs(lanes + delta_funding_mr_lanes(environ))
+    return dedupe_lane_specs(lanes + paper_observation_lanes(lanes, environ))
+
+
 async def main() -> None:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
-    lanes = build_lane_specs_from_env() + candidate_shadow_lanes()
-    seen = {spec.lane_id for spec in lanes}
-    lanes += [s for s in delta_funding_mr_lanes() if s.lane_id not in seen]
+    lanes = build_all_lane_specs()
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
     provider = MultiLaneProvider(primary_lane_id=primary)
 
