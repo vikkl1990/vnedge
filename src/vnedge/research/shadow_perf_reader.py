@@ -34,6 +34,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
 SHADOW_JOURNAL_GLOB = "*shadow*.journal.jsonl"
 
+# The real-time shadow scalp runner (vnedge.runtime.realtime_shadow_scalp)
+# writes its per-family journals here, with scalp_shadow_intent /
+# scalp_shadow_outcome records. They carry the same intent identity + virtual
+# net the aggregator needs, so folding them in is a small path addition, not a
+# new reader. File names embed the venue (cascade_binanceusdm_BTCUSDT...),
+# so the glob is broad and identity/exchange resolve exactly as before.
+DEFAULT_SCALP_JOURNAL_DIR = Path("logs/scalp_shadow")
+SCALP_JOURNAL_GLOB = "*.journal.jsonl"
+
+# Both record spellings feed one aggregation: the candle shadow lanes emit
+# shadow_intent/shadow_outcome; the real-time scalp lanes emit
+# scalp_shadow_intent/scalp_shadow_outcome.
+_INTENT_KINDS = ("shadow_intent", "scalp_shadow_intent")
+_OUTCOME_KINDS = ("shadow_outcome", "scalp_shadow_outcome")
+
 # Longest-first so "binanceusdm" wins over "binance" and "delta_india" over
 # "delta" when both substrings appear in a lane id.
 KNOWN_EXCHANGES: tuple[str, ...] = (
@@ -60,12 +75,17 @@ def read_shadow_perf(
     journal_dir: Path | str = DEFAULT_JOURNAL_DIR,
     *,
     known_exchanges: tuple[str, ...] = KNOWN_EXCHANGES,
+    scalp_journal_dir: Path | str | None = None,
 ) -> dict:
     """Aggregate shadow_outcome records per (strategy, exchange, symbol).
 
     Returns a JSON-serializable payload; ``available=False`` with empty lanes
     when the directory or journals are absent (graceful degradation — a
     research container without the logs mount must not fail its cycle).
+
+    ``scalp_journal_dir`` (opt-in) additionally folds the real-time shadow
+    scalp lanes' journals into the same aggregation. It stays off by default so
+    existing callers/tests are unchanged; ``continuous_research`` passes it.
     """
     journal_dir = Path(journal_dir)
     payload = {
@@ -80,20 +100,29 @@ def read_shadow_perf(
             "can_promote": False,
         },
     }
-    if not journal_dir.is_dir():
+
+    sources: list[tuple[Path, str]] = []
+    if journal_dir.is_dir():
+        sources.append((journal_dir, SHADOW_JOURNAL_GLOB))
+    if scalp_journal_dir is not None:
+        scalp_dir = Path(scalp_journal_dir)
+        if scalp_dir.is_dir() and scalp_dir != journal_dir:
+            sources.append((scalp_dir, SCALP_JOURNAL_GLOB))
+    if not sources:
         return payload
 
     aggregates: dict[str, _LaneAggregate] = {}
     journals_read = 0
-    for path in sorted(journal_dir.glob(SHADOW_JOURNAL_GLOB)):
-        lane = _read_journal(path, known_exchanges=known_exchanges)
-        if lane is None:
-            continue
-        journals_read += 1
-        identity, outcomes = lane
-        key = shadow_perf_key(*identity)
-        agg = aggregates.setdefault(key, _LaneAggregate(*identity))
-        agg.absorb(path.name, outcomes)
+    for source_dir, glob in sources:
+        for path in sorted(source_dir.glob(glob)):
+            lane = _read_journal(path, known_exchanges=known_exchanges)
+            if lane is None:
+                continue
+            journals_read += 1
+            identity, outcomes = lane
+            key = shadow_perf_key(*identity)
+            agg = aggregates.setdefault(key, _LaneAggregate(*identity))
+            agg.absorb(path.name, outcomes)
 
     lanes = [agg.to_dict() for agg in aggregates.values() if agg.trades > 0]
     lanes.sort(key=lambda lane: (-lane["net_usd"], lane["strategy"], lane["symbol"]))
@@ -143,12 +172,12 @@ def _read_journal(
                 rec_payload = record.get("payload")
                 if not isinstance(rec_payload, dict):
                     continue
-                if kind == "shadow_intent" and strategy is None:
+                if kind in _INTENT_KINDS and strategy is None:
                     intent = rec_payload.get("intent") or {}
                     if intent.get("strategy_id") and intent.get("symbol"):
                         strategy = str(intent["strategy_id"])
                         symbol = str(intent["symbol"])
-                elif kind == "shadow_outcome":
+                elif kind in _OUTCOME_KINDS:
                     key = rec_payload.get("intent_key")
                     if key is None or key in outcomes:
                         continue  # first record wins, same as the tracker
