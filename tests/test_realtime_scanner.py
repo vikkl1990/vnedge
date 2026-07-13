@@ -29,12 +29,12 @@ def record(kind, payload, minutes_ago=1):
     }
 
 
-def lane_eval(*, fired=False, funding=0.62, z=0.4):
+def lane_eval(*, fired=False, funding=0.62, z=0.4, mode="shadow"):
     return {
         "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
         "strategy_id": "funding_mean_reversion",
         "symbol": "BTC/USDT:USDT",
-        "mode": "shadow",
+        "mode": mode,
         "fired": fired,
         "signal_reason": "funding stretched" if fired else None,
         "skip_reason": None,
@@ -119,6 +119,50 @@ def test_runtime_lane_firing_counts_shadow_intent(tmp_path):
     assert row["funnel"]["shadow_intents"] == 1
     assert row["latest_shadow_intent"]["approved"] is True
     assert payload["summary"]["firing"] == 1
+
+
+def test_runtime_paper_lane_reports_order_and_exit_activity(tmp_path):
+    journal = tmp_path / "logs" / "funding_mr_btc_v1_20260703.journal.jsonl"
+    write_jsonl(
+        journal,
+        [
+            record("lane_eval", lane_eval(fired=True, funding=0.91, z=-1.8, mode="paper")),
+            record("risk_decision", {"approved": True}),
+            record(
+                "order_intent",
+                {
+                    "intent_key": "k-paper",
+                    "client_order_id": "vne_123",
+                    "intent": {
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "long",
+                        "quantity": 0.01,
+                        "strategy_id": "funding_mean_reversion",
+                        "reduce_only": False,
+                    },
+                },
+            ),
+            record("order_acknowledged", {"intent_key": "k-paper"}),
+            record("live_paper_exit", {"reason": "take_profit", "state": "filled"}),
+        ],
+    )
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["mode"] == "paper"
+    assert row["state"] == STATE_FIRING
+    assert row["funnel"]["paper_order_intents"] == 1
+    assert row["funnel"]["paper_exits"] == 1
+    assert row["latest_paper_order"]["client_order_id"] == "vne_123"
+    assert payload["summary"]["paper_lanes"] == 1
+    assert payload["summary"]["paper_firing"] == 1
+    assert payload["summary"]["paper_order_intents"] == 1
+    assert "Paper activity: 1 lane(s), 1 order intents, 1 exits" in payload["operator_answer"]
 
 
 def test_event_leadlag_shadow_artifact_is_live_scanner_row(tmp_path):

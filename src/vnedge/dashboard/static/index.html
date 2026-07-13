@@ -2292,6 +2292,7 @@
       <h2>Real-Time Scanner <span class="tag" id="rt_policy">live journals only; not replay</span></h2>
       <div class="mini-grid" aria-label="real-time scanner summary">
         <div class="mini-card good"><div class="small-label">Firing Now</div><div class="big" id="rt_firing">--</div><div class="tiny">shadow / paper signals</div></div>
+        <div class="mini-card info"><div class="small-label">Paper Active</div><div class="big" id="rt_paper">--</div><div class="tiny" id="rt_paper_orders">orders -- / exits --</div></div>
         <div class="mini-card warn"><div class="small-label">Near Trigger</div><div class="big" id="rt_near">--</div><div class="tiny">&gt;= 90% pressure</div></div>
         <div class="mini-card"><div class="small-label">Waiting</div><div class="big" id="rt_waiting">--</div><div class="tiny">below thresholds</div></div>
         <div class="mini-card"><div class="small-label">Rows</div><div class="big" id="rt_rows">--</div><div class="tiny" id="rt_age">scanner age --</div></div>
@@ -2300,7 +2301,7 @@
       <div class="table-wrap">
       <table id="rtScanner">
         <thead><tr>
-          <th>State</th><th>Lane</th><th>Venue</th><th>Symbol</th><th>Strategy</th><th>Why / Pressure</th><th>Live Evals</th><th>Signals</th>
+          <th>State</th><th>Mode</th><th>Lane</th><th>Venue</th><th>Symbol</th><th>Strategy</th><th>Why / Pressure</th><th>Live Evals</th><th>Signals</th>
         </tr></thead>
         <tbody id="rtScannerBody"></tbody>
       </table>
@@ -4840,6 +4841,8 @@
     const s=d.summary||{};
     const rows=Array.isArray(d.rows)?d.rows:[];
     text("rt_firing",num(s.firing));
+    text("rt_paper",num(s.paper_lanes));
+    text("rt_paper_orders","orders "+num(s.paper_order_intents)+" / exits "+num(s.paper_exits));
     text("rt_near",num(s.near_trigger));
     text("rt_waiting",num(s.waiting));
     text("rt_rows",num(s.total_rows));
@@ -4856,6 +4859,7 @@
         const tr=body.insertRow();
         const stateCell=tr.insertCell();
         appendBadge(stateCell,String(row.state||"WAITING").replaceAll("_"," "),scannerTone(row.state));
+        appendCell(tr,String(row.mode||"--").replace("_observation",""),"mono");
         appendCell(tr,row.lane_id||"--","mono clip",row.journal||"");
         appendCell(tr,String(row.exchange||"--").replace("usdm",""));
         appendCell(tr,String(row.symbol||"--").split(":")[0]);

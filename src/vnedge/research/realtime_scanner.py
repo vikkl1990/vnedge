@@ -117,6 +117,7 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 20) -> str:
         (
             "summary: "
             f"{summary.get('total_rows', 0)} rows, "
+            f"{summary.get('paper_lanes', 0)} paper, "
             f"{summary.get('firing', 0)} firing, "
             f"{summary.get('near_trigger', 0)} near, "
             f"{summary.get('waiting', 0)} waiting, "
@@ -172,9 +173,17 @@ def _runtime_row_from_journal(
         "approved_shadow_intents": 0,
         "rejected_shadow_intents": 0,
         "shadow_outcomes": 0,
+        "risk_decisions": 0,
+        "paper_order_intents": 0,
+        "paper_order_acknowledged": 0,
+        "paper_exits": 0,
+        "paper_reports": 0,
     }
     latest_intent: dict[str, Any] | None = None
     latest_outcome: dict[str, Any] | None = None
+    latest_paper_order: dict[str, Any] | None = None
+    latest_paper_exit: dict[str, Any] | None = None
+    latest_paper_report: dict[str, Any] | None = None
 
     for record in _iter_jsonl(path, max_bytes=config.tail_bytes):
         record_ts = _parse_dt(record.get("ts"))
@@ -211,6 +220,19 @@ def _runtime_row_from_journal(
         elif kind == "shadow_outcome":
             funnel["shadow_outcomes"] += 1
             latest_outcome = dict(payload)
+        elif kind == "risk_decision":
+            funnel["risk_decisions"] += 1
+        elif kind == "order_intent":
+            funnel["paper_order_intents"] += 1
+            latest_paper_order = dict(payload)
+        elif kind == "order_acknowledged":
+            funnel["paper_order_acknowledged"] += 1
+        elif kind == "live_paper_exit":
+            funnel["paper_exits"] += 1
+            latest_paper_exit = dict(payload)
+        elif kind == "live_paper_report":
+            funnel["paper_reports"] += 1
+            latest_paper_report = dict(payload.get("report") or payload)
 
     if latest_eval is None:
         return None
@@ -263,6 +285,9 @@ def _runtime_row_from_journal(
         },
         "latest_shadow_intent": _compact_intent(latest_intent),
         "latest_shadow_outcome": _compact_outcome(latest_outcome),
+        "latest_paper_order": _compact_paper_order(latest_paper_order),
+        "latest_paper_exit": latest_paper_exit,
+        "latest_paper_report": latest_paper_report,
         "proximity": proximity,
         "can_trade": False,
         "can_promote": False,
@@ -484,6 +509,28 @@ def _summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "total_rows": len(rows),
         "runtime_lanes": sum(1 for row in rows if row.get("row_type") == "runtime_lane"),
+        "paper_lanes": sum(
+            1
+            for row in rows
+            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+        ),
+        "paper_firing": sum(
+            1
+            for row in rows
+            if row.get("row_type") == "runtime_lane"
+            and row.get("mode") == "paper"
+            and row.get("state") == STATE_FIRING
+        ),
+        "paper_order_intents": sum(
+            int(row.get("funnel", {}).get("paper_order_intents") or 0)
+            for row in rows
+            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+        ),
+        "paper_exits": sum(
+            int(row.get("funnel", {}).get("paper_exits") or 0)
+            for row in rows
+            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+        ),
         "event_lanes": sum(1 for row in rows if row.get("row_type") == "event_leadlag_shadow"),
         "firing": counts.get(STATE_FIRING, 0),
         "near_trigger": counts.get(STATE_NEAR_TRIGGER, 0),
@@ -501,6 +548,10 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
     firing = int(summary.get("firing") or 0)
     near = int(summary.get("near_trigger") or 0)
     stale = int(summary.get("stale") or 0)
+    paper_lanes = int(summary.get("paper_lanes") or 0)
+    paper_firing = int(summary.get("paper_firing") or 0)
+    paper_orders = int(summary.get("paper_order_intents") or 0)
+    paper_exits = int(summary.get("paper_exits") or 0)
     if total == 0:
         return (
             "No live scanner rows yet. This report only reads runtime journals; "
@@ -508,7 +559,9 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         )
     if firing:
         return (
-            f"{firing} lane(s) are firing now. This is shadow/paper observation, "
+            f"{firing} lane(s) are firing now, including {paper_firing} paper lane(s). "
+            f"Paper activity: {paper_lanes} lane(s), {paper_orders} order intents, "
+            f"{paper_exits} exits. This is shadow/paper observation, "
             "not permission to promote or trade."
         )
     if near:
@@ -566,13 +619,30 @@ def _compact_intent(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _compact_paper_order(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    intent = payload.get("intent") or {}
+    if not isinstance(intent, Mapping):
+        return {"intent_key": payload.get("intent_key")}
+    return {
+        "intent_key": payload.get("intent_key"),
+        "client_order_id": payload.get("client_order_id"),
+        "side": intent.get("side"),
+        "quantity": intent.get("quantity"),
+        "reduce_only": intent.get("reduce_only"),
+        "strategy_id": intent.get("strategy_id"),
+        "symbol": intent.get("symbol"),
+    }
+
+
 def _compact_outcome(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
     return {
         "intent_key": payload.get("intent_key"),
-        "net_usd": payload.get("net_usd"),
-        "exit_reason": payload.get("exit_reason"),
+        "net_usd": payload.get("net_usd", payload.get("virtual_net_usd")),
+        "exit_reason": payload.get("exit_reason", payload.get("resolution")),
         "bars_held": payload.get("bars_held"),
     }
 
