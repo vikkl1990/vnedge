@@ -2,6 +2,8 @@ services:
   multi-lane-shadow:
     build: .
     restart: unless-stopped
+    mem_limit: 1500m
+    mem_reservation: 256m
     # Multi-exchange lanes: Binance + Bybit, each in BOTH fill modes —
     #   paper  = simulated fills on live data (live-$ venue comparison; the
     #            governed funding-MR trials continue on their account files)
@@ -133,6 +135,8 @@ services:
   orderflow-footprint-miner:
     build: .
     restart: unless-stopped
+    mem_limit: 1500m
+    mem_reservation: 256m
     command: ["python", "-m", "vnedge.research.orderflow_footprint",
               "--interval-seconds", "${ORDERFLOW_FOOTPRINT_INTERVAL_SECONDS:-1800}",
               "--bar-seconds", "${ORDERFLOW_FOOTPRINT_BAR_SECONDS:-60}",
@@ -199,6 +203,8 @@ services:
   candidate-replay-executor:
     build: .
     restart: unless-stopped
+    mem_limit: 2500m
+    mem_reservation: 256m
     depends_on: [event-leadlag-miner, orderflow-footprint-miner]
     command: ["python", "-m", "vnedge.research.candidate_replay_executor",
               "--interval-seconds", "${CANDIDATE_REPLAY_INTERVAL_SECONDS:-1800}",
@@ -217,6 +223,8 @@ services:
   execution-condition-miner:
     build: .
     restart: unless-stopped
+    mem_limit: 2500m
+    mem_reservation: 256m
     depends_on: [candidate-replay-executor]
     command: ["python", "-m", "vnedge.research.execution_condition_miner",
               "--interval-seconds", "${EXECUTION_CONDITION_INTERVAL_SECONDS:-1800}"]
@@ -233,6 +241,8 @@ services:
   filtered-replay-executor:
     build: .
     restart: unless-stopped
+    mem_limit: 2500m
+    mem_reservation: 256m
     depends_on: [execution-condition-miner]
     command: ["python", "-m", "vnedge.research.filtered_replay_executor",
               "--interval-seconds", "${FILTERED_REPLAY_INTERVAL_SECONDS:-1800}",
@@ -525,6 +535,8 @@ services:
   leadlag-echo-scalp:
     build: .
     restart: unless-stopped
+    mem_limit: 1500m
+    mem_reservation: 256m
     command: ["python", "-m", "vnedge.research.leadlag_echo_scalp",
               "--interval-seconds", "${LEADLAG_ECHO_SCALP_INTERVAL_SECONDS:-21600}",
               "--pairs", "BTC,ETH",
