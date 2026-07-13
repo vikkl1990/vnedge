@@ -28,6 +28,7 @@ DAILY_SCALPER_FAMILIES: tuple[str, ...] = (
     "squeeze_release",
     "fvg_retest",
 )
+TRIGGER_PROFILES: tuple[str, ...] = ("strict", "momentum", "directional")
 
 
 def daily_scalper_default_params() -> QuantSignalPackParams:
@@ -82,13 +83,20 @@ class DailyScalperPack(BaseStrategy):
         stop_atr_mult: float = 1.10,
         take_profit_r: float = 1.50,
         require_1m_trigger: bool = True,
+        trigger_profile: str = "strict",
         params: QuantSignalPackParams | None = None,
     ) -> None:
+        if trigger_profile not in TRIGGER_PROFILES:
+            raise ValueError(
+                f"unknown trigger_profile {trigger_profile!r}; "
+                f"expected one of {TRIGGER_PROFILES}"
+            )
         self.funding = funding
         self.context_1h = context_1h
         self.context_4h = context_4h
         self.trigger_1m = trigger_1m
         self.require_1m_trigger = require_1m_trigger
+        self.trigger_profile = trigger_profile
         base_params = params or daily_scalper_default_params()
         base_params = replace(
             base_params,
@@ -150,8 +158,10 @@ class DailyScalperPack(BaseStrategy):
     def _trigger_allowed(self, side: str, row: pd.Series) -> bool:
         if not self.require_1m_trigger:
             return True
-        col = "trigger_1m_long" if side == "long" else "trigger_1m_short"
+        col = _trigger_column(self.trigger_profile, side)
         value = row.get(col)
+        if value is None and self.trigger_profile == "strict":
+            value = row.get("trigger_1m_long" if side == "long" else "trigger_1m_short")
         if isinstance(value, bool):
             return value
         if pd.isna(value):
@@ -222,20 +232,48 @@ def _merge_trigger(base: pd.DataFrame, trigger_1m: pd.DataFrame | None) -> pd.Da
     trig["m1_ema_mid"] = ema(trig["close"], 21)
     trig["m1_momentum_3"] = trig["close"] - trig["close"].shift(3)
     trig["m1_volume_z"] = zscore(trig["volume"], 60)
-    trig["trigger_1m_long"] = (
+    trig["trigger_1m_strict_long"] = (
         (trig["close"] > trig["m1_ema_fast"])
         & (trig["m1_ema_fast"] >= trig["m1_ema_mid"])
         & (trig["m1_momentum_3"] > 0)
         & (trig["m1_volume_z"].fillna(0.0) >= -0.25)
     )
-    trig["trigger_1m_short"] = (
+    trig["trigger_1m_strict_short"] = (
         (trig["close"] < trig["m1_ema_fast"])
         & (trig["m1_ema_fast"] <= trig["m1_ema_mid"])
         & (trig["m1_momentum_3"] < 0)
         & (trig["m1_volume_z"].fillna(0.0) >= -0.25)
     )
+    trig["trigger_1m_momentum_long"] = (
+        (trig["close"] > trig["m1_ema_fast"])
+        & (trig["m1_momentum_3"] > 0)
+        & (trig["m1_volume_z"].fillna(0.0) >= -0.50)
+    )
+    trig["trigger_1m_momentum_short"] = (
+        (trig["close"] < trig["m1_ema_fast"])
+        & (trig["m1_momentum_3"] < 0)
+        & (trig["m1_volume_z"].fillna(0.0) >= -0.50)
+    )
+    trig["trigger_1m_directional_long"] = (
+        (trig["close"] > trig["m1_ema_mid"])
+        & (trig["m1_momentum_3"] >= 0)
+        & (trig["m1_volume_z"].fillna(0.0) >= -0.75)
+    )
+    trig["trigger_1m_directional_short"] = (
+        (trig["close"] < trig["m1_ema_mid"])
+        & (trig["m1_momentum_3"] <= 0)
+        & (trig["m1_volume_z"].fillna(0.0) >= -0.75)
+    )
+    # Backward-compatible aliases used by existing tests and any old artifacts.
+    trig["trigger_1m_long"] = trig["trigger_1m_strict_long"]
+    trig["trigger_1m_short"] = trig["trigger_1m_strict_short"]
     trig["_available_ts"] = trig["timestamp"] + _timeframe_delta("1m")
-    trig = trig[["_available_ts", "trigger_1m_long", "trigger_1m_short"]]
+    trigger_cols = ["trigger_1m_long", "trigger_1m_short"]
+    for profile in TRIGGER_PROFILES:
+        trigger_cols.extend(
+            [_trigger_column(profile, "long"), _trigger_column(profile, "short")]
+        )
+    trig = trig[["_available_ts", *dict.fromkeys(trigger_cols)]]
     out = pd.merge_asof(
         base.sort_values("_decision_ts"),
         trig.sort_values("_available_ts"),
@@ -254,6 +292,16 @@ def _timeframe_delta(timeframe: str) -> pd.Timedelta:
     if timeframe.endswith("d"):
         return pd.Timedelta(days=int(timeframe[:-1]))
     raise ValueError(f"unsupported timeframe: {timeframe}")
+
+
+def _trigger_column(profile: str, side: str) -> str:
+    if profile not in TRIGGER_PROFILES:
+        raise ValueError(
+            f"unknown trigger_profile {profile!r}; expected one of {TRIGGER_PROFILES}"
+        )
+    if side not in {"long", "short"}:
+        raise ValueError(f"unknown trigger side: {side!r}")
+    return f"trigger_1m_{profile}_{side}"
 
 
 def _float(value) -> float:

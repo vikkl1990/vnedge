@@ -3,11 +3,13 @@
 import pandas as pd
 
 from vnedge.research.daily_scalper_pack import (
+    DAILY_SCALPER_CADENCE_PROFILES,
     DailyScalperCandidate,
     default_candidates,
     parse_args,
     parse_candidate,
     run_daily_scalper_research,
+    run_daily_scalper_cadence_sweep,
 )
 from vnedge.strategy.base_strategy import SignalIntent
 from vnedge.strategy.daily_scalper_pack import DailyScalperPack
@@ -68,6 +70,18 @@ def test_daily_scalper_requires_context_and_trigger():
     assert diagnostic is not None
 
 
+def test_daily_scalper_supports_cadence_trigger_profiles():
+    strategy = DailyScalperPack(trigger_profile="momentum")
+    strategy._base = FakeBase()
+    row = context_row(trigger=False)
+    row["trigger_1m_momentum_long"] = [True]
+
+    intent = strategy.signal(row, 0)
+
+    assert intent is not None
+    assert intent.side == "long"
+
+
 def test_daily_scalper_research_marks_missing_lanes_untestable(tmp_path):
     candidate = DailyScalperCandidate("binanceusdm", "DOGE/USDT:USDT", "order_block")
 
@@ -78,6 +92,28 @@ def test_daily_scalper_research_marks_missing_lanes_untestable(tmp_path):
     assert "missing data lane" in result["reasons"][0]
     assert report["policy"]["can_trade"] is False
     assert report["summary"]["untestable"] == 1
+    assert result["cadence_profile"] == "strict"
+    assert result["signal_cadence"]["raw_signals"] == 0
+
+
+def test_daily_scalper_cadence_sweep_is_research_only(tmp_path):
+    candidate = DailyScalperCandidate("binanceusdm", "DOGE/USDT:USDT", "order_block")
+
+    report = run_daily_scalper_cadence_sweep(
+        tmp_path,
+        candidates=(candidate,),
+        profiles=(
+            DAILY_SCALPER_CADENCE_PROFILES["strict"],
+            DAILY_SCALPER_CADENCE_PROFILES["active"],
+        ),
+    )
+
+    assert report["strategy"] == "daily_scalper_cadence_refactor_v1"
+    assert report["policy"]["can_trade"] is False
+    assert report["can_promote"] is False
+    assert len(report["results"]) == 2
+    assert report["summary"]["candidates"] == 1
+    assert report["recommendations"][0]["can_trade"] is False
 
 
 def test_daily_scalper_default_candidates_cover_configured_universe(monkeypatch):
@@ -97,12 +133,16 @@ def test_daily_scalper_default_candidates_cover_configured_universe(monkeypatch)
 def test_daily_scalper_cli_supports_loop_mode():
     default = parse_args([])
     loop = parse_args(["--interval-seconds", "21600", "--once", "--max-candidates", "12"])
+    cadence = parse_args(["--cadence-sweep", "--profile", "active", "--fast-smoke"])
 
     assert default.interval_seconds == 0
     assert default.once is False
     assert loop.interval_seconds == 21600
     assert loop.once is True
     assert loop.max_candidates == 12
+    assert cadence.cadence_sweep is True
+    assert cadence.profile[0].name == "active"
+    assert cadence.fast_smoke is True
 
 
 def test_parse_candidate_accepts_optional_side_filter():
