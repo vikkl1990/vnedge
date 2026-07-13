@@ -180,6 +180,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         "event_taker_replay": {"rows": []},
         "cascade_reversion": {"targets": []},
         "leadlag_echo_scalp": {"targets": []},
+        "realtime_shadow_scalp": {},
         "shadow_lanes": {"lanes": [], "shadow_trials": [], "blocked": []},
         "live_shadow_perf": {"available": False},
         "edge_agents": {"policy": {"can_trade": False}},
