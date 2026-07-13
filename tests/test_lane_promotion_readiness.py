@@ -3,6 +3,7 @@
 import json
 
 from vnedge.research.lane_promotion_readiness import (
+    STATUS_PAPER_ACTIVE,
     STATUS_PAPER_REVIEW_READY,
     STATUS_REPLAY_NEEDS_ADAPTER,
     STATUS_SHADOW_NOT_FIRING,
@@ -65,6 +66,41 @@ def _write_journal(path, records):
     path.write_text("\n".join(json.dumps(row) for row in records) + "\n")
 
 
+def _paper_eval(fired=True):
+    return {
+        "ts": "2026-07-08T16:00:00+00:00",
+        "kind": "lane_eval",
+        "payload": {
+            "bar_ts": "2026-07-08T15:00:00+00:00",
+            "strategy_id": STRATEGY,
+            "symbol": SYMBOL,
+            "mode": "paper",
+            "fired": fired,
+            "signal_reason": "crowded shorts",
+            "backfill": False,
+        },
+    }
+
+
+def _paper_order():
+    return {
+        "ts": "2026-07-08T16:00:00+00:00",
+        "kind": "order_intent",
+        "payload": {
+            "intent_key": "k-paper",
+            "client_order_id": "vne_paper",
+            "intent": {
+                "symbol": SYMBOL,
+                "side": "long",
+                "quantity": 0.01,
+                "strategy_id": STRATEGY,
+                "reduce_only": False,
+                "order_type": "market",
+            },
+        },
+    }
+
+
 def test_manifest_lane_without_shadow_outcomes_is_not_firing(tmp_path):
     research = tmp_path / "research"
     journals = tmp_path / "logs"
@@ -116,6 +152,55 @@ def test_positive_mature_shadow_lane_is_paper_review_ready_not_live_ready(tmp_pa
     assert payload["summary"]["paper_review_ready"] == 1
     assert payload["summary"]["live_ready"] == 0
     assert "paper trial not completed" in row["live_blockers"]
+
+
+def test_active_paper_trial_is_reported_separately_from_shadow_readiness(tmp_path):
+    research = tmp_path / "research"
+    journals = tmp_path / "logs"
+    research.mkdir()
+    journals.mkdir()
+    write_shadow_manifest(generate_shadow_manifest([]), research)
+    _write_journal(
+        journals / "funding_mr_btc_v1_20260703.journal.jsonl",
+        [
+            _paper_eval(),
+            {"ts": "2026-07-08T16:00:01+00:00", "kind": "risk_decision", "payload": {"approved": True}},
+            _paper_order(),
+            {"ts": "2026-07-08T16:00:02+00:00", "kind": "order_acknowledged", "payload": {"intent_key": "k-paper"}},
+            {"ts": "2026-07-08T18:00:00+00:00", "kind": "live_paper_exit", "payload": {"reason": "take_profit"}},
+            {
+                "ts": "2026-07-08T18:00:01+00:00",
+                "kind": "live_paper_report",
+                "payload": {
+                    "report": {
+                        "mode": "paper_live",
+                        "symbol": SYMBOL,
+                        "strategy_id": STRATEGY,
+                        "orders_submitted": 1,
+                        "fills": 1,
+                        "realized_pnl_usd": 8.5,
+                        "final_equity_usd": 508.5,
+                    }
+                },
+            },
+        ],
+    )
+
+    payload = build_lane_promotion_readiness(research_dir=research, journal_dir=journals)
+
+    row = payload["rows"][0]
+    assert row["row_type"] == "paper_trial_lane"
+    assert row["status"] == STATUS_PAPER_ACTIVE
+    assert row["paper_active"] is True
+    assert row["paper_review_ready"] is False
+    assert row["live_ready"] is False
+    assert row["evidence"]["paper_order_intents"] == 1
+    assert row["evidence"]["paper_exits"] == 1
+    assert row["evidence"]["realized_pnl_usd"] == 8.5
+    assert payload["summary"]["paper_active"] == 1
+    assert payload["summary"]["paper_order_intents"] == 1
+    assert payload["summary"]["paper_exits"] == 1
+    assert "1 approved paper lane(s) active" in payload["operator_answer"]
 
 
 def test_filtered_replay_trial_is_adapter_blocked(tmp_path):

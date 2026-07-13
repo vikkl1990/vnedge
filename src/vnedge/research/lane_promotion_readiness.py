@@ -38,6 +38,8 @@ STATUS_SHADOW_NEGATIVE = "SHADOW_NEGATIVE"
 STATUS_SHADOW_PF_TOO_LOW = "SHADOW_PF_TOO_LOW"
 STATUS_REPLAY_NEEDS_ADAPTER = "REPLAY_POSITIVE_NEEDS_SHADOW_ADAPTER"
 STATUS_BLOCKED = "BLOCKED"
+STATUS_PAPER_ACTIVE = "PAPER_ACTIVE"
+STATUS_PAPER_WAITING = "PAPER_WAITING_FOR_SIGNAL"
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,7 @@ def build_lane_promotion_readiness(
         for blocked in manifest.get("blocked", []) or []
         if isinstance(blocked, Mapping)
     )
+    rows.extend(_paper_trial_rows(Path(journal_dir)))
     rows.sort(key=_row_sort_key)
 
     summary = _summary(rows)
@@ -129,18 +132,22 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 30) -> str:
         (
             "summary: "
             f"{summary.get('total_rows', 0)} rows, "
+            f"{summary.get('paper_active', 0)} paper-active, "
             f"{summary.get('shadow_firing', 0)} firing, "
             f"{summary.get('paper_review_ready', 0)} paper-review candidates, "
             f"{summary.get('live_ready', 0)} live-ready"
         ),
     ]
     for row in list(payload.get("rows", []))[:limit]:
+        evidence = row.get("evidence", {})
+        trades = evidence.get("virtual_trades", evidence.get("paper_order_intents", 0))
+        net = evidence.get("net_usd", evidence.get("realized_pnl_usd"))
         lines.append(
             f"  {row.get('status', 'UNKNOWN'):<38} "
             f"{row.get('exchange', '')} {row.get('symbol', '')} "
             f"{row.get('strategy_id') or row.get('family') or row.get('source', '')} "
-            f"trades={row.get('evidence', {}).get('virtual_trades', 0)} "
-            f"net={row.get('evidence', {}).get('net_usd')}"
+            f"trades={trades} "
+            f"net={net}"
         )
     lines.append("read-only: can_trade=false can_promote=false")
     return "\n".join(lines)
@@ -231,6 +238,169 @@ def _blocked_row(blocked: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _paper_trial_rows(journal_dir: Path) -> list[dict[str, Any]]:
+    """Summarize approved live-paper lanes from runtime journals."""
+    if not journal_dir.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(journal_dir.glob("*.journal.jsonl")):
+        if path.name.endswith("_shadow.journal.jsonl"):
+            continue
+        evidence = _paper_evidence(path)
+        if evidence is None:
+            continue
+        status = (
+            STATUS_PAPER_ACTIVE
+            if int(evidence.get("paper_order_intents") or 0) > 0
+            else STATUS_PAPER_WAITING
+        )
+        rows.append({
+            "row_type": "paper_trial_lane",
+            "lane_id": path.name.removesuffix(".journal.jsonl"),
+            "trial_id": path.name.removesuffix(".journal.jsonl"),
+            "journal": str(path),
+            "exchange": evidence.get("exchange") or "",
+            "symbol": evidence.get("symbol") or "",
+            "timeframe": evidence.get("timeframe") or "1h",
+            "strategy_id": evidence.get("strategy_id") or "",
+            "mode": "paper",
+            "status": status,
+            "paper_active": status == STATUS_PAPER_ACTIVE,
+            "paper_review_ready": False,
+            "live_ready": False,
+            "can_trade": False,
+            "can_promote": False,
+            "evidence": evidence,
+            "blockers": _paper_blockers(evidence),
+            "next_action": (
+                "keep approved paper trial running and judge only against its locked manifest"
+                if status == STATUS_PAPER_ACTIVE
+                else "keep approved paper trial online until the next valid signal"
+            ),
+            "live_blockers": [
+                "paper trial verdict not complete",
+                "pre-live checklist not cleared",
+                "three live gates not open",
+            ],
+        })
+    return rows
+
+
+def _paper_evidence(path: Path) -> dict[str, Any] | None:
+    counters = {
+        "evals": 0,
+        "live_signals": 0,
+        "risk_decisions": 0,
+        "paper_order_intents": 0,
+        "paper_order_acknowledged": 0,
+        "paper_exits": 0,
+        "paper_reports": 0,
+    }
+    active_since_ts: str | None = None
+    latest_eval_ts: str | None = None
+    latest_bar_ts: str | None = None
+    latest_signal_reason: str | None = None
+    latest_order: dict[str, Any] | None = None
+    latest_exit: dict[str, Any] | None = None
+    latest_report: dict[str, Any] | None = None
+    symbol = ""
+    strategy_id = ""
+    exchange = ""
+
+    for record in _iter_jsonl(path):
+        ts = str(record.get("ts") or "")
+        if ts and active_since_ts is None:
+            active_since_ts = ts
+        kind = str(record.get("kind") or "")
+        payload = record.get("payload")
+        if not isinstance(payload, Mapping):
+            payload = {}
+        if kind == "lane_eval":
+            counters["evals"] += 1
+            latest_eval_ts = ts or latest_eval_ts
+            latest_bar_ts = str(payload.get("bar_ts") or latest_bar_ts or "")
+            symbol = str(payload.get("symbol") or symbol)
+            strategy_id = str(payload.get("strategy_id") or strategy_id)
+            exchange = str(payload.get("exchange") or exchange)
+            if bool(payload.get("fired")) and not bool(payload.get("backfill")):
+                counters["live_signals"] += 1
+                latest_signal_reason = str(payload.get("signal_reason") or "")
+        elif kind == "risk_decision":
+            counters["risk_decisions"] += 1
+        elif kind == "order_intent":
+            counters["paper_order_intents"] += 1
+            latest_order = dict(payload)
+            intent = payload.get("intent")
+            if isinstance(intent, Mapping):
+                symbol = str(intent.get("symbol") or symbol)
+                strategy_id = str(intent.get("strategy_id") or strategy_id)
+        elif kind == "order_acknowledged":
+            counters["paper_order_acknowledged"] += 1
+        elif kind == "live_paper_exit":
+            counters["paper_exits"] += 1
+            latest_exit = dict(payload)
+        elif kind == "live_paper_report":
+            counters["paper_reports"] += 1
+            latest_report = dict(payload.get("report") or payload)
+            symbol = str(latest_report.get("symbol") or symbol)
+            strategy_id = str(latest_report.get("strategy_id") or strategy_id)
+
+    if not any(counters.values()):
+        return None
+    if counters["evals"] == 0 and counters["paper_order_intents"] == 0 and latest_report is None:
+        return None
+
+    report = latest_report or {}
+    return {
+        **counters,
+        "active_since_ts": active_since_ts,
+        "latest_eval_ts": latest_eval_ts,
+        "latest_bar_ts": latest_bar_ts or None,
+        "latest_signal_reason": latest_signal_reason,
+        "latest_order": _compact_paper_order(latest_order),
+        "latest_exit": latest_exit,
+        "latest_report": report,
+        "symbol": symbol or report.get("symbol") or "",
+        "strategy_id": strategy_id or report.get("strategy_id") or "",
+        "exchange": exchange,
+        "timeframe": "1h",
+        "orders_submitted": report.get("orders_submitted"),
+        "fills": report.get("fills"),
+        "realized_pnl_usd": report.get("realized_pnl_usd"),
+        "unrealized_pnl_usd": report.get("unrealized_pnl_usd"),
+        "final_equity_usd": report.get("final_equity_usd"),
+        "risk_rejects": report.get("risk_rejects"),
+    }
+
+
+def _compact_paper_order(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    intent = payload.get("intent")
+    if not isinstance(intent, Mapping):
+        return {"intent_key": payload.get("intent_key")}
+    return {
+        "intent_key": payload.get("intent_key"),
+        "client_order_id": payload.get("client_order_id"),
+        "symbol": intent.get("symbol"),
+        "side": intent.get("side"),
+        "quantity": intent.get("quantity"),
+        "reduce_only": intent.get("reduce_only"),
+        "strategy_id": intent.get("strategy_id"),
+        "order_type": intent.get("order_type"),
+    }
+
+
+def _paper_blockers(evidence: Mapping[str, Any]) -> list[str]:
+    blockers = [
+        "paper status is visibility only, not promotion",
+        "live promotion still requires completed paper verdict and live ladder gates",
+    ]
+    if int(evidence.get("paper_order_intents") or 0) == 0:
+        blockers.append("no paper order intents yet; waiting for the next approved signal")
+    return blockers
+
+
 def _shadow_status(
     perf: Mapping[str, Any] | None,
     config: ReadinessConfig,
@@ -309,6 +479,20 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             1 for row in rows if row.get("row_type") == "filtered_replay_shadow_trial"
         ),
         "blocked": statuses.get(STATUS_BLOCKED, 0),
+        "paper_runtime_lanes": sum(
+            1 for row in rows if row.get("row_type") == "paper_trial_lane"
+        ),
+        "paper_active": sum(1 for row in rows if row.get("paper_active")),
+        "paper_order_intents": sum(
+            int(row.get("evidence", {}).get("paper_order_intents") or 0)
+            for row in rows
+            if row.get("row_type") == "paper_trial_lane"
+        ),
+        "paper_exits": sum(
+            int(row.get("evidence", {}).get("paper_exits") or 0)
+            for row in rows
+            if row.get("row_type") == "paper_trial_lane"
+        ),
         "shadow_firing": sum(
             1
             for row in rows
@@ -329,7 +513,12 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
     firing = int(summary.get("shadow_firing") or 0)
     not_firing = int(summary.get("shadow_not_firing") or 0)
     trials = int(summary.get("filtered_replay_shadow_trials") or 0)
+    paper_active = int(summary.get("paper_active") or 0)
+    paper_orders = int(summary.get("paper_order_intents") or 0)
+    paper_exits = int(summary.get("paper_exits") or 0)
     return (
+        f"{paper_active} approved paper lane(s) active "
+        f"({paper_orders} order intents, {paper_exits} exits), "
         f"{paper} lane(s) are paper-review ready, {live} lane(s) are live-ready, "
         f"{firing} runtime shadow lane(s) are firing, {not_firing} are not firing, "
         f"and {trials} replay-positive trial(s) still need runtime adapters."
@@ -338,13 +527,15 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
 
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str, str]:
     rank = {
-        STATUS_PAPER_REVIEW_READY: 0,
-        STATUS_SHADOW_COLLECTING: 1,
-        STATUS_SHADOW_PF_TOO_LOW: 2,
-        STATUS_SHADOW_NEGATIVE: 3,
-        STATUS_SHADOW_NOT_FIRING: 4,
-        STATUS_REPLAY_NEEDS_ADAPTER: 5,
-        STATUS_BLOCKED: 6,
+        STATUS_PAPER_ACTIVE: 0,
+        STATUS_PAPER_WAITING: 1,
+        STATUS_PAPER_REVIEW_READY: 2,
+        STATUS_SHADOW_COLLECTING: 3,
+        STATUS_SHADOW_PF_TOO_LOW: 4,
+        STATUS_SHADOW_NEGATIVE: 5,
+        STATUS_SHADOW_NOT_FIRING: 6,
+        STATUS_REPLAY_NEEDS_ADAPTER: 7,
+        STATUS_BLOCKED: 8,
     }.get(str(row.get("status") or ""), 9)
     return (
         rank,
@@ -359,6 +550,24 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open() as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    rows.append(record)
+    except OSError:
+        return []
+    return rows
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
