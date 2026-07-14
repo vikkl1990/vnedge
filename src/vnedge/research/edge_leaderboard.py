@@ -134,6 +134,20 @@ def _row_from_record(
         payoff=payoff,
         trades=trades,
     )
+    execution_truth = _execution_truth_view(record.get("execution_truth"))
+    truth_annotation = _execution_truth_annotation(execution_truth)
+    if truth_annotation in {
+        "TRUTH_UNDER_SAMPLED",
+        "TRUTH_LOW_FILL_CONFIDENCE",
+        "TRUTH_NEGATIVE_AFTER_COST",
+        "TRUTH_NO_EVENTS",
+    }:
+        blockers = [*blockers, truth_annotation.lower()]
+        route = "BLOCKED"
+    elif truth_annotation == "TRUTH_TAKER_EDGE":
+        route = "TAKER_ALLOWED"
+    elif truth_annotation == "TRUTH_MAKER_EDGE" and route != "BLOCKED":
+        route = "MAKER_ONLY"
     latest_judgment = None
     if family is None and judgment_index:
         latest_judgment = judgment_index.get((exchange, symbol, strategy))
@@ -175,6 +189,10 @@ def _row_from_record(
         score = round(score + LIVE_SHADOW_SCORE_BONUS, 2)
     elif live_shadow_annotation == LIVE_SHADOW_NEGATIVE:
         score = round(score - LIVE_SHADOW_SCORE_BONUS, 2)
+    if truth_annotation in {"TRUTH_MAKER_EDGE", "TRUTH_TAKER_EDGE"}:
+        score = round(score + 4.0, 2)
+    elif truth_annotation:
+        score = round(score - 4.0, 2)
     candidate_id = (
         f"{strategy}__{family}_only"
         if family and strategy == "quant_signal_pack_v1"
@@ -209,6 +227,8 @@ def _row_from_record(
         "latest_judgment": latest_judgment,
         "live_shadow": live_shadow,
         "live_shadow_annotation": live_shadow_annotation,
+        "execution_truth": execution_truth,
+        "execution_truth_annotation": truth_annotation,
         "can_trade": False,
         "can_promote": False,
         "requires_human_approval": True,
@@ -243,6 +263,59 @@ def _live_shadow_annotation(live_shadow: dict | None) -> str | None:
     if live_shadow["net_usd"] < 0:
         return LIVE_SHADOW_NEGATIVE
     return None
+
+
+def _execution_truth_view(raw: object) -> dict | None:
+    """Compact execution-truth summary from execution_edge_labeler output.
+
+    Records may attach either the full report under ``execution_truth`` or just
+    the report's ``summary``.  The view is intentionally small so the
+    leaderboard can join proof without becoming a second labeler.
+    """
+    if not isinstance(raw, dict):
+        return None
+    summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else raw
+    if not isinstance(summary, dict):
+        return None
+    verdict = str(summary.get("verdict") or "")
+    if not verdict:
+        return None
+    return {
+        "verdict": verdict,
+        "samples": int(summary.get("samples", 0) or 0),
+        "executable_samples": int(summary.get("executable_samples", 0) or 0),
+        "positive_net_samples": int(summary.get("positive_net_samples", 0) or 0),
+        "avg_net_bps": (
+            _finite_float(summary["avg_net_bps"])
+            if summary.get("avg_net_bps") is not None
+            else None
+        ),
+        "profit_factor": (
+            _finite_float(summary["profit_factor"])
+            if summary.get("profit_factor") is not None
+            else None
+        ),
+        "avg_fill_probability": (
+            _finite_float(summary["avg_fill_probability"])
+            if summary.get("avg_fill_probability") is not None
+            else None
+        ),
+        "primary_blocker": str(summary.get("primary_blocker") or ""),
+    }
+
+
+def _execution_truth_annotation(execution_truth: dict | None) -> str | None:
+    if not execution_truth:
+        return None
+    verdict = execution_truth.get("verdict")
+    return {
+        "MAKER_EDGE": "TRUTH_MAKER_EDGE",
+        "TAKER_EDGE": "TRUTH_TAKER_EDGE",
+        "UNDER_SAMPLED": "TRUTH_UNDER_SAMPLED",
+        "LOW_FILL_CONFIDENCE": "TRUTH_LOW_FILL_CONFIDENCE",
+        "NEGATIVE_AFTER_COST": "TRUTH_NEGATIVE_AFTER_COST",
+        "NO_EVENTS": "TRUTH_NO_EVENTS",
+    }.get(str(verdict))
 
 
 def _route_and_blockers(
@@ -337,6 +410,8 @@ def _queue_entry(row: dict) -> dict:
         "payoff_ratio": row["payoff_ratio"],
         "live_shadow": row["live_shadow"],
         "live_shadow_annotation": row["live_shadow_annotation"],
+        "execution_truth": row["execution_truth"],
+        "execution_truth_annotation": row["execution_truth_annotation"],
         "latest_judgment": row["latest_judgment"],
         "can_trade": False,
         "can_promote": False,
@@ -413,6 +488,17 @@ def _summary(rows: list[dict], queue: list[dict]) -> dict:
         "live_shadow_negative": sum(
             1 for r in rows if r["live_shadow_annotation"] == LIVE_SHADOW_NEGATIVE
         ),
+        "execution_truth_tracked": sum(1 for r in rows if r["execution_truth"] is not None),
+        "execution_truth_positive": sum(
+            1 for r in rows
+            if r["execution_truth_annotation"] in {"TRUTH_MAKER_EDGE", "TRUTH_TAKER_EDGE"}
+        ),
+        "execution_truth_blocked": sum(
+            1 for r in rows
+            if str(r.get("execution_truth_annotation") or "").startswith("TRUTH_")
+            and r["execution_truth_annotation"]
+            not in {"TRUTH_MAKER_EDGE", "TRUTH_TAKER_EDGE"}
+        ),
     }
 
 
@@ -444,6 +530,13 @@ def _policy(registry: ScalperParameterRegistry) -> dict:
         "judgment_overlay": {
             "enabled": True,
             "latest_reject_blocks_queue": True,
+        },
+        "execution_truth": {
+            "enabled": True,
+            "source": "vnedge.research.execution_edge_labeler",
+            "blocks_queue_when_negative_or_under_sampled": True,
+            "annotation_only_for_score": False,
+            "never_auto_promotes": True,
         },
     }
 
