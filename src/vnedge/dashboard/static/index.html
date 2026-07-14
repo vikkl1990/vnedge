@@ -994,6 +994,7 @@
   .mini-card.info,.gov-card.info{background:rgba(10,25,41,.86)}
   .mini-card.plan,.gov-card.plan{background:rgba(24,18,40,.86)}
   .terminal-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+  .vibe-panel{margin:10px}
   .dense-panel{
     min-width:0;
     border:1px solid var(--line);
@@ -2691,6 +2692,18 @@
           <div class="empty" id="workbench_empty">proof queue is empty or awaiting council output</div>
         </div>
       </div>
+      <div class="dense-panel vibe-panel">
+        <div class="dense-title">
+          <span>Persistent Hypothesis Memory</span>
+          <span id="vibe_age">waiting</span>
+        </div>
+        <div class="table-wrap">
+          <table id="vibe_cards"><thead><tr>
+            <th>Life</th><th>Health</th><th>Hypothesis</th><th>Next proof</th><th>Seen</th><th>Blocked by</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="empty" id="vibe_empty">hypothesis memory has not published yet</div>
+      </div>
     </section>
 
     <section class="agent-board" id="shadowManifestBoard" data-view="research">
@@ -3161,6 +3174,7 @@
   let lastResearch={results:[],drift_alerts:[]};
   let lastCouncil={summary:{},debates:[]};
   let lastWorkbench={summary:{},tasks:[]};
+  let lastVibe={summary:{},cards:[]};
   let lastRealtimeScanner={summary:{},rows:[]};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
@@ -5173,6 +5187,16 @@
     return "dimval";
   }
 
+  function lifecycleTone(v){
+    const s=String(v||"");
+    if(s==="MONITORING")return "plan";
+    if(s==="ACTIVE")return "good";
+    if(s==="INCUBATING")return "info";
+    if(s==="DECAYED")return "warn";
+    if(s==="DISABLED")return "bad";
+    return "idle";
+  }
+
   function priorityTone(score){
     const p=num(score);
     if(p>=75)return "pos";
@@ -5207,11 +5231,33 @@
     if(card)card.className="mini-card "+(tone||"");
   }
 
-  function renderCouncil(council,workbench){
+  function renderVibe(vibe){
+    const v=vibe||{summary:{},cards:[]};
+    lastVibe=v;
+    const cards=Array.isArray(v.cards)?v.cards:[];
+    text("vibe_age",v.generated_at?"updated "+utcClock(v.generated_at):"waiting");
+    const body=$("vibe_cards").querySelector("tbody");
+    body.replaceChildren();
+    cards.slice(0,12).forEach(card=>{
+      const tr=body.insertRow();
+      appendBadge(tr.insertCell(),String(card.lifecycle_state||"--").replaceAll("_"," "),lifecycleTone(card.lifecycle_state));
+      appendCell(tr,num(card.health_score).toFixed(1),priorityTone(card.health_score),
+        "priority "+num(card.priority_score).toFixed(1)+" / decay "+num(card.decay_score).toFixed(1));
+      appendCell(tr,compactCandidate(card),"clip",card.hypothesis_id||card.candidate_id||"");
+      appendCell(tr,shortCouncilAction(card.next_action),"clip",card.proof_step||"");
+      appendCell(tr,String(num(card.times_seen)),"mono");
+      appendCell(tr,firstBlocker(card.blocked_by),"clip",(Array.isArray(card.blocked_by)?card.blocked_by:[]).join(", "));
+    });
+    $("vibe_cards").style.display=cards.length?"table":"none";
+    $("vibe_empty").style.display=cards.length?"none":"block";
+  }
+
+  function renderCouncil(council,workbench,vibe){
     const c=council||{summary:{},debates:[]};
     const w=workbench||{summary:{},tasks:[]};
     lastCouncil=c;
     lastWorkbench=w;
+    renderVibe(vibe);
     wnCollectCouncil(c,w);
     wnRender();
 
@@ -5334,8 +5380,12 @@
   }
 
   function loadCouncil(){
-    Promise.all([fetchJSON("/alpha-council"),fetchJSON("/alpha-workbench")])
-      .then(([c,w])=>{renderCouncil(c,w);reapplyView();})
+    Promise.all([
+      fetchJSON("/alpha-council").catch(()=>({summary:{},debates:[]})),
+      fetchJSON("/alpha-workbench").catch(()=>({summary:{},tasks:[]})),
+      fetchJSON("/vibe-intelligence").catch(()=>({summary:{},cards:[]}))
+    ])
+      .then(([c,w,v])=>{renderCouncil(c,w,v);reapplyView();})
       .catch(()=>{});
   }
 
