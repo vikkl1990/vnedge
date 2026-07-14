@@ -47,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 # --- Whitelists / blocklists ---------------------------------------------------
 
+#: Namespace every AI-authored strategy_id is force-prefixed with, so an AI
+#: strategy is always distinguishable from a hand-written / registered one.
+AI_STRATEGY_ID_PREFIX = "ai_"
+
 #: Top-level packages an AI strategy may import freely (submodules allowed).
 ALLOWED_IMPORT_ROOTS = frozenset({"pandas", "numpy", "math", "dataclasses"})
 
@@ -595,7 +599,10 @@ def _restricted_globals(module_name: str) -> dict:
 
 
 def load_ai_strategy(
-    source: str, *, strategy_id_prefix: str = "ai_", module_name: str = "ai_strategy"
+    source: str,
+    *,
+    strategy_id_prefix: str = AI_STRATEGY_ID_PREFIX,
+    module_name: str = "ai_strategy",
 ) -> type[BaseStrategy]:
     """Validate, then exec ``source`` in a restricted namespace and return the
     single ``BaseStrategy`` subclass it defines.
@@ -644,7 +651,9 @@ def load_ai_strategy(
 
 
 def ai_strategies_from_dir(
-    path: str | Path = "data/strategies/ai", *, strategy_id_prefix: str = "ai_"
+    path: str | Path = "data/strategies/ai",
+    *,
+    strategy_id_prefix: str = AI_STRATEGY_ID_PREFIX,
 ) -> dict[str, type[BaseStrategy]]:
     """Load every ``*.py`` under ``path``. Files that fail validation (or raise
     on load) are skipped with a logged reason — a bad AI strategy can never

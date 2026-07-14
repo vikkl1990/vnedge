@@ -159,6 +159,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         live_shadow_perf={"available": False},
         event_taker_replay={"rows": []},
         cascade_reversion={"targets": []},
+        ai_candidates={"candidates": []},
         leadlag_echo_scalp={"targets": []},
     ))
     text = (tmp_path / "live_research" / "latest.json").read_text()
@@ -179,6 +180,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         "scalper_parameter_registry": {"version": "test"},
         "event_taker_replay": {"rows": []},
         "cascade_reversion": {"targets": []},
+        "ai_candidates": {"candidates": []},
         "leadlag_echo_scalp": {"targets": []},
         "realtime_shadow_scalp": {},
         "shadow_lanes": {"lanes": [], "shadow_trials": [], "blocked": []},

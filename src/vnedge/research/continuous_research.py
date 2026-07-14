@@ -51,6 +51,10 @@ from vnedge.data.funding_ingestor import ingest_funding
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research import data_burn
 from vnedge.risk.protections import STOP_EXIT_REASONS
+from vnedge.research.ai_candidate_research import (
+    build_ai_candidates_payload,
+    write_ai_candidates_payload,
+)
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
@@ -679,6 +683,12 @@ def _alpha_factory_enabled() -> bool:
     }
 
 
+def _ai_candidate_research_enabled() -> bool:
+    return os.environ.get("AI_CANDIDATE_RESEARCH_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _enabled_research_strategies() -> set[str] | None:
     configured = set(_split_csv(os.environ.get("RESEARCH_STRATEGIES")))
     return configured or None
@@ -699,6 +709,12 @@ def _load_cascade_reversion_latest() -> dict:
     """Last output of the liquidation-cascade reversion replay
     (vnedge.research.cascade_reversion), or {} if absent/unreadable."""
     return _read_optional_json(OUT_DIR / "cascade_reversion.json")
+
+
+def _load_ai_candidates_latest() -> dict:
+    """Last output of the AI-authored strategy candidate research
+    (vnedge.research.ai_candidate_research), or {} if absent/unreadable."""
+    return _read_optional_json(OUT_DIR / "ai_candidates.json")
 
 
 def _load_leadlag_echo_scalp_latest() -> dict:
@@ -787,6 +803,8 @@ class ResearchPayload:
     cascade_reversion: dict = field(default_factory=dict)
     leadlag_echo_scalp: dict = field(default_factory=dict)
     realtime_shadow_scalp: dict = field(default_factory=dict)
+    # AI-authored strategy candidates (research only — never trades/promotes)
+    ai_candidates: dict = field(default_factory=dict)
 
 
 def publish(payload: ResearchPayload) -> None:
@@ -807,6 +825,9 @@ def publish(payload: ResearchPayload) -> None:
         "scalper_parameter_registry": payload.scalper_parameter_registry or {},
         "event_taker_replay": payload.event_taker_replay or {},
         "cascade_reversion": payload.cascade_reversion or {},
+        # AI-authored strategy candidates: AST-validated, causality-gated,
+        # walk-forwarded — research only, never a trade or a promotion.
+        "ai_candidates": payload.ai_candidates or {},
         "leadlag_echo_scalp": payload.leadlag_echo_scalp or {},
         # live-tick firing of the scalp detectors (real-time shadow, never a
         # trade); real-time only accelerates evidence, it does not gate.
@@ -980,6 +1001,16 @@ async def run_cycle() -> list[dict]:
         l2.get("scalper_parameter_registry")
         or DEFAULT_SCALPER_PARAMETER_REGISTRY.to_dict()
     )
+    # AI-authored strategy candidates: load + AST-validate + causality-check +
+    # walk-forward the data/strategies/ai/ files and fold the result in. Runs on
+    # the existing cadence (no new service); a bad file is counted, never fatal.
+    if _ai_candidate_research_enabled():
+        try:
+            write_ai_candidates_payload(
+                build_ai_candidates_payload(store, targets), OUT_DIR
+            )
+        except Exception as exc:  # noqa: BLE001 — AI research must never kill a cycle
+            logger.exception("ai candidate research failed: %s", exc)
     publish(ResearchPayload(
         records=records,
         started=started,
@@ -998,6 +1029,7 @@ async def run_cycle() -> list[dict]:
         live_shadow_perf=live_shadow_perf,
         event_taker_replay=_load_event_taker_latest(),
         cascade_reversion=_load_cascade_reversion_latest(),
+        ai_candidates=_load_ai_candidates_latest(),
         leadlag_echo_scalp=_load_leadlag_echo_scalp_latest(),
         realtime_shadow_scalp=_load_realtime_shadow_scalp_latest(),
     ))
