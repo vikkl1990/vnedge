@@ -29,7 +29,7 @@ from vnedge.scalping.parameter_registry import (
     DEFAULT_SCALPER_PARAMETER_REGISTRY,
     ExchangeFeeProfile,
 )
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.strategy_registry import get_strategy_class
 
 ExecutionRoute = Literal["MAKER_ONLY", "TAKER_ALLOWED"]
