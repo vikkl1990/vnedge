@@ -248,3 +248,56 @@ def test_no_shadow_perf_rows_carry_null_live_shadow():
     assert board["policy"]["live_shadow"]["annotation_only"] is True
     assert board["policy"]["live_shadow"]["never_auto_promotes"] is True
     assert board["policy"]["live_shadow"]["min_virtual_trades"] == 5
+
+
+def test_execution_truth_negative_blocks_otherwise_passing_lane():
+    rec = record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)
+    rec["execution_truth"] = {
+        "summary": {
+            "verdict": "NEGATIVE_AFTER_COST",
+            "samples": 44,
+            "executable_samples": 44,
+            "positive_net_samples": 11,
+            "avg_net_bps": -2.8,
+            "profit_factor": 0.72,
+            "avg_fill_probability": 1.0,
+            "primary_blocker": "average net/PF below maker breakeven",
+        }
+    }
+
+    board = build_edge_leaderboard([rec])
+    row = board["rows"][0]
+
+    assert row["promotion_tier"] == "BLOCKED"
+    assert row["route_decision"] == "BLOCKED"
+    assert row["execution_truth_annotation"] == "TRUTH_NEGATIVE_AFTER_COST"
+    assert "truth_negative_after_cost" in row["blockers"]
+    assert board["promotion_queue"] == []
+    assert board["summary"]["execution_truth_tracked"] == 1
+    assert board["summary"]["execution_truth_blocked"] == 1
+    assert board["policy"]["execution_truth"]["never_auto_promotes"] is True
+
+
+def test_execution_truth_taker_edge_can_upgrade_route_but_not_promote_to_trade():
+    rec = record(verdict="PASS", net=55.0, trades=30, fees=20.0, pf=2.0, payoff=2.2)
+    rec["execution_truth"] = {
+        "verdict": "TAKER_EDGE",
+        "samples": 50,
+        "executable_samples": 50,
+        "positive_net_samples": 32,
+        "avg_net_bps": 3.4,
+        "profit_factor": 1.55,
+        "avg_fill_probability": 1.0,
+        "primary_blocker": "taker route clears fee wall",
+    }
+
+    board = build_edge_leaderboard([rec])
+    row = board["rows"][0]
+
+    assert row["promotion_tier"] == "JUDGMENT_READY"
+    assert row["route_decision"] == "TAKER_ALLOWED"
+    assert row["execution_truth"]["avg_net_bps"] == 3.4
+    assert row["execution_truth_annotation"] == "TRUTH_TAKER_EDGE"
+    assert row["can_trade"] is False
+    assert board["promotion_queue"][0]["execution_truth_annotation"] == "TRUTH_TAKER_EDGE"
+    assert board["summary"]["execution_truth_positive"] == 1
