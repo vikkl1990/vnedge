@@ -235,7 +235,6 @@ def test_naive_datetime_event_is_treated_as_utc():
 
 
 def test_report_timestamps_are_utc_iso_strings():
-    df = candles([(100.0, 100.1, 99.9, 100.0), (100.0, 100.1, 99.9, 100.0)])
     report = build_truth_report(
         exchange="test",
         symbol="BTC/USDT:USDT",
