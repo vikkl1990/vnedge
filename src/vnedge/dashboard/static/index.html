@@ -2010,6 +2010,197 @@
     .funnel-deck{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
   }
+
+  /* ============================================================
+     Production multi-view shell (top nav, views, legal, about,
+     cost model, deploy provenance). Appended last so it wins.
+     ============================================================ */
+
+  /* Stack the workstation vertically: persistent TOP nav, then the
+     active view. The nav-rail is repurposed as the horizontal nav bar. */
+  .workstation-shell{grid-template-columns:minmax(0,1fr);gap:8px}
+  .nav-rail{
+    position:sticky;
+    top:8px;
+    z-index:15;
+    display:flex;
+    align-items:stretch;
+    gap:2px;
+    overflow-x:auto;
+    padding:4px;
+    border-color:rgba(82,104,130,.5);
+    border-radius:8px;
+    background:linear-gradient(180deg, rgba(11,17,27,.99), rgba(7,11,18,.99));
+    box-shadow:0 8px 22px rgba(0,0,0,.24);
+    backdrop-filter:blur(10px);
+  }
+  .nav-rail .nav-title{
+    display:flex;
+    align-items:center;
+    flex:0 0 auto;
+    padding:6px 12px 6px 8px;
+    border-bottom:none;
+    border-right:1px solid var(--line);
+    color:var(--quiet);
+    font-size:9.5px;
+    letter-spacing:.12em;
+    white-space:nowrap;
+  }
+  .nav-rail .nav-link{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex:0 0 auto;
+    min-height:36px;
+    padding:6px 12px;
+    border:1px solid transparent;
+    border-bottom:none;
+    border-radius:6px;
+    color:#bdc8d4;
+    white-space:nowrap;
+  }
+  .nav-rail .nav-link:hover{background:rgba(77,178,255,.08)}
+  .nav-rail .nav-link.active{
+    background:rgba(77,178,255,.12);
+    border-color:rgba(77,178,255,.5);
+    color:var(--text);
+  }
+  .nav-rail .nav-link .nav-icon{width:20px;height:20px;font-size:10px}
+  .nav-link .nav-badge{
+    margin-left:6px;
+    padding:0 5px;
+    border-radius:999px;
+    border:1px solid var(--line2);
+    color:var(--quiet);
+    font-family:var(--mono);
+    font-size:9px;
+    font-weight:700;
+  }
+  .nav-link.active .nav-badge{border-color:rgba(77,178,255,.5);color:var(--blue)}
+  .nav-link.nav-legal .nav-icon{color:var(--amber);border-color:rgba(247,189,84,.4);background:rgba(247,189,84,.06)}
+
+  /* View containers: the router shows exactly one. */
+  [data-view]{scroll-margin-top:88px}
+  .view-doc{
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    background:rgba(8,14,22,.96);
+    margin-bottom:8px;
+    overflow:hidden;
+  }
+  .view-doc h2,.view-doc .doc-head{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    min-height:38px;padding:9px 14px;border-bottom:1px solid var(--line);
+    background:rgba(10,16,25,.99);color:#dbe8f7;font-size:11px;
+    letter-spacing:.08em;text-transform:uppercase;
+  }
+  .doc-body{padding:14px 16px 16px;color:var(--muted);font-size:12.5px;line-height:1.65}
+  .doc-body h3{
+    margin:16px 0 6px;color:var(--text);font-size:12px;letter-spacing:.06em;
+    text-transform:uppercase;
+  }
+  .doc-body h3:first-child{margin-top:0}
+  .doc-body p{margin:0 0 9px;max-width:78ch}
+  .doc-body ul{margin:0 0 9px 18px;padding:0}
+  .doc-body li{margin:0 0 5px}
+  .doc-body strong{color:var(--text)}
+  .doc-lede{
+    color:var(--text);font-size:13.5px;line-height:1.6;
+    border-left:2px solid var(--blue);padding-left:12px;margin-bottom:14px;max-width:80ch;
+  }
+  .doc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0}
+  .doc-card{
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:rgba(5,10,17,.6);padding:11px 12px;
+  }
+  .doc-card .dc-label{color:var(--quiet);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px}
+  .doc-card .dc-value{color:var(--text);font-size:12.5px;line-height:1.5}
+  .doc-note{
+    margin-top:12px;padding:10px 12px;border:1px solid rgba(247,189,84,.34);
+    border-radius:var(--radius);background:rgba(247,189,84,.05);
+    color:var(--amber);font-size:11.5px;line-height:1.55;
+  }
+  .ladder-steps{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}
+  .ladder-steps span{
+    display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+    border:1px solid var(--line2);border-radius:999px;
+    color:var(--muted);font-family:var(--mono);font-size:10.5px;
+  }
+  .ladder-steps span:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--blue);opacity:.7}
+  .ladder-steps .step-live:before{background:var(--red)}
+  .ladder-steps .arrow{border:none;color:var(--quiet);padding:5px 0}
+  .ladder-steps .arrow:before{display:none}
+
+  /* Legal / risk warning: sober amber-bordered document. */
+  .legal-warn h2,.legal-warn .doc-head{color:var(--amber);border-bottom-color:rgba(247,189,84,.34)}
+  .legal-warn{border-color:rgba(247,189,84,.34)}
+  .legal-body p strong{color:var(--amber)}
+
+  /* First-visit dismissible risk banner (localStorage remembered). */
+  .risk-banner{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    margin-bottom:8px;padding:9px 12px;
+    border:1px solid rgba(247,189,84,.42);border-radius:var(--radius);
+    background:linear-gradient(180deg, rgba(35,26,8,.92), rgba(20,15,6,.92));
+    color:var(--amber);font-size:11.5px;line-height:1.5;
+  }
+  .risk-banner .rb-icon{flex:0 0 auto;font-family:var(--mono);font-weight:800;font-size:13px}
+  .risk-banner .rb-text{flex:1 1 260px;min-width:0}
+  .risk-banner .rb-text b{color:#ffe6b0}
+  .risk-banner a.rb-more{color:#ffe6b0;text-decoration:underline;cursor:pointer}
+  .risk-banner .rb-dismiss{
+    flex:0 0 auto;min-height:26px;padding:4px 12px;cursor:pointer;
+    border:1px solid rgba(247,189,84,.5);border-radius:6px;
+    background:rgba(247,189,84,.08);color:var(--amber);
+    font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  }
+  .risk-banner .rb-dismiss:hover{background:rgba(247,189,84,.16)}
+
+  /* Cost-model (fee wall honesty) panel. */
+  .cost-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 12px}
+  .cost-card{
+    border:1px solid var(--line2);border-radius:var(--radius);
+    background:rgba(5,10,17,.7);padding:11px 12px;
+  }
+  .cost-card.primary{border-color:rgba(77,178,255,.44);background:rgba(9,24,40,.6)}
+  .cost-card.taker{border-color:rgba(247,189,84,.42);background:rgba(35,25,10,.5)}
+  .cost-card .cc-label{color:var(--quiet);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase}
+  .cost-card .cc-value{
+    margin-top:6px;font-family:var(--mono);font-size:24px;font-weight:900;
+    line-height:1;font-variant-numeric:tabular-nums;
+  }
+  .cost-card.primary .cc-value{color:var(--blue)}
+  .cost-card.taker .cc-value{color:var(--amber)}
+  .cost-card .cc-formula{margin-top:6px;color:var(--muted);font-size:10.5px;line-height:1.4}
+  .cost-foot{padding:0 12px 12px;color:var(--quiet);font-size:10.5px;line-height:1.5}
+  .cost-foot code{color:var(--text);font-family:var(--mono)}
+
+  /* Deploy / provenance panel. */
+  .provenance-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px 12px}
+
+  /* Persistent app footer (version + UTC clock + read-only disclaimer). */
+  .app-footer{
+    display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;
+    margin-top:10px;padding:10px 14px;
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:rgba(8,13,21,.9);color:var(--quiet);font-size:10.5px;line-height:1.5;
+  }
+  .app-footer .af-sep{opacity:.5}
+  .app-footer .af-ver{font-family:var(--mono);color:var(--muted)}
+  .app-footer .af-ro{color:var(--muted)}
+  .app-footer .af-warn{color:var(--amber)}
+  .app-footer .af-clock{margin-left:auto;font-family:var(--mono);color:var(--muted)}
+
+  @media(max-width:900px){
+    .doc-grid,.cost-grid,.provenance-grid{grid-template-columns:1fr}
+  }
+  @media(max-width:1040px){
+    .nav-rail{position:sticky;top:8px}
+  }
+  @media(max-width:520px){
+    .risk-banner,.app-footer{display:none}
+    #content>.risk-banner{display:none}
+  }
 </style>
 </head>
 <body>
@@ -2067,37 +2258,44 @@
       </div>
       <div class="ms-incident" id="ms_incident">no incidents recorded</div>
     </div>
-    <div class="whats-new" id="whatsNew" aria-label="what changed — recent notable events">
+    <div class="risk-banner" id="riskBanner" role="alert" style="display:none">
+      <span class="rb-icon" aria-hidden="true">!</span>
+      <span class="rb-text"><b>Extreme-risk research software.</b> Crypto derivatives are highly volatile and you can lose all your capital. This is paper/shadow research tooling, not financial advice. <a class="rb-more" data-nav="legal" href="#legal">Read the full risk disclosure</a>.</span>
+      <button type="button" class="rb-dismiss" id="riskBannerDismiss">I understand</button>
+    </div>
+    <div class="whats-new" id="whatsNew" data-view="overview" aria-label="what changed — recent notable events">
       <span class="wn-label">What changed</span>
       <div class="wn-items" id="wnItems"><span class="wn-empty">watching for lane and research events&hellip;</span></div>
     </div>
     <div class="workstation-shell">
       <aside class="nav-rail" aria-label="workspace navigation">
-        <div class="nav-title">Workspaces</div>
-        <a class="nav-link active" href="#tradeMonitor"><span class="nav-icon">01</span><span>Trade Monitor</span></a>
-        <a class="nav-link" href="#lanesBoard"><span class="nav-icon">02</span><span>Research Lanes</span></a>
-        <a class="nav-link" href="#microstructureWorkspace"><span class="nav-icon">03</span><span>Microstructure</span></a>
-        <a class="nav-link" href="#architectureMap"><span class="nav-icon">04</span><span>Architecture</span></a>
-        <a class="nav-link" href="#performanceWorkbench"><span class="nav-icon">05</span><span>Performance</span></a>
-        <a class="nav-link" href="#agentBoard"><span class="nav-icon">06</span><span>AI Research</span></a>
+        <div class="nav-title">VN EDGE</div>
+        <a class="nav-link active" data-nav="overview" href="#overview"><span class="nav-icon">01</span><span>Overview</span></a>
+        <a class="nav-link" data-nav="trading" href="#trading"><span class="nav-icon">02</span><span>Trading</span></a>
+        <a class="nav-link" data-nav="research" href="#research"><span class="nav-icon">03</span><span>Research</span><span class="nav-badge">no-trade</span></a>
+        <a class="nav-link" data-nav="microstructure" href="#microstructure"><span class="nav-icon">04</span><span>Microstructure</span></a>
+        <a class="nav-link" data-nav="incidents" href="#incidents"><span class="nav-icon">05</span><span>Incidents</span></a>
+        <a class="nav-link" data-nav="system" href="#system"><span class="nav-icon">06</span><span>System</span></a>
+        <a class="nav-link" data-nav="about" href="#about"><span class="nav-icon">i</span><span>About</span></a>
+        <a class="nav-link nav-legal" data-nav="legal" href="#legal"><span class="nav-icon">!</span><span>Risk &amp; Legal</span></a>
       </aside>
 
       <div class="workspace-main">
         <div class="workspace-header">
           <div>
             <div class="workspace-title">Commercial Operator Workstation</div>
-            <div class="workspace-sub">Trade monitor, microstructure, research governance, and system health in one read-only control surface.</div>
+            <div class="workspace-sub" id="workspaceSub">Trade monitor, microstructure, research governance, and system health in one read-only control surface.</div>
           </div>
           <nav class="workspace-tabs" aria-label="workspace shortcuts">
-            <a class="active" href="#tradeMonitor">Monitor</a>
-            <a href="#microstructureWorkspace">Market</a>
-            <a href="#lanesBoard">Research</a>
-            <a href="#agentBoard">Agents</a>
-            <a href="#architectureMap">System</a>
+            <a class="active" data-nav="overview" href="#overview">Overview</a>
+            <a data-nav="trading" href="#trading">Trading</a>
+            <a data-nav="research" href="#research">Research</a>
+            <a data-nav="microstructure" href="#microstructure">Market</a>
+            <a data-nav="system" href="#system">System</a>
           </nav>
         </div>
 
-    <section class="readiness-ribbon" id="readinessRibbon" aria-label="live readiness ladder">
+    <section class="readiness-ribbon" id="readinessRibbon" data-view="overview" aria-label="live readiness ladder">
       <div class="readiness-head">
         <div>
           <div class="eyebrow">Live Readiness Ladder</div>
@@ -2115,7 +2313,7 @@
       </div>
     </section>
 
-    <div class="command-strip" aria-label="operator gates">
+    <div class="command-strip" data-view="overview" aria-label="operator gates">
       <div class="gate"><div class="label">Mode ladder</div><div class="value idle" id="gateMode">--</div><div class="detail" id="gateModeDetail">waiting</div></div>
       <div class="gate"><div class="label">Risk gateway</div><div class="value idle" id="gateRisk">--</div><div class="detail" id="gateRiskDetail">all orders gated</div></div>
       <div class="gate"><div class="label">Live gate</div><div class="value idle" id="gateLive">--</div><div class="detail" id="gateLiveDetail">three locks required</div></div>
@@ -2124,7 +2322,7 @@
       <div class="gate"><div class="label">Journal</div><div class="value idle" id="gateJournal">--</div><div class="detail" id="gateJournalDetail">WAL status</div></div>
     </div>
 
-    <section class="quant-deck" id="quantDeck" aria-label="Quant Command Deck">
+    <section class="quant-deck" id="quantDeck" data-view="overview" aria-label="Quant Command Deck">
       <h2>
         <span class="deck-title">Quant Command Deck</span>
         <span class="deck-status">
@@ -2212,10 +2410,10 @@
       </div>
     </section>
 
-    <div class="zone zone-floor" id="zoneTradingFloor" aria-label="trading floor zone">
+    <div class="zone zone-floor" id="zoneTradingFloor" data-view-group aria-label="trading floor zone">
       <div class="zone-banner">Trading Floor <span class="zone-sub">live lanes &mdash; real + virtual money</span></div>
 
-    <section class="operator-board" id="tradeMonitor" aria-label="operator cockpit">
+    <section class="operator-board" id="tradeMonitor" data-view="overview" aria-label="operator cockpit">
       <div class="operator-head">
         <div>
           <div class="eyebrow">Operator state</div>
@@ -2274,7 +2472,7 @@
       </div>
     </section>
 
-    <section id="lanesBoard" class="lane-board" aria-label="multi-exchange lanes">
+    <section id="lanesBoard" class="lane-board" data-view="trading" aria-label="multi-exchange lanes">
       <h2>Multi-exchange Lane Matrix <span class="tag">Binance, Bybit, Delta readiness; research/shadow only unless live gates pass</span></h2>
       <div class="table-wrap">
       <table>
@@ -2288,7 +2486,7 @@
       </div>
     </section>
 
-    <section id="realtimeScannerBoard" aria-label="real-time scanner">
+    <section id="realtimeScannerBoard" data-view="trading" aria-label="real-time scanner">
       <h2>Real-Time Scanner <span class="tag" id="rt_policy">live journals only; not replay</span></h2>
       <div class="mini-grid" aria-label="real-time scanner summary">
         <div class="mini-card good"><div class="small-label">Firing Now</div><div class="big" id="rt_firing">--</div><div class="tiny">shadow / paper signals</div></div>
@@ -2309,7 +2507,7 @@
       <div class="empty" id="rtScannerEmpty">live scanner is waiting for lane journals</div>
     </section>
 
-    <section aria-label="signal funnel and trade journal">
+    <section data-view="trading" aria-label="signal funnel and trade journal">
       <h2>Signal Pressure &amp; Trade Journal <span class="tag">scanner-style hot/cold pressure, approval quality, and chronological execution narrative</span></h2>
       <div class="funnel-deck" aria-label="signal pressure summary">
         <div class="funnel-tile"><div class="label">Lanes</div><div class="value" id="funnel_lanes">--</div><div class="sub">reporting</div><div class="pressure-track"><i id="funnel_lanes_bar"></i></div></div>
@@ -2339,7 +2537,7 @@
       </div>
     </section>
 
-    <div class="workbench" id="performanceWorkbench">
+    <div class="workbench" id="performanceWorkbench" data-view="overview">
       <div class="main-column">
         <div class="kpis">
           <div class="kpi"><div class="lbl">Equity</div><div class="val neutral" id="equity">--</div><canvas id="sp_equity"></canvas></div>
@@ -2418,10 +2616,10 @@
 
     </div>
 
-    <div class="zone zone-lab" id="zoneResearchLab" aria-label="research lab zone">
+    <div class="zone zone-lab" id="zoneResearchLab" data-view-group aria-label="research lab zone">
       <div class="zone-banner">Research Lab <span class="zone-sub">cannot trade, cannot promote</span></div>
 
-        <section>
+        <section data-view="research">
           <h2>Research Lab <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
           <div class="table-wrap">
             <table id="research"><thead><tr>
@@ -2433,7 +2631,7 @@
           <div class="empty" id="rl_note" style="display:none;font-size:10.5px"></div>
         </section>
 
-    <section class="agent-board" id="agentBoard">
+    <section class="agent-board" id="agentBoard" data-view="research">
       <h2>Alpha Council &amp; Proof Queue <span class="tag" id="council_policy">research-only; agents cannot trade or promote</span></h2>
       <div class="mini-grid council-grid" aria-label="agent council operating summary">
         <div class="mini-card info">
@@ -2495,7 +2693,7 @@
       </div>
     </section>
 
-    <section class="agent-board" id="shadowManifestBoard">
+    <section class="agent-board" id="shadowManifestBoard" data-view="research">
       <h2>Research &#8594; Shadow Lanes <span class="tag">shadow-only; cannot trade or promote; untouched-data judgment before any promotion</span></h2>
       <div class="kv">
         <span class="k">L2 discovery</span><span class="v" id="sd_discovery">awaiting first L2 mining pass</span>
@@ -2511,10 +2709,10 @@
 
     </div>
 
-    <div class="zone zone-infra" id="zoneInfrastructure" aria-label="infrastructure zone">
-      <div class="zone-banner">Infrastructure <span class="zone-sub">venues, feeds, pipes</span></div>
+    <div class="zone zone-infra" id="zoneInfrastructure" data-view-group aria-label="infrastructure zone">
+      <div class="zone-banner">Infrastructure <span class="zone-sub">venues, feeds, pipes, health, provenance</span></div>
 
-    <section id="connectionsBoard" aria-label="venue connections">
+    <section id="connectionsBoard" data-view="incidents" aria-label="venue connections">
       <h2>Connections <span class="tag">one row per venue &mdash; transport, staleness, symbols, keys; from the /state snapshot only</span></h2>
       <div id="laneHealthLine" style="display:none;margin:0 0 8px">
         <span class="chip idle" id="laneHealthBadge" title="desired vs active lane journals; from lane_health in the /state snapshot">lane health</span>
@@ -2527,13 +2725,16 @@
       <div class="empty" id="connections-empty">no venue connections reported yet</div>
     </section>
 
-    <section id="incidentsBoard" aria-label="incident timeline">
+    <section id="incidentsBoard" data-view="incidents" aria-label="incident timeline">
       <h2>Incidents <span class="tag" id="incidents_meta">merged alerts + journal incidents; newest 20</span></h2>
+      <div style="padding:0 11px 8px">
+        <a class="range-btn" id="runbooksLink" href="#" target="_blank" rel="noopener" title="operator runbooks (docs/RUNBOOKS.md)">Open runbooks &rarr;</a>
+      </div>
       <div class="alerts" id="incidentsList" style="display:none"></div>
       <div class="empty" id="incidents-empty">no incidents recorded</div>
     </section>
 
-    <details class="loop-board" id="architectureMap" open>
+    <details class="loop-board" id="architectureMap" data-view="system" open>
       <summary class="panel-title">
         <span>Execution Architecture</span>
         <span class="tag">V1 single-process kernel; service split and sub-3ms targets stay deferred</span>
@@ -2601,7 +2802,50 @@
       </div>
     </details>
 
-    <section class="institutional-board" id="microstructureWorkspace" aria-label="institutional workspace">
+    <section id="deployProvenance" data-view="system" aria-label="deploy provenance">
+      <h2>Deploy &amp; Provenance <span class="tag">single-process asyncio kernel; Linux VPS + Docker target</span></h2>
+      <div class="provenance-grid">
+        <div class="doc-card"><div class="dc-label">Build</div><div class="dc-value" id="prov_build">read-only research build</div></div>
+        <div class="doc-card"><div class="dc-label">Process model</div><div class="dc-value">Single-writer asyncio; no IPC / event bus in V1</div></div>
+        <div class="doc-card"><div class="dc-label">Snapshot pulse</div><div class="dc-value" id="prov_pulse">--</div></div>
+        <div class="doc-card"><div class="dc-label">Deploy target</div><div class="dc-value">Linux VPS + Docker (compose); dev on macOS</div></div>
+        <div class="doc-card"><div class="dc-label">Access control</div><div class="dc-value">Bearer-token read-only; zero control routes</div></div>
+        <div class="doc-card"><div class="dc-label">Live venue scope</div><div class="dc-value">One exchange, BTC + ETH USDT perps at V1</div></div>
+      </div>
+      <div class="cost-foot">Container split, service bus, ONNX hot paths and sub-3ms targets are deliberately deferred until evidence demands them (architecture review 2026-07-02).</div>
+    </section>
+
+    <section id="costModelBoard" class="institutional-board" data-view="microstructure" aria-label="fee wall cost model">
+      <h2>Fee Wall &amp; Cost Model <span class="tag" id="cost_source">two honest round-trip cost models, read from research/paper constants</span></h2>
+      <div class="cost-grid">
+        <div class="cost-card primary">
+          <div class="cc-label">Maker-first round trip</div>
+          <div class="cc-value" id="cost_maker_first">-- bps</div>
+          <div class="cc-formula" id="cost_maker_formula">maker entry + taker exit + slippage</div>
+        </div>
+        <div class="cost-card taker">
+          <div class="cc-label">Taker round trip</div>
+          <div class="cc-value" id="cost_taker_rt">-- bps</div>
+          <div class="cc-formula" id="cost_taker_formula">2 × taker + slippage</div>
+        </div>
+        <div class="doc-card">
+          <div class="dc-label">Component fees (binanceusdm)</div>
+          <div class="dc-value" id="cost_components">maker -- / taker -- / slippage -- / safety --</div>
+        </div>
+        <div class="doc-card">
+          <div class="dc-label">Paper broker fill model</div>
+          <div class="dc-value" id="cost_paper">taker -- / slippage -- → -- bps RT</div>
+        </div>
+      </div>
+      <div class="cost-foot">
+        Sourced live from <code>GET /cost-model</code> (reads <code>scalper_replay_diagnostics</code> and
+        <code>paper.fill_model</code> constants — never hardcoded). The maker-first wall (~8 bps) is the scalper
+        breakeven; the taker wall (~11 bps) applies when both legs cross. With the research safety buffer the
+        gates use <span id="cost_buffered">-- / -- bps</span>.
+      </div>
+    </section>
+
+    <section class="institutional-board" id="microstructureWorkspace" data-view="microstructure" aria-label="institutional workspace">
       <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
       <div class="workspace-grid">
         <div class="terminal" aria-label="system telemetry and microstructure terminal">
@@ -2759,7 +3003,7 @@
       </div>
     </section>
 
-      <div class="infra-grid">
+      <div class="infra-grid" data-view="microstructure">
         <section>
           <h2>Market <span class="tag">feed health</span></h2>
           <div class="kv">
@@ -2794,18 +3038,96 @@
       </div>
     </div>
 
-    <footer>
-      <span class="legend">
-        <span><span class="dot" style="background:var(--green)"></span>active</span>
-        <span><span class="dot" style="background:var(--amber)"></span>watch</span>
-        <span><span class="dot" style="background:var(--red)"></span>blocked</span>
-        <span><span class="dot" style="background:var(--violet)"></span>governed</span>
-      </span>
-      <span>read-only surface: no order, config, risk, or kill-switch controls</span>
-      <span>crypto derivatives are high-risk; this is not financial advice</span>
-    </footer>
+    <section class="view-doc about-doc" id="aboutView" data-view="about" aria-label="about vnedge">
+      <div class="doc-head"><span>About VN Edge</span><span class="tag">safety-first crypto perpetuals research &amp; execution</span></div>
+      <div class="doc-body">
+        <p class="doc-lede">VN Edge is a capital-protection-first research and execution stack for crypto
+        perpetual futures. Its guiding rule is simple and non-negotiable: protecting capital always beats
+        chasing profit. Nothing shown in this dashboard is financial advice.</p>
+
+        <h3>What it is</h3>
+        <p>A single-process asyncio application that pairs a strategy-research lab (walk-forward backtesting,
+        promotion gates, an alpha council and proof queue) with a custom CCXT execution stack. Every order
+        intent — with no exception or bypass path — passes a pre-trade risk gateway before it can reach a venue.</p>
+
+        <h3>The mode ladder</h3>
+        <p>Strategies climb a validated ladder; each rung is proven before the next is unlocked.</p>
+        <div class="ladder-steps">
+          <span>backtest</span><span class="arrow">→</span>
+          <span>paper</span><span class="arrow">→</span>
+          <span>shadow</span><span class="arrow">→</span>
+          <span class="step-live">live_small</span><span class="arrow">→</span>
+          <span class="step-live">live_full</span>
+        </div>
+        <p>Live orders require three independent gates: a <strong>live_*</strong> mode, an explicit
+        <strong>live_trading_enabled</strong> flag, and a typed confirmation phrase. Miss any one and no real
+        order can be placed.</p>
+
+        <h3>Governance</h3>
+        <div class="doc-grid">
+          <div class="doc-card"><div class="dc-label">Risk gateway</div><div class="dc-value">Every intent evaluated; reduce-only exits are never blocked by entry-quality checks.</div></div>
+          <div class="doc-card"><div class="dc-label">Human-gated promotion</div><div class="dc-value">No strategy auto-promotes or hot-swaps; a person approves each step on untouched data.</div></div>
+          <div class="doc-card"><div class="dc-label">Burn / pre-registration</div><div class="dc-value">Judgments are declared before results are seen; seen data cannot be reused to promote.</div></div>
+          <div class="doc-card"><div class="dc-label">Fail-closed reconciliation</div><div class="dc-value">Any mismatch stops new entries, goes reduce-only, and rebuilds state from the exchange.</div></div>
+          <div class="doc-card"><div class="dc-label">Kill switch</div><div class="dc-value">Never auto-resets; trips to exits-only and requires a manual reset.</div></div>
+          <div class="doc-card"><div class="dc-label">Explainable rejections</div><div class="dc-value">A rejected order carries every failed check, not just the first one.</div></div>
+        </div>
+
+        <h3>What it is not</h3>
+        <ul>
+          <li>Not financial, investment, or trading advice, and not a signal service.</li>
+          <li>Not a guarantee of profit — most researched strategies are rejected by the gates.</li>
+          <li>Not a place to enter credentials: this surface is strictly read-only.</li>
+        </ul>
+        <div class="doc-note">Design point: sub-$1,000 capital, a fixed daily-loss halt (default $20), default 5× leverage
+        with a hard 30× ceiling, and position size derived from risk-per-trade and stop distance — never from leverage.</div>
+      </div>
+    </section>
+
+    <section class="view-doc legal-warn legal-body" id="legalView" data-view="legal" aria-label="risk warning and legal disclosure">
+      <div class="doc-head"><span>Risk Disclosure &amp; Legal</span><span class="tag">please read in full</span></div>
+      <div class="doc-body">
+        <p class="doc-lede">Crypto derivatives are among the highest-risk financial instruments that exist.
+        Trading them can and does wipe out entire accounts. Do not use this software with money you cannot
+        afford to lose completely.</p>
+
+        <h3>You can lose all of your capital</h3>
+        <p>Perpetual futures are leveraged. Leverage magnifies losses as well as gains, and a single adverse
+        move can liquidate a position entirely. <strong>You can lose your whole balance, and losses can occur
+        rapidly.</strong> Funding, fees, and slippage add further costs on every round trip.</p>
+
+        <h3>Research / paper software — not advice</h3>
+        <p><strong>Nothing in this dashboard is financial, investment, legal, or tax advice.</strong> VN Edge is
+        research and paper/shadow tooling. Its outputs — signals, scores, verdicts, promotion queues — are
+        experimental, may be wrong, and must never be treated as a recommendation to buy or sell anything.
+        Consult a licensed professional before making any financial decision.</p>
+
+        <h3>Past performance means nothing</h3>
+        <p><strong>Past and simulated performance is not indicative of future results.</strong> Backtests,
+        walk-forward statistics, and shadow PnL are estimates computed on historical data under modelling
+        assumptions. Real fills, real fees, real funding, and real market impact will differ. Any positive
+        research result is a hypothesis awaiting falsification, not a promise.</p>
+
+        <h3>No warranty</h3>
+        <p>This software is provided "as is", without warranty of any kind. The authors accept no liability for
+        any loss or damage arising from its use. You are solely responsible for your own trading decisions and
+        for compliance with the laws and tax rules of your jurisdiction.</p>
+
+        <div class="doc-note">By using this dashboard you acknowledge that you understand these risks, that this
+        is not financial advice, and that you alone bear responsibility for any capital you choose to deploy.</div>
+      </div>
+    </section>
       </div>
     </div>
+
+    <footer class="app-footer" aria-label="build and disclaimer">
+      <span class="af-ver" id="footVersion">read-only research build</span>
+      <span class="af-sep">·</span>
+      <span class="af-ro">read-only surface — no order, config, risk, or kill-switch controls</span>
+      <span class="af-sep">·</span>
+      <span class="af-warn">crypto derivatives are high-risk; not financial advice</span>
+      <span class="af-clock" id="footClock">--:--:-- UTC</span>
+    </footer>
   </main>
 </div>
 
@@ -2842,6 +3164,7 @@
   let lastRealtimeScanner={summary:{},rows:[]};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
+  let lastCostModel=null;
 
   function finite(v){return Number.isFinite(Number(v));}
   function num(v,def=0){return finite(v)?Number(v):def;}
@@ -3146,7 +3469,119 @@
       ("risk/data/execution clean; "+path));
   }
 
-  setInterval(()=>{ text("clock",new Date().toISOString().slice(11,19)+" UTC"); },1000);
+  setInterval(()=>{
+    const now=new Date().toISOString().slice(11,19)+" UTC";
+    text("clock",now);
+    text("footClock",now);
+  },1000);
+
+  // --- Multi-view client-side router ---------------------------------------
+  // Hash-based routing over data-view blocks; each view shows only its panels.
+  // Group wrappers (zones) hide when none of their children are in the view.
+  const VIEWS=["overview","trading","research","microstructure","incidents","system","about","legal"];
+  const VIEW_SUB={
+    overview:"Readiness ladder, gates, command deck, KPIs and equity — the at-a-glance operating picture.",
+    trading:"Live lane matrix, real-time scanner, and the signal funnel + trade journal. Virtual vs real PnL is badged.",
+    research:"Walk-forward leaderboard, scanners, and the alpha council proof queue. Research cannot trade or promote.",
+    microstructure:"Connections, feeds, the fee-wall cost model, and L2 / order-book microstructure telemetry.",
+    incidents:"Merged alert + journal incident timeline, venue and lane health, with runbook links.",
+    system:"Execution architecture, process model, and deploy provenance for the single-process kernel.",
+    about:"What VN Edge is, the mode ladder, and the governance that keeps it safety-first.",
+    legal:"Risk disclosure and legal terms — crypto derivatives are extremely high risk."
+  };
+  // Legacy in-page anchors still resolve to a view.
+  const ANCHOR_TO_VIEW={
+    tradeMonitor:"overview",performanceWorkbench:"overview",readinessRibbon:"overview",
+    quantDeck:"overview",lanesBoard:"trading",realtimeScannerBoard:"trading",
+    agentBoard:"research",shadowManifestBoard:"research",microstructureWorkspace:"microstructure",
+    costModelBoard:"microstructure",connectionsBoard:"incidents",incidentsBoard:"incidents",
+    architectureMap:"system",deployProvenance:"system"
+  };
+  function currentView(){
+    const h=(location.hash||"").replace(/^#/,"");
+    if(VIEWS.includes(h))return h;
+    if(ANCHOR_TO_VIEW[h])return ANCHOR_TO_VIEW[h];
+    return "overview";
+  }
+  // Visibility only — safe to re-run after any render that toggled a panel's
+  // own display (render fns set display="" to reveal populated tables, which
+  // would otherwise fight the router). No scrolling here.
+  function applyViewVisibility(view){
+    document.querySelectorAll("[data-view]").forEach(el=>{
+      const views=(el.getAttribute("data-view")||"").split(/\s+/);
+      el.style.display=views.includes(view)?"":"none";
+    });
+    document.querySelectorAll("[data-view-group]").forEach(g=>{
+      const anyVisible=Array.from(g.querySelectorAll("[data-view]"))
+        .some(el=>el.style.display!=="none");
+      g.style.display=anyVisible?"":"none";
+    });
+    document.querySelectorAll("[data-nav]").forEach(a=>{
+      a.classList.toggle("active",a.getAttribute("data-nav")===view);
+    });
+  }
+  function setView(view){
+    applyViewVisibility(view);
+    if($("workspaceSub")&&VIEW_SUB[view])text("workspaceSub",VIEW_SUB[view]);
+    try{document.body.dataset.view=view;}catch(_err){}
+    window.scrollTo({top:0,behavior:"auto"});
+  }
+  function reapplyView(){ applyViewVisibility(currentView()); }
+  function routeFromHash(){ setView(currentView()); }
+  addEventListener("hashchange",routeFromHash);
+  document.querySelectorAll("[data-nav]").forEach(a=>{
+    a.addEventListener("click",e=>{
+      const v=a.getAttribute("data-nav");
+      if(!VIEWS.includes(v))return;
+      e.preventDefault();
+      if(currentView()===v){setView(v);}      // same view: still refresh/scroll
+      else{location.hash="#"+v;}                // triggers hashchange -> setView
+    });
+  });
+  routeFromHash();
+
+  // --- First-visit risk banner (localStorage remembered) -------------------
+  const RISK_ACK_KEY="vnedge.dashboard.riskAck";
+  (function initRiskBanner(){
+    const banner=$("riskBanner");
+    if(!banner)return;
+    let ack=false;
+    try{ack=localStorage.getItem(RISK_ACK_KEY)==="1";}catch(_err){ack=false;}
+    banner.style.display=ack?"none":"";
+    const btn=$("riskBannerDismiss");
+    if(btn)btn.addEventListener("click",()=>{
+      banner.style.display="none";
+      try{localStorage.setItem(RISK_ACK_KEY,"1");}catch(_err){}
+    });
+  })();
+
+  // --- Fee-wall / cost model (real numbers from GET /cost-model) ------------
+  function renderCostModel(cm){
+    if(!cm||typeof cm!=="object")return;
+    lastCostModel=cm;
+    const makerFirst=finite(cm.maker_first_rt_bps)?Number(cm.maker_first_rt_bps):null;
+    const takerRt=finite(cm.taker_rt_bps)?Number(cm.taker_rt_bps):null;
+    // Dedicated cost-model panel.
+    if(makerFirst!=null)text("cost_maker_first",makerFirst.toFixed(1)+" bps");
+    if(takerRt!=null)text("cost_taker_rt",takerRt.toFixed(1)+" bps");
+    text("cost_components","maker "+bps(cm.maker_bps)+" / taker "+bps(cm.taker_bps)+
+      " / slippage "+bps(cm.slippage_bps)+" / safety "+bps(cm.safety_buffer_bps));
+    const pf=cm.paper_fill_model||{};
+    text("cost_paper","taker "+bps(pf.taker_fee_bps)+" / slippage "+bps(pf.slippage_bps)+
+      " → "+bps(pf.taker_rt_bps)+" RT");
+    text("cost_buffered",bps(cm.maker_first_cost_bps)+" / "+bps(cm.taker_round_trip_cost_bps));
+    if(cm.source)text("cost_source",cm.source);
+    // Microstructure OBI table: real taker round-trip (was a fixed fake bps).
+    if(takerRt!=null)text("obi_fee_wall",takerRt.toFixed(1)+" bps taker RT");
+    if(makerFirst!=null)text("obi_maker_edge","~"+makerFirst.toFixed(1)+" bps maker-first");
+    // Quant deck maker fee wall (was static "8 bps").
+    if(makerFirst!=null)text("qd_fee_wall",makerFirst.toFixed(0)+" bps");
+    text("qd_fee_detail","maker+taker+slip "+(makerFirst!=null?makerFirst.toFixed(1):"--")+
+      " vs taker RT "+(takerRt!=null?takerRt.toFixed(1):"--")+" bps");
+    // Top tape fee-wall chip.
+    if(takerRt!=null)text("tape_edge",takerRt.toFixed(0)+" bps");
+  }
+  function loadCostModel(){ fetchJSON("/cost-model").then(renderCostModel).catch(()=>{}); }
 
   // --- "What changed" strip -------------------------------------------------
   // Client-side only: notable events distilled from snapshot lanes[].trade_log
@@ -3737,6 +4172,13 @@
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
+    // Build provenance: use a /state field if the bot publishes one, else a
+    // neutral read-only label.
+    const build=s.git_sha||s.build_sha||s.commit||s.version||null;
+    const buildLabel=build?("build "+String(build).slice(0,12)):"read-only research build";
+    text("footVersion",buildLabel);
+    if($("prov_build"))text("prov_build",buildLabel);
+    if($("prov_pulse"))text("prov_pulse",s.ts?ageText(Math.max(0,Date.now()-Date.parse(s.ts))):"--");
     renderLanes(s.lanes,s);
     renderFunnelJournal(s.lanes||[]);
     wnCollectLanes(s.lanes||[]);
@@ -3801,7 +4243,8 @@
     }
     text("tape_funding",((num(s.funding_rate)*100).toFixed(4))+"% / 8h");
     text("tape_feed",ageText(lat));
-    text("tape_edge","10 bps");
+    text("tape_edge",lastCostModel&&finite(lastCostModel.taker_rt_bps)?
+      Number(lastCostModel.taker_rt_bps).toFixed(0)+" bps":"10 bps");
     text("tape_lanes",Array.isArray(s.lanes)?s.lanes.length:0);
     text("tape_mode",String(s.mode||"--").toUpperCase());
 
@@ -3898,6 +4341,9 @@
     const ledger=sess.fill_ledger;
     setNode("nodeLedger",ledger?"good":"warn",ledger?(num(ledger.records)+" records, chained"):"live phase");
     renderInstitutional();
+    // Render fns above toggle their own panels' display; re-assert the active
+    // view so only the current view's panels stay visible.
+    reapplyView();
   }
 
   function renderOperator(ctx){
@@ -4131,7 +4577,7 @@
   }
 
   function loadIncidents(){
-    fetchJSON("/incidents").then(renderIncidents).catch(()=>{});
+    fetchJSON("/incidents").then(d=>{renderIncidents(d);reapplyView();}).catch(()=>{});
   }
 
   function renderTrial(t,fills){
@@ -4227,8 +4673,12 @@
     setPlainTone("obi_funding_signal",feed.funding==="ok"&&feed.open_interest==="ok"?"funding/OI ok":"incomplete",
       feed.funding==="ok"&&feed.open_interest==="ok"?"pos":"neg");
     const spread=price&&finite(price.spread_bps)?num(price.spread_bps):null;
-    text("obi_fee_wall","10.0 bps taker RT");
-    text("obi_maker_edge","~7.0 bps maker-first");
+    // Real cost model (GET /cost-model) — not hardcoded. Falls back only until
+    // the first /cost-model response lands.
+    const cmTaker=lastCostModel&&finite(lastCostModel.taker_rt_bps)?Number(lastCostModel.taker_rt_bps):null;
+    const cmMaker=lastCostModel&&finite(lastCostModel.maker_first_rt_bps)?Number(lastCostModel.maker_first_rt_bps):null;
+    text("obi_fee_wall",cmTaker!=null?cmTaker.toFixed(1)+" bps taker RT":"loading…");
+    text("obi_maker_edge",cmMaker!=null?"~"+cmMaker.toFixed(1)+" bps maker-first":"loading…");
     setPlainTone("obi_fee_signal",spread==null?"waiting":spread<3?"maker lane required":"fee wall dominant",
       spread==null?"dimval":spread<3?"pos":"neutral");
     text("obi_spread_regime",spread==null?"--":(spread<2?"tight":spread<8?"normal":"wide"));
@@ -4880,17 +5330,17 @@
   }
 
   function loadResearch(){
-    fetchJSON("/research").then(renderResearch).catch(()=>{});
+    fetchJSON("/research").then(d=>{renderResearch(d);reapplyView();}).catch(()=>{});
   }
 
   function loadCouncil(){
     Promise.all([fetchJSON("/alpha-council"),fetchJSON("/alpha-workbench")])
-      .then(([c,w])=>renderCouncil(c,w))
+      .then(([c,w])=>{renderCouncil(c,w);reapplyView();})
       .catch(()=>{});
   }
 
   function loadRealtimeScanner(){
-    fetchJSON("/realtime-scanner").then(renderRealtimeScanner).catch(()=>{});
+    fetchJSON("/realtime-scanner").then(d=>{renderRealtimeScanner(d);reapplyView();}).catch(()=>{});
   }
 
   const AGENT_ACTION_LABEL={
@@ -4984,14 +5434,22 @@
     }
   }
 
+  // Runbooks deep-link (token-scoped, opens the rendered docs/RUNBOOKS.md).
+  (function(){
+    const a=$("runbooksLink");
+    if(a)a.href="/runbooks?token="+encodeURIComponent(token);
+  })();
+
   loadResearch();
   loadCouncil();
   loadRealtimeScanner();
   loadIncidents();
+  loadCostModel();
   setInterval(loadResearch,60000);
   setInterval(loadCouncil,60000);
   setInterval(loadRealtimeScanner,30000);
   setInterval(loadIncidents,60000);
+  setInterval(loadCostModel,300000);
 
   let backoff=500;
   function connect(){

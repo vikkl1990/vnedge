@@ -120,6 +120,80 @@ def test_dashboard_shell_service_ui(client):
     assert "renderMobileStrip" in html
 
 
+def test_cost_model_route_auth_gated_and_real_numbers(client):
+    """Fee-wall honesty: /cost-model returns the REAL round-trip cost models,
+    read from the research + paper constants (not hardcoded in the UI)."""
+    assert client.get("/cost-model").status_code == 401
+    assert client.get("/cost-model?token=wrong").status_code == 401
+    r = client.get("/cost-model?token=t3st-token")
+    assert r.status_code == 200
+    assert r.headers["X-Dashboard-User"] == "operator"
+    payload = r.json()
+    # Numbers come from the same source the engines use.
+    from vnedge.paper.fill_model import FillModel
+    from vnedge.scalping.parameter_registry import (
+        DEFAULT_SCALPER_PARAMETER_REGISTRY as registry,
+    )
+
+    fee = registry.fee_profile("binanceusdm")
+    paper = FillModel()
+    assert payload["maker_bps"] == fee.maker_bps
+    assert payload["taker_bps"] == fee.taker_bps
+    assert payload["slippage_bps"] == fee.slippage_bps
+    # maker-first RT (~8 bps) = maker entry + taker exit + slippage
+    assert payload["maker_first_rt_bps"] == fee.maker_bps + fee.taker_bps + fee.slippage_bps
+    # taker RT (~11 bps) = both legs taker + slippage
+    assert payload["taker_rt_bps"] == 2 * fee.taker_bps + fee.slippage_bps
+    assert payload["maker_first_rt_bps"] == 8.0
+    assert payload["taker_rt_bps"] == 11.0
+    # paper broker's own pessimistic model is reported alongside
+    assert payload["paper_fill_model"]["taker_fee_bps"] == paper.taker_fee_bps
+    assert payload["paper_fill_model"]["slippage_bps"] == paper.slippage_bps
+    assert payload["paper_fill_model"]["taker_rt_bps"] == 2 * (
+        paper.taker_fee_bps + paper.slippage_bps
+    )
+
+
+def test_cost_model_route_has_no_control_verbs(client):
+    """The new route is read-only like every other data route."""
+    for method in ("post", "put", "delete"):
+        assert getattr(client, method)("/cost-model?token=t3st-token").status_code in (404, 405)
+
+
+def test_dashboard_shell_has_multiview_nav_and_legal(client):
+    """Production multi-view shell: top-nav views, risk warning, about,
+    legal, and the real fee-wall cost-model panel are all present."""
+    html = client.get("/").text
+    # every top-nav view is present
+    for view in ("overview", "trading", "research", "microstructure",
+                 "incidents", "system", "about", "legal"):
+        assert f'data-nav="{view}"' in html
+        assert f'data-view="{view}"' in html or view in ("overview",)
+    # commercial risk warning: first-visit banner + dedicated legal view
+    assert 'id="riskBanner"' in html
+    assert "Extreme-risk research software" in html
+    assert 'id="legalView"' in html
+    assert "Risk Disclosure" in html
+    assert "you can lose all" in html.lower()
+    assert "past" in html.lower() and "not indicative of future" in html.lower()
+    # about view
+    assert 'id="aboutView"' in html
+    assert "About VN Edge" in html
+    assert "mode ladder" in html.lower()
+    # fee-wall / cost-model panel wired to the real route
+    assert "Fee Wall &amp; Cost Model" in html
+    assert 'id="cost_maker_first"' in html and 'id="cost_taker_rt"' in html
+    assert "/cost-model" in html
+    assert "loadCostModel" in html
+    # the hardcoded fake fee assignment is gone from the source
+    assert 'text("obi_fee_wall","10.0 bps taker RT")' not in html
+    # persistent footer: version + read-only disclaimer + UTC clock
+    assert 'id="footVersion"' in html and 'id="footClock"' in html
+    assert "read-only research build" in html
+    # router present
+    assert "function setView" in html and "hashchange" in html
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")
@@ -662,6 +736,7 @@ def test_identity_header_on_all_data_routes():
         "/state",
         "/history",
         "/research",
+        "/cost-model",
         "/alpha-council",
         "/alpha-workbench",
         "/lane-readiness",
