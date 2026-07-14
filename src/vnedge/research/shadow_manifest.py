@@ -32,6 +32,7 @@ RUNTIME_LOCKED_PARAMS: dict[str, dict] = {
     "volatility_expansion_breakout_v1": {},   # default config (DOGE-judged)
     "alpha_stack_confluence_v1": {},          # research-only confluence default
     "quant_signal_pack_v1": {},               # research-only signal-pack default
+    "sats_5m_scalper_v1": {},                 # research-only 5m TQI/BBP lane
     "trend_retest_v1": {},                    # research-only retest-entry default
 }
 

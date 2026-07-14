@@ -541,8 +541,34 @@ class LivePaperSession:
     # Feature columns worth surfacing per evaluation, when the strategy
     # computes them. Signal proximity ("how close is this lane to firing")
     # is unreadable from a binary fired/not-fired record; these make it visible.
-    _EVAL_FEATURES = ("funding_pct", "close_z", "er", "atr_pct")
-    _EVAL_THRESHOLDS = ("extreme_pct", "z_entry", "breakout_bars", "min_score")
+    _EVAL_FEATURES = (
+        "funding_pct",
+        "close_z",
+        "er",
+        "atr_pct",
+        "tqi_long",
+        "tqi_short",
+        "quality_strength",
+        "bbp",
+        "bbp_delta",
+        "rsi",
+        "volume_z",
+        "mom_persist_long",
+        "mom_persist_short",
+        "structure_long",
+        "structure_short",
+    )
+    _EVAL_THRESHOLDS = (
+        "extreme_pct",
+        "z_entry",
+        "breakout_bars",
+        "min_score",
+        "min_tqi",
+        "min_quality_strength",
+        "min_momentum_persistence",
+        "min_bbp_atr",
+        "min_volume_z",
+    )
 
     def _record_eval(
         self, df: pd.DataFrame, index: int, sig: SignalIntent | None,

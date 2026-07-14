@@ -50,6 +50,7 @@ from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
+from vnedge.strategy.sats_5m_scalper import Sats5mScalper
 from vnedge.strategy.scalper_1m import Scalper1m
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
@@ -385,6 +386,8 @@ def _build_single_strategy(
         return AlphaStackConfluence(seed_funding, **params)
     if strategy_id == "quant_signal_pack_v1":
         return QuantSignalPack(seed_funding, **params)
+    if strategy_id == "sats_5m_scalper_v1":
+        return Sats5mScalper(seed_funding, **params)
     if strategy_id == "trend_retest_v1":
         return TrendRetest(seed_funding, **params)
     if strategy_id == "alpha_distillation_pack_v1":
