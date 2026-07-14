@@ -40,12 +40,27 @@ echo "deploying $(git rev-parse --short HEAD)"
 # Skip the build only when NOTHING that lands in the image changed. The path
 # list must include EVERY input to the image: a docs/ or .dockerignore change
 # once shipped nothing because it was omitted here (2026-07-11).
+IMAGE_INPUTS="src/ research/ docs/ pyproject.toml README.md Dockerfile .dockerignore docker-compose.yml"
 NEED_BUILD=1
-if [ "$PREV" != "$HEAD_SHA" ] && git diff --quiet "$PREV" "$HEAD_SHA" -- \
-        src/ research/ docs/ pyproject.toml README.md Dockerfile \
-        .dockerignore docker-compose.yml 2>/dev/null; then
+if [ "$PREV" != "$HEAD_SHA" ] && git diff --quiet "$PREV" "$HEAD_SHA" -- $IMAGE_INPUTS 2>/dev/null; then
     NEED_BUILD=0
     echo "no image-affecting changes since ${PREV:0:7} — skipping rebuild"
+fi
+
+# CONTENT-BASED stale-image guard (2026-07-14): git-HEAD diffing is not a
+# reliable proxy for what is IN the running image — a prior deploy that skipped
+# the build (or a manual `up -d --no-build`) leaves the image OLDER than the
+# committed code while NEED_BUILD reads 0. #149's code sat un-deployed for a day
+# exactly this way. So: if the running image is older than the newest commit to
+# any image input, force a rebuild regardless of the git diff.
+run_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1)
+if [ -n "$run_img" ]; then
+    img_epoch=$(date -d "$(docker inspect --format '{{.Created}}' "$run_img")" +%s 2>/dev/null || echo 0)
+    code_epoch=$(git log -1 --format=%ct -- $IMAGE_INPUTS 2>/dev/null || echo 0)
+    if [ "$code_epoch" -gt "$img_epoch" ]; then
+        NEED_BUILD=1
+        echo "running image predates committed code (img $img_epoch < code $code_epoch) — forcing rebuild"
+    fi
 fi
 if [ "$NEED_BUILD" = 1 ]; then
     echo "building image (isolated from recreation)..."
@@ -90,9 +105,9 @@ if [ "$LANES_OK" != 1 ]; then
     fi
 fi
 
-# Freshness assertion: if we built, the running container MUST have been
-# recreated since the deploy began. A stale StartedAt means the new image
-# never took (build skipped by compose, or a partial recreate) — fail loudly.
+# Freshness assertion: if we built, the running container must (a) have been
+# recreated since the deploy began, AND (b) run an image NEWER than the code —
+# the content check that git-time-diffing alone missed on 2026-07-14.
 if [ "$NEED_BUILD" = 1 ]; then
     cid=$(docker compose ps -q multi-lane-shadow)
     started=$(docker inspect --format '{{.State.StartedAt}}' "$cid")
@@ -102,7 +117,15 @@ if [ "$NEED_BUILD" = 1 ]; then
              "before this deploy) — the new image did not take" >&2
         exit 1
     fi
-    echo "freshness OK: container recreated at $started"
+    new_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1)
+    new_img_epoch=$(date -d "$(docker inspect --format '{{.Created}}' "$new_img")" +%s 2>/dev/null || echo 0)
+    final_code_epoch=$(git log -1 --format=%ct -- $IMAGE_INPUTS 2>/dev/null || echo 0)
+    if [ "$new_img_epoch" -lt "$final_code_epoch" ]; then
+        echo "STALE IMAGE: running image ($new_img_epoch) still older than committed" \
+             "code ($final_code_epoch) after build — build did not take" >&2
+        exit 1
+    fi
+    echo "freshness OK: container recreated at $started, image newer than code"
 fi
 exit 0
 }
