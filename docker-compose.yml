@@ -39,6 +39,11 @@ services:
       # MULTI_LANE_DELTA_PAPER_OBSERVE=0.
       MULTI_LANE_PAPER_OBSERVE_ALL: "${MULTI_LANE_PAPER_OBSERVE_ALL:-0}"
       MULTI_LANE_DELTA_PAPER_OBSERVE: "${MULTI_LANE_DELTA_PAPER_OBSERVE:-1}"
+      # Curated 5m Delta India SATS-style scalper observation lanes. Shadow by
+      # default; isolated simulated paper twins appear only when the existing
+      # MULTI_LANE_PAPER_OBSERVE_ALL flag is enabled.
+      MULTI_LANE_SATS_5M_DELTA: "${MULTI_LANE_SATS_5M_DELTA:-1}"
+      MULTI_LANE_SATS_5M_SYMBOLS: "${MULTI_LANE_SATS_5M_SYMBOLS:-ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT}"
       # Runtime control-plane guard: if research/live_research/shadow_lanes.json
       # changes after startup, exit deliberately so Docker reloads the exact
       # desired lane set. This prevents MISSING/STALE/ORPHAN drift.

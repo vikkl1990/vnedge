@@ -57,6 +57,16 @@ FUNDING_MR_PARAMS = {
     "stop_atr_mult": 1.5,
 }
 TREND_PARAMS: dict = {}
+SATS_5M_PARAMS: dict = {
+    "min_tqi": 0.58,
+    "min_quality_strength": 0.08,
+    "min_momentum_persistence": 0.55,
+    "min_bbp_atr": 0.10,
+    "min_bbp_slope": -0.05,
+    "min_volume_z": -0.75,
+    "stop_atr_mult": 0.95,
+    "take_profit_r": 3.0,
+}
 
 DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
@@ -273,6 +283,38 @@ def delta_funding_mr_lanes(environ: Mapping[str, str] = os.environ) -> list[Lane
     ]
 
 
+def sats_5m_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    """Curated 5m Delta India SATS-style scalper observation lanes.
+
+    These are SHADOW-only by default: the point is to collect live signal and
+    virtual-outcome evidence for the 5m quality-trend setup operators compare
+    against chart indicators. Existing PAPER observation mirroring can create
+    isolated simulated ledgers, but these lanes are not promoted paper trials.
+    """
+    if not _truthy(environ, "MULTI_LANE_SATS_5M_DELTA", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_SATS_5M_SYMBOLS",
+        "ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT",
+        environ,
+    )
+    symbols = [_delta_india_symbol(symbol) for symbol in raw_symbols]
+    return [
+        LaneSpec(
+            lane_id=f"sats_5m_scalper_{DELTA_EXCHANGE}_{_slug_symbol(symbol)}_shadow",
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="5m",
+            strategy_id="sats_5m_scalper_v1",
+            strategy_params=SATS_5M_PARAMS,
+            mode=RunnerMode.SHADOW,
+        )
+        for symbol in symbols
+    ]
+
+
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     raw = environ.get(name, default)
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -442,6 +484,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         build_lane_specs_from_env(environ)
         + candidate_shadow_lanes(environ)
         + delta_funding_mr_lanes(environ)
+        + sats_5m_delta_lanes(environ)
     )
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 
