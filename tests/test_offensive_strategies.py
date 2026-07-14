@@ -189,5 +189,5 @@ def test_registry_has_research_lanes():
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
         "funding_squeeze_continuation_v1", "alpha_stack_confluence_v1",
         "quant_signal_pack_v1", "alpha_distillation_pack_v1",
-        "trend_retest_v1",
+        "trend_retest_v1", "sats_5m_scalper_v1",
     }
