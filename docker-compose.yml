@@ -18,6 +18,12 @@ services:
       # Optional per-user tokens: "name:token:role[:expiry_iso];..."
       # (docs/DASHBOARD_AUTH.md). DASHBOARD_TOKEN keeps working unchanged.
       DASHBOARD_USERS: ${DASHBOARD_USERS:-}
+      # Optional AI-agent gateway. Empty/off by default. Prefer token_sha256
+      # entries in production; raw token entries are hashed immediately at
+      # startup. See docs/AGENT_GATEWAY.md.
+      AGENT_GATEWAY_TOKENS_JSON: ${AGENT_GATEWAY_TOKENS_JSON:-}
+      AGENT_GATEWAY_AUDIT_PATH: ${AGENT_GATEWAY_AUDIT_PATH:-logs/agent_gateway/audit.jsonl}
+      AGENT_GATEWAY_JOBS_DIR: ${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit,delta_india}"

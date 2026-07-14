@@ -26,6 +26,14 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
+from vnedge.agent_gateway.app import (
+    AgentGatewayArtifacts,
+    env_agent_audit_path,
+    env_agent_jobs_dir,
+    mount_agent_gateway,
+)
+from vnedge.agent_gateway.audit import AgentAuditLogger
+from vnedge.agent_gateway.auth import AgentTokenStore
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 
 logger = logging.getLogger(__name__)
@@ -260,6 +268,9 @@ def create_app(
     lane_readiness_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
     token_store: TokenStore | None = None,
+    agent_token_store: AgentTokenStore | None = None,
+    agent_audit_path: Path | None = None,
+    agent_jobs_dir: Path | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
 
@@ -291,6 +302,26 @@ def create_app(
                      Path.cwd() / "docs" / "RUNBOOKS.md") if c.exists()),
         _REPO_ROOT / "docs" / "RUNBOOKS.md",
     )
+
+    resolved_agent_store = (
+        agent_token_store if agent_token_store is not None else AgentTokenStore.from_env()
+    )
+    if len(resolved_agent_store):
+        mount_agent_gateway(
+            app,
+            provider=provider,
+            token_store=resolved_agent_store,
+            audit_logger=AgentAuditLogger(agent_audit_path or env_agent_audit_path()),
+            jobs_dir=agent_jobs_dir or env_agent_jobs_dir(),
+            artifacts=AgentGatewayArtifacts(
+                research_path=research_path,
+                alpha_council_path=alpha_council_path,
+                alpha_workbench_path=alpha_workbench_path,
+                vibe_intelligence_path=vibe_intelligence_path,
+                lane_readiness_path=lane_readiness_path,
+                realtime_scanner_path=realtime_scanner_path,
+            ),
+        )
 
     def _authorized(request: Request) -> AuthResult:
         """Authenticate the request; raise 401 (with the store's reason —
