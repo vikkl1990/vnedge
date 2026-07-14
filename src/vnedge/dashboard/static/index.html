@@ -700,8 +700,69 @@
   .alert .ats{color:var(--quiet);font-size:10.5px;white-space:nowrap}
   .alert .msg{min-width:0;overflow-wrap:anywhere}
   .agent-board{order:6}
+  .lane-command-grid{
+    display:grid;
+    grid-template-columns:repeat(6,minmax(0,1fr));
+    gap:8px;
+    padding:10px 12px;
+    border-bottom:1px solid var(--line);
+    background:rgba(6,12,21,.56);
+  }
+  .lane-command-card{
+    min-width:0;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:rgba(8,15,25,.9);
+    padding:9px;
+  }
+  .lane-command-card.good{border-color:rgba(51,209,122,.35);background:rgba(9,30,22,.72)}
+  .lane-command-card.warn{border-color:rgba(255,184,77,.42);background:rgba(35,25,10,.72)}
+  .lane-command-card.bad{border-color:rgba(255,90,104,.45);background:rgba(37,13,18,.72)}
+  .lane-command-card.info{border-color:rgba(77,178,255,.38);background:rgba(9,24,40,.72)}
+  .lane-command-card.plan{border-color:rgba(169,140,255,.38);background:rgba(22,17,38,.72)}
+  .lane-command-card .small-label{
+    color:var(--quiet);
+    font-size:9px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-command-card .big{
+    margin-top:6px;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-size:20px;
+    font-weight:900;
+    line-height:1.1;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-command-card .tiny{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:10px;
+    line-height:1.25;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-brief{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px 10px;
+    align-items:center;
+    padding:8px 12px;
+    border-bottom:1px solid var(--line);
+    color:var(--muted);
+    font-size:10.5px;
+    line-height:1.35;
+  }
+  .lane-brief strong{color:var(--text);font-weight:800}
   .lane-board table{
-    min-width:100%;
+    min-width:1180px;
     table-layout:fixed;
   }
   .lane-board th,.lane-board td{
@@ -709,18 +770,16 @@
     overflow:hidden;
     text-overflow:ellipsis;
   }
-  .lane-board th:nth-child(1),.lane-board td:nth-child(1){width:12%}
-  .lane-board th:nth-child(2),.lane-board td:nth-child(2){width:8%}
-  .lane-board th:nth-child(3),.lane-board td:nth-child(3){width:10%}
-  .lane-board th:nth-child(4),.lane-board td:nth-child(4){width:9%}
-  .lane-board th:nth-child(5),.lane-board td:nth-child(5){width:11%}
-  .lane-board th:nth-child(6),.lane-board td:nth-child(6){width:7%}
-  .lane-board th:nth-child(7),.lane-board td:nth-child(7){width:8%}
-  .lane-board th:nth-child(8),.lane-board td:nth-child(8){width:7%}
-  .lane-board th:nth-child(9),.lane-board td:nth-child(9){width:6%}
-  .lane-board th:nth-child(10),.lane-board td:nth-child(10){width:7%}
-  .lane-board th:nth-child(11),.lane-board td:nth-child(11){width:6%}
-  .lane-board th:nth-child(12),.lane-board td:nth-child(12){width:9%}
+  .lane-board th:nth-child(1),.lane-board td:nth-child(1){width:16%}
+  .lane-board th:nth-child(2),.lane-board td:nth-child(2){width:12%}
+  .lane-board th:nth-child(3),.lane-board td:nth-child(3){width:7%}
+  .lane-board th:nth-child(4),.lane-board td:nth-child(4){width:8%}
+  .lane-board th:nth-child(5),.lane-board td:nth-child(5){width:9%}
+  .lane-board th:nth-child(6),.lane-board td:nth-child(6){width:11%}
+  .lane-board th:nth-child(7),.lane-board td:nth-child(7){width:10%}
+  .lane-board th:nth-child(8),.lane-board td:nth-child(8){width:8%}
+  .lane-board th:nth-child(9),.lane-board td:nth-child(9){width:8%}
+  .lane-board th:nth-child(10),.lane-board td:nth-child(10){width:11%}
   .lane-rank{
     display:inline-flex;
     align-items:center;
@@ -748,6 +807,29 @@
     letter-spacing:.08em;
     color:var(--muted);
   }
+  .mini-badge.good{border-color:rgba(51,209,122,.38);color:var(--green);background:rgba(51,209,122,.08)}
+  .mini-badge.warn{border-color:rgba(255,184,77,.44);color:var(--amber);background:rgba(255,184,77,.08)}
+  .mini-badge.bad{border-color:rgba(255,90,104,.45);color:var(--red);background:rgba(255,90,104,.08)}
+  .mini-badge.info{border-color:rgba(77,178,255,.42);color:var(--blue);background:rgba(77,178,255,.08)}
+  .mini-badge.plan{border-color:rgba(169,140,255,.4);color:var(--violet);background:rgba(169,140,255,.08)}
+  .lane-title{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    min-width:0;
+  }
+  .lane-title .name{
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .lane-subline{
+    margin-top:3px;
+    color:var(--quiet);
+    font-size:10px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
 
   footer{
     order:7;
@@ -773,6 +855,7 @@
     .op-clock{text-align:left}
     .action-matrix{grid-template-columns:repeat(3,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .lane-command-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .workspace-grid{grid-template-columns:1fr}
     .mini-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
     .loop-flow{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -805,6 +888,7 @@
     .command-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
     .action-matrix{grid-template-columns:repeat(2,minmax(0,1fr))}
     .operator-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .lane-command-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .gate-line{grid-template-columns:repeat(2,minmax(0,1fr))}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -817,6 +901,7 @@
   }
   @media(max-width:430px){
     .kpis{grid-template-columns:1fr}
+    .lane-command-grid{grid-template-columns:1fr}
     .mini-grid,.gov-grid,.drift-grid{grid-template-columns:1fr}
     .price-main{font-size:19px}
     .tape-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -960,11 +1045,20 @@
 
     <section id="lanesBoard" class="lane-board" aria-label="multi-exchange lanes">
       <h2>Multi-exchange Lane Matrix <span class="tag">Binance, Bybit, Delta readiness; research/shadow only unless live gates pass</span></h2>
+      <div class="lane-command-grid" aria-label="lane command summary">
+        <div class="lane-command-card info" id="lane_card_total"><div class="small-label">Scanner rows</div><div class="big" id="lane_total">--</div><div class="tiny" id="lane_total_detail">runtime + scanner</div></div>
+        <div class="lane-command-card good" id="lane_card_paper"><div class="small-label">Paper active</div><div class="big" id="lane_paper">--</div><div class="tiny" id="lane_paper_detail">simulated fills</div></div>
+        <div class="lane-command-card warn" id="lane_card_firing"><div class="small-label">Firing now</div><div class="big" id="lane_firing">--</div><div class="tiny" id="lane_firing_detail">latest evaluated bar</div></div>
+        <div class="lane-command-card plan" id="lane_card_shadow"><div class="small-label">Shadow observe</div><div class="big" id="lane_shadow">--</div><div class="tiny" id="lane_shadow_detail">intents, no fills</div></div>
+        <div class="lane-command-card bad" id="lane_card_stale"><div class="small-label">Stale / blocked</div><div class="big" id="lane_stale">--</div><div class="tiny" id="lane_stale_detail">needs attention</div></div>
+        <div class="lane-command-card info" id="lane_card_orders"><div class="small-label">Paper intents</div><div class="big" id="lane_orders">--</div><div class="tiny" id="lane_orders_detail">orders / exits</div></div>
+      </div>
+      <div class="lane-brief" id="lane_brief"><strong>Lane pulse</strong><span>waiting for scanner and runtime snapshots</span></div>
       <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Rank / Lane</th><th>Venue</th><th>Mode</th><th>Symbol</th><th>Strategy</th>
-          <th>Equity</th><th>Net</th><th>Fees</th><th>Fills</th><th>Risk</th><th>Feed</th><th>Block / Next</th>
+          <th>Rank / Lane</th><th>State</th><th>Venue</th><th>Mode</th><th>Symbol</th>
+          <th>Strategy</th><th>Signals</th><th>Orders / Fills</th><th>Net</th><th>Latest reason / blocker</th>
         </tr></thead>
         <tbody id="lanesBody"></tbody>
       </table>
@@ -1574,18 +1668,25 @@
       fb.innerHTML="";
       lanes.forEach(l=>{
         const f=l.funnel||{};
-        const approved=(l.mode==="shadow")?num(f.shadow_approved):num(f.submitted);
+        const mode=String(l.mode||"").toLowerCase();
+        const bars=num(f.evals,num(f.bars));
+        const signals=num(f.live_signals,num(f.signals));
+        const approved=mode.includes("shadow")
+          ?num(f.approved_shadow_intents,num(f.shadow_approved))
+          :num(f.paper_order_acknowledged,num(f.submitted));
         const rejected=num(f.shadow_rejected)+num(f.risk_rejects);
-        const conv=num(f.bars)>0?(num(f.signals)/num(f.bars)*100).toFixed(1)+"% fire":"--";
+        const submitted=num(f.paper_order_intents,num(f.submitted));
+        const fills=num(f.paper_exits,num(f.fills));
+        const conv=bars>0?(signals/bars*100).toFixed(1)+"% fire":"--";
         const tr=document.createElement("tr");
         appendCell(tr,l.lane_id,"mono");
-        appendCell(tr,String(num(f.bars)));
-        appendCell(tr,String(num(f.signals)),num(f.signals)>0?"pos":"");
+        appendCell(tr,String(bars));
+        appendCell(tr,String(signals),signals>0?"pos":"");
         appendCell(tr,String(approved),approved>0?"pos":"");
         appendCell(tr,String(rejected),rejected>0?"neg":"");
         appendCell(tr,String(num(f.sizing_skips)));
-        appendCell(tr,String(num(f.submitted)));
-        appendCell(tr,String(num(f.fills)),num(f.fills)>0?"pos":"");
+        appendCell(tr,String(submitted));
+        appendCell(tr,String(fills),fills>0?"pos":"");
         appendCell(tr,conv);
         fb.appendChild(tr);
       });
@@ -1619,93 +1720,247 @@
       }
     }
   }
-  function renderLanes(lanes,snapshot){
+  function laneSources(){
+    const scanner=lastResearch&&lastResearch.realtime_scanner||{};
+    const readiness=lastResearch&&lastResearch.lane_promotion_readiness||{};
+    return {
+      scanner,
+      readiness,
+      scannerRows:Array.isArray(scanner.rows)?scanner.rows:[],
+      readinessRows:Array.isArray(readiness.rows)?readiness.rows:[]
+    };
+  }
+  function mergeLaneRows(lanes,snapshot){
     const s=snapshot||{};
     const feed=s.feed_health||{};
+    const src=laneSources();
+    const byId=new Map();
+    function laneKey(row,prefix){
+      return row&&row.lane_id||[
+        prefix||"lane",
+        row&&row.exchange||"",
+        row&&row.symbol||"",
+        row&&row.strategy_id||row&&row.strategy||"",
+        row&&row.mode||""
+      ].join("|");
+    }
+    function ensure(id){
+      if(!byId.has(id))byId.set(id,{lane_id:id});
+      return byId.get(id);
+    }
+    (Array.isArray(lanes)?lanes:[]).forEach(row=>{
+      const id=laneKey(row,"runtime");
+      const entry=ensure(id);
+      entry.runtime=row;
+      Object.assign(entry,row);
+    });
+    src.scannerRows.forEach(row=>{
+      const id=laneKey(row,"scanner");
+      const entry=ensure(id);
+      entry.scanner=row;
+      Object.assign(entry,row,entry.runtime||{});
+    });
+    src.readinessRows.forEach(row=>{
+      const id=laneKey(row,"readiness");
+      const entry=ensure(id);
+      entry.readiness=row;
+      entry.status=row.status||entry.status;
+      entry.blockers=row.blockers||entry.blockers;
+      entry.evidence=row.evidence||entry.evidence;
+      entry.next_action=row.next_action||entry.next_action;
+      Object.assign(entry,entry.runtime||{});
+    });
+    if(!byId.size){
+      [
+        {
+          lane_id:"primary-governed",
+          exchange:feed.exchange||"binanceusdm",
+          mode:s.mode||"paper",
+          symbol:s.symbol||"BTC/USDT:USDT",
+          strategy_id:s.strategy_id||"--",
+          equity:s.equity,
+          realized_pnl:s.realized_pnl,
+          unrealized_pnl:s.unrealized_pnl,
+          fees_usd:s.fees_usd,
+          fills:s.fills,
+          risk_status:s.risk_status||"--",
+          feed:feed.candles==="ok"?"ok":feed.candles||"--",
+          next:"active governed snapshot"
+        },
+        {
+          lane_id:"scanner-pending",
+          exchange:"scanner",
+          mode:"research",
+          symbol:"all venues",
+          strategy_id:"realtime scanner",
+          risk_status:"not armed",
+          feed:"pending",
+          next:"waiting for realtime_scanner_latest.json"
+        }
+      ].forEach(row=>byId.set(row.lane_id,row));
+    }
+    return [...byId.values()].map(row=>{
+      const scanner=row.scanner||{};
+      const readiness=row.readiness||{};
+      const evidence=row.evidence||readiness.evidence||{};
+      const funnel=Object.assign(
+        {},
+        row.funnel||{},
+        scanner.funnel||{},
+        evidence.funnel||{}
+      );
+      const latest=scanner.latest_eval||evidence.latest_eval||row.latest_eval||{};
+      const mode=row.mode||scanner.mode||readiness.mode||s.mode||"--";
+      const status=row.status||scanner.status||readiness.status||"";
+      const statusText=String(status).toUpperCase();
+      const modeText=String(mode).toLowerCase();
+      const net=(modeText.includes("shadow")||statusText.includes("NEGATIVE"))&&finite(evidence.net_usd)
+        ?num(evidence.net_usd)
+        :finite(row.realized_pnl)||finite(row.unrealized_pnl)
+        ?num(row.realized_pnl)+num(row.unrealized_pnl)
+        :finite(evidence.net_usd)?num(evidence.net_usd):0;
+      const blockers=row.blockers||readiness.blockers||[];
+      return Object.assign({},row,{
+        mode,
+        funnel,
+        latest_eval:latest,
+        status,
+        blockers,
+        evidence,
+        net_usd:net,
+        live_signals:num(funnel.live_signals,num(funnel.signals)),
+        paper_intents:num(funnel.paper_order_intents,num(funnel.submitted)),
+        paper_exits:num(funnel.paper_exits,0),
+        shadow_intents:num(funnel.shadow_intents,0),
+        shadow_approved:num(funnel.approved_shadow_intents,num(funnel.shadow_approved)),
+        evals:num(funnel.evals,num(funnel.bars)),
+        fired_now:latest.fired===true,
+        reason:latest.signal_reason||blockers[0]||latest.skip_reason||row.block_reason||row.next_action||row.next||"",
+      });
+    }).sort((a,b)=>lanePriority(a)-lanePriority(b));
+  }
+  function lanePriority(row){
+    const status=String(row.status||"").toUpperCase();
+    const mode=String(row.mode||"").toLowerCase();
+    if(row.fired_now)return 0;
+    if(mode.includes("paper")&&row.paper_intents>0)return 1;
+    if(mode.includes("paper"))return 2;
+    if(row.live_signals>0||row.shadow_intents>0||row.shadow_approved>0)return 3;
+    if(status.includes("NEGATIVE"))return 4;
+    if(status.includes("BLOCK"))return 5;
+    if(status.includes("STALE"))return 6;
+    return 7;
+  }
+  function laneState(row){
+    const status=String(row.status||"").toUpperCase();
+    const mode=String(row.mode||"").toLowerCase();
+    if(row.fired_now)return ["FIRING","warn"];
+    if(status.includes("NEGATIVE"))return ["NEGATIVE","bad"];
+    if(status.includes("BLOCK"))return ["BLOCKED","bad"];
+    if(status.includes("STALE"))return ["STALE","bad"];
+    if(mode.includes("paper")&&row.paper_intents>0)return ["PAPER ACTIVE","good"];
+    if(mode.includes("paper"))return ["PAPER WATCH","info"];
+    if(row.live_signals>0||row.shadow_intents>0||row.shadow_approved>0)return ["RECENT","plan"];
+    if(status.includes("NOT_FIRING"))return ["QUIET","warn"];
+    if(mode.includes("shadow"))return ["SHADOW","plan"];
+    return ["WAITING","idle"];
+  }
+  function setLaneCard(id,value,detail,tone){
+    text("lane_"+id,value);
+    text("lane_"+id+"_detail",detail);
+    setBoxTone("lane_card_"+id,"lane-command-card",tone);
+  }
+  function renderLaneCommand(rows){
+    const src=laneSources();
+    const ss=src.scanner.summary||{};
+    const rs=src.readiness.summary||{};
+    const paper=finite(ss.paper_lanes)?num(ss.paper_lanes):rows.filter(r=>String(r.mode).includes("paper")).length;
+    const firing=finite(ss.firing)?num(ss.firing):rows.filter(r=>r.fired_now).length;
+    const shadow=finite(rs.runtime_shadow_lanes)?num(rs.runtime_shadow_lanes):rows.filter(r=>String(r.mode).includes("shadow")).length;
+    const stale=num(ss.stale);
+    const blocked=finite((rs.status_counts||{}).BLOCKED)?num((rs.status_counts||{}).BLOCKED):num(rs.blocked);
+    const paperOrders=finite(ss.paper_order_intents)?num(ss.paper_order_intents):rows.reduce((sum,r)=>sum+r.paper_intents,0);
+    const paperExits=finite(ss.paper_exits)?num(ss.paper_exits):rows.reduce((sum,r)=>sum+r.paper_exits,0);
+    const total=finite(ss.total_rows)?num(ss.total_rows):rows.length;
+    setLaneCard("total",String(total),(finite(ss.runtime_lanes)?ss.runtime_lanes:rows.length)+" runtime lanes","info");
+    setLaneCard("paper",String(paper),(finite(rs.paper_active)?rs.paper_active:paper)+" paper active",paper?"good":"idle");
+    setLaneCard("firing",String(firing),(finite(ss.near_trigger)?ss.near_trigger:0)+" near trigger",firing?"warn":"idle");
+    setLaneCard("shadow",String(shadow),"observation only",shadow?"plan":"idle");
+    setLaneCard("stale",String(stale+blocked),num(ss.waiting)+" waiting / "+num(ss.stale)+" stale",(stale+blocked)?"bad":"good");
+    setLaneCard("orders",String(paperOrders),paperExits+" exits recorded",paperOrders?"info":"idle");
+    const brief=$("lane_brief");
+    if(brief){
+      const generated=src.scanner.generated_at||src.readiness.generated_at||lastResearch.generated_at;
+      brief.innerHTML="";
+      const strong=document.createElement("strong");
+      strong.textContent="Lane pulse";
+      brief.appendChild(strong);
+      const span=document.createElement("span");
+      span.textContent=[
+        generated?"updated "+String(generated).slice(11,19)+" UTC":"waiting for scanner timestamp",
+        paper+" paper",
+        shadow+" shadow",
+        firing+" firing",
+        num(ss.near_trigger)+" near",
+        num(ss.stale)+" stale",
+        num(rs.live_ready)+" live-ready"
+      ].join(" · ");
+      brief.appendChild(span);
+    }
+  }
+  function renderLanes(lanes,snapshot){
+    const s=snapshot||{};
     const board=document.getElementById("lanesBoard");
     const body=document.getElementById("lanesBody");
-    if(!board||!body)return;
+    if(!board||!body)return [];
     board.style.display="";
     body.replaceChildren();
-    const supplied=Array.isArray(lanes)&&lanes.length?lanes:[];
-    const rows=supplied.length?supplied:[
-      {
-        lane_id:"primary-governed",
-        exchange:feed.exchange||"binanceusdm",
-        mode:s.mode||"paper",
-        symbol:s.symbol||"BTC/USDT:USDT",
-        strategy_id:s.strategy_id||"--",
-        equity:s.equity,
-        realized_pnl:s.realized_pnl,
-        unrealized_pnl:s.unrealized_pnl,
-        fees_usd:s.fees_usd,
-        fills:s.fills,
-        risk_status:s.risk_status||"--",
-        feed:feed.candles==="ok"?"ok":feed.candles||"--",
-        next:"active governed snapshot"
-      },
-      {
-        lane_id:"bybit-shadow",
-        exchange:"bybit",
-        mode:"research/shadow",
-        symbol:"BTC/USDT + ETH/USDT",
-        strategy_id:"same gate suite",
-        equity:null,
-        realized_pnl:0,
-        unrealized_pnl:0,
-        fees_usd:0,
-        fills:0,
-        risk_status:"not armed",
-        feed:"pending",
-        next:"second venue adapter decision"
-      },
-      {
-        lane_id:"delta-india",
-        exchange:"delta_india",
-        mode:"research/compliance",
-        symbol:"INR-eligible perps",
-        strategy_id:"CA-gated live path",
-        equity:null,
-        realized_pnl:0,
-        unrealized_pnl:0,
-        fees_usd:0,
-        fills:0,
-        risk_status:"not armed",
-        feed:"pending",
-        next:"India compliance sign-off"
-      }
-    ];
+    const rows=mergeLaneRows(lanes,s);
+    renderLaneCommand(rows);
     const money=(v)=>(v>=0?"+$":"-$")+Math.abs(Number(v)||0).toFixed(2);
     const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
     rows.forEach((l,idx)=>{
       const tr=body.insertRow();
-      const laneCell=appendCell(tr,"");
+      const laneCell=tr.insertCell();
+      laneCell.className="clip";
       const rank=document.createElement("span");
       rank.className="lane-rank";
       rank.textContent=String(idx+1);
       laneCell.appendChild(rank);
-      laneCell.appendChild(document.createTextNode(l.lane_id||""));
-      laneCell.style.textAlign="left";
-      appendCell(tr,(l.exchange||"").replace("usdm",""));
-      appendCell(tr,l.mode||s.mode||"--");
+      const title=document.createElement("span");
+      title.className="lane-title";
+      const name=document.createElement("span");
+      name.className="name";
+      name.textContent=l.lane_id||"";
+      title.appendChild(name);
+      laneCell.appendChild(title);
+      const sub=document.createElement("div");
+      sub.className="lane-subline";
+      sub.textContent=(l.status||"runtime")+" / "+(l.latest_eval&&l.latest_eval.bar_ts?String(l.latest_eval.bar_ts).slice(11,16)+" UTC":"latest --");
+      laneCell.appendChild(sub);
+      const [stateLabel,stateTone]=laneState(l);
+      const stateCell=tr.insertCell();
+      appendBadge(stateCell,stateLabel,stateTone);
+      appendCell(tr,(l.exchange||"").replace("binanceusdm","binance").replace("delta_india","delta"),"clip",l.exchange||"");
+      appendCell(tr,l.mode||s.mode||"--","clip",l.mode||s.mode||"");
       appendCell(tr,String(l.symbol||"").split(":")[0],"clip",l.symbol||"");
       appendCell(tr,String(l.strategy_id||l.strategy||"--").replace(/_v1$/,""),"clip",l.strategy_id||l.strategy||"");
-      appendCell(tr,l.equity==null?"--":"$"+(Number(l.equity)||0).toFixed(2));
-      const net=num(l.realized_pnl)+num(l.unrealized_pnl);
-      appendCell(tr,money(net),cls(net));
-      appendCell(tr,"$"+(Number(l.fees_usd)||0).toFixed(2));
-      appendCell(tr,l.fills||0);
-      appendCell(tr,l.risk_status||"?",l.risk_status==="ok"?"pos":String(l.risk_status).includes("pending")||String(l.risk_status).includes("not")?"neutral":"neg");
-      appendCell(tr,l.feed||"?",l.feed==="ok"?"pos":String(l.feed).includes("pending")?"neutral":"neg");
-      appendCell(tr,l.block_reason||l.next||"--","clip",l.block_reason||l.next||"");
+      const signalText=String(l.live_signals||0)+" live / "+String(num(l.funnel&&l.funnel.backfill_signals))+" backfill";
+      appendCell(tr,signalText,l.live_signals||l.fired_now?"pos":"dimval",signalText);
+      const orderText=String(l.paper_intents||0)+" / "+String(l.paper_exits||l.fills||0);
+      appendCell(tr,orderText,l.paper_intents?"pos":"dimval","paper intents / exits or fills");
+      appendCell(tr,money(l.net_usd),cls(l.net_usd));
+      const reason=l.reason||((l.blockers||[])[0])||"waiting for next closed bar";
+      appendCell(tr,reason,"clip",reason);
     });
+    return rows;
   }
 
   function renderSnapshot(raw){
     const s=raw||{};
     lastSnapshot=s;
-    renderLanes(s.lanes,s);
-    renderFunnelJournal(s.lanes||[]);
+    const laneRows=renderLanes(s.lanes,s);
+    renderFunnelJournal(laneRows);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
@@ -1878,7 +2133,11 @@
     const snapshotAge=s.ts?Math.max(0,Date.now()-Date.parse(s.ts)):null;
     text("op_snapshot_age",snapshotAge==null?"--":ageText(snapshotAge));
     const researchRows=Array.isArray(lastResearch.results)?lastResearch.results.length:0;
-    const laneCount=Array.isArray(s.lanes)?s.lanes.length:0;
+    const scannerSummary=(lastResearch.realtime_scanner||{}).summary||{};
+    const readinessSummary=(lastResearch.lane_promotion_readiness||{}).summary||{};
+    const laneCount=finite(scannerSummary.total_rows)?num(scannerSummary.total_rows):Array.isArray(s.lanes)?s.lanes.length:0;
+    const paperActive=finite(readinessSummary.paper_active)?num(readinessSummary.paper_active):num(scannerSummary.paper_lanes);
+    const firing=finite(scannerSummary.firing)?num(scannerSummary.firing):0;
     setAction("entries",entriesAllowed?"ALLOW":"BLOCK",
       entriesAllowed?"all intent gates green":blockers[0]||"waiting for clean gateway",
       entriesAllowed?"good":"bad");
@@ -1890,8 +2149,8 @@
       s.live_trading_enabled?"live confirmation locks satisfied":"three live locks not satisfied",
       s.live_trading_enabled?"warn":"good");
     setAction("shadow",laneCount?"RUNNING":"PLANNED",
-      laneCount?laneCount+" venue lanes reporting":"primary lane plus venue readiness",
-      laneCount?"plan":"idle");
+      laneCount?laneCount+" scanner rows; "+paperActive+" paper; "+firing+" firing":"primary lane plus venue readiness",
+      firing?"warn":laneCount?"plan":"idle");
     setAction("research",researchRows?"PUBLISHED":"WAITING",
       researchRows?researchRows+" walk-forward rows":"no latest research payload",
       researchRows?"plan":"idle");
@@ -2049,6 +2308,8 @@
     const research=lastResearch||{};
     const rows=Array.isArray(research.results)?research.results:[];
     const drift=Array.isArray(research.drift_alerts)?research.drift_alerts:[];
+    const scannerSummary=(research.realtime_scanner||{}).summary||{};
+    const readinessSummary=(research.lane_promotion_readiness||{}).summary||{};
     const best=bestResearch(rows);
     const lat=feed.last_update_ms;
     const feedTone=latencyTone(lat);
@@ -2066,8 +2327,12 @@
       num(session.signals)+" signals",s.strategy_id?"info":"idle");
     renderInstCard("card_core_risk","it_core_risk",s.risk_status||"--",
       entriesAllowed?"entries allowed":"entries blocked",riskTone);
-    renderInstCard("card_core_research","it_core_research",rows.length?String(rows.length):"--",
-      research.generated_at?"updated "+String(research.generated_at).slice(11,19)+" UTC":"waiting",rows.length?"plan":"idle");
+    renderInstCard("card_core_research","it_core_research",
+      finite(scannerSummary.total_rows)?String(scannerSummary.total_rows):rows.length?String(rows.length):"--",
+      finite(scannerSummary.paper_lanes)
+        ?scannerSummary.paper_lanes+" paper / "+num(scannerSummary.firing)+" firing"
+        :research.generated_at?"updated "+String(research.generated_at).slice(11,19)+" UTC":"waiting",
+      finite(scannerSummary.firing)&&num(scannerSummary.firing)>0?"warn":rows.length?"plan":"idle");
     renderInstCard("card_core_snapshot","it_core_snapshot",snapshotAge==null?"--":ageText(snapshotAge),
       "coalesced latest state",snapshotAge!=null&&snapshotAge<5000?"good":"warn");
     renderInstCard("card_core_context","it_core_context","single",
@@ -2080,7 +2345,9 @@
       unresolved?"BLOCKED":orders.length?"WATCH":"GOOD",unresolved?"bad":orders.length?"warn":"good");
     renderInstLatency("journal",s.last_journal_write||"--",journalTone==="good"?"GOOD":"BLOCKED",journalTone);
     renderInstLatency("research",research.generated_at?timeAgoFromIso(research.generated_at):"--",
-      rows.length?"PUBLISHED":"WAITING",rows.length?"plan":"idle");
+      finite(scannerSummary.total_rows)?"SCANNER":rows.length?"PUBLISHED":"WAITING",
+      finite(scannerSummary.firing)&&num(scannerSummary.firing)>0?"warn":rows.length?"plan":"idle",
+      finite(readinessSummary.live_ready)?readinessSummary.live_ready+" live-ready":"");
     renderInstLatency("private",s.live_trading_enabled?"verify stream":"live phase",
       s.live_trading_enabled?"WATCH":"WAITING",s.live_trading_enabled?"warn":"idle");
 
@@ -2501,6 +2768,10 @@
       dv.appendChild(e);
     }
     dv.style.display=drift.length?"block":"none";
+    if(lastSnapshot){
+      const laneRows=renderLanes(lastSnapshot.lanes,lastSnapshot);
+      renderFunnelJournal(laneRows);
+    }
     renderInstitutional();
   }
 

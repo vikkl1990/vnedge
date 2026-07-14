@@ -50,6 +50,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "workspace navigation" in html
     assert "operator actionability matrix" in html
     assert "Multi-exchange Lane Matrix" in html
+    assert "lane command summary" in html
+    assert "Paper active" in html
     assert "Fee Wall" in html
     assert "LIVE ARMED" in html
 
@@ -90,6 +92,31 @@ def test_history_endpoint_auth_and_content(tmp_path):
 
 def test_history_without_file_is_empty(client):
     assert client.get("/history?token=t3st-token").json() == []
+
+
+def test_research_endpoint_includes_lane_scanner_companions(tmp_path):
+    import json
+
+    latest = tmp_path / "latest.json"
+    latest.write_text(json.dumps({"results": [{"strategy": "funding"}]}))
+    (tmp_path / "realtime_scanner_latest.json").write_text(json.dumps({
+        "summary": {"paper_lanes": 2, "firing": 1},
+        "rows": [{"lane_id": "paper-a"}],
+    }))
+    (tmp_path / "lane_promotion_readiness_latest.json").write_text(json.dumps({
+        "summary": {"paper_active": 2, "live_ready": 0},
+        "rows": [{"lane_id": "paper-a", "status": "PAPER_ACTIVE"}],
+    }))
+    provider = SnapshotProvider()
+    provider.publish({"mode": "paper"})
+    client = TestClient(create_app(
+        provider, token="t3st-token", research_path=latest,
+    ))
+
+    payload = client.get("/research?token=t3st-token").json()
+    assert payload["results"][0]["strategy"] == "funding"
+    assert payload["realtime_scanner"]["summary"]["paper_lanes"] == 2
+    assert payload["lane_promotion_readiness"]["rows"][0]["status"] == "PAPER_ACTIVE"
 
 
 def test_no_control_routes_exist(client):

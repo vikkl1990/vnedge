@@ -37,6 +37,18 @@ class SnapshotProvider:
         return self._latest
 
 
+def _read_json_file(path: Path, fallback: dict) -> dict:
+    if not path.exists():
+        return fallback
+    import json
+
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return fallback
+    return payload if isinstance(payload, dict) else fallback
+
+
 def create_app(
     provider: SnapshotProvider,
     token: str,
@@ -94,12 +106,16 @@ def create_app(
             raise HTTPException(status_code=401, detail="missing or invalid token")
         if research_path is None or not research_path.exists():
             return JSONResponse({"results": []})
-        import json
-
-        try:
-            return JSONResponse(json.loads(research_path.read_text()))
-        except json.JSONDecodeError:
-            return JSONResponse({"results": []})  # mid-write race: serve empty
+        payload = _read_json_file(research_path, {"results": []})
+        research_dir = research_path.parent
+        companions = {
+            "realtime_scanner": research_dir / "realtime_scanner_latest.json",
+            "lane_promotion_readiness": research_dir / "lane_promotion_readiness_latest.json",
+        }
+        for key, path in companions.items():
+            if key not in payload:
+                payload[key] = _read_json_file(path, {})
+        return JSONResponse(payload)
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
