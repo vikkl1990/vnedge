@@ -66,6 +66,27 @@ services:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
 
+  # Agent Gateway research worker. It consumes queued /api/agent/v1/backtests
+  # jobs and writes terminal research-only evidence. No exchange credentials,
+  # no order adapter, no promotion path.
+  agent-job-runner:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.agent_gateway.job_runner",
+              "--interval-seconds", "${AGENT_JOB_RUNNER_INTERVAL_SECONDS:-60}",
+              "--max-per-cycle", "${AGENT_JOB_RUNNER_MAX_PER_CYCLE:-1}"]
+    environment:
+      AGENT_GATEWAY_JOBS_DIR: ${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}
+      AGENT_JOB_RUNNER_DATA_ROOT: ${AGENT_JOB_RUNNER_DATA_ROOT:-data}
+      AGENT_JOB_RUNNER_ARTIFACT_DIR: ${AGENT_JOB_RUNNER_ARTIFACT_DIR:-research/live_research/agent_jobs}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Continuous research: hourly data refresh + rolling walk-forward +
   # promotion-gate verdicts. No execution access — it shares only market
   # data (rw) and the research output dir the dashboard reads (ro there).
