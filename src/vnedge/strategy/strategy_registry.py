@@ -15,6 +15,7 @@ from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuat
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.sats_5m_scalper import Sats5mScalper
+from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
@@ -28,6 +29,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     AlphaStackConfluence.strategy_id: AlphaStackConfluence,
     QuantSignalPack.strategy_id: QuantSignalPack,
     Sats5mScalper.strategy_id: Sats5mScalper,
+    SMCPlaybookScalper.strategy_id: SMCPlaybookScalper,
     TrendRetest.strategy_id: TrendRetest,
     AlphaDistillationPack.strategy_id: AlphaDistillationPack,
 }

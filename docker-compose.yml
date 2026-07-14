@@ -459,6 +459,8 @@ services:
   vibe-intelligence:
     build: .
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
     depends_on: [alpha-council, alpha-workbench]
     command: ["python", "-m", "vnedge.research.vibe_intelligence",
               "--interval-seconds", "${VIBE_INTELLIGENCE_INTERVAL_SECONDS:-900}",

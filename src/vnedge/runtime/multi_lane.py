@@ -52,6 +52,7 @@ from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.sats_5m_scalper import Sats5mScalper
 from vnedge.strategy.scalper_1m import Scalper1m
+from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
@@ -388,6 +389,8 @@ def _build_single_strategy(
         return QuantSignalPack(seed_funding, **params)
     if strategy_id == "sats_5m_scalper_v1":
         return Sats5mScalper(seed_funding, **params)
+    if strategy_id == "smc_playbook_scalper_v1":
+        return SMCPlaybookScalper(seed_funding, **params)
     if strategy_id == "trend_retest_v1":
         return TrendRetest(seed_funding, **params)
     if strategy_id == "alpha_distillation_pack_v1":
