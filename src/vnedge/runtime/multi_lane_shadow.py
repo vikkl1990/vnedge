@@ -18,6 +18,13 @@ NO live orders.
 
 Neither mode ever submits to a real exchange. Modes/venues/symbols are env
 driven (MULTI_LANE_MODES, MULTI_LANE_EXCHANGES, MULTI_LANE_SYMBOLS).
+
+Set MULTI_LANE_PAPER_OBSERVE_ALL=1 (default OFF) to mirror shadow-only lanes
+into isolated PAPER observation ledgers (`<lane_id>_paper_observation`). That is
+still simulated execution on live data only — never a real order, never a
+strategy promotion, and it never relaxes the live-order gates. Lanes that
+already have a human-approved PAPER trial (the governed funding-MR trials) are
+left untouched, not duplicated.
 """
 
 from __future__ import annotations
@@ -158,6 +165,85 @@ def candidate_shadow_lanes(environ: Mapping[str, str] = os.environ) -> list[Lane
     if not _truthy(environ, "MULTI_LANE_CANDIDATES", "1"):
         return []
     return dedupe_lane_specs(list(CANDIDATE_SHADOW_LANES) + manifest_shadow_lanes(environ))
+
+
+def _strategy_params_key(params: dict | None) -> str:
+    return json.dumps(params or {}, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _paper_identity(spec: LaneSpec) -> tuple[str, str, str, str, str]:
+    """Identity of a lane's simulated-paper twin — mode-agnostic, params-aware.
+
+    Distinct from ``_lane_identity`` (which keys on mode to keep paper/shadow of
+    the same lane apart): this collapses mode so a shadow lane can be matched
+    against an EXISTING paper lane of the same strategy/venue/symbol/params — the
+    signal we use to leave the governed paper trials untouched.
+    """
+    return (
+        spec.exchange,
+        spec.symbol,
+        spec.timeframe,
+        spec.strategy_id,
+        _strategy_params_key(spec.strategy_params),
+    )
+
+
+def _paper_observation_lane_id(spec: LaneSpec) -> str:
+    if spec.lane_id.endswith("_shadow"):
+        return f"{spec.lane_id.removesuffix('_shadow')}_paper_observation"
+    return f"{spec.lane_id}_paper_observation"
+
+
+def paper_observation_lanes(
+    specs: list[LaneSpec],
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Mirror shadow-only lanes into isolated PAPER observation ledgers.
+
+    OFF by default (MULTI_LANE_PAPER_OBSERVE_ALL=1 opts in). Deliberately
+    separate from governed paper-trial promotion:
+
+    - If an equivalent PAPER lane already exists (the human-approved BTC/Bybit
+      funding-MR trials), it is NOT duplicated — the governed trial stays
+      canonical on its own account files.
+    - Each mirror gets a `<lane_id>_paper_observation` id, so its account and
+      journal files can never collide with the trial or shadow ledgers.
+    - PAPER remains simulated fills routed through the same gateway pipeline;
+      no live order or credential path is added.
+
+    Delta India is included by default here (it is still a simulated exchange in
+    PAPER mode); operators can drop it with MULTI_LANE_DELTA_PAPER_OBSERVE=0.
+    """
+    if not _truthy(environ, "MULTI_LANE_PAPER_OBSERVE_ALL", "0"):
+        return []
+
+    allow_delta = _truthy(environ, "MULTI_LANE_DELTA_PAPER_OBSERVE", "1")
+    existing_ids = {spec.lane_id for spec in specs}
+    paper_identities = {
+        _paper_identity(spec) for spec in specs if spec.mode is RunnerMode.PAPER
+    }
+    mirrors: list[LaneSpec] = []
+    for spec in specs:
+        if spec.mode is not RunnerMode.SHADOW:
+            continue
+        if spec.exchange == DELTA_EXCHANGE and not allow_delta:
+            continue
+        identity = _paper_identity(spec)
+        if identity in paper_identities:
+            # an equivalent human-approved PAPER trial already runs this lane
+            continue
+        lane_id = _paper_observation_lane_id(spec)
+        if lane_id in existing_ids:
+            continue
+        mirrors.append(replace(
+            spec,
+            lane_id=lane_id,
+            mode=RunnerMode.PAPER,
+            is_primary=False,
+        ))
+        existing_ids.add(lane_id)
+        paper_identities.add(identity)
+    return mirrors
 
 
 def delta_funding_mr_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
@@ -346,12 +432,18 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     Single source of truth shared by main() and the lane-health auditor
     (vnedge.runtime.lane_health), so "desired" can never silently diverge
     from what the runner actually launches.
+
+    When MULTI_LANE_PAPER_OBSERVE_ALL is on, shadow-only lanes are additionally
+    mirrored into isolated PAPER observation ledgers. It is layered on the fully
+    deduped base set so the mirror sees which paper trials already exist and
+    never duplicates a governed one; with the flag off it is a strict no-op.
     """
-    return dedupe_lane_specs(
+    base = dedupe_lane_specs(
         build_lane_specs_from_env(environ)
         + candidate_shadow_lanes(environ)
         + delta_funding_mr_lanes(environ)
     )
+    return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 
 
 def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:

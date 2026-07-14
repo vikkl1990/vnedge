@@ -2,7 +2,12 @@
 
 from vnedge.runtime import multi_lane
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
-from vnedge.runtime.multi_lane_shadow import build_lane_specs_from_env, lane_specs_fingerprint
+from vnedge.runtime.multi_lane_shadow import (
+    build_lane_specs_from_env,
+    desired_lane_specs,
+    lane_specs_fingerprint,
+    paper_observation_lanes,
+)
 from vnedge.runtime.runner_config import RunnerMode
 
 
@@ -239,6 +244,62 @@ def test_delta_paper_opt_in_still_uses_candle_only_strategy():
     assert specs[0].symbol == "BTC/USD:USD"
     assert specs[0].mode is RunnerMode.PAPER
     assert specs[0].strategy_id == "trend_continuation_v1"
+
+
+def test_paper_observation_lanes_disabled_by_default():
+    # helper returns nothing with the flag unset...
+    specs = build_lane_specs_from_env({})
+    assert paper_observation_lanes(specs, {}) == []
+
+
+def test_paper_observation_flag_off_is_a_no_op_on_desired_set():
+    # ...and the full desired set is byte-identical whether the flag is unset
+    # or explicitly "0" — flag-off adds ZERO lanes (safety req #1).
+    base = desired_lane_specs({})
+    off = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "0"})
+    ids_base = [s.lane_id for s in base]
+    assert ids_base == [s.lane_id for s in off]
+    assert not any(s.lane_id.endswith("_paper_observation") for s in base)
+    assert lane_specs_fingerprint(base) == lane_specs_fingerprint(off)
+
+
+def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
+    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    ids = {spec.lane_id for spec in specs}
+
+    # Governed BTC/Bybit paper-trial ledgers stay canonical and are not mirrored.
+    assert "funding_mr_btc_v1_20260703" in ids
+    assert "funding_mr_bybit_20260704" in ids
+    assert "funding_mr_binanceusdm_btc_usdt_usdt_paper_observation" not in ids
+    assert "funding_mr_bybit_btc_usdt_usdt_paper_observation" not in ids
+
+    # Shadow-only lanes (no equivalent paper trial) get isolated paper ledgers.
+    assert "trend_continuation_delta_india_btc_usd_usd_paper_observation" in ids
+    assert "funding_mr_delta_india_btc_usd_usd_paper_observation" in ids
+    assert "trend_continuation_xrp_bybit_paper_observation" in ids
+
+    observed = [
+        spec for spec in specs if spec.lane_id.endswith("_paper_observation")
+    ]
+    assert observed
+    assert all(spec.mode is RunnerMode.PAPER for spec in observed)
+    assert all(not spec.is_primary for spec in observed)
+    # isolated ledgers: every observation id is unique across the runtime set
+    assert len(ids) == len(specs)
+
+
+def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors():
+    specs = desired_lane_specs({
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+        "MULTI_LANE_DELTA_PAPER_OBSERVE": "0",
+    })
+    ids = {spec.lane_id for spec in specs}
+
+    assert "trend_continuation_xrp_bybit_paper_observation" in ids
+    assert not any(
+        spec.exchange == "delta_india" and spec.mode is RunnerMode.PAPER
+        for spec in specs
+    )
 
 
 def test_lane_specs_reject_unknown_mode():
