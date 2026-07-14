@@ -63,6 +63,8 @@ SATS_5M_PARAMS: dict = {
     "min_momentum_persistence": 0.55,
     "min_bbp_atr": 0.10,
     "min_bbp_slope": -0.05,
+    "stealth_trail_atr_mult": 2.5,
+    "stealth_trail_reclaim_atr": 0.25,
     "min_volume_z": -0.75,
     "stop_atr_mult": 0.95,
     "take_profit_r": 3.0,
