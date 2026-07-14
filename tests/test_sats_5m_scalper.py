@@ -91,6 +91,9 @@ def test_sats_5m_fires_on_quality_trend_continuation():
     assert intent is not None
     assert intent.side == "long"
     assert "sats_5m_scalper long" in intent.reason
+    assert "BullP=" in intent.reason
+    assert "BearP=" in intent.reason
+    assert "trail=" in intent.reason
     assert "tp_ladder=" in intent.reason
     assert "TQI=" in intent.reason
     assert intent.stop_price < float(df["close"].iloc[-1])
@@ -107,6 +110,24 @@ def test_sats_5m_blocks_low_quality_chop():
     df = strategy.prepare(candles)
 
     assert strategy.signal(df, len(df) - 1) is None
+
+
+def test_sats_5m_computes_classic_bull_bear_power_and_stealth_trail():
+    candles = make_candles(trend_quality_rows())
+    p = params()
+
+    df = add_sats_5m_columns(candles, p)
+    last = df.iloc[-1]
+
+    assert last["bull_power"] > 0
+    assert last["bear_power"] > -1.0
+    assert last["bbp"] == pytest.approx(last["bull_power"] + last["bear_power"])
+    assert last["stealth_trend"] in {-1, 1}
+    assert not pd.isna(last["stealth_trail"])
+    if last["stealth_trend"] > 0:
+        assert last["stealth_trail"] < last["close"]
+    else:
+        assert last["stealth_trail"] > last["close"]
 
 
 def test_sats_5m_rejects_unknown_side_filter():
@@ -126,7 +147,12 @@ def test_sats_5m_features_are_causal_when_future_changes():
     cols = [
         "ema_fast",
         "ema_slow",
+        "bull_power",
+        "bear_power",
         "bbp",
+        "stealth_trail",
+        "stealth_trend",
+        "stealth_distance_atr",
         "rsi",
         "er",
         "prior_high",

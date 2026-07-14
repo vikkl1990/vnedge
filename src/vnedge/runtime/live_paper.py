@@ -549,8 +549,13 @@ class LivePaperSession:
         "tqi_long",
         "tqi_short",
         "quality_strength",
+        "bull_power",
+        "bear_power",
         "bbp",
         "bbp_delta",
+        "stealth_trail",
+        "stealth_trend",
+        "stealth_distance_atr",
         "rsi",
         "volume_z",
         "mom_persist_long",
@@ -567,6 +572,8 @@ class LivePaperSession:
         "min_quality_strength",
         "min_momentum_persistence",
         "min_bbp_atr",
+        "min_bbp_slope",
+        "stealth_trail_atr_mult",
         "min_volume_z",
     )
 
