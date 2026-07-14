@@ -14,8 +14,14 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Data & runtime state (anchored to root — src/vnedge/data is source code)
-/data/
+# Data & runtime state (anchored to root — src/vnedge/data is source code).
+# Exclude data CONTENTS but keep the AI strategy sandbox tracked: AI-authored
+# strategy SOURCE is validated code (not market data) and never trades — it is
+# a research candidate. Re-inclusion must step through each parent dir.
+/data/*
+!/data/strategies
+/data/strategies/*
+!/data/strategies/ai
 /logs/
 *.parquet
 *.db
