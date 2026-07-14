@@ -253,6 +253,7 @@ def create_app(
     research_path: Path | None = None,
     alpha_council_path: Path | None = None,
     alpha_workbench_path: Path | None = None,
+    vibe_intelligence_path: Path | None = None,
     alerts_path: Path | None = None,
     journal_dir: Path | None = None,
     runbooks_path: Path | None = None,
@@ -519,6 +520,18 @@ def create_app(
             _read_json_payload(
                 alpha_workbench_path,
                 {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False},
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/vibe-intelligence")
+    async def vibe_intelligence(request: Request) -> JSONResponse:
+        """Latest persistent hypothesis lifecycle memory."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                vibe_intelligence_path,
+                {"summary": {}, "cards": [], "can_trade": False, "can_promote": False},
             ),
             headers=_identity(user),
         )

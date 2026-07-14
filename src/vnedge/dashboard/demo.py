@@ -93,6 +93,7 @@ async def main() -> None:
         research_path=Path("research/live_research/latest.json"),
         alpha_council_path=Path("research/live_research/alpha_council_latest.json"),
         alpha_workbench_path=Path("research/live_research/alpha_workbench_latest.json"),
+        vibe_intelligence_path=Path("research/live_research/vibe_intelligence_latest.json"),
         realtime_scanner_path=Path("research/live_research/realtime_scanner_latest.json"),
     )
     server = uvicorn.Server(

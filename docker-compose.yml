@@ -453,6 +453,22 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Vibe-style hypothesis lifecycle memory. It joins alpha-council debates with
+  # alpha-workbench proof tasks, then persists active/monitoring/decayed/disabled
+  # hypothesis cards. Research-only: no credentials, no orders, no promotions.
+  vibe-intelligence:
+    build: .
+    restart: unless-stopped
+    depends_on: [alpha-council, alpha-workbench]
+    command: ["python", "-m", "vnedge.research.vibe_intelligence",
+              "--interval-seconds", "${VIBE_INTELLIGENCE_INTERVAL_SECONDS:-900}",
+              "--max-cards", "${VIBE_INTELLIGENCE_MAX_CARDS:-50}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.

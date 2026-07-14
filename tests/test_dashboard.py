@@ -235,6 +235,7 @@ def test_history_without_file_is_empty(client):
 def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     council = tmp_path / "alpha_council_latest.json"
     workbench = tmp_path / "alpha_workbench_latest.json"
+    vibe = tmp_path / "vibe_intelligence_latest.json"
     readiness = tmp_path / "lane_promotion_readiness_latest.json"
     scanner = tmp_path / "realtime_scanner_latest.json"
     council.write_text(json.dumps({
@@ -246,6 +247,12 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     workbench.write_text(json.dumps({
         "summary": {"open_tasks": 1},
         "tasks": [{"task_type": "conservative_replay"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    vibe.write_text(json.dumps({
+        "summary": {"active": 1},
+        "cards": [{"lifecycle_state": "ACTIVE"}],
         "can_trade": False,
         "can_promote": False,
     }))
@@ -269,16 +276,22 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         token="t3st-token",
         alpha_council_path=council,
         alpha_workbench_path=workbench,
+        vibe_intelligence_path=vibe,
         lane_readiness_path=readiness,
         realtime_scanner_path=scanner,
     ))
 
     assert client.get("/alpha-council").status_code == 401
     assert client.get("/alpha-workbench").status_code == 401
+    assert client.get("/vibe-intelligence").status_code == 401
     assert client.get("/lane-readiness").status_code == 401
     assert client.get("/realtime-scanner").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
+    vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
+    assert vibe_payload["summary"]["active"] == 1
+    assert vibe_payload["cards"][0]["lifecycle_state"] == "ACTIVE"
+    assert vibe_payload["can_promote"] is False
     lane_payload = client.get("/lane-readiness?token=t3st-token").json()
     assert lane_payload["summary"]["paper_review_ready"] == 1
     assert lane_payload["can_promote"] is False
@@ -296,16 +309,19 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         token="t3st-token",
         alpha_council_path=tmp_path / "missing_council.json",
         alpha_workbench_path=tmp_path / "missing_workbench.json",
+        vibe_intelligence_path=tmp_path / "missing_vibe.json",
         lane_readiness_path=tmp_path / "missing_readiness.json",
         realtime_scanner_path=tmp_path / "missing_scanner.json",
     ))
 
     council = client.get("/alpha-council?token=t3st-token").json()
     workbench = client.get("/alpha-workbench?token=t3st-token").json()
+    vibe = client.get("/vibe-intelligence?token=t3st-token").json()
     readiness = client.get("/lane-readiness?token=t3st-token").json()
     scanner = client.get("/realtime-scanner?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
+    assert vibe == {"summary": {}, "cards": [], "can_trade": False, "can_promote": False}
     assert readiness == {
         "summary": {},
         "rows": [],
