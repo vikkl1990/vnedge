@@ -128,6 +128,59 @@ The response is a job ledger record, not a promotion:
 }
 ```
 
+## Job Runner
+
+`python -m vnedge.agent_gateway.job_runner` consumes pending backtest jobs and
+writes terminal research-only evidence. It runs from recorded local data only:
+
+- registered strategies are backtested against Parquet candles in
+  `data/normalized/...`;
+- AI-authored `ai_*` strategies are routed through the sandboxed candidate
+  research surface;
+- missing data, unknown strategies, non-strict jobs, or live-enabled requests
+  become `BLOCKED_RESEARCH_ONLY` with a concrete reason;
+- unexpected execution errors become `FAILED_RESEARCH_ONLY`;
+- successful jobs become `DONE_RESEARCH_ONLY`.
+
+No terminal state authorizes trading:
+
+```json
+{
+  "status": "DONE_RESEARCH_ONLY",
+  "result": {
+    "metrics": {"num_trades": 12, "net_profit_usd": -3.42},
+    "promotion_verdict": "NOT_EVALUATED_AGENT_JOB",
+    "can_trade": false,
+    "can_promote": false,
+    "live_orders_enabled": false
+  }
+}
+```
+
+Run once:
+
+```bash
+python -m vnedge.agent_gateway.job_runner --once --json
+```
+
+The Docker Compose service `agent-job-runner` runs continuously and shares
+only:
+
+- `./logs` read/write for the job ledger;
+- `./data` read-only for market data;
+- `./research/live_research` read/write for artifacts under
+  `agent_jobs/<job_id>.json`.
+
+Tuning knobs:
+
+| Env | Default | Meaning |
+|---|---:|---|
+| `AGENT_GATEWAY_JOBS_DIR` | `logs/agent_gateway/jobs` | Queue directory shared with the dashboard service. |
+| `AGENT_JOB_RUNNER_INTERVAL_SECONDS` | `60` | Poll cadence. |
+| `AGENT_JOB_RUNNER_MAX_PER_CYCLE` | `1` | Bounded jobs per poll. |
+| `AGENT_JOB_RUNNER_DATA_ROOT` | `data` | Recorded data root. |
+| `AGENT_JOB_RUNNER_ARTIFACT_DIR` | `research/live_research/agent_jobs` | JSON evidence output. |
+
 ## Audit Files
 
 Defaults:
@@ -141,9 +194,6 @@ is tamper-evident without mixing it into the order decision journal.
 ## Next Phases
 
 1. Agent Gateway OpenAPI document and MCP wrapper.
-2. A worker that consumes `PENDING_RESEARCH_ONLY` jobs and runs approved
-   backtest/replay commands.
-3. Sandboxed strategy-package authoring with AST/import validation.
-4. UI panels for agent tokens, jobs, and audit trail.
-5. Paper-only agent action scope, after a separate review.
-
+2. Replay/tick-job adapters for microstructure candidates.
+3. UI panels for agent tokens, jobs, and audit trail.
+4. Paper-only agent action scope, after a separate review.
