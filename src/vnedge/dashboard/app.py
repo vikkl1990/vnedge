@@ -189,6 +189,48 @@ def _render_runbooks_html(markdown: str) -> str:
     return "".join(parts)
 
 
+def _cost_model_payload() -> dict:
+    """The REAL round-trip cost model, read from the same constants the
+    research and paper engines use — never hardcoded in the UI.
+
+    Two honest cost models the operator must reconcile:
+    - maker-first: maker entry + taker exit + slippage (the ~8 bps wall the
+      scalper replay diagnostics use as breakeven).
+    - taker round-trip: both legs taker + slippage (the ~11 bps wall).
+    The paper broker's pessimistic fill model is reported alongside so the
+    "8 vs 10 bps" disconnect is visible instead of buried in one number.
+    """
+    from vnedge.paper.fill_model import FillModel
+    from vnedge.scalping.parameter_registry import (
+        DEFAULT_SCALPER_PARAMETER_REGISTRY as _registry,
+    )
+
+    fee = _registry.fee_profile("binanceusdm")
+    paper = FillModel()
+    maker_first_rt = fee.maker_bps + fee.taker_bps + fee.slippage_bps
+    taker_rt = 2 * fee.taker_bps + fee.slippage_bps
+    paper_taker_rt = 2 * (paper.taker_fee_bps + paper.slippage_bps)
+    return {
+        "exchange": fee.exchange,
+        "source": "scalper_replay_diagnostics + paper.fill_model constants",
+        "maker_bps": fee.maker_bps,
+        "taker_bps": fee.taker_bps,
+        "slippage_bps": fee.slippage_bps,
+        "safety_buffer_bps": fee.safety_buffer_bps,
+        # Two labelled round-trip cost models (no safety buffer — the raw wall).
+        "maker_first_rt_bps": round(maker_first_rt, 2),
+        "taker_rt_bps": round(taker_rt, 2),
+        # With the research safety buffer applied (what the gates actually use).
+        "maker_first_cost_bps": round(fee.maker_first_cost_bps, 2),
+        "taker_round_trip_cost_bps": round(fee.taker_round_trip_cost_bps, 2),
+        "paper_fill_model": {
+            "taker_fee_bps": paper.taker_fee_bps,
+            "slippage_bps": paper.slippage_bps,
+            "taker_rt_bps": round(paper_taker_rt, 2),
+        },
+    }
+
+
 class SnapshotProvider:
     """Holds the latest coalesced snapshot. The bot publishes; the UI reads.
     That is the entire coupling between them."""
@@ -448,6 +490,14 @@ def create_app(
         return JSONResponse(
             _read_json_payload(research_path, {"results": []}), headers=_identity(user)
         )
+
+    @app.get("/cost-model")
+    async def cost_model(request: Request) -> JSONResponse:
+        """The real maker-first (~8bps) and taker (~11bps) round-trip cost
+        models, read from the research/paper constants — not hardcoded in the
+        UI. Auth-gated like every data route; read-only."""
+        user = _authorized(request)
+        return JSONResponse(_cost_model_payload(), headers=_identity(user))
 
     @app.get("/alpha-council")
     async def alpha_council(request: Request) -> JSONResponse:
