@@ -114,9 +114,11 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     alpha = {"flow": ["mine_structural_hypotheses"], "flow_guards": {"can_trade": False}}
     params = {"version": "test", "can_trade": False}
     leaderboard = {"summary": {"rows": 1}, "policy": {"can_trade": False}}
+    ranker = {"summary": {"ready": 1}, "policy": {"can_trade": False}}
     payload = cr.ResearchPayload(
         records=records, started=0.0, universe={"targets": 1},
-        agent_plan={"policy": {"can_trade": False}}, scalper_research=scalper,
+        agent_plan={"policy": {"can_trade": False}}, factor_ranker=ranker,
+        scalper_research=scalper,
         alpha_factory=alpha, scalper_parameter_registry=params,
         edge_leaderboard=leaderboard)
     cr.publish(payload)
@@ -125,6 +127,8 @@ def test_publish_atomic_and_feed(tmp_path, monkeypatch):
     assert latest["results"][0]["verdict"] == "PASS"
     assert latest["results"][0]["exchange"] == "binanceusdm"
     assert latest["universe"]["targets"] == 1
+    assert latest["factor_ranker"]["summary"]["ready"] == 1
+    assert latest["factor_ranker"]["policy"]["can_trade"] is False
     assert latest["scalper_research"]["flow"] == ["tick_l2_recorder"]
     assert latest["scalper_research"]["flow_guards"]["can_trade"] is False
     assert latest["alpha_factory"]["flow"] == ["mine_structural_hypotheses"]
@@ -153,6 +157,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         agent_plan={"policy": {"can_trade": False}},
         edge_leaderboard={"summary": {"rows": 1}},
         universe={"targets": 2},
+        factor_ranker={"summary": {"ready": 1}},
         scalper_research={"flow": ["tick_l2_recorder"]},
         alpha_factory={"flow": ["mine_structural_hypotheses"]},
         scalper_parameter_registry={"version": "test"},
@@ -175,6 +180,7 @@ def test_publish_payload_schema_matches_legacy_kwargs_dict(tmp_path, monkeypatch
         "results": records,
         "drift_alerts": [{"rule_id": "drift_verdict_flip"}],
         "universe": {"targets": 2},
+        "factor_ranker": {"summary": {"ready": 1}},
         "scalper_research": {"flow": ["tick_l2_recorder"]},
         "alpha_factory": {"flow": ["mine_structural_hypotheses"]},
         "scalper_parameter_registry": {"version": "test"},
