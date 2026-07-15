@@ -139,6 +139,7 @@ class OrderManager:
             "client_order_id": order.client_order_id,
             "approved": decision.approved,
             "failed_checks": list(decision.failed_checks),
+            "warning_checks": list(decision.warning_checks),
             "intent": asdict(intent),
         })
         if not decision.approved:

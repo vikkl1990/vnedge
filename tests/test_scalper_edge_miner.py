@@ -80,6 +80,8 @@ def test_pressure_continuation_candidate_clears_route_gate():
     assert best.profit_factor is not None and best.profit_factor > 1.15
     assert best.avg_net_bps is not None and best.avg_net_bps > 0.5
     assert best.can_trade is False
+    assert best.execution_evidence == "hypothesis_only"
+    assert best.fill_assumption == "synthetic_observation_fill_not_replay"
 
 
 def test_flat_pressure_is_below_breakeven_not_signal():
