@@ -190,4 +190,5 @@ def test_registry_has_research_lanes():
         "funding_squeeze_continuation_v1", "alpha_stack_confluence_v1",
         "quant_signal_pack_v1", "alpha_distillation_pack_v1",
         "trend_retest_v1", "sats_5m_scalper_v1", "smc_playbook_scalper_v1",
+        "stealth_trail_bbp_v1", "human_trade_fingerprint_v1",
     }

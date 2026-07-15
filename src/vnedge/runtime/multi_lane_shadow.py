@@ -69,6 +69,13 @@ SATS_5M_PARAMS: dict = {
     "stop_atr_mult": 0.95,
     "take_profit_r": 3.0,
 }
+STEALTH_TRAIL_BBP_PARAMS: dict = {
+    "min_expected_net_edge_bps": 25.0,
+    "min_bbp_z": 0.20,
+    "min_volume_z": 0.40,
+    "min_body_atr": 0.45,
+    "min_body_percentile": 0.60,
+}
 
 DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
@@ -317,6 +324,39 @@ def sats_5m_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpe
     ]
 
 
+def stealth_trail_bbp_delta_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Curated 5m Delta India human-fingerprint scanner observation lanes.
+
+    These run the stricter BBP + stealth-trail + 15m/1h confirmation scanner in
+    SHADOW only. The strategy reason string carries the taker fallback verdict,
+    but no paper/live promotion is implied here.
+    """
+    if not _truthy(environ, "MULTI_LANE_STEALTH_TRAIL_BBP_DELTA", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_STEALTH_TRAIL_BBP_SYMBOLS",
+        "ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT",
+        environ,
+    )
+    symbols = [_delta_india_symbol(symbol) for symbol in raw_symbols]
+    return [
+        LaneSpec(
+            lane_id=f"stealth_trail_bbp_{DELTA_EXCHANGE}_{_slug_symbol(symbol)}_shadow",
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="5m",
+            strategy_id="stealth_trail_bbp_v1",
+            strategy_params=STEALTH_TRAIL_BBP_PARAMS,
+            mode=RunnerMode.SHADOW,
+        )
+        for symbol in symbols
+    ]
+
+
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     raw = environ.get(name, default)
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -487,6 +527,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + candidate_shadow_lanes(environ)
         + delta_funding_mr_lanes(environ)
         + sats_5m_delta_lanes(environ)
+        + stealth_trail_bbp_delta_lanes(environ)
     )
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 
