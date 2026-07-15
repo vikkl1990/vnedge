@@ -215,16 +215,21 @@ fees). The charter's "revisit complexity only with evidence of need" was
 repeatedly violated: cascade -> echo -> SATS -> SMC -> vibe -> AI-sandbox ->
 gateway were built without any earning the next.
 
-STANDING DISCIPLINE (added 2026-07-15): PROVE before BUILD. Do not add a new
-research family/module until an existing one produces a CANDIDATE verdict or
-the funding-MR trial completes under an approved successor protocol. Fixes
-this cycle: 29 orphan lane journals archived; the candidate_replay /
-execution_condition unbounded tick-cache (multi-GB OOM, 2026-07-11/13) bounded
-to a single-entry cache; mem_limits cap the 3 replay/mining hogs at 2.5G.
-OPEN: successor trial protocol (>=10 trades / 120d cap) still needs human
-approval; CI + branch protection still needed (2 red-main slips this session);
-permutation-test significance for the 117k-trials/day multiple-comparisons load
-still unbuilt.
+PROVE-before-BUILD (added 2026-07-15) — RETIRED 2026-07-16 by explicit user
+decision (informed override, offered hold/probe/retire; chose retire). New
+research families are accepted freely again; the funding_mr trial no longer
+gates new work. The reality above still STANDS as honest context — 0 CANDIDATE
+verdicts, 0 live orders, 1 partial trial — it just is no longer a merge gate.
+First family merged post-retirement: stealth_trail_bbp_v1 (#172, shadow-only).
+Infra fixes from that cycle remain in force: 29 orphan lane journals archived;
+the candidate_replay / execution_condition unbounded tick-cache (multi-GB OOM,
+2026-07-11/13) bounded to a single-entry cache; mem_limits cap the 3
+replay/mining hogs at 2.5G.
+STILL OPEN (not gated, but real): successor trial protocol (>=10 trades / 120d
+cap) needs human approval; CI + branch protection still needed (2 red-main
+slips this session); permutation-test significance for the 117k-trials/day
+multiple-comparisons load still unbuilt — the more families we add freely, the
+more this one matters.
 
 ## Build order (next milestones)
 
