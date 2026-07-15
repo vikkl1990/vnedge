@@ -2508,6 +2508,23 @@
       <div class="empty" id="rtScannerEmpty">live scanner is waiting for lane journals</div>
     </section>
 
+    <section id="realtimeShadowScalpBoard" data-view="trading" aria-label="real-time shadow scalp">
+      <h2>Real-Time Shadow Scalp (live) <span class="tag" id="rss_policy">live-tick shadow firing (cascade + echo); virtual only, cannot trade or promote</span></h2>
+      <div class="mini-grid" aria-label="real-time shadow scalp summary">
+        <div class="mini-card good"><div class="small-label">Virtual Trades</div><div class="big" id="rss_trades">--</div><div class="tiny">shadow fills, no real orders</div></div>
+        <div class="mini-card info"><div class="small-label">Lanes</div><div class="big" id="rss_lanes">--</div><div class="tiny" id="rss_intents">intents --</div></div>
+        <div class="mini-card"><div class="small-label">Maker &gt; Taker</div><div class="big" id="rss_makerwins">--</div><div class="tiny">lanes where maker beats taker</div></div>
+        <div class="mini-card"><div class="small-label">Notional</div><div class="big" id="rss_notional">--</div><div class="tiny" id="rss_age">age --</div></div>
+      </div>
+      <div class="empty" id="rss_answer">real-time shadow scalp runner has not published yet</div>
+      <div class="table-wrap">
+        <table id="rssLanes"><thead><tr>
+          <th>Family</th><th>Venue</th><th>Symbol</th><th>Verdict</th><th>Virtual</th><th>Taker net</th><th>Maker net</th><th>Events/hr</th><th>Last fire</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="rssLanesEmpty">no shadow scalp lanes firing yet</div>
+    </section>
+
     <section data-view="trading" aria-label="signal funnel and trade journal">
       <h2>Signal Pressure &amp; Trade Journal <span class="tag">scanner-style hot/cold pressure, approval quality, and chronological execution narrative</span></h2>
       <div class="funnel-deck" aria-label="signal pressure summary">
@@ -2720,6 +2737,49 @@
       <div class="empty" id="sd_empty">no research winners with locked params yet -- winners without locked params are blocked, not run</div>
     </section>
 
+    <section class="agent-board" id="cascadeReversionBoard" data-view="research">
+      <h2>Cascade Reversion (research) <span class="tag">liquidation cascade &rarr; reversion scalp; dual cost model (taker vs maker); research-only, cannot trade or promote</span></h2>
+      <div class="kv">
+        <span class="k">Targets</span><span class="v" id="cr_summary">awaiting first cascade scan</span>
+        <span class="k">Updated</span><span class="v" id="cr_age">waiting</span>
+      </div>
+      <div class="table-wrap">
+        <table id="cr_targets"><thead><tr>
+          <th>Venue</th><th>Symbol</th><th>Events</th><th>Verdict</th><th>Taker net</th><th>Maker net</th><th>Cost edge</th><th>Overlap days</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="cr_empty">cascade reversion research has not published yet</div>
+    </section>
+
+    <section class="agent-board" id="leadlagEchoBoard" data-view="research">
+      <h2>Lead-Lag Echo Scalp (research) <span class="tag">Binance &rarr; Delta lead-lag echo; dual cost model; research-only, cannot trade or promote</span></h2>
+      <div class="kv">
+        <span class="k">Targets</span><span class="v" id="ll_summary">awaiting first lead-lag scan</span>
+        <span class="k">Updated</span><span class="v" id="ll_age">waiting</span>
+      </div>
+      <div class="table-wrap">
+        <table id="ll_targets"><thead><tr>
+          <th>Pair</th><th>Events</th><th>Verdict</th><th>Taker net</th><th>Maker net</th><th>Cost edge</th><th>Lag resp%</th><th>Overlap days</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="ll_empty">lead-lag echo scalp research has not published yet</div>
+    </section>
+
+    <section class="agent-board" id="aiCandidatesBoard" data-view="research">
+      <h2>AI Strategy Candidates (sandbox) <span class="tag">AI-sandbox-authored; AST-validated + causality-gated + walk-forwarded; research-only</span></h2>
+      <div class="kv">
+        <span class="k">Sandbox</span><span class="v" id="ai_summary">awaiting first AI candidate pass</span>
+        <span class="k">Updated</span><span class="v" id="ai_age">waiting</span>
+      </div>
+      <div class="empty" id="ai_banner" style="display:none;color:var(--amber);font-size:10.5px;margin:0 0 8px">AI-AUTHORED &middot; CANNOT TRADE &middot; needs untouched judgment + human approval</div>
+      <div class="table-wrap">
+        <table id="ai_candidates"><thead><tr>
+          <th>Strategy</th><th>Verdict</th><th>Causality</th><th>OOS net</th><th>OOS trades</th><th>Windows</th><th>Status</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="ai_empty">AI strategy sandbox has not published candidates yet</div>
+    </section>
+
     </div>
 
     <div class="zone zone-infra" id="zoneInfrastructure" data-view-group aria-label="infrastructure zone">
@@ -2745,6 +2805,19 @@
       </div>
       <div class="alerts" id="incidentsList" style="display:none"></div>
       <div class="empty" id="incidents-empty">no incidents recorded</div>
+    </section>
+
+    <section id="laneHealthBoard" data-view="incidents" aria-label="lane health audit">
+      <h2>Lane Health <span class="tag">desired-vs-active lane journal audit; OK / STALE / SILENT / MISSING / ORPHAN; from the /state snapshot</span></h2>
+      <div class="kv">
+        <span class="k">Summary</span><span class="v" id="lh_summary">no lane health reported</span>
+      </div>
+      <div class="table-wrap">
+        <table id="lh_rows"><thead><tr>
+          <th>Lane</th><th>Verdict</th><th>Age</th><th>Trade-compatible</th><th>Detail</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty" id="lh_empty">no lane health data in the current snapshot</div>
     </section>
 
     <details class="loop-board" id="architectureMap" data-view="system" open>
@@ -2824,6 +2897,7 @@
         <div class="doc-card"><div class="dc-label">Deploy target</div><div class="dc-value">Linux VPS + Docker (compose); dev on macOS</div></div>
         <div class="doc-card"><div class="dc-label">Access control</div><div class="dc-value">Bearer-token read-only; zero control routes</div></div>
         <div class="doc-card"><div class="dc-label">Live venue scope</div><div class="dc-value">One exchange, BTC + ETH USDT perps at V1</div></div>
+        <div class="doc-card"><div class="dc-label">Agent gateway</div><div class="dc-value" id="prov_agent_gateway" title="read-only informational; the agent gateway mounts only when agent tokens are configured">dormant (no agent tokens)</div></div>
       </div>
       <div class="cost-foot">Container split, service bus, ONNX hot paths and sub-3ms targets are deliberately deferred until evidence demands them (architecture review 2026-07-02).</div>
     </section>
@@ -4199,6 +4273,8 @@
     wnRender();
     renderConnections(s.lanes||[],s);
     renderLaneHealth(s.lane_health,s.runtime_control);
+    renderLaneHealthTable(s.lane_health);
+    renderAgentGateway(s);
     const feed=s.feed_health||{};
     const price=s.price||null;
     const positions=Array.isArray(s.positions)?s.positions:[];
@@ -5097,6 +5173,10 @@
     }
     renderAgent(d.edge_agents||{}, d.universe||{}, d.edge_leaderboard||{});
     renderScalperDiscovery(d);
+    renderCascadeReversion(d.cascade_reversion||{});
+    renderLeadLagEcho(d.leadlag_echo_scalp||{});
+    renderAiCandidates(d.ai_candidates||{});
+    renderRealtimeShadowScalp(d.realtime_shadow_scalp||{});
     if(lastOperatorCtx)renderReadiness(lastOperatorCtx);
     const note=$("rl_note");
     if(d.note){note.textContent=d.note;note.style.display="block";}else{note.style.display="none";}
@@ -5119,6 +5199,210 @@
     }
     dv.style.display=drift.length?"block":"none";
     renderInstitutional();
+  }
+
+  // --- Scalp research panels (cascade / lead-lag / real-time shadow) ----------
+  // All three share the dual cost model (taker_taker vs maker_first) and the
+  // same verdict vocabulary. Data arrives already folded into /research; these
+  // are pure-frontend renders. Research-only: cannot trade, cannot promote.
+  function scalpVerdictTone(v){
+    const s=String(v||"");
+    if(s==="CANDIDATE")return "good";
+    if(s==="MAKER_ONLY_POSITIVE")return "info";
+    if(s==="NEGATIVE_EDGE")return "bad";
+    return "idle"; // UNDER_SAMPLED / unknown -> not enough evidence
+  }
+  function scalpAgg(t,model){
+    const a=(t&&t.aggregates)||{};
+    return a[model]||{};
+  }
+  // Highlight the dual-cost insight: when the maker-first model beats the
+  // taker-taker model, maker fills carry the edge (badge it), else taker.
+  function costEdgeCell(tr,taker,maker){
+    const beats=num(maker)>num(taker);
+    appendBadge(tr.insertCell(),beats?"MAKER":"taker",beats?"info":"idle");
+  }
+  function utcClockMs(ms){
+    if(!finite(ms))return "--";
+    try{return new Date(Number(ms)).toISOString().slice(11,19)+" UTC";}
+    catch(_e){return "--";}
+  }
+  function verdictCountsText(vc){
+    const e=Object.entries(vc||{});
+    return e.length?e.map(([k,v])=>v+" "+String(k).replaceAll("_"," ")).join(", "):"no verdicts";
+  }
+  function renderCascadeReversion(payload){
+    const d=payload||{};
+    const targets=Array.isArray(d.targets)?d.targets:[];
+    const sm=d.summary||{};
+    text("cr_summary",targets.length
+      ?(num(sm.targets||targets.length)+" targets, "+num(sm.events)+" events; "+verdictCountsText(sm.verdict_counts))
+      :"awaiting first cascade scan (needs recorded liquidation + trade days)");
+    text("cr_age",d.generated_at?"updated "+utcClock(d.generated_at):"waiting");
+    const body=$("cr_targets").querySelector("tbody");
+    body.replaceChildren();
+    targets.forEach(t=>{
+      const taker=scalpAgg(t,"taker_taker"), maker=scalpAgg(t,"maker_first");
+      const tr=body.insertRow();
+      appendCell(tr,String(t.exchange||"--").replace("usdm",""));
+      appendCell(tr,String(t.symbol||"--").split(":")[0]);
+      appendCell(tr,num(t.events));
+      appendBadge(tr.insertCell(),String(t.verdict||"--").replaceAll("_"," "),scalpVerdictTone(t.verdict));
+      appendCell(tr,usd(taker.net_usd),classFor(taker.net_usd));
+      appendCell(tr,usd(maker.net_usd),classFor(maker.net_usd));
+      costEdgeCell(tr,taker.net_usd,maker.net_usd);
+      const scanned=Array.isArray(t.days_scanned)?t.days_scanned.length:0;
+      const avail=Array.isArray(t.days_with_liquidations)?t.days_with_liquidations.length:0;
+      appendCell(tr,scanned+"/"+avail,null,"days scanned / days with liquidations");
+    });
+    $("cr_targets").style.display=targets.length?"table":"none";
+    $("cr_empty").style.display=targets.length?"none":"block";
+  }
+  function renderLeadLagEcho(payload){
+    const d=payload||{};
+    const targets=Array.isArray(d.targets)?d.targets:[];
+    const sm=d.summary||{};
+    text("ll_summary",targets.length
+      ?(num(sm.targets||targets.length)+" pairs, "+num(sm.events)+" events; "+verdictCountsText(sm.verdict_counts))
+      :"awaiting first lead-lag scan (needs overlapping leader + follower trade days)");
+    text("ll_age",d.generated_at?"updated "+utcClock(d.generated_at):"waiting");
+    const body=$("ll_targets").querySelector("tbody");
+    body.replaceChildren();
+    targets.forEach(t=>{
+      const taker=scalpAgg(t,"taker_taker"), maker=scalpAgg(t,"maker_first");
+      const lag=t.lag_estimate||{};
+      const tr=body.insertRow();
+      const venues=[String(t.leader_exchange||"").replace("usdm",""),String(t.follower_exchange||"").replace("usdm","")].filter(Boolean).join("→");
+      appendCell(tr,(t.base||"--")+(venues?" ("+venues+")":""),"clip",(t.leader_symbol||"")+" → "+(t.follower_symbol||""));
+      appendCell(tr,num(t.events));
+      appendBadge(tr.insertCell(),String(t.verdict||"--").replaceAll("_"," "),scalpVerdictTone(t.verdict));
+      appendCell(tr,usd(taker.net_usd),classFor(taker.net_usd));
+      appendCell(tr,usd(maker.net_usd),classFor(maker.net_usd));
+      costEdgeCell(tr,taker.net_usd,maker.net_usd);
+      appendCell(tr,finite(lag.response_rate_pct)?num(lag.response_rate_pct).toFixed(0)+"%":"--",null,lag.caveat||"");
+      const ov=Array.isArray(t.overlap_days)?t.overlap_days.length:0;
+      const sc=Array.isArray(t.days_scanned)?t.days_scanned.length:0;
+      appendCell(tr,sc+"/"+ov,null,"days scanned / overlap days");
+    });
+    $("ll_targets").style.display=targets.length?"table":"none";
+    $("ll_empty").style.display=targets.length?"none":"block";
+  }
+  function aiVerdictTone(v){
+    const s=String(v||"");
+    if(s==="CANDIDATE")return "good";
+    if(s==="REJECT")return "warn";
+    if(s==="INSUFFICIENT_DATA")return "idle";
+    return "bad"; // REFUSED_LOOKAHEAD / REFUSED_CAUSALITY_ERROR / ERROR
+  }
+  function renderAiCandidates(payload){
+    const d=payload||{};
+    const cands=Array.isArray(d.candidates)?d.candidates:[];
+    const sm=d.summary||{};
+    text("ai_summary",cands.length
+      ?(num(sm.loaded||cands.length)+" loaded, "+num(sm.rejected_files)+" files rejected; "+verdictCountsText(sm.verdict_counts))
+      :"awaiting first AI candidate pass (sandbox strategies in data/strategies/ai/)");
+    text("ai_age",d.generated_at?"updated "+utcClock(d.generated_at):"waiting");
+    $("ai_banner").style.display=cands.length?"block":"none";
+    const body=$("ai_candidates").querySelector("tbody");
+    body.replaceChildren();
+    cands.forEach(c=>{
+      const wf=c.walk_forward||{};
+      const causal=c.causality;
+      const tr=body.insertRow();
+      appendCell(tr,c.strategy_id||"--","clip",c.source_file||"");
+      appendBadge(tr.insertCell(),String(c.verdict||"--").replaceAll("_"," "),aiVerdictTone(c.verdict));
+      if(causal==null)appendBadge(tr.insertCell(),"n/a","idle");
+      else appendBadge(tr.insertCell(),causal.passed?"PASS":"FAIL",causal.passed?"good":"bad");
+      appendCell(tr,finite(wf.oos_net_usd)?usd(wf.oos_net_usd):"--",classFor(wf.oos_net_usd));
+      appendCell(tr,finite(wf.oos_trades)?num(wf.oos_trades):"--");
+      appendCell(tr,(wf.traded_windows==null||wf.windows==null)?"--":num(wf.traded_windows)+"/"+num(wf.windows));
+      appendCell(tr,"AI-AUTHORED · CANNOT TRADE",null,
+        (Array.isArray(c.reasons)&&c.reasons.length)?c.reasons.join("; "):"needs untouched judgment + human approval");
+    });
+    $("ai_candidates").style.display=cands.length?"table":"none";
+    $("ai_empty").style.display=cands.length?"none":"block";
+  }
+  function renderRealtimeShadowScalp(payload){
+    const d=payload||{};
+    const lanes=Array.isArray(d.lanes)?d.lanes:[];
+    const sm=d.summary||{};
+    text("rss_trades",num(sm.virtual_trades));
+    text("rss_lanes",num(sm.lanes||lanes.length));
+    text("rss_intents","intents "+num(sm.intents));
+    text("rss_makerwins",num(sm.maker_beats_taker_lanes));
+    text("rss_notional",finite(d.notional_usd)?moneyAbs(d.notional_usd):"--");
+    text("rss_age",d.generated_at?"updated "+utcClock(d.generated_at):"age --");
+    text("rss_answer",lanes.length
+      ?(lanes.length+" shadow scalp lane(s) live; "+num(sm.virtual_trades)+" virtual trades, "+num(sm.maker_beats_taker_lanes)+" maker-favored")
+      :"real-time shadow scalp runner has not published yet");
+    const body=$("rssLanes").querySelector("tbody");
+    body.replaceChildren();
+    lanes.forEach(l=>{
+      const taker=scalpAgg(l,"taker_taker"), maker=scalpAgg(l,"maker_first");
+      const tr=body.insertRow();
+      appendCell(tr,String(l.family||"--").replaceAll("_"," "));
+      appendCell(tr,String(l.exchange||"--").replace("usdm",""));
+      appendCell(tr,String(l.symbol||"--").split(":")[0]);
+      appendBadge(tr.insertCell(),String(l.verdict||"--").replaceAll("_"," "),scalpVerdictTone(l.verdict));
+      appendCell(tr,num(l.virtual_trades));
+      appendCell(tr,usd(taker.net_usd),classFor(taker.net_usd));
+      appendCell(tr,usd(maker.net_usd),classFor(maker.net_usd));
+      appendCell(tr,finite(l.events_per_hour)?num(l.events_per_hour).toFixed(2):"--");
+      const fire=finite(l.last_intent_ms)?l.last_intent_ms:(finite(l.last_event_ms)?l.last_event_ms:null);
+      appendCell(tr,fire==null?"--":utcClockMs(fire),null,"last shadow fire (UTC)");
+    });
+    $("rssLanes").style.display=lanes.length?"table":"none";
+    $("rssLanesEmpty").style.display=lanes.length?"none":"block";
+  }
+  // --- Lane health audit table (from the /state snapshot) ---------------------
+  function laneHealthTone(v){
+    const s=String(v||"");
+    if(s==="OK")return "good";
+    if(s==="STALE"||s==="MISSING")return "bad";
+    if(s==="SILENT"||s==="ORPHAN"||s==="PROBATION")return "warn";
+    return "idle";
+  }
+  function renderLaneHealthTable(lh){
+    const h=lh||{};
+    const problems=Array.isArray(h.problems)?h.problems:[];
+    const hasHealth=h.summary!=null;
+    text("lh_summary",hasHealth
+      ?(h.summary+(h.healthy===false?" (unhealthy)":h.healthy===true?" (healthy)":""))
+      :"no lane health reported");
+    const body=$("lh_rows").querySelector("tbody");
+    body.replaceChildren();
+    problems.forEach(p=>{
+      const tr=body.insertRow();
+      appendCell(tr,p.lane_id||"--","clip");
+      appendBadge(tr.insertCell(),String(p.verdict||"--"),laneHealthTone(p.verdict));
+      appendCell(tr,finite(p.age_seconds)?ageText(num(p.age_seconds)*1000):"--");
+      appendBadge(tr.insertCell(),p.trade_compatible===false?"no":"yes",p.trade_compatible===false?"warn":"idle");
+      appendCell(tr,p.detail||"--","clip",p.detail||"");
+    });
+    // The snapshot carries only non-OK rows; all-OK reports have an empty
+    // problems list but a valid summary — say so rather than "no data".
+    $("lh_empty").textContent=hasHealth
+      ?"all desired lanes OK (no problem rows in snapshot)"
+      :"no lane health data in the current snapshot";
+    $("lh_rows").style.display=problems.length?"table":"none";
+    $("lh_empty").style.display=problems.length?"none":"block";
+  }
+  // --- Agent gateway status chip (read-only informational) --------------------
+  function renderAgentGateway(s){
+    const el=$("prov_agent_gateway");
+    if(!el)return;
+    const g=s&&(s.agent_gateway||s.agent_gateway_status);
+    let enabled=null,label="dormant (no agent tokens)";
+    if(g&&typeof g==="object"){
+      enabled=g.enabled===true||g.mounted===true||g.status==="enabled";
+      label=enabled?"enabled (mounted)":"dormant (no agent tokens)";
+    }else if(typeof g==="boolean"){
+      enabled=g; label=g?"enabled (mounted)":"dormant (no agent tokens)";
+    }else if(typeof g==="string"&&g){
+      enabled=(g==="enabled"||g==="mounted"); label=g;
+    }
+    el.textContent=label;
+    el.className="dc-value"+(enabled===true?" good":enabled===false?" idle":"");
   }
 
   function fmtNet(side){

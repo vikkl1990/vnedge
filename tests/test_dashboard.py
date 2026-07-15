@@ -194,6 +194,181 @@ def test_dashboard_shell_has_multiview_nav_and_legal(client):
     assert "function setView" in html and "hashchange" in html
 
 
+def test_dashboard_shell_has_research_scalp_panels(client):
+    """The unrendered research features now have panels: cascade reversion,
+    lead-lag echo scalp, real-time shadow scalp, and AI candidates — each
+    grouped into the right view and clearly labelled research/cannot-trade."""
+    html = client.get("/").text
+    # panel titles (the markers the acceptance asks for)
+    assert "Cascade Reversion (research)" in html
+    assert "Lead-Lag Echo Scalp (research)" in html
+    assert "Real-Time Shadow Scalp (live)" in html
+    assert "AI Strategy Candidates (sandbox)" in html
+    # AI panel carries the explicit cannot-trade governance badge
+    assert "AI-AUTHORED" in html and "CANNOT TRADE" in html
+    assert "needs untouched judgment + human approval" in html
+    # panel containers wired to the render pipeline
+    for el in ("cascadeReversionBoard", "leadlagEchoBoard", "aiCandidatesBoard",
+               "realtimeShadowScalpBoard", "cr_targets", "ll_targets",
+               "ai_candidates", "rssLanes"):
+        assert f'id="{el}"' in html
+    # render functions exist and are wired into renderResearch
+    for fn in ("renderCascadeReversion", "renderLeadLagEcho",
+               "renderAiCandidates", "renderRealtimeShadowScalp"):
+        assert f"function {fn}(" in html
+        assert f"{fn}(" in html
+    # research panels live in the research view; the live-firing one in trading
+    assert 'id="cascadeReversionBoard" data-view="research"' in html
+    assert 'id="realtimeShadowScalpBoard" data-view="trading"' in html
+
+
+def test_dashboard_shell_has_lane_health_table_and_agent_gateway(client):
+    """Lane health audit table (Incidents) and the read-only agent-gateway
+    status chip (System) are present and wired to the snapshot."""
+    html = client.get("/").text
+    assert 'id="laneHealthBoard" data-view="incidents"' in html
+    assert 'id="lh_rows"' in html
+    assert "renderLaneHealthTable" in html
+    # agent gateway status chip in the deploy/provenance (system) panel
+    assert 'id="prov_agent_gateway"' in html
+    assert "dormant (no agent tokens)" in html
+    assert "renderAgentGateway" in html
+
+
+def _synthetic_research_doc() -> dict:
+    """Mirror how continuous_research folds the scalp/AI surfaces into
+    latest.json, with one row per panel so the round-trip test can assert the
+    exact nested fields the frontend renders from."""
+    agg = {
+        "taker_taker": {"events": 12, "net_usd": -0.42, "avg_net_bps": -3.5,
+                        "win_rate_pct": 41.0, "profit_factor": 0.8},
+        "maker_first": {"events": 12, "net_usd": 0.31, "avg_net_bps": 2.6,
+                        "win_rate_pct": 58.0, "profit_factor": 1.4},
+    }
+    return {
+        "results": [],
+        "cascade_reversion": {
+            "generated_at": "2026-07-14T00:00:00+00:00",
+            "targets": [{
+                "exchange": "binanceusdm", "symbol": "BTC/USDT:USDT",
+                "events": 12, "verdict": "MAKER_ONLY_POSITIVE",
+                "days_scanned": ["20260701", "20260702"],
+                "days_with_liquidations": ["20260701", "20260702", "20260703"],
+                "aggregates": agg, "can_trade": False, "can_promote": False,
+            }],
+            "summary": {"targets": 1, "events": 12,
+                        "verdict_counts": {"MAKER_ONLY_POSITIVE": 1}},
+            "can_trade": False, "can_promote": False,
+        },
+        "leadlag_echo_scalp": {
+            "generated_at": "2026-07-14T00:00:00+00:00",
+            "targets": [{
+                "base": "BTC", "leader_exchange": "binanceusdm",
+                "leader_symbol": "BTC/USDT:USDT",
+                "follower_exchange": "delta_india", "follower_symbol": "BTCUSD",
+                "events": 9, "verdict": "CANDIDATE",
+                "overlap_days": ["20260701", "20260702"],
+                "days_scanned": ["20260701", "20260702"],
+                "lag_estimate": {"impulses": 30, "responded": 21,
+                                 "response_rate_pct": 70.0, "caveat": "research estimate only"},
+                "aggregates": agg, "can_trade": False, "can_promote": False,
+            }],
+            "summary": {"targets": 1, "events": 9,
+                        "verdict_counts": {"CANDIDATE": 1}},
+            "can_trade": False, "can_promote": False,
+        },
+        "realtime_shadow_scalp": {
+            "generated_at": "2026-07-14T00:00:00+00:00",
+            "mode": "realtime_shadow_only", "notional_usd": 100.0,
+            "lanes": [{
+                "family": "cascade_reversion", "exchange": "binanceusdm",
+                "symbol": "BTC/USDT:USDT", "verdict": "UNDER_SAMPLED",
+                "intents": 3, "virtual_trades": 2, "events_per_hour": 0.5,
+                "last_intent_ms": 1_752_000_000_000, "last_event_ms": 1_752_000_100_000,
+                "aggregates": agg, "maker_beats_taker": True,
+                "can_trade": False, "can_promote": False,
+            }],
+            "summary": {"lanes": 1, "intents": 3, "virtual_trades": 2,
+                        "maker_beats_taker_lanes": 1,
+                        "verdict_counts": {"UNDER_SAMPLED": 1}},
+            "can_trade": False, "can_promote": False,
+        },
+        "ai_candidates": {
+            "generated_at": "2026-07-14T00:00:00+00:00",
+            "candidates": [{
+                "strategy_id": "ai_momentum_x", "source_file": "ai_momentum_x.py",
+                "family": "ai_authored",
+                "causality": {"passed": True, "n_bars": 500},
+                "walk_forward": {"windows": 4, "traded_windows": 3, "oos_trades": 18,
+                                 "oos_net_usd": 12.5, "profitable_windows_pct": 66.7,
+                                 "passed": False},
+                "verdict": "REJECT", "reasons": ["profit factor below gate"],
+                "can_trade": False, "can_promote": False,
+                "requires_untouched_judgment": True,
+            }],
+            "summary": {"loaded": 1, "rejected_files": 0, "candidates": 1,
+                        "verdict_counts": {"REJECT": 1}, "can_trade": False,
+                        "can_promote": False, "requires_untouched_judgment": True},
+            "can_trade": False, "can_promote": False,
+            "requires_untouched_judgment": True,
+        },
+    }
+
+
+def test_research_route_delivers_scalp_and_ai_panel_data(tmp_path):
+    """Serve-and-assert: a synthetic latest.json with the new keys round-trips
+    through GET /research with the exact nested fields the panels render."""
+    research = tmp_path / "latest.json"
+    research.write_text(json.dumps(_synthetic_research_doc()))
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(create_app(provider, token="t3st-token", research_path=research))
+    doc = client.get("/research?token=t3st-token").json()
+
+    cr = doc["cascade_reversion"]["targets"][0]
+    assert cr["verdict"] == "MAKER_ONLY_POSITIVE"
+    assert cr["aggregates"]["taker_taker"]["net_usd"] == -0.42
+    assert cr["aggregates"]["maker_first"]["net_usd"] == 0.31  # maker beats taker
+
+    ll = doc["leadlag_echo_scalp"]["targets"][0]
+    assert ll["verdict"] == "CANDIDATE"
+    assert ll["lag_estimate"]["response_rate_pct"] == 70.0
+
+    lane = doc["realtime_shadow_scalp"]["lanes"][0]
+    assert lane["family"] == "cascade_reversion"
+    assert lane["last_intent_ms"] == 1_752_000_000_000  # "last fire" delivered
+
+    ai = doc["ai_candidates"]["candidates"][0]
+    assert ai["verdict"] == "REJECT"
+    assert ai["causality"]["passed"] is True
+    assert ai["can_trade"] is False and ai["requires_untouched_judgment"] is True
+
+
+def test_dashboard_inline_js_parses_under_node():
+    """The inline dashboard script must be syntactically valid JS (guards the
+    hand-written render functions). Skipped when node is unavailable."""
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    html = (_Path(__file__).resolve().parents[1]
+            / "src/vnedge/dashboard/static/index.html").read_text()
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert scripts, "no inline script found"
+    for block in scripts:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(block)
+            path = fh.name
+        result = subprocess.run([node, "--check", path],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")

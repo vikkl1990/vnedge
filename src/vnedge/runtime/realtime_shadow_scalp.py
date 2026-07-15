@@ -286,6 +286,10 @@ class _ScalpLaneBase:
             "maker_fills": len(self._maker_bps),
             "open_scalps": self.open_count(),
             "events_per_hour": events_per_hour,
+            # last-fire timestamps for the dashboard "Real-Time Shadow Scalp"
+            # panel (epoch ms; None until the lane fires). Observability only.
+            "last_intent_ms": self._last_intent_ms,
+            "last_event_ms": self._last_event_ms,
             "aggregates": {"taker_taker": taker, "maker_first": maker},
             "maker_beats_taker": maker_beats_taker,
             "assumed_maker_fill_caveat": self.maker_caveat,
