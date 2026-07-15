@@ -11,6 +11,7 @@ from vnedge.config.risk_config import RiskConfig
 from vnedge.dashboard.app import SnapshotProvider, create_app
 from vnedge.dashboard.auth import DashboardUser, TokenStore, parse_users_env
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
+from vnedge.agent_gateway.jobs import DONE_STATUS, create_backtest_job, update_job
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
@@ -66,6 +67,9 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "scanner-style hot/cold pressure" in html
     assert "Alpha Council &amp; Proof Queue" in html
     assert "Persistent Proof Queue" in html
+    assert "Quant OS Job Ledger" in html
+    assert 'id="agent_jobs"' in html
+    assert "/agent-jobs" in html
     assert "LIVE ARMED" in html
     assert "Live Readiness Ladder" in html
     assert 'id="rd_state"' in html
@@ -474,6 +478,58 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert scanner_payload["summary"]["near_trigger"] == 1
     assert scanner_payload["mode"] == "live_observation_not_replay"
     assert scanner_payload["can_trade"] is False
+
+
+def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+    job = create_backtest_job(
+        jobs_dir=jobs_dir,
+        agent="quantos_seed",
+        request={
+            "strategy_id": "sats_5m_scalper_v1",
+            "exchange": "delta_india",
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "5m",
+            "hypothesis_id": "seed-sats",
+            "strict_mode": True,
+            "live_orders_enabled": False,
+            "parameters": {"seed_id": "seed-sats"},
+        },
+    )
+    update_job(
+        jobs_dir,
+        job["job_id"],
+        status=DONE_STATUS,
+        result={"metrics": {"net_profit_usd": 1.25, "num_trades": 3}},
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(create_app(provider, token="t3st-token", agent_jobs_dir=jobs_dir))
+
+    assert client.get("/agent-jobs").status_code == 401
+    payload = client.get("/agent-jobs?token=t3st-token").json()
+
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["done"] == 1
+    assert payload["summary"]["gateway_http_mounted"] is False
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert payload["jobs"][0]["adapter"] == "registered_backtest"
+    assert payload["jobs"][0]["hypothesis_id"] == "seed-sats"
+    assert payload["jobs"][0]["result_summary"] == "net +1.25 USD / trades 3"
+
+
+def test_agent_jobs_missing_dir_is_safe(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(
+        create_app(provider, token="t3st-token", agent_jobs_dir=tmp_path / "missing")
+    )
+
+    payload = client.get("/agent-jobs?token=t3st-token").json()
+    assert payload["summary"]["total"] == 0
+    assert payload["jobs"] == []
+    assert payload["live_orders_enabled"] is False
 
 
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):

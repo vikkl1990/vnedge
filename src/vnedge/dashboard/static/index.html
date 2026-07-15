@@ -2682,6 +2682,26 @@
           <div class="big" id="council_freshness">--</div>
           <div class="tiny">latest artifact age</div>
         </div>
+        <div class="mini-card info">
+          <div class="small-label">Agent Jobs</div>
+          <div class="big" id="agent_jobs_total">--</div>
+          <div class="tiny" id="agent_jobs_policy">research only</div>
+        </div>
+        <div class="mini-card plan">
+          <div class="small-label">Pending</div>
+          <div class="big" id="agent_jobs_pending">--</div>
+          <div class="tiny">runner queue</div>
+        </div>
+        <div class="mini-card">
+          <div class="small-label">Replay</div>
+          <div class="big" id="agent_jobs_replay">--</div>
+          <div class="tiny">microstructure jobs</div>
+        </div>
+        <div class="mini-card warn">
+          <div class="small-label">Blocked / Failed</div>
+          <div class="big" id="agent_jobs_blocked">--</div>
+          <div class="tiny">needs operator review</div>
+        </div>
       </div>
       <div class="terminal-split">
         <div class="dense-panel">
@@ -2708,6 +2728,18 @@
           </div>
           <div class="empty" id="workbench_empty">proof queue is empty or awaiting council output</div>
         </div>
+      </div>
+      <div class="dense-panel vibe-panel">
+        <div class="dense-title">
+          <span>Quant OS Job Ledger</span>
+          <span id="agent_jobs_age">waiting</span>
+        </div>
+        <div class="table-wrap">
+          <table id="agent_jobs"><thead><tr>
+            <th>Status</th><th>Adapter</th><th>Hypothesis</th><th>Market</th><th>Result</th><th>Updated</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="empty" id="agent_jobs_empty">agent job ledger is empty; seed jobs run when the research worker starts</div>
       </div>
       <div class="dense-panel vibe-panel">
         <div class="dense-title">
@@ -5536,12 +5568,61 @@
     $("vibe_empty").style.display=cards.length?"none":"block";
   }
 
-  function renderCouncil(council,workbench,vibe){
+  function jobStatusTone(status){
+    const s=String(status||"");
+    if(s.includes("DONE"))return "good";
+    if(s.includes("RUNNING"))return "plan";
+    if(s.includes("PENDING"))return "info";
+    if(s.includes("BLOCKED"))return "warn";
+    if(s.includes("FAILED"))return "bad";
+    return "idle";
+  }
+
+  function jobAdapterLabel(adapter){
+    return String(adapter||"--").replaceAll("_"," ");
+  }
+
+  function renderAgentJobs(payload){
+    const data=payload||{summary:{},jobs:[]};
+    const s=data.summary||{};
+    const jobs=Array.isArray(data.jobs)?data.jobs:[];
+    text("agent_jobs_total",num(s.total));
+    text("agent_jobs_pending",num(s.pending)+"/"+num(s.running));
+    const replay=jobs.filter(j=>String(j.adapter||"").includes("replay")).length;
+    text("agent_jobs_replay",replay);
+    text("agent_jobs_blocked",num(s.blocked)+num(s.failed));
+    text("agent_jobs_policy",data.can_trade===false&&data.can_promote===false?"cannot trade/promote":"policy unknown");
+    text("agent_jobs_age",jobs.length?"latest "+timeAgoFromIso(jobs[0].updated_at):"waiting");
+    setMiniCardTone("agent_jobs_pending",num(s.running)>0?"plan":num(s.pending)>0?"info":"idle");
+    setMiniCardTone("agent_jobs_replay",replay>0?"info":"idle");
+    setMiniCardTone("agent_jobs_blocked",num(s.blocked)+num(s.failed)>0?"warn":"good");
+
+    const table=$("agent_jobs");
+    if(!table)return;
+    const body=table.querySelector("tbody");
+    body.replaceChildren();
+    jobs.slice(0,14).forEach(job=>{
+      const tr=body.insertRow();
+      appendBadge(tr.insertCell(),String(job.status||"--").replaceAll("_"," "),jobStatusTone(job.status));
+      appendCell(tr,jobAdapterLabel(job.adapter),"clip");
+      appendCell(tr,String(job.hypothesis_id||job.strategy_id||"--"),"clip",job.job_id||"");
+      appendCell(tr,
+        String(job.exchange||"--").replace("usdm","")+" / "+
+        String(job.symbol||"--").split(":")[0]+" / "+String(job.timeframe||"--"));
+      appendCell(tr,String(job.result_summary||"--"),"clip",job.result_summary||"");
+      appendCell(tr,job.updated_at?utcClock(job.updated_at):"--","mono",job.updated_at||"");
+    });
+    table.style.display=jobs.length?"table":"none";
+    $("agent_jobs_empty").style.display=jobs.length?"none":"block";
+  }
+
+  function renderCouncil(council,workbench,vibe,agentJobs){
     const c=council||{summary:{},debates:[]};
     const w=workbench||{summary:{},tasks:[]};
     lastCouncil=c;
     lastWorkbench=w;
     renderVibe(vibe);
+    renderAgentJobs(agentJobs);
     wnCollectCouncil(c,w);
     wnRender();
 
@@ -5667,9 +5748,10 @@
     Promise.all([
       fetchJSON("/alpha-council").catch(()=>({summary:{},debates:[]})),
       fetchJSON("/alpha-workbench").catch(()=>({summary:{},tasks:[]})),
-      fetchJSON("/vibe-intelligence").catch(()=>({summary:{},cards:[]}))
+      fetchJSON("/vibe-intelligence").catch(()=>({summary:{},cards:[]})),
+      fetchJSON("/agent-jobs").catch(()=>({summary:{},jobs:[]}))
     ])
-      .then(([c,w,v])=>{renderCouncil(c,w,v);reapplyView();})
+      .then(([c,w,v,j])=>{renderCouncil(c,w,v,j);reapplyView();})
       .catch(()=>{});
   }
 

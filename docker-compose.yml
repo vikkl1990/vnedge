@@ -79,6 +79,7 @@ services:
       AGENT_GATEWAY_JOBS_DIR: ${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}
       AGENT_JOB_RUNNER_DATA_ROOT: ${AGENT_JOB_RUNNER_DATA_ROOT:-data}
       AGENT_JOB_RUNNER_ARTIFACT_DIR: ${AGENT_JOB_RUNNER_ARTIFACT_DIR:-research/live_research/agent_jobs}
+      AGENT_JOB_RUNNER_SEED_DEFAULTS: ${AGENT_JOB_RUNNER_SEED_DEFAULTS:-1}
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data:ro
