@@ -199,7 +199,7 @@ python -m vnedge.agent_gateway.seed_jobs --json
 
 The seeded jobs are:
 
-- `sats_5m_scalper_v1` on Delta India ETH 5m candles;
+- `sats_5m_scalper_v1` on Delta India `ETH/USD:USD` 5m candles;
 - `candidate_replay_executor_v1` for conservative L2/order-flow replay;
 - `ai_example_ma_cross` for the sandbox AI candidate pipeline.
 

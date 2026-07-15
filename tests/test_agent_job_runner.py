@@ -265,3 +265,33 @@ def test_quantos_seed_dry_run_does_not_write(tmp_path):
     assert payload["created_count"] == len(DEFAULT_SEED_REQUESTS)
     assert payload["skipped_count"] == 0
     assert not jobs_dir.exists()
+
+
+def test_quantos_seed_request_signature_allows_corrected_specs(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+    create_backtest_job(
+        jobs_dir=jobs_dir,
+        agent="old_seed",
+        request={
+            "strategy_id": "sats_5m_scalper_v1",
+            "exchange": "delta_india",
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "5m",
+            "hypothesis_id": "quantos_seed_sats_5m_delta_eth",
+            "strict_mode": True,
+            "live_orders_enabled": False,
+            "parameters": {"seed_id": "quantos_seed_sats_5m_delta_eth"},
+        },
+    )
+
+    payload = seed_default_jobs(jobs_dir)
+
+    assert payload["created_count"] == len(DEFAULT_SEED_REQUESTS)
+    sats_jobs = [
+        read_job(jobs_dir, path.stem)
+        for path in jobs_dir.glob("agj_*.json")
+        if (read_job(jobs_dir, path.stem) or {}).get("request", {}).get("strategy_id")
+        == "sats_5m_scalper_v1"
+    ]
+    symbols = sorted(job["request"]["symbol"] for job in sats_jobs if job is not None)
+    assert symbols == ["ETH/USD:USD", "ETH/USDT:USDT"]

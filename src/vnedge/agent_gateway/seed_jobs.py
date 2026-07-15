@@ -9,6 +9,7 @@ requires the normal untouched-data judgment before promotion.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -24,7 +25,7 @@ DEFAULT_SEED_REQUESTS: tuple[dict[str, Any], ...] = (
         "seed_id": "quantos_seed_sats_5m_delta_eth",
         "strategy_id": "sats_5m_scalper_v1",
         "exchange": "delta_india",
-        "symbol": "ETH/USDT:USDT",
+        "symbol": "ETH/USD:USD",
         "timeframe": "5m",
         "hypothesis_id": "quantos_seed_sats_5m_delta_eth",
         "notes": "Starter 5m SATS/BBP/stealth-trail scalper evidence job.",
@@ -95,13 +96,14 @@ def seed_default_jobs(
 ) -> dict[str, Any]:
     """Create the default Quant OS starter jobs once per ledger."""
     path = Path(jobs_dir) if jobs_dir is not None else env_agent_jobs_dir()
-    existing_seed_ids = _existing_seed_ids(path)
+    existing = _existing_seed_signatures(path)
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
 
     for request in DEFAULT_SEED_REQUESTS:
         seed_id = str(request["seed_id"])
-        if seed_id in existing_seed_ids:
+        signature = _seed_signature(request)
+        if (seed_id, signature) in existing:
             skipped.append({"seed_id": seed_id, "reason": "already_present"})
             continue
 
@@ -109,6 +111,7 @@ def seed_default_jobs(
         job_request.pop("seed_id", None)
         job_request["strict_mode"] = True
         job_request["live_orders_enabled"] = False
+        job_request.setdefault("parameters", {})["seed_signature"] = signature
         if dry_run:
             created.append({"seed_id": seed_id, "status": "DRY_RUN"})
             continue
@@ -125,7 +128,7 @@ def seed_default_jobs(
                 "status": str(job["status"]),
             }
         )
-        existing_seed_ids.add(seed_id)
+        existing.add((seed_id, signature))
 
     return {
         "jobs_dir": str(path),
@@ -139,15 +142,27 @@ def seed_default_jobs(
     }
 
 
-def _existing_seed_ids(jobs_dir: Path) -> set[str]:
-    ids: set[str] = set()
+def _existing_seed_signatures(jobs_dir: Path) -> set[tuple[str, str]]:
+    signatures: set[tuple[str, str]] = set()
     for job in list_jobs(jobs_dir, limit=500):
         request = job.get("request") if isinstance(job.get("request"), dict) else {}
         params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
-        for value in (request.get("hypothesis_id"), params.get("seed_id")):
-            if value:
-                ids.add(str(value))
-    return ids
+        seed_id = request.get("hypothesis_id") or params.get("seed_id")
+        if not seed_id:
+            continue
+        stored_signature = params.get("seed_signature")
+        signature = str(stored_signature or _seed_signature({"seed_id": seed_id, **request}))
+        signatures.add((str(seed_id), signature))
+    return signatures
+
+
+def _seed_signature(request: dict[str, Any]) -> str:
+    payload = deepcopy(request)
+    payload.pop("notes", None)
+    params = payload.get("parameters") if isinstance(payload.get("parameters"), dict) else {}
+    params.pop("seed_signature", None)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
