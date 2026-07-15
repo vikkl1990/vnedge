@@ -29,6 +29,9 @@ ContextTimeframeLabel = Literal["4h", "1h", "15m", "1m"]
 TimeframeLabel = ExecutionTimeframeLabel | ContextTimeframeLabel
 FamilyResearchStatus = Literal["active_research", "deprioritized", "tombstoned"]
 
+DEFAULT_ACTIVE_SCALPER_FAMILY_ID = "forced_flow_continuation"
+REFERENCE_REPLAY_FAMILY_ID = "book_imbalance_continuation"
+
 
 @dataclass(frozen=True)
 class ExchangeFeeProfile:
@@ -222,7 +225,7 @@ class ScalperParameterRegistry:
     def replay_sweep_kwargs(
         self,
         exchange: str = "binanceusdm",
-        family_id: str = "book_imbalance_continuation",
+        family_id: str = DEFAULT_ACTIVE_SCALPER_FAMILY_ID,
     ) -> dict:
         fee = self.fee_profile(exchange)
         family = self.family(family_id)
@@ -240,7 +243,9 @@ class ScalperParameterRegistry:
             "slippage_bps": fee.slippage_bps,
         }
 
-    def scanner_gate_kwargs(self, family_id: str = "book_imbalance_continuation") -> dict:
+    def scanner_gate_kwargs(
+        self, family_id: str = DEFAULT_ACTIVE_SCALPER_FAMILY_ID
+    ) -> dict:
         gate = self.family(family_id).route_gate
         return {
             "min_fill_rate_pct": gate.min_fill_rate_pct,

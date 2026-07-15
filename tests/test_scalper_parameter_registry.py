@@ -4,6 +4,8 @@ import pytest
 
 from vnedge.scalping.parameter_registry import (
     DEFAULT_SCALPER_PARAMETER_REGISTRY as REGISTRY,
+    DEFAULT_ACTIVE_SCALPER_FAMILY_ID,
+    REFERENCE_REPLAY_FAMILY_ID,
     ExitPolicy,
 )
 
@@ -61,14 +63,18 @@ def test_exchange_fee_profiles_expose_cost_hurdles():
 
 def test_replay_and_alpha_kwargs_are_registry_backed():
     replay = REGISTRY.replay_sweep_kwargs()
+    reference = REGISTRY.replay_sweep_kwargs(family_id=REFERENCE_REPLAY_FAMILY_ID)
     alpha = REGISTRY.alpha_factory_kwargs()
 
     assert replay["min_imbalances"] == REGISTRY.family(
-        "book_imbalance_continuation"
+        DEFAULT_ACTIVE_SCALPER_FAMILY_ID
     ).imbalance_grid
-    assert replay["family_id"] == "book_imbalance_continuation"
-    assert replay["exit_policy_id"] == "static_fast"
-    assert replay["ttl_ms"] == REGISTRY.exit_policy("static_fast").ttl_ms
+    assert replay["family_id"] == DEFAULT_ACTIVE_SCALPER_FAMILY_ID
+    assert replay["exit_policy_id"] == "adverse_cut"
+    assert replay["ttl_ms"] == REGISTRY.exit_policy("adverse_cut").ttl_ms
+    assert reference["family_id"] == REFERENCE_REPLAY_FAMILY_ID
+    assert reference["exit_policy_id"] == "static_fast"
+    assert reference["ttl_ms"] == REGISTRY.exit_policy("static_fast").ttl_ms
     assert alpha["context_timeframes"] == ("4h", "1h", "15m", "1m")
     assert 250 in alpha["horizons_ms"]
     assert 60_000 in alpha["horizons_ms"]

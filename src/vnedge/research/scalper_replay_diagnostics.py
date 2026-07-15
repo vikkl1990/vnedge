@@ -22,10 +22,15 @@ from vnedge.scalping.replay_backtester import (
     TickReplayBacktester,
     load_tick_events,
 )
-from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
+from vnedge.scalping.parameter_registry import (
+    DEFAULT_SCALPER_PARAMETER_REGISTRY,
+    REFERENCE_REPLAY_FAMILY_ID,
+)
 
 
-_REPLAY_DEFAULTS = DEFAULT_SCALPER_PARAMETER_REGISTRY.replay_sweep_kwargs()
+_REPLAY_DEFAULTS = DEFAULT_SCALPER_PARAMETER_REGISTRY.replay_sweep_kwargs(
+    family_id=REFERENCE_REPLAY_FAMILY_ID
+)
 
 
 def _quantile(values: list[float], q: float) -> float | None:
@@ -60,7 +65,7 @@ class ReplaySweepConfig:
         cls,
         *,
         exchange: str = "binanceusdm",
-        family_id: str = "book_imbalance_continuation",
+        family_id: str = REFERENCE_REPLAY_FAMILY_ID,
     ) -> "ReplaySweepConfig":
         defaults = DEFAULT_SCALPER_PARAMETER_REGISTRY.replay_sweep_kwargs(
             exchange=exchange,
@@ -107,7 +112,7 @@ class ScalperReplayRow:
     verdict: str
     profit_factor: float | None = None
     breakeven_bps: float = 0.0
-    family_id: str = "book_imbalance_continuation"
+    family_id: str = REFERENCE_REPLAY_FAMILY_ID
     exit_policy_id: str = "static_fast"
     exit_reason_counts: dict[str, int] | None = None
 
@@ -365,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--day", required=True, help="UTC day in YYYYMMDD")
     p.add_argument(
         "--family-id",
-        default="book_imbalance_continuation",
+        default=REFERENCE_REPLAY_FAMILY_ID,
         choices=sorted(DEFAULT_SCALPER_PARAMETER_REGISTRY.families),
     )
     p.add_argument(

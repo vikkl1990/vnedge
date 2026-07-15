@@ -91,8 +91,3 @@ class Settings(BaseSettings):
     def entries_allowed(self) -> bool:
         """False in emergency_reduce_only: only position-reducing orders may flow."""
         return self.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
-
-
-def load_settings() -> Settings:
-    """Load settings from environment/.env. Call once at startup."""
-    return Settings()

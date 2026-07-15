@@ -89,8 +89,9 @@ work, in priority order:
 3. Live ExecutionAdapter on Binance testnet (last unbuilt execution piece)
 4. Second venue adapter — Bybit vs Delta India is a USER decision (live
    venue/compliance choice)
-5. Formally retire the Freqtrade research leg + sentiment/news ambitions
-   (pending user confirmation — currently silent drift)
+5. ~~Retire the Freqtrade research leg + sentiment/news ambitions~~ ✅
+   (retired as active VNEDGE architecture; old references are research
+   comparison material only, not runtime direction)
 NOTE: the running trial (PID on the Mac) predates alerts/persistence wiring;
 they activate on its next (re)start — the intended VPS migration moment
 (docs/DEPLOY.md §2 preserves the account).
