@@ -168,6 +168,12 @@ class ScalperRiskGateway:
                 f"{self.limits.order_count(now)} orders/min "
                 f"(max {self.config.max_orders_per_minute})",
             )
+            check(
+                "scalper_cancel_rate",
+                self.limits.cancel_count(now) < self.config.max_cancels_per_minute,
+                f"{self.limits.cancel_count(now)} cancels/min "
+                f"(max {self.config.max_cancels_per_minute})",
+            )
             entry_fee = (
                 self.config.maker_fee_bps
                 if intent.order_type == "limit"
@@ -191,3 +197,11 @@ class ScalperRiskGateway:
             failed_checks=tuple(failed),
             passed_checks=tuple(passed),
         )
+
+    def record_order(self, now: datetime | None = None) -> None:
+        """Record a hot-path order submission attempt after it reaches OrderManager."""
+        self.limits.record_order(now)
+
+    def record_cancel(self, now: datetime | None = None) -> None:
+        """Record a hot-path cancel attempt after it reaches OrderManager."""
+        self.limits.record_cancel(now)
