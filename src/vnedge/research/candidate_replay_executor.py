@@ -251,14 +251,24 @@ def replay_specs(
     cache keeps the executor usable for lead-lag hypotheses with dozens of
     reconstructed events.
     """
-    cache: dict[tuple[str, str, str], list[tuple[int, str, object]]] = {}
-    rows: list[CandidateReplayRow] = []
-    for spec in specs:
+    # Process specs grouped by tick-lane key so each full-day tick set (millions
+    # of rows, ~hundreds of MB) is loaded once AND held only while its group is
+    # active — a single-entry cache, not an unbounded one. The prior dict cached
+    # EVERY (exchange,symbol,day) with no eviction and grew to multi-GB across a
+    # batch spanning many days (2026-07-13 OOM). Original spec order preserved.
+    indexed: list[tuple[int, CandidateReplayRow]] = []
+    cur_key: tuple[str, str, str] | None = None
+    cur_events: list[tuple[int, str, object]] | None = None
+    order = sorted(range(len(specs)), key=lambda i: (
+        specs[i].exchange, specs[i].symbol, specs[i].day))
+    for i in order:
+        spec = specs[i]
         key = (spec.exchange, spec.symbol, spec.day)
-        if key not in cache:
-            cache[key] = load_tick_events(data_root, spec.exchange, spec.symbol, spec.day)
-        rows.append(replay_spec(data_root, spec, config=config, events=cache[key]))
-    return rows
+        if key != cur_key:
+            cur_events = load_tick_events(data_root, spec.exchange, spec.symbol, spec.day)
+            cur_key = key
+        indexed.append((i, replay_spec(data_root, spec, config=config, events=cur_events)))
+    return [row for _, row in sorted(indexed)]
 
 
 def _row_from_result(

@@ -205,6 +205,27 @@ Implementation contracts for milestones 2–6 (data quality gate checks, order
 state machine incl. TIMEOUT_UNKNOWN handling, reconciliation scope, WAL
 rules) live in docs/DESIGN.md — follow them when building those modules.
 
+## System state audit (2026-07-15) — READ BEFORE BUILDING MORE
+
+Reality check by the architect: the system has ~41 research modules, ~30
+containers, ~40 lanes — but 1 governed trial (6/10 fills, criterion
+statistically impossible in its window), 0 live orders ever, and 0 scalper
+CANDIDATE verdicts (cascade/echo all NEGATIVE_EDGE or UNDER_SAMPLED after
+fees). The charter's "revisit complexity only with evidence of need" was
+repeatedly violated: cascade -> echo -> SATS -> SMC -> vibe -> AI-sandbox ->
+gateway were built without any earning the next.
+
+STANDING DISCIPLINE (added 2026-07-15): PROVE before BUILD. Do not add a new
+research family/module until an existing one produces a CANDIDATE verdict or
+the funding-MR trial completes under an approved successor protocol. Fixes
+this cycle: 29 orphan lane journals archived; the candidate_replay /
+execution_condition unbounded tick-cache (multi-GB OOM, 2026-07-11/13) bounded
+to a single-entry cache; mem_limits cap the 3 replay/mining hogs at 2.5G.
+OPEN: successor trial protocol (>=10 trades / 120d cap) still needs human
+approval; CI + branch protection still needed (2 red-main slips this session);
+permutation-test significance for the 117k-trials/day multiple-comparisons load
+still unbuilt.
+
 ## Build order (next milestones)
 
 1. ~~Foundation: config + risk core + mode gates~~ ✅
