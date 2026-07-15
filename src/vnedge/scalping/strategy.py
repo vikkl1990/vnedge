@@ -1,9 +1,13 @@
-"""Strategy interface for event-driven scalpers.
+"""Experimental strategy interface for event-driven scalpers.
 
 This is intentionally separate from BaseStrategy, whose contract is candle
 oriented. Scalper strategies react to book/trade/timer/fill events, but they
 still return ordinary OrderIntent objects so the same gateway, journal, and
 OrderManager remain the only execution path.
+
+Status: research scaffold only. The production paper/shadow runners still use
+registered candle/manifest lanes; no live loop dispatches BaseScalperStrategy
+subclasses yet.
 """
 
 from __future__ import annotations
@@ -45,7 +49,11 @@ class ScalperDecisionContext:
 
 
 class BaseScalperStrategy(ABC):
-    """Optional event hooks for a future hot loop."""
+    """Optional event hooks for a future hot loop.
+
+    Do not treat subclasses of this interface as production scalper lanes until
+    a runner explicitly wires them through the risk gateway and journal.
+    """
 
     strategy_id: str = "unnamed_scalper"
 

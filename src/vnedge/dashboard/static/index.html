@@ -1180,7 +1180,6 @@
   #orders{min-width:980px}
   #positions{min-width:820px}
   #research{min-width:1180px}
-  #ea_proposals{min-width:980px}
   #council_debates{min-width:900px}
   #workbench_tasks{min-width:920px}
   th,td{
@@ -2883,7 +2882,7 @@
             <div class="loop-node" id="nodeHistorian"><span class="node-name">Equity Historian</span><span class="node-status" id="nodeHistorianStatus">waiting</span></div>
             <div class="loop-node violet" id="nodeDrift"><span class="node-name">Drift Monitor</span><span class="node-status" id="nodeDriftStatus">research sync</span></div>
             <div class="loop-node" id="nodeAlerts"><span class="node-name">Alerts Engine</span><span class="node-status" id="nodeAlertsStatus">waiting</span></div>
-            <div class="loop-node amber"><span class="node-name">Private Stream</span><span class="node-status">next live phase</span></div>
+            <div class="loop-node amber"><span class="node-name">Private Stream</span><span class="node-status">not instrumented</span></div>
             <div class="loop-node amber" id="nodeL2"><span class="node-name">L2 Builder</span><span class="node-status" id="nodeL2Status">scalper phase</span></div>
           </div>
         </div>
@@ -3021,11 +3020,11 @@
 
             <div class="mini-grid">
               <div class="mini-card" id="card_rt_journal"><div class="small-label">Journal</div><div class="big" id="rt_journal">--</div><div class="tiny" id="rt_journal_detail">WAL health</div></div>
-              <div class="mini-card" id="card_rt_gc"><div class="small-label">GC / runtime</div><div class="big" id="rt_gc">--</div><div class="tiny" id="rt_gc_detail">instrumentation</div></div>
+              <div class="mini-card" id="card_rt_gc" style="display:none"><div class="small-label">GC / runtime</div><div class="big" id="rt_gc">--</div><div class="tiny" id="rt_gc_detail">instrumentation</div></div>
               <div class="mini-card" id="card_rt_shared"><div class="small-label">State cache</div><div class="big" id="rt_shared">--</div><div class="tiny" id="rt_shared_detail">single-process cache</div></div>
               <div class="mini-card" id="card_rt_heartbeat"><div class="small-label">Heartbeat</div><div class="big" id="rt_heartbeat">--</div><div class="tiny" id="rt_heartbeat_detail">snapshot pulse</div></div>
               <div class="mini-card" id="card_rt_event_rate"><div class="small-label">Event rate</div><div class="big" id="rt_event_rate">--</div><div class="tiny" id="rt_event_rate_detail">bars / minute</div></div>
-              <div class="mini-card" id="card_rt_clock"><div class="small-label">Clock skew</div><div class="big" id="rt_clock">--</div><div class="tiny" id="rt_clock_detail">server vs browser</div></div>
+              <div class="mini-card" id="card_rt_clock" style="display:none"><div class="small-label">Clock skew</div><div class="big" id="rt_clock">--</div><div class="tiny" id="rt_clock_detail">server vs browser</div></div>
             </div>
 
             <div class="terminal-split">
@@ -3102,7 +3101,7 @@
 
             <div class="terminal-split">
               <div class="dense-panel">
-                <div class="dense-title"><span>Audit Trail</span><span class="tag">latest events</span></div>
+                <div class="dense-title"><span>Derived Event Trail</span><span class="tag">visible artifacts</span></div>
                 <div id="audit_trail"></div>
               </div>
               <div class="dense-panel">
@@ -3111,7 +3110,7 @@
                   <span class="k">Model registry</span><span class="v" id="ch_registry">--</span>
                   <span class="k">Data freshness</span><span class="v" id="ch_data">--</span>
                   <span class="k">Fill ledger</span><span class="v" id="ch_ledger">--</span>
-                  <span class="k">Audit trail</span><span class="v" id="ch_audit">--</span>
+                  <span class="k">Derived events</span><span class="v" id="ch_audit">--</span>
                   <span class="k">Tax treatment</span><span class="v" id="ch_tax">CA gated</span>
                   <span class="k">Access control</span><span class="v" id="ch_access">read-only</span>
                 </div>
@@ -3282,6 +3281,7 @@
   let lastWorkbench={summary:{},tasks:[]};
   let lastVibe={summary:{},cards:[]};
   let lastRealtimeScanner={summary:{},rows:[]};
+  let lastLaneReadiness={summary:{},rows:[]};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
   let lastCostModel=null;
@@ -3426,6 +3426,10 @@
     const e=$(id);
     if(e)e.className=base+(tone?" "+tone:"");
   }
+  function setVisible(id,visible){
+    const e=$(id);
+    if(e)e.style.display=visible?"":"none";
+  }
   function setPressure(id,value,tone){
     const e=$(id);
     if(!e)return;
@@ -3528,6 +3532,22 @@
     const generatedAt=lastResearch.generated_at||"";
     const researchAgeMs=Date.parse(generatedAt);
     const researchFresh=Number.isFinite(researchAgeMs)&&Date.now()-researchAgeMs<90*60*1000;
+    const readiness=lastLaneReadiness||{};
+    const readinessSummary=readiness.summary||{};
+    const readinessRows=Array.isArray(readiness.rows)?readiness.rows:[];
+    const readinessStatuses=readinessRows.map(r=>String(r.status||r.state||r.readiness||"").toUpperCase());
+    const readinessReadyRows=readinessStatuses.filter(s=>s.includes("PAPER")&&s.includes("READY")).length;
+    const readinessBlockedRows=readinessStatuses.filter(s=>s.includes("BLOCK")||s.includes("REJECT")||s.includes("PROBATION")).length;
+    const readinessReady=Math.max(
+      num(readinessSummary.paper_review_ready),
+      num(readinessSummary.paper_ready),
+      num(readinessSummary.ready_for_paper),
+      readinessReadyRows
+    );
+    const readinessPublished=!!(
+      readiness.generated_at||readiness.operator_answer||readinessRows.length||
+      Object.keys(readinessSummary).length
+    );
     const feePct=num(s.equity)>0?num(s.fees_usd)/num(s.equity)*100:0;
     const spread=price&&finite(price.spread_bps)?num(price.spread_bps):null;
 
@@ -3554,11 +3574,21 @@
       unresolved?unresolved+" unresolved order(s)":orders.length?"venue state age visible":"state machine idle",
       executionTone);
 
-    const researchTone=passRows.length?"warn":rows.length?(researchFresh?"info":"warn"):"idle";
+    const researchTone=readinessReady?"warn":readinessBlockedRows?"warn":
+      passRows.length?"warn":rows.length?(researchFresh?"info":"warn"):"idle";
+    const researchValue=readinessReady?"PAPER REVIEW":
+      readinessPublished?readinessRows.length?"READINESS":"REPORT":
+      passRows.length?"HUMAN GATE":rows.length?"SCANNING":"WAITING";
+    const researchDetail=readinessPublished
+      ?(readiness.operator_answer||(
+        readinessRows.length+" lane readiness row(s); "+readinessReady+
+        " paper-ready, "+readinessBlockedRows+" blocked/probation"
+      ))
+      :passRows.length?passRows.length+" PASS candidate(s); untouched/paper approval required":
+        rows.length?(rows.length+" rows; latest "+(generatedAt?timeAgoFromIso(generatedAt):"--")):"no published research payload";
     setReadinessCell("research",
-      passRows.length?"HUMAN GATE":rows.length?"SCANNING":"WAITING",
-      passRows.length?passRows.length+" PASS candidate(s); untouched/paper approval required":
-        rows.length?(rows.length+" rows; latest "+(generatedAt?timeAgoFromIso(generatedAt):"--")):"no published research payload",
+      researchValue,
+      researchDetail,
       researchTone);
 
     const costTone=spread!=null&&spread>8?"bad":feePct>2||(spread!=null&&spread>3)?"warn":"good";
@@ -3691,7 +3721,7 @@
       " → "+bps(pf.taker_rt_bps)+" RT");
     text("cost_buffered",bps(cm.maker_first_cost_bps)+" / "+bps(cm.taker_round_trip_cost_bps));
     if(cm.source)text("cost_source",cm.source);
-    // Microstructure OBI table: real taker round-trip (was a fixed fake bps).
+    // Microstructure OBI table: real taker round-trip from /cost-model.
     if(takerRt!=null)text("obi_fee_wall",takerRt.toFixed(1)+" bps taker RT");
     if(makerFirst!=null)text("obi_maker_edge","~"+makerFirst.toFixed(1)+" bps maker-first");
     // Quant deck maker fee wall (was static "8 bps").
@@ -3976,22 +4006,22 @@
     if(!price||!finite(price.mid)){
       const row=document.createElement("div");
       row.className="depth-row midline";
-      row.textContent="top-of-book proxy waiting for live feed";
+      row.textContent="top-of-book waiting for live feed";
       box.appendChild(row);
       return;
     }
     const bid=num(price.bid);
     const ask=num(price.ask);
     const mid=num(price.mid,(bid+ask)/2);
-    const spread=Math.max(Math.abs(ask-bid),mid*0.00001);
-    const step=Math.max(spread,mid*0.000055);
-    const rows=[];
-    for(let i=3;i>=1;i--)rows.push({side:"ask",level:"A"+i,price:ask+step*(i-1),width:32+i*15});
-    rows.push({side:"mid",level:"MID",price:mid,width:100});
-    for(let i=1;i<=3;i++)rows.push({side:"bid",level:"B"+i,price:bid-step*(i-1),width:80-i*13});
+    const rows=[
+      {side:"ask",level:"A1",price:ask,width:72,title:"best ask from snapshot"},
+      {side:"mid",level:"MID",price:mid,width:100,title:"computed midpoint; no depth level"},
+      {side:"bid",level:"B1",price:bid,width:72,title:"best bid from snapshot"},
+    ];
     rows.forEach(r=>{
       const row=document.createElement("div");
       row.className="depth-row"+(r.side==="mid"?" midline":"");
+      row.title=r.title;
       const level=document.createElement("span");
       level.textContent=r.level;
       const left=document.createElement("div");
@@ -4013,6 +4043,10 @@
       row.appendChild(right);
       box.appendChild(row);
     });
+    const note=document.createElement("div");
+    note.className="depth-row midline";
+    note.textContent="L2 depth levels absent from snapshot";
+    box.appendChild(note);
   }
   function renderDeckWhy(items){
     const box=$("qd_why_list");
@@ -4035,11 +4069,26 @@
     const box=$("qd_lanes");
     if(!box)return;
     box.replaceChildren();
-    const rows=(Array.isArray(lanes)&&lanes.length?lanes:[
-      {lane_id:"binance-primary",exchange:(s.feed_health||{}).exchange||"binance",symbol:s.symbol||"BTC/USDT:USDT",mode:s.mode||"paper",risk_status:s.risk_status||"ok"},
-      {lane_id:"bybit-shadow",exchange:"bybit",symbol:"BTC/ETH majors",mode:"planned shadow",risk_status:"not armed"},
-      {lane_id:"delta-india",exchange:"delta_india",symbol:"INR compliant perps",mode:"planned research",risk_status:"not armed"},
-    ]).map(l=>({lane:l,chip:laneStateChip(l)}));
+    const actualRows=Array.isArray(lanes)&&lanes.length?lanes:[];
+    if(!actualRows.length){
+      const row=document.createElement("div");
+      row.className="lane-radar-row idle";
+      const name=document.createElement("div");
+      name.className="lane-name";
+      name.textContent="no lane snapshot";
+      const state=document.createElement("div");
+      state.className="lane-state text-idle";
+      state.textContent="WAITING";
+      const meta=document.createElement("div");
+      meta.className="lane-meta";
+      meta.textContent="snapshot.lanes missing; no planned venue fallback";
+      row.appendChild(name);
+      row.appendChild(state);
+      row.appendChild(meta);
+      box.appendChild(row);
+      return;
+    }
+    const rows=actualRows.map(l=>({lane:l,chip:laneStateChip(l)}));
     rows.sort((a,b)=>laneRank(a.chip)-laneRank(b.chip));
     rows.slice(0,6).forEach(({lane,chip})=>{
       const row=document.createElement("div");
@@ -4132,60 +4181,20 @@
   }
   function renderLanes(lanes,snapshot){
     const s=snapshot||{};
-    const feed=s.feed_health||{};
     const board=document.getElementById("lanesBoard");
     const body=document.getElementById("lanesBody");
     if(!board||!body)return;
     board.style.display="";
     body.replaceChildren();
-    const supplied=Array.isArray(lanes)&&lanes.length?lanes:[];
-    const rows=supplied.length?supplied:[
-      {
-        lane_id:"primary-governed",
-        exchange:feed.exchange||"binanceusdm",
-        mode:s.mode||"paper",
-        symbol:s.symbol||"BTC/USDT:USDT",
-        strategy_id:s.strategy_id||"--",
-        equity:s.equity,
-        realized_pnl:s.realized_pnl,
-        unrealized_pnl:s.unrealized_pnl,
-        fees_usd:s.fees_usd,
-        fills:s.fills,
-        risk_status:s.risk_status||"--",
-        feed:feed.candles==="ok"?"ok":feed.candles||"--",
-        next:"active governed snapshot"
-      },
-      {
-        lane_id:"bybit-shadow",
-        exchange:"bybit",
-        mode:"research/shadow",
-        symbol:"BTC/USDT + ETH/USDT",
-        strategy_id:"same gate suite",
-        equity:null,
-        realized_pnl:0,
-        unrealized_pnl:0,
-        fees_usd:0,
-        fills:0,
-        risk_status:"not armed",
-        feed:"pending",
-        next:"second venue adapter decision"
-      },
-      {
-        lane_id:"delta-india",
-        exchange:"delta_india",
-        mode:"research/compliance",
-        symbol:"INR-eligible perps",
-        strategy_id:"CA-gated live path",
-        equity:null,
-        realized_pnl:0,
-        unrealized_pnl:0,
-        fees_usd:0,
-        fills:0,
-        risk_status:"not armed",
-        feed:"pending",
-        next:"India compliance sign-off"
-      }
-    ];
+    const rows=Array.isArray(lanes)&&lanes.length?lanes:[];
+    if(!rows.length){
+      const tr=body.insertRow();
+      const td=tr.insertCell();
+      td.colSpan=13;
+      td.className="muted";
+      td.textContent="no lane snapshot published; planned exchange lane fallbacks are hidden";
+      return;
+    }
     const money=(v)=>(v>=0?"+$":"-$")+Math.abs(Number(v)||0).toFixed(2);
     const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
     rows.forEach((l,idx)=>{
@@ -4553,7 +4562,7 @@
     renderLatencyRow("public",ageText(lat),toneText(feedTone),feedTone,feedTone==="bad"?"blocks entries":"");
     renderLatencyRow("candles",feed.candles||"--",toneText(statusTone(feed.candles)),statusTone(feed.candles),feed.candles==="ok"?"":"blocks research/live");
     renderLatencyRow("funding",((feed.funding||"--")+" / "+(feed.open_interest||"--")),fundingOk?"GOOD":"BLOCKED",fundingOk?"good":"bad",fundingOk?"":"funding or OI bad");
-    renderLatencyRow("private",s.live_trading_enabled?"pending live adapter":"next live phase",s.live_trading_enabled?"WATCH":"WAITING",s.live_trading_enabled?"warn":"idle",s.live_trading_enabled?"verify before live":"not in paper");
+    renderLatencyRow("private","not instrumented","NO METRIC","idle","private stream latency is not measured yet");
     renderLatencyRow("order",unresolved?"timeout unknown":orders.length?orders.length+" working":"none working",unresolved?"BLOCKED":orders.length?"WATCH":"GOOD",unresolved?"bad":orders.length?"warn":"good",unresolved?"blocks new risk":"");
     renderLatencyRow("portfolio",snapshotAge==null?"--":ageText(snapshotAge),snapshotAge!=null&&snapshotAge<5000?"GOOD":"WATCH",snapshotAge!=null&&snapshotAge<5000?"good":"warn",snapshotAge!=null&&snapshotAge<5000?"":"snapshot stale");
     renderLatencyRow("journal",s.last_journal_write||"--",journalTone==="good"?"GOOD":"BLOCKED",journalTone,journalTone==="good"?"":"exits only");
@@ -4739,6 +4748,7 @@
     const fills=Array.isArray(s.recent_fills)?s.recent_fills:[];
     const alerts=Array.isArray(s.recent_alerts)?s.recent_alerts:[];
     const session=s.session||{};
+    const bm=session.book_metrics||null;
     const research=lastResearch||{};
     const rows=Array.isArray(research.results)?research.results:[];
     const drift=Array.isArray(research.drift_alerts)?research.drift_alerts:[];
@@ -4774,8 +4784,7 @@
     renderInstLatency("journal",s.last_journal_write||"--",journalTone==="good"?"GOOD":"BLOCKED",journalTone);
     renderInstLatency("research",research.generated_at?timeAgoFromIso(research.generated_at):"--",
       rows.length?"PUBLISHED":"WAITING",rows.length?"plan":"idle");
-    renderInstLatency("private",s.live_trading_enabled?"verify stream":"live phase",
-      s.live_trading_enabled?"WATCH":"WAITING",s.live_trading_enabled?"warn":"idle");
+    renderInstLatency("private","not instrumented","NO METRIC","idle");
 
     if(price){
       text("obi_l1_bid",num(price.bid).toFixed(2));
@@ -4807,24 +4816,41 @@
     text("obi_fill_bias",spread==null?"--":(spread<3?"queue risk":"adverse selection watch"));
     setPlainTone("obi_selection_signal",spread==null?"waiting":spread<8?"watch maker fills":"block scalps",
       spread==null?"dimval":spread<8?"neutral":"neg");
-    text("obi_l2_state","not wired");
-    text("obi_recorder","tick recorder next");
-    setPlainTone("obi_l2_signal","needed for true scalper","neutral");
-    text("obi_bid_qty","pending L2");
-    text("obi_ask_qty","pending L2");
-    setPlainTone("obi_value","not computed","dimval");
-    text("obi_summary",price?"L1 ready; L2 pending":"waiting for book");
+    const hasBookMetrics=bm&&(
+      finite(bm.imbalance)||finite(bm.liq_usd_5bps)||finite(bm.spread_bps)||
+      finite(bm.bid_qty)||finite(bm.ask_qty)
+    );
+    if(hasBookMetrics){
+      const imbalance=finite(bm.imbalance)?num(bm.imbalance):null;
+      const liq=finite(bm.liq_usd_5bps)?"$"+Math.round(num(bm.liq_usd_5bps)).toLocaleString()+" @5bps":"--";
+      text("obi_l2_state","book metrics");
+      text("obi_recorder",finite(bm.spread_bps)?num(bm.spread_bps).toFixed(2)+" bps":"snapshot metric");
+      setPlainTone("obi_l2_signal","published by feed","pos");
+      text("obi_bid_qty",finite(bm.bid_qty)?num(bm.bid_qty).toFixed(4):liq);
+      text("obi_ask_qty",finite(bm.ask_qty)?num(bm.ask_qty).toFixed(4):"depth window");
+      setPlainTone("obi_value",imbalance==null?"--":(imbalance>=0?"+":"")+imbalance.toFixed(3),
+        imbalance==null?"dimval":Math.abs(imbalance)>=0.35?"pos":"neutral");
+      text("obi_summary","book metrics wired");
+    }else{
+      text("obi_l2_state","no metric");
+      text("obi_recorder","not published");
+      setPlainTone("obi_l2_signal","not decision-grade","dimval");
+      text("obi_bid_qty","--");
+      text("obi_ask_qty","--");
+      setPlainTone("obi_value","--","dimval");
+      text("obi_summary",price?"L1 only; no depth metrics":"waiting for book");
+    }
 
     renderInstCard("card_rt_journal","rt_journal",journalTone==="good"?"OK":"BLOCKED",
       journalTone==="good"?"append-only writes healthy":"exits-only mode",journalTone);
-    renderInstCard("card_rt_gc","rt_gc","N/A","Python GC probe not instrumented","idle");
+    setVisible("card_rt_gc",false);
     renderInstCard("card_rt_shared","rt_shared","SYNCED","in-process state cache","good");
     renderInstCard("card_rt_heartbeat","rt_heartbeat",snapshotAge==null?"--":ageText(snapshotAge),
       "latest dashboard pulse",snapshotAge!=null&&snapshotAge<5000?"good":"warn");
     const barsPerMinute=barsPerMinuteFrom(session);
     renderInstCard("card_rt_event_rate","rt_event_rate",finite(barsPerMinute)?barsPerMinute.toFixed(2):"--",
       "bars / minute",finite(barsPerMinute)?"info":"idle");
-    renderInstCard("card_rt_clock","rt_clock","not measured","add exchange/server skew probe","idle");
+    setVisible("card_rt_clock",false);
 
     renderInstAnomalies(alerts,drift,unresolved);
     setTextTone("it_env_entries",entriesAllowed?"allowed":"blocked",entriesAllowed?"pos":"neg");
@@ -4926,7 +4952,7 @@
     setTextTone("ch_registry",hasRows?"published":"waiting",hasRows?"pos":"");
     setTextTone("ch_data",toneText(feedTone),feedTone==="bad"?"neg":feedTone==="warn"?"":"pos");
     setTextTone("ch_ledger",fills.length?fills.length+" recent fills":"no fills",fills.length?"pos":"");
-    setTextTone("ch_audit",(alerts.length+drift.length)+" events",(alerts.length+drift.length)?"":"pos");
+    setTextTone("ch_audit",(alerts.length+drift.length)+" derived",(alerts.length+drift.length)?"":"pos");
     setTextTone("ch_tax","CA gated","neutral");
     setTextTone("ch_access","read-only","pos");
   }
@@ -4946,7 +4972,6 @@
     appendLanding(body,"equity_history.jsonl",String(eq.length),eq.length?"loaded":"waiting",eq.length?"browser cache":"",eq.length?"good":"idle");
     appendLanding(body,"research_latest.json",String(rows.length),rows.length?"published":"waiting",
       lastResearch.generated_at||"",rows.length?"plan":"idle");
-    appendLanding(body,"tick_l2_recorder.parquet","--","not started","scalper validation phase","warn");
     text("landing_count",rows.length+" research rows");
   }
 
@@ -5020,7 +5045,7 @@
     if(!view.length){
       const empty=document.createElement("div");
       empty.className="empty";
-      empty.textContent="waiting for audit events";
+      empty.textContent="no derived events in visible artifacts";
       box.appendChild(empty);
     }
   }
@@ -5203,7 +5228,6 @@
       const extra=ae.total_attempts?" ; auto-explore "+ae.total_attempts+" tried ("+ae.distinct_variants+" variants)":"";
       text("rl_updated","updated "+String(d.generated_at).slice(11,19)+" UTC; hourly"+extra);
     }
-    renderAgent(d.edge_agents||{}, d.universe||{}, d.edge_leaderboard||{});
     renderScalperDiscovery(d);
     renderCascadeReversion(d.cascade_reversion||{});
     renderLeadLagEcho(d.leadlag_echo_scalp||{});
@@ -5740,6 +5764,12 @@
     if(empty)empty.style.display=has?"none":"block";
   }
 
+  function renderLaneReadiness(payload){
+    lastLaneReadiness=payload||{summary:{},rows:[]};
+    if(lastOperatorCtx)renderReadiness(lastOperatorCtx);
+    renderInstitutional();
+  }
+
   function loadResearch(){
     fetchJSON("/research").then(d=>{renderResearch(d);reapplyView();}).catch(()=>{});
   }
@@ -5759,95 +5789,8 @@
     fetchJSON("/realtime-scanner").then(d=>{renderRealtimeScanner(d);reapplyView();}).catch(()=>{});
   }
 
-  const AGENT_ACTION_LABEL={
-    pre_registered_judgment:"pre-register judgment",
-    cross_exchange_validation:"cross-exchange check",
-    variant_backtest:"auto-uplift variant"
-  };
-
-  function renderAgent(edgeAgents, universe, leaderboard){
-    if(!$("ea_proposals"))return;
-    const uni=universe||{};
-    const lb=leaderboard||{};
-    if(uni.targets){
-      const exchanges=Array.isArray(uni.exchanges)?uni.exchanges.join(", "):"--";
-      const symbolCount=Array.isArray(uni.symbols)?uni.symbols.length:0;
-      text("ea_universe",uni.targets+" targets; "+exchanges+" x "+symbolCount+" symbols");
-    }else{
-      text("ea_universe","--");
-    }
-
-    const lbRows=Array.isArray(lb.rows)?lb.rows:[];
-    const lbSummary=lb.summary||{};
-    if(lbRows.length){
-      const summary=lbRows.slice(0,5).map(r=>{
-        const sym=String(r.symbol||"--").split(":")[0];
-        const ex=String(r.exchange||"--").replace("usdm","");
-        const family=r.family?"/"+String(r.family).replace("_","-"):"";
-        const net=finite(r.oos_net_usd)?usd(r.oos_net_usd):"--";
-        return "#"+r.rank+" "+sym+"/"+ex+family+" "+r.route_decision+" "+net;
-      }).join(" | ");
-      text("ea_pairs",summary+" ; queue "+num(lbSummary.queued));
-    }else{
-      const pairs=Array.isArray(edgeAgents.profitable_pairs)?edgeAgents.profitable_pairs:[];
-      if(pairs.length){
-        const summary=pairs.slice(0,6).map(p=>{
-          const sym=String(p.symbol||"--").split(":")[0];
-          const ex=String(p.exchange||"--").replace("usdm","");
-          const strategy=String(p.best_strategy||"--").replace(/_v1$/,"");
-          const net=finite(p.oos_net_usd)?usd(p.oos_net_usd):"--";
-          return sym+"/"+ex+" "+strategy+" "+net+(p.verdict==="PASS"?" PASS":"");
-        }).join(" | ");
-        text("ea_pairs",summary);
-      }else{
-        text("ea_pairs","none currently profitable");
-      }
-    }
-
-    const proposals=Array.isArray(edgeAgents.proposals)?edgeAgents.proposals:[];
-    const queue=Array.isArray(lb.promotion_queue)?lb.promotion_queue:[];
-    const body=$("ea_proposals").querySelector("tbody");
-    body.replaceChildren();
-    for(const item of queue.slice(0,8)){
-      const tr=body.insertRow();
-      const target=String(item.symbol||"--").split(":")[0]+" / "+String(item.exchange||"--").replace("usdm","");
-      appendCell(tr,String(item.next_step||"--").replaceAll("_"," "),
-        item.promotion_tier==="JUDGMENT_READY"?"pos":item.promotion_tier==="VARIANT_RESEARCH_READY"?"text-info":"neutral");
-      appendCell(tr,target);
-      appendCell(tr,String(item.candidate_id||item.strategy||"--").replace(/_v1$/,""),"clip");
-      appendCell(tr,String(item.route_decision||"--").replace("_"," "),
-        item.route_decision==="TAKER_ALLOWED"?"pos":item.route_decision==="MAKER_ONLY"?"text-info":"warn");
-      const ls=item.live_shadow;
-      appendCell(tr,
-        ls&&finite(ls.net_usd)?usd(ls.net_usd)+" ("+num(ls.virtual_trades)+")":"—",
-        item.live_shadow_annotation==="LIVE_SHADOW_POSITIVE"?"pos":
-          item.live_shadow_annotation==="LIVE_SHADOW_NEGATIVE"?"warn":"neutral",
-        ls?"live shadow virtual net over "+num(ls.span_days)+"d; annotation only, never promotes":"no live shadow lane");
-      appendCell(tr,
-        "score "+num(item.score).toFixed(1)+"; PF "+num(item.profit_factor).toFixed(2)+
-        "; "+num(item.oos_trades)+" trades; "+usd(item.oos_net_usd),
-        "clip");
-    }
-    for(const proposal of proposals.slice(0,12)){
-      const tr=body.insertRow();
-      const action=AGENT_ACTION_LABEL[proposal.proposal_type]||proposal.proposal_type||"--";
-      const target=String(proposal.symbol||"--").split(":")[0]+" / "+String(proposal.exchange||"--").replace("usdm","");
-      appendCell(tr,action,proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"text-good");
-      appendCell(tr,target);
-      appendCell(tr,String(proposal.parent_strategy||proposal.strategy_id||"--").replace(/_v1$/,""),"clip");
-      appendCell(tr,proposal.proposal_type==="pre_registered_judgment"?"human gate":proposal.proposal_type==="cross_exchange_validation"?"shadow check":"explore only",
-        proposal.proposal_type==="pre_registered_judgment"?"pos":proposal.proposal_type==="cross_exchange_validation"?"text-info":"neutral");
-      appendCell(tr,"—","neutral");
-      appendCell(tr,String(proposal.rationale||"--").slice(0,110),"clip",proposal.rationale||"");
-    }
-    const hasActions=proposals.length||queue.length;
-    $("ea_proposals").style.display=hasActions?"table":"none";
-    $("ea_empty").style.display=hasActions?"none":"block";
-    if(edgeAgents.policy){
-      const lbText=lbSummary.rows?"; leaderboard "+lbSummary.rows+" rows, "+lbSummary.blocked+" blocked":"";
-      text("ea_policy","exploratory only; cannot trade or promote; "+
-        (edgeAgents.policy.max_variant_proposals||0)+" variant cap"+lbText);
-    }
+  function loadLaneReadiness(){
+    fetchJSON("/lane-readiness").then(d=>{renderLaneReadiness(d);reapplyView();}).catch(()=>{});
   }
 
   // Runbooks deep-link (token-scoped, opens the rendered docs/RUNBOOKS.md).
@@ -5859,11 +5802,13 @@
   loadResearch();
   loadCouncil();
   loadRealtimeScanner();
+  loadLaneReadiness();
   loadIncidents();
   loadCostModel();
   setInterval(loadResearch,60000);
   setInterval(loadCouncil,60000);
   setInterval(loadRealtimeScanner,30000);
+  setInterval(loadLaneReadiness,30000);
   setInterval(loadIncidents,60000);
   setInterval(loadCostModel,300000);
 

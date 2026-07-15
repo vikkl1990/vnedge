@@ -79,6 +79,22 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert 'id="rd_research"' in html
     assert 'id="rd_cost"' in html
     assert 'id="rd_governance"' in html
+    assert "/lane-readiness" in html
+    assert "loadLaneReadiness" in html
+    assert "Derived Event Trail" in html
+    assert "L2 depth levels absent from snapshot" in html
+    assert "book metrics wired" in html
+    assert "snapshot.lanes missing; no planned venue fallback" in html
+    assert "no lane snapshot published; planned exchange lane fallbacks are hidden" in html
+    assert "renderAgent(" not in html
+    assert "ea_proposals" not in html
+    assert "pending L2" not in html
+    assert "tick recorder next" not in html
+    assert "bybit-shadow" not in html
+    assert "planned shadow" not in html
+    assert "tick_l2_recorder.parquet" not in html
+    assert "pending live adapter" not in html
+    assert "next live phase" not in html
 
 
 def test_dashboard_shell_preserves_operator_instruments(client):
