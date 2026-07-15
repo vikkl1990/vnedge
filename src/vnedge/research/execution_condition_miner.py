@@ -121,18 +121,23 @@ def run_execution_condition_miner(
         row for row in (replay_payload or {}).get("rows", [])
         if isinstance(row, Mapping)
     ]
-    cache: dict[tuple[str, str, str], list[tuple[int, str, object]]] = {}
-    rows = []
-    for row in replay_rows:
+    # Single-entry tick cache grouped by event key (see candidate_replay_executor):
+    # load each full-day tick set once, hold only the active group — the prior
+    # unbounded dict grew to multi-GB (2026-07-13 OOM). Original row order kept.
+    indexed: list[tuple[int, dict]] = []
+    cur_key: tuple[str, str, str] | None = None
+    cur_events: list[tuple[int, str, object]] | None = None
+    order = sorted(range(len(replay_rows)), key=lambda i: _row_event_key(replay_rows[i]))
+    for i in order:
+        row = replay_rows[i]
         key = _row_event_key(row)
-        if key not in cache:
-            cache[key] = _safe_load_events(data_root, *key)
-        rows.append(analyze_replay_row(
-            data_root,
-            row,
-            config=config,
-            events=cache[key],
-        ).to_dict())
+        if key != cur_key:
+            cur_events = _safe_load_events(data_root, *key)
+            cur_key = key
+        indexed.append((i, analyze_replay_row(
+            data_root, row, config=config, events=cur_events,
+        ).to_dict()))
+    rows = [r for _, r in sorted(indexed)]
     candidate_conditions = _candidate_conditions(rows)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
