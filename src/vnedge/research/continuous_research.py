@@ -58,6 +58,10 @@ from vnedge.research.ai_candidate_research import (
 from vnedge.research.alpha_factory import alpha_factory_policy, run_alpha_factory
 from vnedge.research.edge_leaderboard import build_edge_leaderboard
 from vnedge.research.edge_agents import EdgeResearchAgent, runnable_variant_proposals
+from vnedge.research.factor_ranker import (
+    build_factor_ranker_payload,
+    write_factor_ranker_payload,
+)
 from vnedge.research.shadow_perf_reader import DEFAULT_JOURNAL_DIR, read_shadow_perf
 from vnedge.research.shadow_manifest import (
     generate_shadow_manifest,
@@ -683,6 +687,12 @@ def _alpha_factory_enabled() -> bool:
     }
 
 
+def _factor_ranker_enabled() -> bool:
+    return os.environ.get("FACTOR_RANKER_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _ai_candidate_research_enabled() -> bool:
     return os.environ.get("AI_CANDIDATE_RESEARCH_ENABLED", "1").lower() not in {
         "0", "false", "no", "off",
@@ -795,6 +805,7 @@ class ResearchPayload:
     agent_plan: dict = field(default_factory=dict)
     edge_leaderboard: dict = field(default_factory=dict)
     universe: dict = field(default_factory=dict)
+    factor_ranker: dict = field(default_factory=dict)
     scalper_research: dict = field(default_factory=dict)
     alpha_factory: dict = field(default_factory=dict)
     scalper_parameter_registry: dict = field(default_factory=dict)
@@ -820,6 +831,7 @@ def publish(payload: ResearchPayload) -> None:
         "results": payload.records,
         "drift_alerts": payload.drift_alerts or [],
         "universe": payload.universe or {},
+        "factor_ranker": payload.factor_ranker or {},
         "scalper_research": payload.scalper_research or {},
         "alpha_factory": payload.alpha_factory or {},
         "scalper_parameter_registry": payload.scalper_parameter_registry or {},
@@ -935,6 +947,21 @@ async def run_cycle() -> list[dict]:
         shadow_perf=live_shadow_perf,
         judgment_records=judgment_records,
     )
+    factor_ranker: dict = {}
+    if _factor_ranker_enabled():
+        try:
+            factor_ranker = build_factor_ranker_payload(store, targets)
+            write_factor_ranker_payload(factor_ranker, OUT_DIR)
+        except Exception as exc:  # noqa: BLE001 — triage must not kill research
+            logger.exception("factor ranker failed: %s", exc)
+            factor_ranker = {
+                "policy": {
+                    "research_only": True,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+                "error": str(exc),
+            }
     # research -> shadow bridge: turn profitable winners with locked params into
     # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
     try:
@@ -1023,6 +1050,7 @@ async def run_cycle() -> list[dict]:
         },
         edge_leaderboard=edge_leaderboard,
         universe=summarize_universe(targets),
+        factor_ranker=factor_ranker,
         scalper_research=scalper_research,
         alpha_factory=alpha_factory,
         scalper_parameter_registry=scalper_parameter_registry,
