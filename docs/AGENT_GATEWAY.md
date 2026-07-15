@@ -137,6 +137,9 @@ writes terminal research-only evidence. It runs from recorded local data only:
   `data/normalized/...`;
 - AI-authored `ai_*` strategies are routed through the sandboxed candidate
   research surface;
+- microstructure replay jobs route through the conservative candidate replay
+  executor and consume only standard mined artifacts plus recorded tick/L2
+  data;
 - missing data, unknown strategies, non-strict jobs, or live-enabled requests
   become `BLOCKED_RESEARCH_ONLY` with a concrete reason;
 - unexpected execution errors become `FAILED_RESEARCH_ONLY`;
@@ -180,6 +183,55 @@ Tuning knobs:
 | `AGENT_JOB_RUNNER_MAX_PER_CYCLE` | `1` | Bounded jobs per poll. |
 | `AGENT_JOB_RUNNER_DATA_ROOT` | `data` | Recorded data root. |
 | `AGENT_JOB_RUNNER_ARTIFACT_DIR` | `research/live_research/agent_jobs` | JSON evidence output. |
+
+## Conservative Replay Job Example
+
+Agents can request the replay adapter without registering a trading strategy:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategy_id": "candidate_replay_executor_v1",
+    "exchange": "delta_india",
+    "symbol": "ETH/USDT:USDT",
+    "timeframe": "1m",
+    "hypothesis_id": "orderflow-delta-eth-replay",
+    "strict_mode": true,
+    "live_orders_enabled": false,
+    "parameters": {
+      "max_event_leadlag": 5,
+      "max_orderflow": 25,
+      "min_replay_fills": 5,
+      "queue_aware": true
+    }
+  }' \
+  http://127.0.0.1:8080/api/agent/v1/backtests
+```
+
+Equivalent adapter form:
+
+```json
+{
+  "strategy_id": "agent_named_microstructure_hypothesis",
+  "exchange": "binanceusdm",
+  "symbol": "SOL/USDT:USDT",
+  "timeframe": "1m",
+  "strict_mode": true,
+  "live_orders_enabled": false,
+  "parameters": {"adapter": "candidate_replay"}
+}
+```
+
+The runner reads:
+
+- `research/live_research/event_leadlag_latest.json`
+- `research/live_research/orderflow_footprint_latest.json`
+- recorded tick/L2 shards under `data/`
+
+The result still says `promotion_verdict=NOT_EVALUATED_AGENT_JOB`. A
+`REPLAY_CANDIDATE` row is only a proof task; it does not create a paper lane.
 
 ## Audit Files
 

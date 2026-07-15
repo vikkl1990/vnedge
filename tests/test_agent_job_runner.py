@@ -144,3 +144,87 @@ def test_runner_blocks_missing_data_and_live_enabled_requests(tmp_path):
     assert by_id[live["job_id"]]["status"] == BLOCKED_STATUS
     assert "live_orders_enabled" in by_id[live["job_id"]]["blocked_reason"]
     assert by_id[live["job_id"]]["can_trade"] is False
+
+
+def test_candidate_replay_agent_job_runs_research_only_adapter(tmp_path, monkeypatch):
+    jobs_dir = tmp_path / "jobs"
+    request = _request(
+        strategy_id="candidate_replay_executor_v1",
+        parameters={
+            "max_event_leadlag": 7,
+            "max_orderflow": 11,
+            "min_replay_fills": 3,
+            "notional_usd": 250.0,
+            "queue_aware": True,
+        },
+    )
+    job = create_backtest_job(jobs_dir=jobs_dir, agent="agent", request=request)
+    seen = {}
+
+    def fake_replay(data_root, *, event_leadlag_path, orderflow_path, config):
+        seen["data_root"] = data_root
+        seen["event_leadlag_path"] = str(event_leadlag_path)
+        seen["orderflow_path"] = str(orderflow_path)
+        seen["config"] = config.to_dict()
+        return {
+            "generated_at": "2026-07-15T00:00:00+00:00",
+            "summary": {"rows": 1, "replay_candidates": 1, "fills": 5},
+            "rows": [
+                {
+                    "candidate_id": "r1",
+                    "verdict": "REPLAY_CANDIDATE",
+                    "net_usd": 0.42,
+                    "can_trade": False,
+                    "can_promote": False,
+                }
+            ],
+            "can_trade": False,
+            "can_promote": False,
+        }
+
+    monkeypatch.setattr("vnedge.agent_gateway.job_runner.run_candidate_replay", fake_replay)
+
+    completed = run_pending_jobs(
+        jobs_dir=jobs_dir,
+        data_root=tmp_path / "data",
+        artifact_dir=tmp_path / "artifacts",
+    )
+
+    assert completed[0]["job_id"] == job["job_id"]
+    assert completed[0]["status"] == DONE_STATUS
+    result = completed[0]["result"]
+    assert result["execution"] == "candidate_replay"
+    assert result["summary"]["replay_candidates"] == 1
+    assert result["top_rows"][0]["verdict"] == "REPLAY_CANDIDATE"
+    assert result["promotion_verdict"] == "NOT_EVALUATED_AGENT_JOB"
+    assert result["can_trade"] is False
+    assert result["can_promote"] is False
+    assert seen["config"]["max_event_leadlag_specs"] == 7
+    assert seen["config"]["max_orderflow_specs"] == 11
+    assert seen["config"]["min_replay_fills"] == 3
+    assert seen["config"]["notional_usd"] == 250.0
+    assert seen["config"]["queue_aware"] is True
+
+
+def test_candidate_replay_adapter_flag_does_not_require_registered_strategy(
+    tmp_path, monkeypatch
+):
+    jobs_dir = tmp_path / "jobs"
+    create_backtest_job(
+        jobs_dir=jobs_dir,
+        agent="agent",
+        request=_request(
+            strategy_id="agent_microstructure_probe",
+            parameters={"adapter": "candidate_replay"},
+        ),
+    )
+
+    monkeypatch.setattr(
+        "vnedge.agent_gateway.job_runner.run_candidate_replay",
+        lambda *_args, **_kwargs: {"summary": {}, "rows": [], "can_trade": False},
+    )
+
+    completed = run_pending_jobs(jobs_dir=jobs_dir, data_root=tmp_path / "data")
+
+    assert completed[0]["status"] == DONE_STATUS
+    assert completed[0]["result"]["execution"] == "candidate_replay"
