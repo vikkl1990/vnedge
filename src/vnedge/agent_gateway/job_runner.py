@@ -39,6 +39,13 @@ from vnedge.research.ai_candidate_research import (
     AI_STRATEGY_DIR,
     run_ai_candidate_research,
 )
+from vnedge.research.candidate_replay_executor import (
+    EXECUTOR_ID as CANDIDATE_REPLAY_EXECUTOR_ID,
+    DEFAULT_EVENT_LEADLAG,
+    DEFAULT_ORDERFLOW,
+    CandidateReplayConfig,
+    run_candidate_replay,
+)
 from vnedge.strategy.ai_sandbox import AI_STRATEGY_ID_PREFIX
 from vnedge.strategy.strategy_registry import get_strategy_class
 
@@ -46,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 RUNNER_VERSION = "agent_job_runner_v1"
 CONFIG_PARAMETER_KEYS = frozenset({"max_holding_bars"})
+CANDIDATE_REPLAY_ALIASES = frozenset(
+    {CANDIDATE_REPLAY_EXECUTOR_ID, "candidate_replay", "candidate_replay_executor"}
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,8 @@ def execute_job(
         return JobOutcome(status=BLOCKED_STATUS, blocked_reason=guard, result=_base_result(job))
 
     strategy_id = str(request["strategy_id"])
+    if _is_candidate_replay_request(request):
+        return _execute_candidate_replay_job(job, data_root=data_root)
     if strategy_id.startswith(AI_STRATEGY_ID_PREFIX):
         return _execute_ai_candidate_job(job, data_root=data_root, artifact_dir=artifact_dir)
     return _execute_registered_strategy_job(job, data_root=data_root)
@@ -307,6 +319,75 @@ def _execute_ai_candidate_job(
     return JobOutcome(status=DONE_STATUS, result=result)
 
 
+def _execute_candidate_replay_job(
+    job: dict[str, Any],
+    *,
+    data_root: Path | str,
+) -> JobOutcome:
+    request = job["request"]
+    params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+    config = CandidateReplayConfig(
+        max_event_leadlag_specs=_bounded_int(
+            params.get("max_event_leadlag_specs") or params.get("max_event_leadlag"),
+            default=3,
+            lower=0,
+            upper=50,
+        ),
+        max_orderflow_specs=_bounded_int(
+            params.get("max_orderflow_specs") or params.get("max_orderflow"),
+            default=20,
+            lower=0,
+            upper=250,
+        ),
+        min_replay_fills=_bounded_int(
+            params.get("min_replay_fills"),
+            default=5,
+            lower=1,
+            upper=10_000,
+        ),
+        queue_aware=bool(params.get("queue_aware", False)),
+        notional_usd=_bounded_float(
+            params.get("notional_usd"),
+            default=100.0,
+            lower=1.0,
+            upper=100_000.0,
+        ),
+    )
+    try:
+        payload = run_candidate_replay(
+            data_root,
+            event_leadlag_path=DEFAULT_EVENT_LEADLAG,
+            orderflow_path=DEFAULT_ORDERFLOW,
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001 - replay failure is persisted evidence
+        return JobOutcome(
+            status=FAILED_STATUS,
+            error=str(exc),
+            result={
+                **_base_result(job),
+                "execution": "candidate_replay",
+                "config": config.to_dict(),
+            },
+        )
+
+    result = {
+        **_base_result(job),
+        "execution": "candidate_replay",
+        "config": config.to_dict(),
+        "summary": payload.get("summary", {}),
+        "top_rows": list(payload.get("rows", []))[:20],
+        "candidate_replay_payload": payload,
+        "promotion_verdict": "NOT_EVALUATED_AGENT_JOB",
+        "promotion_note": (
+            "Candidate replay rows are proof tasks only. REPLAY_CANDIDATE "
+            "still requires untouched judgment, paper/shadow trial, and "
+            "explicit human approval before promotion."
+        ),
+    }
+    return JobOutcome(status=DONE_STATUS, result=result)
+
+
 def _guard_request(request: dict[str, Any]) -> str | None:
     required = ("strategy_id", "exchange", "symbol", "timeframe")
     missing = [key for key in required if not request.get(key)]
@@ -317,6 +398,15 @@ def _guard_request(request: dict[str, Any]) -> str | None:
     if request.get("strict_mode") is not True:
         return "agent job must keep strict_mode=true"
     return None
+
+
+def _is_candidate_replay_request(request: dict[str, Any]) -> bool:
+    params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+    adapter = str(params.get("adapter") or params.get("job_adapter") or "")
+    return str(request.get("strategy_id")) in CANDIDATE_REPLAY_ALIASES or adapter in {
+        "candidate_replay",
+        CANDIDATE_REPLAY_EXECUTOR_ID,
+    }
 
 
 def _load_market_window(
@@ -420,6 +510,18 @@ def _bounded_int(value: Any, *, default: int, lower: int, upper: int) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
+        return default
+    return max(lower, min(parsed, upper))
+
+
+def _bounded_float(value: Any, *, default: float, lower: float, upper: float) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
         return default
     return max(lower, min(parsed, upper))
 
