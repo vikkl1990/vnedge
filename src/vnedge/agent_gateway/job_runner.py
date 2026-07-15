@@ -58,6 +58,10 @@ CANDIDATE_REPLAY_ALIASES = frozenset(
 )
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class JobOutcome:
     status: str
@@ -622,6 +626,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("AGENT_JOB_RUNNER_MAX_PER_CYCLE", "1")),
     )
+    parser.add_argument(
+        "--seed-defaults",
+        action="store_true",
+        default=_truthy(os.environ.get("AGENT_JOB_RUNNER_SEED_DEFAULTS")),
+        help="Idempotently seed the default Quant OS research jobs before polling",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -630,6 +640,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args(argv)
+    if args.seed_defaults:
+        from vnedge.agent_gateway.seed_jobs import seed_default_jobs
+
+        seeded = seed_default_jobs(Path(args.jobs_dir))
+        if args.json and (args.once or seeded["created_count"]):
+            print(json.dumps({"seeded": seeded}, indent=2, sort_keys=True))
+        if seeded["created_count"]:
+            logger.info("seeded %d Quant OS research job(s)", seeded["created_count"])
     while True:
         completed = run_pending_jobs(
             jobs_dir=args.jobs_dir,

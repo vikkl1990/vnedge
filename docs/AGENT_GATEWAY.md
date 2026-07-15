@@ -183,6 +183,28 @@ Tuning knobs:
 | `AGENT_JOB_RUNNER_MAX_PER_CYCLE` | `1` | Bounded jobs per poll. |
 | `AGENT_JOB_RUNNER_DATA_ROOT` | `data` | Recorded data root. |
 | `AGENT_JOB_RUNNER_ARTIFACT_DIR` | `research/live_research/agent_jobs` | JSON evidence output. |
+| `AGENT_JOB_RUNNER_SEED_DEFAULTS` | `1` in Compose | Idempotently enqueue the Quant OS starter research jobs on worker startup. |
+
+The human dashboard also exposes a token-gated `/agent-jobs` endpoint and the
+Quant OS Job Ledger panel. This is deliberately separate from
+`/api/agent/v1/jobs`: operators can inspect the queue with the dashboard token
+even when the Agent Gateway HTTP surface is not mounted because no agent tokens
+are configured.
+
+Seed the starter jobs manually:
+
+```bash
+python -m vnedge.agent_gateway.seed_jobs --json
+```
+
+The seeded jobs are:
+
+- `sats_5m_scalper_v1` on Delta India ETH 5m candles;
+- `candidate_replay_executor_v1` for conservative L2/order-flow replay;
+- `ai_example_ma_cross` for the sandbox AI candidate pipeline.
+
+They are ordinary research-only jobs: `strict_mode=true`,
+`live_orders_enabled=false`, `can_trade=false`, `can_promote=false`.
 
 ## Conservative Replay Job Example
 

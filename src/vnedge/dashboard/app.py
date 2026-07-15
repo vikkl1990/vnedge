@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +35,15 @@ from vnedge.agent_gateway.app import (
 )
 from vnedge.agent_gateway.audit import AgentAuditLogger
 from vnedge.agent_gateway.auth import AgentTokenStore
+from vnedge.agent_gateway.jobs import (
+    BLOCKED_STATUS,
+    DONE_STATUS,
+    FAILED_STATUS,
+    PENDING_STATUS,
+    RUNNING_STATUS,
+    TERMINAL_STATUSES,
+    list_jobs,
+)
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 
 logger = logging.getLogger(__name__)
@@ -68,6 +78,113 @@ _GENERAL_RUNBOOK = "general-triage"
 _NON_INCIDENT_ALERTS = frozenset({"new_fill"})
 
 _LANE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed:
+        return None
+    return parsed
+
+
+def _agent_job_adapter(job: dict) -> str:
+    request = job.get("request") if isinstance(job.get("request"), dict) else {}
+    params = request.get("parameters") if isinstance(request.get("parameters"), dict) else {}
+    strategy_id = str(request.get("strategy_id") or "")
+    adapter = str(params.get("adapter") or params.get("job_adapter") or "")
+    if strategy_id.startswith("ai_"):
+        return "ai_candidate"
+    if "candidate_replay" in {strategy_id, adapter} or strategy_id == "candidate_replay_executor_v1":
+        return "candidate_replay"
+    return "registered_backtest"
+
+
+def _agent_job_result_summary(job: dict) -> str:
+    if job.get("blocked_reason"):
+        return str(job["blocked_reason"])
+    if job.get("error"):
+        return str(job["error"])
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    if metrics:
+        net = _safe_float(metrics.get("net_profit_usd"))
+        trades = int(_safe_float(metrics.get("num_trades")) or 0)
+        if net is not None:
+            return f"net {net:+.2f} USD / trades {trades}"
+        return f"trades {trades}"
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    if summary:
+        candidates = int(_safe_float(summary.get("replay_candidates")) or 0)
+        fills = int(_safe_float(summary.get("fills")) or 0)
+        rows = int(_safe_float(summary.get("rows")) or 0)
+        return f"replay candidates {candidates} / fills {fills} / rows {rows}"
+    matched = result.get("matched_candidate")
+    if isinstance(matched, dict):
+        verdict = str(matched.get("verdict") or "candidate")
+        net = _safe_float(matched.get("oos_net_usd"))
+        return f"{verdict} {net:+.2f} USD" if net is not None else verdict
+    if job.get("status") == PENDING_STATUS:
+        return "waiting for research runner"
+    if job.get("status") == RUNNING_STATUS:
+        return "running now"
+    return "no terminal result yet"
+
+
+def _agent_jobs_payload(
+    jobs_dir: Path | None,
+    *,
+    limit: int,
+    gateway_http_mounted: bool,
+) -> dict:
+    rows = list_jobs(jobs_dir, limit=limit) if jobs_dir is not None else []
+    status_counts = Counter(str(job.get("status") or "UNKNOWN") for job in rows)
+    pending = status_counts.get(PENDING_STATUS, 0)
+    running = status_counts.get(RUNNING_STATUS, 0)
+    done = status_counts.get(DONE_STATUS, 0)
+    blocked = status_counts.get(BLOCKED_STATUS, 0)
+    failed = status_counts.get(FAILED_STATUS, 0)
+    recent: list[dict] = []
+    for job in rows:
+        request = job.get("request") if isinstance(job.get("request"), dict) else {}
+        recent.append(
+            {
+                "job_id": job.get("job_id"),
+                "status": job.get("status"),
+                "adapter": _agent_job_adapter(job),
+                "created_by": job.get("created_by"),
+                "hypothesis_id": request.get("hypothesis_id"),
+                "strategy_id": request.get("strategy_id"),
+                "exchange": request.get("exchange"),
+                "symbol": request.get("symbol"),
+                "timeframe": request.get("timeframe"),
+                "updated_at": job.get("updated_at") or job.get("created_at"),
+                "result_summary": _agent_job_result_summary(job),
+                "can_trade": False,
+                "can_promote": False,
+                "live_orders_enabled": False,
+            }
+        )
+    return {
+        "summary": {
+            "total": len(rows),
+            "pending": pending,
+            "running": running,
+            "done": done,
+            "blocked": blocked,
+            "failed": failed,
+            "terminal": sum(status_counts.get(status, 0) for status in TERMINAL_STATUSES),
+            "gateway_http_mounted": gateway_http_mounted,
+        },
+        "jobs": recent,
+        "jobs_dir": str(jobs_dir) if jobs_dir is not None else None,
+        "policy": "dashboard-read-only; agent jobs cannot trade or promote",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }
 
 
 def _tail_lines(path: Path, max_bytes: int = 512_000) -> list[str]:
@@ -303,16 +420,18 @@ def create_app(
         _REPO_ROOT / "docs" / "RUNBOOKS.md",
     )
 
+    agent_jobs_path = agent_jobs_dir or env_agent_jobs_dir()
     resolved_agent_store = (
         agent_token_store if agent_token_store is not None else AgentTokenStore.from_env()
     )
+    agent_gateway_http_mounted = bool(len(resolved_agent_store))
     if len(resolved_agent_store):
         mount_agent_gateway(
             app,
             provider=provider,
             token_store=resolved_agent_store,
             audit_logger=AgentAuditLogger(agent_audit_path or env_agent_audit_path()),
-            jobs_dir=agent_jobs_dir or env_agent_jobs_dir(),
+            jobs_dir=agent_jobs_path,
             artifacts=AgentGatewayArtifacts(
                 research_path=research_path,
                 alpha_council_path=alpha_council_path,
@@ -563,6 +682,25 @@ def create_app(
             _read_json_payload(
                 vibe_intelligence_path,
                 {"summary": {}, "cards": [], "can_trade": False, "can_promote": False},
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/agent-jobs")
+    async def agent_jobs(request: Request, limit: int = 100) -> JSONResponse:
+        """Operator-facing Agent Gateway job ledger.
+
+        This is dashboard-token gated and read-only. It works even when the
+        agent HTTP API is intentionally unmounted because no agent tokens are
+        configured.
+        """
+        user = _authorized(request)
+        limit = max(1, min(int(limit), 200))
+        return JSONResponse(
+            _agent_jobs_payload(
+                agent_jobs_path,
+                limit=limit,
+                gateway_http_mounted=agent_gateway_http_mounted,
             ),
             headers=_identity(user),
         )

@@ -15,6 +15,7 @@ from vnedge.agent_gateway.jobs import (
     create_backtest_job,
     read_job,
 )
+from vnedge.agent_gateway.seed_jobs import DEFAULT_SEED_REQUESTS, seed_default_jobs
 from vnedge.data.parquet_store import ParquetStore
 
 
@@ -228,3 +229,39 @@ def test_candidate_replay_adapter_flag_does_not_require_registered_strategy(
 
     assert completed[0]["status"] == DONE_STATUS
     assert completed[0]["result"]["execution"] == "candidate_replay"
+
+
+def test_quantos_seed_jobs_are_idempotent_and_research_only(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+
+    first = seed_default_jobs(jobs_dir)
+    second = seed_default_jobs(jobs_dir)
+
+    assert first["created_count"] == len(DEFAULT_SEED_REQUESTS)
+    assert first["skipped_count"] == 0
+    assert second["created_count"] == 0
+    assert second["skipped_count"] == len(DEFAULT_SEED_REQUESTS)
+    assert first["can_trade"] is False
+    assert first["can_promote"] is False
+
+    jobs = sorted(jobs_dir.glob("agj_*.json"))
+    assert len(jobs) == len(DEFAULT_SEED_REQUESTS)
+    stored = [read_job(jobs_dir, path.stem) for path in jobs]
+    assert all(job is not None for job in stored)
+    for job in stored:
+        assert job["created_by"] == "quantos_seed"
+        assert job["can_trade"] is False
+        assert job["can_promote"] is False
+        assert job["live_orders_enabled"] is False
+        assert job["request"]["strict_mode"] is True
+        assert job["request"]["live_orders_enabled"] is False
+
+
+def test_quantos_seed_dry_run_does_not_write(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+
+    payload = seed_default_jobs(jobs_dir, dry_run=True)
+
+    assert payload["created_count"] == len(DEFAULT_SEED_REQUESTS)
+    assert payload["skipped_count"] == 0
+    assert not jobs_dir.exists()
