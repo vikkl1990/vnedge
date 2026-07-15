@@ -14,7 +14,8 @@ Design notes:
   one failing 1).
 - Reduce-only orders skip entry-quality gates (spread, funding, exposure):
   getting OUT of risk must never be blocked by filters designed to stop us
-  getting INTO risk. Kill switch, staleness and validity checks still apply.
+  getting INTO risk. Public-feed health/staleness is recorded as an exit
+  warning, not a hard reject; order-mechanics validity checks still apply.
 """
 
 from __future__ import annotations
@@ -89,10 +90,16 @@ class RiskDecision:
     intent: OrderIntent
     failed_checks: tuple[str, ...] = ()
     passed_checks: tuple[str, ...] = ()
+    warning_checks: tuple[str, ...] = ()
 
     @property
     def explanation(self) -> str:
         if self.approved:
+            if self.warning_checks:
+                return (
+                    f"APPROVED_WITH_WARNINGS ({len(self.passed_checks)} checks passed; "
+                    f"warnings: {'; '.join(self.warning_checks)})"
+                )
             return f"APPROVED ({len(self.passed_checks)} checks passed)"
         return "REJECTED: " + "; ".join(self.failed_checks)
 
@@ -117,6 +124,7 @@ class PreTradeRiskGateway:
         cfg = self._config
         failed: list[str] = []
         passed: list[str] = []
+        warnings: list[str] = []
 
         def check(name: str, ok: bool, detail: str = "") -> None:
             if ok:
@@ -124,11 +132,19 @@ class PreTradeRiskGateway:
             else:
                 failed.append(f"{name}: {detail}" if detail else name)
 
+        def check_exit_warning(name: str, ok: bool, detail: str = "") -> None:
+            if ok:
+                passed.append(name)
+            elif intent.reduce_only:
+                warnings.append(f"{name}: {detail}" if detail else name)
+            else:
+                failed.append(f"{name}: {detail}" if detail else name)
+
         # --- Always-on checks (apply to entries AND exits) -------------------
-        check("exchange_health", market.exchange_healthy, "exchange unhealthy/degraded")
+        check_exit_warning("exchange_health", market.exchange_healthy, "exchange unhealthy/degraded")
 
         staleness = (now - market.last_update).total_seconds()
-        check(
+        check_exit_warning(
             "data_freshness",
             staleness <= cfg.max_data_staleness_seconds,
             f"data {staleness:.1f}s old (max {cfg.max_data_staleness_seconds}s)",
@@ -250,8 +266,9 @@ class PreTradeRiskGateway:
             intent=intent,
             failed_checks=tuple(failed),
             passed_checks=tuple(passed),
+            warning_checks=tuple(warnings),
         )
-        log = logger.info if decision.approved else logger.warning
+        log = logger.info if decision.approved and not warnings else logger.warning
         log(
             "risk_decision strategy=%s symbol=%s side=%s reduce_only=%s -> %s",
             intent.strategy_id, intent.symbol, intent.side, intent.reduce_only,

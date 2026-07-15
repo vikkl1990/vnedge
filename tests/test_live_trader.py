@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pandas as pd
 import pytest
 
 from vnedge.config.risk_config import RiskConfig
@@ -62,6 +63,9 @@ class FakeLiveAdapter:
         if behavior == "timeout":
             from vnedge.execution.order_manager import AdapterTimeout
             raise AdapterTimeout("no ack")
+        if behavior == "reject":
+            from vnedge.execution.order_manager import AdapterRejection
+            raise AdapterRejection("venue rejected")
         if behavior == "timeout_reached":
             from vnedge.execution.order_manager import AdapterTimeout
 
@@ -275,3 +279,57 @@ async def test_timeout_reached_entry_plan_survives_reconciliation(tmp_path):
     assert session.orders_submitted == 1
     assert not om.has_unresolved_orders
     assert session._plan is not None
+
+
+async def test_live_exit_plan_survives_reject_and_retries_with_new_key(tmp_path):
+    adapter = FakeLiveAdapter(script=["reject", "ack"])
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, om = wire(
+        live_settings(),
+        FakeFeed([]),
+        adapter,
+        accounts,
+        tmp_path,
+        OneShotLong(),
+    )
+    session._plan = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._entry_bar_ts = pd.Timestamp(BASE, unit="ms", tz="UTC")
+
+    await session._submit_exit("stop", datetime.now(UTC))
+
+    assert session._plan is not None
+    assert session.orders_submitted == 1
+
+    await session._submit_exit("stop", datetime.now(UTC))
+
+    assert session._plan is None
+    keys = [o.intent_key for o in om.orders.values() if o.intent.reduce_only]
+    assert keys[-1] == keys[-2] + "|retry=1"
+
+
+async def test_live_timeout_lost_exit_plan_waits_for_reconcile_before_retry(tmp_path):
+    adapter = FakeLiveAdapter(script=["timeout", "ack"])
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, om = wire(
+        live_settings(),
+        FakeFeed([]),
+        adapter,
+        accounts,
+        tmp_path,
+        OneShotLong(),
+    )
+    session._plan = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._entry_bar_ts = pd.Timestamp(BASE, unit="ms", tz="UTC")
+
+    await session._submit_exit("stop", datetime.now(UTC))
+    await session._submit_exit("stop", datetime.now(UTC))
+
+    assert session._plan is not None
+    assert session.orders_submitted == 1
+
+    await session._reconcile()
+    await session._submit_exit("stop", datetime.now(UTC))
+
+    assert session._plan is None
+    keys = [o.intent_key for o in om.orders.values() if o.intent.reduce_only]
+    assert keys[-1] == keys[-2] + "|retry=1"

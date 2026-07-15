@@ -447,6 +447,85 @@ async def test_tick_stop_breach_exits_between_bars(tmp_path):
     assert intents[-1]["payload"]["intent_key"].startswith(f"exit|{SYM}|tick_stop|")
 
 
+async def test_stale_feed_warns_but_tick_stop_reduce_only_exits(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    await session.run(max_bars=1)
+
+    feed.stale = True
+    feed.quote = (94.0, 94.02)
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert exchange.get_positions() == []
+    assert session._plan is None
+    records = [r for r in session.journal.read_all() if r["kind"] == "risk_decision"]
+    exit_decision = records[-1]["payload"]
+    assert exit_decision["approved"] is True
+    assert any("data_freshness" in w for w in exit_decision["warning_checks"])
+
+
+async def test_rejected_tick_stop_preserves_plan_then_retries_with_new_key(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        strategy=LongOnce(),
+        script=["ok", "reject:venue down"],
+    )
+    await session.run(max_bars=1)
+
+    feed.quote = (94.0, 94.02)
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert len(exchange.get_positions()) == 1
+    assert session._plan is not None
+    assert session.tick_stop_exits == 0
+    preserved = [r for r in session.journal.read_all() if r["kind"] == "exit_plan_preserved"]
+    assert preserved[-1]["payload"]["state"] == "rejected"
+
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert exchange.get_positions() == []
+    assert session._plan is None
+    intents = [r["payload"]["intent_key"] for r in session.journal.read_all()
+               if r["kind"] == "order_intent"]
+    assert intents[-2].startswith(f"exit|{SYM}|tick_stop|")
+    assert intents[-1] == intents[-2] + "|retry=1"
+
+
+async def test_timeout_lost_tick_stop_preserves_until_reconcile_then_retries(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        strategy=LongOnce(),
+        script=["ok", "timeout_lost"],
+    )
+    await session.run(max_bars=1)
+
+    feed.quote = (94.0, 94.02)
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert len(exchange.get_positions()) == 1
+    assert session._plan is not None
+    assert session.om.has_unresolved_orders
+    await session._check_tick_stop(datetime.now(UTC))
+    exit_intents = [r for r in session.journal.read_all()
+                    if r["kind"] == "order_intent"
+                    and r["payload"]["intent"]["reduce_only"]]
+    assert len(exit_intents) == 1
+
+    session._reconcile()
+    await session._check_tick_stop(datetime.now(UTC))
+
+    assert exchange.get_positions() == []
+    assert session._plan is None
+    intents = [r["payload"]["intent_key"] for r in session.journal.read_all()
+               if r["kind"] == "order_intent"
+               and r["payload"]["intent"]["reduce_only"]]
+    assert intents[-1] == intents[-2] + "|retry=1"
+
+
 async def test_tick_quote_without_breach_does_not_exit(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, strategy=LongOnce())

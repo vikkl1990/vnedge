@@ -83,6 +83,8 @@ class EdgeHypothesisResult:
     state: str
     can_trade: bool = False
     can_promote: bool = False
+    execution_evidence: str = "hypothesis_only"
+    fill_assumption: str = "synthetic_observation_fill_not_replay"
     requires_untouched_judgment: bool = True
 
     def to_dict(self) -> dict:
@@ -263,7 +265,7 @@ def _result(
     avg_forward = mean(forward) if forward else None
     win_rate = len(wins) / len(net) * 100.0 if net else 0.0
     family = hypothesis_id.split("|", 1)[0]
-    fake_row = ScalperReplayRow(
+    hypothesis_row = ScalperReplayRow(
         min_imbalance=0.0,
         max_spread_bps=config.max_spread_bps,
         quotes=len(observations),
@@ -274,12 +276,12 @@ def _result(
         net_usd=sum(net) / 10_000.0 * config.notional_usd,
         avg_net_bps=avg_net,
         avg_adverse_bps=None,
-        verdict="CANDIDATE" if avg_net and avg_net > 0 else "NEGATIVE_EDGE",
+        verdict="HYPOTHESIS_ONLY" if avg_net and avg_net > 0 else "NEGATIVE_EDGE",
         profit_factor=pf,
         breakeven_bps=_maker_round_trip_cost_bps(config),
         family_id=family,
     )
-    route = decide_execution_route(fake_row, config.scanner_config)
+    route = decide_execution_route(hypothesis_row, config.scanner_config)
     state = _edge_state(len(observations), route, config)
     return EdgeHypothesisResult(
         exchange=exchange,

@@ -40,6 +40,13 @@ from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
 
+_EXIT_ACCEPTED_STATES = frozenset(
+    {OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED, OrderState.FILLED}
+)
+_EXIT_RETRYABLE_STATES = frozenset(
+    {OrderState.RISK_REJECTED, OrderState.REJECTED, OrderState.CANCELLED}
+)
+
 
 class AccountProvider(Protocol):
     """Supplies live account truth to the gateway."""
@@ -107,6 +114,8 @@ class LiveTraderSession:
         self._plan: SignalIntent | None = None
         self._entry_bar_ts = None
         self._parked_entries = {}
+        self._pending_exit_orders: dict[str, str] = {}
+        self._exit_retry_attempts: dict[str, int] = {}
         self._bars = 0
 
     @property
@@ -166,7 +175,7 @@ class LiveTraderSession:
         positions = await self.accounts.open_positions()
         pos = next((p for p in positions if p.symbol == self.symbol), None)
         if pos is None:
-            self._plan = None
+            self._clear_exit_plan()
             return
         intent = OrderIntent(
             symbol=self.symbol, side="short" if pos.side == "long" else "long",
@@ -174,12 +183,53 @@ class LiveTraderSession:
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
         account = await self.accounts.account_state()
-        await self.om.submit(
+        key_ts = (
+            int(pd.Timestamp(self._entry_bar_ts).value)
+            if self._entry_bar_ts is not None
+            else int(now.timestamp() * 1000)
+        )
+        base_key = f"exit|{self.symbol}|{reason}|{key_ts}"
+        pending = self._pending_exit_orders.get(base_key)
+        if pending is not None:
+            pending_order = self.om.orders.get(pending)
+            if pending_order is not None and pending_order.state in (
+                OrderState.TIMEOUT_UNKNOWN,
+                OrderState.RECONCILING,
+            ):
+                return
+            self._pending_exit_orders.pop(base_key, None)
+        order = await self.om.submit(
             intent, account, self.feed.market_state(),
-            intent_key=f"exit|{self.symbol}|{reason}|{int(now.timestamp() * 1000)}", now=now,
+            intent_key=self._exit_intent_key(base_key), now=now,
         )
         self.orders_submitted += 1
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self._clear_exit_plan()
+        else:
+            self._preserve_exit_plan(base_key, order)
+
+    def _exit_intent_key(self, base_key: str) -> str:
+        attempt = self._exit_retry_attempts.get(base_key, 0)
+        return base_key if attempt == 0 else f"{base_key}|retry={attempt}"
+
+    def _clear_exit_plan(self) -> None:
         self._plan = None
+        self._entry_bar_ts = None
+        self._pending_exit_orders.clear()
+        self._exit_retry_attempts.clear()
+
+    def _preserve_exit_plan(self, base_key: str, order) -> None:
+        if order.state in (OrderState.TIMEOUT_UNKNOWN, OrderState.RECONCILING):
+            self._pending_exit_orders[base_key] = order.client_order_id
+        elif order.state in _EXIT_RETRYABLE_STATES:
+            self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
+        if order.state is OrderState.RISK_REJECTED:
+            self.risk_rejects += 1
+        logger.warning(
+            "preserving live exit plan after submit ended %s (%s)",
+            order.state.value,
+            order.client_order_id,
+        )
 
     async def emergency_flatten(self) -> None:
         """Close every venue position reduce-only through the normal pipeline."""
@@ -252,14 +302,30 @@ class LiveTraderSession:
         for coid in resolved:
             parked = self._parked_entries.pop(coid, None)
             if parked is None:
+                self._resolve_pending_exit(coid)
                 continue
             order = self.om.orders[coid]
-            if order.state in (
-                OrderState.ACKNOWLEDGED,
-                OrderState.PARTIALLY_FILLED,
-                OrderState.FILLED,
-            ) and self._plan is None:
+            if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
                 self._plan, self._entry_bar_ts = parked
+
+    def _resolve_pending_exit(self, client_order_id: str) -> None:
+        base_key = next(
+            (
+                key
+                for key, pending_id in self._pending_exit_orders.items()
+                if pending_id == client_order_id
+            ),
+            None,
+        )
+        if base_key is None:
+            return
+        order = self.om.orders[client_order_id]
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self._clear_exit_plan()
+            return
+        if order.state in _EXIT_RETRYABLE_STATES:
+            self._pending_exit_orders.pop(base_key, None)
+            self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
 
     def _report(self) -> RunReport:
         return RunReport(

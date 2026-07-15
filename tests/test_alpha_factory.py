@@ -143,6 +143,8 @@ def test_structural_alpha_routes_to_replay_but_never_trades():
     assert best.route_decision.route in {"MAKER_ONLY", "TAKER_ALLOWED"}
     assert best.can_trade is False
     assert best.can_promote is False
+    assert best.execution_evidence == "hypothesis_only"
+    assert best.fill_assumption == "synthetic_observation_fill_not_replay"
     assert best.requires_conservative_replay is True
     assert best.requires_untouched_judgment is True
 

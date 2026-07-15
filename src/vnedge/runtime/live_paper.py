@@ -50,6 +50,13 @@ from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
 
+_EXIT_ACCEPTED_STATES = frozenset(
+    {OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED, OrderState.FILLED}
+)
+_EXIT_RETRYABLE_STATES = frozenset(
+    {OrderState.RISK_REJECTED, OrderState.REJECTED, OrderState.CANCELLED}
+)
+
 
 @dataclass
 class _LivePlan:
@@ -123,6 +130,8 @@ class LivePaperSession:
         self.trade_log: deque = deque(maxlen=40)
         self._plan: _LivePlan | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
+        self._pending_exit_orders: dict[str, str] = {}
+        self._exit_retry_attempts: dict[str, int] = {}
         self._orphan_position_guarded = False
         self._reconciliation_fail_closed = False
         self._bars_since_reconcile = 0
@@ -285,34 +294,88 @@ class LivePaperSession:
 
         Both the bar-close path (_manage_exit) and the tick-stop path
         (_check_tick_stop) flow through here, so every exit passes the same
-        gateway/journal/OrderManager pipeline and clears the plan the same
-        way. Returns the ManagedOrder, or None if no position existed (the
-        plan is cleared regardless)."""
+        gateway/journal/OrderManager pipeline. Returns the ManagedOrder, or
+        None if no position existed or an unresolved prior exit attempt is
+        awaiting reconciliation. The plan is cleared only after the exit is
+        accepted/filled or the position is confirmed flat."""
         positions = {p.symbol: p for p in self.exchange.get_positions()}
         pos = positions.get(self.config.symbol)
         if pos is None:
-            self._plan = None
+            self._clear_exit_plan()
             return None
+        base_key = f"exit|{self.config.symbol}|{reason}|{key_ts}"
+        pending = self._pending_exit_orders.get(base_key)
+        if pending is not None:
+            pending_order = self.om.orders.get(pending)
+            if pending_order is not None and pending_order.state in (
+                OrderState.TIMEOUT_UNKNOWN,
+                OrderState.RECONCILING,
+            ):
+                self.journal.append("exit_plan_waiting_reconciliation", {
+                    "intent_key": base_key,
+                    "client_order_id": pending,
+                    "reason": reason,
+                    "state": pending_order.state.value,
+                })
+                return None
+            self._pending_exit_orders.pop(base_key, None)
         intent = OrderIntent(
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
             quantity=abs(pos.quantity), notional_usd=0.0, leverage=1.0,
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
+        intent_key = self._exit_intent_key(base_key)
         order = await self.om.submit(
             intent, self.tracker.account_state(), self.feed.market_state(),
-            intent_key=f"exit|{self.config.symbol}|{reason}|{key_ts}",
+            intent_key=intent_key,
             now=now,
         )
         self.orders_submitted += 1
-        self._plan = None
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self._mark_exit_accepted(reason)
+        else:
+            self._preserve_exit_plan(base_key, order, reason)
+        return order
+
+    def _exit_intent_key(self, base_key: str) -> str:
+        attempt = self._exit_retry_attempts.get(base_key, 0)
+        return base_key if attempt == 0 else f"{base_key}|retry={attempt}"
+
+    def _mark_exit_accepted(self, reason: str) -> None:
+        self._clear_exit_plan()
         # A tick stop fires BETWEEN closes, so the exit belongs to the bar
         # currently forming (index len(candles)): a 1-bar cooldown then blocks
         # that bar's entry evaluation, exactly as a bar-close stop blocks its
         # own bar's re-entry.
         exit_bar = len(self.candles) - (0 if reason == "tick_stop" else 1)
         self.protections.on_exit(reason, exit_bar)
-        return order
+
+    def _clear_exit_plan(self) -> None:
+        self._plan = None
+        self._pending_exit_orders.clear()
+        self._exit_retry_attempts.clear()
+
+    def _preserve_exit_plan(self, base_key: str, order, reason: str) -> None:
+        if order.state in (OrderState.TIMEOUT_UNKNOWN, OrderState.RECONCILING):
+            self._pending_exit_orders[base_key] = order.client_order_id
+        elif order.state in _EXIT_RETRYABLE_STATES:
+            self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
+        if order.state is OrderState.RISK_REJECTED:
+            self.risk_rejects += 1
+        self.journal.append("exit_plan_preserved", {
+            "intent_key": base_key,
+            "client_order_id": order.client_order_id,
+            "reason": reason,
+            "state": order.state.value,
+            "next_retry": self._exit_intent_key(base_key),
+        })
+        logger.warning(
+            "preserving exit plan after %s submit ended %s (%s)",
+            reason,
+            order.state.value,
+            order.client_order_id,
+        )
 
     async def _check_tick_stop(self, now: datetime) -> None:
         """Idle-tick STOP monitoring — capital protection at quote granularity.
@@ -350,7 +413,8 @@ class LivePaperSession:
         order = await self._submit_exit("tick_stop", int(entry_bar_ts.value), now)
         if order is None:
             return
-        self.tick_stop_exits += 1
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self.tick_stop_exits += 1
         trigger_px = bid if sig.side == "long" else ask
         self.journal.append("tick_stop_exit", {
             "reason": "tick_stop",
@@ -918,12 +982,47 @@ class LivePaperSession:
         for coid in report.resolved_orders:
             plan = self._parked_entries.pop(coid, None)
             if plan is None:
+                self._resolve_pending_exit(coid)
                 continue
             order = self.om.orders[coid]
-            if order.state in (
-                OrderState.ACKNOWLEDGED,
-                OrderState.PARTIALLY_FILLED,
-                OrderState.FILLED,
-            ) and self._plan is None:
+            if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
                 self._plan = plan
         return report
+
+    def _resolve_pending_exit(self, client_order_id: str) -> None:
+        base_key = next(
+            (
+                key
+                for key, pending_id in self._pending_exit_orders.items()
+                if pending_id == client_order_id
+            ),
+            None,
+        )
+        if base_key is None:
+            return
+        order = self.om.orders[client_order_id]
+        reason = _exit_reason_from_key(base_key)
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self.journal.append("exit_plan_cleared_after_reconciliation", {
+                "intent_key": base_key,
+                "client_order_id": client_order_id,
+                "reason": reason,
+                "state": order.state.value,
+            })
+            self._mark_exit_accepted(reason)
+            return
+        if order.state in _EXIT_RETRYABLE_STATES:
+            self._pending_exit_orders.pop(base_key, None)
+            self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
+            self.journal.append("exit_plan_preserved_after_reconciliation", {
+                "intent_key": base_key,
+                "client_order_id": client_order_id,
+                "reason": reason,
+                "state": order.state.value,
+                "next_retry": self._exit_intent_key(base_key),
+            })
+
+
+def _exit_reason_from_key(intent_key: str) -> str:
+    parts = intent_key.split("|")
+    return parts[2] if len(parts) > 2 else "exit"

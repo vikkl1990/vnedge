@@ -102,6 +102,44 @@ def test_stale_data_rejected(gateway):
     assert any("data_freshness" in f for f in decision.failed_checks)
 
 
+def test_stale_data_warns_but_does_not_block_reduce_only_exit(gateway):
+    market = healthy_market(last_update=NOW - timedelta(seconds=30))
+    decision = gateway.evaluate(
+        entry_intent(reduce_only=True),
+        healthy_account(open_positions=1),
+        market,
+        now=NOW,
+    )
+    assert decision.approved, decision.explanation
+    assert not decision.failed_checks
+    assert any("data_freshness" in f for f in decision.warning_checks)
+
+
+def test_exchange_health_warns_but_does_not_block_reduce_only_exit(gateway):
+    market = healthy_market(exchange_healthy=False)
+    decision = gateway.evaluate(
+        entry_intent(reduce_only=True),
+        healthy_account(open_positions=1),
+        market,
+        now=NOW,
+    )
+    assert decision.approved, decision.explanation
+    assert not decision.failed_checks
+    assert any("exchange_health" in f for f in decision.warning_checks)
+
+
+def test_symbol_mismatch_still_blocks_reduce_only_exit(gateway):
+    market = healthy_market(symbol="ETH/USDT:USDT")
+    decision = gateway.evaluate(
+        entry_intent(reduce_only=True),
+        healthy_account(open_positions=1),
+        market,
+        now=NOW,
+    )
+    assert not decision.approved
+    assert any("symbol_match" in f for f in decision.failed_checks)
+
+
 def test_daily_loss_limit_blocks_new_entries(gateway):
     account = healthy_account(daily_pnl_usd=-25.0)  # limit is $20
     decision = gateway.evaluate(entry_intent(), account, healthy_market(), now=NOW)
