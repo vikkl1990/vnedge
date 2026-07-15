@@ -44,10 +44,15 @@ def test_passed_strategy_enters_judgment_queue_with_taker_route():
     top = board["rows"][0]
     assert top["promotion_tier"] == "JUDGMENT_READY"
     assert top["route_decision"] == "TAKER_ALLOWED"
+    assert top["optimizer_fitness"]["hard_filters_passed"] is True
+    assert top["optimizer_fitness"]["can_trade"] is False
     assert top["can_trade"] is False
     assert top["requires_untouched_judgment"] is True
     assert board["promotion_queue"][0]["next_step"] == "pre_register_untouched_judgment"
+    assert board["promotion_queue"][0]["optimizer_fitness"]["hard_filters_passed"] is True
     assert board["policy"]["can_promote"] is False
+    assert board["policy"]["optimizer_scorecard"]["can_trade"] is False
+    assert board["summary"]["optimizer_hard_filters_passed"] == 1
 
 
 def test_latest_rejected_judgment_blocks_rolling_pass_from_queue():
@@ -128,8 +133,27 @@ def test_negative_or_sub_pf_rows_are_blocked_not_queued():
     ])
 
     assert all(row["promotion_tier"] == "BLOCKED" for row in board["rows"])
+    assert all(not row["optimizer_fitness"]["hard_filters_passed"] for row in board["rows"])
     assert board["promotion_queue"] == []
     assert board["summary"]["blocked"] == 2
+
+
+def test_optimizer_scorecard_marks_near_miss_without_promotion():
+    board = build_edge_leaderboard([
+        record(net=120.0, trades=9, fees=20.0, pf=2.8, payoff=2.8),
+    ])
+
+    row = board["rows"][0]
+    assert row["promotion_tier"] == "BLOCKED"
+    assert row["optimizer_fitness"]["hard_filters_passed"] is False
+    assert row["optimizer_fitness"]["near_miss"] is True
+    assert "min_trades" in {
+        item["name"]
+        for item in row["optimizer_fitness"]["hard_filters"]
+        if not item["passed"]
+    }
+    assert row["can_promote"] is False
+    assert board["summary"]["optimizer_near_misses"] == 1
 
 
 def test_auto_pass_requires_human_review_not_direct_judgment():

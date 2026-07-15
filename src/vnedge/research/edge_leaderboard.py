@@ -21,6 +21,11 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
+from vnedge.research.optimizer_scorecard import (
+    OptimizerScorecardConfig,
+    build_optimizer_scorecard,
+    optimizer_scorecard_policy,
+)
 from vnedge.research.shadow_perf_reader import index_shadow_perf, shadow_perf_key
 from vnedge.scalping.parameter_registry import (
     DEFAULT_SCALPER_PARAMETER_REGISTRY,
@@ -165,6 +170,19 @@ def _row_from_record(
     fee_multiple = round(net / fees, 2) if fees > 0 else None
     avg_net = round(net / trades, 4) if trades else 0.0
     fee_drag = _fee_drag_pct(net, fees)
+    gate = registry.family("book_imbalance_continuation").route_gate
+    optimizer_fitness = build_optimizer_scorecard(
+        net_usd=net,
+        trades=trades,
+        fees_usd=fees,
+        profit_factor=profit_factor,
+        payoff_ratio=payoff,
+        profitable_windows_pct=_finite_float(record.get("profitable_windows_pct", 0.0)),
+        config=OptimizerScorecardConfig(
+            min_trades=MIN_CANDIDATE_TRADES,
+            min_profit_factor=gate.maker_min_profit_factor,
+        ),
+    )
     # Live shadow evidence joins STRATEGY rows only: a family probe shares its
     # parent's shadow lane, so attributing the whole lane's virtual PnL to one
     # family would fabricate evidence.
@@ -222,6 +240,7 @@ def _row_from_record(
         "profit_factor": profit_factor,
         "payoff_ratio": payoff,
         "profitable_windows_pct": _finite_float(record.get("profitable_windows_pct", 0.0)),
+        "optimizer_fitness": optimizer_fitness,
         "gates": record.get("gates", "standard"),
         "blockers": blockers,
         "latest_judgment": latest_judgment,
@@ -408,6 +427,7 @@ def _queue_entry(row: dict) -> dict:
         "oos_trades": row["oos_trades"],
         "profit_factor": row["profit_factor"],
         "payoff_ratio": row["payoff_ratio"],
+        "optimizer_fitness": row["optimizer_fitness"],
         "live_shadow": row["live_shadow"],
         "live_shadow_annotation": row["live_shadow_annotation"],
         "execution_truth": row["execution_truth"],
@@ -499,6 +519,12 @@ def _summary(rows: list[dict], queue: list[dict]) -> dict:
             and r["execution_truth_annotation"]
             not in {"TRUTH_MAKER_EDGE", "TRUTH_TAKER_EDGE"}
         ),
+        "optimizer_hard_filters_passed": sum(
+            1 for r in rows if r["optimizer_fitness"]["hard_filters_passed"]
+        ),
+        "optimizer_near_misses": sum(
+            1 for r in rows if r["optimizer_fitness"]["near_miss"]
+        ),
     }
 
 
@@ -538,6 +564,12 @@ def _policy(registry: ScalperParameterRegistry) -> dict:
             "annotation_only_for_score": False,
             "never_auto_promotes": True,
         },
+        "optimizer_scorecard": optimizer_scorecard_policy(
+            OptimizerScorecardConfig(
+                min_trades=MIN_CANDIDATE_TRADES,
+                min_profit_factor=gate.maker_min_profit_factor,
+            )
+        ),
     }
 
 
