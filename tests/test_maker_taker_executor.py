@@ -18,7 +18,10 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent, PreTradeRiskGateway
+from vnedge.scalping.microstructure import MarketMicroState, PrivateStreamState, TopOfBook
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
+from vnedge.scalping.risk import ScalperRiskConfig, ScalperRiskGateway
+from vnedge.scalping.strategy import QuoteIntent
 
 NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 SYM = "BTC/USDT:USDT"
@@ -43,6 +46,36 @@ def market() -> MarketState:
         estimated_slippage_bps=1.0,
         funding_rate=0.0,
         exchange_healthy=True,
+    )
+
+
+def micro_market(**overrides) -> MarketMicroState:
+    defaults = dict(
+        top=TopOfBook(
+            symbol=SYM,
+            bid=99.99,
+            bid_size=60.0,
+            ask=100.01,
+            ask_size=60.0,
+            event_time=NOW - timedelta(milliseconds=100),
+        ),
+        private=PrivateStreamState(
+            last_event_at=NOW - timedelta(milliseconds=100),
+            connected=True,
+        ),
+        funding_rate=0.0,
+        estimated_slippage_bps=1.0,
+    )
+    defaults.update(overrides)
+    return MarketMicroState(**defaults)
+
+
+def stale_private_micro() -> MarketMicroState:
+    return micro_market(
+        private=PrivateStreamState(
+            last_event_at=NOW - timedelta(seconds=5),
+            connected=True,
+        )
     )
 
 
@@ -74,7 +107,47 @@ def plan(**overrides) -> MakerTakerExecutionPlan:
     return MakerTakerExecutionPlan(**defaults)
 
 
-def world(tmp_path, *, script=None):
+def test_plan_from_quote_intent_maps_scalper_contract():
+    quote = QuoteIntent(
+        intent(),
+        expected_edge_bps=18.5,
+        ttl_ms=375,
+        post_only=True,
+        reason="book impulse",
+    )
+
+    built = MakerTakerExecutionPlan.from_quote_intent(
+        executor_id="quote_exec",
+        quote=quote,
+        fee_profile=DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile("binanceusdm"),
+        fallback_edge_decay_bps=2.0,
+    )
+
+    assert built.executor_id == "quote_exec"
+    assert built.intent == quote.intent
+    assert built.expected_edge_bps == pytest.approx(18.5)
+    assert built.maker_ttl_ms == 375
+    assert built.fallback_edge_decay_bps == pytest.approx(2.0)
+
+
+def test_plan_from_quote_intent_requires_post_only():
+    quote = QuoteIntent(intent(), expected_edge_bps=18.5, ttl_ms=375, post_only=False)
+
+    with pytest.raises(ValueError, match="post_only"):
+        MakerTakerExecutionPlan.from_quote_intent(
+            executor_id="quote_exec",
+            quote=quote,
+            fee_profile=DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile("binanceusdm"),
+        )
+
+
+def world(
+    tmp_path,
+    *,
+    script=None,
+    scalper: bool = False,
+    scalper_config: ScalperRiskConfig | None = None,
+):
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     exchange = SimulatedExchange(
         FillModel(slippage_bps=0.0, taker_fee_bps=0.0),
@@ -86,7 +159,12 @@ def world(tmp_path, *, script=None):
         KillSwitch(kill_file=tmp_path / "KILL"),
     )
     om = OrderManager(gateway, journal, PaperBroker(exchange, script=script))
-    return MakerTakerExecutor(om, journal), exchange, journal
+    scalper_gateway = (
+        ScalperRiskGateway(gateway, scalper_config or ScalperRiskConfig())
+        if scalper
+        else None
+    )
+    return MakerTakerExecutor(om, journal, scalper_gateway=scalper_gateway), exchange, journal
 
 
 async def test_maker_quote_is_post_only_and_taker_fallback_submits_when_edge_covers(tmp_path):
@@ -250,3 +328,70 @@ async def test_taker_fallback_uses_fresh_account_snapshot(tmp_path):
     assert report.taker_order.state is OrderState.RISK_REJECTED
     assert any("symbol_exposure" in event.note for event in report.taker_order.history)
     assert exchange.get_fills() == []
+
+
+async def test_scalper_gateway_missing_microstate_blocks_before_maker_submit(tmp_path):
+    executor, exchange, journal = world(tmp_path, scalper=True)
+
+    report = await executor.execute(plan(), account=account(), market=market(), now=NOW)
+
+    assert report.state is ExecutorState.BLOCKED
+    assert report.reason == "maker_scalper_risk_rejected"
+    assert report.maker_order is None
+    assert exchange.orders == {}
+    assert "scalper_micro_market_missing" in report.maker_check.failed_checks
+    kinds = [r["kind"] for r in journal.read_all()]
+    assert "order_intent" not in kinds
+    assert "executor_scalper_risk_decision" in kinds
+
+
+async def test_scalper_gateway_stale_private_stream_blocks_before_maker_submit(tmp_path):
+    executor, exchange, journal = world(tmp_path, scalper=True)
+
+    report = await executor.execute(
+        plan(),
+        account=account(),
+        market=market(),
+        micro_market=stale_private_micro(),
+        now=NOW,
+    )
+
+    assert report.state is ExecutorState.BLOCKED
+    assert report.reason == "maker_scalper_risk_rejected"
+    assert report.maker_order is None
+    assert exchange.orders == {}
+    assert any("scalper_private_stream" in f for f in report.maker_check.failed_checks)
+    decision = [r for r in journal.read_all()
+                if r["kind"] == "executor_scalper_risk_decision"][-1]["payload"]
+    assert decision["route"] == "maker"
+    assert decision["approved"] is False
+
+
+async def test_scalper_gateway_approves_maker_then_blocks_taker_on_hot_order_budget(tmp_path):
+    executor, exchange, journal = world(
+        tmp_path,
+        scalper=True,
+        scalper_config=ScalperRiskConfig(max_orders_per_minute=1, max_cancels_per_minute=10),
+    )
+
+    report = await executor.execute(
+        plan(),
+        account=account(),
+        market=market(),
+        micro_market=micro_market(),
+        now=NOW,
+    )
+
+    assert report.state is ExecutorState.TAKER_BLOCKED
+    assert report.reason == "taker_fallback_scalper_risk_rejected"
+    assert report.maker_order is not None
+    assert report.maker_order.state is OrderState.CANCELLED
+    assert report.taker_order is None
+    assert len(exchange.get_fills()) == 0
+    assert report.taker_check is not None
+    assert any("scalper_order_rate" in f for f in report.taker_check.failed_checks)
+    decisions = [r["payload"] for r in journal.read_all()
+                 if r["kind"] == "executor_scalper_risk_decision"]
+    assert [d["route"] for d in decisions] == ["maker", "taker_fallback"]
+    assert decisions[0]["approved"] is True
+    assert decisions[1]["approved"] is False

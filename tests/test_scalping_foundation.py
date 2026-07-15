@@ -150,6 +150,19 @@ def test_scalper_risk_rate_budget_blocks_new_entries(tmp_path):
     assert any("scalper_order_rate" in f for f in decision.failed_checks)
 
 
+def test_scalper_risk_cancel_budget_blocks_new_entries(tmp_path):
+    limits = ScalperRiskLimits(max_orders_per_minute=10, max_cancels_per_minute=1)
+    limits.record_cancel(NOW - timedelta(seconds=1))
+    gw = scalper_gateway(
+        tmp_path,
+        ScalperRiskConfig(max_orders_per_minute=10, max_cancels_per_minute=1),
+        limits,
+    )
+    decision = gw.evaluate(intent(), account(), micro(), expected_edge_bps=20.0, now=NOW)
+    assert not decision.approved
+    assert any("scalper_cancel_rate" in f for f in decision.failed_checks)
+
+
 def test_reduce_only_exit_skips_private_stream_edge_and_rate_checks(tmp_path):
     limits = ScalperRiskLimits(max_orders_per_minute=1, max_cancels_per_minute=1)
     limits.record_order(NOW)

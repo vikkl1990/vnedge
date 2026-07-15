@@ -19,6 +19,9 @@ from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
 from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent
 from vnedge.scalping.parameter_registry import ExchangeFeeProfile
+from vnedge.scalping.microstructure import MarketMicroState
+from vnedge.scalping.risk import ScalperRiskGateway
+from vnedge.scalping.strategy import QuoteIntent
 
 
 class ExecutorState(str, Enum):
@@ -80,6 +83,37 @@ class MakerTakerExecutionPlan:
             if value < 0:
                 raise ValueError(f"{name} cannot be negative")
 
+    @classmethod
+    def from_quote_intent(
+        cls,
+        *,
+        executor_id: str,
+        quote: QuoteIntent,
+        fee_profile: ExchangeFeeProfile,
+        fallback_enabled: bool = True,
+        min_maker_net_edge_bps: float = 0.0,
+        min_maker_cost_coverage: float = 1.0,
+        min_taker_net_edge_bps: float = 0.0,
+        min_taker_cost_coverage: float = 1.0,
+        fallback_edge_decay_bps: float = 0.0,
+    ) -> "MakerTakerExecutionPlan":
+        """Adapt a scalper QuoteIntent into the maker-first executor contract."""
+        if not quote.post_only:
+            raise ValueError("maker/taker executor requires QuoteIntent.post_only=True")
+        return cls(
+            executor_id=executor_id,
+            intent=quote.intent,
+            expected_edge_bps=quote.expected_edge_bps,
+            fee_profile=fee_profile,
+            maker_ttl_ms=quote.ttl_ms,
+            fallback_enabled=fallback_enabled,
+            min_maker_net_edge_bps=min_maker_net_edge_bps,
+            min_maker_cost_coverage=min_maker_cost_coverage,
+            min_taker_net_edge_bps=min_taker_net_edge_bps,
+            min_taker_cost_coverage=min_taker_cost_coverage,
+            fallback_edge_decay_bps=fallback_edge_decay_bps,
+        )
+
 
 @dataclass(frozen=True)
 class ExecutorReport:
@@ -126,9 +160,16 @@ class MakerTakerExecutor:
     the maker quote and records a no-trade instead of paying the fee wall.
     """
 
-    def __init__(self, order_manager: OrderManager, journal: DecisionJournal) -> None:
+    def __init__(
+        self,
+        order_manager: OrderManager,
+        journal: DecisionJournal,
+        *,
+        scalper_gateway: ScalperRiskGateway | None = None,
+    ) -> None:
         self._om = order_manager
         self._journal = journal
+        self._scalper_gateway = scalper_gateway
 
     async def execute(
         self,
@@ -140,6 +181,8 @@ class MakerTakerExecutor:
         edge_at_fallback_bps: float | None = None,
         account_at_fallback: AccountState | None = None,
         market_at_fallback: MarketState | None = None,
+        micro_market: MarketMicroState | None = None,
+        micro_market_at_fallback: MarketMicroState | None = None,
         after_maker_submit: AfterMakerSubmit | None = None,
     ) -> ExecutorReport:
         self._journal.append("executor_started", {
@@ -179,13 +222,33 @@ class MakerTakerExecutor:
             order_type="limit",
             time_in_force="PO",
         )
+        maker_scalper_failures = self._scalper_risk_failures(
+            plan.executor_id,
+            "maker",
+            maker_intent,
+            account,
+            micro_market,
+            expected_edge_bps=plan.expected_edge_bps,
+            now=now,
+        )
+        if maker_scalper_failures:
+            return self._finish(
+                plan.executor_id,
+                ExecutorState.BLOCKED,
+                None,
+                None,
+                self._block_route(maker_check, maker_scalper_failures),
+                None,
+                reason="maker_scalper_risk_rejected",
+            )
         maker = await self._om.submit(
             maker_intent,
             account,
-            market,
+            self._order_manager_market(market, micro_market),
             intent_key=f"{plan.executor_id}|maker",
             now=now,
         )
+        self._record_scalper_order(maker, now)
         self._journal.append("executor_maker_submitted", {
             "executor_id": plan.executor_id,
             "client_order_id": maker.client_order_id,
@@ -225,6 +288,7 @@ class MakerTakerExecutor:
                 maker.client_order_id,
                 reason=f"maker ttl expired after {plan.maker_ttl_ms}ms",
             )
+            self._record_scalper_cancel(now)
 
         maker_filled = max(0.0, maker.filled_quantity)
         if maker.state is OrderState.FILLED:
@@ -292,13 +356,38 @@ class MakerTakerExecutor:
                 reason="taker_fallback_edge_below_hurdle",
             )
 
+        taker_intent = self._taker_intent(plan.intent, remaining)
+        taker_account = account_at_fallback or account
+        taker_micro_market = micro_market_at_fallback or micro_market
+        taker_scalper_failures = self._scalper_risk_failures(
+            plan.executor_id,
+            "taker_fallback",
+            taker_intent,
+            taker_account,
+            taker_micro_market,
+            expected_edge_bps=fallback_edge,
+            now=now,
+        )
+        if taker_scalper_failures:
+            return self._finish(
+                plan.executor_id,
+                ExecutorState.TAKER_BLOCKED,
+                maker,
+                None,
+                maker_check,
+                self._block_route(taker_check, taker_scalper_failures),
+                maker_filled_quantity=maker_filled,
+                reason="taker_fallback_scalper_risk_rejected",
+            )
+
         taker = await self._om.submit(
-            self._taker_intent(plan.intent, remaining),
-            account_at_fallback or account,
-            market_at_fallback or market,
+            taker_intent,
+            taker_account,
+            self._order_manager_market(market_at_fallback or market, taker_micro_market),
             intent_key=f"{plan.executor_id}|taker_fallback",
             now=now,
         )
+        self._record_scalper_order(taker, now)
         self._journal.append("executor_taker_submitted", {
             "executor_id": plan.executor_id,
             "client_order_id": taker.client_order_id,
@@ -356,6 +445,73 @@ class MakerTakerExecutor:
             net_edge_bps=net,
             cost_coverage=coverage,
             failed_checks=tuple(failed),
+        )
+
+    def _scalper_risk_failures(
+        self,
+        executor_id: str,
+        route: str,
+        intent: OrderIntent,
+        account: AccountState,
+        micro_market: MarketMicroState | None,
+        *,
+        expected_edge_bps: float,
+        now: datetime | None,
+    ) -> tuple[str, ...]:
+        if self._scalper_gateway is None:
+            return ()
+        if micro_market is None:
+            failed = ("scalper_micro_market_missing",)
+            self._journal.append("executor_scalper_risk_decision", {
+                "executor_id": executor_id,
+                "route": route,
+                "approved": False,
+                "failed_checks": list(failed),
+                "passed_checks": [],
+                "expected_edge_bps": expected_edge_bps,
+            })
+            return failed
+        decision = self._scalper_gateway.evaluate(
+            intent,
+            account,
+            micro_market,
+            expected_edge_bps=expected_edge_bps,
+            now=now,
+        )
+        self._journal.append("executor_scalper_risk_decision", {
+            "executor_id": executor_id,
+            "route": route,
+            "approved": decision.approved,
+            "base_approved": decision.base_decision.approved,
+            "failed_checks": list(decision.failed_checks),
+            "passed_checks": list(decision.passed_checks),
+            "expected_edge_bps": expected_edge_bps,
+        })
+        return () if decision.approved else decision.failed_checks
+
+    def _order_manager_market(
+        self,
+        market: MarketState,
+        micro_market: MarketMicroState | None,
+    ) -> MarketState:
+        if self._scalper_gateway is None or micro_market is None:
+            return market
+        return micro_market.to_market_state()
+
+    def _record_scalper_order(self, order: ManagedOrder, now: datetime | None) -> None:
+        if self._scalper_gateway is None or order.state is OrderState.RISK_REJECTED:
+            return
+        self._scalper_gateway.record_order(now)
+
+    def _record_scalper_cancel(self, now: datetime | None) -> None:
+        if self._scalper_gateway is not None:
+            self._scalper_gateway.record_cancel(now)
+
+    def _block_route(self, check: RouteCheck, failures: tuple[str, ...]) -> RouteCheck:
+        return replace(
+            check,
+            allowed=False,
+            failed_checks=check.failed_checks + failures,
         )
 
     def _taker_intent(self, base: OrderIntent, quantity: float) -> OrderIntent:
