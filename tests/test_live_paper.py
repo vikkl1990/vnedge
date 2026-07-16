@@ -15,9 +15,10 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
-from vnedge.runtime.live_paper import LivePaperSession
+from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.quant_signal_pack import QuantSignalPack
 
 BASE = 1_750_000_000_000
 MIN = 60_000
@@ -65,6 +66,25 @@ class AlwaysLong(BaseStrategy):
         close = float(df["close"].iloc[index])
         return SignalIntent("long", stop_price=close * 0.95,
                             take_profit_price=close * 1.10)
+
+
+def test_eval_threshold_extraction_reads_frozen_strategy_params():
+    strategy = QuantSignalPack(
+        None,
+        min_score=6.0,
+        min_score_delta=1.25,
+        min_volume_z=0.55,
+    )
+
+    thresholds = _extract_strategy_thresholds(
+        strategy, ("min_score", "min_score_delta", "min_volume_z")
+    )
+
+    assert thresholds == {
+        "min_score": 6.0,
+        "min_score_delta": 1.25,
+        "min_volume_z": 0.55,
+    }
 
 
 def history(n=5) -> pd.DataFrame:

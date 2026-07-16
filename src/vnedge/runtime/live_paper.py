@@ -58,6 +58,29 @@ _EXIT_RETRYABLE_STATES = frozenset(
 )
 
 
+def _extract_strategy_thresholds(
+    strategy: BaseStrategy, threshold_names: tuple[str, ...]
+) -> dict[str, float]:
+    """Read scanner thresholds from either the strategy or its frozen params."""
+    params = getattr(strategy, "params", None)
+    thresholds: dict[str, float] = {}
+    for attr in threshold_names:
+        val = getattr(strategy, attr, None)
+        if not _is_numeric(val) and params is not None:
+            val = getattr(params, attr, None)
+        if _is_numeric(val):
+            thresholds[attr] = float(val)
+    return thresholds
+
+
+def _is_numeric(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
 @dataclass
 class _LivePlan:
     signal: SignalIntent
@@ -608,8 +631,11 @@ class LivePaperSession:
     _EVAL_FEATURES = (
         "funding_pct",
         "close_z",
+        "funding_rate",
         "er",
         "atr_pct",
+        "long_score",
+        "short_score",
         "tqi_long",
         "tqi_short",
         "quality_strength",
@@ -617,6 +643,8 @@ class LivePaperSession:
         "bear_power",
         "bbp",
         "bbp_delta",
+        "bbp_hist_z",
+        "bbp_hist_slope",
         "stealth_trail",
         "stealth_trend",
         "stealth_distance_atr",
@@ -626,19 +654,31 @@ class LivePaperSession:
         "mom_persist_short",
         "structure_long",
         "structure_short",
+        "body_atr",
+        "body_percentile",
+        "expected_net_edge_bps_long",
+        "expected_net_edge_bps_short",
     )
     _EVAL_THRESHOLDS = (
         "extreme_pct",
         "z_entry",
         "breakout_bars",
         "min_score",
+        "min_score_delta",
         "min_tqi",
         "min_quality_strength",
         "min_momentum_persistence",
         "min_bbp_atr",
+        "min_bbp_z",
         "min_bbp_slope",
         "stealth_trail_atr_mult",
         "min_volume_z",
+        "min_body_atr",
+        "min_body_percentile",
+        "min_expected_net_edge_bps",
+        "max_funding_against",
+        "min_atr_pct",
+        "max_atr_pct",
     )
 
     def _record_eval(
@@ -655,11 +695,7 @@ class LivePaperSession:
             if col in df.columns:
                 val = float(row[col])
                 features[col] = None if math.isnan(val) else round(val, 6)
-        thresholds = {}
-        for attr in self._EVAL_THRESHOLDS:
-            val = getattr(self.strategy, attr, None)
-            if isinstance(val, (int, float)):
-                thresholds[attr] = val
+        thresholds = _extract_strategy_thresholds(self.strategy, self._EVAL_THRESHOLDS)
         record = {
             "bar_ts": df["timestamp"].iloc[index].isoformat(),
             "strategy_id": self.strategy.strategy_id,

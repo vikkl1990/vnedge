@@ -9,6 +9,7 @@ from vnedge.runtime.multi_lane_shadow import (
     paper_observation_lanes,
 )
 from vnedge.runtime.runner_config import RunnerMode
+from vnedge.strategy.stealth_trail_bbp import STEALTH_TRAIL_BBP_ID, StealthTrailBBPScanner
 
 
 def snap(equity, fills=0, realized=0.0, symbol="BTC/USDT:USDT",
@@ -127,6 +128,12 @@ def test_lane_spec_defaults():
     assert spec.daily_loss_usd == 10.0
     assert spec.is_primary is False
     assert spec.mode is RunnerMode.SHADOW
+
+
+def test_multi_lane_builds_stealth_trail_bbp_strategy():
+    strategy = multi_lane._build_single_strategy(STEALTH_TRAIL_BBP_ID, {}, None, None)
+
+    assert isinstance(strategy, StealthTrailBBPScanner)
 
 
 def test_publish_error_adds_faulted_lane():

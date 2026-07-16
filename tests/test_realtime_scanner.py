@@ -83,6 +83,97 @@ def test_runtime_lane_near_trigger(tmp_path):
     assert "96%" in row["why"]
 
 
+def test_runtime_lane_reports_quant_score_proximity(tmp_path):
+    journal = tmp_path / "logs" / "quant_signal_pack_v1_bybit_eth_shadow.journal.jsonl"
+    write_jsonl(journal, [
+        record(
+            "lane_eval",
+            {
+                "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+                "strategy_id": "quant_signal_pack_v1",
+                "symbol": "ETH/USDT:USDT",
+                "mode": "shadow",
+                "fired": False,
+                "signal_reason": None,
+                "skip_reason": None,
+                "features": {
+                    "long_score": 4.5,
+                    "short_score": 3.9,
+                    "volume_z": 0.2,
+                },
+                "thresholds": {
+                    "min_score": 5.0,
+                    "min_score_delta": 1.0,
+                    "min_volume_z": 0.35,
+                },
+                "backfill": False,
+            },
+        )
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        config=RealtimeScannerConfig(near_trigger_ratio=0.95),
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    names = {item["name"] for item in row["proximity"]}
+    assert row["state"] == STATE_WAITING
+    assert row["why"].startswith("score 4.5/5")
+    assert {"score", "score_delta", "volume_z"} <= names
+
+
+def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
+    journal = tmp_path / "logs" / "sats_5m_scalper_delta_sol_shadow.journal.jsonl"
+    write_jsonl(journal, [
+        record(
+            "lane_eval",
+            {
+                "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+                "strategy_id": "sats_5m_scalper_v1",
+                "symbol": "SOL/USD:USD",
+                "mode": "shadow",
+                "fired": False,
+                "signal_reason": None,
+                "skip_reason": None,
+                "features": {
+                    "tqi_long": 0.51,
+                    "tqi_short": 0.30,
+                    "quality_strength": 0.21,
+                    "mom_persist_long": 0.44,
+                    "bbp": 0.08,
+                    "volume_z": -0.90,
+                    "expected_net_edge_bps_long": 22.0,
+                },
+                "thresholds": {
+                    "min_tqi": 0.58,
+                    "min_quality_strength": 0.08,
+                    "min_momentum_persistence": 0.55,
+                    "min_bbp_atr": 0.10,
+                    "min_volume_z": -0.75,
+                    "min_expected_net_edge_bps": 25.0,
+                },
+                "backfill": False,
+            },
+        )
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        config=RealtimeScannerConfig(near_trigger_ratio=0.95),
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    names = {item["name"] for item in row["proximity"]}
+    assert row["state"] == STATE_WAITING
+    assert "expected_net_edge_bps" in names
+    assert {"tqi", "quality_strength", "momentum_persistence", "bbp_atr", "volume_z"} <= names
+
+
 def test_runtime_lane_firing_counts_shadow_intent(tmp_path):
     journal = tmp_path / "logs" / "funding_mr_delta_india_btc_shadow.journal.jsonl"
     write_jsonl(
