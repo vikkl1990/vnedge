@@ -349,6 +349,13 @@ def _runtime_state(
     if not pairs:
         return STATE_WAITING, "no threshold telemetry exposed", []
     unmet = [item for item in pairs if float(item.get("gap") or 0.0) > 0.0]
+    if not unmet:
+        return (
+            STATE_WAITING,
+            "all published scanner gates passed, but no signal fired; "
+            "expose hidden veto telemetry",
+            pairs,
+        )
     best = max(unmet or pairs, key=lambda item: float(item.get("ratio") or 0.0))
     ratio = float(best.get("ratio") or 0.0)
     if ratio >= config.near_trigger_ratio:
@@ -918,6 +925,20 @@ def _runtime_blocker_uplift(why: str) -> dict[str, Any]:
         return {
             "priority": "repair",
             "action": "WAIT_FOR_PROTECTION_CLEAR",
+            "reason": reason,
+        }
+    if any(
+        token in text
+        for token in (
+            "no signal fired",
+            "hidden veto",
+            "published scanner gates passed",
+            "threshold pass",
+        )
+    ):
+        return {
+            "priority": "instrument",
+            "action": "EXPOSE_DECISION_BLOCKER_TELEMETRY",
             "reason": reason,
         }
     if any(
