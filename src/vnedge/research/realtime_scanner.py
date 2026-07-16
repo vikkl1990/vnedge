@@ -22,6 +22,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from vnedge.data.schemas import TIMEFRAME_MS
+
 DEFAULT_RESEARCH_DIR = Path("research/live_research")
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
 DEFAULT_OUT = DEFAULT_RESEARCH_DIR / "realtime_scanner_latest.json"
@@ -57,6 +59,7 @@ _GATE_CATEGORIES: dict[str, tuple[str, str]] = {
 @dataclass(frozen=True)
 class RealtimeScannerConfig:
     max_eval_age_seconds: float = 3 * 3600
+    stale_timeframe_multiple: float = 3.0
     near_trigger_ratio: float = 0.90
     tail_bytes: int = 1_000_000
     max_rows: int = 100
@@ -197,6 +200,20 @@ def _runtime_row_from_journal(
         "paper_exits": 0,
         "paper_reports": 0,
     }
+    recent_windows = {
+        "1h": 3600.0,
+        "6h": 6 * 3600.0,
+        "24h": 24 * 3600.0,
+    }
+    recent = {
+        name: {
+            "evals": 0,
+            "live_signals": 0,
+            "paper_order_intents": 0,
+            "paper_exits": 0,
+        }
+        for name in recent_windows
+    }
     latest_intent: dict[str, Any] | None = None
     latest_outcome: dict[str, Any] | None = None
     latest_paper_order: dict[str, Any] | None = None
@@ -211,6 +228,7 @@ def _runtime_row_from_journal(
         payload = record.get("payload")
         if not isinstance(payload, Mapping):
             continue
+        _count_recent_event(recent, recent_windows, record_ts, now, kind, payload)
         if kind == "lane_eval":
             funnel["evals"] += 1
             backfill = bool(payload.get("backfill"))
@@ -256,7 +274,15 @@ def _runtime_row_from_journal(
         return None
 
     age_seconds = _age_seconds(latest_eval_ts, now)
-    state, why, proximity = _runtime_state(latest_eval, age_seconds, config)
+    lane_id = path.name.removesuffix(".journal.jsonl")
+    timeframe = _runtime_timeframe(latest_eval, lane_id)
+    stale_after_seconds = _stale_after_seconds(timeframe, config)
+    state, why, proximity = _runtime_state(
+        latest_eval,
+        age_seconds,
+        config,
+        stale_after_seconds=stale_after_seconds,
+    )
     intent = latest_intent.get("intent") if isinstance(latest_intent, Mapping) else {}
     exchange = str(
         latest_eval.get("exchange")
@@ -281,10 +307,11 @@ def _runtime_row_from_journal(
     gate_diagnostics = _gate_diagnostics(state, proximity)
     return {
         "row_type": "runtime_lane",
-        "lane_id": path.name.removesuffix(".journal.jsonl"),
+        "lane_id": lane_id,
         "journal": str(path),
         "exchange": exchange,
         "symbol": symbol,
+        "timeframe": timeframe,
         "strategy_id": strategy_id,
         "mode": str(latest_eval.get("mode") or ""),
         "state": state,
@@ -292,8 +319,10 @@ def _runtime_row_from_journal(
         "latest_eval_ts": latest_eval_ts.isoformat() if latest_eval_ts else None,
         "latest_bar_ts": latest_eval.get("bar_ts"),
         "age_seconds": age_seconds,
+        "stale_after_seconds": stale_after_seconds,
         "active_since_ts": first_record_ts.isoformat() if first_record_ts else None,
         "funnel": funnel,
+        "recent": recent,
         "live_fire_rate": live_fire_rate,
         "latest_eval": {
             "fired": bool(latest_eval.get("fired")),
@@ -325,8 +354,11 @@ def _runtime_state(
     latest_eval: Mapping[str, Any],
     age_seconds: float | None,
     config: RealtimeScannerConfig,
+    *,
+    stale_after_seconds: float | None = None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
-    if age_seconds is not None and age_seconds > config.max_eval_age_seconds:
+    max_age = stale_after_seconds or config.max_eval_age_seconds
+    if age_seconds is not None and age_seconds > max_age:
         return STATE_STALE, f"last live eval {int(age_seconds)}s old", []
     if bool(latest_eval.get("fired")):
         return (
@@ -660,31 +692,50 @@ def _summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     for row in rows:
         state = str(row.get("state") or STATE_WAITING)
         counts[state] = counts.get(state, 0) + 1
+    paper_rows = [
+        row
+        for row in rows
+        if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+    ]
+    fresh_paper_rows = [
+        row for row in paper_rows if row.get("state") != STATE_STALE
+    ]
     return {
         "total_rows": len(rows),
         "runtime_lanes": sum(1 for row in rows if row.get("row_type") == "runtime_lane"),
-        "paper_lanes": sum(
-            1
-            for row in rows
-            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
-        ),
+        "paper_lanes": len(paper_rows),
+        "paper_fresh_lanes": len(fresh_paper_rows),
+        "paper_stale_lanes": len(paper_rows) - len(fresh_paper_rows),
         "paper_firing": sum(
             1
-            for row in rows
-            if row.get("row_type") == "runtime_lane"
-            and row.get("mode") == "paper"
-            and row.get("state") == STATE_FIRING
+            for row in paper_rows
+            if row.get("state") == STATE_FIRING
         ),
         "paper_order_intents": sum(
             int(row.get("funnel", {}).get("paper_order_intents") or 0)
-            for row in rows
-            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+            for row in paper_rows
         ),
         "paper_exits": sum(
             int(row.get("funnel", {}).get("paper_exits") or 0)
-            for row in rows
-            if row.get("row_type") == "runtime_lane" and row.get("mode") == "paper"
+            for row in paper_rows
         ),
+        "paper_order_lanes": sum(
+            1
+            for row in paper_rows
+            if int(row.get("funnel", {}).get("paper_order_intents") or 0) > 0
+        ),
+        "paper_active_lanes_1h": _recent_lane_count(paper_rows, "1h"),
+        "paper_active_lanes_6h": _recent_lane_count(paper_rows, "6h"),
+        "paper_active_lanes_24h": _recent_lane_count(paper_rows, "24h"),
+        "paper_signals_1h": _recent_sum(paper_rows, "1h", "live_signals"),
+        "paper_signals_6h": _recent_sum(paper_rows, "6h", "live_signals"),
+        "paper_signals_24h": _recent_sum(paper_rows, "24h", "live_signals"),
+        "paper_order_intents_1h": _recent_sum(paper_rows, "1h", "paper_order_intents"),
+        "paper_order_intents_6h": _recent_sum(paper_rows, "6h", "paper_order_intents"),
+        "paper_order_intents_24h": _recent_sum(paper_rows, "24h", "paper_order_intents"),
+        "paper_exits_1h": _recent_sum(paper_rows, "1h", "paper_exits"),
+        "paper_exits_6h": _recent_sum(paper_rows, "6h", "paper_exits"),
+        "paper_exits_24h": _recent_sum(paper_rows, "24h", "paper_exits"),
         "event_lanes": sum(1 for row in rows if row.get("row_type") == "event_leadlag_shadow"),
         "firing": counts.get(STATE_FIRING, 0),
         "near_trigger": counts.get(STATE_NEAR_TRIGGER, 0),
@@ -705,9 +756,12 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
     near = int(summary.get("near_trigger") or 0)
     stale = int(summary.get("stale") or 0)
     paper_lanes = int(summary.get("paper_lanes") or 0)
+    paper_fresh = int(summary.get("paper_fresh_lanes") or 0)
     paper_firing = int(summary.get("paper_firing") or 0)
     paper_orders = int(summary.get("paper_order_intents") or 0)
     paper_exits = int(summary.get("paper_exits") or 0)
+    paper_orders_1h = int(summary.get("paper_order_intents_1h") or 0)
+    paper_orders_24h = int(summary.get("paper_order_intents_24h") or 0)
     if total == 0:
         return (
             "No live scanner rows yet. This report only reads runtime journals; "
@@ -716,8 +770,10 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
     if firing:
         return (
             f"{firing} lane(s) are firing now, including {paper_firing} paper lane(s). "
-            f"Paper activity: {paper_lanes} lane(s), {paper_orders} order intents, "
-            f"{paper_exits} exits. This is shadow/paper observation, "
+            f"Paper activity: {paper_fresh}/{paper_lanes} fresh, "
+            f"{paper_orders_1h} orders in 1h, {paper_orders_24h} in 24h "
+            f"({paper_orders} tail orders / {paper_exits} exits). "
+            "This is shadow/paper observation, "
             "not permission to promote or trade."
         )
     if near:
@@ -1016,6 +1072,57 @@ def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     )
 
 
+def _count_recent_event(
+    recent: dict[str, dict[str, int]],
+    windows: Mapping[str, float],
+    record_ts: datetime | None,
+    now: datetime,
+    kind: str,
+    payload: Mapping[str, Any],
+) -> None:
+    if record_ts is None:
+        return
+    age = _age_seconds(record_ts, now)
+    if age is None:
+        return
+    for name, seconds in windows.items():
+        if age > seconds:
+            continue
+        bucket = recent[name]
+        if kind == "lane_eval":
+            bucket["evals"] += 1
+            if bool(payload.get("fired")) and not bool(payload.get("backfill")):
+                bucket["live_signals"] += 1
+        elif kind == "order_intent":
+            bucket["paper_order_intents"] += 1
+        elif kind in ("live_paper_exit", "tick_stop_exit"):
+            bucket["paper_exits"] += 1
+
+
+def _recent_sum(rows: list[Mapping[str, Any]], window: str, key: str) -> int:
+    total = 0
+    for row in rows:
+        recent = row.get("recent")
+        if not isinstance(recent, Mapping):
+            continue
+        bucket = recent.get(window)
+        if isinstance(bucket, Mapping):
+            total += int(bucket.get(key) or 0)
+    return total
+
+
+def _recent_lane_count(rows: list[Mapping[str, Any]], window: str) -> int:
+    count = 0
+    for row in rows:
+        recent = row.get("recent")
+        if not isinstance(recent, Mapping):
+            continue
+        bucket = recent.get(window)
+        if isinstance(bucket, Mapping) and sum(int(v or 0) for v in bucket.values()) > 0:
+            count += 1
+    return count
+
+
 def _compact_intent(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         return None
@@ -1063,6 +1170,25 @@ def _exchange_hint(name: str) -> str:
         if exchange in name:
             return exchange
     return ""
+
+
+def _runtime_timeframe(latest_eval: Mapping[str, Any], lane_id: str) -> str:
+    value = latest_eval.get("timeframe")
+    if isinstance(value, str) and value:
+        return value
+    text = lane_id.lower()
+    if "sats_5m" in text or "stealth_trail_bbp" in text:
+        return "5m"
+    if "scalper_1m" in text or "_1m_" in text:
+        return "1m"
+    return "1h"
+
+
+def _stale_after_seconds(timeframe: str, config: RealtimeScannerConfig) -> float:
+    ms = TIMEFRAME_MS.get(timeframe)
+    if ms is None:
+        return float(config.max_eval_age_seconds)
+    return max(1.0, float(config.stale_timeframe_multiple) * ms / 1000.0)
 
 
 def _tail_lines(path: Path, max_bytes: int) -> list[str]:

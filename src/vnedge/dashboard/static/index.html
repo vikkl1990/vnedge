@@ -2486,7 +2486,7 @@
       <h2>Real-Time Scanner <span class="tag" id="rt_policy">live journals only; not replay</span></h2>
       <div class="mini-grid" aria-label="real-time scanner summary">
         <div class="mini-card good"><div class="small-label">Firing Now</div><div class="big" id="rt_firing">--</div><div class="tiny">shadow / paper signals</div></div>
-        <div class="mini-card info"><div class="small-label">Paper Active</div><div class="big" id="rt_paper">--</div><div class="tiny" id="rt_paper_orders">orders -- / exits --</div></div>
+        <div class="mini-card info"><div class="small-label">Paper Fresh</div><div class="big" id="rt_paper">--</div><div class="tiny" id="rt_paper_orders">orders -- / exits --</div></div>
         <div class="mini-card warn"><div class="small-label">Near Trigger</div><div class="big" id="rt_near">--</div><div class="tiny">&gt;= 90% pressure</div></div>
         <div class="mini-card"><div class="small-label">Waiting</div><div class="big" id="rt_waiting">--</div><div class="tiny">below thresholds</div></div>
         <div class="mini-card"><div class="small-label">Rows</div><div class="big" id="rt_rows">--</div><div class="tiny" id="rt_age">scanner age --</div></div>
@@ -5375,8 +5375,11 @@
     const s=d.summary||{};
     const rows=Array.isArray(d.rows)?d.rows:[];
     text("rt_firing",num(s.firing));
-    text("rt_paper",num(s.paper_lanes));
-    text("rt_paper_orders","orders "+num(s.paper_order_intents)+" / exits "+num(s.paper_exits));
+    text("rt_paper",num(s.paper_fresh_lanes)+"/"+num(s.paper_lanes));
+    text("rt_paper_orders",
+      "orders 1h "+num(s.paper_order_intents_1h)+
+      " / 24h "+num(s.paper_order_intents_24h)+
+      " · stale "+num(s.paper_stale_lanes));
     text("rt_near",num(s.near_trigger));
     text("rt_waiting",num(s.waiting));
     text("rt_rows",num(s.total_rows));

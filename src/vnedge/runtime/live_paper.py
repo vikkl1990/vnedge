@@ -699,7 +699,9 @@ class LivePaperSession:
         record = {
             "bar_ts": df["timestamp"].iloc[index].isoformat(),
             "strategy_id": self.strategy.strategy_id,
+            "exchange": getattr(self.feed, "exchange_id", ""),
             "symbol": self.config.symbol,
+            "timeframe": self.config.timeframe,
             "mode": self.config.mode.value,
             "fired": sig is not None,
             "signal_reason": sig.reason if sig is not None else None,
@@ -892,6 +894,57 @@ class LivePaperSession:
             self.signals += 1
             await self._submit_entry(sig, datetime.now(UTC))
 
+    def _is_paper_observation_lane(self) -> bool:
+        trial_id = str((self.trial_meta or {}).get("trial_id") or "")
+        return (
+            self.config.mode is RunnerMode.PAPER
+            and trial_id.endswith("_paper_observation")
+        )
+
+    async def _paper_observation_prime(self) -> None:
+        """PAPER observation lanes: prime observability, never restart-enter.
+
+        Governed paper trials deliberately do not prime on startup because a
+        restart must not duplicate a live-paper entry. Observation mirrors are
+        different: their purpose is operator visibility across many lanes, and
+        stale scanner rows after every deploy hide the real state. So they
+        journal seeded-bar evaluations exactly like shadow prime, but submit
+        no orders or intents. Any fired latest bar is marked as a signal in
+        lane_eval telemetry only; the paper order path still waits for a
+        forward live candle.
+        """
+        if not self._is_paper_observation_lane():
+            return
+        if len(self.candles) <= self.strategy.warmup_bars:
+            return
+        df = self.strategy.prepare(self.candles)
+        last = len(df) - 1
+        first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
+        backfill_fired = 0
+        for i in range(first, last):
+            sig_i = self.strategy.signal(df, i)
+            self._record_eval(df, i, sig_i, backfill=True)
+            backfill_fired += sig_i is not None
+        sig = self.strategy.signal(df, last)
+        self._record_eval(
+            df,
+            last,
+            sig,
+            skip_reason=(
+                "paper_observation_prime: no restart order submitted"
+                if sig is not None else None
+            ),
+        )
+        logger.info(
+            "paper observation prime [%s %s]: %d seeded bars backfilled "
+            "(%d would have fired), latest -> %s (no restart order)",
+            self.strategy.strategy_id,
+            self.config.symbol,
+            max(0, last - first),
+            backfill_fired,
+            f"{sig.side} signal" if sig is not None else "no signal",
+        )
+
     async def run(self, *, max_bars: int | None = None,
                   deadline_seconds: float | None = None) -> RunReport:
         started = datetime.now(UTC)
@@ -907,6 +960,7 @@ class LivePaperSession:
             )
 
         await self._shadow_prime()
+        await self._paper_observation_prime()
 
         while True:
             if max_bars is not None and bars >= max_bars:

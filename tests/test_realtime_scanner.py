@@ -269,6 +269,88 @@ def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
     assert row["uplift"]["action"] == "REPAIR_EXECUTION_ROUTE_OR_SKIP"
 
 
+def test_runtime_staleness_uses_lane_timeframe(tmp_path):
+    logs = tmp_path / "logs"
+    five_min = logs / "sats_5m_scalper_delta_eth_paper_observation.journal.jsonl"
+    hourly = logs / "funding_mr_btc_v1_20260703.journal.jsonl"
+    write_jsonl(five_min, [
+        record(
+            "lane_eval",
+            {
+                **lane_eval(funding=0.62, z=-0.4, mode="paper"),
+                "strategy_id": "sats_5m_scalper_v1",
+                "symbol": "ETH/USD:USD",
+                "timeframe": "5m",
+            },
+            minutes_ago=16,
+        )
+    ])
+    write_jsonl(hourly, [
+        record(
+            "lane_eval",
+            {
+                **lane_eval(funding=0.62, z=-0.4, mode="paper"),
+                "timeframe": "1h",
+            },
+            minutes_ago=179,
+        )
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=logs,
+        now=NOW,
+    )
+
+    rows = {row["lane_id"]: row for row in payload["rows"]}
+    assert rows["sats_5m_scalper_delta_eth_paper_observation"]["state"] == "STALE"
+    assert rows["sats_5m_scalper_delta_eth_paper_observation"]["stale_after_seconds"] == 900.0
+    assert rows["funding_mr_btc_v1_20260703"]["state"] == STATE_WAITING
+    assert rows["funding_mr_btc_v1_20260703"]["stale_after_seconds"] == 10_800.0
+    assert payload["summary"]["paper_fresh_lanes"] == 1
+    assert payload["summary"]["paper_stale_lanes"] == 1
+
+
+def test_paper_summary_distinguishes_fresh_and_order_producing(tmp_path):
+    logs = tmp_path / "logs"
+    fresh = logs / "fresh_paper_observation.journal.jsonl"
+    stale = logs / "stale_paper_observation.journal.jsonl"
+    write_jsonl(
+        fresh,
+        [
+            record("lane_eval", lane_eval(fired=True, mode="paper"), minutes_ago=10),
+            record(
+                "order_intent",
+                {
+                    "intent_key": "k1",
+                    "client_order_id": "cid1",
+                    "intent": {"symbol": "BTC/USDT:USDT", "side": "long"},
+                },
+                minutes_ago=9,
+            ),
+        ],
+    )
+    write_jsonl(stale, [
+        record("lane_eval", lane_eval(funding=0.2, mode="paper"), minutes_ago=240)
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=logs,
+        now=NOW,
+    )
+
+    summary = payload["summary"]
+    assert summary["paper_lanes"] == 2
+    assert summary["paper_fresh_lanes"] == 1
+    assert summary["paper_stale_lanes"] == 1
+    assert summary["paper_order_lanes"] == 1
+    assert summary["paper_active_lanes_1h"] == 1
+    assert summary["paper_order_intents_1h"] == 1
+    assert summary["paper_order_intents_24h"] == 1
+    assert "1/2 fresh" in payload["operator_answer"]
+
+
 def test_runtime_lane_firing_counts_shadow_intent(tmp_path):
     journal = tmp_path / "logs" / "funding_mr_delta_india_btc_shadow.journal.jsonl"
     write_jsonl(
@@ -348,7 +430,7 @@ def test_runtime_paper_lane_reports_order_and_exit_activity(tmp_path):
     assert payload["summary"]["paper_lanes"] == 1
     assert payload["summary"]["paper_firing"] == 1
     assert payload["summary"]["paper_order_intents"] == 1
-    assert "Paper activity: 1 lane(s), 1 order intents, 1 exits" in payload["operator_answer"]
+    assert "Paper activity: 1/1 fresh, 1 orders in 1h, 1 in 24h" in payload["operator_answer"]
 
 
 def test_event_leadlag_shadow_artifact_is_live_scanner_row(tmp_path):
