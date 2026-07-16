@@ -5722,9 +5722,16 @@
   }
 
   function scannerPressure(row){
+    const diag=row&&row.gate_diagnostics?row.gate_diagnostics:{};
+    const blocker=diag.primary_blocker||{};
+    if(blocker.name){
+      return String(blocker.name)+" "+(num(blocker.ratio)*100).toFixed(0)+"%";
+    }
+    if(diag.all_gates_passed)return "all gates passed";
     const prox=Array.isArray(row&&row.proximity)?row.proximity:[];
     if(!prox.length)return "";
-    const best=prox.slice().sort((a,b)=>num(b.ratio)-num(a.ratio))[0];
+    const failed=prox.filter(p=>num(p.gap)>0);
+    const best=(failed.length?failed:prox).slice().sort((a,b)=>num(b.ratio)-num(a.ratio))[0];
     if(!best)return "";
     return String(best.name||"pressure")+" "+(num(best.ratio)*100).toFixed(0)+"%";
   }

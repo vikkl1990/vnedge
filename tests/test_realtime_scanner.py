@@ -128,6 +128,48 @@ def test_runtime_lane_reports_quant_score_proximity(tmp_path):
     assert row["uplift"]["action"] == "ISOLATE_STRONGER_SIGNAL_FAMILY"
 
 
+def test_runtime_lane_with_passed_gates_and_cooldown_reports_runtime_blocker(tmp_path):
+    journal = tmp_path / "logs" / "quant_signal_pack_v1_bybit_eth_shadow.journal.jsonl"
+    write_jsonl(journal, [
+        record(
+            "lane_eval",
+            {
+                "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+                "strategy_id": "quant_signal_pack_v1",
+                "symbol": "ETH/USDT:USDT",
+                "mode": "shadow",
+                "fired": False,
+                "signal_reason": None,
+                "skip_reason": "post_exit_cooldown: 1 bar(s) remaining",
+                "features": {
+                    "long_score": 7.0,
+                    "short_score": 1.0,
+                    "volume_z": 1.2,
+                },
+                "thresholds": {
+                    "min_score": 5.0,
+                    "min_score_delta": 1.0,
+                    "min_volume_z": 0.35,
+                },
+                "backfill": False,
+            },
+        )
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["state"] == STATE_WAITING
+    assert row["gate_diagnostics"]["all_gates_passed"] is True
+    assert row["gate_diagnostics"]["primary_blocker"] is None
+    assert row["uplift"]["action"] == "WAIT_FOR_COOLDOWN_CLEAR"
+    assert row["uplift"]["priority"] == "observe"
+
+
 def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
     journal = tmp_path / "logs" / "sats_5m_scalper_delta_sol_shadow.journal.jsonl"
     write_jsonl(journal, [

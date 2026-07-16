@@ -313,6 +313,7 @@ def _runtime_row_from_journal(
             state=state,
             diagnostics=gate_diagnostics,
             funnel=funnel,
+            why=why,
         ),
         "can_trade": False,
         "can_promote": False,
@@ -598,6 +599,7 @@ def _event_rows(
                     "signals": 1 if state == STATE_FIRING else 0,
                     "shadow_intents": 1 if row.get("shadow_intent") else 0,
                 },
+                why=why,
             ),
             "can_trade": False,
             "can_promote": False,
@@ -791,6 +793,7 @@ def _uplift_for_runtime_state(
     state: str,
     diagnostics: Mapping[str, Any],
     funnel: Mapping[str, Any],
+    why: str = "",
 ) -> dict[str, Any]:
     if state == STATE_STALE:
         return {
@@ -816,6 +819,8 @@ def _uplift_for_runtime_state(
         }
     primary = diagnostics.get("primary_blocker")
     if not isinstance(primary, Mapping):
+        if _all_gates_passed(diagnostics):
+            return _runtime_blocker_uplift(why)
         return {
             "priority": "instrument",
             "action": "EXPOSE_THRESHOLD_TELEMETRY",
@@ -877,6 +882,64 @@ def _uplift_for_runtime_state(
         "priority": "watch" if state == STATE_NEAR_TRIGGER else "observe",
         "action": action,
         "reason": f"{name}: {reason}",
+    }
+
+
+def _all_gates_passed(diagnostics: Mapping[str, Any]) -> bool:
+    return bool(diagnostics.get("all_gates_passed")) or (
+        int(diagnostics.get("passed_count") or 0) > 0
+        and int(diagnostics.get("failed_count") or 0) == 0
+    )
+
+
+def _runtime_blocker_uplift(why: str) -> dict[str, Any]:
+    reason = why.strip() or "all published scanner gates passed, but runtime held entry"
+    text = reason.lower()
+    if "cooldown" in text:
+        return {
+            "priority": "observe",
+            "action": "WAIT_FOR_COOLDOWN_CLEAR",
+            "reason": reason,
+        }
+    if any(
+        token in text
+        for token in (
+            "protection",
+            "risk",
+            "daily loss",
+            "daily_loss",
+            "drawdown",
+            "loss streak",
+            "kill",
+            "reduce-only",
+            "reduce_only",
+        )
+    ):
+        return {
+            "priority": "repair",
+            "action": "WAIT_FOR_PROTECTION_CLEAR",
+            "reason": reason,
+        }
+    if any(
+        token in text
+        for token in (
+            "order",
+            "position",
+            "journal",
+            "reconciliation",
+            "account",
+            "route",
+        )
+    ):
+        return {
+            "priority": "repair",
+            "action": "REPAIR_RUNTIME_BLOCKER",
+            "reason": reason,
+        }
+    return {
+        "priority": "observe",
+        "action": "WAIT_FOR_RUNTIME_BLOCKER_CLEAR",
+        "reason": reason,
     }
 
 
