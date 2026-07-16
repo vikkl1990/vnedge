@@ -390,6 +390,18 @@ def test_dashboard_inline_js_parses_under_node():
         assert result.returncode == 0, result.stderr
 
 
+def test_dashboard_realtime_scanner_prefers_primary_blocker_pressure():
+    from pathlib import Path as _Path
+
+    html = (_Path(__file__).resolve().parents[1]
+            / "src/vnedge/dashboard/static/index.html").read_text()
+
+    assert "const blocker=diag.primary_blocker||{};" in html
+    assert "if(blocker.name)" in html
+    assert "if(diag.all_gates_passed)return \"all gates passed\";" in html
+    assert "const failed=prox.filter(p=>num(p.gap)>0);" in html
+
+
 def test_no_snapshot_yet_is_503():
     app = create_app(SnapshotProvider(), token="t3st-token")
     r = TestClient(app).get("/state?token=t3st-token")

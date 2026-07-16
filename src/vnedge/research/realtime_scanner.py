@@ -35,6 +35,24 @@ STATE_WARMING = "WARMING"
 STATE_STALE = "STALE"
 STATE_NO_EVAL = "NO_EVAL"
 
+_GATE_CATEGORIES: dict[str, tuple[str, str]] = {
+    "funding": ("crowding_extreme", "wait_for_richer_funding_extreme"),
+    "z": ("mean_reversion_extension", "wait_for_cleaner_price_extension"),
+    "score": ("confluence_quality", "raise_or_isolate_confluence"),
+    "score_delta": ("side_separation", "avoid_mixed_long_short_pressure"),
+    "tqi": ("trend_quality", "wait_for_stronger_quality_trend"),
+    "quality_strength": ("side_separation", "avoid_mixed_long_short_pressure"),
+    "momentum_persistence": ("momentum_followthrough", "wait_for_followthrough"),
+    "bbp_atr": ("bbp_pressure", "wait_for_stronger_bbp_pressure"),
+    "bbp_z": ("bbp_pressure", "wait_for_stronger_bbp_pressure"),
+    "volume_z": ("participation", "require_real_participation"),
+    "body_atr": ("displacement", "wait_for_real_displacement"),
+    "body_percentile": ("displacement", "wait_for_real_displacement"),
+    "expected_net_edge_bps": ("cost_edge", "repair_execution_or_skip"),
+    "leader_bps": ("event_impulse", "wait_for_larger_leader_move"),
+    "leader_z": ("event_impulse", "wait_for_larger_leader_move"),
+}
+
 
 @dataclass(frozen=True)
 class RealtimeScannerConfig:
@@ -260,6 +278,7 @@ def _runtime_row_from_journal(
         if funnel["live_evals"]
         else None
     )
+    gate_diagnostics = _gate_diagnostics(state, proximity)
     return {
         "row_type": "runtime_lane",
         "lane_id": path.name.removesuffix(".journal.jsonl"),
@@ -289,6 +308,13 @@ def _runtime_row_from_journal(
         "latest_paper_exit": latest_paper_exit,
         "latest_paper_report": latest_paper_report,
         "proximity": proximity,
+        "gate_diagnostics": gate_diagnostics,
+        "uplift": _uplift_for_runtime_state(
+            state=state,
+            diagnostics=gate_diagnostics,
+            funnel=funnel,
+            why=why,
+        ),
         "can_trade": False,
         "can_promote": False,
         "requires_replay_for_promotion": True,
@@ -525,8 +551,14 @@ def _event_rows(
             why = str(intent.get("signal_reason") or "")
         if not why:
             reasons = _list(row.get("why_no_trade"))
-            why = "; ".join(reasons[:3]) if reasons else str(row.get("state") or "event filter not met")
+            why = (
+                "; ".join(reasons[:3])
+                if reasons
+                else str(row.get("state") or "event filter not met")
+            )
         spec_id = str(row.get("spec_id") or "event_leadlag_shadow")
+        proximity = _event_proximity(row)
+        gate_diagnostics = _gate_diagnostics(state, proximity)
         rows.append({
             "row_type": "event_leadlag_shadow",
             "lane_id": spec_id,
@@ -556,7 +588,19 @@ def _event_rows(
                 "features": row.get("metrics") or {},
                 "thresholds": (row.get("metrics") or {}).get("filter", {}),
             },
-            "proximity": _event_proximity(row),
+            "proximity": proximity,
+            "gate_diagnostics": gate_diagnostics,
+            "uplift": _uplift_for_runtime_state(
+                state=state,
+                diagnostics=gate_diagnostics,
+                funnel={
+                    "evals": 1,
+                    "live_evals": 1,
+                    "signals": 1 if state == STATE_FIRING else 0,
+                    "shadow_intents": 1 if row.get("shadow_intent") else 0,
+                },
+                why=why,
+            ),
             "can_trade": False,
             "can_promote": False,
             "requires_replay_for_promotion": True,
@@ -640,6 +684,8 @@ def _summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "waiting": counts.get(STATE_WAITING, 0),
         "warming": counts.get(STATE_WARMING, 0),
         "stale": counts.get(STATE_STALE, 0),
+        "top_blocker_categories": _top_blocker_categories(rows),
+        "uplift_action_counts": _uplift_action_counts(rows),
         "scanner_not_replay": True,
         "can_trade": False,
         "can_promote": False,
@@ -668,9 +714,12 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
             "not permission to promote or trade."
         )
     if near:
+        blockers = summary.get("top_blocker_categories") or {}
+        top = next(iter(blockers), None) if isinstance(blockers, Mapping) else None
+        blocker_note = f" Top blocker: {top}." if top else ""
         return (
             f"No current fire; {near} lane(s) are near trigger. Watch these first, "
-            "then require replay/shadow proof before promotion."
+            "then require replay/shadow proof before promotion." + blocker_note
         )
     if stale:
         return (
@@ -681,6 +730,244 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         "No current fire. Lanes are evaluating live data, but features are below "
         "their configured thresholds."
     )
+
+
+def _gate_diagnostics(
+    state: str,
+    proximity: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Classify flat threshold pairs into operator-grade gate diagnostics."""
+    pairs = [item for item in proximity if isinstance(item, Mapping)]
+    failed = [
+        _annotated_gate(item)
+        for item in pairs
+        if float(item.get("gap") or 0.0) > 0.0
+    ]
+    passed = [
+        _annotated_gate(item)
+        for item in pairs
+        if float(item.get("gap") or 0.0) <= 0.0
+    ]
+    failed.sort(key=lambda item: float(item.get("ratio") or 0.0), reverse=True)
+    passed.sort(key=lambda item: str(item.get("name") or ""))
+    closest = failed[0] if failed else None
+    weakest = (
+        min(failed, key=lambda item: float(item.get("ratio") or 0.0))
+        if failed
+        else None
+    )
+    ratios = [min(1.0, max(0.0, float(item.get("ratio") or 0.0))) for item in pairs]
+    readiness_score = round(sum(ratios) / len(ratios), 4) if ratios else None
+    category_counts: dict[str, int] = {}
+    for item in failed:
+        category = str(item.get("category") or "unknown")
+        category_counts[category] = category_counts.get(category, 0) + 1
+    return {
+        "state": state,
+        "all_gates_passed": bool(pairs) and not failed,
+        "passed_count": len(passed),
+        "failed_count": len(failed),
+        "readiness_score": readiness_score,
+        "primary_blocker": closest,
+        "weakest_blocker": weakest,
+        "failed_categories": category_counts,
+        "failed": failed,
+        "passed": passed,
+    }
+
+
+def _annotated_gate(item: Mapping[str, Any]) -> dict[str, Any]:
+    name = str(item.get("name") or "unknown")
+    category, action = _GATE_CATEGORIES.get(
+        name,
+        ("signal_quality", "inspect_strategy_specific_gate"),
+    )
+    out = dict(item)
+    out["category"] = category
+    out["uplift_hint"] = action
+    return out
+
+
+def _uplift_for_runtime_state(
+    *,
+    state: str,
+    diagnostics: Mapping[str, Any],
+    funnel: Mapping[str, Any],
+    why: str = "",
+) -> dict[str, Any]:
+    if state == STATE_STALE:
+        return {
+            "priority": "repair",
+            "action": "FIX_DATA_FRESHNESS",
+            "reason": "scanner cannot be elevated while live evaluations are stale",
+        }
+    if state == STATE_WARMING:
+        return {
+            "priority": "observe",
+            "action": "COLLECT_WARMUP_BARS",
+            "reason": "features are not ready yet",
+        }
+    if state == STATE_FIRING:
+        live_signals = int(funnel.get("live_signals") or funnel.get("signals") or 0)
+        return {
+            "priority": "prove",
+            "action": "ROUTE_TO_REPLAY_AND_SHADOW_OUTCOME_REVIEW",
+            "reason": (
+                f"{live_signals} live signal(s) observed; proof still requires "
+                "replay/outcomes"
+            ),
+        }
+    primary = diagnostics.get("primary_blocker")
+    if not isinstance(primary, Mapping):
+        if _all_gates_passed(diagnostics):
+            return _runtime_blocker_uplift(why)
+        return {
+            "priority": "instrument",
+            "action": "EXPOSE_THRESHOLD_TELEMETRY",
+            "reason": "lane does not publish enough gate telemetry to diagnose",
+        }
+    category = str(primary.get("category") or "signal_quality")
+    name = str(primary.get("name") or "gate")
+    action_by_category = {
+        "cost_edge": (
+            "REPAIR_EXECUTION_ROUTE_OR_SKIP",
+            "expected edge is below the modeled cost wall",
+        ),
+        "confluence_quality": (
+            "ISOLATE_STRONGER_SIGNAL_FAMILY",
+            "confluence score is not high enough for fee-sensitive trading",
+        ),
+        "side_separation": (
+            "REQUIRE_CLEARER_SIDE_DOMINANCE",
+            "long and short pressure are too mixed",
+        ),
+        "participation": (
+            "WAIT_FOR_REAL_PARTICIPATION",
+            "volume/participation is not strong enough",
+        ),
+        "displacement": (
+            "WAIT_FOR_TRUE_IMPULSE_CANDLE",
+            "body impulse is not large enough",
+        ),
+        "bbp_pressure": (
+            "WAIT_FOR_STRONGER_BBP_PRESSURE",
+            "BBP pressure is below trigger quality",
+        ),
+        "trend_quality": (
+            "WAIT_FOR_STRONGER_QUALITY_TREND",
+            "trend quality is below trigger quality",
+        ),
+        "momentum_followthrough": (
+            "WAIT_FOR_MOMENTUM_FOLLOWTHROUGH",
+            "recent bars do not show enough persistence",
+        ),
+        "crowding_extreme": (
+            "WAIT_FOR_RICHER_CROWDING_EXTREME",
+            "funding/crowding is not stretched enough",
+        ),
+        "mean_reversion_extension": (
+            "WAIT_FOR_CLEANER_EXTENSION",
+            "price extension is not stretched enough",
+        ),
+        "event_impulse": (
+            "WAIT_FOR_LARGER_LEADER_IMPULSE",
+            "lead-lag event impulse is too small",
+        ),
+    }
+    action, reason = action_by_category.get(
+        category,
+        ("INSPECT_STRATEGY_GATE", "strategy-specific threshold is not met"),
+    )
+    return {
+        "priority": "watch" if state == STATE_NEAR_TRIGGER else "observe",
+        "action": action,
+        "reason": f"{name}: {reason}",
+    }
+
+
+def _all_gates_passed(diagnostics: Mapping[str, Any]) -> bool:
+    return bool(diagnostics.get("all_gates_passed")) or (
+        int(diagnostics.get("passed_count") or 0) > 0
+        and int(diagnostics.get("failed_count") or 0) == 0
+    )
+
+
+def _runtime_blocker_uplift(why: str) -> dict[str, Any]:
+    reason = why.strip() or "all published scanner gates passed, but runtime held entry"
+    text = reason.lower()
+    if "cooldown" in text:
+        return {
+            "priority": "observe",
+            "action": "WAIT_FOR_COOLDOWN_CLEAR",
+            "reason": reason,
+        }
+    if any(
+        token in text
+        for token in (
+            "protection",
+            "risk",
+            "daily loss",
+            "daily_loss",
+            "drawdown",
+            "loss streak",
+            "kill",
+            "reduce-only",
+            "reduce_only",
+        )
+    ):
+        return {
+            "priority": "repair",
+            "action": "WAIT_FOR_PROTECTION_CLEAR",
+            "reason": reason,
+        }
+    if any(
+        token in text
+        for token in (
+            "order",
+            "position",
+            "journal",
+            "reconciliation",
+            "account",
+            "route",
+        )
+    ):
+        return {
+            "priority": "repair",
+            "action": "REPAIR_RUNTIME_BLOCKER",
+            "reason": reason,
+        }
+    return {
+        "priority": "observe",
+        "action": "WAIT_FOR_RUNTIME_BLOCKER_CLEAR",
+        "reason": reason,
+    }
+
+
+def _top_blocker_categories(rows: list[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        diag = row.get("gate_diagnostics")
+        if not isinstance(diag, Mapping):
+            continue
+        primary = diag.get("primary_blocker")
+        if not isinstance(primary, Mapping):
+            continue
+        category = str(primary.get("category") or "unknown")
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _uplift_action_counts(rows: list[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        uplift = row.get("uplift")
+        if not isinstance(uplift, Mapping):
+            continue
+        action = str(uplift.get("action") or "")
+        if not action:
+            continue
+        counts[action] = counts.get(action, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
