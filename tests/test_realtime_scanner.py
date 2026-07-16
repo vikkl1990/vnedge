@@ -170,6 +170,53 @@ def test_runtime_lane_with_passed_gates_and_cooldown_reports_runtime_blocker(tmp
     assert row["uplift"]["priority"] == "observe"
 
 
+def test_runtime_lane_with_passed_gates_and_no_signal_reports_hidden_veto(tmp_path):
+    journal = tmp_path / "logs" / "sats_5m_scalper_delta_eth_shadow.journal.jsonl"
+    write_jsonl(journal, [
+        record(
+            "lane_eval",
+            {
+                "bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+                "strategy_id": "sats_5m_scalper_v1",
+                "symbol": "ETH/USD:USD",
+                "mode": "shadow",
+                "fired": False,
+                "signal_reason": None,
+                "skip_reason": None,
+                "features": {
+                    "tqi_long": 0.70,
+                    "tqi_short": 0.10,
+                    "quality_strength": 0.25,
+                    "bbp": 0.40,
+                    "volume_z": 1.20,
+                },
+                "thresholds": {
+                    "min_tqi": 0.58,
+                    "min_quality_strength": 0.08,
+                    "min_bbp_atr": 0.10,
+                    "min_volume_z": -0.75,
+                },
+                "backfill": False,
+            },
+        )
+    ])
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["state"] == STATE_WAITING
+    assert payload["summary"]["near_trigger"] == 0
+    assert row["gate_diagnostics"]["all_gates_passed"] is True
+    assert row["gate_diagnostics"]["primary_blocker"] is None
+    assert "hidden veto" in row["why"]
+    assert row["uplift"]["action"] == "EXPOSE_DECISION_BLOCKER_TELEMETRY"
+    assert row["uplift"]["priority"] == "instrument"
+
+
 def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
     journal = tmp_path / "logs" / "sats_5m_scalper_delta_sol_shadow.journal.jsonl"
     write_jsonl(journal, [
