@@ -65,11 +65,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "Fee Wall" in html
     assert "Signal Pressure &amp; Trade Journal" in html
     assert "scanner-style hot/cold pressure" in html
-    assert "Alpha Council &amp; Proof Queue" in html
-    assert "Persistent Proof Queue" in html
-    assert "Quant OS Job Ledger" in html
-    assert 'id="agent_jobs"' in html
-    assert "/agent-jobs" in html
+    # Alpha Council / Proof Queue / Job Ledger removed in the operational-core
+    # cleanup (2026-07-16) — they were no-trade research surface.
     assert "LIVE ARMED" in html
     assert "Live Readiness Ladder" in html
     assert 'id="rd_state"' in html
@@ -81,7 +78,6 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert 'id="rd_governance"' in html
     assert "/lane-readiness" in html
     assert "loadLaneReadiness" in html
-    assert "Derived Event Trail" in html
     assert "L2 depth levels absent from snapshot" in html
     assert "book metrics wired" in html
     assert "snapshot.lanes missing; no planned venue fallback" in html
@@ -112,7 +108,8 @@ def test_dashboard_shell_preserves_operator_instruments(client):
     assert 'id="risk"' in html and 'id="kill"' in html and 'id="conn"' in html
     assert 'id="connectionsBoard"' in html
     assert 'id="zoneTradingFloor"' in html
-    assert 'id="zoneResearchLab"' in html
+    # Research Lab zone removed in the operational-core cleanup (2026-07-16).
+    assert 'id="zoneResearchLab"' not in html
     assert 'id="zoneInfrastructure"' in html
     assert 'className="v-badge"' in html
     assert "virtual PnL -- shadow lane, no real orders" in html
@@ -181,14 +178,17 @@ def test_cost_model_route_has_no_control_verbs(client):
 
 
 def test_dashboard_shell_has_multiview_nav_and_legal(client):
-    """Production multi-view shell: top-nav views, risk warning, about,
-    legal, and the real fee-wall cost-model panel are all present."""
+    """Operational-core shell (2026-07-16): only the views we actually use are
+    navigable; the research + microstructure-workspace views were removed.
+    Risk warning, about, legal, and the real fee-wall cost-model panel remain."""
     html = client.get("/").text
-    # every top-nav view is present
-    for view in ("overview", "trading", "research", "microstructure",
-                 "incidents", "system", "about", "legal"):
+    # the operational-core nav views are present
+    for view in ("overview", "trading", "incidents", "system", "about", "legal"):
         assert f'data-nav="{view}"' in html
-        assert f'data-view="{view}"' in html or view in ("overview",)
+    # the research + microstructure views are GONE (nav and sections)
+    for gone in ("research", "microstructure"):
+        assert f'data-nav="{gone}"' not in html
+        assert f'data-view="{gone}"' not in html
     # commercial risk warning: first-visit banner + dedicated legal view
     assert 'id="riskBanner"' in html
     assert "Extreme-risk research software" in html
@@ -214,31 +214,32 @@ def test_dashboard_shell_has_multiview_nav_and_legal(client):
     assert "function setView" in html and "hashchange" in html
 
 
-def test_dashboard_shell_has_research_scalp_panels(client):
-    """The unrendered research features now have panels: cascade reversion,
-    lead-lag echo scalp, real-time shadow scalp, and AI candidates — each
-    grouped into the right view and clearly labelled research/cannot-trade."""
+def test_dashboard_operational_core_cut(client):
+    """Operational-core cleanup (2026-07-16): the no-trade research panels
+    (cascade reversion, lead-lag echo, AI candidates, alpha council, shadow
+    manifest) and the microstructure workspace were removed — they never
+    produced a CANDIDATE verdict and were dead surface. The Trading-view
+    real-time shadow scalp panel is a keeper and must remain."""
     html = client.get("/").text
-    # panel titles (the markers the acceptance asks for)
-    assert "Cascade Reversion (research)" in html
-    assert "Lead-Lag Echo Scalp (research)" in html
-    assert "Real-Time Shadow Scalp (live)" in html
-    assert "AI Strategy Candidates (sandbox)" in html
-    # AI panel carries the explicit cannot-trade governance badge
-    assert "AI-AUTHORED" in html and "CANNOT TRADE" in html
-    assert "needs untouched judgment + human approval" in html
-    # panel containers wired to the render pipeline
+    # removed research-view panels are gone (DOM ids + titles)
     for el in ("cascadeReversionBoard", "leadlagEchoBoard", "aiCandidatesBoard",
-               "realtimeShadowScalpBoard", "cr_targets", "ll_targets",
-               "ai_candidates", "rssLanes"):
-        assert f'id="{el}"' in html
-    # render functions exist and are wired into renderResearch
-    for fn in ("renderCascadeReversion", "renderLeadLagEcho",
-               "renderAiCandidates", "renderRealtimeShadowScalp"):
-        assert f"function {fn}(" in html
-        assert f"{fn}(" in html
-    # research panels live in the research view; the live-firing one in trading
-    assert 'id="cascadeReversionBoard" data-view="research"' in html
+               "agentBoard", "shadowManifestBoard", "microstructureWorkspace"):
+        assert f'id="{el}"' not in html
+    assert "AI Strategy Candidates (sandbox)" not in html
+    assert "Alpha Council" not in html
+    # the research data-polling was neutralised (no more /research, /agent-jobs,
+    # /alpha-council, /vibe-intelligence fetches firing into removed DOM)
+    assert 'fetchJSON("/research")' not in html
+    assert 'fetchJSON("/agent-jobs")' not in html
+    assert 'fetchJSON("/alpha-council")' not in html
+    # kept: the Trading-view real-time shadow scalp panel + its live wiring
+    assert 'id="realtimeShadowScalpBoard"' in html
+    assert 'id="rssLanes"' in html
+    assert "function renderRealtimeShadowScalp(" in html
+    # kept: the real fee-wall cost model, now folded under the System view
+    assert 'id="costModelBoard"' in html
+    assert "Fee Wall &amp; Cost Model" in html
+    # the live-firing scalp panel stays in the Trading view
     assert 'id="realtimeShadowScalpBoard" data-view="trading"' in html
 
 

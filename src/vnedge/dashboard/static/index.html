@@ -2272,10 +2272,8 @@
         <div class="nav-title">VN EDGE</div>
         <a class="nav-link active" data-nav="overview" href="#overview"><span class="nav-icon">01</span><span>Overview</span></a>
         <a class="nav-link" data-nav="trading" href="#trading"><span class="nav-icon">02</span><span>Trading</span></a>
-        <a class="nav-link" data-nav="research" href="#research"><span class="nav-icon">03</span><span>Research</span><span class="nav-badge">no-trade</span></a>
-        <a class="nav-link" data-nav="microstructure" href="#microstructure"><span class="nav-icon">04</span><span>Microstructure</span></a>
-        <a class="nav-link" data-nav="incidents" href="#incidents"><span class="nav-icon">05</span><span>Incidents</span></a>
-        <a class="nav-link" data-nav="system" href="#system"><span class="nav-icon">06</span><span>System</span></a>
+        <a class="nav-link" data-nav="incidents" href="#incidents"><span class="nav-icon">03</span><span>Incidents</span></a>
+        <a class="nav-link" data-nav="system" href="#system"><span class="nav-icon">04</span><span>System</span></a>
         <a class="nav-link" data-nav="about" href="#about"><span class="nav-icon">i</span><span>About</span></a>
         <a class="nav-link nav-legal" data-nav="legal" href="#legal"><span class="nav-icon">!</span><span>Risk &amp; Legal</span></a>
       </aside>
@@ -2289,8 +2287,6 @@
           <nav class="workspace-tabs" aria-label="workspace shortcuts">
             <a class="active" data-nav="overview" href="#overview">Overview</a>
             <a data-nav="trading" href="#trading">Trading</a>
-            <a data-nav="research" href="#research">Research</a>
-            <a data-nav="microstructure" href="#microstructure">Market</a>
             <a data-nav="system" href="#system">System</a>
           </nav>
         </div>
@@ -2633,186 +2629,6 @@
 
     </div>
 
-    <div class="zone zone-lab" id="zoneResearchLab" data-view-group aria-label="research lab zone">
-      <div class="zone-banner">Research Lab <span class="zone-sub">cannot trade, cannot promote</span></div>
-
-        <section data-view="research">
-          <h2>Research Lab <span class="tag" id="rl_updated">waiting for first cycle</span></h2>
-          <div class="table-wrap">
-            <table id="research"><thead><tr>
-              <th>Lane</th><th>Venue</th><th>Strategy</th><th>Symbol</th><th>OOS net</th><th>Fee wall</th><th>L / S</th><th>Trades</th><th>Windows</th><th>Gate</th><th>Action</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="research-empty">research loop has not published yet</div>
-          <div class="alerts" id="drift" style="display:none"></div>
-          <div class="empty" id="rl_note" style="display:none;font-size:10.5px"></div>
-        </section>
-
-    <section class="agent-board" id="agentBoard" data-view="research">
-      <h2>Alpha Council &amp; Proof Queue <span class="tag" id="council_policy">research-only; agents cannot trade or promote</span></h2>
-      <div class="mini-grid council-grid" aria-label="agent council operating summary">
-        <div class="mini-card info">
-          <div class="small-label">Debated</div>
-          <div class="big" id="council_debated">--</div>
-          <div class="tiny" id="council_sources">candidate sources</div>
-        </div>
-        <div class="mini-card plan">
-          <div class="small-label">High Priority</div>
-          <div class="big" id="council_high">--</div>
-          <div class="tiny">research queue</div>
-        </div>
-        <div class="mini-card warn">
-          <div class="small-label">Blocked</div>
-          <div class="big" id="council_blocked">--</div>
-          <div class="tiny">needs proof</div>
-        </div>
-        <div class="mini-card info">
-          <div class="small-label">Open Tasks</div>
-          <div class="big" id="workbench_open">--</div>
-          <div class="tiny" id="workbench_delta">persistent backlog</div>
-        </div>
-        <div class="mini-card">
-          <div class="small-label">Top Action</div>
-          <div class="big" id="council_top_action">--</div>
-          <div class="tiny">next proof step</div>
-        </div>
-        <div class="mini-card">
-          <div class="small-label">Freshness</div>
-          <div class="big" id="council_freshness">--</div>
-          <div class="tiny">latest artifact age</div>
-        </div>
-        <div class="mini-card info">
-          <div class="small-label">Agent Jobs</div>
-          <div class="big" id="agent_jobs_total">--</div>
-          <div class="tiny" id="agent_jobs_policy">research only</div>
-        </div>
-        <div class="mini-card plan">
-          <div class="small-label">Pending</div>
-          <div class="big" id="agent_jobs_pending">--</div>
-          <div class="tiny">runner queue</div>
-        </div>
-        <div class="mini-card">
-          <div class="small-label">Replay</div>
-          <div class="big" id="agent_jobs_replay">--</div>
-          <div class="tiny">microstructure jobs</div>
-        </div>
-        <div class="mini-card warn">
-          <div class="small-label">Blocked / Failed</div>
-          <div class="big" id="agent_jobs_blocked">--</div>
-          <div class="tiny">needs operator review</div>
-        </div>
-      </div>
-      <div class="terminal-split">
-        <div class="dense-panel">
-          <div class="dense-title">
-            <span>Live Agent Debate</span>
-            <span id="council_age">waiting</span>
-          </div>
-          <div class="table-wrap">
-            <table id="council_debates"><thead><tr>
-              <th>Priority</th><th>Candidate</th><th>Source</th><th>Action</th><th>Verdict</th><th>Primary blocker</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="council_empty">council artifact has not published yet</div>
-        </div>
-        <div class="dense-panel">
-          <div class="dense-title">
-            <span>Persistent Proof Queue</span>
-            <span id="workbench_age">waiting</span>
-          </div>
-          <div class="table-wrap">
-            <table id="workbench_tasks"><thead><tr>
-              <th>Priority</th><th>Task</th><th>Candidate</th><th>Route</th><th>Blocked by</th><th>Status</th>
-            </tr></thead><tbody></tbody></table>
-          </div>
-          <div class="empty" id="workbench_empty">proof queue is empty or awaiting council output</div>
-        </div>
-      </div>
-      <div class="dense-panel vibe-panel">
-        <div class="dense-title">
-          <span>Quant OS Job Ledger</span>
-          <span id="agent_jobs_age">waiting</span>
-        </div>
-        <div class="table-wrap">
-          <table id="agent_jobs"><thead><tr>
-            <th>Status</th><th>Adapter</th><th>Hypothesis</th><th>Market</th><th>Result</th><th>Updated</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
-        <div class="empty" id="agent_jobs_empty">agent job ledger is empty; seed jobs run when the research worker starts</div>
-      </div>
-      <div class="dense-panel vibe-panel">
-        <div class="dense-title">
-          <span>Persistent Hypothesis Memory</span>
-          <span id="vibe_age">waiting</span>
-        </div>
-        <div class="table-wrap">
-          <table id="vibe_cards"><thead><tr>
-            <th>Life</th><th>Health</th><th>Hypothesis</th><th>Next proof</th><th>Seen</th><th>Blocked by</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
-        <div class="empty" id="vibe_empty">hypothesis memory has not published yet</div>
-      </div>
-    </section>
-
-    <section class="agent-board" id="shadowManifestBoard" data-view="research">
-      <h2>Research &#8594; Shadow Lanes <span class="tag">shadow-only; cannot trade or promote; untouched-data judgment before any promotion</span></h2>
-      <div class="kv">
-        <span class="k">L2 discovery</span><span class="v" id="sd_discovery">awaiting first L2 mining pass</span>
-        <span class="k">Shadow manifest</span><span class="v" id="sd_manifest">--</span>
-      </div>
-      <div class="table-wrap">
-        <table id="sd_lanes"><thead><tr>
-          <th>Shadow lane</th><th>Venue</th><th>Symbol</th><th>Source verdict</th><th>OOS net</th><th>Status</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="sd_empty">no research winners with locked params yet -- winners without locked params are blocked, not run</div>
-    </section>
-
-    <section class="agent-board" id="cascadeReversionBoard" data-view="research">
-      <h2>Cascade Reversion (research) <span class="tag">liquidation cascade &rarr; reversion scalp; dual cost model (taker vs maker); research-only, cannot trade or promote</span></h2>
-      <div class="kv">
-        <span class="k">Targets</span><span class="v" id="cr_summary">awaiting first cascade scan</span>
-        <span class="k">Updated</span><span class="v" id="cr_age">waiting</span>
-      </div>
-      <div class="table-wrap">
-        <table id="cr_targets"><thead><tr>
-          <th>Venue</th><th>Symbol</th><th>Events</th><th>Verdict</th><th>Taker net</th><th>Maker net</th><th>Cost edge</th><th>Overlap days</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="cr_empty">cascade reversion research has not published yet</div>
-    </section>
-
-    <section class="agent-board" id="leadlagEchoBoard" data-view="research">
-      <h2>Lead-Lag Echo Scalp (research) <span class="tag">Binance &rarr; Delta lead-lag echo; dual cost model; research-only, cannot trade or promote</span></h2>
-      <div class="kv">
-        <span class="k">Targets</span><span class="v" id="ll_summary">awaiting first lead-lag scan</span>
-        <span class="k">Updated</span><span class="v" id="ll_age">waiting</span>
-      </div>
-      <div class="table-wrap">
-        <table id="ll_targets"><thead><tr>
-          <th>Pair</th><th>Events</th><th>Verdict</th><th>Taker net</th><th>Maker net</th><th>Cost edge</th><th>Lag resp%</th><th>Overlap days</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="ll_empty">lead-lag echo scalp research has not published yet</div>
-    </section>
-
-    <section class="agent-board" id="aiCandidatesBoard" data-view="research">
-      <h2>AI Strategy Candidates (sandbox) <span class="tag">AI-sandbox-authored; AST-validated + causality-gated + walk-forwarded; research-only</span></h2>
-      <div class="kv">
-        <span class="k">Sandbox</span><span class="v" id="ai_summary">awaiting first AI candidate pass</span>
-        <span class="k">Updated</span><span class="v" id="ai_age">waiting</span>
-      </div>
-      <div class="empty" id="ai_banner" style="display:none;color:var(--amber);font-size:10.5px;margin:0 0 8px">AI-AUTHORED &middot; CANNOT TRADE &middot; needs untouched judgment + human approval</div>
-      <div class="table-wrap">
-        <table id="ai_candidates"><thead><tr>
-          <th>Strategy</th><th>Verdict</th><th>Causality</th><th>OOS net</th><th>OOS trades</th><th>Windows</th><th>Status</th>
-        </tr></thead><tbody></tbody></table>
-      </div>
-      <div class="empty" id="ai_empty">AI strategy sandbox has not published candidates yet</div>
-    </section>
-
-    </div>
-
     <div class="zone zone-infra" id="zoneInfrastructure" data-view-group aria-label="infrastructure zone">
       <div class="zone-banner">Infrastructure <span class="zone-sub">venues, feeds, pipes, health, provenance</span></div>
 
@@ -2933,7 +2749,7 @@
       <div class="cost-foot">Container split, service bus, ONNX hot paths and sub-3ms targets are deliberately deferred until evidence demands them (architecture review 2026-07-02).</div>
     </section>
 
-    <section id="costModelBoard" class="institutional-board" data-view="microstructure" aria-label="fee wall cost model">
+    <section id="costModelBoard" class="institutional-board" data-view="system" aria-label="fee wall cost model">
       <h2>Fee Wall &amp; Cost Model <span class="tag" id="cost_source">two honest round-trip cost models, read from research/paper constants</span></h2>
       <div class="cost-grid">
         <div class="cost-card primary">
@@ -2963,197 +2779,6 @@
       </div>
     </section>
 
-    <section class="institutional-board" id="microstructureWorkspace" data-view="microstructure" aria-label="institutional workspace">
-      <h2>Institutional Workspace <span class="tag">system telemetry, microstructure, compliance, and model governance</span></h2>
-      <div class="workspace-grid">
-        <div class="terminal" aria-label="system telemetry and microstructure terminal">
-          <div class="terminal-head">
-            <span>View 1: System Telemetry & Microstructure Performance</span>
-            <span class="tag" id="it_status">read-only terminal</span>
-          </div>
-          <div class="terminal-body">
-            <div class="mini-grid">
-              <div class="mini-card" id="card_core_feed"><div class="small-label">Exchange feed</div><div class="big" id="it_core_feed">--</div><div class="tiny" id="it_core_feed_detail">waiting</div></div>
-              <div class="mini-card" id="card_core_strategy"><div class="small-label">Strategy core</div><div class="big" id="it_core_strategy">--</div><div class="tiny" id="it_core_strategy_detail">registry gated</div></div>
-              <div class="mini-card" id="card_core_risk"><div class="small-label">Risk gateway</div><div class="big" id="it_core_risk">--</div><div class="tiny" id="it_core_risk_detail">all intents evaluated</div></div>
-              <div class="mini-card" id="card_core_research"><div class="small-label">Research lanes</div><div class="big" id="it_core_research">--</div><div class="tiny" id="it_core_research_detail">hourly sweep</div></div>
-              <div class="mini-card" id="card_core_snapshot"><div class="small-label">Snapshot bus</div><div class="big" id="it_core_snapshot">--</div><div class="tiny" id="it_core_snapshot_detail">coalesced latest state</div></div>
-              <div class="mini-card" id="card_core_context"><div class="small-label">Process model</div><div class="big" id="it_core_context">--</div><div class="tiny" id="it_core_context_detail">single writer</div></div>
-            </div>
-
-            <div class="terminal-split">
-              <div class="dense-panel">
-                <div class="dense-title"><span>Latency Distribution Profile</span><span class="tag">observed surface age</span></div>
-                <div class="table-wrap">
-                  <table class="audit-table">
-                    <thead><tr><th>Metric</th><th>Current</th><th>Target</th><th>Status</th></tr></thead>
-                    <tbody>
-                      <tr><td>Public WS feed</td><td id="it_lat_feed_now">--</td><td id="it_lat_feed_target">&lt;30s</td><td id="it_lat_feed_status">--</td></tr>
-                      <tr><td>Dashboard snapshot</td><td id="it_lat_snapshot_now">--</td><td>&lt;5s</td><td id="it_lat_snapshot_status">--</td></tr>
-                      <tr><td>Order state machine</td><td id="it_lat_order_now">--</td><td>resolved</td><td id="it_lat_order_status">--</td></tr>
-                      <tr><td>Decision journal WAL</td><td id="it_lat_journal_now">--</td><td>append ok</td><td id="it_lat_journal_status">--</td></tr>
-                      <tr><td>Research publication</td><td id="it_lat_research_now">--</td><td>hourly</td><td id="it_lat_research_status">--</td></tr>
-                      <tr><td>Private order stream</td><td id="it_lat_private_now">--</td><td>live adapter</td><td id="it_lat_private_status">--</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div class="dense-panel">
-                <div class="dense-title"><span>Microstructure Signal Depth</span><span class="tag" id="obi_summary">L1 ready</span></div>
-                <div class="table-wrap">
-                  <table class="audit-table">
-                    <thead><tr><th>Layer</th><th>Bid</th><th>Ask</th><th>Signal</th></tr></thead>
-                    <tbody>
-                      <tr><td>L1 Top</td><td id="obi_l1_bid">--</td><td id="obi_l1_ask">--</td><td id="obi_l1_signal">--</td></tr>
-                      <tr><td>Spread</td><td id="obi_spread_bps">--</td><td id="obi_mid">--</td><td id="obi_spread_signal">--</td></tr>
-                      <tr><td>Funding</td><td id="obi_funding">--</td><td id="obi_oi">--</td><td id="obi_funding_signal">--</td></tr>
-                      <tr><td>Fee Wall</td><td id="obi_fee_wall">--</td><td id="obi_maker_edge">--</td><td id="obi_fee_signal">--</td></tr>
-                      <tr><td>Adverse Selection</td><td id="obi_spread_regime">--</td><td id="obi_fill_bias">--</td><td id="obi_selection_signal">--</td></tr>
-                      <tr><td>L2 Builder</td><td id="obi_l2_state">--</td><td id="obi_recorder">--</td><td id="obi_l2_signal">--</td></tr>
-                      <tr><td>OBI Aggregate</td><td id="obi_bid_qty">--</td><td id="obi_ask_qty">--</td><td id="obi_value">--</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            <div class="mini-grid">
-              <div class="mini-card" id="card_rt_journal"><div class="small-label">Journal</div><div class="big" id="rt_journal">--</div><div class="tiny" id="rt_journal_detail">WAL health</div></div>
-              <div class="mini-card" id="card_rt_gc" style="display:none"><div class="small-label">GC / runtime</div><div class="big" id="rt_gc">--</div><div class="tiny" id="rt_gc_detail">instrumentation</div></div>
-              <div class="mini-card" id="card_rt_shared"><div class="small-label">State cache</div><div class="big" id="rt_shared">--</div><div class="tiny" id="rt_shared_detail">single-process cache</div></div>
-              <div class="mini-card" id="card_rt_heartbeat"><div class="small-label">Heartbeat</div><div class="big" id="rt_heartbeat">--</div><div class="tiny" id="rt_heartbeat_detail">snapshot pulse</div></div>
-              <div class="mini-card" id="card_rt_event_rate"><div class="small-label">Event rate</div><div class="big" id="rt_event_rate">--</div><div class="tiny" id="rt_event_rate_detail">bars / minute</div></div>
-              <div class="mini-card" id="card_rt_clock" style="display:none"><div class="small-label">Clock skew</div><div class="big" id="rt_clock">--</div><div class="tiny" id="rt_clock_detail">server vs browser</div></div>
-            </div>
-
-            <div class="terminal-split">
-              <div class="dense-panel">
-                <div class="dense-title"><span>Alerts & Anomalies</span><span class="tag" id="it_anomaly_count">quiet</span></div>
-                <div id="it_anomalies"></div>
-              </div>
-              <div class="dense-panel">
-                <div class="dense-title"><span>Fast Loop Operating Envelope</span><span class="tag">read-only</span></div>
-                <div class="kv">
-                  <span class="k">Entries</span><span class="v" id="it_env_entries">--</span>
-                  <span class="k">Reduce-only exits</span><span class="v" id="it_env_exits">--</span>
-                  <span class="k">Open exposure</span><span class="v" id="it_env_exposure">--</span>
-                  <span class="k">Data age max</span><span class="v" id="it_env_data_age">--</span>
-                  <span class="k">Unresolved orders</span><span class="v" id="it_env_unresolved">--</span>
-                  <span class="k">Fee drag</span><span class="v" id="it_env_fee_drag">--</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="terminal purple" aria-label="compliance audit and model governance terminal">
-          <div class="terminal-head">
-            <span>View 2: Compliance, Audit & Model Governance</span>
-            <span class="tag" id="cg_status">asynchronous audit</span>
-          </div>
-          <div class="terminal-body">
-            <div class="gov-grid">
-              <div class="gov-card" id="card_gov_model"><div class="small-label">Active model</div><div class="big" id="gov_model">--</div><div class="tiny" id="gov_model_detail">registry / strategy</div></div>
-              <div class="gov-card" id="card_gov_hurdle"><div class="small-label">Hurdle status</div><div class="big" id="gov_hurdle">--</div><div class="tiny" id="gov_hurdle_detail">promotion gate</div></div>
-              <div class="gov-card" id="card_gov_net"><div class="small-label">Latest OOS net</div><div class="big" id="gov_oos_net">--</div><div class="tiny" id="gov_oos_net_detail">walk-forward only</div></div>
-              <div class="gov-card" id="card_gov_dd"><div class="small-label">Max drawdown</div><div class="big" id="gov_max_dd">--</div><div class="tiny" id="gov_max_dd_detail">candidate / trial</div></div>
-            </div>
-
-            <div class="gate-line" aria-label="promotion gates">
-              <span class="gate-step idle" id="gate_no_lookahead">No lookahead</span>
-              <span class="gate-step idle" id="gate_min_trades">Min trades</span>
-              <span class="gate-step idle" id="gate_oos_net">OOS net</span>
-              <span class="gate-step idle" id="gate_pf">PF / payoff</span>
-              <span class="gate-step idle" id="gate_dd">DD cap</span>
-              <span class="gate-step idle" id="gate_stability">Stability</span>
-            </div>
-
-            <div class="terminal-split">
-              <div class="dense-panel">
-                <div class="dense-title"><span>Parquet / JSONL Landing Audit</span><span class="tag" id="landing_count">ledger view</span></div>
-                <div class="table-wrap">
-                  <table class="audit-table">
-                    <thead><tr><th>Dataset</th><th>Rows</th><th>State</th><th>Modified</th></tr></thead>
-                    <tbody id="audit_landing_rows"></tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div class="dense-panel">
-                <div class="dense-title"><span>Fill / Fee Transaction Matrix</span><span class="tag" id="fill_matrix_count">latest fills</span></div>
-                <div class="table-wrap">
-                  <table class="fill-table">
-                    <thead><tr><th>Seq</th><th>Symbol</th><th>Side</th><th>Notional</th><th>Fee</th><th>Realized</th></tr></thead>
-                    <tbody id="fill_matrix_rows"></tbody>
-                  </table>
-                </div>
-                <div class="empty" id="fill_matrix_empty">no fills in latest snapshot</div>
-              </div>
-            </div>
-
-            <div class="drift-grid">
-              <div class="gov-card" id="card_drift_match"><div class="small-label">Live vs backtest</div><div class="big" id="drift_match">--</div><div class="tiny" id="drift_match_detail">variance alerts</div></div>
-              <div class="gov-card" id="card_drift_slip"><div class="small-label">Adverse slippage</div><div class="big" id="drift_slip">--</div><div class="tiny" id="drift_slip_detail">fill spread proxy</div></div>
-              <div class="gov-card" id="card_drift_funding"><div class="small-label">Funding anomaly</div><div class="big" id="drift_funding">--</div><div class="tiny" id="drift_funding_detail">current funding</div></div>
-              <div class="gov-card" id="card_drift_edge"><div class="small-label">Edge decay</div><div class="big" id="drift_edge">--</div><div class="tiny" id="drift_edge_detail">latest research candidate</div></div>
-            </div>
-
-            <div class="terminal-split">
-              <div class="dense-panel">
-                <div class="dense-title"><span>Derived Event Trail</span><span class="tag">visible artifacts</span></div>
-                <div id="audit_trail"></div>
-              </div>
-              <div class="dense-panel">
-                <div class="dense-title"><span>Governance & Compliance Health</span><span class="tag">India live path</span></div>
-                <div class="kv">
-                  <span class="k">Model registry</span><span class="v" id="ch_registry">--</span>
-                  <span class="k">Data freshness</span><span class="v" id="ch_data">--</span>
-                  <span class="k">Fill ledger</span><span class="v" id="ch_ledger">--</span>
-                  <span class="k">Derived events</span><span class="v" id="ch_audit">--</span>
-                  <span class="k">Tax treatment</span><span class="v" id="ch_tax">CA gated</span>
-                  <span class="k">Access control</span><span class="v" id="ch_access">read-only</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-      <div class="infra-grid" data-view="microstructure">
-        <section>
-          <h2>Market <span class="tag">feed health</span></h2>
-          <div class="kv">
-            <span class="k">Exchange</span><span class="v" id="fh_ex">--</span>
-            <span class="k">Bid / Ask</span><span class="v" id="mk_ba">--</span>
-            <span class="k">Spread</span><span class="v" id="mk_spread">--</span>
-            <span class="k">Funding rate</span><span class="v" id="mk_funding">--</span>
-            <span class="k">Candles</span><span class="v" id="fh_candles">--</span>
-            <span class="k">Funding feed</span><span class="v" id="fh_funding">--</span>
-            <span class="k">Open interest</span><span class="v" id="fh_oi">--</span>
-            <span class="k">Last event</span><span class="v" id="fh_last">--</span>
-          </div>
-        </section>
-        <section>
-          <h2>Session <span class="tag">runtime counters</span></h2>
-          <div class="kv">
-            <span class="k">Uptime</span><span class="v" id="ss_uptime">--</span>
-            <span class="k">Bars processed</span><span class="v" id="ss_bars">--</span>
-            <span class="k">Signals</span><span class="v" id="ss_signals">--</span>
-            <span class="k">Orders submitted</span><span class="v" id="ss_orders">--</span>
-            <span class="k">Risk rejects</span><span class="v" id="ss_rejects">--</span>
-            <span class="k">Sizing skips</span><span class="v" id="ss_skips">--</span>
-            <span class="k">Recon mismatches</span><span class="v" id="ss_recon">--</span>
-            <span class="k">Dropped candles</span><span class="v" id="ss_dropped">--</span>
-          </div>
-        </section>
-        <section>
-          <h2>Alerts <span class="tag" id="alertcount"></span></h2>
-          <div class="alerts" id="alerts"></div>
-          <div class="empty" id="alerts-empty">no alerts fired</div>
-        </section>
-      </div>
     </div>
 
     <section class="view-doc about-doc" id="aboutView" data-view="about" aria-label="about vnedge">
@@ -3643,8 +3268,7 @@
   const ANCHOR_TO_VIEW={
     tradeMonitor:"overview",performanceWorkbench:"overview",readinessRibbon:"overview",
     quantDeck:"overview",lanesBoard:"trading",realtimeScannerBoard:"trading",
-    agentBoard:"research",shadowManifestBoard:"research",microstructureWorkspace:"microstructure",
-    costModelBoard:"microstructure",connectionsBoard:"incidents",incidentsBoard:"incidents",
+    costModelBoard:"system",connectionsBoard:"incidents",incidentsBoard:"incidents",
     architectureMap:"system",deployProvenance:"system"
   };
   function currentView(){
@@ -5770,20 +5394,9 @@
     renderInstitutional();
   }
 
-  function loadResearch(){
-    fetchJSON("/research").then(d=>{renderResearch(d);reapplyView();}).catch(()=>{});
-  }
+  function loadResearch(){ /* research view removed (operational-core UI, 2026-07-16) */ }
 
-  function loadCouncil(){
-    Promise.all([
-      fetchJSON("/alpha-council").catch(()=>({summary:{},debates:[]})),
-      fetchJSON("/alpha-workbench").catch(()=>({summary:{},tasks:[]})),
-      fetchJSON("/vibe-intelligence").catch(()=>({summary:{},cards:[]})),
-      fetchJSON("/agent-jobs").catch(()=>({summary:{},jobs:[]}))
-    ])
-      .then(([c,w,v,j])=>{renderCouncil(c,w,v,j);reapplyView();})
-      .catch(()=>{});
-  }
+  function loadCouncil(){ /* research council view removed (operational-core UI, 2026-07-16) */ }
 
   function loadRealtimeScanner(){
     fetchJSON("/realtime-scanner").then(d=>{renderRealtimeScanner(d);reapplyView();}).catch(()=>{});
