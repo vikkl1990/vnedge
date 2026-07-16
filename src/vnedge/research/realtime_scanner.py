@@ -322,7 +322,8 @@ def _runtime_state(
             return STATE_WARMING, "feature warmup incomplete", []
     if not pairs:
         return STATE_WAITING, "no threshold telemetry exposed", []
-    best = max(pairs, key=lambda item: float(item.get("ratio") or 0.0))
+    unmet = [item for item in pairs if float(item.get("gap") or 0.0) > 0.0]
+    best = max(unmet or pairs, key=lambda item: float(item.get("ratio") or 0.0))
     ratio = float(best.get("ratio") or 0.0)
     if ratio >= config.near_trigger_ratio:
         return (
@@ -349,31 +350,107 @@ def _threshold_pairs(eval_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(features, Mapping) or not isinstance(thresholds, Mapping):
         return []
     pairs: list[dict[str, Any]] = []
-    _add_pair(
+    _add_min_pair(
         pairs,
         "funding",
         _num(features.get("funding_pct")),
         _num(thresholds.get("extreme_pct")),
         absolute=True,
     )
-    _add_pair(
+    _add_min_pair(
         pairs,
         "z",
         _num(features.get("close_z")),
         _num(thresholds.get("z_entry")),
         absolute=True,
     )
-    _add_pair(
+    _add_min_pair(
         pairs,
         "score",
-        _num(features.get("score")),
+        _first_num(
+            features.get("score"),
+            _max_num(features.get("long_score"), features.get("short_score")),
+        ),
         _num(thresholds.get("min_score")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "score_delta",
+        _score_delta(features),
+        _num(thresholds.get("min_score_delta")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "tqi",
+        _max_num(features.get("tqi_long"), features.get("tqi_short")),
+        _num(thresholds.get("min_tqi")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "quality_strength",
+        _num(features.get("quality_strength")),
+        _num(thresholds.get("min_quality_strength")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "momentum_persistence",
+        _max_num(features.get("mom_persist_long"), features.get("mom_persist_short")),
+        _num(thresholds.get("min_momentum_persistence")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "bbp_atr",
+        _num(features.get("bbp")),
+        _num(thresholds.get("min_bbp_atr")),
+        absolute=True,
+    )
+    _add_min_pair(
+        pairs,
+        "bbp_z",
+        _num(features.get("bbp_hist_z")),
+        _num(thresholds.get("min_bbp_z")),
+        absolute=True,
+    )
+    _add_min_pair(
+        pairs,
+        "volume_z",
+        _num(features.get("volume_z")),
+        _num(thresholds.get("min_volume_z")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "body_atr",
+        _num(features.get("body_atr")),
+        _num(thresholds.get("min_body_atr")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "body_percentile",
+        _num(features.get("body_percentile")),
+        _num(thresholds.get("min_body_percentile")),
+        absolute=False,
+    )
+    _add_min_pair(
+        pairs,
+        "expected_net_edge_bps",
+        _max_num(
+            features.get("expected_net_edge_bps_long"),
+            features.get("expected_net_edge_bps_short"),
+        ),
+        _num(thresholds.get("min_expected_net_edge_bps")),
         absolute=False,
     )
     return pairs
 
 
-def _add_pair(
+def _add_min_pair(
     out: list[dict[str, Any]],
     name: str,
     value: float | None,
@@ -381,18 +458,44 @@ def _add_pair(
     *,
     absolute: bool,
 ) -> None:
-    if value is None or threshold is None or threshold <= 0:
+    if value is None or threshold is None:
         return
     observed = abs(value) if absolute else value
-    ratio = observed / threshold if threshold else 0.0
+    if threshold > 0:
+        ratio = observed / threshold
+    else:
+        gap = max(0.0, threshold - observed)
+        ratio = 1.0 - gap / max(1.0, abs(threshold))
     out.append({
         "name": name,
         "value": observed,
         "raw_value": value,
         "threshold": threshold,
-        "ratio": ratio,
+        "ratio": max(0.0, ratio),
         "gap": max(0.0, threshold - observed),
     })
+
+
+def _first_num(*values: Any) -> float | None:
+    for value in values:
+        out = _num(value)
+        if out is not None:
+            return out
+    return None
+
+
+def _max_num(*values: Any) -> float | None:
+    nums = [_num(value) for value in values]
+    present = [value for value in nums if value is not None]
+    return max(present) if present else None
+
+
+def _score_delta(features: Mapping[str, Any]) -> float | None:
+    long_score = _num(features.get("long_score"))
+    short_score = _num(features.get("short_score"))
+    if long_score is None or short_score is None:
+        return None
+    return abs(long_score - short_score)
 
 
 def _event_rows(
@@ -469,21 +572,21 @@ def _event_proximity(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(filt, Mapping):
         return []
     out: list[dict[str, Any]] = []
-    _add_pair(
+    _add_min_pair(
         out,
         "leader_bps",
         _num(metrics.get("signed_leader_bps")),
         _num(filt.get("min_abs_leader_bps")),
         absolute=True,
     )
-    _add_pair(
+    _add_min_pair(
         out,
         "leader_z",
         _num(metrics.get("signed_leader_z")),
         _num(filt.get("min_abs_leader_z")),
         absolute=True,
     )
-    _add_pair(
+    _add_min_pair(
         out,
         "volume_z",
         _num(metrics.get("leader_volume_z")),
