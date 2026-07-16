@@ -3535,6 +3535,11 @@
     const readiness=lastLaneReadiness||{};
     const readinessSummary=readiness.summary||{};
     const readinessRows=Array.isArray(readiness.rows)?readiness.rows:[];
+    const triageCounts=readinessSummary.triage_counts||{};
+    const readinessRefactor=
+      num(triageCounts.EARLY_STOP_DOMINATED)+
+      num(triageCounts.MATURE_NEGATIVE_EDGE)+
+      num(triageCounts.POSITIVE_LOW_PROFIT_FACTOR);
     const readinessStatuses=readinessRows.map(r=>String(r.status||r.state||r.readiness||"").toUpperCase());
     const readinessReadyRows=readinessStatuses.filter(s=>s.includes("PAPER")&&s.includes("READY")).length;
     const readinessBlockedRows=readinessStatuses.filter(s=>s.includes("BLOCK")||s.includes("REJECT")||s.includes("PROBATION")).length;
@@ -3574,16 +3579,20 @@
       unresolved?unresolved+" unresolved order(s)":orders.length?"venue state age visible":"state machine idle",
       executionTone);
 
-    const researchTone=readinessReady?"warn":readinessBlockedRows?"warn":
+    const researchTone=readinessReady?"warn":readinessRefactor?"warn":readinessBlockedRows?"warn":
       passRows.length?"warn":rows.length?(researchFresh?"info":"warn"):"idle";
     const researchValue=readinessReady?"PAPER REVIEW":
+      readinessRefactor?"REFACTOR":
       readinessPublished?readinessRows.length?"READINESS":"REPORT":
       passRows.length?"HUMAN GATE":rows.length?"SCANNING":"WAITING";
+    const readinessTriageNote=readinessRefactor
+      ? readinessRefactor+" lane(s) need scanner/exit refactor; "
+      : "";
     const researchDetail=readinessPublished
-      ?(readiness.operator_answer||(
+      ?(readinessTriageNote+(readiness.operator_answer||(
         readinessRows.length+" lane readiness row(s); "+readinessReady+
         " paper-ready, "+readinessBlockedRows+" blocked/probation"
-      ))
+      )))
       :passRows.length?passRows.length+" PASS candidate(s); untouched/paper approval required":
         rows.length?(rows.length+" rows; latest "+(generatedAt?timeAgoFromIso(generatedAt):"--")):"no published research payload";
     setReadinessCell("research",
@@ -5719,6 +5728,15 @@
     if(!best)return "";
     return String(best.name||"pressure")+" "+(num(best.ratio)*100).toFixed(0)+"%";
   }
+  function scannerGateAction(row){
+    const uplift=row&&row.uplift?row.uplift:{};
+    const diag=row&&row.gate_diagnostics?row.gate_diagnostics:{};
+    const blocker=diag.primary_blocker||{};
+    const action=String(uplift.action||"").replaceAll("_"," ").toLowerCase();
+    const category=String(blocker.category||"").replaceAll("_"," ");
+    const pressure=scannerPressure(row);
+    return [action,category,pressure].filter(Boolean).join(" / ");
+  }
 
   function renderRealtimeScanner(payload){
     const d=payload||{summary:{},rows:[]};
@@ -5749,8 +5767,9 @@
         appendCell(tr,String(row.exchange||"--").replace("usdm",""));
         appendCell(tr,String(row.symbol||"--").split(":")[0]);
         appendCell(tr,shortName(row.strategy_id||row.runner_id||"--"),"clip");
-        const pressure=scannerPressure(row);
-        appendCell(tr,[row.why,pressure].filter(Boolean).join(" / "),"clip",row.why||"");
+        const action=scannerGateAction(row);
+        appendCell(tr,[row.why,action].filter(Boolean).join(" / "),"clip",
+          [row.why,action,row.uplift&&row.uplift.reason].filter(Boolean).join(" / "));
         const f=row.funnel||{};
         appendCell(tr,num(f.live_evals||f.evals).toLocaleString());
         appendCell(tr,num(f.live_signals||f.signals).toLocaleString(),

@@ -123,6 +123,9 @@ def test_runtime_lane_reports_quant_score_proximity(tmp_path):
     assert row["state"] == STATE_WAITING
     assert row["why"].startswith("score 4.5/5")
     assert {"score", "score_delta", "volume_z"} <= names
+    assert row["gate_diagnostics"]["primary_blocker"]["name"] == "score"
+    assert row["gate_diagnostics"]["primary_blocker"]["category"] == "confluence_quality"
+    assert row["uplift"]["action"] == "ISOLATE_STRONGER_SIGNAL_FAMILY"
 
 
 def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
@@ -172,6 +175,9 @@ def test_runtime_lane_reports_sats_and_stealth_proximity(tmp_path):
     assert row["state"] == STATE_WAITING
     assert "expected_net_edge_bps" in names
     assert {"tqi", "quality_strength", "momentum_persistence", "bbp_atr", "volume_z"} <= names
+    assert row["gate_diagnostics"]["primary_blocker"]["name"] == "expected_net_edge_bps"
+    assert row["gate_diagnostics"]["primary_blocker"]["category"] == "cost_edge"
+    assert row["uplift"]["action"] == "REPAIR_EXECUTION_ROUTE_OR_SKIP"
 
 
 def test_runtime_lane_firing_counts_shadow_intent(tmp_path):
@@ -295,7 +301,10 @@ def test_event_leadlag_shadow_artifact_is_live_scanner_row(tmp_path):
     assert row["state"] == STATE_WAITING
     assert row["exchange"] == "delta_india"
     assert "leader_move_below" in row["why"]
+    assert row["gate_diagnostics"]["primary_blocker"]["category"] == "participation"
+    assert row["uplift"]["action"] == "WAIT_FOR_REAL_PARTICIPATION"
     assert payload["summary"]["event_lanes"] == 1
+    assert payload["summary"]["top_blocker_categories"]["participation"] == 1
 
 
 def test_publish_realtime_scanner_atomic(tmp_path):

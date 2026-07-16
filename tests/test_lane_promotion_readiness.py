@@ -6,6 +6,7 @@ from vnedge.research.lane_promotion_readiness import (
     STATUS_PAPER_ACTIVE,
     STATUS_PAPER_REVIEW_READY,
     STATUS_REPLAY_NEEDS_ADAPTER,
+    STATUS_SHADOW_NEGATIVE,
     STATUS_SHADOW_NOT_FIRING,
     ReadinessConfig,
     build_lane_promotion_readiness,
@@ -109,6 +110,7 @@ def test_manifest_lane_without_shadow_outcomes_is_not_firing(tmp_path):
     payload = build_lane_promotion_readiness(research_dir=research, journal_dir=journals)
 
     assert payload["summary"]["shadow_not_firing"] == 1
+    assert payload["summary"]["triage_counts"]["NO_LIVE_OUTCOMES"] == 1
     assert payload["summary"]["paper_review_ready"] == 0
     row = payload["rows"][0]
     assert row["status"] == STATUS_SHADOW_NOT_FIRING
@@ -152,6 +154,33 @@ def test_positive_mature_shadow_lane_is_paper_review_ready_not_live_ready(tmp_pa
     assert payload["summary"]["paper_review_ready"] == 1
     assert payload["summary"]["live_ready"] == 0
     assert "paper trial not completed" in row["live_blockers"]
+    assert row["triage"]["bucket"] == "PAPER_REVIEW_CANDIDATE"
+
+
+def test_negative_stop_dominated_shadow_lane_gets_refactor_triage(tmp_path):
+    research = tmp_path / "research"
+    journals = tmp_path / "logs"
+    research.mkdir()
+    journals.mkdir()
+    write_shadow_manifest(generate_shadow_manifest([_pair()]), research)
+    _write_journal(
+        journals / "funding_mr_binanceusdm_btc_usdt_usdt_shadow.journal.jsonl",
+        [
+            _intent("k1"),
+            _intent("k2"),
+            _outcome("k1", -4.0, "2026-07-01T00:00:00+00:00"),
+            _outcome("k2", -3.0, "2026-07-01T04:00:00+00:00"),
+        ],
+    )
+
+    payload = build_lane_promotion_readiness(research_dir=research, journal_dir=journals)
+
+    row = payload["rows"][0]
+    assert row["status"] == STATUS_SHADOW_NEGATIVE
+    assert row["triage"]["bucket"] == "EARLY_STOP_DOMINATED"
+    assert row["triage"]["priority"] == "refactor"
+    assert "exit geometry" in row["next_action"]
+    assert payload["summary"]["triage_counts"]["EARLY_STOP_DOMINATED"] == 1
 
 
 def test_active_paper_trial_is_reported_separately_from_shadow_readiness(tmp_path):
@@ -164,10 +193,22 @@ def test_active_paper_trial_is_reported_separately_from_shadow_readiness(tmp_pat
         journals / "funding_mr_btc_v1_20260703.journal.jsonl",
         [
             _paper_eval(),
-            {"ts": "2026-07-08T16:00:01+00:00", "kind": "risk_decision", "payload": {"approved": True}},
+            {
+                "ts": "2026-07-08T16:00:01+00:00",
+                "kind": "risk_decision",
+                "payload": {"approved": True},
+            },
             _paper_order(),
-            {"ts": "2026-07-08T16:00:02+00:00", "kind": "order_acknowledged", "payload": {"intent_key": "k-paper"}},
-            {"ts": "2026-07-08T18:00:00+00:00", "kind": "live_paper_exit", "payload": {"reason": "take_profit"}},
+            {
+                "ts": "2026-07-08T16:00:02+00:00",
+                "kind": "order_acknowledged",
+                "payload": {"intent_key": "k-paper"},
+            },
+            {
+                "ts": "2026-07-08T18:00:00+00:00",
+                "kind": "live_paper_exit",
+                "payload": {"reason": "take_profit"},
+            },
             {
                 "ts": "2026-07-08T18:00:01+00:00",
                 "kind": "live_paper_report",

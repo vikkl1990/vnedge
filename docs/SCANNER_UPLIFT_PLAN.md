@@ -17,6 +17,9 @@ No scanner is allowed to promote or trade by itself. Every scanner payload must 
    - Threshold extraction must read both direct strategy attributes and frozen
      `strategy.params` dataclasses.
    - Missing telemetry is an instrumentation defect, not a market verdict.
+   - Runtime scanner rows must include `gate_diagnostics` and `uplift`, so the
+     operator sees whether the blocker is side separation, participation,
+     displacement, BBP pressure, cost edge, stale data, or missing telemetry.
 
 2. **State contract**
    - Use `FIRING`, `NEAR_TRIGGER`, `WAITING`, `WARMING`, `STALE`, `NO_EVAL`.
@@ -34,6 +37,9 @@ No scanner is allowed to promote or trade by itself. Every scanner payload must 
    - Every scanner artifact should include a short `operator_answer`.
    - The answer must say whether the next action is fix data, record more, replay,
      wait for signal, repair exits, or pre-register judgment.
+   - Promotion-readiness rows must include `triage`, separating no-outcome,
+     early negative, stop-dominated, mature negative, low-PF positive, paper
+     waiting, and paper-running states.
 
 ## Runtime Scanners
 
@@ -45,9 +51,13 @@ lead-lag shadow journals.
 Uplift:
 - Expand proximity from funding/z only to score, score delta, TQI, quality
   strength, BBP, volume, body impulse, and expected net edge.
+- Classify each primary blocker into a gate category and action:
+  `REQUIRE_CLEARER_SIDE_DOMINANCE`, `WAIT_FOR_REAL_PARTICIPATION`,
+  `WAIT_FOR_TRUE_IMPULSE_CANDLE`, `REPAIR_EXECUTION_ROUTE_OR_SKIP`,
+  `FIX_DATA_FRESHNESS`, or `EXPOSE_THRESHOLD_TELEMETRY`.
 - Distinguish stale paper-observation lanes from stale active shadow lanes.
-- Add per-row `next_action`: `FIX_FRESHNESS`, `WAIT_MARKET`, `ADD_TELEMETRY`,
-  `WATCH_NEAR_TRIGGER`, `OBSERVE_PAPER`.
+- Add per-row `uplift`: `FIX_DATA_FRESHNESS`, `WAIT_MARKET`,
+  `EXPOSE_THRESHOLD_TELEMETRY`, `WATCH_NEAR_TRIGGER`, `OBSERVE_PAPER`.
 
 ### `event_leadlag_shadow`
 
@@ -196,6 +206,11 @@ Current role: truth table for paper/shadow/live readiness.
 Uplift:
 - Split `PAPER_ACTIVE` from `PAPER_REVIEW_READY`.
 - Show exact blockers: trades, days, PF, net, paper verdict, live ladder.
+- Add `triage.bucket` and `triage.action`:
+  `EARLY_STOP_DOMINATED` means refactor entry/exit quality before promotion;
+  `MATURE_NEGATIVE_EDGE` means disable paper promotion until refactored;
+  `NO_LIVE_OUTCOMES` means keep observing and inspect realtime scanner;
+  `APPROVED_PAPER_RUNNING` remains visibility only, not promotion.
 - Never let runtime firing count imply live-readiness.
 
 ### `alpha_council`
@@ -238,8 +253,25 @@ Uplift:
 
 ## Immediate Priority
 
-1. Wire configured scanners that cannot instantiate.
-2. Eliminate `no threshold telemetry exposed` for all active runtime lanes.
-3. Add failure bucket consistency from replay -> council -> UI.
-4. Make stale paper-observation lanes visually separate from active scanners.
+1. Refactor quant/alpha-stack lanes with stop-dominated shadow outcomes before
+   any paper promotion discussion.
+2. Reduce side-conflict lanes: the VM snapshot shows side separation as the top
+   runtime blocker, so prefer family/side isolation over threshold loosening.
+3. Fix stale runtime lanes before tuning; stale rows are data/runtime defects.
+4. Add failure bucket consistency from replay -> council -> UI.
 5. Only then discuss threshold changes.
+
+## VM Snapshot: 2026-07-16
+
+Using the live VM journals copied read-only from `161.118.252.185`, the gate
+refactor classified the active scanner estate as:
+
+- Realtime scanner: 62 rows, 0 firing, 1 near-trigger, 49 waiting, 12 stale.
+- Top runtime blockers: side separation 18, trend quality 7, participation 5,
+  displacement 4, crowding/extension 6 combined.
+- Readiness triage: 7 `EARLY_STOP_DOMINATED` shadow lanes, 4
+  `NO_LIVE_OUTCOMES`, 9 approved paper lanes running, 20 paper lanes waiting.
+
+Trading interpretation: do not loosen gates. The elevation path is stricter
+side/family isolation, cleaner impulse/participation filters, execution proof,
+and exit-geometry repair for the stop-dominated lanes.

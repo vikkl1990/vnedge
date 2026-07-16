@@ -163,6 +163,8 @@ def _manifest_lane_row(
     symbol = str(lane.get("symbol") or "")
     perf = shadow_index.get(shadow_perf_key(strategy, exchange, symbol))
     status, blockers = _shadow_status(perf, config)
+    evidence = _shadow_evidence(perf)
+    triage = _shadow_triage(status, evidence, blockers, config)
     paper_review_ready = status == STATUS_PAPER_REVIEW_READY
     return {
         "row_type": "runtime_shadow_lane",
@@ -177,12 +179,13 @@ def _manifest_lane_row(
         "live_ready": False,
         "can_trade": False,
         "can_promote": False,
-        "evidence": _shadow_evidence(perf),
+        "evidence": evidence,
         "blockers": blockers,
+        "triage": triage,
         "next_action": (
             "open human paper-trial approval review"
             if paper_review_ready
-            else "keep shadow lane running until firing and positive after costs"
+            else triage["action"]
         ),
         "live_blockers": [
             "paper trial not completed",
@@ -215,6 +218,12 @@ def _shadow_trial_row(trial: Mapping[str, Any]) -> dict[str, Any]:
             "no live shadow outcomes yet",
             "paper trial not approved",
         ],
+        "triage": {
+            "bucket": "REPLAY_POSITIVE_NEEDS_ADAPTER",
+            "priority": "build",
+            "action": "build runtime shadow adapter, then collect live outcomes",
+            "rationale": "execution replay is promising but not connected to live shadow evidence",
+        },
         "next_action": trial.get("next_action")
         or "build runtime shadow adapter, then collect live shadow outcomes",
     }
@@ -234,6 +243,12 @@ def _blocked_row(blocked: Mapping[str, Any]) -> dict[str, Any]:
         "can_promote": False,
         "evidence": {"latest_judgment": blocked.get("latest_judgment")},
         "blockers": [str(blocked.get("reason") or "blocked by manifest")],
+        "triage": {
+            "bucket": "MANIFEST_BLOCKED",
+            "priority": "blocked",
+            "action": "resolve blocker through a fresh approved judgment",
+            "rationale": "blocked manifest candidates are not eligible for elevation",
+        },
         "next_action": "resolve blocker with a fresh approved judgment or locked runtime params",
     }
 
@@ -254,6 +269,7 @@ def _paper_trial_rows(journal_dir: Path) -> list[dict[str, Any]]:
             if int(evidence.get("paper_order_intents") or 0) > 0
             else STATUS_PAPER_WAITING
         )
+        triage = _paper_triage(status, evidence)
         rows.append({
             "row_type": "paper_trial_lane",
             "lane_id": path.name.removesuffix(".journal.jsonl"),
@@ -272,10 +288,11 @@ def _paper_trial_rows(journal_dir: Path) -> list[dict[str, Any]]:
             "can_promote": False,
             "evidence": evidence,
             "blockers": _paper_blockers(evidence),
+            "triage": triage,
             "next_action": (
-                "keep approved paper trial running and judge only against its locked manifest"
+                triage["action"]
                 if status == STATUS_PAPER_ACTIVE
-                else "keep approved paper trial online until the next valid signal"
+                else triage["action"]
             ),
             "live_blockers": [
                 "paper trial verdict not complete",
@@ -465,6 +482,113 @@ def _shadow_evidence(perf: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _shadow_triage(
+    status: str,
+    evidence: Mapping[str, Any],
+    blockers: list[str],
+    config: ReadinessConfig,
+) -> dict[str, str]:
+    trades = int(evidence.get("virtual_trades") or 0)
+    span_days = float(evidence.get("span_days") or 0.0)
+    net = float(evidence.get("net_usd") or 0.0)
+    profit_factor = _optional_float(evidence.get("profit_factor"))
+    resolutions = evidence.get("resolutions") or {}
+    stops = int(resolutions.get("stop") or 0) if isinstance(resolutions, Mapping) else 0
+    targets = (
+        int(resolutions.get("target") or 0)
+        if isinstance(resolutions, Mapping)
+        else 0
+    )
+    timeouts = (
+        int(resolutions.get("timeout") or 0)
+        if isinstance(resolutions, Mapping)
+        else 0
+    )
+
+    if status == STATUS_PAPER_REVIEW_READY:
+        return {
+            "bucket": "PAPER_REVIEW_CANDIDATE",
+            "priority": "review",
+            "action": "open human paper-trial approval review",
+            "rationale": "shadow evidence clears sample, span, net, and profit-factor gates",
+        }
+    if trades == 0:
+        return {
+            "bucket": "NO_LIVE_OUTCOMES",
+            "priority": "observe",
+            "action": "keep shadow lane running; inspect realtime scanner if it remains silent",
+            "rationale": "no resolved shadow outcomes exist yet",
+        }
+    if net <= config.min_shadow_net_usd and (
+        trades >= config.min_shadow_trades or span_days >= config.min_shadow_span_days
+    ):
+        return {
+            "bucket": "MATURE_NEGATIVE_EDGE",
+            "priority": "refactor_or_disable",
+            "action": (
+                "disable paper promotion and refactor entry/exit before more "
+                "runtime exposure"
+            ),
+            "rationale": "negative after costs despite enough shadow sample or time span",
+        }
+    if net <= config.min_shadow_net_usd and stops >= max(1, targets + timeouts):
+        return {
+            "bucket": "EARLY_STOP_DOMINATED",
+            "priority": "refactor",
+            "action": "tighten candidate quality or exit geometry before promotion discussion",
+            "rationale": (
+                "early outcomes are stop-dominated: "
+                f"stops={stops}, targets={targets}, timeouts={timeouts}"
+            ),
+        }
+    if net <= config.min_shadow_net_usd:
+        return {
+            "bucket": "EARLY_NEGATIVE_SAMPLE",
+            "priority": "observe",
+            "action": "collect the minimum shadow sample, but keep paper/live blocked",
+            "rationale": "negative so far, but sample/span gates are still open",
+        }
+    if profit_factor is not None and profit_factor < config.min_shadow_profit_factor:
+        return {
+            "bucket": "POSITIVE_LOW_PROFIT_FACTOR",
+            "priority": "refactor",
+            "action": "raise trade quality or improve payoff before paper review",
+            "rationale": "net is positive but gross losses are too large for the PF gate",
+        }
+    if blockers:
+        return {
+            "bucket": "COLLECT_MORE_EVIDENCE",
+            "priority": "observe",
+            "action": "keep collecting shadow outcomes until sample/span gates are satisfied",
+            "rationale": "; ".join(blockers[:2]),
+        }
+    return {
+        "bucket": "UNKNOWN_REVIEW",
+        "priority": "inspect",
+        "action": "inspect shadow evidence manually",
+        "rationale": "status/blocker combination was not recognized",
+    }
+
+
+def _paper_triage(status: str, evidence: Mapping[str, Any]) -> dict[str, str]:
+    if status == STATUS_PAPER_ACTIVE:
+        return {
+            "bucket": "APPROVED_PAPER_RUNNING",
+            "priority": "observe",
+            "action": (
+                "keep approved paper trial running and judge only against its "
+                "locked manifest"
+            ),
+            "rationale": "paper order activity exists, but paper status is visibility only",
+        }
+    return {
+        "bucket": "APPROVED_PAPER_WAITING",
+        "priority": "observe",
+        "action": "keep approved paper trial online until the next valid signal",
+        "rationale": "approved paper lane has not submitted an order intent yet",
+    }
+
+
 def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     statuses: dict[str, int] = {}
     for row in rows:
@@ -501,6 +625,7 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "shadow_not_firing": statuses.get(STATUS_SHADOW_NOT_FIRING, 0),
         "shadow_negative": statuses.get(STATUS_SHADOW_NEGATIVE, 0),
+        "triage_counts": _triage_counts(rows),
         "paper_review_ready": sum(1 for row in rows if row.get("paper_review_ready")),
         "live_ready": sum(1 for row in rows if row.get("live_ready")),
         "status_counts": statuses,
@@ -523,6 +648,19 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         f"{firing} runtime shadow lane(s) are firing, {not_firing} are not firing, "
         f"and {trials} replay-positive trial(s) still need runtime adapters."
     )
+
+
+def _triage_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        triage = row.get("triage")
+        if not isinstance(triage, Mapping):
+            continue
+        bucket = str(triage.get("bucket") or "")
+        if not bucket:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str, str]:
