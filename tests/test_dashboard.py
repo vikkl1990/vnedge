@@ -400,6 +400,10 @@ def test_dashboard_realtime_scanner_prefers_primary_blocker_pressure():
     assert "if(blocker.name)" in html
     assert "if(diag.all_gates_passed)return \"all gates passed\";" in html
     assert "const failed=prox.filter(p=>num(p.gap)>0);" in html
+    assert "Paper Fresh" in html
+    assert "num(s.paper_fresh_lanes)+\"/\"+num(s.paper_lanes)" in html
+    assert "num(s.paper_order_intents_1h)" in html
+    assert "num(s.paper_stale_lanes)" in html
 
 
 def test_no_snapshot_yet_is_503():

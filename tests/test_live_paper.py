@@ -98,7 +98,8 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
 
 
 def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
-                  tick_stops_enabled=True, post_exit_cooldown_bars=1):
+                  tick_stops_enabled=True, post_exit_cooldown_bars=1,
+                  trial_meta=None):
     config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
                           tick_stops_enabled=tick_stops_enabled,
                           post_exit_cooldown_bars=post_exit_cooldown_bars)
@@ -110,6 +111,7 @@ def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PA
     session = LivePaperSession(
         strategy or AlwaysLong(), feed, history(), config,
         gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+        trial_meta=trial_meta,
     )
     return session, exchange
 
@@ -178,6 +180,28 @@ async def test_paper_mode_is_not_primed_on_startup(tmp_path):
 
     assert session.orders_submitted == 0      # nothing submitted from a prime
     assert exchange.get_positions() == []
+
+
+async def test_paper_observation_prime_journals_without_restart_order(tmp_path):
+    feed = FakeFeed([])
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        mode=RunnerMode.PAPER,
+        trial_meta={"trial_id": "always_long_paper_observation"},
+    )
+
+    await session.run(max_bars=0)
+
+    assert session.orders_submitted == 0
+    assert session.live_signals == 1
+    assert session.signals == 0
+    assert exchange.get_positions() == []
+    evals = [r["payload"] for r in session.journal.read_all() if r["kind"] == "lane_eval"]
+    assert len(evals) == 3
+    assert [e["backfill"] for e in evals] == [True, True, False]
+    assert evals[-1]["fired"] is True
+    assert evals[-1]["skip_reason"] == "paper_observation_prime: no restart order submitted"
 
 
 async def test_non_forward_candles_dropped(tmp_path):
@@ -305,6 +329,8 @@ async def test_lane_eval_journaled_for_every_evaluated_bar(tmp_path):
         assert r["payload"]["fired"] is True  # AlwaysLong fires every bar
         assert r["payload"]["backfill"] is False
         assert r["payload"]["strategy_id"] == "always_long"
+        assert r["payload"]["exchange"] == "fake"
+        assert r["payload"]["timeframe"] == "1h"
         assert "features" in r["payload"] and "thresholds" in r["payload"]
     # the newest evaluation is surfaced for the dashboard snapshot
     assert session.last_eval is not None
