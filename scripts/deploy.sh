@@ -53,7 +53,7 @@ fi
 # committed code while NEED_BUILD reads 0. #149's code sat un-deployed for a day
 # exactly this way. So: if the running image is older than the newest commit to
 # any image input, force a rebuild regardless of the git diff.
-run_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1)
+run_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1 || true)
 if [ -n "$run_img" ]; then
     img_epoch=$(date -d "$(docker inspect --format '{{.Created}}' "$run_img")" +%s 2>/dev/null || echo 0)
     code_epoch=$(git log -1 --format=%ct -- $IMAGE_INPUTS 2>/dev/null || echo 0)
@@ -61,6 +61,9 @@ if [ -n "$run_img" ]; then
         NEED_BUILD=1
         echo "running image predates committed code (img $img_epoch < code $code_epoch) — forcing rebuild"
     fi
+else
+    NEED_BUILD=1
+    echo "no inspectable running image for multi-lane-shadow — forcing rebuild"
 fi
 if [ "$NEED_BUILD" = 1 ]; then
     echo "building image (isolated from recreation)..."
