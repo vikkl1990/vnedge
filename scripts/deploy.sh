@@ -69,14 +69,24 @@ if [ "$NEED_BUILD" = 1 ]; then
     echo "building image (isolated from recreation)..."
     # Explicit build so a failure aborts the deploy loudly (set -e); a silent
     # build failure once left a stale image serving while the deploy "passed".
-    # Compose exports every `build: .` service as a separate image. Letting
-    # BuildKit unpack them all at once has wedged this VM in futex waits after
-    # cache pruning, while the running fleet stayed healthy. Serialize by
-    # default; operators can opt back into parallel builds explicitly.
-    if ! COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}" docker compose build; then
+    # Compose treats every `build: .` service as a separate export target even
+    # though they all run the same app image with different commands. Exporting
+    # 20+ identical images in one BuildKit bake has wedged this VM in futex
+    # waits. Build the canonical app service once, then tag that image for the
+    # sibling app services so `up --no-build` can recreate from local images.
+    APP_BUILD_SERVICE=multi-lane-shadow
+    COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
+    APP_BUILD_IMAGE="${COMPOSE_PROJECT}-${APP_BUILD_SERVICE}:latest"
+    if ! docker compose build "$APP_BUILD_SERVICE"; then
         echo "IMAGE BUILD FAILED — aborting deploy, nothing recreated" >&2
         exit 1
     fi
+    for svc in $(docker compose config --services); do
+        case "$svc" in
+            "$APP_BUILD_SERVICE"|dashboard-tls) continue ;;
+        esac
+        docker tag "$APP_BUILD_IMAGE" "${COMPOSE_PROJECT}-${svc}:latest"
+    done
 fi
 
 # Recreate from the already-built image. --no-build guarantees no build spike
