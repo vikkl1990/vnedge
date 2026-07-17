@@ -2191,7 +2191,184 @@
   .app-footer .af-warn{color:var(--amber)}
   .app-footer .af-clock{margin-left:auto;font-family:var(--mono);color:var(--muted)}
 
+  /* Production quant cockpit: live activity spine + venue pressure tape. */
+  .quant-deck{
+    border-color:rgba(72,229,211,.46);
+    background:
+      linear-gradient(180deg, rgba(8,13,19,.99), rgba(5,8,13,.99)),
+      repeating-linear-gradient(90deg, rgba(72,229,211,.035) 0, rgba(72,229,211,.035) 1px, transparent 1px, transparent 74px);
+  }
+  .quant-deck h2{
+    min-height:38px;
+    border-bottom-color:rgba(72,229,211,.25);
+    background:linear-gradient(90deg, rgba(4,10,15,.99), rgba(10,17,24,.99) 58%, rgba(20,16,10,.96));
+  }
+  .activity-spine{
+    display:grid;
+    grid-template-columns:repeat(7,minmax(0,1fr));
+    gap:1px;
+    border-bottom:1px solid rgba(72,229,211,.18);
+    background:rgba(72,229,211,.16);
+  }
+  .activity-cell{
+    min-width:0;
+    min-height:58px;
+    padding:8px 10px;
+    background:rgba(5,10,15,.94);
+    border-top:1px solid rgba(255,255,255,.025);
+  }
+  .activity-cell span{
+    display:block;
+    color:var(--quiet);
+    font-size:8.5px;
+    font-weight:860;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .activity-cell b{
+    display:block;
+    margin-top:5px;
+    color:var(--text);
+    font-family:var(--mono);
+    font-size:19px;
+    line-height:1;
+    font-weight:950;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .activity-cell i{
+    display:block;
+    margin-top:5px;
+    color:var(--muted);
+    font-size:9.5px;
+    line-height:1.2;
+    font-style:normal;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .activity-cell.good{background:linear-gradient(180deg, rgba(10,31,22,.96), rgba(5,12,10,.96))}
+  .activity-cell.warn{background:linear-gradient(180deg, rgba(39,28,12,.96), rgba(14,11,6,.96))}
+  .activity-cell.bad{background:linear-gradient(180deg, rgba(40,13,18,.96), rgba(13,7,10,.96))}
+  .activity-cell.info{background:linear-gradient(180deg, rgba(9,24,40,.96), rgba(5,10,18,.96))}
+  .activity-cell.plan{background:linear-gradient(180deg, rgba(24,18,40,.96), rgba(10,8,18,.96))}
+  .activity-cell.good b{color:var(--green)}
+  .activity-cell.warn b{color:var(--amber)}
+  .activity-cell.bad b{color:var(--red)}
+  .activity-cell.info b{color:var(--blue)}
+  .activity-cell.plan b{color:var(--violet)}
+  .deck-answer{
+    min-height:30px;
+    padding:7px 12px;
+    border-bottom:1px solid rgba(82,104,130,.28);
+    color:#c7d2dd;
+    background:rgba(3,7,11,.72);
+    font-family:var(--mono);
+    font-size:10.5px;
+    line-height:1.45;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .venue-strip{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:5px;
+    margin:7px 0;
+  }
+  .venue-card{
+    min-width:0;
+    border:1px solid rgba(82,104,130,.44);
+    border-radius:6px;
+    background:rgba(3,8,13,.55);
+    padding:6px 7px;
+  }
+  .venue-card .venue-name{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:6px;
+    color:#e8f0f8;
+    font-family:var(--mono);
+    font-size:10px;
+    font-weight:900;
+    text-transform:uppercase;
+  }
+  .venue-card .venue-count{
+    color:var(--quiet);
+    font-size:9px;
+    font-weight:700;
+  }
+  .venue-card .venue-metrics{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:9.5px;
+    line-height:1.25;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .venue-card.good{border-color:rgba(51,209,122,.38);background:rgba(9,29,21,.55)}
+  .venue-card.warn{border-color:rgba(255,184,77,.42);background:rgba(33,24,10,.55)}
+  .venue-card.bad{border-color:rgba(255,90,104,.44);background:rgba(34,12,17,.55)}
+  .venue-card.info{border-color:rgba(77,178,255,.38);background:rgba(8,22,36,.55)}
+  .deck-journal{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    min-height:34px;
+    padding:7px 10px;
+    border-top:1px solid rgba(82,104,130,.24);
+    background:rgba(4,8,13,.82);
+    overflow-x:auto;
+  }
+  .deck-journal:before{
+    content:"JOURNAL";
+    flex:0 0 auto;
+    color:var(--quiet);
+    font-size:9px;
+    font-weight:900;
+    letter-spacing:.1em;
+  }
+  .journal-chip{
+    flex:0 0 auto;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    max-width:360px;
+    min-height:22px;
+    padding:3px 8px;
+    border:1px solid rgba(82,104,130,.48);
+    border-radius:999px;
+    background:rgba(7,12,19,.9);
+    color:var(--muted);
+    font-family:var(--mono);
+    font-size:9.5px;
+    white-space:nowrap;
+  }
+  .journal-chip .jc-time{color:var(--quiet)}
+  .journal-chip .jc-event{font-weight:900;text-transform:uppercase;letter-spacing:.04em}
+  .journal-chip .jc-lane{max-width:118px;overflow:hidden;text-overflow:ellipsis}
+  .journal-chip.good{border-color:rgba(51,209,122,.42);color:var(--green)}
+  .journal-chip.warn{border-color:rgba(255,184,77,.42);color:var(--amber)}
+  .journal-chip.bad{border-color:rgba(255,90,104,.48);color:var(--red)}
+  .journal-chip.info{border-color:rgba(77,178,255,.42);color:var(--blue)}
+  .lane-row.good td:first-child,.scanner-row.good td:first-child{box-shadow:inset 3px 0 0 rgba(51,209,122,.9)}
+  .lane-row.warn td:first-child,.scanner-row.warn td:first-child{box-shadow:inset 3px 0 0 rgba(255,184,77,.9)}
+  .lane-row.bad td:first-child,.scanner-row.bad td:first-child{box-shadow:inset 3px 0 0 rgba(255,90,104,.95)}
+  .lane-row.plan td:first-child,.scanner-row.info td:first-child{box-shadow:inset 3px 0 0 rgba(169,140,255,.85)}
+  .journal-row.good td:first-child{box-shadow:inset 3px 0 0 rgba(51,209,122,.9)}
+  .journal-row.bad td:first-child{box-shadow:inset 3px 0 0 rgba(255,90,104,.95)}
+  .journal-row.warn td:first-child{box-shadow:inset 3px 0 0 rgba(255,184,77,.9)}
+
   @media(max-width:900px){
+    .activity-spine{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .venue-strip{grid-template-columns:1fr}
     .doc-grid,.cost-grid,.provenance-grid{grid-template-columns:1fr}
   }
   @media(max-width:1040px){
@@ -2327,6 +2504,16 @@
           <span>read-only terminal</span>
         </span>
       </h2>
+      <div class="activity-spine" aria-label="live scanner production tape">
+        <div class="activity-cell idle" id="act_paper_fresh"><span>Paper fresh</span><b id="qd_paper_fresh">--</b><i id="qd_paper_fresh_sub">fresh / configured</i></div>
+        <div class="activity-cell idle" id="act_signals_1h"><span>Signals 1h</span><b id="qd_signals_1h">--</b><i id="qd_signals_1h_sub">live journal fires</i></div>
+        <div class="activity-cell idle" id="act_orders_1h"><span>Orders 1h</span><b id="qd_orders_1h">--</b><i id="qd_orders_1h_sub">paper intents</i></div>
+        <div class="activity-cell idle" id="act_orders_24h"><span>Orders 24h</span><b id="qd_orders_24h">--</b><i id="qd_orders_24h_sub">paper intents</i></div>
+        <div class="activity-cell idle" id="act_stale"><span>Stale paper</span><b id="qd_stale">--</b><i id="qd_stale_sub">needs data repair</i></div>
+        <div class="activity-cell idle" id="act_review"><span>Review ready</span><b id="qd_review">--</b><i id="qd_review_sub">promotion queue</i></div>
+        <div class="activity-cell idle" id="act_live_ready"><span>Live ready</span><b id="qd_live_ready">--</b><i id="qd_live_ready_sub">must stay zero</i></div>
+      </div>
+      <div class="deck-answer" id="qd_scanner_answer">scanner production tape waiting for live journals</div>
       <div class="quant-grid">
         <div class="quant-panel" aria-label="market microstructure tape">
           <div class="qp-head">
@@ -2385,6 +2572,7 @@
             <div class="qp-value" id="qd_lane_focus">--</div>
             <div class="qp-note" id="qd_lane_reason">waiting for scanner state</div>
           </div>
+          <div class="venue-strip" id="qd_venue_strip" aria-label="venue pressure strip"></div>
           <div class="lane-radar" id="qd_lanes"></div>
         </div>
 
@@ -2404,6 +2592,7 @@
           </div>
         </div>
       </div>
+      <div class="deck-journal" id="qd_journal_strip" aria-label="latest execution journal tape"></div>
     </section>
 
     <div class="zone zone-floor" id="zoneTradingFloor" data-view-group aria-label="trading floor zone">
@@ -3553,6 +3742,7 @@
       events.sort((a,b)=>String(b.ts).localeCompare(String(a.ts)));
       events.slice(0,25).forEach(e=>{
         const tr=document.createElement("tr");
+        tr.className="journal-row "+eventTone(e.event);
         appendCell(tr,String(e.ts||"").replace("T"," ").slice(0,19),"mono");
         appendCell(tr,e.lane,"mono");
         const tone=e.event==="fill"||e.event==="shadow_approved"||e.event==="order_submitted"?"pos":
@@ -3616,6 +3806,189 @@
     if(meter)meter.className="signal-meter "+(tone||"idle");
     if(bar)bar.style.width=Math.max(0,Math.min(100,num(width))).toFixed(1)+"%";
     text(valueId,label);
+  }
+  function setActivityCell(key,value,detail,tone){
+    const cell=$("act_"+key);
+    if(cell)cell.className="activity-cell "+(tone||"idle");
+    text("qd_"+key,value);
+    text("qd_"+key+"_sub",detail);
+  }
+  function eventTone(event){
+    const e=String(event||"").toLowerCase();
+    if(e.includes("fill")||e.includes("approved")||e.includes("submitted")||e.includes("tp"))
+      return "good";
+    if(e.includes("reject")||e.includes("skip")||e.includes("stop")||e.includes("risk"))
+      return "bad";
+    if(e.includes("signal")||e.includes("near")||e.includes("entry"))
+      return "warn";
+    return "info";
+  }
+  function runtimeVenueName(value){
+    const v=String(value||"--").replace("binanceusdm","binance").replace("delta_india","delta");
+    return v==="--"?"venue":v;
+  }
+  function venueTone(v){
+    if(num(v.stale)>0&&num(v.fresh)===0)return "bad";
+    if(num(v.firing)>0)return "good";
+    if(num(v.near)>0)return "warn";
+    if(num(v.stale)>0)return "warn";
+    if(num(v.rows)>0)return "info";
+    return "idle";
+  }
+  function scannerRows(){
+    return Array.isArray(lastRealtimeScanner.rows)?lastRealtimeScanner.rows:[];
+  }
+  function renderDeckActivity(){
+    const s=lastRealtimeScanner.summary||{};
+    const r=lastLaneReadiness.summary||{};
+    const published=!!(Object.keys(s).length||scannerRows().length);
+    const paperFresh=num(s.paper_fresh_lanes);
+    const paperLanes=num(s.paper_lanes);
+    const stale=num(s.paper_stale_lanes);
+    const sig1h=num(s.paper_signals_1h);
+    const ord1h=num(s.paper_order_intents_1h);
+    const ord24h=num(s.paper_order_intents_24h);
+    const reviewReady=num(r.paper_review_ready)+num(r.ready_for_paper)+num(r.paper_ready);
+    const liveReady=num(r.live_ready);
+    setActivityCell(
+      "paper_fresh",
+      published?(paperFresh+"/"+paperLanes):"--",
+      published?("active lanes "+num(s.paper_active_lanes_1h)+" in 1h"):"scanner not published",
+      !published?"idle":paperLanes&&paperFresh===0?"bad":stale?"warn":"good"
+    );
+    setActivityCell(
+      "signals_1h",
+      published?String(sig1h):"--",
+      published?(num(s.paper_signals_24h)+" in 24h"):"live journals only",
+      sig1h>0?"good":published?"idle":"idle"
+    );
+    setActivityCell(
+      "orders_1h",
+      published?String(ord1h):"--",
+      published?(ord24h+" in 24h"):"paper intents",
+      ord1h>0?"good":ord24h>0?"warn":published?"idle":"idle"
+    );
+    setActivityCell(
+      "orders_24h",
+      published?String(ord24h):"--",
+      published?(num(s.paper_order_lanes)+" paper lane(s) produced"):"paper orders",
+      ord24h>0?"info":published?"idle":"idle"
+    );
+    setActivityCell(
+      "stale",
+      published?String(stale):"--",
+      published?("total stale "+num(s.stale)):"freshness pending",
+      stale>3?"bad":stale>0?"warn":published?"good":"idle"
+    );
+    setActivityCell(
+      "review",
+      Object.keys(r).length?String(reviewReady):"--",
+      Object.keys(r).length?(num(r.paper_active)+" active / "+num(r.paper_runtime_lanes)+" runtime"):"lane readiness waiting",
+      reviewReady>0?"plan":Object.keys(r).length?"idle":"idle"
+    );
+    setActivityCell(
+      "live_ready",
+      Object.keys(r).length?String(liveReady):"--",
+      Object.keys(r).length?("blocked "+num(r.blocked)):"no live claim",
+      liveReady>0?"warn":Object.keys(r).length?"good":"idle"
+    );
+    text("qd_scanner_answer",
+      lastRealtimeScanner.operator_answer||
+      (published?"scanner published without operator answer":"scanner production tape waiting for live journals"));
+  }
+  function renderDeckVenues(lanes){
+    const box=$("qd_venue_strip");
+    if(!box)return;
+    const venues=new Map();
+    scannerRows()
+      .filter(r=>r&&r.row_type==="runtime_lane")
+      .forEach(r=>{
+        const key=runtimeVenueName(r.exchange);
+        const v=venues.get(key)||{rows:0,paper:0,firing:0,near:0,stale:0,fresh:0,signals1h:0,orders1h:0};
+        v.rows+=1;
+        if(String(r.mode)==="paper")v.paper+=1;
+        if(String(r.state)==="FIRING")v.firing+=1;
+        if(String(r.state)==="NEAR_TRIGGER")v.near+=1;
+        if(String(r.state)==="STALE")v.stale+=1; else v.fresh+=1;
+        const recent=r.recent||{};
+        const h1=recent["1h"]||{};
+        v.signals1h+=num(h1.live_signals);
+        v.orders1h+=num(h1.paper_order_intents);
+        venues.set(key,v);
+      });
+    if(!venues.size){
+      (Array.isArray(lanes)?lanes:[]).forEach(l=>{
+        const key=runtimeVenueName(l.exchange);
+        const v=venues.get(key)||{rows:0,paper:0,firing:0,near:0,stale:0,fresh:0,signals1h:0,orders1h:0};
+        const chip=laneStateChip(l);
+        v.rows+=1;
+        if(String(l.mode||"").toLowerCase().includes("paper"))v.paper+=1;
+        if(chip.label==="NEAR TRIGGER")v.near+=1;
+        if(chip.tone==="idle")v.fresh+=1;
+        venues.set(key,v);
+      });
+    }
+    box.replaceChildren();
+    const ordered=Array.from(venues.entries()).sort((a,b)=>num(b[1].firing)-num(a[1].firing)||num(b[1].near)-num(a[1].near)||String(a[0]).localeCompare(String(b[0])));
+    if(!ordered.length){
+      const card=document.createElement("div");
+      card.className="venue-card idle";
+      card.innerHTML='<div class="venue-name"><span>venues</span><span class="venue-count">0</span></div><div class="venue-metrics">waiting for lane snapshot</div>';
+      box.appendChild(card);
+      return;
+    }
+    ordered.slice(0,3).forEach(([name,v])=>{
+      const card=document.createElement("div");
+      card.className="venue-card "+venueTone(v);
+      const head=document.createElement("div");
+      head.className="venue-name";
+      const n=document.createElement("span");
+      n.textContent=name;
+      const count=document.createElement("span");
+      count.className="venue-count";
+      count.textContent=String(v.rows);
+      head.appendChild(n);
+      head.appendChild(count);
+      const metrics=document.createElement("div");
+      metrics.className="venue-metrics";
+      metrics.textContent="fire "+v.firing+" / near "+v.near+" / stale "+v.stale+" / sig1h "+v.signals1h;
+      card.appendChild(head);
+      card.appendChild(metrics);
+      box.appendChild(card);
+    });
+  }
+  function renderDeckJournal(lanes){
+    const box=$("qd_journal_strip");
+    if(!box)return;
+    const events=[];
+    (Array.isArray(lanes)?lanes:[]).forEach(l=>(l.trade_log||[]).forEach(e=>events.push({lane:l.lane_id,...e})));
+    events.sort((a,b)=>String(b.ts).localeCompare(String(a.ts)));
+    box.replaceChildren();
+    if(!events.length){
+      const chip=document.createElement("span");
+      chip.className="journal-chip info";
+      chip.innerHTML='<span class="jc-time">--:--:--</span><span class="jc-lane">all lanes</span><span class="jc-event">waiting</span>';
+      box.appendChild(chip);
+      return;
+    }
+    events.slice(0,8).forEach(e=>{
+      const chip=document.createElement("span");
+      chip.className="journal-chip "+eventTone(e.event);
+      const ts=document.createElement("span");
+      ts.className="jc-time";
+      ts.textContent=String(e.ts||"").slice(11,19)||"--:--:--";
+      const lane=document.createElement("span");
+      lane.className="jc-lane";
+      lane.textContent=e.lane||"--";
+      const ev=document.createElement("span");
+      ev.className="jc-event";
+      ev.textContent=String(e.event||"event").replaceAll("_"," ");
+      chip.title=e.detail||"";
+      chip.appendChild(ts);
+      chip.appendChild(lane);
+      chip.appendChild(ev);
+      box.appendChild(chip);
+    });
   }
   function laneRank(chip){
     const order={bad:0,warn:1,good:2,plan:3,info:4,idle:5};
@@ -3754,6 +4127,7 @@
     const fillRate=totals.submitted>0?totals.fills/totals.submitted*100:null;
     const focus=deckFocusLane(lanes);
     const reasons=[];
+    renderDeckActivity();
     if(s.kill_switch_active)reasons.push({tag:"BLOCK",text:"kill switch active; exits only",tone:"bad"});
     if(journalTone==="bad")reasons.push({tag:"BLOCK",text:"journal unavailable; no new entries",tone:"bad"});
     if(riskTone==="bad"&&s.risk_status!=="kill_switch_active")reasons.push({tag:"RISK",text:String(s.risk_status||"risk gateway blocked"),tone:"bad"});
@@ -3792,7 +4166,9 @@
     setDeckChip("qd_lane_count",lanes.length+" lane"+(lanes.length===1?"":"s"),lanes.length?"plan":"idle");
     text("qd_lane_focus",focus?(focus.lane.lane_id||focus.lane.exchange||"--"):"--");
     text("qd_lane_reason",focus?(focus.chip.label+" / "+focus.chip.why):"waiting for scanner state");
+    renderDeckVenues(lanes);
     renderDeckLanes(lanes,s);
+    renderDeckJournal(lanes);
 
     setDeckChip("qd_shadow_state",s.live_trading_enabled?"LIVE ARMED":"SHADOW SAFE",s.live_trading_enabled?"warn":"good");
     setDeckMeter("qd_signal_meter","qd_signal_bar","qd_signal_val",
@@ -3832,6 +4208,8 @@
     const cls=(v)=>Number(v)>0.005?"pos":Number(v)<-0.005?"neg":"neutral";
     rows.forEach((l,idx)=>{
       const tr=body.insertRow();
+      const st=laneStateChip(l);
+      tr.className="lane-row "+(st.tone||"idle");
       const laneCell=appendCell(tr,"");
       const rank=document.createElement("span");
       rank.className="lane-rank";
@@ -3843,7 +4221,6 @@
       appendCell(tr,l.mode||s.mode||"--");
       appendCell(tr,String(l.symbol||"").split(":")[0],"clip",l.symbol||"");
       appendCell(tr,String(l.strategy_id||l.strategy||"--").replace(/_v1$/,""),"clip",l.strategy_id||l.strategy||"");
-      const st=laneStateChip(l);
       const stateCell=tr.insertCell();
       appendBadge(stateCell,st.label,st.tone);
       const why=document.createElement("span");
@@ -5394,6 +5771,7 @@
       body.replaceChildren();
       rows.slice(0,18).forEach(row=>{
         const tr=body.insertRow();
+        tr.className="scanner-row "+scannerTone(row.state);
         const stateCell=tr.insertCell();
         appendBadge(stateCell,String(row.state||"WAITING").replaceAll("_"," "),scannerTone(row.state));
         appendCell(tr,String(row.mode||"--").replace("_observation",""),"mono");
@@ -5415,11 +5793,13 @@
     if(table)table.style.display=has?"table":"none";
     const empty=$("rtScannerEmpty");
     if(empty)empty.style.display=has?"none":"block";
+    if(lastOperatorCtx)renderQuantDeck(lastOperatorCtx);
   }
 
   function renderLaneReadiness(payload){
     lastLaneReadiness=payload||{summary:{},rows:[]};
     if(lastOperatorCtx)renderReadiness(lastOperatorCtx);
+    if(lastOperatorCtx)renderQuantDeck(lastOperatorCtx);
     renderInstitutional();
   }
 

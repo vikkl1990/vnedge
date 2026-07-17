@@ -404,6 +404,13 @@ def test_dashboard_realtime_scanner_prefers_primary_blocker_pressure():
     assert "num(s.paper_fresh_lanes)+\"/\"+num(s.paper_lanes)" in html
     assert "num(s.paper_order_intents_1h)" in html
     assert "num(s.paper_stale_lanes)" in html
+    assert "activity-spine" in html
+    assert "qd_paper_fresh" in html
+    assert "function renderDeckActivity()" in html
+    assert "function renderDeckVenues(lanes)" in html
+    assert "function renderDeckJournal(lanes)" in html
+    assert "tr.className=\"scanner-row \"+scannerTone(row.state);" in html
+    assert "tr.className=\"journal-row \"+eventTone(e.event);" in html
 
 
 def test_no_snapshot_yet_is_503():
