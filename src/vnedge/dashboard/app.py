@@ -45,6 +45,7 @@ from vnedge.agent_gateway.jobs import (
     list_jobs,
 )
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
+from vnedge.dashboard.trade_journal import build_trade_journal
 
 logger = logging.getLogger(__name__)
 
@@ -600,6 +601,32 @@ def create_app(
             headers={"Content-Disposition":
                      f'attachment; filename="vnedge_{lane_label}.csv"',
                      **_identity(user)},
+        )
+
+    @app.get("/trade-journal")
+    async def trade_journal(request: Request, limit: str = "200") -> JSONResponse:
+        """Read-only trade journal projection.
+
+        Combines current snapshot positions/orders with per-lane decision
+        journals and hash-chained fill ledgers. No controls, no mutations.
+        """
+        user = _authorized(request)
+        lane = _query_lane(request)
+        since = _since_iso(_query_days(request))
+        try:
+            limit = max(1, min(int(limit), 500))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="limit must be an integer")
+        return JSONResponse(
+            build_trade_journal(
+                snapshot=provider.latest(),
+                journal_dir=lane_dir,
+                history_path=history_path,
+                lane=lane,
+                since=since,
+                limit=limit,
+            ),
+            headers=_identity(user),
         )
 
     @app.get("/incidents")

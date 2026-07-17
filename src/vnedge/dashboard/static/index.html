@@ -2739,6 +2739,42 @@
       </div>
     </section>
 
+    <section id="tradeLedgerBoard" data-view="trading" aria-label="trade journal ledger">
+      <h2>Trade Journal Ledger <span class="tag" id="tjl_policy">read-only projection from snapshot, decision journals, and fill ledgers</span></h2>
+      <div class="mini-grid" aria-label="trade journal summary">
+        <div class="mini-card good"><div class="small-label">Positions</div><div class="big" id="tjl_positions">--</div><div class="tiny">current snapshot</div></div>
+        <div class="mini-card info"><div class="small-label">Orders</div><div class="big" id="tjl_orders">--</div><div class="tiny" id="tjl_open_orders">open --</div></div>
+        <div class="mini-card"><div class="small-label">Fills</div><div class="big" id="tjl_fills">--</div><div class="tiny" id="tjl_fees">fees --</div></div>
+        <div class="mini-card"><div class="small-label">Closed Trades</div><div class="big" id="tjl_closed">--</div><div class="tiny">actual + virtual</div></div>
+        <div class="mini-card"><div class="small-label">Actual PnL</div><div class="big" id="tjl_actual_pnl">--</div><div class="tiny">gross realized fills</div></div>
+        <div class="mini-card"><div class="small-label">Virtual PnL</div><div class="big" id="tjl_virtual_pnl">--</div><div class="tiny" id="tjl_age">journal age --</div></div>
+      </div>
+      <div class="table-wrap">
+        <table id="tjlPositions"><thead><tr>
+          <th>Lane</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Notional</th><th>Unrealized</th>
+        </tr></thead><tbody id="tjlPositionsBody"></tbody></table>
+      </div>
+      <div class="empty" id="tjlPositionsEmpty">no open positions in the current snapshot</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table id="tjlOrders"><thead><tr>
+          <th>Time</th><th>Lane</th><th>State</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Type</th><th>Client ID</th><th>Reason</th>
+        </tr></thead><tbody id="tjlOrdersBody"></tbody></table>
+      </div>
+      <div class="empty" id="tjlOrdersEmpty">no order lifecycle rows in journal tail</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table id="tjlClosed"><thead><tr>
+          <th>Time</th><th>Lane</th><th>Kind</th><th>Side</th><th>Resolution</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Fees / Bps</th>
+        </tr></thead><tbody id="tjlClosedBody"></tbody></table>
+      </div>
+      <div class="empty" id="tjlClosedEmpty">no closed actual or virtual trades in journal tail</div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table id="tjlEvents"><thead><tr>
+          <th>Time</th><th>Lane</th><th>Event</th><th>Detail</th><th>Source</th>
+        </tr></thead><tbody id="tjlEventsBody"></tbody></table>
+      </div>
+      <div class="empty" id="tjlEventsEmpty">no journal events in the selected tail</div>
+    </section>
+
     <div class="workbench" id="performanceWorkbench" data-view="overview">
       <div class="main-column">
         <div class="kpis">
@@ -3096,6 +3132,7 @@
   let lastVibe={summary:{},cards:[]};
   let lastRealtimeScanner={summary:{},rows:[]};
   let lastLaneReadiness={summary:{},rows:[]};
+  let lastTradeJournal={summary:{},positions:[],orders:[],closed_trades:[],events:[]};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
   let lastCostModel=null;
@@ -5713,6 +5750,124 @@
     $("workbench_empty").style.display=tasks.length?"none":"block";
   }
 
+  function orderTone(state){
+    const s=String(state||"").toLowerCase();
+    if(["filled","acknowledged","risk_approved","resolved"].includes(s))return "good";
+    if(["open","partially_filled","intent_created"].includes(s))return "info";
+    if(["timeout_unknown","reconciling"].includes(s))return "warn";
+    if(["rejected","risk_rejected","refused","cancelled"].includes(s))return "bad";
+    return "idle";
+  }
+
+  function renderTradeLedger(payload){
+    const d=payload||{summary:{},positions:[],orders:[],closed_trades:[],events:[]};
+    lastTradeJournal=d;
+    const s=d.summary||{};
+    const positions=Array.isArray(d.positions)?d.positions:[];
+    const orders=Array.isArray(d.orders)?d.orders:[];
+    const closed=Array.isArray(d.closed_trades)?d.closed_trades:[];
+    const events=Array.isArray(d.events)?d.events:[];
+    text("tjl_positions",num(s.positions));
+    text("tjl_orders",num(s.orders));
+    text("tjl_open_orders","open "+num(s.open_orders));
+    text("tjl_fills",num(s.fills));
+    text("tjl_fees","fees "+moneyAbs(s.fees_usd));
+    text("tjl_closed",num(s.closed_trades));
+    text("tjl_actual_pnl",usd(s.actual_realized_pnl_usd));
+    text("tjl_virtual_pnl",usd(s.virtual_net_usd));
+    text("tjl_age",d.generated_at?"updated "+utcClock(d.generated_at):"journal age --");
+    text("tjl_policy",
+      d.can_trade===false&&d.can_promote===false
+        ?"read-only projection from snapshot, decision journals, and fill ledgers"
+        :"policy unknown -- do not use as trade permission");
+    setMiniCardTone("tjl_orders",num(s.open_orders)>0?"info":"idle");
+    setMiniCardTone("tjl_fills",num(s.fills)>0?"good":"idle");
+    setMiniCardTone("tjl_closed",num(s.closed_trades)>0?"plan":"idle");
+    setMiniCardTone("tjl_actual_pnl",classFor(s.actual_realized_pnl_usd)==="neg"?"bad":"good");
+    setMiniCardTone("tjl_virtual_pnl",classFor(s.virtual_net_usd)==="neg"?"warn":"good");
+
+    const posBody=$("tjlPositionsBody");
+    if(posBody){
+      posBody.replaceChildren();
+      positions.slice(0,20).forEach(p=>{
+        const tr=posBody.insertRow();
+        appendCell(tr,p.lane||"--","mono clip");
+        appendCell(tr,String(p.symbol||"--").split(":")[0],"clip",p.symbol||"");
+        appendCell(tr,p.side||"--",p.side==="long"?"pos":"neg");
+        appendCell(tr,finite(p.quantity)?num(p.quantity).toFixed(6):"--","mono");
+        appendCell(tr,finite(p.entry_price)?num(p.entry_price).toFixed(4):"--","mono");
+        appendCell(tr,finite(p.mark_price)?num(p.mark_price).toFixed(4):"--","mono");
+        appendCell(tr,moneyAbs(p.notional_usd));
+        appendCell(tr,usd(p.unrealized_usd),classFor(p.unrealized_usd));
+      });
+      $("tjlPositions").style.display=positions.length?"table":"none";
+      $("tjlPositionsEmpty").style.display=positions.length?"none":"block";
+    }
+
+    const orderBody=$("tjlOrdersBody");
+    if(orderBody){
+      orderBody.replaceChildren();
+      orders.slice(0,30).forEach(o=>{
+        const tr=orderBody.insertRow();
+        appendCell(tr,utcClock(o.ts),"mono",o.ts||"");
+        appendCell(tr,o.lane||"--","mono clip");
+        appendBadge(tr.insertCell(),String(o.state||"--").replaceAll("_"," "),orderTone(o.state));
+        appendCell(tr,String(o.symbol||"--").split(":")[0],"clip",o.symbol||"");
+        appendCell(tr,o.side||"--",String(o.side||"")==="long"?"pos":String(o.side||"")==="short"?"neg":"");
+        appendCell(tr,finite(o.quantity)?num(o.quantity).toFixed(6):"--","mono");
+        appendCell(tr,o.order_type||"--");
+        appendCell(tr,String(o.client_order_id||"--").slice(0,16),"mono clip",o.client_order_id||"");
+        appendCell(tr,o.reason||o.last_event||"--","clip",o.reason||"");
+      });
+      $("tjlOrders").style.display=orders.length?"table":"none";
+      $("tjlOrdersEmpty").style.display=orders.length?"none":"block";
+    }
+
+    const closedBody=$("tjlClosedBody");
+    if(closedBody){
+      closedBody.replaceChildren();
+      closed.slice(0,30).forEach(t=>{
+        const tr=closedBody.insertRow();
+        const pnl=finite(t.virtual_net_usd)?t.virtual_net_usd:
+          finite(t.net_after_this_fill_fee_usd)?t.net_after_this_fill_fee_usd:
+          t.realized_pnl_usd;
+        const fees=finite(t.fee_usd)?moneyAbs(t.fee_usd):
+          finite(t.fees_usd)?moneyAbs(t.fees_usd):
+          finite(t.taker_net_bps)?"taker "+bps(t.taker_net_bps,2)+" / maker "+bps(t.maker_net_bps,2):"--";
+        appendCell(tr,utcClock(t.ts),"mono",t.ts||"");
+        appendCell(tr,t.lane||"--","mono clip");
+        appendCell(tr,String(t.kind||"--").replaceAll("_"," "),"clip");
+        appendCell(tr,t.side||"--",String(t.side||"")==="long"?"pos":String(t.side||"")==="short"?"neg":"");
+        appendCell(tr,t.resolution||"--");
+        appendCell(tr,finite(t.entry_price)?num(t.entry_price).toFixed(4):"--","mono");
+        appendCell(tr,finite(t.exit_price)?num(t.exit_price).toFixed(4):"--","mono");
+        appendCell(tr,usd(pnl),classFor(pnl));
+        appendCell(tr,fees,"clip");
+      });
+      $("tjlClosed").style.display=closed.length?"table":"none";
+      $("tjlClosedEmpty").style.display=closed.length?"none":"block";
+    }
+
+    const eventsBody=$("tjlEventsBody");
+    if(eventsBody){
+      eventsBody.replaceChildren();
+      events.slice(0,40).forEach(e=>{
+        const tr=eventsBody.insertRow();
+        appendCell(tr,utcClock(e.ts),"mono",e.ts||"");
+        appendCell(tr,e.lane||"--","mono clip");
+        const ev=String(e.event||"--");
+        const tone=ev.includes("rejected")||ev.includes("refused")?"bad":
+          ev.includes("outcome")||ev.includes("acknowledged")||ev.includes("fill")?"good":
+          ev.includes("timeout")||ev.includes("risk")?"warn":"";
+        appendCell(tr,ev.replaceAll("_"," "),tone);
+        appendCell(tr,e.detail||"--","clip",e.detail||"");
+        appendCell(tr,String(e.source||"--").replaceAll("_"," "));
+      });
+      $("tjlEvents").style.display=events.length?"table":"none";
+      $("tjlEventsEmpty").style.display=events.length?"none":"block";
+    }
+  }
+
   function scannerTone(state){
     const s=String(state||"");
     if(s==="FIRING")return "good";
@@ -5811,6 +5966,10 @@
     fetchJSON("/realtime-scanner").then(d=>{renderRealtimeScanner(d);reapplyView();}).catch(()=>{});
   }
 
+  function loadTradeJournal(){
+    fetchJSON("/trade-journal?limit=160").then(d=>{renderTradeLedger(d);reapplyView();}).catch(()=>{});
+  }
+
   function loadLaneReadiness(){
     fetchJSON("/lane-readiness").then(d=>{renderLaneReadiness(d);reapplyView();}).catch(()=>{});
   }
@@ -5824,12 +5983,14 @@
   loadResearch();
   loadCouncil();
   loadRealtimeScanner();
+  loadTradeJournal();
   loadLaneReadiness();
   loadIncidents();
   loadCostModel();
   setInterval(loadResearch,60000);
   setInterval(loadCouncil,60000);
   setInterval(loadRealtimeScanner,30000);
+  setInterval(loadTradeJournal,30000);
   setInterval(loadLaneReadiness,30000);
   setInterval(loadIncidents,60000);
   setInterval(loadCostModel,300000);

@@ -64,6 +64,9 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "Multi-exchange Lane Matrix" in html
     assert "Fee Wall" in html
     assert "Signal Pressure &amp; Trade Journal" in html
+    assert "Trade Journal Ledger" in html
+    assert 'id="tradeLedgerBoard"' in html
+    assert "/trade-journal" in html
     assert "scanner-style hot/cold pressure" in html
     # Alpha Council / Proof Queue / Job Ledger removed in the operational-core
     # cleanup (2026-07-16) — they were no-trade research surface.
@@ -719,6 +722,111 @@ def test_export_csv_shape_and_auth(tmp_path):
 def _write_jsonl(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+
+def test_trade_journal_route_projects_journal_and_fill_ledgers(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({
+        "lane_id": "alpha",
+        "ts": "2026-07-16T03:00:00+00:00",
+        "positions": [
+            {
+                "symbol": SYM,
+                "side": "long",
+                "quantity": 0.01,
+                "entry_price": 100.0,
+                "mark_price": 105.0,
+                "notional_usd": 1.05,
+                "unrealized_usd": 0.05,
+            }
+        ],
+        "open_orders": [
+            {
+                "client_order_id": "working-1",
+                "state": "open",
+                "side": "long",
+                "order_type": "limit",
+                "requested_qty": 0.01,
+                "limit_price": 99.0,
+            }
+        ],
+        "session": {
+            "trade_log": [
+                {
+                    "ts": "2026-07-16T02:55:00+00:00",
+                    "event": "order_submitted",
+                    "detail": "working long limit",
+                }
+            ]
+        },
+    })
+    _write_jsonl(tmp_path / "alpha.fills.jsonl", [
+        {
+            "ts": "2026-07-16T02:58:00+00:00",
+            "symbol": SYM,
+            "side": "sell",
+            "quantity": 0.01,
+            "price": 105.0,
+            "fee_usd": 0.01,
+            "realized_pnl_usd": 0.05,
+            "client_order_id": "exit-1",
+            "hash": "abc",
+        }
+    ])
+    _write_jsonl(tmp_path / "alpha.journal.jsonl", [
+        {
+            "ts": "2026-07-16T02:50:00+00:00",
+            "kind": "order_intent",
+            "payload": {
+                "client_order_id": "working-1",
+                "intent": {
+                    "symbol": SYM,
+                    "side": "long",
+                    "quantity": 0.01,
+                    "order_type": "limit",
+                    "strategy_id": "test_strategy",
+                },
+            },
+        },
+        {
+            "ts": "2026-07-16T02:59:00+00:00",
+            "kind": "shadow_outcome",
+            "payload": {
+                "intent_key": "v1",
+                "resolution": "target",
+                "side": "long",
+                "virtual_net_usd": 0.33,
+                "entry_price": 100.0,
+                "exit_price": 103.0,
+                "fees_usd": 0.02,
+            },
+        },
+    ])
+    client = TestClient(create_app(
+        provider, token="t3st-token",
+        history_path=tmp_path / "alpha.equity.jsonl", journal_dir=tmp_path,
+    ))
+
+    assert client.get("/trade-journal").status_code == 401
+    assert client.get("/trade-journal?token=wrong").status_code == 401
+    assert client.get("/trade-journal?token=t3st-token&lane=../bad").status_code == 400
+    assert client.get("/trade-journal?token=t3st-token&limit=nope").status_code == 400
+
+    response = client.get("/trade-journal?token=t3st-token&lane=alpha")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["policy"]["read_only"] is True
+    assert payload["policy"]["can_trade"] is False
+    assert payload["summary"]["positions"] == 1
+    assert payload["summary"]["open_orders"] == 1
+    assert payload["summary"]["fills"] == 1
+    assert payload["summary"]["closed_trades"] == 2
+    assert payload["orders"][0]["client_order_id"] == "working-1"
+    assert {row["kind"] for row in payload["closed_trades"]} == {
+        "actual_closing_fill",
+        "shadow_outcome",
+    }
+    assert any(event["source"] == "snapshot_trade_log" for event in payload["events"])
 
 
 def _incident_world(tmp_path):
