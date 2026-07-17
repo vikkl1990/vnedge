@@ -62,6 +62,10 @@ from vnedge.research.factor_ranker import (
     build_factor_ranker_payload,
     write_factor_ranker_payload,
 )
+from vnedge.research.public_bot_inspiration import (
+    publish_public_bot_inspiration,
+    run_public_bot_inspiration,
+)
 from vnedge.research.shadow_perf_reader import DEFAULT_JOURNAL_DIR, read_shadow_perf
 from vnedge.research.shadow_manifest import (
     generate_shadow_manifest,
@@ -693,6 +697,12 @@ def _factor_ranker_enabled() -> bool:
     }
 
 
+def _public_bot_inspiration_enabled() -> bool:
+    return os.environ.get("PUBLIC_BOT_INSPIRATION_ENABLED", "1").lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
 def _ai_candidate_research_enabled() -> bool:
     return os.environ.get("AI_CANDIDATE_RESEARCH_ENABLED", "1").lower() not in {
         "0", "false", "no", "off",
@@ -806,6 +816,7 @@ class ResearchPayload:
     edge_leaderboard: dict = field(default_factory=dict)
     universe: dict = field(default_factory=dict)
     factor_ranker: dict = field(default_factory=dict)
+    public_bot_inspiration: dict = field(default_factory=dict)
     scalper_research: dict = field(default_factory=dict)
     alpha_factory: dict = field(default_factory=dict)
     scalper_parameter_registry: dict = field(default_factory=dict)
@@ -832,6 +843,7 @@ def publish(payload: ResearchPayload) -> None:
         "drift_alerts": payload.drift_alerts or [],
         "universe": payload.universe or {},
         "factor_ranker": payload.factor_ranker or {},
+        "public_bot_inspiration": payload.public_bot_inspiration or {},
         "scalper_research": payload.scalper_research or {},
         "alpha_factory": payload.alpha_factory or {},
         "scalper_parameter_registry": payload.scalper_parameter_registry or {},
@@ -962,6 +974,25 @@ async def run_cycle() -> list[dict]:
                 },
                 "error": str(exc),
             }
+    public_bot_inspiration: dict = {}
+    if _public_bot_inspiration_enabled():
+        try:
+            public_bot_inspiration = run_public_bot_inspiration()
+            publish_public_bot_inspiration(
+                public_bot_inspiration,
+                OUT_DIR / "public_bot_inspiration_latest.json",
+                OUT_DIR / "public_bot_inspiration_feed.jsonl",
+            )
+        except Exception as exc:  # noqa: BLE001 — link triage must not kill research
+            logger.exception("public bot inspiration matrix failed: %s", exc)
+            public_bot_inspiration = {
+                "policy": {
+                    "research_only": True,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+                "error": str(exc),
+            }
     # research -> shadow bridge: turn profitable winners with locked params into
     # a shadow-lane manifest (cheap, candle data only). Never trades/promotes.
     try:
@@ -1051,6 +1082,7 @@ async def run_cycle() -> list[dict]:
         edge_leaderboard=edge_leaderboard,
         universe=summarize_universe(targets),
         factor_ranker=factor_ranker,
+        public_bot_inspiration=public_bot_inspiration,
         scalper_research=scalper_research,
         alpha_factory=alpha_factory,
         scalper_parameter_registry=scalper_parameter_registry,
