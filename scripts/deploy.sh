@@ -69,7 +69,11 @@ if [ "$NEED_BUILD" = 1 ]; then
     echo "building image (isolated from recreation)..."
     # Explicit build so a failure aborts the deploy loudly (set -e); a silent
     # build failure once left a stale image serving while the deploy "passed".
-    if ! docker compose build; then
+    # Compose exports every `build: .` service as a separate image. Letting
+    # BuildKit unpack them all at once has wedged this VM in futex waits after
+    # cache pruning, while the running fleet stayed healthy. Serialize by
+    # default; operators can opt back into parallel builds explicitly.
+    if ! COMPOSE_PARALLEL_LIMIT="${COMPOSE_PARALLEL_LIMIT:-1}" docker compose build; then
         echo "IMAGE BUILD FAILED — aborting deploy, nothing recreated" >&2
         exit 1
     fi
