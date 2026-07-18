@@ -586,6 +586,7 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     ) as tmp:
         tmp.write(encoded)
         tmp_path = Path(tmp.name)
+    tmp_path.chmod(0o644)
     tmp_path.replace(path)
 
 
