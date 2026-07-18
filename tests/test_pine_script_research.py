@@ -196,6 +196,9 @@ def test_publish_pine_research_kb_adds_catalog_backlog(tmp_path):
     assert payload["summary"]["needs_source"] == 2
     assert {row["crypto_portability"] for row in payload["records"]} == {"BLOCKED_NO_SOURCE"}
     assert all(row["decision"] == "WAIT_FOR_OPEN_SOURCE_OR_USER_EXPORT" for row in payload["records"])
+    assert {row["source_status"] for row in payload["records"]} == {"CATALOG_METADATA_ONLY"}
+    assert all("not executable Pine source" in row["source_explanation"] for row in payload["records"])
+    assert all("export/paste" in row["source_next_step"] for row in payload["records"])
 
 
 def test_publish_pine_research_kb_reconciles_catalog_match_with_source(tmp_path):
@@ -234,6 +237,8 @@ alertcondition(long, "long")
     record = payload["records"][0]
     assert record["script_id"] == "luxy_ut_god_forecast"
     assert record["discovery_status"] == "SOURCE_BACKED_CATALOG_MATCH"
+    assert record["source_status"] == "SOURCE_BACKED_CATALOG_MATCH"
+    assert "Pine source is present" in record["source_explanation"]
     assert record["catalog_urls"] == (
         "https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/",
     )
@@ -271,6 +276,7 @@ if long
 
     assert payload["priorities"][0]["script_id"] == "orderflow_delta_breakout"
     assert payload["priorities"][0]["next_action"] == "PORT_CAUSAL_FEATURES_AND_REPLAY"
+    assert payload["priorities"][0]["source_status"] == "USER_SUPPLIED_SOURCE"
     assert payload["summary"]["source_requests"] == 1
 
 
@@ -325,3 +331,4 @@ def test_pine_research_cli_imports_catalog_html(tmp_path):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["summary"]["catalog_only"] == 1
     assert payload["records"][0]["title"] == "Anchored Vwap Engine Quantum Algo"
+    assert payload["records"][0]["source_status"] == "CATALOG_METADATA_ONLY"

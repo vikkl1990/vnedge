@@ -80,7 +80,7 @@
     .kv-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}
     .kv{border:1px solid #182333;background:rgba(255,255,255,.025);padding:9px}
     .kv span{display:block;color:var(--muted);font:700 10px/1 var(--mono);text-transform:uppercase}
-    .kv b{display:block;margin-top:6px;font:900 16px/1 var(--mono)}
+    .kv b{display:block;margin-top:6px;font:900 16px/1.15 var(--mono);overflow-wrap:anywhere}
     .notes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
     .note{border:1px solid #182333;background:rgba(255,255,255,.02);padding:10px}
     .note h3{margin:0 0 8px;font:800 11px/1 var(--mono);text-transform:uppercase;color:var(--cyan)}
@@ -133,12 +133,19 @@
           <div class="metric"><span>Source-backed</span><b id="m_source_backed">--</b><i>portable now</i></div>
           <div class="metric"><span>Catalog-only</span><b id="m_catalog_only">--</b><i>needs source</i></div>
           <div class="metric"><span>Portable</span><b id="m_portable">--</b><i>needs proof</i></div>
-          <div class="metric"><span>Needs source</span><b id="m_source">--</b><i>blocked legally</i></div>
+          <div class="metric"><span>Needs source</span><b id="m_source">--</b><i>metadata only</i></div>
           <div class="metric"><span>Port queue</span><b id="m_port_queue">--</b><i>source-backed</i></div>
           <div class="metric"><span>Catalog matches</span><b id="m_matches">--</b><i>reconciled</i></div>
           <div class="metric"><span>Queued TFs</span><b id="m_queue">--</b><i>backtest cells</i></div>
         </div>
         <div class="policy" id="policyText">Loading policy...</div>
+        <div class="policy">
+          <b>Why rows show no source:</b> TradingView catalog pages are discovery
+          metadata. They usually expose title, URL, author/card tags, and sometimes
+          descriptions, but not executable Pine. VNEDGE only ports/backtests a
+          script after a source-backed artifact exists in
+          <span style="font-family:var(--mono)">research/pine_scripts/sources</span>.
+        </div>
       </aside>
 
       <section class="panel">
@@ -157,7 +164,7 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Script</th><th>Mechanism</th><th>Priority</th><th>Verdict</th><th>Source</th><th>Next action</th><th>Tags</th>
+              <th>Script</th><th>Mechanism</th><th>Priority</th><th>Verdict</th><th>Source evidence</th><th>Next action</th><th>Tags</th>
             </tr></thead>
             <tbody id="scriptRows"></tbody>
           </table>
@@ -183,9 +190,11 @@
             <div class="kv"><span>Source lines</span><b id="d_lines">--</b></div>
             <div class="kv"><span>Mechanism</span><b id="d_mechanism">--</b></div>
             <div class="kv"><span>Priority</span><b id="d_priority">--</b></div>
+            <div class="kv"><span>Source state</span><b id="d_source_state">--</b></div>
             <div class="kv"><span>Next action</span><b id="d_action">--</b></div>
             <div class="kv"><span>Promotion</span><b id="d_promo">NO</b></div>
           </div>
+          <div class="answer" id="sourceAnswer">Select a script to inspect source provenance.</div>
           <div class="notes">
             <div class="note"><h3>Features</h3><ul id="d_features"></ul></div>
             <div class="note"><h3>Risks</h3><ul id="d_risks"></ul></div>
@@ -242,6 +251,18 @@
     const span=document.createElement("span");
     span.className="pill "+tone; span.textContent=label; return span;
   }
+  function sourceLabel(r){
+    if(r.source_available){
+      return r.source_status==="SOURCE_BACKED_CATALOG_MATCH"?"source + catalog":"source";
+    }
+    if(String(r.url||"").includes("/script/"))return "catalog only";
+    return "no source";
+  }
+  function sourceTone(r){
+    if(r.source_available)return "good";
+    if(String(r.url||"").includes("/script/"))return "warn";
+    return "bad";
+  }
   function renderRows(){
     const q=($("searchBox").value||"").toLowerCase();
     const verdict=$("verdictFilter").value||"";
@@ -260,7 +281,7 @@
       tr.children[1].appendChild(pill(r.mechanism||"general","info"));
       tr.children[2].textContent=(r.priority_score==null?"--":String(r.priority_score));
       tr.children[3].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
-      tr.children[4].appendChild(pill(r.source_available?"source":"no source",r.source_available?"good":"bad"));
+      tr.children[4].appendChild(pill(sourceLabel(r),sourceTone(r)));
       tr.children[5].textContent=r.next_action||r.decision||"--";
       tr.children[6].textContent=(r.tags||[]).slice(0,5).join(", ")||"--";
       tr.addEventListener("click",()=>{state.selected=r;renderRows();renderDetail();});
@@ -282,8 +303,10 @@
     text("d_lines",r.source_lines||0);
     text("d_mechanism",r.mechanism||"--");
     text("d_priority",(r.priority_score==null?"--":r.priority_score+"/100"));
+    text("d_source_state",r.source_status||sourceLabel(r));
     text("d_action",r.next_action||"--");
     text("d_promo",r.can_promote?"YES":"NO");
+    text("sourceAnswer",(r.source_explanation||"Source provenance is not published.")+" Next: "+(r.source_next_step||r.next_action||"--"));
     list("d_features",r.features||[]);
     list("d_risks",r.risks||[]);
     list("d_uplift",r.ai_uplift_ideas||[]);

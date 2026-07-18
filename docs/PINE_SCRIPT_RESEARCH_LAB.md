@@ -90,6 +90,25 @@ Catalog rows are intentionally `BLOCKED_NO_SOURCE`. They are useful for
 prioritization and AI clustering, but cannot be ported or backtested until
 lawful public/open-source Pine source is supplied.
 
+The dashboard distinguishes source states explicitly:
+
+- `SOURCE_BACKED`: VNEDGE has a `.pine`, `.pinescript`, or `.txt` source
+  artifact with line count and source hash.
+- `SOURCE_BACKED_CATALOG_MATCH`: a source-backed artifact was reconciled to a
+  catalog URL, so the source wins and the listing is retained as provenance.
+- `CATALOG_METADATA_ONLY`: VNEDGE found a TradingView listing, but the
+  executable Pine is not present in the catalog artifact. This is not
+  backtestable yet.
+- `SOURCE_MISSING`: an idea record exists without a source artifact or catalog
+  URL.
+
+To turn a `CATALOG_METADATA_ONLY` row into a port candidate, confirm the author
+has exposed source and place the exported/pasted Pine file under:
+
+```text
+research/pine_scripts/sources/
+```
+
 When a catalog URL and a source-backed Pine export look like the same script,
 the publisher reconciles them into one source-backed record. The source record
 wins, while `catalog_urls` and `catalog_script_ids` preserve discovery
@@ -102,6 +121,7 @@ Each record contains:
 
 - `script_id`, title, URL, author, kind,
 - source availability, license, line count, SHA-256 hash,
+- source status, explanation, and next source step,
 - detected features and risks,
 - crypto portability verdict,
 - crypto fit score,
