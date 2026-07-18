@@ -59,12 +59,14 @@
       font:700 12px/1 var(--mono);min-width:170px;
     }
     .table-wrap{overflow:auto;max-height:calc(100vh - 330px)}
-    table{width:100%;border-collapse:collapse;min-width:920px}
+    table{width:100%;border-collapse:collapse;min-width:1280px}
     th,td{border-bottom:1px solid #182333;padding:9px 10px;text-align:left;vertical-align:top}
     th{position:sticky;top:0;background:#0c131d;color:var(--muted);font:700 10px/1 var(--mono);text-transform:uppercase;z-index:1}
     td{font-size:12px;color:#d7e0ec}
     td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
     tr.active{background:rgba(77,178,255,.08)}
+    .mini{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.35}
+    .row-stack{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
     .pill{display:inline-flex;align-items:center;border:1px solid var(--line);padding:4px 7px;font:800 10px/1 var(--mono);text-transform:uppercase}
     .good{color:var(--green);border-color:rgba(71,209,140,.45);background:rgba(71,209,140,.08)}
     .warn{color:var(--amber);border-color:rgba(243,180,78,.45);background:rgba(243,180,78,.08)}
@@ -91,6 +93,13 @@
     .tf b{display:block;font:900 18px/1 var(--mono)}
     .tf span{display:block;margin-top:6px;color:var(--muted);font-size:11px;line-height:1.35}
     .answer{margin-top:12px;border-left:3px solid var(--blue);padding:10px 12px;background:rgba(77,178,255,.06);color:#c9d6e6;font-size:12px;line-height:1.45}
+    .distiller{margin-top:14px}
+    .task-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:12px}
+    .task{border:1px solid #182333;background:rgba(255,255,255,.025);padding:11px;min-width:0}
+    .task b{display:block;font:900 14px/1.2 var(--mono);overflow-wrap:anywhere}
+    .task span{display:block;margin-top:7px;color:var(--muted);font-size:11px;line-height:1.35}
+    .task .score{margin-top:9px;font:900 20px/1 var(--mono);color:var(--cyan)}
+    .evidence{margin-top:14px}
     .footer{margin-top:14px;color:var(--muted);font-size:11px;text-align:center}
     @media(max-width:1100px){
       .grid,.detail{grid-template-columns:1fr}
@@ -100,6 +109,7 @@
       .topbar{grid-template-columns:1fr}
       .toolbar{justify-content:flex-start}
       .summary,.kv-grid,.notes,.tf-grid{grid-template-columns:1fr}
+      .task-list{grid-template-columns:1fr}
       .shell{padding:12px}
     }
   </style>
@@ -168,12 +178,37 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Script</th><th>Mechanism</th><th>Priority</th><th>Verdict</th><th>Source evidence</th><th>Next action</th><th>Tags</th>
+              <th>Script</th><th>Mechanism</th><th>AI review</th><th>Backtests</th><th>Priority</th><th>Verdict</th><th>Source evidence</th><th>Next action</th>
             </tr></thead>
             <tbody id="scriptRows"></tbody>
           </table>
         </div>
       </section>
+    </section>
+
+    <section class="panel distiller">
+      <h2>Source-Backed Alpha Distiller</h2>
+      <div class="summary">
+        <div class="metric"><span>Reviewed source</span><b id="pd_reviewed">--</b><i>hash-backed scripts</i></div>
+        <div class="metric"><span>Port candidates</span><b id="pd_candidates">--</b><i>causal task queue</i></div>
+        <div class="metric"><span>Quarantine</span><b id="pd_quarantine">--</b><i>repaint/HTF review</i></div>
+        <div class="metric"><span>Queued cells</span><b id="pd_cells">--</b><i>venue x TF proof</i></div>
+      </div>
+      <div class="task-list" id="distillerTasks"></div>
+      <div class="policy" id="distillerAnswer">Loading source-backed primitive queue from /pine-research/distiller.</div>
+    </section>
+
+    <section class="panel evidence">
+      <h2>Backtest Evidence</h2>
+      <div class="summary">
+        <div class="metric"><span>Total cells</span><b id="bt_total">--</b><i>all script x TF rows</i></div>
+        <div class="metric"><span>Completed</span><b id="bt_completed">--</b><i>passed + failed cells</i></div>
+        <div class="metric"><span>Queued</span><b id="bt_queued">--</b><i>needs causal port</i></div>
+        <div class="metric"><span>Blocked</span><b id="bt_blocked">--</b><i>source/repaint/data</i></div>
+        <div class="metric"><span>Best avg bps</span><b id="bt_best_bps">--</b><i>completed cells only</i></div>
+        <div class="metric"><span>Best PF</span><b id="bt_best_pf">--</b><i>completed cells only</i></div>
+      </div>
+      <div class="policy" id="btEvidenceAnswer">Loading backtest evidence.</div>
     </section>
 
     <section class="detail">
@@ -212,6 +247,7 @@
         <h2>Backtest Matrix</h2>
         <div class="matrix">
           <div class="tf-grid" id="tfGrid"></div>
+          <div class="answer" id="selectedBacktestAnswer">Select a script to inspect replay status.</div>
         </div>
       </div>
     </section>
@@ -255,6 +291,57 @@
     const span=document.createElement("span");
     span.className="pill "+tone; span.textContent=label; return span;
   }
+  function small(label){
+    const span=document.createElement("span");
+    span.className="mini"; span.textContent=label; return span;
+  }
+  function summarizeCells(cells){
+    const counts={total:0,queued:0,running:0,passed:0,failed:0,blocked:0,not_applicable:0,completed:0};
+    let bestBps=null,bestPf=null;
+    (cells||[]).forEach(cell=>{
+      const status=cell.status||"queued";
+      counts.total+=1;
+      counts[status]=(counts[status]||0)+1;
+      if(status==="passed"||status==="failed")counts.completed+=1;
+      if(cell.avg_net_bps!=null){
+        const v=Number(cell.avg_net_bps);
+        if(Number.isFinite(v))bestBps=bestBps==null?v:Math.max(bestBps,v);
+      }
+      if(cell.profit_factor!=null){
+        const v=Number(cell.profit_factor);
+        if(Number.isFinite(v))bestPf=bestPf==null?v:Math.max(bestPf,v);
+      }
+    });
+    counts.bestBps=bestBps;
+    counts.bestPf=bestPf;
+    return counts;
+  }
+  function backtestTone(counts){
+    if(counts.passed>0)return "good";
+    if(counts.failed>0)return "bad";
+    if(counts.blocked>0)return "warn";
+    if(counts.queued>0)return "info";
+    return "neutral";
+  }
+  function backtestLine(counts){
+    const parts=[];
+    if(counts.passed)parts.push("passed "+counts.passed);
+    if(counts.failed)parts.push("failed "+counts.failed);
+    if(counts.queued)parts.push("queued "+counts.queued);
+    if(counts.blocked)parts.push("blocked "+counts.blocked);
+    if(!parts.length)return "no replay cells";
+    return parts.join(" | ");
+  }
+  function aiReviewSummary(r){
+    const bits=[];
+    const features=(r.features||[]).slice(0,3).join(", ");
+    const risks=(r.risks||[]).slice(0,2).join(", ");
+    const uplift=(r.ai_uplift_ideas||[])[0]||"no uplift recorded";
+    if(features)bits.push("features: "+features);
+    if(risks)bits.push("risks: "+risks);
+    bits.push("uplift: "+uplift);
+    return bits.join(" | ");
+  }
   function sourceLabel(r){
     if(r.source_available){
       return r.source_status==="SOURCE_BACKED_CATALOG_MATCH"?"source + catalog":"source";
@@ -279,15 +366,25 @@
     rows.forEach((r,idx)=>{
       const tr=document.createElement("tr");
       if(state.selected&&state.selected.script_id===r.script_id)tr.className="active";
-      tr.innerHTML="<td><b></b><div class='meta'></div></td><td></td><td class='num'></td><td></td><td></td><td></td><td></td>";
+      const cellSummary=summarizeCells(r.backtests||[]);
+      tr.innerHTML="<td><b></b><div class='meta'></div></td><td></td><td></td><td></td><td class='num'></td><td></td><td></td><td></td>";
       tr.querySelector("b").textContent=r.title||r.script_id;
       tr.querySelector(".meta").textContent=r.url||"--";
       tr.children[1].appendChild(pill(r.mechanism||"general","info"));
-      tr.children[2].textContent=(r.priority_score==null?"--":String(r.priority_score));
-      tr.children[3].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
-      tr.children[4].appendChild(pill(sourceLabel(r),sourceTone(r)));
-      tr.children[5].textContent=r.next_action||r.decision||"--";
-      tr.children[6].textContent=(r.tags||[]).slice(0,5).join(", ")||"--";
+      const tags=document.createElement("div"); tags.className="row-stack";
+      (r.tags||[]).slice(0,4).forEach(t=>tags.appendChild(pill(t,"info")));
+      tr.children[1].appendChild(tags);
+      tr.children[2].appendChild(small(aiReviewSummary(r)));
+      tr.children[3].appendChild(pill(backtestLine(cellSummary),backtestTone(cellSummary)));
+      tr.children[3].appendChild(small(
+        cellSummary.completed
+          ? "best avg "+(cellSummary.bestBps==null?"--":cellSummary.bestBps.toFixed(2)+" bps")+" | best PF "+(cellSummary.bestPf==null?"--":cellSummary.bestPf.toFixed(2))
+          : "no completed VNEDGE replay yet"
+      ));
+      tr.children[4].textContent=(r.priority_score==null?"--":String(r.priority_score));
+      tr.children[5].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
+      tr.children[6].appendChild(pill(sourceLabel(r),sourceTone(r)));
+      tr.children[7].textContent=r.next_action||r.decision||"--";
       tr.addEventListener("click",()=>{state.selected=r;renderRows();renderDetail();});
       body.appendChild(tr);
       if(idx===0&&!state.selected){state.selected=r;}
@@ -319,6 +416,7 @@
     list("d_risks",r.risks||[]);
     list("d_uplift",r.ai_uplift_ideas||[]);
     const tf=$("tfGrid"); tf.innerHTML="";
+    const counts=summarizeCells(r.backtests||[]);
     (r.backtests||[]).forEach(cell=>{
       const div=document.createElement("div");
       const tone=cell.status==="passed"?"good":cell.status==="failed"?"bad":cell.status==="blocked"?"warn":"info";
@@ -331,6 +429,32 @@
       tf.appendChild(div);
     });
     if(!tf.children.length)tf.textContent="No timeframe cells published.";
+    text(
+      "selectedBacktestAnswer",
+      counts.completed
+        ? "Completed replay cells exist for this script. Treat them as research evidence only until a VNEDGE causal port and untouched judgment pass."
+        : "No completed VNEDGE backtest result exists for this script yet. The visible cells are queued/blocked intake status, not proof of edge."
+    );
+  }
+  function renderBacktestEvidence(){
+    const cells=[];
+    state.records.forEach(r=>(r.backtests||[]).forEach(cell=>cells.push(cell)));
+    const counts=summarizeCells(cells);
+    text("bt_total",counts.total);
+    text("bt_completed",counts.completed);
+    text("bt_queued",counts.queued);
+    text("bt_blocked",counts.blocked);
+    text("bt_best_bps",counts.bestBps==null?"--":counts.bestBps.toFixed(2));
+    text("bt_best_pf",counts.bestPf==null?"--":counts.bestPf.toFixed(2));
+    let answer="";
+    if(!counts.total){
+      answer="No backtest cells are published in the KB yet.";
+    }else if(!counts.completed){
+      answer="No completed VNEDGE replay/backtest results are published yet. Current cells are queued or blocked because the Pine ideas still need source review, causal Python ports, and cost-aware replay.";
+    }else{
+      answer="Completed cells are visible in the row and selected matrix. They remain research-only and cannot promote without causal port, fee-aware replay, and untouched-window judgment.";
+    }
+    text("btEvidenceAnswer",answer);
   }
   function render(payload){
     state.records=Array.isArray(payload.records)?payload.records:[];
@@ -354,7 +478,39 @@
     text("operatorAnswer",payload.operator_answer||"research-only");
     text("footer","source "+(payload.source||"--")+" | generated "+(payload.generated_at||"--"));
     const chip=$("statusChip"); chip.textContent="loaded"; chip.className="chip good";
+    renderBacktestEvidence();
     renderRows();
+  }
+  function renderDistiller(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("pd_reviewed",s.source_backed_reviewed);
+    text("pd_candidates",s.port_candidates);
+    text("pd_quarantine",s.causality_quarantine);
+    text("pd_cells",s.queued_backtest_cells);
+    text("distillerAnswer",payload.operator_answer||"No distiller artifact published yet.");
+    const listEl=$("distillerTasks"); listEl.innerHTML="";
+    (payload.port_tasks||[]).slice(0,6).forEach(task=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=task.recommended_port||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=(task.distillation_score==null?"--":task.distillation_score)+"/100";
+      const meta=document.createElement("span");
+      meta.textContent="sources "+(task.source_count||0)+" | primitives "+((task.primitive_stack||[]).slice(0,4).join(", ")||"--");
+      const replay=document.createElement("span");
+      replay.textContent=task.first_replay||"awaiting replay plan";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(replay);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No source-backed port tasks published.";
+      listEl.appendChild(div);
+    }
   }
   function load(){
     const chip=$("statusChip"); chip.textContent="loading"; chip.className="chip info";
@@ -362,6 +518,10 @@
       .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(render)
       .catch(err=>{chip.textContent="error";chip.className="chip bad";$("operatorAnswer").textContent=String(err);});
+    fetch("/pine-research/distiller",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderDistiller)
+      .catch(err=>{$("distillerAnswer").textContent=String(err);renderDistiller({});});
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);

@@ -387,6 +387,7 @@ def create_app(
     lane_readiness_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
     pine_research_path: Path | None = None,
+    pine_alpha_distiller_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -470,6 +471,11 @@ def create_app(
         except json.JSONDecodeError:
             return fallback  # mid-write race: serve a safe empty payload
         return payload if isinstance(payload, dict) else fallback
+
+    pine_alpha_distiller_file = (
+        pine_alpha_distiller_path
+        or Path("research/live_research/pine_alpha_distiller_latest.json")
+    )
 
     @app.get("/")
     async def index() -> FileResponse:
@@ -791,6 +797,27 @@ def create_app(
         user = _authorized(request)
         return JSONResponse(
             load_pine_research_payload(pine_research_path),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/distiller")
+    async def pine_alpha_distiller(request: Request) -> JSONResponse:
+        """Source-backed Pine primitive/task distillation artifact."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                pine_alpha_distiller_file,
+                {
+                    "distiller_id": "pine_alpha_distiller_v1",
+                    "summary": {},
+                    "primitive_families": [],
+                    "port_tasks": [],
+                    "script_distillations": [],
+                    "operator_answer": "pine alpha distiller artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
             headers=_identity(user),
         )
 

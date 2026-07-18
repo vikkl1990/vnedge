@@ -29,6 +29,8 @@ New route:
 
 - `/pine-research` serves the standalone Pine Research Lab page.
 - `/pine-research/kb` serves the token-gated JSON knowledge base.
+- `/pine-research/distiller` serves the token-gated source-backed primitive
+  and VNEDGE port-task queue.
 
 The endpoint falls back to a seed payload when the generated artifact is absent,
 so the page remains useful during early deployment. The expected generated
@@ -40,6 +42,12 @@ research/pine_scripts/pine_research_kb.json
 
 `create_app(..., pine_research_path=...)` can point the dashboard at another
 artifact path.
+
+The source-backed distiller publishes:
+
+```text
+research/live_research/pine_alpha_distiller_latest.json
+```
 
 The production Compose dashboard mounts this directory read-only:
 
