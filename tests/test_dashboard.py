@@ -65,6 +65,8 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     assert "Fee Wall" in html
     assert "Signal Pressure &amp; Trade Journal" in html
     assert "Trade Journal Ledger" in html
+    assert "Pine Lab" in html
+    assert "/pine-research" in html
     assert 'id="tradeLedgerBoard"' in html
     assert "/trade-journal" in html
     assert "scanner-style hot/cold pressure" in html
@@ -172,6 +174,58 @@ def test_cost_model_route_auth_gated_and_real_numbers(client):
     assert payload["paper_fill_model"]["taker_rt_bps"] == 2 * (
         paper.taker_fee_bps + paper.slippage_bps
     )
+
+
+def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    kb = tmp_path / "pine_research_kb.json"
+    kb.write_text(json.dumps({
+        "generated_at": "2026-07-18T00:00:00+00:00",
+        "source": "unit",
+        "records": [
+            {
+                "script_id": "open_breakout",
+                "title": "Open Breakout",
+                "url": "https://www.tradingview.com/script/open/",
+                "crypto_portability": "PORTABLE_WITH_CHANGES",
+                "crypto_fit_score": 71,
+                "backtests": [{"timeframe": "5m", "status": "queued"}],
+            }
+        ],
+    }))
+    app = create_app(provider, token="t3st-token", pine_research_path=kb)
+    client = TestClient(app)
+
+    page = client.get("/pine-research")
+    assert page.status_code == 200
+    assert "Pine Research Lab" in page.text
+    assert "/pine-research/kb" in page.text
+    assert "read-only" in page.text.lower()
+    assert "cannot trade" in page.text.lower()
+
+    assert client.get("/pine-research/kb").status_code == 401
+    r = client.get("/pine-research/kb?token=t3st-token")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["portable"] == 1
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+
+
+def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    client = TestClient(
+        create_app(provider, token="t3st-token", pine_research_path=tmp_path / "missing.json")
+    )
+
+    payload = client.get("/pine-research/kb?token=t3st-token").json()
+
+    assert payload["summary"]["total"] >= 3
+    assert payload["source"] == "default_seed"
+    assert any(r["script_id"] == "tradingview_catalog" for r in payload["records"])
 
 
 def test_cost_model_route_has_no_control_verbs(client):

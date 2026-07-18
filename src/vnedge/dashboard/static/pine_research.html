@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VNEDGE Pine Research Lab</title>
+  <style>
+    :root{
+      --bg:#06090d;--panel:#0b1118;--panel2:#0e151f;--line:#1f2b3a;
+      --text:#e8eef7;--muted:#8d9aaa;--blue:#4db2ff;--cyan:#2ee6d6;
+      --green:#47d18c;--amber:#f3b44e;--red:#ff5b67;--purple:#b58cff;
+      --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+      --sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+      letter-spacing:0;min-height:100vh;
+    }
+    body:before{
+      content:"";position:fixed;inset:0;pointer-events:none;
+      background:
+        linear-gradient(90deg,rgba(77,178,255,.05) 1px,transparent 1px),
+        linear-gradient(0deg,rgba(77,178,255,.035) 1px,transparent 1px);
+      background-size:48px 48px;mask-image:linear-gradient(to bottom,#000,transparent 88%);
+    }
+    a{color:var(--blue);text-decoration:none}
+    .locked{display:none;margin:18vh auto 0;max-width:520px;border:1px solid var(--line);background:var(--panel);padding:22px}
+    .shell{display:none;max-width:1680px;margin:0 auto;padding:18px}
+    .topbar{
+      display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:end;
+      border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px;
+    }
+    .eyebrow{font:700 11px/1 var(--mono);text-transform:uppercase;color:var(--cyan);letter-spacing:.08em}
+    h1{margin:6px 0 0;font-size:28px;line-height:1.05;letter-spacing:0}
+    .sub{margin-top:7px;color:var(--muted);font-size:13px;max-width:900px}
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    .chip,.btn{
+      border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--text);
+      padding:8px 10px;font:700 11px/1 var(--mono);text-transform:uppercase;
+    }
+    .btn{cursor:pointer}
+    .btn:hover{border-color:var(--blue)}
+    .grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;align-items:start}
+    .panel{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel),#070b10);min-width:0}
+    .panel h2{
+      margin:0;padding:12px 14px;border-bottom:1px solid var(--line);
+      font-size:13px;text-transform:uppercase;font-family:var(--mono);letter-spacing:.04em;
+    }
+    .summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px}
+    .metric{border:1px solid #182333;background:var(--panel2);padding:10px;min-height:74px}
+    .metric span{display:block;color:var(--muted);font:700 10px/1 var(--mono);text-transform:uppercase}
+    .metric b{display:block;margin-top:8px;font:900 23px/1 var(--mono)}
+    .metric i{display:block;margin-top:6px;color:var(--muted);font-style:normal;font-size:11px}
+    .policy{padding:12px;color:var(--muted);font-size:12px;line-height:1.55;border-top:1px solid var(--line)}
+    .filters{display:flex;gap:8px;flex-wrap:wrap;padding:12px;border-bottom:1px solid var(--line)}
+    input,select{
+      background:#070c12;border:1px solid var(--line);color:var(--text);padding:9px 10px;
+      font:700 12px/1 var(--mono);min-width:170px;
+    }
+    .table-wrap{overflow:auto;max-height:calc(100vh - 330px)}
+    table{width:100%;border-collapse:collapse;min-width:920px}
+    th,td{border-bottom:1px solid #182333;padding:9px 10px;text-align:left;vertical-align:top}
+    th{position:sticky;top:0;background:#0c131d;color:var(--muted);font:700 10px/1 var(--mono);text-transform:uppercase;z-index:1}
+    td{font-size:12px;color:#d7e0ec}
+    td.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+    tr.active{background:rgba(77,178,255,.08)}
+    .pill{display:inline-flex;align-items:center;border:1px solid var(--line);padding:4px 7px;font:800 10px/1 var(--mono);text-transform:uppercase}
+    .good{color:var(--green);border-color:rgba(71,209,140,.45);background:rgba(71,209,140,.08)}
+    .warn{color:var(--amber);border-color:rgba(243,180,78,.45);background:rgba(243,180,78,.08)}
+    .bad{color:var(--red);border-color:rgba(255,91,103,.45);background:rgba(255,91,103,.08)}
+    .info{color:var(--blue);border-color:rgba(77,178,255,.45);background:rgba(77,178,255,.08)}
+    .neutral{color:var(--muted)}
+    .detail{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);gap:14px;margin-top:14px}
+    .detail-body{padding:14px}
+    .title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+    .script-title{font-size:19px;font-weight:900}
+    .meta{color:var(--muted);font:700 11px/1.45 var(--mono);margin-top:6px}
+    .tag-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+    .kv-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}
+    .kv{border:1px solid #182333;background:rgba(255,255,255,.025);padding:9px}
+    .kv span{display:block;color:var(--muted);font:700 10px/1 var(--mono);text-transform:uppercase}
+    .kv b{display:block;margin-top:6px;font:900 16px/1 var(--mono)}
+    .notes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+    .note{border:1px solid #182333;background:rgba(255,255,255,.02);padding:10px}
+    .note h3{margin:0 0 8px;font:800 11px/1 var(--mono);text-transform:uppercase;color:var(--cyan)}
+    .note ul{margin:0;padding-left:16px;color:#c6d0de;font-size:12px;line-height:1.45}
+    .matrix{padding:12px}
+    .tf-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+    .tf{border:1px solid #182333;background:#090f16;padding:10px;min-height:92px}
+    .tf b{display:block;font:900 18px/1 var(--mono)}
+    .tf span{display:block;margin-top:6px;color:var(--muted);font-size:11px;line-height:1.35}
+    .answer{margin-top:12px;border-left:3px solid var(--blue);padding:10px 12px;background:rgba(77,178,255,.06);color:#c9d6e6;font-size:12px;line-height:1.45}
+    .footer{margin-top:14px;color:var(--muted);font-size:11px;text-align:center}
+    @media(max-width:1100px){
+      .grid,.detail{grid-template-columns:1fr}
+      .table-wrap{max-height:none}
+    }
+    @media(max-width:720px){
+      .topbar{grid-template-columns:1fr}
+      .toolbar{justify-content:flex-start}
+      .summary,.kv-grid,.notes,.tf-grid{grid-template-columns:1fr}
+      .shell{padding:12px}
+    }
+  </style>
+</head>
+<body>
+  <div class="locked" id="locked">
+    <div class="eyebrow">Access locked</div>
+    <h1>Pine Research Lab</h1>
+    <p class="sub">Open from the VNEDGE dashboard or append a dashboard token. This page is read-only and cannot trade.</p>
+  </div>
+
+  <main class="shell" id="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">VNEDGE AI Quant OS</div>
+        <h1>Pine Research Lab</h1>
+        <div class="sub">Open-source TradingView script review, crypto portability triage, multi-timeframe replay status, and AI uplift memory. Research-only: no script can trade or promote from this page.</div>
+      </div>
+      <div class="toolbar">
+        <a class="btn" id="backLink" href="/">Operator Cockpit</a>
+        <button class="btn" id="refreshBtn" type="button">Refresh</button>
+        <span class="chip" id="statusChip">loading</span>
+      </div>
+    </header>
+
+    <section class="grid">
+      <aside class="panel">
+        <h2>Research Queue</h2>
+        <div class="summary">
+          <div class="metric"><span>Total scripts</span><b id="m_total">--</b><i>known records</i></div>
+          <div class="metric"><span>Portable</span><b id="m_portable">--</b><i>needs proof</i></div>
+          <div class="metric"><span>Needs source</span><b id="m_source">--</b><i>blocked legally</i></div>
+          <div class="metric"><span>Queued TFs</span><b id="m_queue">--</b><i>backtest cells</i></div>
+        </div>
+        <div class="policy" id="policyText">Loading policy...</div>
+      </aside>
+
+      <section class="panel">
+        <h2>Script Inventory</h2>
+        <div class="filters">
+          <input id="searchBox" placeholder="filter script, tag, decision">
+          <select id="verdictFilter">
+            <option value="">All verdicts</option>
+            <option value="PORTABLE">Portable</option>
+            <option value="PORTABLE_WITH_CHANGES">Portable with changes</option>
+            <option value="RESEARCH_ONLY">Research only</option>
+            <option value="BLOCKED_NO_SOURCE">No source</option>
+            <option value="BLOCKED_REPAINT_RISK">Repaint risk</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Script</th><th>Verdict</th><th>Fit</th><th>Source</th><th>Decision</th><th>Tags</th>
+            </tr></thead>
+            <tbody id="scriptRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="detail">
+      <div class="panel">
+        <h2>AI Review</h2>
+        <div class="detail-body">
+          <div class="title-row">
+            <div>
+              <div class="script-title" id="d_title">Select a script</div>
+              <div class="meta" id="d_meta">--</div>
+            </div>
+            <span class="pill neutral" id="d_verdict">--</span>
+          </div>
+          <div class="tag-row" id="d_tags"></div>
+          <div class="kv-grid">
+            <div class="kv"><span>Crypto fit</span><b id="d_fit">--</b></div>
+            <div class="kv"><span>Kind</span><b id="d_kind">--</b></div>
+            <div class="kv"><span>Source lines</span><b id="d_lines">--</b></div>
+            <div class="kv"><span>Promotion</span><b id="d_promo">NO</b></div>
+          </div>
+          <div class="notes">
+            <div class="note"><h3>Features</h3><ul id="d_features"></ul></div>
+            <div class="note"><h3>Risks</h3><ul id="d_risks"></ul></div>
+            <div class="note"><h3>AI Uplift</h3><ul id="d_uplift"></ul></div>
+          </div>
+          <div class="answer" id="operatorAnswer">Loading research policy...</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Backtest Matrix</h2>
+        <div class="matrix">
+          <div class="tf-grid" id="tfGrid"></div>
+        </div>
+      </div>
+    </section>
+    <div class="footer" id="footer">read-only research build</div>
+  </main>
+
+<script>
+(function(){
+  const TOKEN_KEY="vnedge.dashboard.token";
+  const params=new URLSearchParams(location.search);
+  let token=params.get("token")||"";
+  if(token){
+    try{sessionStorage.setItem(TOKEN_KEY,token);}catch(_err){}
+    params.delete("token");
+    history.replaceState(null,"",location.pathname+(params.toString()?"?"+params:""));
+  }else{
+    try{token=sessionStorage.getItem(TOKEN_KEY)||"";}catch(_err){token="";}
+  }
+  const $=id=>document.getElementById(id);
+  const state={records:[],selected:null};
+  if(!token){$("locked").style.display="block";return;}
+  $("shell").style.display="block";
+  $("backLink").href="/?token="+encodeURIComponent(token);
+
+  function cls(verdict){
+    if(verdict==="PORTABLE"||verdict==="PORTABLE_WITH_CHANGES")return "good";
+    if(verdict==="RESEARCH_ONLY")return "warn";
+    if(verdict==="BLOCKED_REPAINT_RISK")return "bad";
+    if(verdict==="BLOCKED_NO_SOURCE")return "bad";
+    return "info";
+  }
+  function text(id,v){const e=$(id);if(e)e.textContent=v==null||v===""?"--":String(v);}
+  function list(id,items){
+    const el=$(id); if(!el)return; el.innerHTML="";
+    (Array.isArray(items)?items:[]).forEach(item=>{
+      const li=document.createElement("li"); li.textContent=String(item); el.appendChild(li);
+    });
+    if(!el.children.length){const li=document.createElement("li"); li.textContent="none recorded"; el.appendChild(li);}
+  }
+  function pill(label,tone){
+    const span=document.createElement("span");
+    span.className="pill "+tone; span.textContent=label; return span;
+  }
+  function renderRows(){
+    const q=($("searchBox").value||"").toLowerCase();
+    const verdict=$("verdictFilter").value||"";
+    const body=$("scriptRows"); body.innerHTML="";
+    const rows=state.records.filter(r=>{
+      if(verdict && r.crypto_portability!==verdict)return false;
+      if(!q)return true;
+      return [r.title,r.script_id,r.decision,(r.tags||[]).join(" ")].join(" ").toLowerCase().includes(q);
+    });
+    rows.forEach((r,idx)=>{
+      const tr=document.createElement("tr");
+      if(state.selected&&state.selected.script_id===r.script_id)tr.className="active";
+      tr.innerHTML="<td><b></b><div class='meta'></div></td><td></td><td class='num'></td><td></td><td></td><td></td>";
+      tr.querySelector("b").textContent=r.title||r.script_id;
+      tr.querySelector(".meta").textContent=r.url||"--";
+      tr.children[1].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
+      tr.children[2].textContent=(r.crypto_fit_score==null?"--":String(r.crypto_fit_score));
+      tr.children[3].appendChild(pill(r.source_available?"source":"no source",r.source_available?"good":"bad"));
+      tr.children[4].textContent=r.decision||"--";
+      tr.children[5].textContent=(r.tags||[]).slice(0,5).join(", ")||"--";
+      tr.addEventListener("click",()=>{state.selected=r;renderRows();renderDetail();});
+      body.appendChild(tr);
+      if(idx===0&&!state.selected){state.selected=r;}
+    });
+    renderDetail();
+  }
+  function renderDetail(){
+    const r=state.selected || state.records[0];
+    if(!r)return;
+    text("d_title",r.title||r.script_id);
+    text("d_meta",(r.author||"unknown")+" | "+(r.url||"no url")+" | reviewed "+(r.reviewed_at||"--"));
+    const verdict=$("d_verdict"); verdict.textContent=r.crypto_portability||"--"; verdict.className="pill "+cls(r.crypto_portability);
+    const tags=$("d_tags"); tags.innerHTML="";
+    (r.tags||[]).forEach(t=>tags.appendChild(pill(t,"info")));
+    text("d_fit",(r.crypto_fit_score==null?"--":r.crypto_fit_score+"/100"));
+    text("d_kind",r.kind||"--");
+    text("d_lines",r.source_lines||0);
+    text("d_promo",r.can_promote?"YES":"NO");
+    list("d_features",r.features||[]);
+    list("d_risks",r.risks||[]);
+    list("d_uplift",r.ai_uplift_ideas||[]);
+    const tf=$("tfGrid"); tf.innerHTML="";
+    (r.backtests||[]).forEach(cell=>{
+      const div=document.createElement("div");
+      const tone=cell.status==="passed"?"good":cell.status==="failed"?"bad":cell.status==="blocked"?"warn":"info";
+      div.className="tf";
+      div.innerHTML="<b></b><span></span><span></span><span></span>";
+      div.querySelector("b").textContent=cell.timeframe||"--";
+      div.children[1].appendChild(pill(cell.status||"queued",tone));
+      div.children[2].textContent="samples "+(cell.samples||0)+" | avg "+(cell.avg_net_bps==null?"--":Number(cell.avg_net_bps).toFixed(2)+" bps")+" | PF "+(cell.profit_factor==null?"--":Number(cell.profit_factor).toFixed(2));
+      div.children[3].textContent=cell.blocker||"awaiting replay";
+      tf.appendChild(div);
+    });
+    if(!tf.children.length)tf.textContent="No timeframe cells published.";
+  }
+  function render(payload){
+    state.records=Array.isArray(payload.records)?payload.records:[];
+    state.selected=state.records[0]||null;
+    const s=payload.summary||{};
+    text("m_total",s.total); text("m_portable",s.portable); text("m_source",s.needs_source); text("m_queue",s.backtests_queued);
+    const p=payload.policy||{};
+    $("policyText").textContent=[p.source_rule,p.promotion_rule,"Venues: "+(p.venues||[]).join(", "),"TFs: "+(p.timeframes||[]).join(", ")].filter(Boolean).join(" | ");
+    text("operatorAnswer",payload.operator_answer||"research-only");
+    text("footer","source "+(payload.source||"--")+" | generated "+(payload.generated_at||"--"));
+    const chip=$("statusChip"); chip.textContent="loaded"; chip.className="chip good";
+    renderRows();
+  }
+  function load(){
+    const chip=$("statusChip"); chip.textContent="loading"; chip.className="chip info";
+    fetch("/pine-research/kb",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(render)
+      .catch(err=>{chip.textContent="error";chip.className="chip bad";$("operatorAnswer").textContent=String(err);});
+  }
+  $("searchBox").addEventListener("input",renderRows);
+  $("verdictFilter").addEventListener("change",renderRows);
+  $("refreshBtn").addEventListener("click",load);
+  load();
+})();
+</script>
+</body>
+</html>

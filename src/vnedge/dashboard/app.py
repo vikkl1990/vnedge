@@ -46,6 +46,7 @@ from vnedge.agent_gateway.jobs import (
 )
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.research.pine_script_research import load_pine_research_payload
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +386,7 @@ def create_app(
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
+    pine_research_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -473,6 +475,11 @@ def create_app(
     async def index() -> FileResponse:
         # The shell page contains no data; all data endpoints require the token.
         return FileResponse(_STATIC_DIR / "index.html")
+
+    @app.get("/pine-research")
+    async def pine_research_page() -> FileResponse:
+        # Separate static research page. Data remains token-gated below.
+        return FileResponse(_STATIC_DIR / "pine_research.html")
 
     @app.get("/state")
     async def state(request: Request) -> JSONResponse:
@@ -770,6 +777,20 @@ def create_app(
                     "can_promote": False,
                 },
             ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/kb")
+    async def pine_research_kb(request: Request) -> JSONResponse:
+        """Public-script review KB.
+
+        Read-only, dashboard-token gated, and explicitly research-only. This
+        endpoint can be backed by a generated artifact once the crawler/review
+        pipeline publishes it; until then it serves a conservative seed.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            load_pine_research_payload(pine_research_path),
             headers=_identity(user),
         )
 

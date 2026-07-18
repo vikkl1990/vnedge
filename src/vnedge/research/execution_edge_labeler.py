@@ -17,6 +17,7 @@ import argparse
 import inspect
 import json
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from statistics import mean
@@ -201,6 +202,37 @@ def label_strategy_events(
 ) -> tuple[EventTruthLabel, ...]:
     """Run a registered strategy causally and label every raw signal."""
 
+    events = strategy_signal_events(
+        candles,
+        strategy,
+        source_id=source_id,
+        route=route,
+    )
+    return label_events(
+        candles,
+        events,
+        exchange=exchange,
+        config=config,
+        fee_profile=fee_profile,
+    )
+
+
+def strategy_signal_events(
+    candles: pd.DataFrame,
+    strategy: BaseStrategy,
+    *,
+    source_id: str | None = None,
+    route: ExecutionRoute = "MAKER_ONLY",
+    fill_probability: float | None = None,
+    expected_edge_bps: float | None = None,
+) -> tuple[SignalEvent, ...]:
+    """Extract raw strategy events without forward labeling them.
+
+    This keeps the scanner/opportunity table separate from the truth labeler.
+    The event timestamp remains the decision bar close; downstream labelers
+    still fill at the next candle open.
+    """
+
     if candles.empty:
         return ()
     df = strategy.prepare(candles).reset_index(drop=True)
@@ -213,6 +245,9 @@ def label_strategy_events(
         if intent is None:
             continue
         ts = pd.Timestamp(df["timestamp"].iloc[index])
+        intent_expected_edge, intent_fill_probability = _intent_route_metadata(
+            intent.reason
+        )
         events.append(
             SignalEvent(
                 event_id=f"{strategy.strategy_id}|{ts.isoformat()}|{len(events)}",
@@ -227,16 +262,20 @@ def label_strategy_events(
                 source_id=source_id or strategy.strategy_id,
                 strategy_id=strategy.strategy_id,
                 route=route,
+                expected_edge_bps=(
+                    expected_edge_bps
+                    if expected_edge_bps is not None
+                    else intent_expected_edge
+                ),
+                fill_probability=(
+                    fill_probability
+                    if fill_probability is not None
+                    else intent_fill_probability
+                ),
                 metadata={"reason": intent.reason, "bar_index": index},
             )
         )
-    return label_events(
-        candles,
-        events,
-        exchange=exchange,
-        config=config,
-        fee_profile=fee_profile,
-    )
+    return tuple(events)
 
 
 def summarize_truth(
@@ -406,7 +445,7 @@ def _label_one(
         fill_probability=round(fill_probability, 4),
         fill_evidence=fill_evidence,
         blockers=tuple(dict.fromkeys(blockers)),
-        metadata=dict(event.metadata),
+        metadata=_event_metadata(event),
     )
 
 
@@ -528,8 +567,55 @@ def _invalid_label(event: SignalEvent, fees: ExchangeFeeProfile, reason: str) ->
         fill_probability=0.0,
         fill_evidence="none",
         blockers=(reason,),
-        metadata=dict(event.metadata),
+        metadata=_event_metadata(event),
     )
+
+
+def _event_metadata(event: SignalEvent) -> dict:
+    metadata = dict(event.metadata)
+    if event.expected_edge_bps is not None:
+        metadata["expected_edge_bps"] = float(event.expected_edge_bps)
+    if event.fill_probability is not None:
+        metadata["fill_probability"] = float(event.fill_probability)
+    return metadata
+
+
+_INTENT_KV_RE = re.compile(
+    r"(?P<key>[A-Za-z][A-Za-z0-9_]*)(?P<sep>=|:)"
+    r"(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
+)
+_EXPECTED_EDGE_KEYS = {
+    "expectededge",
+    "expectededgebps",
+    "expectednet",
+    "expectednetbps",
+}
+_FILL_PROBABILITY_KEYS = {
+    "fillprobability",
+    "fillprob",
+    "makerfillprobability",
+    "makerfillprob",
+}
+
+
+def _intent_route_metadata(reason: str) -> tuple[float | None, float | None]:
+    """Extract machine-readable route hints from a strategy reason string."""
+
+    expected_edge: float | None = None
+    fill_probability: float | None = None
+    for match in _INTENT_KV_RE.finditer(reason or ""):
+        key = re.sub(r"[^A-Za-z0-9]", "", match.group("key")).lower()
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        if key in _EXPECTED_EDGE_KEYS:
+            expected_edge = value
+        elif key in _FILL_PROBABILITY_KEYS:
+            fill_probability = max(0.0, min(1.0, value))
+    return expected_edge, fill_probability
 
 
 def _verdict(

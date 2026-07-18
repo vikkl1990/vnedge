@@ -2451,6 +2451,7 @@
         <a class="nav-link" data-nav="trading" href="#trading"><span class="nav-icon">02</span><span>Trading</span></a>
         <a class="nav-link" data-nav="incidents" href="#incidents"><span class="nav-icon">03</span><span>Incidents</span></a>
         <a class="nav-link" data-nav="system" href="#system"><span class="nav-icon">04</span><span>System</span></a>
+        <a class="nav-link" id="pineLabLink" href="/pine-research"><span class="nav-icon">05</span><span>Pine Lab</span></a>
         <a class="nav-link" data-nav="about" href="#about"><span class="nav-icon">i</span><span>About</span></a>
         <a class="nav-link nav-legal" data-nav="legal" href="#legal"><span class="nav-icon">!</span><span>Risk &amp; Legal</span></a>
       </aside>
@@ -5978,6 +5979,8 @@
   (function(){
     const a=$("runbooksLink");
     if(a)a.href="/runbooks?token="+encodeURIComponent(token);
+    const p=$("pineLabLink");
+    if(p)p.href="/pine-research?token="+encodeURIComponent(token);
   })();
 
   loadResearch();
