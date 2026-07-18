@@ -28,6 +28,7 @@ def test_dashboard_reads_pine_research_kb_from_host_artifact():
 def test_pine_backtest_evidence_refreshes_matrix_overlay():
     service = compose_services()["pine-backtest-evidence"]
 
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
     assert service["command"][:3] == ["python", "-m", "vnedge.research.pine_backtest_evidence"]
     assert "--interval-seconds" in service["command"]
     assert "--report-dir" in service["command"]

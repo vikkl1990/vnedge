@@ -438,6 +438,7 @@ services:
   pine-backtest-evidence:
     build: .
     restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
     depends_on:
       - daily-scalper-pack
       - daily-scalper-cadence

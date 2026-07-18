@@ -78,6 +78,7 @@ def test_pine_backtest_evidence_attaches_primitive_results(tmp_path):
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
     assert json.loads(out.read_text(encoding="utf-8"))["summary"]["backtests_queued"] == 1
+    assert out.stat().st_mode & 0o777 == 0o644
 
 
 def test_pine_backtest_evidence_blocks_catalog_and_repaint_rows(tmp_path):
