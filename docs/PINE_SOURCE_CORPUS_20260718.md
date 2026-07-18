@@ -81,9 +81,10 @@ Reject or quarantine these before backtesting:
 
 ## Recommended Build Order
 
-1. `pine_alpha_distiller_v1`: parse source-backed scripts into normalized
-   primitives: zone, sweep, displacement, volume impulse, MTF bias, trail,
-   target/stop geometry, repaint risk.
+1. `pine_alpha_distiller_v1`: built as the source-backed primitive/task
+   distiller. It parses accessible Pine artifacts into zone, sweep,
+   displacement, volume impulse, MTF bias, trail, target/stop geometry, and
+   repaint-risk queues without emitting Pine source.
 2. `fvg_liquidity_breakout_v1`: first executable port family from the corpus.
    Use 1h bias, 15m setup, 5m trigger, volume/displacement confirmation, and a
    25 bps expected-net floor.

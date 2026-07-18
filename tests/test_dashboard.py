@@ -180,6 +180,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})
     kb = tmp_path / "pine_research_kb.json"
+    distiller = tmp_path / "pine_alpha_distiller_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -194,17 +195,33 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
             }
         ],
     }))
-    app = create_app(provider, token="t3st-token", pine_research_path=kb)
+    distiller.write_text(json.dumps({
+        "distiller_id": "pine_alpha_distiller_v1",
+        "summary": {"source_backed_reviewed": 1, "port_candidates": 1},
+        "port_tasks": [{"recommended_port": "fvg_liquidity_breakout_v1"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    app = create_app(
+        provider,
+        token="t3st-token",
+        pine_research_path=kb,
+        pine_alpha_distiller_path=distiller,
+    )
     client = TestClient(app)
 
     page = client.get("/pine-research")
     assert page.status_code == 200
     assert "Pine Research Lab" in page.text
     assert "/pine-research/kb" in page.text
+    assert "/pine-research/distiller" in page.text
+    assert "Backtest Evidence" in page.text
+    assert "AI review" in page.text
     assert "read-only" in page.text.lower()
     assert "cannot trade" in page.text.lower()
 
     assert client.get("/pine-research/kb").status_code == 401
+    assert client.get("/pine-research/distiller").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -212,6 +229,12 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert payload["summary"]["portable"] == 1
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
+    d = client.get("/pine-research/distiller?token=t3st-token")
+    assert d.status_code == 200
+    distiller_payload = d.json()
+    assert distiller_payload["summary"]["port_candidates"] == 1
+    assert distiller_payload["can_trade"] is False
+    assert distiller_payload["can_promote"] is False
 
 
 def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):
