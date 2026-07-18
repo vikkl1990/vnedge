@@ -332,6 +332,9 @@
     if(!parts.length)return "no replay cells";
     return parts.join(" | ");
   }
+  function hasCompletedEvidence(r){
+    return summarizeCells(r&&r.backtests||[]).completed>0;
+  }
   function aiReviewSummary(r){
     const bits=[];
     const features=(r.features||[]).slice(0,3).join(", ");
@@ -425,7 +428,12 @@
       div.querySelector("b").textContent=cell.timeframe||"--";
       div.children[1].appendChild(pill(cell.status||"queued",tone));
       div.children[2].textContent="samples "+(cell.samples||0)+" | avg "+(cell.avg_net_bps==null?"--":Number(cell.avg_net_bps).toFixed(2)+" bps")+" | PF "+(cell.profit_factor==null?"--":Number(cell.profit_factor).toFixed(2));
-      div.children[3].textContent=cell.blocker||"awaiting replay";
+      const evidenceBits=[];
+      if(cell.evidence_source)evidenceBits.push(cell.evidence_source);
+      if(cell.tested_strategy)evidenceBits.push(cell.tested_strategy);
+      if(cell.tested_symbol)evidenceBits.push(cell.tested_symbol);
+      evidenceBits.push(cell.blocker||"awaiting replay");
+      div.children[3].textContent=evidenceBits.join(" | ");
       tf.appendChild(div);
     });
     if(!tf.children.length)tf.textContent="No timeframe cells published.";
@@ -458,7 +466,7 @@
   }
   function render(payload){
     state.records=Array.isArray(payload.records)?payload.records:[];
-    state.selected=state.records[0]||null;
+    state.selected=state.records.find(hasCompletedEvidence)||state.records[0]||null;
     const s=payload.summary||{};
     text("m_total",s.total);
     text("m_source_backed",s.source_backed);

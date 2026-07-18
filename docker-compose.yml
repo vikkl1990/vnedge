@@ -431,6 +431,32 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Pine research evidence overlay: maps source-backed Pine distiller tasks onto
+  # VNEDGE-owned primitive backtest/replay artifacts so the Pine Lab matrix
+  # shows completed/blocked evidence instead of stale "queued" placeholders.
+  # Research-only: no source code emitted, no orders, no promotion path.
+  pine-backtest-evidence:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - daily-scalper-pack
+      - daily-scalper-cadence
+      - alpha-distillation
+      - orderflow-footprint-miner
+      - event-leadlag-miner
+      - candidate-replay-executor
+    command: ["python", "-m", "vnedge.research.pine_backtest_evidence",
+              "--interval-seconds", "${PINE_BACKTEST_EVIDENCE_INTERVAL_SECONDS:-1800}",
+              "--kb", "research/pine_scripts/pine_research_kb.json",
+              "--distiller", "research/live_research/pine_alpha_distiller_latest.json",
+              "--report-dir", "research/live_research"]
+    volumes:
+      - ./research/pine_scripts:/app/research/pine_scripts
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Bitcoin-native regime sensor: read-only node/mempool/fee telemetry that
   # tags research windows as calm/building/stressed/panic. It is context only:
   # no wallet RPCs, no exchange credentials, no data/execution mounts.

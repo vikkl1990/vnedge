@@ -25,6 +25,24 @@ def test_dashboard_reads_pine_research_kb_from_host_artifact():
     assert "./research/pine_scripts:/app/research/pine_scripts:ro" in service["volumes"]
 
 
+def test_pine_backtest_evidence_refreshes_matrix_overlay():
+    service = compose_services()["pine-backtest-evidence"]
+
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.pine_backtest_evidence"]
+    assert "--interval-seconds" in service["command"]
+    assert "--report-dir" in service["command"]
+    assert "./research/pine_scripts:/app/research/pine_scripts" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) >= {
+        "daily-scalper-pack",
+        "daily-scalper-cadence",
+        "alpha-distillation",
+        "orderflow-footprint-miner",
+        "event-leadlag-miner",
+        "candidate-replay-executor",
+    }
+
+
 def test_event_leadlag_shadow_can_refresh_public_candle_context():
     services = compose_services()
     service = services["event-leadlag-shadow"]

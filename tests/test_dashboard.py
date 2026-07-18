@@ -217,6 +217,8 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/distiller" in page.text
     assert "Backtest Evidence" in page.text
     assert "AI review" in page.text
+    assert "hasCompletedEvidence" in page.text
+    assert "evidence_source" in page.text
     assert "read-only" in page.text.lower()
     assert "cannot trade" in page.text.lower()
 

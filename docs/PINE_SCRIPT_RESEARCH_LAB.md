@@ -49,6 +49,24 @@ The source-backed distiller publishes:
 research/live_research/pine_alpha_distiller_latest.json
 ```
 
+The backtest matrix is refreshed by a third artifact step:
+
+```bash
+python -m vnedge.research.pine_backtest_evidence \
+  --kb research/pine_scripts/pine_research_kb.json \
+  --distiller research/live_research/pine_alpha_distiller_latest.json \
+  --report-dir research/live_research
+```
+
+This command overlays VNEDGE-owned primitive evidence from artifacts such as
+`alpha_distillation_latest.json`, `daily_scalper_cadence_latest.json`,
+`orderflow_footprint_latest.json`, `candidate_replay_latest.json`, and
+`event_leadlag_latest.json` onto each source-backed Pine row. A completed cell
+means "the matching VNEDGE primitive has evidence"; it does **not** mean the
+original Pine script was executed, copied, or approved for shadow/paper/live.
+Rows still require a causal Python port and untouched-window judgment before
+any promotion discussion.
+
 The production Compose dashboard mounts this directory read-only:
 
 ```text
@@ -219,6 +237,7 @@ in chunks:
 - source-hash batch,
 - AI review batch,
 - port/backtest queue batch,
+- evidence overlay batch (`pine_backtest_evidence_v1`),
 - dedupe against existing VNEDGE scanner families.
 
 The crawler must not scrape or store protected/invite-only source. It should
