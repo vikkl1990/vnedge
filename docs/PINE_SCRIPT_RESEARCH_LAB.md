@@ -90,6 +90,12 @@ Catalog rows are intentionally `BLOCKED_NO_SOURCE`. They are useful for
 prioritization and AI clustering, but cannot be ported or backtested until
 lawful public/open-source Pine source is supplied.
 
+When a catalog URL and a source-backed Pine export look like the same script,
+the publisher reconciles them into one source-backed record. The source record
+wins, while `catalog_urls` and `catalog_script_ids` preserve discovery
+provenance. This prevents the lab from double-counting a script after source is
+supplied.
+
 ## Knowledge-base shape
 
 Each record contains:
@@ -101,10 +107,19 @@ Each record contains:
 - crypto fit score,
 - porting notes,
 - AI uplift ideas,
+- mechanism cluster, priority score, and next action,
 - timeframe backtest cells,
 - decision and promotion flags.
 
 Promotion flags are always false at this layer.
+
+`next_action` is the operator queue:
+
+- `REQUEST_OPEN_SOURCE_EXPORT`: catalog hit only; source is still required.
+- `PORT_CAUSAL_FEATURES_AND_REPLAY`: source exists and the mechanism can be
+  ported into VNEDGE for causality tests and replay.
+- `RUN_CAUSALITY_AUDIT`: source exists but repaint/lookahead risk is present.
+- `DISTILL_FEATURES_ONLY`: useful as ML/features, not a standalone scanner.
 
 ## Verdict meanings
 

@@ -54,6 +54,9 @@ def test_load_pine_research_payload_summarizes_generated_artifact(tmp_path):
         "total": 2,
         "source_backed": 0,
         "catalog_only": 2,
+        "reconciled_catalog_matches": 0,
+        "port_queue": 0,
+        "source_requests": 2,
         "portable": 1,
         "needs_source": 1,
         "research_only": 0,
@@ -193,6 +196,82 @@ def test_publish_pine_research_kb_adds_catalog_backlog(tmp_path):
     assert payload["summary"]["needs_source"] == 2
     assert {row["crypto_portability"] for row in payload["records"]} == {"BLOCKED_NO_SOURCE"}
     assert all(row["decision"] == "WAIT_FOR_OPEN_SOURCE_OR_USER_EXPORT" for row in payload["records"])
+
+
+def test_publish_pine_research_kb_reconciles_catalog_match_with_source(tmp_path):
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "luxy_ut_god_forecast.pine").write_text(
+        """
+//@version=6
+indicator("Luxy UT GOD - UT-BOT Forecast", overlay=true)
+ema = ta.ema(close, 21)
+atr = ta.atr(14)
+long = close > ema and volume > ta.sma(volume, 20)
+plotshape(long)
+alertcondition(long, "long")
+""",
+        encoding="utf-8",
+    )
+    html = tmp_path / "catalog.html"
+    html.write_text(
+        '<a href="/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/">',
+        encoding="utf-8",
+    )
+    output = tmp_path / "kb.json"
+
+    payload = publish_pine_research_kb(
+        source_dir=source_dir,
+        catalog_html_files=[html],
+        output_path=output,
+        include_defaults=False,
+    )
+
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["source_backed"] == 1
+    assert payload["summary"]["catalog_only"] == 0
+    assert payload["summary"]["reconciled_catalog_matches"] == 1
+    record = payload["records"][0]
+    assert record["script_id"] == "luxy_ut_god_forecast"
+    assert record["discovery_status"] == "SOURCE_BACKED_CATALOG_MATCH"
+    assert record["catalog_urls"] == (
+        "https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/",
+    )
+    assert record["next_action"] == "PORT_CAUSAL_FEATURES_AND_REPLAY"
+
+
+def test_pine_research_priority_queue_prefers_source_backed_port(tmp_path):
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "orderflow_delta_breakout.pine").write_text(
+        """
+//@version=6
+strategy("Order Flow Delta Breakout", overlay=true)
+delta = volume - ta.sma(volume, 20)
+atr = ta.atr(14)
+long = close > ta.highest(high[1], 12) and delta > 0
+if long
+    strategy.entry("L", strategy.long)
+    strategy.exit("LX", "L", stop=close - atr, limit=close + atr * 2)
+""",
+        encoding="utf-8",
+    )
+    html = tmp_path / "catalog.html"
+    html.write_text(
+        '<a href="/script/ODpXONLY-Liquidity-Sweep-Detector-Pro/">',
+        encoding="utf-8",
+    )
+
+    payload = publish_pine_research_kb(
+        source_dir=source_dir,
+        catalog_html_files=[html],
+        output_path=tmp_path / "kb.json",
+        include_defaults=False,
+    )
+
+    assert payload["priorities"][0]["script_id"] == "orderflow_delta_breakout"
+    assert payload["priorities"][0]["next_action"] == "PORT_CAUSAL_FEATURES_AND_REPLAY"
+    assert payload["summary"]["source_requests"] == 1
 
 
 def test_pine_research_cli_publishes_artifact(tmp_path, capsys):
