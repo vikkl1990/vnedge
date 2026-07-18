@@ -137,6 +137,10 @@
           <div class="metric"><span>Port queue</span><b id="m_port_queue">--</b><i>source-backed</i></div>
           <div class="metric"><span>Catalog matches</span><b id="m_matches">--</b><i>reconciled</i></div>
           <div class="metric"><span>Queued TFs</span><b id="m_queue">--</b><i>backtest cells</i></div>
+          <div class="metric"><span>Opened pages</span><b id="m_extract_attempted">--</b><i>manifested</i></div>
+          <div class="metric"><span>Extracted source</span><b id="m_extract_extracted">--</b><i>open-source only</i></div>
+          <div class="metric"><span>Blocked/errors</span><b id="m_extract_blocked">--</b><i>needs operator</i></div>
+          <div class="metric"><span>Last extract</span><b id="m_extract_latest">--</b><i>UTC</i></div>
         </div>
         <div class="policy" id="policyText">Loading policy...</div>
         <div class="policy">
@@ -306,7 +310,11 @@
     text("d_source_state",r.source_status||sourceLabel(r));
     text("d_action",r.next_action||"--");
     text("d_promo",r.can_promote?"YES":"NO");
-    text("sourceAnswer",(r.source_explanation||"Source provenance is not published.")+" Next: "+(r.source_next_step||r.next_action||"--"));
+    const extraction=r.source_extraction||{};
+    const extractionText=extraction.extracted_at
+      ? " Extracted: "+extraction.extracted_at+" | hash "+String(extraction.source_sha256||"").slice(0,12)+"."
+      : "";
+    text("sourceAnswer",(r.source_explanation||"Source provenance is not published.")+extractionText+" Next: "+(r.source_next_step||r.next_action||"--"));
     list("d_features",r.features||[]);
     list("d_risks",r.risks||[]);
     list("d_uplift",r.ai_uplift_ideas||[]);
@@ -336,6 +344,11 @@
     text("m_port_queue",s.port_queue);
     text("m_matches",s.reconciled_catalog_matches);
     text("m_queue",s.backtests_queued);
+    const ex=payload.source_extraction||{};
+    text("m_extract_attempted",ex.attempted);
+    text("m_extract_extracted",ex.extracted);
+    text("m_extract_blocked",Number(ex.blocked||0)+Number(ex.errors||0));
+    text("m_extract_latest",(ex.latest_success_at||"").slice(0,16)||"--");
     const p=payload.policy||{};
     $("policyText").textContent=[p.source_rule,p.promotion_rule,"Venues: "+(p.venues||[]).join(", "),"TFs: "+(p.timeframes||[]).join(", ")].filter(Boolean).join(" | ");
     text("operatorAnswer",payload.operator_answer||"research-only");

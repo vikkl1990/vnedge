@@ -39,6 +39,7 @@ DEFAULT_TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
 DEFAULT_VENUES: tuple[str, ...] = ("binanceusdm", "bybit", "delta_india")
 DEFAULT_PINE_SOURCE_DIR = Path("research/pine_scripts/sources")
 DEFAULT_PINE_KB_PATH = Path("research/pine_scripts/pine_research_kb.json")
+DEFAULT_PINE_EXTRACTION_MANIFEST = Path("research/pine_scripts/extraction_manifest.jsonl")
 PINE_SOURCE_SUFFIXES = (".pine", ".pinescript", ".txt")
 TRADINGVIEW_BASE_URL = "https://www.tradingview.com"
 DEFAULT_TRADINGVIEW_DISCOVERY_URLS: tuple[str, ...] = (
@@ -170,6 +171,7 @@ def empty_pine_research_payload() -> dict:
             "blocked_repaint": 0,
             "backtests_queued": 0,
         },
+        "source_extraction": _empty_extraction_summary(),
         "records": [],
         "priorities": [],
         "policy": _policy(),
@@ -321,6 +323,11 @@ def load_pine_research_payload(path: Path | None) -> dict:
         "summary": summarize_records(enriched),
         "records": enriched,
         "priorities": _priority_queue(enriched),
+        "source_extraction": (
+            raw.get("source_extraction")
+            if isinstance(raw.get("source_extraction"), dict)
+            else _empty_extraction_summary()
+        ),
         "policy": raw.get("policy") if isinstance(raw.get("policy"), dict) else _policy(),
         "operator_answer": str(
             raw.get("operator_answer")
@@ -343,6 +350,7 @@ def build_pine_research_payload(
         "summary": summarize_records(rows),
         "records": rows,
         "priorities": _priority_queue(rows),
+        "source_extraction": _empty_extraction_summary(),
         "policy": _policy(),
         "operator_answer": (
             "Pine reviews are a research funnel. A script can become a VNEDGE "
@@ -361,6 +369,7 @@ def publish_pine_research_kb(
     catalog_urls: Iterable[str] = (),
     catalog_discovery_urls: Iterable[str] = (),
     catalog_html_files: Iterable[Path | str] = (),
+    extraction_manifest_files: Iterable[Path | str] = (),
     output_path: Path | str = DEFAULT_PINE_KB_PATH,
     include_defaults: bool = True,
     max_catalog_records: int = 250,
@@ -376,6 +385,8 @@ def publish_pine_research_kb(
     """
 
     records: list[dict] = []
+    extraction_entries = load_pine_extraction_manifest(extraction_manifest_files)
+    extraction_by_path = _extraction_entries_by_output(extraction_entries)
     if include_defaults:
         records.extend(default_pine_research_payload()["records"])
     for path in discover_pine_source_files(source_dir, source_files):
@@ -388,7 +399,12 @@ def publish_pine_research_kb(
             author=_author_from_source(source),
             source_license=_license_from_source(source),
         )
-        records.append(record.to_dict())
+        record_dict = record.to_dict()
+        _apply_extraction_provenance(
+            record_dict,
+            _extraction_entry_for_source_path(path, extraction_by_path),
+        )
+        records.append(record_dict)
     for url in discover_tradingview_catalog_urls(
         catalog_urls=catalog_urls,
         catalog_discovery_urls=catalog_discovery_urls,
@@ -401,6 +417,7 @@ def publish_pine_research_kb(
     payload = _build_payload_from_dicts(
         _dedupe_record_dicts(records),
         source=source_label,
+        source_extraction=summarize_extraction_manifest(extraction_entries),
     )
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -435,6 +452,62 @@ def discover_pine_source_files(
         out.append(path)
         seen.add(resolved)
     return tuple(out)
+
+
+def load_pine_extraction_manifest(
+    manifest_files: Iterable[Path | str] = (),
+) -> tuple[dict, ...]:
+    """Load JSONL source-extraction attempts from browser/operator runs.
+
+    The manifest is a provenance trail, not a source transport. Source files
+    remain gitignored artifacts; committed KB rows keep only URL/status/hash
+    evidence so a later operator can audit what was actually opened.
+    """
+
+    entries: list[dict] = []
+    for item in manifest_files:
+        path = Path(item)
+        if not path.exists() or not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                normalized = _normalize_extraction_entry(parsed)
+                if normalized:
+                    entries.append(normalized)
+    return tuple(entries)
+
+
+def summarize_extraction_manifest(entries: Iterable[dict]) -> dict:
+    rows = tuple(entries)
+    statuses = Counter(str(row.get("status") or "unknown") for row in rows)
+    extracted = [row for row in rows if row.get("status") == "extracted"]
+    latest_at = max(
+        (str(row.get("started_at") or "") for row in rows if row.get("started_at")),
+        default="",
+    )
+    latest_success_at = max(
+        (str(row.get("started_at") or "") for row in extracted if row.get("started_at")),
+        default="",
+    )
+    return {
+        "attempted": len(rows),
+        "extracted": len(extracted),
+        "blocked": sum(
+            count
+            for status, count in statuses.items()
+            if status.startswith("blocked")
+        ),
+        "errors": statuses["error"],
+        "status_counts": dict(sorted(statuses.items())),
+        "latest_attempt_at": latest_at,
+        "latest_success_at": latest_success_at,
+    }
 
 
 def discover_tradingview_catalog_urls(
@@ -570,7 +643,12 @@ def review_tradingview_catalog_script(url: str) -> PineReviewRecord:
     )
 
 
-def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
+def _build_payload_from_dicts(
+    records: Iterable[dict],
+    *,
+    source: str,
+    source_extraction: dict | None = None,
+) -> dict:
     rows = enrich_pine_research_records(records)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -578,6 +656,7 @@ def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
         "summary": summarize_records(rows),
         "records": rows,
         "priorities": _priority_queue(rows),
+        "source_extraction": source_extraction or _empty_extraction_summary(),
         "policy": _policy(),
         "operator_answer": (
             "Pine KB published from local public/user-supplied source files "
@@ -669,6 +748,102 @@ def _with_priority_fields(record: dict) -> dict:
     row["source_explanation"] = _source_explanation(row)
     row["source_next_step"] = _source_next_step(row)
     return row
+
+
+def _empty_extraction_summary() -> dict:
+    return {
+        "attempted": 0,
+        "extracted": 0,
+        "blocked": 0,
+        "errors": 0,
+        "status_counts": {},
+        "latest_attempt_at": "",
+        "latest_success_at": "",
+    }
+
+
+def _normalize_extraction_entry(entry: dict) -> dict:
+    status = str(entry.get("status") or "").strip().lower()
+    if not status:
+        return {}
+    output = str(entry.get("output") or "").strip()
+    url = _normalize_tradingview_url(str(entry.get("url") or ""))
+    normalized = {
+        "started_at": str(entry.get("started_at") or ""),
+        "status": status,
+        "title": str(entry.get("title") or ""),
+        "url": url or str(entry.get("url") or ""),
+        "output": output,
+        "output_name": Path(output).name if output else "",
+        "source_lines": _bounded_int(entry.get("source_lines"), 0, 1_000_000),
+        "source_sha256": str(entry.get("source_sha256") or ""),
+        "priority_score": _bounded_int(entry.get("priority_score"), 0, 100),
+        "mechanism": str(entry.get("mechanism") or ""),
+        "error": str(entry.get("error") or ""),
+    }
+    if (
+        not normalized["url"]
+        and not normalized["output"]
+        and not normalized["error"]
+    ):
+        return {}
+    return normalized
+
+
+def _extraction_entries_by_output(entries: Iterable[dict]) -> dict[str, dict]:
+    by_key: dict[str, dict] = {}
+    for entry in entries:
+        if entry.get("status") != "extracted":
+            continue
+        for key in _extraction_output_keys(entry):
+            existing = by_key.get(key)
+            if existing is None or str(entry.get("started_at") or "") >= str(
+                existing.get("started_at") or ""
+            ):
+                by_key[key] = entry
+    return by_key
+
+
+def _extraction_output_keys(entry: dict) -> tuple[str, ...]:
+    keys = []
+    output = str(entry.get("output") or "").strip()
+    name = str(entry.get("output_name") or "").strip()
+    if output:
+        keys.append(output)
+        try:
+            keys.append(str(Path(output).resolve()))
+        except OSError:
+            pass
+        keys.append(Path(output).name)
+    if name:
+        keys.append(name)
+    return tuple(dict.fromkeys(key for key in keys if key))
+
+
+def _extraction_entry_for_source_path(path: Path, by_output: dict[str, dict]) -> dict | None:
+    keys = (str(path), str(path.resolve()), path.name)
+    for key in keys:
+        entry = by_output.get(key)
+        if entry:
+            return entry
+    return None
+
+
+def _apply_extraction_provenance(record: dict, entry: dict | None) -> None:
+    if not entry:
+        return
+    url = _normalize_tradingview_url(str(entry.get("url") or ""))
+    if url:
+        record["url"] = url
+        record["catalog_urls"] = _append_unique(record.get("catalog_urls"), url)
+        record["discovery_status"] = "SOURCE_BACKED_CATALOG_MATCH"
+        record["source_origin"] = "tradingview_open_source_browser"
+    record["source_extraction"] = {
+        "status": str(entry.get("status") or ""),
+        "extracted_at": str(entry.get("started_at") or ""),
+        "source_lines": int(entry.get("source_lines") or 0),
+        "source_sha256": str(entry.get("source_sha256") or ""),
+    }
 
 
 def _source_status(record: dict) -> str:
@@ -833,7 +1008,15 @@ def review_pine_source(
     """
 
     lower = source.lower()
-    kind: ScriptKind = "strategy" if "strategy(" in lower else "indicator" if "indicator(" in lower else "unknown"
+    kind: ScriptKind
+    if "strategy(" in lower:
+        kind = "strategy"
+    elif "indicator(" in lower:
+        kind = "indicator"
+    elif "library(" in lower:
+        kind = "library"
+    else:
+        kind = "unknown"
     features = _detect_features(lower)
     risks = _detect_risks(lower)
     fit = _crypto_fit_score(features, risks, source)
@@ -1298,6 +1481,15 @@ def main(argv: list[str] | None = None) -> int:
         help="saved TradingView HTML file to parse for script URLs",
     )
     parser.add_argument(
+        "--extraction-manifest",
+        action="append",
+        default=[],
+        help=(
+            "JSONL manifest from browser-based open-source Pine extraction; "
+            "used for provenance/status only"
+        ),
+    )
+    parser.add_argument(
         "--max-catalog-records",
         type=int,
         default=250,
@@ -1320,6 +1512,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         + list(args.discovery_url),
         catalog_html_files=args.catalog_html,
+        extraction_manifest_files=args.extraction_manifest,
         output_path=args.output,
         include_defaults=not args.no_defaults,
         max_catalog_records=max(0, args.max_catalog_records),

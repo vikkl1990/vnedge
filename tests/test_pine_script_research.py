@@ -9,9 +9,11 @@ from vnedge.research.pine_script_research import (
     extract_tradingview_catalog_page_urls,
     extract_tradingview_script_urls,
     load_pine_research_payload,
+    load_pine_extraction_manifest,
     main,
     publish_pine_research_kb,
     review_pine_source,
+    summarize_extraction_manifest,
 )
 
 
@@ -118,6 +120,26 @@ if long
     assert record.crypto_portability in {"PORTABLE", "PORTABLE_WITH_CHANGES"}
     assert "breakout" in record.features
     assert "risk_plan" in record.features
+
+
+def test_review_pine_source_detects_libraries():
+    source = """
+// This Pine Script code is subject to the Mozilla Public License 2.0
+//@version=6
+library("Range Breakout Helpers")
+export isBreakout(float closePrice, float highLevel) =>
+    closePrice > highLevel
+"""
+
+    record = review_pine_source(
+        script_id="range_breakout_helpers",
+        title="Range Breakout Helpers",
+        url="https://www.tradingview.com/script/example/",
+        source=source,
+    )
+
+    assert record.kind == "library"
+    assert record.source_available is True
 
 
 def test_publish_pine_research_kb_reviews_source_directory(tmp_path):
@@ -297,6 +319,93 @@ alertcondition(long, "long")
         "https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/",
     )
     assert record["next_action"] == "PORT_CAUSAL_FEATURES_AND_REPLAY"
+
+
+def test_publish_pine_research_kb_attaches_extraction_manifest_provenance(tmp_path):
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    source = source_dir / "advanced_fibonacci_golden_zone_hexatrades.pine"
+    source.write_text(
+        """
+//@version=6
+indicator("Advanced Fibonacci Golden Zone [HexaTrades]", overlay=true)
+pivot = ta.pivothigh(high, 15, 5)
+golden = close > ta.ema(close, 20) and not na(pivot)
+alertcondition(golden, "bullish golden zone")
+""",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "extraction_manifest.jsonl"
+    manifest.write_text(
+        json.dumps({
+            "started_at": "2026-07-18T14:00:00Z",
+            "status": "extracted",
+            "title": "Advanced Fibonacci Golden Zone [HexaTrades]",
+            "url": "https://www.tradingview.com/script/gmmtYKS3-Advanced-Fibonacci-Golden-Zone-HexaTrades/",
+            "output": str(source),
+            "source_lines": 7,
+            "source_sha256": "abc123",
+            "priority_score": 47,
+        })
+        + "\n"
+        + json.dumps({
+            "started_at": "2026-07-18T14:01:00Z",
+            "status": "blocked_missing_source_tab",
+            "title": "Protected Script",
+            "url": "https://www.tradingview.com/script/LOCKED-Protected/",
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = publish_pine_research_kb(
+        source_dir=source_dir,
+        extraction_manifest_files=[manifest],
+        output_path=tmp_path / "kb.json",
+        include_defaults=False,
+    )
+
+    assert payload["source_extraction"]["attempted"] == 2
+    assert payload["source_extraction"]["extracted"] == 1
+    assert payload["source_extraction"]["blocked"] == 1
+    record = payload["records"][0]
+    assert record["url"] == (
+        "https://www.tradingview.com/script/gmmtYKS3-Advanced-Fibonacci-Golden-Zone-HexaTrades/"
+    )
+    assert record["source_status"] == "SOURCE_BACKED_CATALOG_MATCH"
+    assert record["source_origin"] == "tradingview_open_source_browser"
+    assert record["source_extraction"]["extracted_at"] == "2026-07-18T14:00:00Z"
+
+
+def test_load_and_summarize_pine_extraction_manifest(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        "\n".join([
+            json.dumps({
+                "started_at": "2026-07-18T13:00:00Z",
+                "status": "extracted",
+                "url": "https://in.tradingview.com/script/AAAA1111-Open-Source/",
+                "output": "/tmp/open_source.pine",
+                "source_lines": "12",
+            }),
+            "not-json",
+            json.dumps({
+                "started_at": "2026-07-18T13:05:00Z",
+                "status": "error",
+                "error": "browser stopped",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    entries = load_pine_extraction_manifest([manifest])
+    summary = summarize_extraction_manifest(entries)
+
+    assert len(entries) == 2
+    assert entries[0]["url"] == "https://www.tradingview.com/script/AAAA1111-Open-Source/"
+    assert summary["attempted"] == 2
+    assert summary["extracted"] == 1
+    assert summary["errors"] == 1
 
 
 def test_pine_research_priority_queue_prefers_source_backed_port(tmp_path):

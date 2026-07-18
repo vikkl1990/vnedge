@@ -129,6 +129,29 @@ has exposed source and place the exported/pasted Pine file under:
 research/pine_scripts/sources/
 ```
 
+When the source came from an open-source TradingView page, also keep a local
+JSONL extraction manifest. The manifest is provenance only: it records URL,
+status, output file, source line count, and hash. The `.pine` files and manifest
+are runtime artifacts and remain gitignored; the published KB stores only the
+review metadata and hash evidence.
+
+```bash
+python -m vnedge.research.pine_script_research \
+  --source-dir research/pine_scripts/sources \
+  --extraction-manifest research/pine_scripts/extraction_manifest.jsonl \
+  --include-tradingview-discovery \
+  --discovery-depth 1 \
+  --max-discovery-pages 80 \
+  --max-catalog-records 1000 \
+  --output research/pine_scripts/pine_research_kb.json \
+  --no-defaults
+```
+
+The browser extractor must only use the visible `Source code` tab on pages that
+TradingView marks as open-source. Protected/invite-only scripts stay
+`CATALOG_METADATA_ONLY` or a blocked manifest row; screenshots/descriptions are
+never treated as executable source.
+
 When a catalog URL and a source-backed Pine export look like the same script,
 the publisher reconciles them into one source-backed record. The source record
 wins, while `catalog_urls` and `catalog_script_ids` preserve discovery
