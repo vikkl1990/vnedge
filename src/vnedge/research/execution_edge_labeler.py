@@ -17,6 +17,7 @@ import argparse
 import inspect
 import json
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from statistics import mean
@@ -244,6 +245,9 @@ def strategy_signal_events(
         if intent is None:
             continue
         ts = pd.Timestamp(df["timestamp"].iloc[index])
+        intent_expected_edge, intent_fill_probability = _intent_route_metadata(
+            intent.reason
+        )
         events.append(
             SignalEvent(
                 event_id=f"{strategy.strategy_id}|{ts.isoformat()}|{len(events)}",
@@ -258,8 +262,16 @@ def strategy_signal_events(
                 source_id=source_id or strategy.strategy_id,
                 strategy_id=strategy.strategy_id,
                 route=route,
-                expected_edge_bps=expected_edge_bps,
-                fill_probability=fill_probability,
+                expected_edge_bps=(
+                    expected_edge_bps
+                    if expected_edge_bps is not None
+                    else intent_expected_edge
+                ),
+                fill_probability=(
+                    fill_probability
+                    if fill_probability is not None
+                    else intent_fill_probability
+                ),
                 metadata={"reason": intent.reason, "bar_index": index},
             )
         )
@@ -566,6 +578,44 @@ def _event_metadata(event: SignalEvent) -> dict:
     if event.fill_probability is not None:
         metadata["fill_probability"] = float(event.fill_probability)
     return metadata
+
+
+_INTENT_KV_RE = re.compile(
+    r"(?P<key>[A-Za-z][A-Za-z0-9_]*)(?P<sep>=|:)"
+    r"(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+))"
+)
+_EXPECTED_EDGE_KEYS = {
+    "expectededge",
+    "expectededgebps",
+    "expectednet",
+    "expectednetbps",
+}
+_FILL_PROBABILITY_KEYS = {
+    "fillprobability",
+    "fillprob",
+    "makerfillprobability",
+    "makerfillprob",
+}
+
+
+def _intent_route_metadata(reason: str) -> tuple[float | None, float | None]:
+    """Extract machine-readable route hints from a strategy reason string."""
+
+    expected_edge: float | None = None
+    fill_probability: float | None = None
+    for match in _INTENT_KV_RE.finditer(reason or ""):
+        key = re.sub(r"[^A-Za-z0-9]", "", match.group("key")).lower()
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        if key in _EXPECTED_EDGE_KEYS:
+            expected_edge = value
+        elif key in _FILL_PROBABILITY_KEYS:
+            fill_probability = max(0.0, min(1.0, value))
+    return expected_edge, fill_probability
 
 
 def _verdict(
