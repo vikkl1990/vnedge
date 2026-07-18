@@ -41,6 +41,31 @@ research/pine_scripts/pine_research_kb.json
 `create_app(..., pine_research_path=...)` can point the dashboard at another
 artifact path.
 
+The production Compose dashboard mounts this directory read-only:
+
+```text
+./research/pine_scripts:/app/research/pine_scripts:ro
+```
+
+Publish or refresh the artifact with:
+
+```bash
+python -m vnedge.research.pine_script_research \
+  --source-dir research/pine_scripts/sources \
+  --output research/pine_scripts/pine_research_kb.json
+```
+
+Explicit user-supplied exports can be reviewed without scanning the directory:
+
+```bash
+python -m vnedge.research.pine_script_research \
+  ~/Downloads/open_indicator.pine \
+  --source-dir /path/that/does/not/exist \
+  --output research/pine_scripts/pine_research_kb.json
+```
+
+Use `--no-defaults` for a clean artifact with only supplied/open-source files.
+
 ## Knowledge-base shape
 
 Each record contains:

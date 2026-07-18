@@ -632,6 +632,7 @@ async def main() -> int:
             realtime_scanner_path=Path(
                 "research/live_research/realtime_scanner_latest.json"
             ),
+            pine_research_path=Path("research/pine_scripts/pine_research_kb.json"),
         )
         server = uvicorn.Server(uvicorn.Config(
             app, host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),

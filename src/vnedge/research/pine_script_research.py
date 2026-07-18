@@ -9,6 +9,7 @@ repo.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
@@ -32,6 +33,9 @@ BacktestStatus = Literal["queued", "running", "passed", "failed", "blocked", "no
 
 DEFAULT_TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h")
 DEFAULT_VENUES: tuple[str, ...] = ("binanceusdm", "bybit", "delta_india")
+DEFAULT_PINE_SOURCE_DIR = Path("research/pine_scripts/sources")
+DEFAULT_PINE_KB_PATH = Path("research/pine_scripts/pine_research_kb.json")
+PINE_SOURCE_SUFFIXES = (".pine", ".pinescript", ".txt")
 
 
 @dataclass(frozen=True)
@@ -269,6 +273,111 @@ def build_pine_research_payload(
     }
 
 
+def publish_pine_research_kb(
+    *,
+    source_dir: Path | str | None = DEFAULT_PINE_SOURCE_DIR,
+    source_files: Iterable[Path | str] = (),
+    output_path: Path | str = DEFAULT_PINE_KB_PATH,
+    include_defaults: bool = True,
+    source_label: str = "pine_research_publisher",
+) -> dict:
+    """Review public/user-supplied Pine files and write the dashboard KB.
+
+    This intentionally works from local files only. TradingView protected or
+    invite-only source must not be scraped into VNEDGE; those records stay
+    metadata-only until the user supplies lawful source.
+    """
+
+    records: list[dict] = []
+    if include_defaults:
+        records.extend(default_pine_research_payload()["records"])
+    for path in discover_pine_source_files(source_dir, source_files):
+        source = path.read_text(encoding="utf-8")
+        record = review_pine_source(
+            script_id=_script_id_from_path(path),
+            title=_title_from_source(source, path.stem),
+            url=f"user_supplied_pine:{path.name}",
+            source=source,
+            author=_author_from_source(source),
+            source_license=_license_from_source(source),
+        )
+        records.append(record.to_dict())
+    payload = _build_payload_from_dicts(
+        _dedupe_record_dicts(records),
+        source=source_label,
+    )
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return payload
+
+
+def discover_pine_source_files(
+    source_dir: Path | str | None = DEFAULT_PINE_SOURCE_DIR,
+    source_files: Iterable[Path | str] = (),
+) -> tuple[Path, ...]:
+    """Return local Pine source files in stable order."""
+
+    discovered: list[Path] = []
+    for item in source_files:
+        path = Path(item)
+        if path.exists() and path.is_file() and _is_pine_source_path(path):
+            discovered.append(path)
+    if source_dir is not None:
+        root = Path(source_dir)
+        if root.exists():
+            discovered.extend(
+                path for path in root.rglob("*")
+                if path.is_file() and _is_pine_source_path(path)
+            )
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for path in sorted(discovered, key=lambda p: str(p)):
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        out.append(path)
+        seen.add(resolved)
+    return tuple(out)
+
+
+def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
+    rows = [_normalize_record(record) for record in records]
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "source": source,
+        "summary": summarize_records(rows),
+        "records": rows,
+        "policy": _policy(),
+        "operator_answer": (
+            "Pine KB published from local public/user-supplied source files. "
+            "Every record remains research-only until VNEDGE port/replay and "
+            "untouched-window judgment clear."
+        ),
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def _dedupe_record_dicts(records: Iterable[dict]) -> tuple[dict, ...]:
+    by_id: dict[str, dict] = {}
+    for record in records:
+        script_id = str(record.get("script_id") or "").strip()
+        if not script_id:
+            continue
+        existing = by_id.get(script_id)
+        if existing is None or _record_priority(record) >= _record_priority(existing):
+            by_id[script_id] = dict(record)
+    return tuple(by_id[key] for key in sorted(by_id))
+
+
+def _record_priority(record: dict) -> tuple[int, int]:
+    return (
+        1 if record.get("source_available") else 0,
+        int(record.get("source_lines") or 0),
+    )
+
+
 def summarize_records(records: Iterable[dict]) -> dict:
     rows = tuple(records)
     verdicts = Counter(str(row.get("crypto_portability") or "") for row in rows)
@@ -377,6 +486,43 @@ def _bounded_int(value: object, floor: int, ceiling: int) -> int:
     return max(floor, min(ceiling, parsed))
 
 
+def _is_pine_source_path(path: Path) -> bool:
+    return path.suffix.lower() in PINE_SOURCE_SUFFIXES
+
+
+def _script_id_from_path(path: Path) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", path.stem.strip()).strip("_").lower()
+    return cleaned or "pine_script"
+
+
+def _title_from_source(source: str, fallback: str) -> str:
+    match = re.search(
+        r"\b(?:indicator|strategy|library)\s*\(\s*['\"]([^'\"]+)['\"]",
+        source,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else fallback.replace("_", " ").strip()
+
+
+def _author_from_source(source: str) -> str:
+    for line in source.splitlines()[:20]:
+        match = re.search(r"(?:author|created by)\s*[:=]\s*(.+)$", line, re.IGNORECASE)
+        if match:
+            return match.group(1).strip().strip("/ ")
+    return "user supplied"
+
+
+def _license_from_source(source: str) -> str:
+    lower = source.lower()
+    if "mozilla public license" in lower or "mpl-2.0" in lower:
+        return "MPL-2.0"
+    if "mit license" in lower:
+        return "MIT"
+    if "apache license" in lower:
+        return "Apache-2.0"
+    return "unknown"
+
+
 def _detect_features(lower_source: str) -> set[str]:
     checks = {
         "trend": ("ema", "supertrend", "adx", "trend"),
@@ -472,3 +618,46 @@ def _policy() -> dict:
         "timeframes": list(DEFAULT_TIMEFRAMES),
         "venues": list(DEFAULT_VENUES),
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="publish a research-only Pine script review KB artifact"
+    )
+    parser.add_argument("source_files", nargs="*", help="explicit Pine source files")
+    parser.add_argument(
+        "--source-dir",
+        default=str(DEFAULT_PINE_SOURCE_DIR),
+        help="directory scanned recursively for .pine/.pinescript/.txt files",
+    )
+    parser.add_argument("--output", default=str(DEFAULT_PINE_KB_PATH))
+    parser.add_argument(
+        "--no-defaults",
+        action="store_true",
+        help="do not include built-in seed records",
+    )
+    parser.add_argument("--json", action="store_true", help="print full payload")
+    args = parser.parse_args(argv)
+
+    payload = publish_pine_research_kb(
+        source_dir=args.source_dir,
+        source_files=args.source_files,
+        output_path=args.output,
+        include_defaults=not args.no_defaults,
+        source_label="pine_research_publisher",
+    )
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        summary = payload["summary"]
+        print(
+            "pine research KB published: "
+            f"total={summary['total']} portable={summary['portable']} "
+            f"needs_source={summary['needs_source']} "
+            f"queued={summary['backtests_queued']} output={args.output}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

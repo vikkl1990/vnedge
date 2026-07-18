@@ -19,6 +19,12 @@ def test_event_leadlag_miner_refreshes_candidate_feed_on_interval():
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
 
 
+def test_dashboard_reads_pine_research_kb_from_host_artifact():
+    service = compose_services()["multi-lane-shadow"]
+
+    assert "./research/pine_scripts:/app/research/pine_scripts:ro" in service["volumes"]
+
+
 def test_event_leadlag_shadow_can_refresh_public_candle_context():
     services = compose_services()
     service = services["event-leadlag-shadow"]
