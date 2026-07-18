@@ -76,6 +76,26 @@ python -m vnedge.research.pine_script_research \
   --max-catalog-records 250
 ```
 
+For the broad TradingView intake, use the built-in accessible discovery preset.
+It fetches public catalog/tag pages such as scripts, indicators, strategies,
+crypto, BTC/ETH, scalping, day trading, SMC/liquidity, order blocks, FVG, VWAP,
+RSI, MACD, Supertrend, and Bollinger pages, then optionally follows one hop of
+additional `/scripts/.../` category links:
+
+```bash
+python -m vnedge.research.pine_script_research \
+  --include-tradingview-discovery \
+  --discovery-depth 1 \
+  --max-discovery-pages 80 \
+  --source-dir research/pine_scripts/sources \
+  --output research/pine_scripts/pine_research_kb.json \
+  --max-catalog-records 1000
+```
+
+This imports every public script listing discovered inside the configured page
+and record caps. It still stores these as `CATALOG_METADATA_ONLY` unless a
+lawful Pine source export is present.
+
 For large profile/tag pages, save the HTML once and import it in chunks:
 
 ```bash
