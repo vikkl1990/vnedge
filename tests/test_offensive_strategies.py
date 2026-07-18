@@ -192,5 +192,5 @@ def test_registry_has_research_lanes():
         "trend_retest_v1", "sats_5m_scalper_v1", "smc_playbook_scalper_v1",
         "stealth_trail_bbp_v1", "human_trade_fingerprint_v1",
         "luxy_ut_bot_forecast_v1", "momentum_cascade_lyro_v1",
-        "luxara_live_plan_qtm_v1",
+        "luxara_live_plan_qtm_v1", "luxara_break_bounce_v27_v1",
     }
