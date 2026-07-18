@@ -33,12 +33,14 @@ def params() -> LuxaraLivePlanQTMParams:
         min_volume_ratio=0.1,
         volume_sma_window=5,
         min_expected_net_edge_bps=0.0,
+        min_room_to_liquidity_bps=0.0,
         min_fill_probability=0.0,
         stop_atr_mult=0.8,
         min_stop_bps=5.0,
         take_profit_r=2.0,
         slippage_bps=1.0,
         safety_buffer_bps=1.0,
+        allowed_sides=(),
     )
 
 

@@ -44,9 +44,10 @@ class LuxaraLivePlanQTMParams:
     structure_lookback: int = 70
 
     min_grade_score: int = 3
-    min_volume_ratio: float = 0.50
+    min_volume_ratio: float = 1.50
     volume_sma_window: int = 20
-    min_expected_net_edge_bps: float = 25.0
+    min_expected_net_edge_bps: float = 120.0
+    min_room_to_liquidity_bps: float = 150.0
     min_fill_probability: float = 0.35
 
     stop_atr_mult: float = 1.20
@@ -58,7 +59,7 @@ class LuxaraLivePlanQTMParams:
     taker_exit_bps: float = 5.0
     slippage_bps: float = 2.0
     safety_buffer_bps: float = 5.0
-    allowed_sides: tuple[str, ...] = ()
+    allowed_sides: tuple[str, ...] = ("long",)
 
     def __post_init__(self) -> None:
         if self.atr_period < 1:
@@ -201,6 +202,7 @@ class LuxaraLivePlanQTMScanner(BaseStrategy):
                 if min_expected_net_edge_bps is None
                 else min_expected_net_edge_bps
             ),
+            min_room_to_liquidity_bps=base.min_room_to_liquidity_bps,
             min_fill_probability=base.min_fill_probability,
             stop_atr_mult=base.stop_atr_mult,
             stop_buffer_atr=base.stop_buffer_atr,
@@ -303,6 +305,7 @@ class LuxaraLivePlanQTMScanner(BaseStrategy):
             f"structure={'above_midline' if bool(row['qtm_above_midline']) else 'below_midline'}; "
             f"trail={float(row['qtm_trail']):.6g}; trendBars={int(float(row['qtm_trend_bars']))}; "
             f"roomToLiquidity={float(row[f'qtm_structure_room_{side}']):.1f}; "
+            f"roomFloor={self.params.min_room_to_liquidity_bps:.1f}; "
             f"expectedEdge={edge:.1f}; fillProbability={fill:.2f}; "
             f"volRatio={float(row['qtm_volume_ratio']):.2f}; "
             f"tp_ladder={float(row[f'tp1_{side}']):.6g}/{float(row[f'tp2_{side}']):.6g}; "
@@ -415,6 +418,7 @@ def _candidate_side(
         df[f"qtm_signal_{side}"]
         & (df[f"qtm_grade_score_{side}"] >= params.min_grade_score)
         & (df["qtm_volume_ratio"] >= params.min_volume_ratio)
+        & (df[f"qtm_structure_room_{side}"] >= params.min_room_to_liquidity_bps)
     ).fillna(False)
 
 
