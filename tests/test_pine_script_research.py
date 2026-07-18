@@ -4,6 +4,7 @@ import json
 
 from vnedge.research.pine_script_research import (
     default_pine_research_payload,
+    extract_tradingview_script_urls,
     load_pine_research_payload,
     main,
     publish_pine_research_kb,
@@ -51,6 +52,8 @@ def test_load_pine_research_payload_summarizes_generated_artifact(tmp_path):
 
     assert payload["summary"] == {
         "total": 2,
+        "source_backed": 0,
+        "catalog_only": 2,
         "portable": 1,
         "needs_source": 1,
         "research_only": 0,
@@ -150,6 +153,48 @@ if long
     assert record["can_promote"] is False
 
 
+def test_extract_tradingview_script_urls_dedupes_catalog_payload():
+    html = """
+<a href="/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/">
+<a href="https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/#chart-view-comment-form">
+<a href="https://in.tradingview.com/script/gnAGO9QR-Momentum-Cascade-Lyro-RS/">
+"""
+
+    urls = extract_tradingview_script_urls(html)
+
+    assert urls == (
+        "https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/",
+        "https://www.tradingview.com/script/gnAGO9QR-Momentum-Cascade-Lyro-RS/",
+    )
+
+
+def test_publish_pine_research_kb_adds_catalog_backlog(tmp_path):
+    html = tmp_path / "catalog.html"
+    html.write_text(
+        """
+<a href="/script/Vgitqk52-Order-Flow-Volume-Delta-CVD-Absorption-Divergence-LunqFX/">
+<a href="/script/ODpXONLY-Liquidity-Sweep-Detector-Pro/">
+""",
+        encoding="utf-8",
+    )
+    output = tmp_path / "kb.json"
+
+    payload = publish_pine_research_kb(
+        source_dir=tmp_path / "missing",
+        catalog_html_files=[html],
+        output_path=output,
+        include_defaults=False,
+        source_label="unit_catalog",
+    )
+
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["catalog_only"] == 2
+    assert payload["summary"]["source_backed"] == 0
+    assert payload["summary"]["needs_source"] == 2
+    assert {row["crypto_portability"] for row in payload["records"]} == {"BLOCKED_NO_SOURCE"}
+    assert all(row["decision"] == "WAIT_FOR_OPEN_SOURCE_OR_USER_EXPORT" for row in payload["records"])
+
+
 def test_pine_research_cli_publishes_artifact(tmp_path, capsys):
     source = tmp_path / "ut_bot.txt"
     source.write_text(
@@ -178,3 +223,26 @@ alertcondition(close > trail, "long")
     assert "pine research KB published" in printed
     assert payload["summary"]["total"] == 1
     assert payload["records"][0]["source_available"] is True
+
+
+def test_pine_research_cli_imports_catalog_html(tmp_path):
+    html = tmp_path / "catalog.html"
+    html.write_text(
+        '<a href="/script/eqD9PKX8-Anchored-VWAP-Engine-Quantum-Algo/">',
+        encoding="utf-8",
+    )
+    output = tmp_path / "kb.json"
+
+    assert main([
+        "--source-dir",
+        str(tmp_path / "missing"),
+        "--catalog-html",
+        str(html),
+        "--output",
+        str(output),
+        "--no-defaults",
+    ]) == 0
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["summary"]["catalog_only"] == 1
+    assert payload["records"][0]["title"] == "Anchored Vwap Engine Quantum Algo"

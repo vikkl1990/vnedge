@@ -66,6 +66,30 @@ python -m vnedge.research.pine_script_research \
 
 Use `--no-defaults` for a clean artifact with only supplied/open-source files.
 
+Bulk TradingView catalog links can be added as metadata-only backlog:
+
+```bash
+python -m vnedge.research.pine_script_research \
+  --catalog-url https://www.tradingview.com/scripts/ \
+  --source-dir research/pine_scripts/sources \
+  --output research/pine_scripts/pine_research_kb.json \
+  --max-catalog-records 250
+```
+
+For large profile/tag pages, save the HTML once and import it in chunks:
+
+```bash
+python -m vnedge.research.pine_script_research \
+  --catalog-html research/pine_scripts/catalog/tradingview_scripts_page_1.html \
+  --source-dir research/pine_scripts/sources \
+  --output research/pine_scripts/pine_research_kb.json \
+  --no-defaults
+```
+
+Catalog rows are intentionally `BLOCKED_NO_SOURCE`. They are useful for
+prioritization and AI clustering, but cannot be ported or backtested until
+lawful public/open-source Pine source is supplied.
+
 ## Knowledge-base shape
 
 Each record contains:
@@ -100,10 +124,10 @@ The initial page includes:
 - Luxara Break & Bounce V27: ported as `luxara_break_bounce_v27_v1`; telemetry
   only because broad breakouts failed and the strict pulse is sparse.
 
-## Next build
+## Chunked research loop
 
-The next production-grade step is a crawler/reviewer job that publishes
-`research/pine_scripts/pine_research_kb.json` in chunks:
+The production-grade loop publishes `research/pine_scripts/pine_research_kb.json`
+in chunks:
 
 - catalog/import batch,
 - source-hash batch,

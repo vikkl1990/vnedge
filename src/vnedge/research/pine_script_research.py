@@ -14,11 +14,15 @@ import hashlib
 import json
 import math
 import re
+from html import unescape
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable, Literal
+from urllib.error import URLError
+from urllib.parse import urljoin, urlparse
+from urllib.request import Request, urlopen
 
 
 PortabilityVerdict = Literal[
@@ -36,6 +40,11 @@ DEFAULT_VENUES: tuple[str, ...] = ("binanceusdm", "bybit", "delta_india")
 DEFAULT_PINE_SOURCE_DIR = Path("research/pine_scripts/sources")
 DEFAULT_PINE_KB_PATH = Path("research/pine_scripts/pine_research_kb.json")
 PINE_SOURCE_SUFFIXES = (".pine", ".pinescript", ".txt")
+TRADINGVIEW_BASE_URL = "https://www.tradingview.com"
+TRADINGVIEW_SCRIPT_RE = re.compile(
+    r"(?:https?://(?:www\.|in\.)?tradingview\.com)?/script/"
+    r"[A-Za-z0-9]+-[^\"'<>\s?#]+/?(?:#[^\"'<>\s]+)?"
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,8 @@ def empty_pine_research_payload() -> dict:
         "source": "fallback_empty",
         "summary": {
             "total": 0,
+            "source_backed": 0,
+            "catalog_only": 0,
             "portable": 0,
             "needs_source": 0,
             "research_only": 0,
@@ -277,8 +288,11 @@ def publish_pine_research_kb(
     *,
     source_dir: Path | str | None = DEFAULT_PINE_SOURCE_DIR,
     source_files: Iterable[Path | str] = (),
+    catalog_urls: Iterable[str] = (),
+    catalog_html_files: Iterable[Path | str] = (),
     output_path: Path | str = DEFAULT_PINE_KB_PATH,
     include_defaults: bool = True,
+    max_catalog_records: int = 250,
     source_label: str = "pine_research_publisher",
 ) -> dict:
     """Review public/user-supplied Pine files and write the dashboard KB.
@@ -302,6 +316,12 @@ def publish_pine_research_kb(
             source_license=_license_from_source(source),
         )
         records.append(record.to_dict())
+    for url in discover_tradingview_catalog_urls(
+        catalog_urls=catalog_urls,
+        catalog_html_files=catalog_html_files,
+        max_records=max_catalog_records,
+    ):
+        records.append(review_tradingview_catalog_script(url).to_dict())
     payload = _build_payload_from_dicts(
         _dedupe_record_dicts(records),
         source=source_label,
@@ -341,6 +361,99 @@ def discover_pine_source_files(
     return tuple(out)
 
 
+def discover_tradingview_catalog_urls(
+    *,
+    catalog_urls: Iterable[str] = (),
+    catalog_html_files: Iterable[Path | str] = (),
+    max_records: int = 250,
+) -> tuple[str, ...]:
+    """Discover TradingView script URLs from catalog/profile/tag pages.
+
+    TradingView's public catalog exposes script cards in HTML for some pages
+    and via client-side rendering for others. This importer intentionally
+    collects URL metadata only; Pine source must arrive via open/user-supplied
+    local files before any strategy port or replay can happen.
+    """
+
+    urls: list[str] = []
+    for url in catalog_urls:
+        cleaned = _clean_url(url)
+        if not cleaned:
+            continue
+        if _is_tradingview_script_url(cleaned):
+            urls.append(cleaned)
+            continue
+        html = _fetch_catalog_html(cleaned)
+        urls.extend(extract_tradingview_script_urls(html, base_url=cleaned))
+    for item in catalog_html_files:
+        path = Path(item)
+        if not path.exists() or not path.is_file():
+            continue
+        urls.extend(
+            extract_tradingview_script_urls(
+                path.read_text(encoding="utf-8"),
+                base_url=TRADINGVIEW_BASE_URL,
+            )
+        )
+    return _dedupe_urls(urls, limit=max_records)
+
+
+def extract_tradingview_script_urls(
+    html: str,
+    *,
+    base_url: str = TRADINGVIEW_BASE_URL,
+) -> tuple[str, ...]:
+    """Extract normalized TradingView script URLs from a public HTML payload."""
+
+    found = []
+    for match in TRADINGVIEW_SCRIPT_RE.finditer(html):
+        found.append(_normalize_tradingview_url(match.group(0), base_url=base_url))
+    return _dedupe_urls(found)
+
+
+def review_tradingview_catalog_script(url: str) -> PineReviewRecord:
+    """Create a metadata-only research row for a TradingView script URL."""
+
+    normalized = _normalize_tradingview_url(url)
+    slug = _slug_from_script_url(normalized)
+    title = _title_from_slug(slug)
+    lower = title.lower()
+    features = _detect_features(lower)
+    risks = {
+        "catalog_metadata_only",
+        "source_not_collected",
+    }
+    if not features:
+        features = _detect_features(slug.lower().replace("-", " "))
+    fit = max(5, min(55, _crypto_fit_score(features, risks, lower) - 18))
+    return PineReviewRecord(
+        script_id=_script_id_from_url(normalized),
+        title=title,
+        url=normalized,
+        author="TradingView community",
+        kind="unknown",
+        source_available=False,
+        source_license="unknown",
+        source_lines=0,
+        tags=tuple(sorted({"catalog", *features})),
+        features=tuple(sorted(features)),
+        risks=tuple(sorted(risks)),
+        crypto_portability="BLOCKED_NO_SOURCE",
+        crypto_fit_score=fit,
+        porting_notes=(
+            "Catalog discovery only: fetch or supply lawful open Pine source before porting.",
+            "Do not treat screenshots, labels, likes, or comments as executable edge.",
+        ),
+        ai_uplift_ideas=(
+            "Prioritize source requests for scripts with crypto-fit mechanics matching VNEDGE gaps.",
+            "Cluster catalog backlog by mechanism, then port one representative per cluster.",
+        ),
+        backtests=_queued_backtests("blocked", "catalog URL discovered; Pine source not available"),
+        decision="WAIT_FOR_OPEN_SOURCE_OR_USER_EXPORT",
+        reviewed_at=datetime.now(UTC).isoformat(),
+    )
+
+
 def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
     rows = [_normalize_record(record) for record in records]
     return {
@@ -357,6 +470,21 @@ def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
         "can_trade": False,
         "can_promote": False,
     }
+
+
+def _fetch_catalog_html(url: str, *, timeout_seconds: float = 20.0) -> str:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 VNEDGE-PineResearch/1.0",
+            "Accept": "text/html,application/xhtml+xml",
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except (OSError, URLError, TimeoutError, ValueError):
+        return ""
 
 
 def _dedupe_record_dicts(records: Iterable[dict]) -> tuple[dict, ...]:
@@ -381,6 +509,12 @@ def _record_priority(record: dict) -> tuple[int, int]:
 def summarize_records(records: Iterable[dict]) -> dict:
     rows = tuple(records)
     verdicts = Counter(str(row.get("crypto_portability") or "") for row in rows)
+    source_backed = sum(1 for row in rows if row.get("source_available"))
+    catalog_only = sum(
+        1
+        for row in rows
+        if not row.get("source_available") and "/script/" in str(row.get("url") or "")
+    )
     backtests_queued = 0
     for row in rows:
         for cell in row.get("backtests") or []:
@@ -388,6 +522,8 @@ def summarize_records(records: Iterable[dict]) -> dict:
                 backtests_queued += 1
     return {
         "total": len(rows),
+        "source_backed": source_backed,
+        "catalog_only": catalog_only,
         "portable": verdicts["PORTABLE"] + verdicts["PORTABLE_WITH_CHANGES"],
         "needs_source": verdicts["BLOCKED_NO_SOURCE"],
         "research_only": verdicts["RESEARCH_ONLY"],
@@ -488,6 +624,62 @@ def _bounded_int(value: object, floor: int, ceiling: int) -> int:
 
 def _is_pine_source_path(path: Path) -> bool:
     return path.suffix.lower() in PINE_SOURCE_SUFFIXES
+
+
+def _clean_url(url: str) -> str:
+    return str(url or "").strip()
+
+
+def _dedupe_urls(urls: Iterable[str], *, limit: int | None = None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in urls:
+        normalized = _normalize_tradingview_url(url)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+        if limit is not None and len(out) >= limit:
+            break
+    return tuple(out)
+
+
+def _normalize_tradingview_url(
+    url: str,
+    *,
+    base_url: str = TRADINGVIEW_BASE_URL,
+) -> str:
+    joined = urljoin(base_url, unescape(str(url or "").strip()))
+    parsed = urlparse(joined)
+    if "/script/" not in parsed.path:
+        return ""
+    path = parsed.path
+    if not path.endswith("/"):
+        path = f"{path}/"
+    return f"https://www.tradingview.com{path}"
+
+
+def _is_tradingview_script_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.netloc.endswith("tradingview.com") and parsed.path.startswith("/script/")
+
+
+def _slug_from_script_url(url: str) -> str:
+    parts = [part for part in urlparse(url).path.split("/") if part]
+    if len(parts) >= 2 and parts[0] == "script":
+        return parts[1]
+    return "tradingview-script"
+
+
+def _script_id_from_url(url: str) -> str:
+    return _script_id_from_path(Path(_slug_from_script_url(url)))
+
+
+def _title_from_slug(slug: str) -> str:
+    pieces = slug.split("-", 1)
+    title_slug = pieces[1] if len(pieces) == 2 else pieces[0]
+    title = re.sub(r"[-_]+", " ", title_slug).strip()
+    return title.title() if title else "TradingView Script"
 
 
 def _script_id_from_path(path: Path) -> str:
@@ -632,6 +824,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", default=str(DEFAULT_PINE_KB_PATH))
     parser.add_argument(
+        "--catalog-url",
+        action="append",
+        default=[],
+        help="TradingView catalog/profile/tag/script URL to discover as metadata-only backlog",
+    )
+    parser.add_argument(
+        "--catalog-html",
+        action="append",
+        default=[],
+        help="saved TradingView HTML file to parse for script URLs",
+    )
+    parser.add_argument(
+        "--max-catalog-records",
+        type=int,
+        default=250,
+        help="maximum discovered TradingView script URLs to add",
+    )
+    parser.add_argument(
         "--no-defaults",
         action="store_true",
         help="do not include built-in seed records",
@@ -642,8 +852,11 @@ def main(argv: list[str] | None = None) -> int:
     payload = publish_pine_research_kb(
         source_dir=args.source_dir,
         source_files=args.source_files,
+        catalog_urls=args.catalog_url,
+        catalog_html_files=args.catalog_html,
         output_path=args.output,
         include_defaults=not args.no_defaults,
+        max_catalog_records=max(0, args.max_catalog_records),
         source_label="pine_research_publisher",
     )
     if args.json:

@@ -130,6 +130,8 @@
         <h2>Research Queue</h2>
         <div class="summary">
           <div class="metric"><span>Total scripts</span><b id="m_total">--</b><i>known records</i></div>
+          <div class="metric"><span>Source-backed</span><b id="m_source_backed">--</b><i>portable now</i></div>
+          <div class="metric"><span>Catalog-only</span><b id="m_catalog_only">--</b><i>needs source</i></div>
           <div class="metric"><span>Portable</span><b id="m_portable">--</b><i>needs proof</i></div>
           <div class="metric"><span>Needs source</span><b id="m_source">--</b><i>blocked legally</i></div>
           <div class="metric"><span>Queued TFs</span><b id="m_queue">--</b><i>backtest cells</i></div>
@@ -294,7 +296,12 @@
     state.records=Array.isArray(payload.records)?payload.records:[];
     state.selected=state.records[0]||null;
     const s=payload.summary||{};
-    text("m_total",s.total); text("m_portable",s.portable); text("m_source",s.needs_source); text("m_queue",s.backtests_queued);
+    text("m_total",s.total);
+    text("m_source_backed",s.source_backed);
+    text("m_catalog_only",s.catalog_only);
+    text("m_portable",s.portable);
+    text("m_source",s.needs_source);
+    text("m_queue",s.backtests_queued);
     const p=payload.policy||{};
     $("policyText").textContent=[p.source_rule,p.promotion_rule,"Venues: "+(p.venues||[]).join(", "),"TFs: "+(p.timeframes||[]).join(", ")].filter(Boolean).join(" | ");
     text("operatorAnswer",payload.operator_answer||"research-only");
