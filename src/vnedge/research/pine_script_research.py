@@ -589,7 +589,55 @@ def _with_priority_fields(record: dict) -> dict:
     row["next_action"] = next_action
     row["priority_reason"] = _priority_reason(row, mechanism, next_action)
     row.setdefault("discovery_status", "SOURCE_BACKED" if row.get("source_available") else "CATALOG_ONLY")
+    row["source_status"] = _source_status(row)
+    row["source_explanation"] = _source_explanation(row)
+    row["source_next_step"] = _source_next_step(row)
     return row
+
+
+def _source_status(record: dict) -> str:
+    if record.get("source_available"):
+        if record.get("catalog_urls"):
+            return "SOURCE_BACKED_CATALOG_MATCH"
+        url = str(record.get("url") or "")
+        if url.startswith("user_supplied_pine:") or url == "user_supplied":
+            return "USER_SUPPLIED_SOURCE"
+        return "SOURCE_BACKED"
+    if "/script/" in str(record.get("url") or ""):
+        return "CATALOG_METADATA_ONLY"
+    return "SOURCE_MISSING"
+
+
+def _source_explanation(record: dict) -> str:
+    if record.get("source_available"):
+        lines = int(record.get("source_lines") or 0)
+        digest = str(record.get("source_sha256") or "")[:12]
+        suffix = f" Source hash starts {digest}." if digest else ""
+        return (
+            f"Pine source is present in VNEDGE ({lines} lines), so it can be "
+            f"audited, ported causally, and replayed.{suffix}"
+        )
+    if "/script/" in str(record.get("url") or ""):
+        return (
+            "This row came from TradingView catalog metadata. The listing gives "
+            "title/URL/tags, but not executable Pine source; protected, invite-only, "
+            "or closed scripts cannot be copied or honestly backtested by VNEDGE."
+        )
+    return (
+        "No Pine source artifact is attached to this record yet, so VNEDGE can "
+        "only keep it as a research idea."
+    )
+
+
+def _source_next_step(record: dict) -> str:
+    if record.get("source_available"):
+        return "Run causality review, port only causal features, then replay on untouched data."
+    if "/script/" in str(record.get("url") or ""):
+        return (
+            "Open the script page, confirm the author exposes source, then export/paste "
+            "the Pine into research/pine_scripts/sources for review."
+        )
+    return "Attach a .pine/.pinescript/.txt source file before porting or backtesting."
 
 
 def _priority_queue(records: Iterable[dict], *, limit: int = 25) -> list[dict]:
@@ -611,6 +659,8 @@ def _priority_queue(records: Iterable[dict], *, limit: int = 25) -> list[dict]:
             "priority_score": int(row.get("priority_score") or 0),
             "next_action": str(row.get("next_action") or "WAIT"),
             "priority_reason": str(row.get("priority_reason") or ""),
+            "source_status": str(row.get("source_status") or ""),
+            "source_next_step": str(row.get("source_next_step") or ""),
         }
         for row in queued[:limit]
     ]
