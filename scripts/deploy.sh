@@ -41,6 +41,21 @@ echo "deploying $(git rev-parse --short HEAD)"
 # list must include EVERY input to the image: a docs/ or .dockerignore change
 # once shipped nothing because it was omitted here (2026-07-11).
 IMAGE_INPUTS="src/ research/ docs/ pyproject.toml README.md Dockerfile .dockerignore docker-compose.yml"
+APP_BUILD_SERVICE=multi-lane-shadow
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
+APP_BUILD_IMAGE="${COMPOSE_PROJECT}-${APP_BUILD_SERVICE}:latest"
+
+service_image_id() {
+    local svc="$1"
+    local cid
+    cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
+    if [ -n "$cid" ]; then
+        docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true
+        return
+    fi
+    docker image inspect --format '{{.Id}}' "${COMPOSE_PROJECT}-${svc}:latest" 2>/dev/null || true
+}
+
 NEED_BUILD=1
 if [ "$PREV" != "$HEAD_SHA" ] && git diff --quiet "$PREV" "$HEAD_SHA" -- $IMAGE_INPUTS 2>/dev/null; then
     NEED_BUILD=0
@@ -53,7 +68,7 @@ fi
 # committed code while NEED_BUILD reads 0. #149's code sat un-deployed for a day
 # exactly this way. So: if the running image is older than the newest commit to
 # any image input, force a rebuild regardless of the git diff.
-run_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1 || true)
+run_img=$(service_image_id "$APP_BUILD_SERVICE")
 if [ -n "$run_img" ]; then
     img_epoch=$(date -d "$(docker inspect --format '{{.Created}}' "$run_img")" +%s 2>/dev/null || echo 0)
     code_epoch=$(git log -1 --format=%ct -- $IMAGE_INPUTS 2>/dev/null || echo 0)
@@ -74,9 +89,6 @@ if [ "$NEED_BUILD" = 1 ]; then
     # 20+ identical images in one BuildKit bake has wedged this VM in futex
     # waits. Build the canonical app service once, then tag that image for the
     # sibling app services so `up --no-build` can recreate from local images.
-    APP_BUILD_SERVICE=multi-lane-shadow
-    COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
-    APP_BUILD_IMAGE="${COMPOSE_PROJECT}-${APP_BUILD_SERVICE}:latest"
     if ! docker compose build "$APP_BUILD_SERVICE"; then
         echo "IMAGE BUILD FAILED — aborting deploy, nothing recreated" >&2
         exit 1
@@ -134,7 +146,11 @@ if [ "$NEED_BUILD" = 1 ]; then
              "before this deploy) — the new image did not take" >&2
         exit 1
     fi
-    new_img=$(docker compose images -q multi-lane-shadow 2>/dev/null | head -1)
+    new_img=$(service_image_id "$APP_BUILD_SERVICE")
+    if [ -z "$new_img" ]; then
+        echo "STALE IMAGE: no inspectable image for $APP_BUILD_SERVICE after deploy" >&2
+        exit 1
+    fi
     new_img_epoch=$(date -d "$(docker inspect --format '{{.Created}}' "$new_img")" +%s 2>/dev/null || echo 0)
     final_code_epoch=$(git log -1 --format=%ct -- $IMAGE_INPUTS 2>/dev/null || echo 0)
     if [ "$new_img_epoch" -lt "$final_code_epoch" ]; then
