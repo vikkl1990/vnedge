@@ -55,6 +55,7 @@ DEFAULT_SCALPER_STRATEGIES = (
     "stealth_trail_bbp_v1",
     "human_trade_fingerprint_v1",
     "luxy_ut_bot_forecast_v1",
+    "momentum_cascade_lyro_v1",
     "smc_playbook_scalper_v1",
     "quant_signal_pack_v1",
     "alpha_stack_confluence_v1",
