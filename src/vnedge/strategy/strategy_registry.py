@@ -12,6 +12,7 @@ from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
 from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.momentum_cascade_lyro import MomentumCascadeLyroScanner
 from vnedge.strategy.panic_reversal import PanicReversal
@@ -42,6 +43,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     AlphaDistillationPack.strategy_id: AlphaDistillationPack,
     LuxyUTBotForecastScanner.strategy_id: LuxyUTBotForecastScanner,
     MomentumCascadeLyroScanner.strategy_id: MomentumCascadeLyroScanner,
+    LuxaraLivePlanQTMScanner.strategy_id: LuxaraLivePlanQTMScanner,
 }
 
 
