@@ -40,17 +40,17 @@ class LuxaraBreakBounceV27Params:
 
     atr_window: int = 14
     volume_sma_window: int = 20
-    min_volume_ratio: float = 1.35
+    min_volume_ratio: float = 2.50
     liquidity_lookback: int = 90
     measured_move_fraction: float = 0.75
 
     min_grade_score: int = 4
     min_box_width_atr: float = 0.55
-    max_box_width_atr: float = 6.0
-    min_breakout_bps: float = 2.0
-    min_room_to_liquidity_bps: float = 90.0
+    max_box_width_atr: float = 2.50
+    min_breakout_bps: float = 12.0
+    min_room_to_liquidity_bps: float = 0.0
     min_expected_net_edge_bps: float = 80.0
-    min_fill_probability: float = 0.42
+    min_fill_probability: float = 0.55
 
     stop_atr_mult: float = 0.85
     stop_buffer_atr: float = 0.15
@@ -61,7 +61,7 @@ class LuxaraBreakBounceV27Params:
     taker_exit_bps: float = 5.0
     slippage_bps: float = 2.0
     safety_buffer_bps: float = 5.0
-    allowed_sides: tuple[str, ...] = ()
+    allowed_sides: tuple[str, ...] = ("short",)
 
     def __post_init__(self) -> None:
         if self.setup_lookback < 5:
