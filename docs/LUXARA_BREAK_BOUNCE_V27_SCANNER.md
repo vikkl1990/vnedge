@@ -30,7 +30,7 @@ Defaults after VM mining:
 
 These are anti-noise defaults, not promotion approval.
 
-## VM Replay Proof on commit 3bd20f3
+## VM Replay Proof on commit f7dc178
 
 Data root: `/home/ubuntu/vnedge/data`
 
