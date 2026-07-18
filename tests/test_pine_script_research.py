@@ -2,8 +2,11 @@
 
 import json
 
+import vnedge.research.pine_script_research as pine_research
 from vnedge.research.pine_script_research import (
     default_pine_research_payload,
+    discover_tradingview_catalog_urls,
+    extract_tradingview_catalog_page_urls,
     extract_tradingview_script_urls,
     load_pine_research_payload,
     main,
@@ -168,6 +171,57 @@ def test_extract_tradingview_script_urls_dedupes_catalog_payload():
     assert urls == (
         "https://www.tradingview.com/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/",
         "https://www.tradingview.com/script/gnAGO9QR-Momentum-Cascade-Lyro-RS/",
+    )
+
+
+def test_extract_tradingview_catalog_page_urls_dedupes():
+    html = """
+<a href="/scripts/scalping/">
+<a href="https://in.tradingview.com/scripts/scalping/?sort=recent">
+<a href="/scripts/orderblocks/">
+<a href="/script/A47z5YCR-Luxy-UT-God-Mode-UT-Bot-Forecast-Signals-Zones-and-Risk/">
+"""
+
+    urls = extract_tradingview_catalog_page_urls(html)
+
+    assert urls == (
+        "https://www.tradingview.com/scripts/scalping/",
+        "https://www.tradingview.com/scripts/orderblocks/",
+    )
+
+
+def test_discover_tradingview_catalog_urls_crawls_accessible_frontier(monkeypatch):
+    pages = {
+        "https://www.tradingview.com/scripts/crypto/": """
+            <a href="/script/AAAA1111-Crypto-Flow-Setup/">
+            <a href="/scripts/scalping/">
+        """,
+        "https://www.tradingview.com/scripts/scalping/": """
+            <a href="/script/BBBB2222-Five-Minute-Scalp-Trend/">
+        """,
+    }
+
+    monkeypatch.setattr(
+        pine_research,
+        "_fetch_catalog_html",
+        lambda url: pages.get(url, ""),
+    )
+
+    shallow = discover_tradingview_catalog_urls(
+        catalog_discovery_urls=["https://www.tradingview.com/scripts/crypto/"],
+        discovery_depth=0,
+        max_pages=4,
+    )
+    deep = discover_tradingview_catalog_urls(
+        catalog_discovery_urls=["https://www.tradingview.com/scripts/crypto/"],
+        discovery_depth=1,
+        max_pages=4,
+    )
+
+    assert shallow == ("https://www.tradingview.com/script/AAAA1111-Crypto-Flow-Setup/",)
+    assert deep == (
+        "https://www.tradingview.com/script/AAAA1111-Crypto-Flow-Setup/",
+        "https://www.tradingview.com/script/BBBB2222-Five-Minute-Scalp-Trend/",
     )
 
 

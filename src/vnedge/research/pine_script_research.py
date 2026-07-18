@@ -15,7 +15,7 @@ import json
 import math
 import re
 from html import unescape
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,9 +41,38 @@ DEFAULT_PINE_SOURCE_DIR = Path("research/pine_scripts/sources")
 DEFAULT_PINE_KB_PATH = Path("research/pine_scripts/pine_research_kb.json")
 PINE_SOURCE_SUFFIXES = (".pine", ".pinescript", ".txt")
 TRADINGVIEW_BASE_URL = "https://www.tradingview.com"
+DEFAULT_TRADINGVIEW_DISCOVERY_URLS: tuple[str, ...] = (
+    "https://www.tradingview.com/scripts/",
+    "https://www.tradingview.com/scripts/indicators/",
+    "https://www.tradingview.com/scripts/strategies/",
+    "https://www.tradingview.com/scripts/crypto/",
+    "https://www.tradingview.com/scripts/bitcoin/",
+    "https://www.tradingview.com/scripts/ethereum/",
+    "https://www.tradingview.com/scripts/scalping/",
+    "https://www.tradingview.com/scripts/daytrading/",
+    "https://www.tradingview.com/scripts/swingtrading/",
+    "https://www.tradingview.com/scripts/trendanalysis/",
+    "https://www.tradingview.com/scripts/technicalindicators/",
+    "https://www.tradingview.com/scripts/volume/",
+    "https://www.tradingview.com/scripts/supportandresistance/",
+    "https://www.tradingview.com/scripts/smartmoneyconcepts/",
+    "https://www.tradingview.com/scripts/liquidity/",
+    "https://www.tradingview.com/scripts/orderblocks/",
+    "https://www.tradingview.com/scripts/fairvaluegap/",
+    "https://www.tradingview.com/scripts/supplyanddemand/",
+    "https://www.tradingview.com/scripts/rsi/",
+    "https://www.tradingview.com/scripts/macd/",
+    "https://www.tradingview.com/scripts/supertrend/",
+    "https://www.tradingview.com/scripts/vwap/",
+    "https://www.tradingview.com/scripts/bollingerbands/",
+)
 TRADINGVIEW_SCRIPT_RE = re.compile(
     r"(?:https?://(?:www\.|in\.)?tradingview\.com)?/script/"
     r"[A-Za-z0-9]+-[^\"'<>\s?#]+/?(?:#[^\"'<>\s]+)?"
+)
+TRADINGVIEW_CATALOG_RE = re.compile(
+    r"(?:https?://(?:www\.|in\.)?tradingview\.com)?/scripts/"
+    r"[A-Za-z0-9][^\"'<>\s?#]*/?"
 )
 TITLE_STOPWORDS = frozenset({
     "a",
@@ -330,10 +359,13 @@ def publish_pine_research_kb(
     source_dir: Path | str | None = DEFAULT_PINE_SOURCE_DIR,
     source_files: Iterable[Path | str] = (),
     catalog_urls: Iterable[str] = (),
+    catalog_discovery_urls: Iterable[str] = (),
     catalog_html_files: Iterable[Path | str] = (),
     output_path: Path | str = DEFAULT_PINE_KB_PATH,
     include_defaults: bool = True,
     max_catalog_records: int = 250,
+    catalog_discovery_depth: int = 0,
+    max_catalog_pages: int = 40,
     source_label: str = "pine_research_publisher",
 ) -> dict:
     """Review public/user-supplied Pine files and write the dashboard KB.
@@ -359,8 +391,11 @@ def publish_pine_research_kb(
         records.append(record.to_dict())
     for url in discover_tradingview_catalog_urls(
         catalog_urls=catalog_urls,
+        catalog_discovery_urls=catalog_discovery_urls,
         catalog_html_files=catalog_html_files,
         max_records=max_catalog_records,
+        discovery_depth=catalog_discovery_depth,
+        max_pages=max_catalog_pages,
     ):
         records.append(review_tradingview_catalog_script(url).to_dict())
     payload = _build_payload_from_dicts(
@@ -405,8 +440,11 @@ def discover_pine_source_files(
 def discover_tradingview_catalog_urls(
     *,
     catalog_urls: Iterable[str] = (),
+    catalog_discovery_urls: Iterable[str] = (),
     catalog_html_files: Iterable[Path | str] = (),
     max_records: int = 250,
+    discovery_depth: int = 0,
+    max_pages: int = 40,
 ) -> tuple[str, ...]:
     """Discover TradingView script URLs from catalog/profile/tag pages.
 
@@ -417,6 +455,7 @@ def discover_tradingview_catalog_urls(
     """
 
     urls: list[str] = []
+    pending_pages: deque[tuple[str, int]] = deque()
     for url in catalog_urls:
         cleaned = _clean_url(url)
         if not cleaned:
@@ -424,8 +463,29 @@ def discover_tradingview_catalog_urls(
         if _is_tradingview_script_url(cleaned):
             urls.append(cleaned)
             continue
-        html = _fetch_catalog_html(cleaned)
-        urls.extend(extract_tradingview_script_urls(html, base_url=cleaned))
+        page = _normalize_tradingview_catalog_url(cleaned)
+        if page:
+            pending_pages.append((page, 0))
+    for url in catalog_discovery_urls:
+        page = _normalize_tradingview_catalog_url(url)
+        if page:
+            pending_pages.append((page, 0))
+    seen_pages: set[str] = set()
+    max_depth = max(0, discovery_depth)
+    page_budget = max(0, max_pages)
+    while pending_pages and len(seen_pages) < page_budget and len(urls) < max_records:
+        page_url, depth = pending_pages.popleft()
+        if page_url in seen_pages:
+            continue
+        seen_pages.add(page_url)
+        html = _fetch_catalog_html(page_url)
+        urls.extend(extract_tradingview_script_urls(html, base_url=page_url))
+        if depth >= max_depth:
+            continue
+        for next_page in extract_tradingview_catalog_page_urls(html, base_url=page_url):
+            if next_page in seen_pages:
+                continue
+            pending_pages.append((next_page, depth + 1))
     for item in catalog_html_files:
         path = Path(item)
         if not path.exists() or not path.is_file():
@@ -450,6 +510,21 @@ def extract_tradingview_script_urls(
     for match in TRADINGVIEW_SCRIPT_RE.finditer(html):
         found.append(_normalize_tradingview_url(match.group(0), base_url=base_url))
     return _dedupe_urls(found)
+
+
+def extract_tradingview_catalog_page_urls(
+    html: str,
+    *,
+    base_url: str = TRADINGVIEW_BASE_URL,
+) -> tuple[str, ...]:
+    """Extract normalized TradingView catalog/tag URLs from HTML."""
+
+    found = []
+    for match in TRADINGVIEW_CATALOG_RE.finditer(html):
+        normalized = _normalize_tradingview_catalog_url(match.group(0), base_url=base_url)
+        if normalized:
+            found.append(normalized)
+    return _dedupe_plain_urls(found)
 
 
 def review_tradingview_catalog_script(url: str) -> PineReviewRecord:
@@ -505,7 +580,8 @@ def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
         "priorities": _priority_queue(rows),
         "policy": _policy(),
         "operator_answer": (
-            "Pine KB published from local public/user-supplied source files. "
+            "Pine KB published from local public/user-supplied source files "
+            "and accessible TradingView catalog metadata. "
             "Every record remains research-only until VNEDGE port/replay and "
             "untouched-window judgment clear."
         ),
@@ -973,6 +1049,20 @@ def _dedupe_urls(urls: Iterable[str], *, limit: int | None = None) -> tuple[str,
     return tuple(out)
 
 
+def _dedupe_plain_urls(urls: Iterable[str], *, limit: int | None = None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in urls:
+        normalized = str(url or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+        if limit is not None and len(out) >= limit:
+            break
+    return tuple(out)
+
+
 def _normalize_tradingview_url(
     url: str,
     *,
@@ -981,6 +1071,23 @@ def _normalize_tradingview_url(
     joined = urljoin(base_url, unescape(str(url or "").strip()))
     parsed = urlparse(joined)
     if "/script/" not in parsed.path:
+        return ""
+    path = parsed.path
+    if not path.endswith("/"):
+        path = f"{path}/"
+    return f"https://www.tradingview.com{path}"
+
+
+def _normalize_tradingview_catalog_url(
+    url: str,
+    *,
+    base_url: str = TRADINGVIEW_BASE_URL,
+) -> str:
+    joined = urljoin(base_url, unescape(str(url or "").strip()))
+    parsed = urlparse(joined)
+    if parsed.netloc and not parsed.netloc.endswith("tradingview.com"):
+        return ""
+    if "/script/" in parsed.path or not parsed.path.startswith("/scripts/"):
         return ""
     path = parsed.path
     if not path.endswith("/"):
@@ -1162,6 +1269,29 @@ def main(argv: list[str] | None = None) -> int:
         help="TradingView catalog/profile/tag/script URL to discover as metadata-only backlog",
     )
     parser.add_argument(
+        "--include-tradingview-discovery",
+        action="store_true",
+        help="crawl the built-in TradingView discovery preset as metadata-only backlog",
+    )
+    parser.add_argument(
+        "--discovery-url",
+        action="append",
+        default=[],
+        help="additional TradingView catalog/tag URL for the discovery frontier",
+    )
+    parser.add_argument(
+        "--discovery-depth",
+        type=int,
+        default=0,
+        help="catalog-link crawl depth for TradingView discovery URLs",
+    )
+    parser.add_argument(
+        "--max-discovery-pages",
+        type=int,
+        default=40,
+        help="maximum TradingView catalog/tag pages to fetch during discovery",
+    )
+    parser.add_argument(
         "--catalog-html",
         action="append",
         default=[],
@@ -1185,10 +1315,16 @@ def main(argv: list[str] | None = None) -> int:
         source_dir=args.source_dir,
         source_files=args.source_files,
         catalog_urls=args.catalog_url,
+        catalog_discovery_urls=(
+            [*DEFAULT_TRADINGVIEW_DISCOVERY_URLS] if args.include_tradingview_discovery else []
+        )
+        + list(args.discovery_url),
         catalog_html_files=args.catalog_html,
         output_path=args.output,
         include_defaults=not args.no_defaults,
         max_catalog_records=max(0, args.max_catalog_records),
+        catalog_discovery_depth=max(0, args.discovery_depth),
+        max_catalog_pages=max(0, args.max_discovery_pages),
         source_label="pine_research_publisher",
     )
     if args.json:
