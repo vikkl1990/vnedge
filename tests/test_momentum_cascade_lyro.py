@@ -33,6 +33,7 @@ def params() -> MomentumCascadeLyroParams:
         min_1h_adx=0.0,
         min_m3_abs=0.0,
         min_m3_slope=-99.0,
+        min_coherence=0.0,
         min_volume_ratio=0.1,
         min_body_atr=0.0,
         min_body_percentile=0.0,

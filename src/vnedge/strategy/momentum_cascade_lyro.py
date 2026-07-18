@@ -59,11 +59,12 @@ class MomentumCascadeLyroParams:
 
     min_m3_abs: float = 0.02
     min_m3_slope: float = 0.00
+    min_coherence: float = 0.40
     min_volume_ratio: float = 0.55
-    min_body_atr: float = 0.15
+    min_body_atr: float = 1.50
     min_body_percentile: float = 0.45
     min_confidence: float = 55.0
-    min_expected_net_edge_bps: float = 10.0
+    min_expected_net_edge_bps: float = 80.0
     cooldown_bars: int = 4
     allow_continuations: bool = True
     max_continuation_trend_bars: int = 18
@@ -258,6 +259,7 @@ class MomentumCascadeLyroScanner(BaseStrategy):
             min_1h_adx=base.min_1h_adx,
             min_m3_abs=base.min_m3_abs,
             min_m3_slope=base.min_m3_slope,
+            min_coherence=base.min_coherence,
             min_volume_ratio=base.min_volume_ratio,
             min_body_atr=base.min_body_atr,
             min_body_percentile=base.min_body_percentile,
@@ -585,8 +587,10 @@ def _candidate_side(
         (sign * df["cascade_trend"] > 0.0)
         & (sign * df["cascade_m3"] >= params.min_m3_abs)
         & (sign * df["cascade_m3_slope"] >= params.min_m3_slope)
+        & (df["cascade_coherence"] >= params.min_coherence)
         & (df[f"htf_score_{side}"] >= 2.0)
         & (df["volume_ratio"] >= params.min_volume_ratio)
+        & df[f"displacement_{side}"]
     )
     trigger = df[f"cascade_flip_{side}"]
     if params.allow_continuations:
