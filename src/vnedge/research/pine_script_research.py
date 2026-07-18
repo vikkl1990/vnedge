@@ -45,6 +45,40 @@ TRADINGVIEW_SCRIPT_RE = re.compile(
     r"(?:https?://(?:www\.|in\.)?tradingview\.com)?/script/"
     r"[A-Za-z0-9]+-[^\"'<>\s?#]+/?(?:#[^\"'<>\s]+)?"
 )
+TITLE_STOPWORDS = frozenset({
+    "a",
+    "ai",
+    "algo",
+    "and",
+    "auto",
+    "bot",
+    "crypto",
+    "for",
+    "full",
+    "god",
+    "indicator",
+    "mode",
+    "pro",
+    "risk",
+    "signals",
+    "strategy",
+    "the",
+    "view",
+    "with",
+    "zones",
+})
+MECHANISM_PRIORITY = {
+    "orderflow": 24,
+    "liquidity": 22,
+    "structure": 20,
+    "breakout": 16,
+    "momentum": 14,
+    "trend": 12,
+    "volume": 10,
+    "volatility": 8,
+    "mtf": 4,
+    "risk_plan": 4,
+}
 
 
 @dataclass(frozen=True)
@@ -98,6 +132,9 @@ def empty_pine_research_payload() -> dict:
             "total": 0,
             "source_backed": 0,
             "catalog_only": 0,
+            "reconciled_catalog_matches": 0,
+            "port_queue": 0,
+            "source_requests": 0,
             "portable": 0,
             "needs_source": 0,
             "research_only": 0,
@@ -105,6 +142,7 @@ def empty_pine_research_payload() -> dict:
             "backtests_queued": 0,
         },
         "records": [],
+        "priorities": [],
         "policy": _policy(),
         "operator_answer": (
             "Pine research KB unavailable; publish research/pine_scripts/"
@@ -247,11 +285,13 @@ def load_pine_research_payload(path: Path | None) -> dict:
     for record in records:
         if isinstance(record, dict):
             normalized.append(_normalize_record(record))
+    enriched = enrich_pine_research_records(normalized)
     return {
         "generated_at": str(raw.get("generated_at") or datetime.now(UTC).isoformat()),
         "source": str(raw.get("source") or path),
-        "summary": summarize_records(normalized),
-        "records": normalized,
+        "summary": summarize_records(enriched),
+        "records": enriched,
+        "priorities": _priority_queue(enriched),
         "policy": raw.get("policy") if isinstance(raw.get("policy"), dict) else _policy(),
         "operator_answer": str(
             raw.get("operator_answer")
@@ -267,12 +307,13 @@ def build_pine_research_payload(
     *,
     source: str,
 ) -> dict:
-    rows = [record.to_dict() for record in records]
+    rows = enrich_pine_research_records(record.to_dict() for record in records)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source,
         "summary": summarize_records(rows),
         "records": rows,
+        "priorities": _priority_queue(rows),
         "policy": _policy(),
         "operator_answer": (
             "Pine reviews are a research funnel. A script can become a VNEDGE "
@@ -455,12 +496,13 @@ def review_tradingview_catalog_script(url: str) -> PineReviewRecord:
 
 
 def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
-    rows = [_normalize_record(record) for record in records]
+    rows = enrich_pine_research_records(records)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source,
         "summary": summarize_records(rows),
         "records": rows,
+        "priorities": _priority_queue(rows),
         "policy": _policy(),
         "operator_answer": (
             "Pine KB published from local public/user-supplied source files. "
@@ -470,6 +512,108 @@ def _build_payload_from_dicts(records: Iterable[dict], *, source: str) -> dict:
         "can_trade": False,
         "can_promote": False,
     }
+
+
+def enrich_pine_research_records(records: Iterable[dict]) -> list[dict]:
+    """Normalize, reconcile catalog/source matches, and add triage metadata."""
+
+    rows = [_normalize_record(record) for record in records]
+    reconciled = _reconcile_catalog_source_matches(rows)
+    enriched = [_with_priority_fields(record) for record in reconciled]
+    return sorted(
+        enriched,
+        key=lambda row: (
+            -int(row.get("priority_score") or 0),
+            str(row.get("script_id") or ""),
+        ),
+    )
+
+
+def _reconcile_catalog_source_matches(records: Iterable[dict]) -> list[dict]:
+    source_rows = [
+        dict(row)
+        for row in records
+        if row.get("source_available")
+    ]
+    catalog_rows = [
+        dict(row)
+        for row in records
+        if not row.get("source_available") and "/script/" in str(row.get("url") or "")
+    ]
+    other_rows = [
+        dict(row)
+        for row in records
+        if not row.get("source_available") and "/script/" not in str(row.get("url") or "")
+    ]
+    matched_catalog_ids: set[str] = set()
+    for catalog in catalog_rows:
+        best_idx = -1
+        best_score = 0.0
+        for idx, source in enumerate(source_rows):
+            score = _title_similarity(
+                str(source.get("title") or source.get("script_id") or ""),
+                str(catalog.get("title") or catalog.get("script_id") or ""),
+            )
+            if score > best_score:
+                best_idx = idx
+                best_score = score
+        if best_idx < 0 or best_score < 0.82:
+            continue
+        source = dict(source_rows[best_idx])
+        catalog_url = str(catalog.get("url") or "")
+        catalog_id = str(catalog.get("script_id") or "")
+        catalog_urls = _append_unique(source.get("catalog_urls"), catalog_url)
+        catalog_ids = _append_unique(source.get("catalog_script_ids"), catalog_id)
+        source["catalog_urls"] = catalog_urls
+        source["catalog_script_ids"] = catalog_ids
+        source["catalog_match_score"] = round(best_score, 3)
+        source["discovery_status"] = "SOURCE_BACKED_CATALOG_MATCH"
+        source["tags"] = tuple(sorted({*source.get("tags", ()), "catalog_match"}))
+        source_rows[best_idx] = source
+        matched_catalog_ids.add(catalog_id)
+
+    unmatched_catalog = [
+        row
+        for row in catalog_rows
+        if str(row.get("script_id") or "") not in matched_catalog_ids
+    ]
+    return [*source_rows, *unmatched_catalog, *other_rows]
+
+
+def _with_priority_fields(record: dict) -> dict:
+    row = dict(record)
+    mechanism = _mechanism_cluster(row)
+    next_action = _next_action(row)
+    row["mechanism"] = mechanism
+    row["priority_score"] = _priority_score(row, mechanism)
+    row["next_action"] = next_action
+    row["priority_reason"] = _priority_reason(row, mechanism, next_action)
+    row.setdefault("discovery_status", "SOURCE_BACKED" if row.get("source_available") else "CATALOG_ONLY")
+    return row
+
+
+def _priority_queue(records: Iterable[dict], *, limit: int = 25) -> list[dict]:
+    queued = sorted(
+        (_normalize_record(record) for record in records),
+        key=lambda row: (
+            -int(row.get("priority_score") or 0),
+            str(row.get("script_id") or ""),
+        ),
+    )
+    return [
+        {
+            "script_id": str(row.get("script_id") or ""),
+            "title": str(row.get("title") or ""),
+            "url": str(row.get("url") or ""),
+            "crypto_portability": str(row.get("crypto_portability") or ""),
+            "source_available": bool(row.get("source_available")),
+            "mechanism": str(row.get("mechanism") or "unknown"),
+            "priority_score": int(row.get("priority_score") or 0),
+            "next_action": str(row.get("next_action") or "WAIT"),
+            "priority_reason": str(row.get("priority_reason") or ""),
+        }
+        for row in queued[:limit]
+    ]
 
 
 def _fetch_catalog_html(url: str, *, timeout_seconds: float = 20.0) -> str:
@@ -515,6 +659,18 @@ def summarize_records(records: Iterable[dict]) -> dict:
         for row in rows
         if not row.get("source_available") and "/script/" in str(row.get("url") or "")
     )
+    reconciled_catalog_matches = sum(1 for row in rows if row.get("catalog_urls"))
+    port_queue = sum(
+        1
+        for row in rows
+        if row.get("source_available")
+        and row.get("crypto_portability") in {"PORTABLE", "PORTABLE_WITH_CHANGES"}
+    )
+    source_requests = sum(
+        1
+        for row in rows
+        if row.get("next_action") == "REQUEST_OPEN_SOURCE_EXPORT"
+    )
     backtests_queued = 0
     for row in rows:
         for cell in row.get("backtests") or []:
@@ -524,6 +680,9 @@ def summarize_records(records: Iterable[dict]) -> dict:
         "total": len(rows),
         "source_backed": source_backed,
         "catalog_only": catalog_only,
+        "reconciled_catalog_matches": reconciled_catalog_matches,
+        "port_queue": port_queue,
+        "source_requests": source_requests,
         "portable": verdicts["PORTABLE"] + verdicts["PORTABLE_WITH_CHANGES"],
         "needs_source": verdicts["BLOCKED_NO_SOURCE"],
         "research_only": verdicts["RESEARCH_ONLY"],
@@ -609,7 +768,127 @@ def _normalize_record(record: dict) -> dict:
     out.setdefault("requires_untouched_judgment", True)
     out.setdefault("backtests", [])
     out["crypto_fit_score"] = _bounded_int(out.get("crypto_fit_score"), 0, 100)
+    out["priority_score"] = _bounded_int(out.get("priority_score"), 0, 100)
     return out
+
+
+def _append_unique(existing: object, value: str) -> tuple[str, ...]:
+    values: list[str] = []
+    if isinstance(existing, (list, tuple)):
+        values.extend(str(item) for item in existing if str(item or "").strip())
+    if value.strip():
+        values.append(value.strip())
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in values:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return tuple(out)
+
+
+def _title_similarity(left: str, right: str) -> float:
+    left_norm = _title_fingerprint(left)
+    right_norm = _title_fingerprint(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm == right_norm:
+        return 1.0
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    if min(len(left_tokens), len(right_tokens)) < 3:
+        return 0.0
+    overlap = len(left_tokens & right_tokens)
+    if overlap < 3:
+        return 0.0
+    containment = overlap / min(len(left_tokens), len(right_tokens))
+    jaccard = overlap / len(left_tokens | right_tokens)
+    return max(jaccard, containment)
+
+
+def _title_fingerprint(value: str) -> str:
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", value.lower())
+        if token not in TITLE_STOPWORDS
+    ]
+    return " ".join(tokens)
+
+
+def _mechanism_cluster(record: dict) -> str:
+    text = " ".join([
+        str(record.get("title") or ""),
+        str(record.get("script_id") or ""),
+        " ".join(str(item) for item in record.get("features") or ()),
+        " ".join(str(item) for item in record.get("tags") or ()),
+    ]).lower()
+    checks = (
+        ("orderflow", ("orderflow", "order flow", "footprint", "cvd", "delta", "absorption")),
+        ("liquidity", ("liquidity", "sweep", "fvg", "fair value", "order block", "ob fvg")),
+        ("structure", ("structure", "mss", "bos", "choch", "support", "resistance", "sr")),
+        ("breakout", ("breakout", "bounce", "box", "range")),
+        ("momentum", ("momentum", "rsi", "roc", "macd", "cascade", "stoch")),
+        ("trend", ("trend", "ema", "supertrend", "ut", "trail")),
+        ("volume", ("volume", "vwap", "mfi", "obv")),
+        ("volatility", ("atr", "volatility", "bollinger", "bb", "keltner")),
+        ("risk_plan", ("stop", "take", "tp", "sl", "risk")),
+        ("mtf", ("mtf", "multi tf", "multi timeframe")),
+    )
+    for mechanism, needles in checks:
+        if any(needle in text for needle in needles):
+            return mechanism
+    return "general"
+
+
+def _next_action(record: dict) -> str:
+    verdict = str(record.get("crypto_portability") or "")
+    source_available = bool(record.get("source_available"))
+    if verdict == "BLOCKED_REPAINT_RISK":
+        return "RUN_CAUSALITY_AUDIT"
+    if not source_available:
+        return "REQUEST_OPEN_SOURCE_EXPORT"
+    if verdict in {"PORTABLE", "PORTABLE_WITH_CHANGES"}:
+        return "PORT_CAUSAL_FEATURES_AND_REPLAY"
+    if verdict == "RESEARCH_ONLY":
+        return "DISTILL_FEATURES_ONLY"
+    return "MANUAL_REVIEW"
+
+
+def _priority_score(record: dict, mechanism: str) -> int:
+    verdict = str(record.get("crypto_portability") or "")
+    risks = set(str(item) for item in record.get("risks") or ())
+    score = _bounded_int(record.get("crypto_fit_score"), 0, 100)
+    score += MECHANISM_PRIORITY.get(mechanism, 0)
+    if record.get("source_available"):
+        score += 18
+    else:
+        score -= 10
+    if verdict in {"PORTABLE", "PORTABLE_WITH_CHANGES"}:
+        score += 10
+    elif verdict == "RESEARCH_ONLY":
+        score -= 8
+    elif verdict == "BLOCKED_REPAINT_RISK":
+        score -= 45
+    if "mtf_repaint_review_required" in risks:
+        score -= 15
+    if "visual_label_not_execution_strategy" in risks:
+        score -= 8
+    if "no_machine_alert_payload" in risks:
+        score -= 4
+    return max(0, min(100, score))
+
+
+def _priority_reason(record: dict, mechanism: str, next_action: str) -> str:
+    if record.get("source_available"):
+        return (
+            f"{mechanism} source is available; {next_action.lower().replace('_', ' ')} "
+            "before any promotion."
+        )
+    return (
+        f"{mechanism} catalog hit; source export is required before VNEDGE can "
+        "port or backtest it."
+    )
 
 
 def _bounded_int(value: object, floor: int, ceiling: int) -> int:
@@ -722,6 +1001,9 @@ def _detect_features(lower_source: str) -> set[str]:
         "momentum": ("rsi", "roc", "macd", "momentum", "stoch"),
         "volatility": ("atr", "bb", "bollinger", "kc", "volatility"),
         "volume": ("volume", "vwap", "obv", "mfi"),
+        "orderflow": ("order flow", "orderflow", "footprint", "cvd", "delta", "absorption"),
+        "liquidity": ("liquidity", "sweep", "fvg", "fair value", "order block"),
+        "structure": ("structure", "mss", "bos", "choch", "support", "resistance"),
         "mtf": ("request.security", "timeframe.", "security("),
         "risk_plan": ("stop", "sl", "take", "tp", "strategy.exit"),
         "alerts": ("alertcondition", "alert("),
@@ -866,7 +1148,10 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "pine research KB published: "
             f"total={summary['total']} portable={summary['portable']} "
+            f"source_backed={summary['source_backed']} "
+            f"catalog_only={summary['catalog_only']} "
             f"needs_source={summary['needs_source']} "
+            f"port_queue={summary['port_queue']} "
             f"queued={summary['backtests_queued']} output={args.output}"
         )
     return 0

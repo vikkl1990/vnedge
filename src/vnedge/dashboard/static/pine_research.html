@@ -134,6 +134,8 @@
           <div class="metric"><span>Catalog-only</span><b id="m_catalog_only">--</b><i>needs source</i></div>
           <div class="metric"><span>Portable</span><b id="m_portable">--</b><i>needs proof</i></div>
           <div class="metric"><span>Needs source</span><b id="m_source">--</b><i>blocked legally</i></div>
+          <div class="metric"><span>Port queue</span><b id="m_port_queue">--</b><i>source-backed</i></div>
+          <div class="metric"><span>Catalog matches</span><b id="m_matches">--</b><i>reconciled</i></div>
           <div class="metric"><span>Queued TFs</span><b id="m_queue">--</b><i>backtest cells</i></div>
         </div>
         <div class="policy" id="policyText">Loading policy...</div>
@@ -155,7 +157,7 @@
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Script</th><th>Verdict</th><th>Fit</th><th>Source</th><th>Decision</th><th>Tags</th>
+              <th>Script</th><th>Mechanism</th><th>Priority</th><th>Verdict</th><th>Source</th><th>Next action</th><th>Tags</th>
             </tr></thead>
             <tbody id="scriptRows"></tbody>
           </table>
@@ -179,6 +181,9 @@
             <div class="kv"><span>Crypto fit</span><b id="d_fit">--</b></div>
             <div class="kv"><span>Kind</span><b id="d_kind">--</b></div>
             <div class="kv"><span>Source lines</span><b id="d_lines">--</b></div>
+            <div class="kv"><span>Mechanism</span><b id="d_mechanism">--</b></div>
+            <div class="kv"><span>Priority</span><b id="d_priority">--</b></div>
+            <div class="kv"><span>Next action</span><b id="d_action">--</b></div>
             <div class="kv"><span>Promotion</span><b id="d_promo">NO</b></div>
           </div>
           <div class="notes">
@@ -249,14 +254,15 @@
     rows.forEach((r,idx)=>{
       const tr=document.createElement("tr");
       if(state.selected&&state.selected.script_id===r.script_id)tr.className="active";
-      tr.innerHTML="<td><b></b><div class='meta'></div></td><td></td><td class='num'></td><td></td><td></td><td></td>";
+      tr.innerHTML="<td><b></b><div class='meta'></div></td><td></td><td class='num'></td><td></td><td></td><td></td><td></td>";
       tr.querySelector("b").textContent=r.title||r.script_id;
       tr.querySelector(".meta").textContent=r.url||"--";
-      tr.children[1].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
-      tr.children[2].textContent=(r.crypto_fit_score==null?"--":String(r.crypto_fit_score));
-      tr.children[3].appendChild(pill(r.source_available?"source":"no source",r.source_available?"good":"bad"));
-      tr.children[4].textContent=r.decision||"--";
-      tr.children[5].textContent=(r.tags||[]).slice(0,5).join(", ")||"--";
+      tr.children[1].appendChild(pill(r.mechanism||"general","info"));
+      tr.children[2].textContent=(r.priority_score==null?"--":String(r.priority_score));
+      tr.children[3].appendChild(pill(r.crypto_portability||"--",cls(r.crypto_portability)));
+      tr.children[4].appendChild(pill(r.source_available?"source":"no source",r.source_available?"good":"bad"));
+      tr.children[5].textContent=r.next_action||r.decision||"--";
+      tr.children[6].textContent=(r.tags||[]).slice(0,5).join(", ")||"--";
       tr.addEventListener("click",()=>{state.selected=r;renderRows();renderDetail();});
       body.appendChild(tr);
       if(idx===0&&!state.selected){state.selected=r;}
@@ -274,6 +280,9 @@
     text("d_fit",(r.crypto_fit_score==null?"--":r.crypto_fit_score+"/100"));
     text("d_kind",r.kind||"--");
     text("d_lines",r.source_lines||0);
+    text("d_mechanism",r.mechanism||"--");
+    text("d_priority",(r.priority_score==null?"--":r.priority_score+"/100"));
+    text("d_action",r.next_action||"--");
     text("d_promo",r.can_promote?"YES":"NO");
     list("d_features",r.features||[]);
     list("d_risks",r.risks||[]);
@@ -301,6 +310,8 @@
     text("m_catalog_only",s.catalog_only);
     text("m_portable",s.portable);
     text("m_source",s.needs_source);
+    text("m_port_queue",s.port_queue);
+    text("m_matches",s.reconciled_catalog_matches);
     text("m_queue",s.backtests_queued);
     const p=payload.policy||{};
     $("policyText").textContent=[p.source_rule,p.promotion_rule,"Venues: "+(p.venues||[]).join(", "),"TFs: "+(p.timeframes||[]).join(", ")].filter(Boolean).join(" | ");
