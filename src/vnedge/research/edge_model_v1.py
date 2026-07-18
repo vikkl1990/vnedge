@@ -58,6 +58,8 @@ ModelVerdict = Literal[
     "MODEL_PAPER_CANDIDATE",
 ]
 
+DEFAULT_EDGE_MODEL_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+
 
 @dataclass(frozen=True)
 class EdgeModelConfig:
@@ -171,6 +173,10 @@ def build_opportunity_dataset(routes: Iterable[OpportunityRoute]) -> pd.DataFram
         symbol = str(meta.get("symbol", "unknown"))
         timeframe = str(meta.get("timeframe", "unknown"))
         risk_bps = _finite_or_none(row.risk_bps)
+        expected_edge_bps = _finite_or_none(row.expected_edge_bps)
+        maker_cost_bps = _finite_or_none(row.maker_cost_bps)
+        taker_cost_bps = _finite_or_none(row.taker_cost_bps)
+        timeframe_seconds = _timeframe_seconds(timeframe)
         record = {
             "event_id": row.event_id,
             "ts": ts,
@@ -182,11 +188,36 @@ def build_opportunity_dataset(routes: Iterable[OpportunityRoute]) -> pd.DataFram
             "side": row.side,
             "hour": ts.hour,
             "day_of_week": ts.dayofweek,
+            "hour_sin": math.sin(2.0 * math.pi * ts.hour / 24.0),
+            "hour_cos": math.cos(2.0 * math.pi * ts.hour / 24.0),
+            "day_of_week_sin": math.sin(2.0 * math.pi * ts.dayofweek / 7.0),
+            "day_of_week_cos": math.cos(2.0 * math.pi * ts.dayofweek / 7.0),
+            "timeframe_seconds": timeframe_seconds,
+            "log_timeframe_seconds": (
+                math.log(float(timeframe_seconds)) if timeframe_seconds else None
+            ),
             "risk_bps": risk_bps,
-            "maker_cost_bps": row.maker_cost_bps,
-            "taker_cost_bps": row.taker_cost_bps,
+            "maker_cost_bps": maker_cost_bps,
+            "taker_cost_bps": taker_cost_bps,
+            "maker_taker_cost_gap_bps": _subtract(taker_cost_bps, maker_cost_bps),
             "maker_fill_probability": row.maker_fill_probability,
-            "expected_edge_bps": _finite_or_none(row.expected_edge_bps),
+            "expected_edge_bps": expected_edge_bps,
+            "expected_minus_maker_cost_bps": _subtract(
+                expected_edge_bps,
+                maker_cost_bps,
+            ),
+            "expected_minus_taker_cost_bps": _subtract(
+                expected_edge_bps,
+                taker_cost_bps,
+            ),
+            "expected_edge_to_risk": _safe_div(expected_edge_bps, risk_bps),
+            "risk_to_maker_cost": _safe_div(risk_bps, maker_cost_bps),
+            "risk_to_taker_cost": _safe_div(risk_bps, taker_cost_bps),
+            "maker_fill_edge_bps": (
+                (float(row.maker_fill_probability) * expected_edge_bps) - maker_cost_bps
+                if expected_edge_bps is not None and maker_cost_bps is not None
+                else None
+            ),
             "maker_net_bps": maker_net,
             "taker_net_bps": taker_net,
         }
@@ -272,6 +303,139 @@ def backtest_edge_model(
         train_samples=len(train),
         test_samples=len(test),
     )
+
+
+def backtest_edge_model_timeframe_matrix(
+    routes: Iterable[OpportunityRoute],
+    *,
+    config: EdgeModelConfig = EdgeModelConfig(),
+    include_aggregate: bool = True,
+) -> dict:
+    """Run edge_model_v1 once per timeframe plus an optional aggregate view."""
+
+    rows = tuple(routes)
+    reports: list[dict] = []
+    if include_aggregate:
+        aggregate = backtest_edge_model(rows, config=config)
+        aggregate["scope"] = _report_scope("ALL_TIMEFRAMES", rows)
+        reports.append(aggregate)
+
+    by_timeframe: dict[str, list[OpportunityRoute]] = {}
+    for row in rows:
+        timeframe = str((row.metadata or {}).get("timeframe") or "unknown")
+        by_timeframe.setdefault(timeframe, []).append(row)
+
+    for timeframe in sorted(by_timeframe, key=_timeframe_sort_key):
+        tf_rows = tuple(by_timeframe[timeframe])
+        report = backtest_edge_model(tf_rows, config=config)
+        report["scope"] = _report_scope(timeframe, tf_rows)
+        reports.append(report)
+
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "truth_layer": "edge_model_v1_timeframe_matrix",
+        "policy": {
+            "research_only": True,
+            "can_trade": False,
+            "can_promote": False,
+            "requires_untouched_judgment": True,
+            "decision_uses_forward_truth": False,
+            "operator_note": (
+                "Timeframe matrix verifies the learner per slice. Aggregate "
+                "improvement cannot promote a lane if the timeframe slice fails."
+            ),
+        },
+        "config": asdict(config),
+        "summary": _matrix_summary(reports),
+        "reports": reports,
+    }
+
+
+def _report_scope(scope_id: str, rows: tuple[OpportunityRoute, ...]) -> dict:
+    timeframes = sorted(
+        {str((row.metadata or {}).get("timeframe") or "unknown") for row in rows},
+        key=_timeframe_sort_key,
+    )
+    targets = sorted(
+        {
+            (
+                str((row.metadata or {}).get("exchange") or "unknown"),
+                str((row.metadata or {}).get("symbol") or "unknown"),
+                str((row.metadata or {}).get("timeframe") or "unknown"),
+            )
+            for row in rows
+        }
+    )
+    return {
+        "id": scope_id,
+        "timeframe": None if scope_id == "ALL_TIMEFRAMES" else scope_id,
+        "opportunities": len(rows),
+        "timeframes": timeframes,
+        "targets": [
+            {"exchange": exchange, "symbol": symbol, "timeframe": timeframe}
+            for exchange, symbol, timeframe in targets
+        ],
+        "strategies": sorted({row.strategy_id for row in rows}),
+    }
+
+
+def _matrix_summary(reports: Iterable[dict]) -> dict:
+    reports = tuple(reports)
+    timeframe_reports = [
+        report for report in reports
+        if report.get("scope", {}).get("id") != "ALL_TIMEFRAMES"
+    ]
+    improved = [
+        report for report in timeframe_reports
+        if report["summary"]["verdict"] in {"MODEL_IMPROVED", "MODEL_PAPER_CANDIDATE"}
+    ]
+    candidates = [
+        report for report in timeframe_reports
+        if report["summary"]["verdict"] == "MODEL_PAPER_CANDIDATE"
+    ]
+    best = _best_report(improved or timeframe_reports)
+    return {
+        "timeframe_count": len(timeframe_reports),
+        "timeframes": [
+            report["scope"]["id"]
+            for report in sorted(
+                timeframe_reports,
+                key=lambda report: _timeframe_sort_key(str(report["scope"]["id"])),
+            )
+        ],
+        "total_opportunities": sum(
+            int(report["scope"]["opportunities"]) for report in timeframe_reports
+        ),
+        "improved_timeframes": [report["scope"]["id"] for report in improved],
+        "paper_candidate_timeframes": [report["scope"]["id"] for report in candidates],
+        "best_timeframe": best["scope"]["id"] if best is not None else None,
+        "best_verdict": best["summary"]["verdict"] if best is not None else None,
+        "best_model_avg_net_bps": (
+            best["summary"]["model_avg_net_bps"] if best is not None else None
+        ),
+        "best_profit_factor": (
+            best["summary"]["model_profit_factor"] if best is not None else None
+        ),
+    }
+
+
+def _best_report(reports: Iterable[dict]) -> dict | None:
+    best: dict | None = None
+    best_key: tuple[float, float, int] | None = None
+    for report in reports:
+        summary = report["summary"]
+        avg = summary["model_avg_net_bps"]
+        improvement = summary["improvement_bps"]
+        trades = int(summary["model_trades"])
+        key = (
+            float(avg) if avg is not None else -10**9,
+            float(improvement) if improvement is not None else -10**9,
+            trades,
+        )
+        if best_key is None or key > best_key:
+            best = report
+            best_key = key
+    return best
 
 
 def build_edge_model_report(
@@ -671,10 +835,37 @@ def _finite_or_none(value: object) -> float | None:
     return f if math.isfinite(f) else None
 
 
+def _subtract(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return left - right
+
+
+def _safe_div(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return numerator / denominator
+
+
 def _round_or_none(value: float | None) -> float | None:
     if value is None or not math.isfinite(float(value)):
         return None
     return round(float(value), 4)
+
+
+def _timeframe_seconds(timeframe: str) -> int | None:
+    match = re.fullmatch(r"(\d+)([mhdw])", str(timeframe).strip().lower())
+    if not match:
+        return None
+    value = int(match.group(1))
+    unit = match.group(2)
+    multiplier = {"m": 60, "h": 3_600, "d": 86_400, "w": 604_800}[unit]
+    return value * multiplier
+
+
+def _timeframe_sort_key(timeframe: str) -> tuple[int, str]:
+    seconds = _timeframe_seconds(timeframe)
+    return (seconds if seconds is not None else 10**12, timeframe)
 
 
 def _clean_name(value: object) -> str:
@@ -736,6 +927,100 @@ def _render_report(report: dict) -> str:
     )
 
 
+def _render_matrix_report(payload: dict) -> str:
+    summary = payload["summary"]
+    lines = [
+        "edge model v1 timeframe matrix",
+        "policy=research_only can_trade=false can_promote=false",
+        "",
+        (
+            f"timeframes={summary['timeframe_count']} "
+            f"opportunities={summary['total_opportunities']} "
+            f"best={summary['best_timeframe']} verdict={summary['best_verdict']}"
+        ),
+        "",
+        "scope          verdict                 opp train/test trades raw_bps model_bps pf     imp_bps blocker",
+    ]
+    for report in payload["reports"]:
+        scope = report.get("scope", {}).get("id", "unknown")
+        s = report["summary"]
+        lines.append(
+            f"{scope:<14} {s['verdict']:<23} {s['opportunities']:>5} "
+            f"{s['train_samples']:>5}/{s['test_samples']:<5} "
+            f"{s['model_trades']:>6} {_fmt(s['raw_avg_net_bps']):>7} "
+            f"{_fmt(s['model_avg_net_bps']):>9} {_fmt(s['model_profit_factor']):>6} "
+            f"{_fmt(s['improvement_bps']):>7} {s['primary_blocker']}"
+        )
+    if not payload["reports"]:
+        lines.append("no reports produced; check candles, symbols, and strategy ids")
+    return "\n".join(lines)
+
+
+def _fmt(value: float | None) -> str:
+    return "--" if value is None else f"{float(value):.2f}"
+
+
+def _compact_routes(report: dict) -> dict:
+    compact = dict(report)
+    routes = tuple(compact.get("routes") or ())
+    compact["routes_omitted"] = len(routes)
+    compact["routes"] = []
+    return compact
+
+
+def _compact_matrix(payload: dict) -> dict:
+    compact = dict(payload)
+    compact["reports"] = [_compact_routes(report) for report in payload["reports"]]
+    return compact
+
+
+def _resolve_timeframes(timeframe: str, timeframes: str | None) -> tuple[str, ...]:
+    raw = _split_csv(timeframes) if timeframes else (timeframe,)
+    if any(item.lower() == "all" for item in raw):
+        return DEFAULT_EDGE_MODEL_TIMEFRAMES
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        if item not in seen:
+            out.append(item)
+            seen.add(item)
+    return tuple(out)
+
+
+def _expand_targets(
+    targets: Iterable[ResearchTarget],
+    timeframes: Iterable[str],
+) -> tuple[ResearchTarget, ...]:
+    out: list[ResearchTarget] = []
+    seen: set[str] = set()
+    for target in targets:
+        for timeframe in timeframes:
+            expanded = ResearchTarget(target.exchange, target.symbol, timeframe)
+            if expanded.key not in seen:
+                out.append(expanded)
+                seen.add(expanded.key)
+    return tuple(out)
+
+
+def _target_data_coverage(data_root: Path | str, targets: Iterable[ResearchTarget]) -> dict:
+    store = ParquetStore(data_root)
+    available: list[dict] = []
+    missing: list[dict] = []
+    for target in targets:
+        item = asdict(target)
+        if store.candles_path(target.exchange, target.symbol, target.timeframe).exists():
+            available.append(item)
+        else:
+            missing.append(item)
+    return {
+        "attempted": len(available) + len(missing),
+        "available": len(available),
+        "missing": len(missing),
+        "available_targets": available,
+        "missing_targets": missing,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="train/test edge_model_v1 on scanner opportunity rows"
@@ -746,6 +1031,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--exchanges", help="comma-separated exchange ids")
     parser.add_argument("--symbols", help="comma-separated symbols")
     parser.add_argument("--timeframe", default="15m")
+    parser.add_argument(
+        "--timeframes",
+        help="comma-separated timeframes or 'all' for 1m,5m,15m,1h,4h",
+    )
     parser.add_argument("--strategies", default=",".join(DEFAULT_SCALPER_STRATEGIES))
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--horizon-bars", type=int, default=8)
@@ -755,18 +1044,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-model-trades", type=int, default=20)
     parser.add_argument("--min-edge-bps", type=float, default=25.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.5)
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="emit aggregate plus per-timeframe reports",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="omit per-opportunity OOS routes from JSON output",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output", help="optional JSON report path")
     args = parser.parse_args(argv)
 
+    timeframes = _resolve_timeframes(args.timeframe, args.timeframes)
     if args.exchange and args.symbol:
-        targets = (ResearchTarget(args.exchange, args.symbol, args.timeframe),)
+        targets = tuple(
+            ResearchTarget(args.exchange, args.symbol, timeframe)
+            for timeframe in timeframes
+        )
     else:
-        targets = load_research_targets(
+        base_targets = load_research_targets(
             exchanges=_split_csv(args.exchanges) or None,
             symbols=_split_csv(args.symbols) or None,
-            timeframe=args.timeframe,
+            timeframe=timeframes[0],
         )
+        targets = _expand_targets(base_targets, timeframes)
     router_config = OpportunityRouterConfig(
         horizon_bars=args.horizon_bars,
         min_samples=args.min_model_trades,
@@ -789,18 +1093,28 @@ def main(argv: list[str] | None = None) -> int:
         lookback_days=args.lookback_days,
         router_config=router_config,
     )
-    report = backtest_edge_model(opportunities, config=model_config)
+    use_matrix = args.matrix or len(timeframes) > 1
+    if use_matrix:
+        report = backtest_edge_model_timeframe_matrix(opportunities, config=model_config)
+    else:
+        report = backtest_edge_model(opportunities, config=model_config)
     report["scope"] = {
         "targets": [asdict(target) for target in targets],
+        "target_coverage": _target_data_coverage(args.data_root, targets),
         "strategies": list(_split_csv(args.strategies)),
         "lookback_days": args.lookback_days,
         "horizon_bars": args.horizon_bars,
+        "timeframes": list(timeframes),
     }
+    if args.compact:
+        report = _compact_matrix(report) if use_matrix else _compact_routes(report)
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
+    elif use_matrix:
+        print(_render_matrix_report(report))
     else:
         print(_render_report(report))
     return 0

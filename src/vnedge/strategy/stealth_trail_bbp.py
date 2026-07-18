@@ -591,7 +591,14 @@ def _exit_for_reference(
             candidates.append(float(row["prior_low"]) - params.stop_buffer_atr * atr_value)
         if not _is_nan(row.get("stealth_trail")) and float(row["stealth_trail"]) < reference_price:
             candidates.append(float(row["stealth_trail"]) - params.stop_buffer_atr * atr_value)
-        stop = max(candidate for candidate in candidates if candidate < reference_price)
+        valid_candidates = [
+            candidate for candidate in candidates if 0.0 < candidate < reference_price
+        ]
+        stop = (
+            max(valid_candidates)
+            if valid_candidates
+            else _fallback_stop(side, reference_price, min_stop, atr_stop)
+        )
         if reference_price - stop < min_stop:
             stop = reference_price - min_stop
         risk = reference_price - stop
@@ -608,7 +615,14 @@ def _exit_for_reference(
             candidates.append(float(row["prior_high"]) + params.stop_buffer_atr * atr_value)
         if not _is_nan(row.get("stealth_trail")) and float(row["stealth_trail"]) > reference_price:
             candidates.append(float(row["stealth_trail"]) + params.stop_buffer_atr * atr_value)
-        stop = min(candidate for candidate in candidates if candidate > reference_price)
+        valid_candidates = [
+            candidate for candidate in candidates if candidate > reference_price
+        ]
+        stop = (
+            min(valid_candidates)
+            if valid_candidates
+            else _fallback_stop(side, reference_price, min_stop, atr_stop)
+        )
         if stop - reference_price < min_stop:
             stop = reference_price + min_stop
         risk = stop - reference_price
@@ -620,6 +634,18 @@ def _exit_for_reference(
         )
         target = max(tp3, room_target) if room_target < reference_price else tp3
     return stop, target
+
+
+def _fallback_stop(
+    side: str,
+    reference_price: float,
+    min_stop: float,
+    atr_stop: float,
+) -> float:
+    distance = max(min_stop, abs(atr_stop), reference_price * 1e-8)
+    if side == "long":
+        return max(reference_price - distance, reference_price * 1e-8)
+    return reference_price + distance
 
 
 def _stealth_trail(

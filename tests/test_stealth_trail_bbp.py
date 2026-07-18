@@ -187,6 +187,16 @@ def test_stealth_trail_bbp_features_are_causal_when_future_changes():
     pd.testing.assert_frame_equal(a.loc[:90, cols], b.loc[:90, cols])
 
 
+def test_stealth_trail_bbp_exit_columns_fallback_without_valid_structural_stop():
+    candles = make_candles([(100.0, 100.0, 100.0, 100.0, 100.0)] * 120)
+    df = add_stealth_trail_bbp_columns(candles, params())
+    warmed = df.dropna(subset=["atr_5m", "stop_long", "stop_short"])
+
+    assert not warmed.empty
+    assert (warmed["stop_long"] < warmed["close"]).all()
+    assert (warmed["stop_short"] > warmed["close"]).all()
+
+
 def test_stealth_trail_bbp_promotion_gate_matches_requested_floor():
     ok, reasons = STEALTH_TRAIL_BBP_PROMOTION_GATE.evaluate(
         avg_net_edge_bps=25.1,
