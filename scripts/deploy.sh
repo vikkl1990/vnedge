@@ -33,6 +33,13 @@ git reset --hard origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 echo "deploying $(git rev-parse --short HEAD)"
 
+# Compose services that write mounted research artifacts must use the host
+# deploy user's UID/GID. OCI Ubuntu images can be 1001 rather than 1000, so
+# detect it here instead of baking in a default that may poison the worktree.
+export VNEDGE_CONTAINER_UID="${VNEDGE_CONTAINER_UID:-$(id -u)}"
+export VNEDGE_CONTAINER_GID="${VNEDGE_CONTAINER_GID:-$(id -g)}"
+echo "compose artifact writer uid/gid: ${VNEDGE_CONTAINER_UID}:${VNEDGE_CONTAINER_GID}"
+
 # Build the image ONCE, up front (not interleaved with recreation). On a box
 # already running ~24 containers, `up -d --build` rebuilt AND recreated the
 # whole fleet simultaneously and thrashed the VM into swap (2026-07-11, ~10min
