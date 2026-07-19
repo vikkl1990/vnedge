@@ -182,6 +182,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     kb = tmp_path / "pine_research_kb.json"
     distiller = tmp_path / "pine_alpha_distiller_latest.json"
     progress = tmp_path / "scanner_tournament_progress.json"
+    uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -219,12 +220,25 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    uplift.write_text(json.dumps({
+        "agent_id": "pine_edge_uplift_agent_v1",
+        "summary": {
+            "promotable_proofs": 1,
+            "positive_under_sampled": 0,
+            "near_miss_after_cost": 2,
+            "experiments": 3,
+        },
+        "experiments": [{"experiment_type": "execution_filtered_replay"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
         pine_research_path=kb,
         pine_alpha_distiller_path=distiller,
         backtest_progress_path=progress,
+        pine_edge_uplift_path=uplift,
     )
     client = TestClient(app)
 
@@ -235,9 +249,12 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/kb" in page.text
     assert "/pine-research/distiller" in page.text
     assert "/pine-research/progress" in page.text
+    assert "/pine-research/uplift-agent" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
+    assert "Agentic Edge Uplift" in page.text
     assert "renderBacktestProgress" in page.text
+    assert "renderUpliftAgent" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -248,6 +265,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/kb").status_code == 401
     assert client.get("/pine-research/distiller").status_code == 401
     assert client.get("/pine-research/progress").status_code == 401
+    assert client.get("/pine-research/uplift-agent").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -269,6 +287,13 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert progress_payload["current_strategy"] == "stealth_trail_bbp_v1"
     assert progress_payload["can_trade"] is False
     assert progress_payload["can_promote"] is False
+    u = client.get("/pine-research/uplift-agent?token=t3st-token")
+    assert u.status_code == 200
+    uplift_payload = u.json()
+    assert uplift_payload["agent_id"] == "pine_edge_uplift_agent_v1"
+    assert uplift_payload["summary"]["promotable_proofs"] == 1
+    assert uplift_payload["can_trade"] is False
+    assert uplift_payload["can_promote"] is False
 
 
 def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):
