@@ -499,23 +499,45 @@ def _priority_queue(records: Iterable[dict], *, limit: int = 25) -> list[dict]:
 
 def _record_backtest_summary(row: dict) -> dict:
     counts = {}
-    best_pf = None
-    best_bps = None
+    best_positive_cell: dict | None = None
+    best_completed_cell: dict | None = None
     for cell in row.get("backtests") or []:
         if not isinstance(cell, dict):
             continue
         status = str(cell.get("status") or "queued")
         counts[status] = counts.get(status, 0) + 1
-        pf = _float_or_none(cell.get("profit_factor"))
         bps = _float_or_none(cell.get("avg_net_bps"))
-        best_pf = pf if best_pf is None or (pf is not None and pf > best_pf) else best_pf
-        best_bps = bps if best_bps is None or (bps is not None and bps > best_bps) else best_bps
-    return {"status_counts": counts, "best_pf": best_pf, "best_avg_net_bps": best_bps}
+        if status in {"passed", "failed"}:
+            best_completed_cell = _better_cell(best_completed_cell, row, cell)
+            if bps is not None and bps > 0:
+                best_positive_cell = _better_cell(best_positive_cell, row, cell)
+    return {
+        "status_counts": counts,
+        "best_pf": (
+            _float_or_none(best_positive_cell.get("profit_factor"))
+            if best_positive_cell is not None else None
+        ),
+        "best_avg_net_bps": (
+            _float_or_none(best_positive_cell.get("avg_net_bps"))
+            if best_positive_cell is not None else None
+        ),
+        "best_completed_pf": (
+            _float_or_none(best_completed_cell.get("profit_factor"))
+            if best_completed_cell is not None else None
+        ),
+        "best_completed_avg_net_bps": (
+            _float_or_none(best_completed_cell.get("avg_net_bps"))
+            if best_completed_cell is not None else None
+        ),
+    }
 
 
 def _evidence_summary(rows: list[dict], evidence: dict[str, dict[str, PrimitiveEvidence]]) -> dict:
     counts = {}
     completed = 0
+    positive_completed = 0
+    best_positive_cell: dict | None = None
+    best_completed_cell: dict | None = None
     for row in rows:
         for cell in row.get("backtests") or []:
             if not isinstance(cell, dict):
@@ -524,19 +546,88 @@ def _evidence_summary(rows: list[dict], evidence: dict[str, dict[str, PrimitiveE
             counts[status] = counts.get(status, 0) + 1
             if status in {"passed", "failed"}:
                 completed += 1
+                best_completed_cell = _better_cell(best_completed_cell, row, cell)
+                avg_net_bps = _float_or_none(cell.get("avg_net_bps"))
+                if avg_net_bps is not None and avg_net_bps > 0:
+                    positive_completed += 1
+                    best_positive_cell = _better_cell(best_positive_cell, row, cell)
     ports = {
         port: {tf: asdict(ev) for tf, ev in by_tf.items()}
         for port, by_tf in sorted(evidence.items())
     }
+    best_positive_avg = (
+        _float_or_none(best_positive_cell.get("avg_net_bps"))
+        if best_positive_cell is not None else None
+    )
+    best_positive_pf = (
+        _float_or_none(best_positive_cell.get("profit_factor"))
+        if best_positive_cell is not None else None
+    )
+    best_completed_avg = (
+        _float_or_none(best_completed_cell.get("avg_net_bps"))
+        if best_completed_cell is not None else None
+    )
+    best_completed_pf = (
+        _float_or_none(best_completed_cell.get("profit_factor"))
+        if best_completed_cell is not None else None
+    )
     return {
         "evidence_id": PINE_BACKTEST_EVIDENCE_ID,
         "status_counts": dict(sorted(counts.items())),
         "completed_cells": completed,
+        "positive_completed_cells": positive_completed,
+        "best_positive_avg_net_bps": best_positive_avg,
+        "best_positive_profit_factor": best_positive_pf,
+        "best_positive_cell": best_positive_cell,
+        "best_completed_avg_net_bps": best_completed_avg,
+        "best_completed_profit_factor": best_completed_pf,
+        "best_completed_cell": best_completed_cell,
+        "headline_verdict": _headline_verdict(completed, positive_completed, counts),
         "ports_with_evidence": len(evidence),
         "port_evidence": ports,
         "can_trade": False,
         "can_promote": False,
     }
+
+
+def _better_cell(existing: dict | None, row: dict, cell: dict) -> dict:
+    candidate = {
+        "script_id": str(row.get("script_id") or ""),
+        "title": str(row.get("title") or ""),
+        "timeframe": str(cell.get("timeframe") or ""),
+        "status": str(cell.get("status") or "queued"),
+        "samples": _int(cell.get("samples")),
+        "avg_net_bps": _float_or_none(cell.get("avg_net_bps")),
+        "profit_factor": _float_or_none(cell.get("profit_factor")),
+        "win_rate_pct": _float_or_none(cell.get("win_rate_pct")),
+        "blocker": str(cell.get("blocker") or ""),
+        "evidence_source": str(cell.get("evidence_source") or ""),
+    }
+    if existing is None:
+        return candidate
+    return candidate if _cell_rank(candidate) > _cell_rank(existing) else existing
+
+
+def _cell_rank(cell: dict) -> tuple[float, float, int]:
+    avg = _float_or_none(cell.get("avg_net_bps"))
+    pf = _float_or_none(cell.get("profit_factor"))
+    return (
+        avg if avg is not None else -999999.0,
+        min(pf if pf is not None else -1.0, 999.0),
+        _int(cell.get("samples")),
+    )
+
+
+def _headline_verdict(completed: int, positive_completed: int, counts: dict) -> str:
+    if positive_completed > 0:
+        return "POSITIVE_COMPLETED_EVIDENCE"
+    if completed > 0:
+        return "NO_POSITIVE_COMPLETED_EDGE"
+    if counts.get("blocked", 0) > 0:
+        return "BLOCKED_OR_QUARANTINED"
+    if counts.get("queued", 0) > 0 or counts.get("running", 0) > 0:
+        return "AWAITING_CAUSAL_REPLAY"
+    return "NO_BACKTEST_EVIDENCE"
 
 
 def _operator_answer(rows: list[dict]) -> str:
