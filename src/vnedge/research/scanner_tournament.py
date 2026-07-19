@@ -344,12 +344,15 @@ def publish_report(report: dict, output: Path | str, feed: Path | str | None = N
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(report, indent=2, sort_keys=True))
+    tmp_path.chmod(0o644)
     tmp_path.replace(output_path)
+    output_path.chmod(0o644)
     if feed is not None:
         feed_path = Path(feed)
         feed_path.parent.mkdir(parents=True, exist_ok=True)
         with feed_path.open("a") as fh:
             fh.write(json.dumps(_feed_record(report), sort_keys=True) + "\n")
+        feed_path.chmod(0o644)
 
 
 def publish_progress(progress: dict, output: Path | str) -> None:
@@ -357,7 +360,9 @@ def publish_progress(progress: dict, output: Path | str) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(progress, indent=2, sort_keys=True))
+    tmp_path.chmod(0o644)
     tmp_path.replace(output_path)
+    output_path.chmod(0o644)
 
 
 def _rank_candidates(

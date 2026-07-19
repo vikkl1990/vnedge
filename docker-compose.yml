@@ -481,6 +481,28 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Research-only executor queue. Converts Pine edge-uplift experiments plus
+  # scanner tournament evidence into concrete causal-port, replay, feature-bank,
+  # and untouched-judgment tasks. It never trades or promotes.
+  edge-uplift-executor:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    depends_on:
+      - pine-edge-uplift-agent
+      - scanner-tournament
+    command: ["python", "-m", "vnedge.research.edge_uplift_executor",
+              "--interval-seconds", "${EDGE_UPLIFT_EXECUTOR_INTERVAL_SECONDS:-1800}",
+              "--uplift", "research/live_research/pine_edge_uplift_agent_latest.json",
+              "--scanner", "research/live_research/scanner_tournament_latest.json",
+              "--out", "research/live_research/edge_uplift_experiments_latest.json",
+              "--feed", "research/live_research/edge_uplift_experiments_feed.jsonl"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Relaxed scanner tournament: intentionally lowers only research-discovery
   # thresholds so Pine/Willy/Lux-style scanners fire enough examples for
   # fee-aware ranking and edge-model learning. It is not a promotion lane:

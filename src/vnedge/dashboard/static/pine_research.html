@@ -238,6 +238,18 @@
       <div class="policy" id="upliftAnswer">Loading edge uplift agent.</div>
     </section>
 
+    <section class="panel distiller">
+      <h2>Edge Uplift Executor</h2>
+      <div class="summary">
+        <div class="metric"><span>Tasks</span><b id="ux_tasks">--</b><i>agent output queued</i></div>
+        <div class="metric"><span>Replay ready</span><b id="ux_replay">--</b><i>execute proof replay</i></div>
+        <div class="metric"><span>Judgment ready</span><b id="ux_judgment">--</b><i>freeze and approve</i></div>
+        <div class="metric"><span>Feature bank</span><b id="ux_bank">--</b><i>train edge router</i></div>
+      </div>
+      <div class="task-list" id="executorTasks"></div>
+      <div class="policy" id="executorAnswer">Loading edge uplift executor.</div>
+    </section>
+
     <section class="detail">
       <div class="panel">
         <h2>AI Review</h2>
@@ -701,6 +713,44 @@
       listEl.appendChild(div);
     }
   }
+  function loadExecutor(){
+    fetch("/pine-research/uplift-executor",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderUpliftExecutor)
+      .catch(err=>{$("executorAnswer").textContent=String(err);renderUpliftExecutor({});});
+  }
+  function renderUpliftExecutor(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("ux_tasks",s.tasks_total);
+    text("ux_replay",s.ready_for_replay);
+    text("ux_judgment",s.ready_for_untouched_judgment);
+    text("ux_bank",s.feature_bank_only);
+    text("executorAnswer",payload.operator_answer||"No edge uplift executor artifact published yet.");
+    const listEl=$("executorTasks"); listEl.innerHTML="";
+    (payload.tasks||[]).slice(0,6).forEach(task=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=task.recommended_port||task.task_id||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=(task.priority==null?"--":task.priority)+"/100";
+      const meta=document.createElement("span");
+      const support=(task.scanner_support||{}).state||"NO_SUPPORT";
+      meta.textContent=(task.status||"--")+" | "+support+" | scripts "+((task.source_script_ids||[]).length);
+      const action=document.createElement("span");
+      action.textContent=task.executor_action||"awaiting executor plan";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No executable edge-uplift tasks published.";
+      listEl.appendChild(div);
+    }
+  }
   function load(){
     const chip=$("statusChip"); chip.textContent="loading"; chip.className="chip info";
     fetch("/pine-research/kb",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
@@ -716,12 +766,14 @@
       .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(renderUpliftAgent)
       .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
+    loadExecutor();
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);
   $("refreshBtn").addEventListener("click",load);
   load();
   setInterval(loadProgress,10000);
+  setInterval(loadExecutor,30000);
 })();
 </script>
 </body>

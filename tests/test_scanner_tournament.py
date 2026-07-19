@@ -1,6 +1,7 @@
 """Scanner tournament keeps discovery permissive and promotion strict."""
 
 import json
+import stat
 
 import pandas as pd
 
@@ -146,6 +147,8 @@ def test_publish_report_writes_atomic_latest_and_feed(tmp_path):
     assert saved["summary"]["can_trade"] is False
     assert feed_rows[-1]["can_promote"] is False
     assert feed_rows[-1]["truth_layer"] == "scanner_tournament_v1"
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644
+    assert stat.S_IMODE(feed.stat().st_mode) == 0o644
 
 
 def test_progress_payload_is_visibility_only_and_atomic(tmp_path):
@@ -180,3 +183,4 @@ def test_progress_payload_is_visibility_only_and_atomic(tmp_path):
     saved = json.loads(output.read_text())
     assert saved["status"] == "running"
     assert saved["current_rows"] == 1440
+    assert stat.S_IMODE(output.stat().st_mode) == 0o644

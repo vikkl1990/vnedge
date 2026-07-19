@@ -165,10 +165,13 @@ def publish_public_indicator_uplift(
                             delete=False) as tmp:
         tmp.write(encoded)
         tmp_path = Path(tmp.name)
+    tmp_path.chmod(0o644)
     tmp_path.replace(out_path)
+    out_path.chmod(0o644)
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     with feed_path.open("a") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    feed_path.chmod(0o644)
     return out_path
 
 

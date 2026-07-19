@@ -1,6 +1,7 @@
 """Agentic Pine edge-uplift planner stays research-only."""
 
 import json
+import stat
 from datetime import UTC, datetime
 
 from vnedge.research.pine_edge_uplift_agent import (
@@ -143,6 +144,8 @@ def test_publish_pine_edge_uplift_agent_is_atomic_and_feed_safe(tmp_path):
     assert saved["agent_id"] == "pine_edge_uplift_agent_v1"
     assert len(rows) == 2
     assert rows[-1]["can_trade"] is False
+    assert stat.S_IMODE(out.stat().st_mode) == 0o644
+    assert stat.S_IMODE(feed.stat().st_mode) == 0o644
 
 
 def test_pine_edge_uplift_agent_does_not_invent_empty_experiments(tmp_path):
