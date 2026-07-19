@@ -485,7 +485,10 @@ def create_app(
     @app.get("/pine-research")
     async def pine_research_page() -> FileResponse:
         # Separate static research page. Data remains token-gated below.
-        return FileResponse(_STATIC_DIR / "pine_research.html")
+        return FileResponse(
+            _STATIC_DIR / "pine_research.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/state")
     async def state(request: Request) -> JSONResponse:
