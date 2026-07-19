@@ -197,6 +197,7 @@
         <div class="metric"><span>Quarantine</span><b id="pd_quarantine">--</b><i>repaint/HTF review</i></div>
         <div class="metric"><span>Queued cells</span><b id="pd_cells">--</b><i>venue x TF proof</i></div>
       </div>
+      <div class="task-list" id="intentionClusters"></div>
       <div class="task-list" id="distillerTasks"></div>
       <div class="policy" id="distillerAnswer">Loading source-backed primitive queue from /pine-research/distiller.</div>
     </section>
@@ -273,6 +274,17 @@
             <div class="kv"><span>Promotion</span><b id="d_promo">NO</b></div>
           </div>
           <div class="answer" id="sourceAnswer">Select a script to inspect source provenance.</div>
+          <div class="answer" id="d_intention">Select a source-backed script to inspect its distilled trading intention.</div>
+          <div class="notes">
+            <div class="note"><h3>Context / Setup</h3><ul id="d_context_setup"></ul></div>
+            <div class="note"><h3>Trigger / Route</h3><ul id="d_trigger_route"></ul></div>
+            <div class="note"><h3>Exit / Proof</h3><ul id="d_exit_proof"></ul></div>
+          </div>
+          <div class="notes">
+            <div class="note"><h3>Portable Atoms</h3><ul id="d_portable_atoms"></ul></div>
+            <div class="note"><h3>Non-Portable</h3><ul id="d_non_portable"></ul></div>
+            <div class="note"><h3>Agent Questions</h3><ul id="d_agent_questions"></ul></div>
+          </div>
           <div class="notes">
             <div class="note"><h3>Features</h3><ul id="d_features"></ul></div>
             <div class="note"><h3>Risks</h3><ul id="d_risks"></ul></div>
@@ -306,7 +318,7 @@
     try{token=sessionStorage.getItem(TOKEN_KEY)||"";}catch(_err){token="";}
   }
   const $=id=>document.getElementById(id);
-  const state={records:[],selected:null};
+  const state={records:[],selected:null,intentionsByScript:{}};
   if(!token){$("locked").style.display="block";return;}
   $("shell").style.display="block";
   $("backLink").href="/?token="+encodeURIComponent(token);
@@ -426,7 +438,21 @@
   function hasCompletedEvidence(r){
     return summarizeCells(r&&r.backtests||[]).completed>0;
   }
+  function distillationFor(r){
+    if(!r)return null;
+    return state.intentionsByScript[String(r.script_id||"")]||null;
+  }
+  function intentionFor(r){
+    const d=distillationFor(r);
+    return d&&d.intention?d.intention:null;
+  }
   function aiReviewSummary(r){
+    const intent=intentionFor(r);
+    if(intent){
+      return "intent: "+String(intent.intent_family||"--").replaceAll("_"," ")
+        +" | thesis: "+(intent.trading_thesis||"--")
+        +" | bot: "+(intent.bot_use||"--");
+    }
     const bits=[];
     const features=(r.features||[]).slice(0,3).join(", ");
     const risks=(r.risks||[]).slice(0,2).join(", ");
@@ -568,6 +594,29 @@
       ? " Extracted: "+extraction.extracted_at+" | hash "+String(extraction.source_sha256||"").slice(0,12)+"."
       : "";
     text("sourceAnswer",(r.source_explanation||"Source provenance is not published.")+extractionText+" Next: "+(r.source_next_step||r.next_action||"--"));
+    const intent=intentionFor(r);
+    if(intent){
+      text(
+        "d_intention",
+        String(intent.intent_family||"--").replaceAll("_"," ").toUpperCase()
+          + " | " + (intent.trading_thesis||"--")
+          + " Bot use: " + (intent.bot_use||"--")
+      );
+      list("d_context_setup",["Context: "+(intent.context||"--"),"Setup: "+(intent.setup||"--")]);
+      list("d_trigger_route",["Trigger: "+(intent.trigger||"--"),"Execution: "+(intent.execution_bias||"--")]);
+      list("d_exit_proof",["Exit: "+(intent.exit_plan||"--"),"Replay: "+(intent.backtest_recipe||"--")]);
+      list("d_portable_atoms",intent.portable_atoms||[]);
+      list("d_non_portable",intent.non_portable_atoms||[]);
+      list("d_agent_questions",intent.uplift_questions||[]);
+    }else{
+      text("d_intention","No source-backed intention is published for this row yet.");
+      list("d_context_setup",[]);
+      list("d_trigger_route",[]);
+      list("d_exit_proof",[]);
+      list("d_portable_atoms",[]);
+      list("d_non_portable",[]);
+      list("d_agent_questions",[]);
+    }
     list("d_features",r.features||[]);
     list("d_risks",r.risks||[]);
     list("d_uplift",r.ai_uplift_ideas||[]);
@@ -647,12 +696,39 @@
   }
   function renderDistiller(payload){
     payload=payload||{};
+    state.intentionsByScript={};
+    (payload.script_distillations||[]).forEach(row=>{
+      if(row&&row.script_id)state.intentionsByScript[String(row.script_id)]=row;
+    });
+    renderRows();
     const s=payload.summary||{};
     text("pd_reviewed",s.source_backed_reviewed);
     text("pd_candidates",s.port_candidates);
     text("pd_quarantine",s.causality_quarantine);
     text("pd_cells",s.queued_backtest_cells);
     text("distillerAnswer",payload.operator_answer||"No distiller artifact published yet.");
+    const clusterEl=$("intentionClusters"); clusterEl.innerHTML="";
+    (payload.intention_clusters||[]).slice(0,6).forEach(cluster=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=String(cluster.intent_family||"--").replaceAll("_"," ");
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=(cluster.port_candidates||0)+"/"+(cluster.source_count||0);
+      const meta=document.createElement("span");
+      meta.textContent=(cluster.recommended_port||"--")+" | fit "+(cluster.median_fit_score??"--")+" | quarantine "+(cluster.quarantine_count||0);
+      const play=document.createElement("span");
+      play.textContent=cluster.playbook||cluster.bot_value||"awaiting playbook";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(play);
+      clusterEl.appendChild(div);
+    });
+    if(!clusterEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No source-backed intention clusters published.";
+      clusterEl.appendChild(div);
+    }
     const listEl=$("distillerTasks"); listEl.innerHTML="";
     (payload.port_tasks||[]).slice(0,6).forEach(task=>{
       const div=document.createElement("div");

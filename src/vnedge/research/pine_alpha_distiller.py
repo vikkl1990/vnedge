@@ -56,6 +56,22 @@ class SourceArtifact:
 
 
 @dataclass(frozen=True)
+class ScriptIntention:
+    intent_family: str
+    trading_thesis: str
+    context: str
+    setup: str
+    trigger: str
+    execution_bias: str
+    exit_plan: str
+    bot_use: str
+    backtest_recipe: str
+    portable_atoms: tuple[str, ...]
+    non_portable_atoms: tuple[str, ...]
+    uplift_questions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ScriptDistillation:
     script_id: str
     title: str
@@ -68,6 +84,7 @@ class ScriptDistillation:
     crypto_fit_score: int
     priority_score: int
     mechanism: str
+    intention: ScriptIntention
     primitives: tuple[str, ...]
     risks: tuple[str, ...]
     action: str
@@ -101,6 +118,23 @@ class PortTask:
     required_data: tuple[str, ...]
     first_replay: str
     gate_before_shadow: tuple[str, ...]
+    can_trade: bool = False
+    can_promote: bool = False
+
+
+@dataclass(frozen=True)
+class IntentionCluster:
+    intent_family: str
+    source_count: int
+    port_candidates: int
+    quarantine_count: int
+    recommended_port: str
+    median_fit_score: float
+    playbook: str
+    bot_value: str
+    first_backtest: str
+    top_scripts: tuple[dict, ...]
+    blocker_summary: tuple[str, ...]
     can_trade: bool = False
     can_promote: bool = False
 
@@ -192,6 +226,9 @@ PRIMITIVE_PATTERNS: dict[str, tuple[str, ...]] = {
         r"breakeven",
         r"partial",
         r"trailing\s+stop",
+        r"strategy\.exit",
+        r"stop\s*=",
+        r"limit\s*=",
     ),
     "mtf_bias": (
         r"request\.security",
@@ -236,6 +273,7 @@ def run_pine_alpha_distiller(
         if _source_for_row(row, source_index) is not None
     ]
     primitive_families = _primitive_families(distillations)
+    intention_clusters = _intention_clusters(distillations)
     port_tasks = _port_tasks(distillations)
     return {
         "distiller_id": PINE_ALPHA_DISTILLER_ID,
@@ -248,9 +286,10 @@ def run_pine_alpha_distiller(
             "include_repaint": include_repaint,
             "no_pine_code_in_output": True,
         },
-        "summary": _summary(distillations, primitive_families, port_tasks),
+        "summary": _summary(distillations, primitive_families, intention_clusters, port_tasks),
         "policy": _policy(),
         "promotion_gates": PROMOTION_GATES,
+        "intention_clusters": [asdict(row) for row in intention_clusters],
         "primitive_families": [asdict(row) for row in primitive_families],
         "port_tasks": [asdict(row) for row in port_tasks],
         "script_distillations": [asdict(row) for row in distillations],
@@ -381,6 +420,14 @@ def _distill_script(row: dict, source_index: dict[str, SourceArtifact]) -> Scrip
     risks = _detect_risks(text, row)
     recommended_port = _recommended_port(row, primitives, risks)
     action = _action_for(row, recommended_port, risks)
+    intention = _intention_for(
+        row=row,
+        text=text,
+        primitives=primitives,
+        risks=risks,
+        recommended_port=recommended_port,
+        action=action,
+    )
     return ScriptDistillation(
         script_id=str(row.get("script_id") or ""),
         title=str(row.get("title") or ""),
@@ -393,11 +440,283 @@ def _distill_script(row: dict, source_index: dict[str, SourceArtifact]) -> Scrip
         crypto_fit_score=_bounded_int(row.get("crypto_fit_score"), 0, 100),
         priority_score=_bounded_int(row.get("priority_score"), 0, 100),
         mechanism=str(row.get("mechanism") or "general"),
+        intention=intention,
         primitives=primitives,
         risks=risks,
         action=action,
         recommended_port=recommended_port,
         distillation_score=_distillation_score(row, primitives, risks, recommended_port),
+    )
+
+
+def _intention_for(
+    *,
+    row: dict,
+    text: str,
+    primitives: tuple[str, ...],
+    risks: tuple[str, ...],
+    recommended_port: str,
+    action: str,
+) -> ScriptIntention:
+    primitive_set = set(primitives)
+    risk_set = set(risks)
+    family = _intent_family(primitive_set, recommended_port)
+    thesis = _trading_thesis(family, primitive_set)
+    context = _context_layer(primitive_set, text)
+    setup = _setup_layer(family, primitive_set)
+    trigger = _trigger_layer(family, primitive_set, text)
+    execution_bias = _execution_layer(recommended_port, primitive_set, text)
+    exit_plan = _exit_layer(primitive_set, text)
+    bot_use = _bot_use(action, recommended_port, family)
+    backtest_recipe = _backtest_recipe(recommended_port, family)
+    portable_atoms = _portable_atoms(primitive_set, text)
+    non_portable_atoms = _non_portable_atoms(risk_set)
+    uplift_questions = _uplift_questions(row, family, primitive_set, risk_set)
+    return ScriptIntention(
+        intent_family=family,
+        trading_thesis=thesis,
+        context=context,
+        setup=setup,
+        trigger=trigger,
+        execution_bias=execution_bias,
+        exit_plan=exit_plan,
+        bot_use=bot_use,
+        backtest_recipe=backtest_recipe,
+        portable_atoms=portable_atoms,
+        non_portable_atoms=non_portable_atoms,
+        uplift_questions=uplift_questions,
+    )
+
+
+def _intent_family(primitive_set: set[str], recommended_port: str) -> str:
+    if recommended_port == "causality_quarantine_v1":
+        return "causality_quarantine"
+    if recommended_port == "source_feature_library_review_v1":
+        return "feature_library"
+    if recommended_port == "orderflow_proxy_v1":
+        return "orderflow_absorption"
+    if recommended_port == "trail_exit_lab_v1":
+        return "adaptive_trail_exit"
+    if recommended_port == "range_expansion_breakout_v1":
+        return "range_expansion_breakout"
+    if recommended_port == "fvg_liquidity_breakout_v1":
+        if "sweep_reclaim" in primitive_set:
+            return "liquidity_sweep_reclaim"
+        return "liquidity_zone_breakout"
+    if recommended_port == "trend_momentum_context_v1":
+        return "trend_momentum_filter"
+    if "momentum_confirm" in primitive_set:
+        return "momentum_feature_bank"
+    return "general_feature_bank"
+
+
+def _trading_thesis(family: str, primitive_set: set[str]) -> str:
+    mapping = {
+        "liquidity_sweep_reclaim": (
+            "Trade failed liquidity grabs: price sweeps a visible pool, reclaims "
+            "structure, then displaces toward the next external-liquidity target."
+        ),
+        "liquidity_zone_breakout": (
+            "Trade from pre-marked imbalance, support/resistance, Fibonacci, or "
+            "order-block zones only when price proves acceptance away from the zone."
+        ),
+        "range_expansion_breakout": (
+            "Wait for a compressed range or session box, require participation, "
+            "then trade the confirmed expansion rather than every touch."
+        ),
+        "adaptive_trail_exit": (
+            "Use adaptive ATR/supertrend/chandelier-style trails to hold winners, "
+            "cut failed momentum quickly, and standardize TP/BE handling."
+        ),
+        "orderflow_absorption": (
+            "Use public-trade pressure, CVD, footprint, and absorption proxies as "
+            "a participation filter, not as a naked 1m entry signal."
+        ),
+        "trend_momentum_filter": (
+            "Use trend, momentum, BBP/RSI/MACD/ADX, and volatility alignment as "
+            "permission for an existing trigger, not as the trigger by itself."
+        ),
+        "momentum_feature_bank": (
+            "Distill oscillator and momentum-state information into edge-model "
+            "features that score whether a trigger has enough follow-through."
+        ),
+        "feature_library": (
+            "Extract reusable causal helper atoms, then attach them to a VNEDGE "
+            "scanner; the source is not a standalone trading system."
+        ),
+        "causality_quarantine": (
+            "The visible idea may be useful, but the source has repaint or "
+            "unconfirmed-HTF risk that must be rewritten before evidence counts."
+        ),
+    }
+    if family in mapping:
+        return mapping[family]
+    if "risk_plan" in primitive_set:
+        return "Extract the risk-plan logic first, then test it as an exit overlay."
+    return "Extract causal features and let the edge model decide whether they add OOS lift."
+
+
+def _context_layer(primitive_set: set[str], text: str) -> str:
+    if "mtf_bias" in primitive_set:
+        return "Use closed 1h/4h context only; never read an unfinished higher-timeframe bar."
+    if "trend_trail" in primitive_set:
+        return "Classify trend and volatility state before allowing lower-timeframe entries."
+    if _contains_any(text, ("session", "opening range", "killzone", "new york", "london")):
+        return "Normalize session ideas to 24x7 crypto windows and test time-of-day edge separately."
+    return "Build context from closed candles, venue liquidity, spread, and fee regime."
+
+
+def _setup_layer(family: str, primitive_set: set[str]) -> str:
+    if family == "liquidity_sweep_reclaim":
+        return "Prior swing, equal high/low, FVG/order-block, or range boundary is swept and reclaimed."
+    if family == "range_expansion_breakout":
+        return "A bounded range forms with falling volatility, then price approaches a clean boundary."
+    if family == "adaptive_trail_exit":
+        return "An existing entry has enough unrealized room for a dynamic trail and partial-exit ladder."
+    if family == "orderflow_absorption":
+        return "Trade pressure diverges from price at a visible level or during a displacement candle."
+    if "liquidity_zone" in primitive_set:
+        return "Pre-compute zones, invalidation buffer, and room-to-liquidity before any trigger."
+    if "momentum_confirm" in primitive_set:
+        return "Momentum state must agree with trend and volatility instead of firing alone."
+    return "Convert the script into causal feature rows before standalone signal testing."
+
+
+def _trigger_layer(family: str, primitive_set: set[str], text: str) -> str:
+    trigger_bits: list[str] = []
+    if "sweep_reclaim" in primitive_set:
+        trigger_bits.append("closed-bar reclaim after sweep")
+    if "range_breakout" in primitive_set:
+        trigger_bits.append("close-confirmed break or retest")
+    if "volume_participation" in primitive_set:
+        trigger_bits.append("volume/delta impulse above train-only threshold")
+    if "momentum_confirm" in primitive_set:
+        trigger_bits.append("momentum slope or BBP/RSI/ADX agreement")
+    if _contains_any(text, ("displacement", "body", "impulse")):
+        trigger_bits.append("displacement candle with body/ATR expansion")
+    if not trigger_bits:
+        trigger_bits.append("edge-router score must exceed fee-aware threshold")
+    return "; ".join(trigger_bits)
+
+
+def _execution_layer(recommended_port: str, primitive_set: set[str], text: str) -> str:
+    if recommended_port == "orderflow_proxy_v1":
+        return "Maker-first only unless predicted move clears taker fee, slippage, and safety buffer."
+    if recommended_port in {"fvg_liquidity_breakout_v1", "range_expansion_breakout_v1"}:
+        return "Prefer maker/retest fills; allow taker only on high-displacement continuation with edge > fees."
+    if "risk_plan" in primitive_set or _contains_any(text, ("tp", "sl", "target", "breakeven")):
+        return "Route entry separately from exit logic; exits remain reduce-only and stop-first in replay."
+    return "Use as context/feature input until a cost-aware entry route is proven."
+
+
+def _exit_layer(primitive_set: set[str], text: str) -> str:
+    if "risk_plan" in primitive_set and "trend_trail" in primitive_set:
+        return "Structural stop, TP1 partial, move to breakeven after TP1, then adaptive trail."
+    if "risk_plan" in primitive_set:
+        return "Structural stop plus TP1/TP2/TP3 ladder; stop-first replay decides ties."
+    if "trend_trail" in primitive_set:
+        return "Use adaptive trail as an overlay on existing entries before standalone testing."
+    if _contains_any(text, ("atr", "stop", "target")):
+        return "Convert ATR stop/target concepts into VNEDGE risk-plan parameters."
+    return "Attach VNEDGE default stop/target model before replay; no source exit is trusted blindly."
+
+
+def _bot_use(action: str, recommended_port: str, family: str) -> str:
+    if action == "CAUSALITY_QUARANTINE":
+        return "Quarantine: rewrite or discard repaint/display logic before it can enter the feature bank."
+    if action == "FEATURE_BANK_ONLY":
+        return "Feature-bank only: useful as a component, not as a standalone scanner lane."
+    if recommended_port == "trail_exit_lab_v1":
+        return "Exit overlay candidate for current shadow/paper lanes before new entries are tested."
+    if recommended_port in {"fvg_liquidity_breakout_v1", "range_expansion_breakout_v1"}:
+        return "Standalone scanner candidate after causal port and all-venue multi-timeframe replay."
+    if recommended_port == "orderflow_proxy_v1":
+        return "Execution/context filter for real-time scanners; needs tick/L2 coverage before entries."
+    if "feature" in family:
+        return "Edge-model feature candidate; prove OOS lift against raw scanner baseline."
+    return "Research-only candidate until VNEDGE-owned Python port and untouched judgment pass."
+
+
+def _backtest_recipe(recommended_port: str, family: str) -> str:
+    if recommended_port == "fvg_liquidity_breakout_v1":
+        return "1h bias, 15m zones, 5m trigger, all venues, ETH/SOL/XRP first, min 20 trades and >25 bps net."
+    if recommended_port == "range_expansion_breakout_v1":
+        return "15m range construction, 5m close/retest trigger, maker-first replay, then 1h/4h sensitivity."
+    if recommended_port == "trail_exit_lab_v1":
+        return "Replay as exit overlay on existing entries; require higher PF or lower drawdown OOS."
+    if recommended_port == "orderflow_proxy_v1":
+        return "Use recorded trades/L2; compare orderflow-filtered entries with unfiltered scanner baseline."
+    if recommended_port == "trend_momentum_context_v1":
+        return "Inject as permission/context feature and measure OOS lift, not raw signal frequency."
+    if family == "causality_quarantine":
+        return "No backtest until repaint/HTF and display-state dependencies are removed."
+    return "Chronological train/OOS split, train-only thresholds, then untouched-window judgment."
+
+
+def _portable_atoms(primitive_set: set[str], text: str) -> tuple[str, ...]:
+    atoms: list[str] = []
+    if "mtf_bias" in primitive_set:
+        atoms.append("closed HTF bias")
+    if "liquidity_zone" in primitive_set:
+        atoms.append("zone boundaries and invalidation buffer")
+    if "sweep_reclaim" in primitive_set:
+        atoms.append("sweep and reclaim event")
+    if "range_breakout" in primitive_set:
+        atoms.append("range box and close-confirmed break")
+    if "trend_trail" in primitive_set:
+        atoms.append("ATR/supertrend-style trail")
+    if "momentum_confirm" in primitive_set:
+        atoms.append("momentum slope, RSI/MACD/BBP/ADX state")
+    if "volume_participation" in primitive_set:
+        atoms.append("volume, VWAP, CVD, or delta participation")
+    if "risk_plan" in primitive_set:
+        atoms.append("structural SL, TP ladder, breakeven rule")
+    if _contains_any(text, ("kalman", "regime", "efficiency")):
+        atoms.append("regime/efficiency state")
+    return tuple(dict.fromkeys(atoms)) or ("feature matrix candidate",)
+
+
+def _non_portable_atoms(risk_set: set[str]) -> tuple[str, ...]:
+    mapping = {
+        "lookahead_on": "lookahead-enabled higher-timeframe values",
+        "mtf_repaint_review_required": "higher-timeframe repaint review required",
+        "request_security_requires_closed_bar_rewrite": "unconfirmed higher-timeframe reads",
+        "last_bar_display_logic": "last-bar display logic that is not historical signal state",
+        "last_bar_display_state": "last-bar-only display state",
+        "visual_overlay_state": "labels/tables/boxes that are visual, not execution state",
+        "visual_label_not_execution_strategy": "visual labels without a deterministic execution contract",
+        "forecast_not_signal": "forecast/projection language without an executable trigger",
+        "no_machine_alert_contract": "no machine-readable alert or order payload",
+        "no_machine_alert_payload": "alert exists but no order-ready payload contract",
+        "strategy_state_requires_event_rewrite": "broker/state assumptions that need event replay",
+        "library_helper_not_standalone": "library helper code without standalone signal contract",
+        "fixed_session_review": "market-session assumptions that must be crypto-normalized",
+    }
+    atoms = [label for risk, label in mapping.items() if risk in risk_set]
+    return tuple(atoms) or ("none detected beyond normal causal-port review",)
+
+
+def _uplift_questions(
+    row: dict,
+    family: str,
+    primitive_set: set[str],
+    risk_set: set[str],
+) -> tuple[str, ...]:
+    questions: list[str] = []
+    if "lookahead_on" in risk_set or "request_security_requires_closed_bar_rewrite" in risk_set:
+        questions.append("Can the same signal survive with closed HTF bars only?")
+    if "visual_overlay_state" in risk_set:
+        questions.append("Which drawn object becomes the deterministic entry/exit event?")
+    if "volume_participation" in primitive_set:
+        questions.append("Does participation improve net bps after venue-specific fees and slippage?")
+    if family in {"liquidity_sweep_reclaim", "range_expansion_breakout"}:
+        questions.append("Does maker-first/retest execution preserve edge better than taker breakout entry?")
+    if "momentum_confirm" in primitive_set:
+        questions.append("Does momentum work as a soft edge-router feature instead of a hard gate?")
+    if int(row.get("crypto_fit_score") or 0) >= 70:
+        questions.append("Can it pass a train-only threshold calibration across all three venues?")
+    return tuple(dict.fromkeys(questions)) or (
+        "Does this source add OOS lift over the current raw scanner baseline?",
     )
 
 
@@ -411,14 +730,14 @@ def _source_for_row(row: dict, source_index: dict[str, SourceArtifact]) -> Sourc
 
 
 def _analysis_text(row: dict, source: str) -> str:
+    # Source-backed intent should come from the script artifact itself.  Generated
+    # KB tags/notes are useful for UI filtering, but including them here makes
+    # primitive detection echo our own prior labels instead of reading the Pine.
     metadata = " ".join(
         [
             str(row.get("title") or ""),
             str(row.get("script_id") or ""),
             str(row.get("mechanism") or ""),
-            " ".join(str(item) for item in row.get("features") or ()),
-            " ".join(str(item) for item in row.get("tags") or ()),
-            " ".join(str(item) for item in row.get("porting_notes") or ()),
         ]
     )
     return f"{metadata}\n{source}".lower()
@@ -559,6 +878,43 @@ def _primitive_families(distillations: Iterable[ScriptDistillation]) -> list[Pri
     return sorted(families, key=lambda row: (-row.script_count, row.primitive))
 
 
+def _intention_clusters(distillations: Iterable[ScriptDistillation]) -> list[IntentionCluster]:
+    by_family: dict[str, list[ScriptDistillation]] = defaultdict(list)
+    for row in distillations:
+        by_family[row.intention.intent_family].append(row)
+    clusters: list[IntentionCluster] = []
+    for family, rows in by_family.items():
+        sorted_rows = sorted(rows, key=lambda row: (-row.distillation_score, row.script_id))
+        port_counts = Counter(row.recommended_port for row in sorted_rows)
+        risk_counts = Counter(risk for row in sorted_rows for risk in row.risks)
+        candidates = [row for row in sorted_rows if row.action == "PORT_CANDIDATE"]
+        fit_scores = [row.crypto_fit_score for row in sorted_rows]
+        recommended_port = port_counts.most_common(1)[0][0]
+        clusters.append(
+            IntentionCluster(
+                intent_family=family,
+                source_count=len(sorted_rows),
+                port_candidates=len(candidates),
+                quarantine_count=sum(
+                    1 for row in sorted_rows if row.action == "CAUSALITY_QUARANTINE"
+                ),
+                recommended_port=recommended_port,
+                median_fit_score=round(float(median(fit_scores)), 2) if fit_scores else 0.0,
+                playbook=_cluster_playbook(family),
+                bot_value=_cluster_bot_value(family, recommended_port),
+                first_backtest=_backtest_recipe(recommended_port, family),
+                top_scripts=tuple(_top_script(row) for row in sorted_rows[:8]),
+                blocker_summary=tuple(
+                    f"{risk}: {count}" for risk, count in risk_counts.most_common(5)
+                ),
+            )
+        )
+    return sorted(
+        clusters,
+        key=lambda row: (-row.port_candidates, -row.source_count, row.intent_family),
+    )
+
+
 def _port_tasks(distillations: Iterable[ScriptDistillation]) -> list[PortTask]:
     by_port: dict[str, list[ScriptDistillation]] = defaultdict(list)
     for row in distillations:
@@ -600,6 +956,7 @@ def _port_tasks(distillations: Iterable[ScriptDistillation]) -> list[PortTask]:
 def _summary(
     distillations: list[ScriptDistillation],
     primitive_families: list[PrimitiveFamily],
+    intention_clusters: list[IntentionCluster],
     port_tasks: list[PortTask],
 ) -> dict:
     actions = Counter(row.action for row in distillations)
@@ -612,8 +969,11 @@ def _summary(
         "causality_quarantine": actions.get("CAUSALITY_QUARANTINE", 0),
         "feature_bank_only": actions.get("FEATURE_BANK_ONLY", 0),
         "manual_review": actions.get("MANUAL_REVIEW", 0),
+        "intention_clusters": len(intention_clusters),
         "primitive_families": len(primitive_families),
         "port_tasks": len(port_tasks),
+        "top_intention_family": intention_clusters[0].intent_family if intention_clusters else "",
+        "top_intention_source_count": intention_clusters[0].source_count if intention_clusters else 0,
         "primitive_counts": dict(primitives.most_common()),
         "task_counts": dict(ports.most_common()),
         "top_task": port_tasks[0].recommended_port if port_tasks else "",
@@ -759,8 +1119,73 @@ def _gate_before_shadow(port: str) -> tuple[str, ...]:
     return tuple(gates)
 
 
+def _cluster_playbook(family: str) -> str:
+    mapping = {
+        "liquidity_sweep_reclaim": (
+            "Context: 1h bias and liquidity map. Setup: sweep/equal high-low/FVG. "
+            "Trigger: 5m reclaim or displacement. Plan: structural stop, room-to-liquidity, TP ladder."
+        ),
+        "liquidity_zone_breakout": (
+            "Context: zone quality and distance to next liquidity. Setup: FVG/order-block/SR zone. "
+            "Trigger: acceptance or rejection away from the zone with volume confirmation."
+        ),
+        "range_expansion_breakout": (
+            "Context: compressed 15m range. Setup: clean range high/low and volatility floor. "
+            "Trigger: close-confirmed break or retest; reject wick-only fakeouts."
+        ),
+        "adaptive_trail_exit": (
+            "Attach adaptive trail, TP1, BE, and structural stop rules to entries that already fire; "
+            "measure PF/DD uplift before standalone entry testing."
+        ),
+        "orderflow_absorption": (
+            "Convert public trade pressure, CVD, footprint, and absorption ideas into execution filters "
+            "for already-qualified setups; never use raw 1m orderflow alone."
+        ),
+        "trend_momentum_filter": (
+            "Use BBP/RSI/MACD/ADX/ER alignment as a soft permission score for candidate triggers, "
+            "then test whether it increases OOS net bps."
+        ),
+        "momentum_feature_bank": (
+            "Store oscillator/momentum states as edge-router features; train thresholds on the past "
+            "and judge only on unseen windows."
+        ),
+        "feature_library": (
+            "Review as reusable atoms only. No trading route exists until a standalone VNEDGE scanner "
+            "contract consumes the helper."
+        ),
+        "causality_quarantine": (
+            "Rewrite unconfirmed HTF, visual-only, or lookahead logic into closed-bar causal atoms; "
+            "do not count any backtest before that rewrite."
+        ),
+    }
+    return mapping.get(
+        family,
+        "Distill causal features, add them to the edge-model feature bank, and measure OOS lift.",
+    )
+
+
+def _cluster_bot_value(family: str, recommended_port: str) -> str:
+    if family in {"liquidity_sweep_reclaim", "liquidity_zone_breakout"}:
+        return "Best candidate for real scanner uplift because it defines context, setup, trigger, and risk."
+    if family == "range_expansion_breakout":
+        return "Can raise signal frequency without dropping governance if retest/maker execution is enforced."
+    if family == "adaptive_trail_exit":
+        return "Most likely to improve negative trades by smarter exits before new entries are promoted."
+    if family == "orderflow_absorption":
+        return "Useful for taker/maker routing and no-trade decisions when L2/trade coverage is healthy."
+    if family in {"trend_momentum_filter", "momentum_feature_bank"}:
+        return "Useful as model features and lane filters; weak as standalone scalper entries after costs."
+    if recommended_port == "causality_quarantine_v1":
+        return "Potential idea value is locked until repaint and display-state dependencies are removed."
+    return "Research-only until a causal Python port proves positive OOS edge."
+
+
 def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle.lower() in text for needle in needles)
 
 
 def _has_any_primitive(primitives: set[str], needles: tuple[str, ...]) -> bool:
