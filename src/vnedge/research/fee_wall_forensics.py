@@ -213,9 +213,11 @@ def build_fee_wall_forensics_report(
     top = _top_reports(report_rows, max_top=max_top)
     sparse = _sparse_positive_reports(report_rows)
     exit_salvage = _exit_salvage_reports(report_rows)
+    strict_candidates = _strict_candidate_reports(report_rows)
     summary = _summary(
         report_rows,
         error_rows,
+        strict_candidates=strict_candidates,
         sparse=sparse,
         exit_salvage=exit_salvage,
     )
@@ -251,6 +253,7 @@ def build_fee_wall_forensics_report(
         },
         "summary": summary,
         "top": top,
+        "strict_fee_wall_candidates": strict_candidates[:25],
         "sample_expansion_candidates": sparse[:25],
         "exit_salvage_candidates": exit_salvage[:25],
         "reports": list(report_rows),
@@ -441,6 +444,7 @@ def _summary(
     reports: tuple[dict, ...],
     errors: tuple[dict, ...],
     *,
+    strict_candidates: list[dict],
     sparse: list[dict],
     exit_salvage: list[dict],
 ) -> dict:
@@ -458,11 +462,6 @@ def _summary(
         if _float_or_none(summary.get("fee_wall_break_rate_pct")) is not None
         and float(summary["fee_wall_break_rate_pct"]) > 0.0
     ]
-    strict = [
-        summary
-        for summary in summaries
-        if summary.get("verdict") in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"}
-    ]
     route_counts = Counter()
     verdict_counts = Counter()
     diagnosis_counts = Counter()
@@ -477,7 +476,7 @@ def _summary(
         "routed_reports": len(routed_reports),
         "positive_avg_net_reports": len(positive_avg),
         "fee_wall_breaker_reports": len(fee_breakers),
-        "strict_fee_wall_candidates": len(strict),
+        "strict_fee_wall_candidates": len(strict_candidates),
         "sample_expansion_candidates": len(sparse),
         "exit_salvage_candidates": len(exit_salvage),
         "route_counts": dict(route_counts),
@@ -493,6 +492,17 @@ def _summary(
 def _top_reports(reports: tuple[dict, ...], *, max_top: int) -> list[dict]:
     ranked = sorted(reports, key=_report_rank_key, reverse=True)
     return [_summary_card(report) for report in ranked[:max_top]]
+
+
+def _strict_candidate_reports(reports: tuple[dict, ...]) -> list[dict]:
+    cards: list[dict] = []
+    for report in reports:
+        summary = report.get("summary", {})
+        if summary.get("verdict") in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"}:
+            card = _summary_card(report)
+            card["recommended_action"] = "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW"
+            cards.append(card)
+    return sorted(cards, key=_card_rank_key, reverse=True)
 
 
 def _sparse_positive_reports(reports: tuple[dict, ...]) -> list[dict]:
