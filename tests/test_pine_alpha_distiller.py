@@ -45,9 +45,16 @@ if long
     row = payload["script_distillations"][0]
     assert row["action"] == "PORT_CANDIDATE"
     assert row["recommended_port"] == "fvg_liquidity_breakout_v1"
+    assert row["intention"]["intent_family"] == "liquidity_sweep_reclaim"
+    assert "sweeps" in row["intention"]["trading_thesis"]
+    assert "closed-bar reclaim" in row["intention"]["trigger"]
+    assert any("structural SL" in atom for atom in row["intention"]["portable_atoms"])
     assert {"liquidity_zone", "sweep_reclaim", "range_breakout", "volume_participation"}.issubset(
         set(row["primitives"])
     )
+    assert payload["summary"]["intention_clusters"] == 1
+    assert payload["intention_clusters"][0]["intent_family"] == "liquidity_sweep_reclaim"
+    assert "Context: 1h bias" in payload["intention_clusters"][0]["playbook"]
     assert tuple(payload["port_tasks"][0]["gate_before_shadow"][-3:]) == (
         "expected net edge >25 bps after fees, slippage, and safety buffer",
         "PF >1.5 and at least 20 historical trades",
@@ -86,6 +93,8 @@ plot(htf)
     assert quarantine_payload["summary"]["causality_quarantine"] == 1
     row = quarantine_payload["script_distillations"][0]
     assert row["recommended_port"] == "causality_quarantine_v1"
+    assert row["intention"]["intent_family"] == "causality_quarantine"
+    assert "unconfirmed higher-timeframe reads" in row["intention"]["non_portable_atoms"]
     assert "lookahead_on" in row["risks"]
 
 
@@ -126,9 +135,12 @@ if long
 
     payload = run_pine_alpha_distiller(kb_path=kb, source_dir=source_dir)
     ports = {row["recommended_port"] for row in payload["script_distillations"]}
+    by_port = {row["recommended_port"]: row for row in payload["script_distillations"]}
 
     assert "trail_exit_lab_v1" in ports
     assert "orderflow_proxy_v1" in ports
+    assert by_port["trail_exit_lab_v1"]["intention"]["bot_use"].startswith("Exit overlay")
+    assert by_port["orderflow_proxy_v1"]["intention"]["execution_bias"].startswith("Maker-first")
     assert payload["summary"]["queued_backtest_cells"] == 24
 
 
