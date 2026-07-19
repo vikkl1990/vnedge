@@ -90,6 +90,11 @@ def test_positive_edge_prefers_maker_when_fill_confidence_is_good():
     assert routes[0].selected_route == "MAKER_ONLY"
     assert routes[0].selected_net_bps == 93.0
     assert routes[0].taker_net_bps == 89.0
+    assert routes[0].mfe_after_cost_bps == 133.0
+    assert routes[0].hold_bars == 1
+    assert routes[0].time_to_mfe_bars == 1
+    assert routes[0].capture_ratio == 0.7143
+    assert routes[0].exit_diagnosis == "CAPTURED_AFTER_COST"
     assert routes[0].can_trade is False
 
 
@@ -206,6 +211,10 @@ def test_strategy_opportunities_summarize_paper_candidate_without_trade_permissi
     assert len(routes) == 2
     assert summary.verdict == "MAKER_EDGE"
     assert summary.paper_candidate is True
+    assert summary.avg_hold_bars == 1.0
+    assert summary.avg_mfe_after_cost_bps > 120.0
+    assert summary.fee_wall_break_rate_pct == 100.0
+    assert summary.exit_diagnosis_counts == {"CAPTURED_AFTER_COST": 2}
     assert summary.can_trade is False
     assert report["policy"]["decision_uses_forward_truth"] is False
     assert report["summary"]["can_promote"] is False

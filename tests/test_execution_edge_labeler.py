@@ -79,11 +79,24 @@ def test_label_event_records_mfe_mae_and_positive_maker_edge():
     assert label.net_bps == 198.0
     assert label.mfe_bps == 220.0
     assert label.mae_bps == -40.0
+    assert label.mfe_after_cost_bps == 218.0
     assert label.risk_bps == 100.0
+    assert label.target_bps == 200.0
+    assert label.hold_bars == 2
+    assert label.time_to_mfe_bars == 2
+    assert label.time_to_mae_bars == 1
+    assert label.capture_ratio == 0.9091
+    assert label.exit_diagnosis == "CAPTURED_AFTER_COST"
     assert label.max_r == 2.2
     summary = summarize_truth(labels, config=EdgeLabelerConfig(min_samples=1))
     assert summary.verdict == "MAKER_EDGE"
     assert summary.avg_net_bps == 198.0
+    assert summary.avg_mfe_after_cost_bps == 218.0
+    assert summary.avg_hold_bars == 2.0
+    assert summary.avg_time_to_mfe_bars == 2.0
+    assert summary.avg_capture_ratio == 0.9091
+    assert summary.fee_wall_break_rate_pct == 100.0
+    assert summary.exit_diagnosis_counts == {"CAPTURED_AFTER_COST": 1}
     assert summary.profit_factor == 999.0
 
 
@@ -118,12 +131,15 @@ def test_fee_wall_blocks_flat_signal_after_route_cost():
     assert labels[0].gross_bps == 1.0
     assert labels[0].route_cost_bps == 11.0
     assert labels[0].net_bps == -10.0
+    assert labels[0].mfe_after_cost_bps < 0.0
+    assert labels[0].exit_diagnosis == "MOVE_NEVER_CLEARED_COST"
     summary = summarize_truth(labels, config=EdgeLabelerConfig(min_samples=1))
     assert summary.verdict == "NEGATIVE_AFTER_COST"
     assert summary.primary_blocker == "average net/PF below maker breakeven"
+    assert summary.fee_wall_break_rate_pct == 0.0
 
 
-def test_stop_wins_when_target_and_stop_share_candle():
+def test_stop_wins_when_target_and_stop_share_candle_and_flags_exit_geometry():
     df = candles(
         [
             (100.0, 100.1, 99.9, 100.0),
@@ -151,6 +167,9 @@ def test_stop_wins_when_target_and_stop_share_candle():
     assert label.outcome == "stop"
     assert label.gross_bps == -100.0
     assert label.net_bps == -102.0
+    assert label.mfe_after_cost_bps == 248.0
+    assert label.capture_ratio == -0.4
+    assert label.exit_diagnosis == "STOP_BEFORE_TARGET"
 
 
 class AlwaysLongStrategy(BaseStrategy):

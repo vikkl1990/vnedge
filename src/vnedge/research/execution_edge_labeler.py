@@ -18,6 +18,8 @@ import inspect
 import json
 import math
 import re
+import sys
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from statistics import mean
@@ -121,9 +123,16 @@ class EventTruthLabel:
     net_bps: float | None
     mfe_bps: float | None
     mae_bps: float | None
+    mfe_after_cost_bps: float | None
     risk_bps: float | None
+    target_bps: float | None
+    hold_bars: int | None
+    time_to_mfe_bars: int | None
+    time_to_mae_bars: int | None
+    capture_ratio: float | None
     max_r: float | None
     min_r: float | None
+    exit_diagnosis: str
     fill_probability: float
     fill_evidence: str
     blockers: tuple[str, ...] = ()
@@ -149,6 +158,12 @@ class EdgeTruthSummary:
     avg_gross_bps: float | None
     avg_mfe_bps: float | None
     avg_mae_bps: float | None
+    avg_mfe_after_cost_bps: float | None
+    avg_hold_bars: float | None
+    avg_time_to_mfe_bars: float | None
+    avg_capture_ratio: float | None
+    fee_wall_break_rate_pct: float
+    exit_diagnosis_counts: dict[str, int]
     profit_factor: float | None
     target_rate_pct: float
     stop_rate_pct: float
@@ -294,6 +309,12 @@ def summarize_truth(
             avg_gross_bps=None,
             avg_mfe_bps=None,
             avg_mae_bps=None,
+            avg_mfe_after_cost_bps=None,
+            avg_hold_bars=None,
+            avg_time_to_mfe_bars=None,
+            avg_capture_ratio=None,
+            fee_wall_break_rate_pct=0.0,
+            exit_diagnosis_counts={},
             profit_factor=None,
             target_rate_pct=0.0,
             stop_rate_pct=0.0,
@@ -309,6 +330,22 @@ def summarize_truth(
     gross = [float(r.gross_bps) for r in valid_forward if r.gross_bps is not None]
     mfe = [float(r.mfe_bps) for r in valid_forward if r.mfe_bps is not None]
     mae = [float(r.mae_bps) for r in valid_forward if r.mae_bps is not None]
+    mfe_after_cost = [
+        float(r.mfe_after_cost_bps)
+        for r in valid_forward
+        if r.mfe_after_cost_bps is not None
+    ]
+    hold_bars = [float(r.hold_bars) for r in valid_forward if r.hold_bars is not None]
+    time_to_mfe = [
+        float(r.time_to_mfe_bars)
+        for r in valid_forward
+        if r.time_to_mfe_bars is not None
+    ]
+    capture = [
+        float(r.capture_ratio)
+        for r in valid_forward
+        if r.capture_ratio is not None
+    ]
     wins = [v for v in net if v > 0]
     losses = [-v for v in net if v < 0]
     pf = (sum(wins) / sum(losses)) if wins and losses else (999.0 if wins else None)
@@ -326,6 +363,16 @@ def summarize_truth(
         avg_gross_bps=_round_or_none(mean(gross) if gross else None),
         avg_mfe_bps=_round_or_none(mean(mfe) if mfe else None),
         avg_mae_bps=_round_or_none(mean(mae) if mae else None),
+        avg_mfe_after_cost_bps=_round_or_none(
+            mean(mfe_after_cost) if mfe_after_cost else None
+        ),
+        avg_hold_bars=_round_or_none(mean(hold_bars) if hold_bars else None),
+        avg_time_to_mfe_bars=_round_or_none(
+            mean(time_to_mfe) if time_to_mfe else None
+        ),
+        avg_capture_ratio=_round_or_none(mean(capture) if capture else None),
+        fee_wall_break_rate_pct=_fee_wall_break_rate(valid_forward),
+        exit_diagnosis_counts=dict(Counter(r.exit_diagnosis for r in valid_forward)),
         profit_factor=_round_or_none(pf),
         target_rate_pct=_outcome_rate(valid_forward, "target"),
         stop_rate_pct=_outcome_rate(valid_forward, "stop"),
@@ -411,9 +458,23 @@ def _label_one(
         raw_exit = float(future.iloc[-1]["close"])
         exit_index = int(future.index[-1])
     future_to_exit = df.iloc[entry_index : int(exit_index) + 1]
-    mfe_bps, mae_bps = _excursions_bps(event.side, entry_price, future_to_exit)
+    mfe_bps, mae_bps, time_to_mfe, time_to_mae = _excursion_stats(
+        event.side,
+        entry_price,
+        future_to_exit,
+    )
     gross = _signed_bps(event.side, entry_price, raw_exit)
     net = gross - route_cost
+    mfe_after_cost = mfe_bps - route_cost
+    target_bps = _target_bps(event.side, entry_price, event.take_profit_price)
+    hold_bars = int(exit_index) - entry_index + 1
+    capture_ratio = _capture_ratio(gross, mfe_bps)
+    exit_diagnosis = _exit_diagnosis(
+        outcome=outcome,
+        net_bps=net,
+        mfe_after_cost_bps=mfe_after_cost,
+        capture_ratio=capture_ratio,
+    )
     max_r = (mfe_bps / risk) if risk and risk > 0 else None
     min_r = (mae_bps / risk) if risk and risk > 0 else None
     if config.include_sizing_blockers and risk is not None and risk <= 0:
@@ -439,9 +500,16 @@ def _label_one(
         net_bps=round(net, 4),
         mfe_bps=round(mfe_bps, 4),
         mae_bps=round(mae_bps, 4),
+        mfe_after_cost_bps=round(mfe_after_cost, 4),
         risk_bps=round(risk, 4) if risk is not None else None,
+        target_bps=round(target_bps, 4) if target_bps is not None else None,
+        hold_bars=hold_bars,
+        time_to_mfe_bars=time_to_mfe,
+        time_to_mae_bars=time_to_mae,
+        capture_ratio=round(capture_ratio, 4) if capture_ratio is not None else None,
         max_r=round(max_r, 4) if max_r is not None else None,
         min_r=round(min_r, 4) if min_r is not None else None,
+        exit_diagnosis=exit_diagnosis,
         fill_probability=round(fill_probability, 4),
         fill_evidence=fill_evidence,
         blockers=tuple(dict.fromkeys(blockers)),
@@ -504,18 +572,73 @@ def _signed_bps(side: str, entry: float, price: float) -> float:
     return move if side == "long" else -move
 
 
-def _excursions_bps(
+def _excursion_stats(
     side: str,
     entry: float,
     future: pd.DataFrame,
-) -> tuple[float, float]:
+) -> tuple[float, float, int | None, int | None]:
+    best_favorable = -math.inf
+    worst_adverse = math.inf
+    time_to_mfe: int | None = None
+    time_to_mae: int | None = None
+    for offset, (_, bar) in enumerate(future.iterrows(), start=1):
+        high = float(bar["high"])
+        low = float(bar["low"])
+        if side == "long":
+            favorable = (high - entry) / entry * 10_000.0
+            adverse = (low - entry) / entry * 10_000.0
+        else:
+            favorable = (entry - low) / entry * 10_000.0
+            adverse = (entry - high) / entry * 10_000.0
+        if favorable > best_favorable:
+            best_favorable = favorable
+            time_to_mfe = offset
+        if adverse < worst_adverse:
+            worst_adverse = adverse
+            time_to_mae = offset
+
+    mfe = max(0.0, best_favorable)
+    mae = min(0.0, worst_adverse)
+    return (
+        mfe,
+        mae,
+        time_to_mfe if mfe > 0.0 else None,
+        time_to_mae if mae < 0.0 else None,
+    )
+
+
+def _target_bps(side: str, entry: float, target: float | None) -> float | None:
+    if target is None or entry <= 0 or target <= 0:
+        return None
     if side == "long":
-        mfe = (float(future["high"].max()) - entry) / entry * 10_000.0
-        mae = (float(future["low"].min()) - entry) / entry * 10_000.0
-    else:
-        mfe = (entry - float(future["low"].min())) / entry * 10_000.0
-        mae = (entry - float(future["high"].max())) / entry * 10_000.0
-    return max(0.0, mfe), min(0.0, mae)
+        return (target - entry) / entry * 10_000.0
+    return (entry - target) / entry * 10_000.0
+
+
+def _capture_ratio(gross_bps: float, mfe_bps: float) -> float | None:
+    if mfe_bps <= 0.0:
+        return None
+    return gross_bps / mfe_bps
+
+
+def _exit_diagnosis(
+    *,
+    outcome: OutcomeKind,
+    net_bps: float,
+    mfe_after_cost_bps: float,
+    capture_ratio: float | None,
+) -> str:
+    if net_bps > 0.0:
+        return "CAPTURED_AFTER_COST"
+    if mfe_after_cost_bps <= 0.0:
+        return "MOVE_NEVER_CLEARED_COST"
+    if outcome == "stop":
+        return "STOP_BEFORE_TARGET"
+    if capture_ratio is not None and capture_ratio < 0.25:
+        return "GAVE_BACK_FEE_WALL_MOVE"
+    if outcome == "horizon":
+        return "HORIZON_EXIT_FAILED_CAPTURE"
+    return "NEGATIVE_AFTER_COST"
 
 
 def _resolve_exit(
@@ -561,9 +684,16 @@ def _invalid_label(event: SignalEvent, fees: ExchangeFeeProfile, reason: str) ->
         net_bps=None,
         mfe_bps=None,
         mae_bps=None,
+        mfe_after_cost_bps=None,
         risk_bps=None,
+        target_bps=None,
+        hold_bars=None,
+        time_to_mfe_bars=None,
+        time_to_mae_bars=None,
+        capture_ratio=None,
         max_r=None,
         min_r=None,
+        exit_diagnosis="INVALID_FORWARD_LABEL",
         fill_probability=0.0,
         fill_evidence="none",
         blockers=(reason,),
@@ -652,6 +782,17 @@ def _outcome_rate(rows: list[EventTruthLabel], outcome: OutcomeKind) -> float:
     return round(sum(1 for row in rows if row.outcome == outcome) / len(rows) * 100.0, 2)
 
 
+def _fee_wall_break_rate(rows: list[EventTruthLabel]) -> float:
+    if not rows:
+        return 0.0
+    cleared = sum(
+        1
+        for row in rows
+        if row.mfe_after_cost_bps is not None and row.mfe_after_cost_bps > 0.0
+    )
+    return round(cleared / len(rows) * 100.0, 2)
+
+
 def _window(df: pd.DataFrame, lookback_days: int | None) -> pd.DataFrame:
     if lookback_days is None or lookback_days <= 0 or df.empty:
         return df.reset_index(drop=True)
@@ -677,10 +818,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     store = ParquetStore(args.data_root)
-    candles = _window(
-        store.read_candles(args.exchange, args.symbol, args.timeframe),
-        args.lookback_days,
-    )
+    try:
+        candles = _window(
+            store.read_candles(args.exchange, args.symbol, args.timeframe),
+            args.lookback_days,
+        )
+    except FileNotFoundError as exc:
+        print(
+            _missing_candles_message(
+                store,
+                args.exchange,
+                args.symbol,
+                args.timeframe,
+                exc,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     strategy_cls = get_strategy_class(args.strategy)
     strategy = _instantiate_strategy(strategy_cls, store, args.exchange, args.symbol)
     config = EdgeLabelerConfig(
@@ -734,6 +888,28 @@ def _instantiate_strategy(
             f"{strategy_cls.strategy_id} requires funding data for {exchange}:{symbol}"
         )
     return strategy_cls(funding=funding)
+
+
+def _missing_candles_message(
+    store: ParquetStore,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    exc: FileNotFoundError,
+) -> str:
+    expected = store.candles_path(exchange, symbol, timeframe)
+    symbol_dir = expected.parent.parent
+    available = sorted(
+        path.parent.name.removeprefix("timeframe=")
+        for path in symbol_dir.glob("timeframe=*/candles.parquet")
+    )
+    available_text = ", ".join(available) if available else "none visible"
+    return (
+        f"{exc}. Missing candle lane is data/config, not a strategy verdict. "
+        f"Expected {expected}. Visible timeframes for {exchange}:{symbol}: "
+        f"{available_text}. If the host has the parquet file but this command "
+        "does not, check the container data mount."
+    )
 
 
 if __name__ == "__main__":

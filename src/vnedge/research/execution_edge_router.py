@@ -16,6 +16,7 @@ import argparse
 import inspect
 import json
 import math
+import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -124,7 +125,14 @@ class OpportunityRoute:
     outcome: str
     mfe_bps: float | None
     mae_bps: float | None
-    risk_bps: float | None
+    risk_bps: float | None = None
+    mfe_after_cost_bps: float | None = None
+    target_bps: float | None = None
+    hold_bars: int | None = None
+    time_to_mfe_bars: int | None = None
+    time_to_mae_bars: int | None = None
+    capture_ratio: float | None = None
+    exit_diagnosis: str = ""
     metadata: dict = field(default_factory=dict)
     can_trade: bool = False
     can_promote: bool = False
@@ -152,6 +160,12 @@ class OpportunityRouterSummary:
     win_rate_pct: float
     avg_mfe_bps: float | None
     avg_mae_bps: float | None
+    avg_mfe_after_cost_bps: float | None
+    avg_hold_bars: float | None
+    avg_time_to_mfe_bars: float | None
+    avg_capture_ratio: float | None
+    fee_wall_break_rate_pct: float
+    exit_diagnosis_counts: dict[str, int]
     primary_blocker: str
     paper_candidate: bool
     can_trade: bool = False
@@ -323,7 +337,24 @@ def route_opportunity(
         outcome=selected.outcome if selected is not None else _dominant_outcome(maker, taker),
         mfe_bps=selected.mfe_bps if selected is not None else maker.mfe_bps,
         mae_bps=selected.mae_bps if selected is not None else maker.mae_bps,
+        mfe_after_cost_bps=(
+            selected.mfe_after_cost_bps if selected is not None else maker.mfe_after_cost_bps
+        ),
         risk_bps=selected.risk_bps if selected is not None else maker.risk_bps,
+        target_bps=selected.target_bps if selected is not None else maker.target_bps,
+        hold_bars=selected.hold_bars if selected is not None else maker.hold_bars,
+        time_to_mfe_bars=(
+            selected.time_to_mfe_bars if selected is not None else maker.time_to_mfe_bars
+        ),
+        time_to_mae_bars=(
+            selected.time_to_mae_bars if selected is not None else maker.time_to_mae_bars
+        ),
+        capture_ratio=(
+            selected.capture_ratio if selected is not None else maker.capture_ratio
+        ),
+        exit_diagnosis=(
+            selected.exit_diagnosis if selected is not None else maker.exit_diagnosis
+        ),
         metadata=dict(maker.metadata),
     )
 
@@ -347,6 +378,22 @@ def summarize_routes(
     avg_net = mean(net) if net else None
     mfe = [float(row.mfe_bps) for row in routed if row.mfe_bps is not None]
     mae = [float(row.mae_bps) for row in routed if row.mae_bps is not None]
+    mfe_after_cost = [
+        float(row.mfe_after_cost_bps)
+        for row in routed
+        if row.mfe_after_cost_bps is not None
+    ]
+    hold_bars = [float(row.hold_bars) for row in routed if row.hold_bars is not None]
+    time_to_mfe = [
+        float(row.time_to_mfe_bars)
+        for row in routed
+        if row.time_to_mfe_bars is not None
+    ]
+    capture = [
+        float(row.capture_ratio)
+        for row in routed
+        if row.capture_ratio is not None
+    ]
     action_counts = dict(Counter(row.action for row in rows))
     verdict, blocker = _summary_verdict(rows, routed, avg_net, pf, config)
     paper_candidate = verdict in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"}
@@ -362,6 +409,16 @@ def summarize_routes(
         win_rate_pct=round(len(wins) / len(net) * 100.0, 2) if net else 0.0,
         avg_mfe_bps=_round_or_none(mean(mfe) if mfe else None),
         avg_mae_bps=_round_or_none(mean(mae) if mae else None),
+        avg_mfe_after_cost_bps=_round_or_none(
+            mean(mfe_after_cost) if mfe_after_cost else None
+        ),
+        avg_hold_bars=_round_or_none(mean(hold_bars) if hold_bars else None),
+        avg_time_to_mfe_bars=_round_or_none(
+            mean(time_to_mfe) if time_to_mfe else None
+        ),
+        avg_capture_ratio=_round_or_none(mean(capture) if capture else None),
+        fee_wall_break_rate_pct=_fee_wall_break_rate(routed),
+        exit_diagnosis_counts=dict(Counter(row.exit_diagnosis for row in routed)),
         primary_blocker=blocker,
         paper_candidate=paper_candidate,
     )
@@ -499,6 +556,18 @@ def _round_or_none(value: float | None) -> float | None:
     return round(float(value), 4)
 
 
+def _fee_wall_break_rate(rows: Iterable[OpportunityRoute]) -> float:
+    rows = tuple(rows)
+    if not rows:
+        return 0.0
+    cleared = sum(
+        1
+        for row in rows
+        if row.mfe_after_cost_bps is not None and row.mfe_after_cost_bps > 0.0
+    )
+    return round(cleared / len(rows) * 100.0, 2)
+
+
 def _window(df: pd.DataFrame, lookback_days: int | None) -> pd.DataFrame:
     if lookback_days is None or lookback_days <= 0 or df.empty:
         return df.reset_index(drop=True)
@@ -539,16 +608,21 @@ def _render_table(reports: Iterable[dict]) -> str:
         "execution edge router backtest",
         "policy=research_only can_trade=false can_promote=false",
         "",
-        "verdict              routed/opp pf    avg_net win% actions                         strategy",
+        "verdict              routed/opp pf    avg_net mfe-cost hold cap   diagnosis                     strategy",
     ]
     for report in reports:
         s = report["summary"]
         actions = ",".join(f"{k}:{v}" for k, v in sorted(s["action_counts"].items()))
+        diagnosis = _top_diagnosis(s.get("exit_diagnosis_counts") or {})
         lines.append(
             f"{s['verdict']:<20} {s['routed']:>4}/{s['opportunities']:<4} "
             f"{_fmt(s['profit_factor']):>5} {_fmt(s['avg_selected_net_bps']):>8} "
-            f"{s['win_rate_pct']:>4.0f} {actions:<31} {report['strategy']}"
+            f"{_fmt(s.get('avg_mfe_after_cost_bps')):>8} "
+            f"{_fmt(s.get('avg_hold_bars')):>4} {_fmt_ratio(s.get('avg_capture_ratio')):>5} "
+            f"{diagnosis:<29} {report['strategy']}"
         )
+        if actions:
+            lines.append(f"{'':<43} actions={actions}")
     if not reports:
         lines.append("no reports produced; check candles, symbols, and strategy ids")
     return "\n".join(lines)
@@ -556,6 +630,39 @@ def _render_table(reports: Iterable[dict]) -> str:
 
 def _fmt(value: float | None) -> str:
     return "--" if value is None else f"{value:.2f}"
+
+
+def _fmt_ratio(value: float | None) -> str:
+    return "--" if value is None else f"{value:.2f}x"
+
+
+def _top_diagnosis(counts: dict[str, int]) -> str:
+    if not counts:
+        return "--"
+    diagnosis, count = max(counts.items(), key=lambda item: item[1])
+    return f"{diagnosis}:{count}"
+
+
+def _missing_candles_message(
+    store: ParquetStore,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    exc: FileNotFoundError,
+) -> str:
+    expected = store.candles_path(exchange, symbol, timeframe)
+    symbol_dir = expected.parent.parent
+    available = sorted(
+        path.parent.name.removeprefix("timeframe=")
+        for path in symbol_dir.glob("timeframe=*/candles.parquet")
+    )
+    available_text = ", ".join(available) if available else "none visible"
+    return (
+        f"{exc}. Missing candle lane is data/config, not a strategy verdict. "
+        f"Expected {expected}. Visible timeframes for {exchange}:{symbol}: "
+        f"{available_text}. If the host has the parquet file but this command "
+        "does not, check the container data mount."
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -582,10 +689,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     store = ParquetStore(args.data_root)
-    candles = _window(
-        store.read_candles(args.exchange, args.symbol, args.timeframe),
-        args.lookback_days,
-    )
+    try:
+        candles = _window(
+            store.read_candles(args.exchange, args.symbol, args.timeframe),
+            args.lookback_days,
+        )
+    except FileNotFoundError as exc:
+        print(
+            _missing_candles_message(
+                store,
+                args.exchange,
+                args.symbol,
+                args.timeframe,
+                exc,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     config = OpportunityRouterConfig(
         horizon_bars=args.horizon_bars,
         min_samples=args.min_samples,
