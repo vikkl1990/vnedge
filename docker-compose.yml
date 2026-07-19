@@ -458,6 +458,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Agentic failure-salvage planner for Pine-derived evidence.  It turns
+  # failed/positive/queued replay cells into ranked research-only uplift
+  # experiments: confluence stacks, feature-bank candidates, execution-filtered
+  # replays, or untouched-judgment requests.  It never promotes or trades.
+  pine-edge-uplift-agent:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    depends_on:
+      - pine-backtest-evidence
+    command: ["python", "-m", "vnedge.research.pine_edge_uplift_agent",
+              "--interval-seconds", "${PINE_EDGE_UPLIFT_INTERVAL_SECONDS:-1800}",
+              "--kb", "research/pine_scripts/pine_research_kb.json",
+              "--distiller", "research/live_research/pine_alpha_distiller_latest.json",
+              "--out", "research/live_research/pine_edge_uplift_agent_latest.json",
+              "--feed", "research/live_research/pine_edge_uplift_agent_feed.jsonl"]
+    volumes:
+      - ./research/pine_scripts:/app/research/pine_scripts:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Relaxed scanner tournament: intentionally lowers only research-discovery
   # thresholds so Pine/Willy/Lux-style scanners fire enough examples for
   # fee-aware ranking and edge-model learning. It is not a promotion lane:

@@ -226,6 +226,18 @@
       <div class="policy" id="btProgressAnswer">Loading scanner tournament progress.</div>
     </section>
 
+    <section class="panel distiller">
+      <h2>Agentic Edge Uplift</h2>
+      <div class="summary">
+        <div class="metric"><span>Promotable proofs</span><b id="eu_proofs">--</b><i>needs untouched judgment</i></div>
+        <div class="metric"><span>Sparse positives</span><b id="eu_sparse">--</b><i>expand replay</i></div>
+        <div class="metric"><span>Near misses</span><b id="eu_near">--</b><i>execution/context salvage</i></div>
+        <div class="metric"><span>Experiments</span><b id="eu_experiments">--</b><i>research-only queue</i></div>
+      </div>
+      <div class="task-list" id="upliftTasks"></div>
+      <div class="policy" id="upliftAnswer">Loading edge uplift agent.</div>
+    </section>
+
     <section class="detail">
       <div class="panel">
         <h2>AI Review</h2>
@@ -658,6 +670,37 @@
       .then(renderBacktestProgress)
       .catch(err=>{$("btProgressAnswer").textContent=String(err);renderBacktestProgress({});});
   }
+  function renderUpliftAgent(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("eu_proofs",s.promotable_proofs);
+    text("eu_sparse",s.positive_under_sampled);
+    text("eu_near",s.near_miss_after_cost);
+    text("eu_experiments",s.experiments);
+    text("upliftAnswer",payload.operator_answer||"No edge uplift artifact published yet.");
+    const listEl=$("upliftTasks"); listEl.innerHTML="";
+    (payload.experiments||[]).slice(0,6).forEach(task=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=task.experiment_type||task.experiment_id||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=(task.salvage_score==null?"--":task.salvage_score)+"/100";
+      const meta=document.createElement("span");
+      meta.textContent=(task.recommended_port||"--")+" | failed "+(task.failed_cells||0)+" | positive "+(task.positive_cells||0);
+      const action=document.createElement("span");
+      action.textContent=task.next_action||task.hypothesis||"awaiting agent plan";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No edge uplift experiments published.";
+      listEl.appendChild(div);
+    }
+  }
   function load(){
     const chip=$("statusChip"); chip.textContent="loading"; chip.className="chip info";
     fetch("/pine-research/kb",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
@@ -669,6 +712,10 @@
       .then(renderDistiller)
       .catch(err=>{$("distillerAnswer").textContent=String(err);renderDistiller({});});
     loadProgress();
+    fetch("/pine-research/uplift-agent",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderUpliftAgent)
+      .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);

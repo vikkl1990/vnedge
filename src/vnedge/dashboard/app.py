@@ -389,6 +389,7 @@ def create_app(
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
+    pine_edge_uplift_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -480,6 +481,10 @@ def create_app(
     pine_backtest_progress_file = (
         backtest_progress_path
         or Path("research/live_research/scanner_tournament_progress.json")
+    )
+    pine_edge_uplift_file = (
+        pine_edge_uplift_path
+        or Path("research/live_research/pine_edge_uplift_agent_latest.json")
     )
 
     @app.get("/")
@@ -860,6 +865,27 @@ def create_app(
                     "current_routes": None,
                     "output_path": None,
                     "last_error": None,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/uplift-agent")
+    async def pine_edge_uplift_agent(request: Request) -> JSONResponse:
+        """Agentic failure-salvage and edge-uplift artifact."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                pine_edge_uplift_file,
+                {
+                    "agent_id": "pine_edge_uplift_agent_v1",
+                    "summary": {},
+                    "failure_clusters": [],
+                    "top_uplifts": [],
+                    "experiments": [],
+                    "operator_answer": "pine edge uplift agent artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },
