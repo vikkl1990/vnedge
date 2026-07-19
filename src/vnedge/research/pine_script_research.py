@@ -171,6 +171,7 @@ def empty_pine_research_payload() -> dict:
             "blocked_repaint": 0,
             "backtests_queued": 0,
         },
+        "backtest_evidence": _empty_backtest_evidence_summary(),
         "source_extraction": _empty_extraction_summary(),
         "records": [],
         "priorities": [],
@@ -317,10 +318,16 @@ def load_pine_research_payload(path: Path | None) -> dict:
         if isinstance(record, dict):
             normalized.append(_normalize_record(record))
     enriched = enrich_pine_research_records(normalized)
+    backtest_evidence = (
+        raw.get("backtest_evidence")
+        if isinstance(raw.get("backtest_evidence"), dict)
+        else _empty_backtest_evidence_summary()
+    )
     return {
         "generated_at": str(raw.get("generated_at") or datetime.now(UTC).isoformat()),
         "source": str(raw.get("source") or path),
         "summary": summarize_records(enriched),
+        "backtest_evidence": backtest_evidence,
         "records": enriched,
         "priorities": _priority_queue(enriched),
         "source_extraction": (
@@ -348,6 +355,7 @@ def build_pine_research_payload(
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source,
         "summary": summarize_records(rows),
+        "backtest_evidence": _empty_backtest_evidence_summary(),
         "records": rows,
         "priorities": _priority_queue(rows),
         "source_extraction": _empty_extraction_summary(),
@@ -759,6 +767,17 @@ def _empty_extraction_summary() -> dict:
         "status_counts": {},
         "latest_attempt_at": "",
         "latest_success_at": "",
+    }
+
+
+def _empty_backtest_evidence_summary() -> dict:
+    return {
+        "evidence_id": "none",
+        "completed_cells": 0,
+        "status_counts": {},
+        "ports_with_evidence": 0,
+        "can_trade": False,
+        "can_promote": False,
     }
 
 

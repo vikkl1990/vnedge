@@ -299,7 +299,7 @@
     const counts={total:0,queued:0,running:0,passed:0,failed:0,blocked:0,not_applicable:0,completed:0};
     let bestBps=null,bestPf=null;
     (cells||[]).forEach(cell=>{
-      const status=cell.status||"queued";
+      const status=String(cell.status||"queued").toLowerCase();
       counts.total+=1;
       counts[status]=(counts[status]||0)+1;
       if(status==="passed"||status==="failed")counts.completed+=1;
@@ -315,6 +315,28 @@
     counts.bestBps=bestBps;
     counts.bestPf=bestPf;
     return counts;
+  }
+  function publisherEvidenceCounts(payload, fallback){
+    const evidence=(payload&&payload.backtest_evidence)||{};
+    const statusCounts=evidence.status_counts||{};
+    const completedRaw=Number(evidence.completed_cells);
+    const failed=Number(statusCounts.failed??fallback.failed);
+    const passed=Number(statusCounts.passed??fallback.passed);
+    const derivedCompleted=Number.isFinite(failed)&&Number.isFinite(passed)?failed+passed:null;
+    const completed=Number.isFinite(completedRaw)&&completedRaw>0
+      ? completedRaw
+      : (derivedCompleted??fallback.completed);
+    const hasPublisher=Number.isFinite(completedRaw)||Object.keys(statusCounts).length>0;
+    if(!hasPublisher)return fallback;
+    return {
+      ...fallback,
+      completed:Number.isFinite(completed)?completed:fallback.completed,
+      queued:Number(statusCounts.queued??fallback.queued),
+      blocked:Number(statusCounts.blocked??fallback.blocked),
+      failed,
+      passed,
+      not_applicable:Number(statusCounts.not_applicable??fallback.not_applicable),
+    };
   }
   function backtestTone(counts){
     if(counts.passed>0)return "good";
@@ -444,10 +466,11 @@
         : "No completed VNEDGE backtest result exists for this script yet. The visible cells are queued/blocked intake status, not proof of edge."
     );
   }
-  function renderBacktestEvidence(){
+  function renderBacktestEvidence(payload){
     const cells=[];
     state.records.forEach(r=>(r.backtests||[]).forEach(cell=>cells.push(cell)));
-    const counts=summarizeCells(cells);
+    const rowCounts=summarizeCells(cells);
+    const counts=publisherEvidenceCounts(payload,rowCounts);
     text("bt_total",counts.total);
     text("bt_completed",counts.completed);
     text("bt_queued",counts.queued);
@@ -460,7 +483,7 @@
     }else if(!counts.completed){
       answer="No completed VNEDGE replay/backtest results are published yet. Current cells are queued or blocked because the Pine ideas still need source review, causal Python ports, and cost-aware replay.";
     }else{
-      answer="Completed cells are visible in the row and selected matrix. They remain research-only and cannot promote without causal port, fee-aware replay, and untouched-window judgment.";
+      answer="Completed cells are visible in the row and selected matrix. They remain research-only and cannot promote without causal port, fee-aware replay, and untouched-window judgment. Failed cells are evidence too: they prove a mapped VNEDGE primitive did not clear gates.";
     }
     text("btEvidenceAnswer",answer);
   }
@@ -486,7 +509,7 @@
     text("operatorAnswer",payload.operator_answer||"research-only");
     text("footer","source "+(payload.source||"--")+" | generated "+(payload.generated_at||"--"));
     const chip=$("statusChip"); chip.textContent="loaded"; chip.className="chip good";
-    renderBacktestEvidence();
+    renderBacktestEvidence(payload);
     renderRows();
   }
   function renderDistiller(payload){

@@ -33,6 +33,13 @@ def test_load_pine_research_payload_summarizes_generated_artifact(tmp_path):
     path.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
+        "backtest_evidence": {
+            "evidence_id": "pine_backtest_evidence_v1",
+            "completed_cells": 1,
+            "status_counts": {"failed": 1, "queued": 1},
+            "can_trade": False,
+            "can_promote": False,
+        },
         "records": [
             {
                 "script_id": "open_ut_bot",
@@ -68,6 +75,8 @@ def test_load_pine_research_payload_summarizes_generated_artifact(tmp_path):
         "blocked_repaint": 0,
         "backtests_queued": 1,
     }
+    assert payload["backtest_evidence"]["completed_cells"] == 1
+    assert payload["backtest_evidence"]["status_counts"] == {"failed": 1, "queued": 1}
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
 
