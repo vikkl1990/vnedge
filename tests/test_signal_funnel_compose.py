@@ -58,6 +58,22 @@ def test_pine_edge_uplift_agent_recycles_failed_evidence_only():
     assert service["depends_on"] == ["pine-backtest-evidence"]
 
 
+def test_edge_uplift_executor_materializes_agent_tasks():
+    service = compose_services()["edge-uplift-executor"]
+
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.edge_uplift_executor"]
+    assert "--interval-seconds" in service["command"]
+    assert "--uplift" in service["command"]
+    assert "research/live_research/pine_edge_uplift_agent_latest.json" in service["command"]
+    assert "--scanner" in service["command"]
+    assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/edge_uplift_experiments_latest.json" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {"pine-edge-uplift-agent", "scanner-tournament"}
+
+
 def test_scanner_tournament_lowers_only_research_discovery_governance():
     service = compose_services()["scanner-tournament"]
 

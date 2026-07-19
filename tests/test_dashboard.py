@@ -183,6 +183,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     distiller = tmp_path / "pine_alpha_distiller_latest.json"
     progress = tmp_path / "scanner_tournament_progress.json"
     uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
+    executor = tmp_path / "edge_uplift_experiments_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -232,6 +233,18 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    executor.write_text(json.dumps({
+        "executor_id": "edge_uplift_executor_v1",
+        "summary": {
+            "tasks_total": 2,
+            "ready_for_replay": 1,
+            "ready_for_untouched_judgment": 0,
+            "feature_bank_only": 1,
+        },
+        "tasks": [{"recommended_port": "fvg_liquidity_breakout_v1"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -239,6 +252,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         pine_alpha_distiller_path=distiller,
         backtest_progress_path=progress,
         pine_edge_uplift_path=uplift,
+        edge_uplift_executor_path=executor,
     )
     client = TestClient(app)
 
@@ -250,11 +264,14 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/distiller" in page.text
     assert "/pine-research/progress" in page.text
     assert "/pine-research/uplift-agent" in page.text
+    assert "/pine-research/uplift-executor" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
+    assert "Edge Uplift Executor" in page.text
     assert "renderBacktestProgress" in page.text
     assert "renderUpliftAgent" in page.text
+    assert "renderUpliftExecutor" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -266,6 +283,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/distiller").status_code == 401
     assert client.get("/pine-research/progress").status_code == 401
     assert client.get("/pine-research/uplift-agent").status_code == 401
+    assert client.get("/pine-research/uplift-executor").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -294,6 +312,13 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert uplift_payload["summary"]["promotable_proofs"] == 1
     assert uplift_payload["can_trade"] is False
     assert uplift_payload["can_promote"] is False
+    x = client.get("/pine-research/uplift-executor?token=t3st-token")
+    assert x.status_code == 200
+    executor_payload = x.json()
+    assert executor_payload["executor_id"] == "edge_uplift_executor_v1"
+    assert executor_payload["summary"]["ready_for_replay"] == 1
+    assert executor_payload["can_trade"] is False
+    assert executor_payload["can_promote"] is False
 
 
 def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):

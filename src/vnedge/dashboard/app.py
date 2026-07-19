@@ -390,6 +390,7 @@ def create_app(
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
     pine_edge_uplift_path: Path | None = None,
+    edge_uplift_executor_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -485,6 +486,10 @@ def create_app(
     pine_edge_uplift_file = (
         pine_edge_uplift_path
         or Path("research/live_research/pine_edge_uplift_agent_latest.json")
+    )
+    edge_uplift_executor_file = (
+        edge_uplift_executor_path
+        or Path("research/live_research/edge_uplift_experiments_latest.json")
     )
 
     @app.get("/")
@@ -886,6 +891,26 @@ def create_app(
                     "top_uplifts": [],
                     "experiments": [],
                     "operator_answer": "pine edge uplift agent artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/uplift-executor")
+    async def edge_uplift_executor(request: Request) -> JSONResponse:
+        """Replay/port task queue produced from the edge-uplift agent."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                edge_uplift_executor_file,
+                {
+                    "executor_id": "edge_uplift_executor_v1",
+                    "summary": {},
+                    "port_pack": [],
+                    "tasks": [],
+                    "operator_answer": "edge uplift executor artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },
