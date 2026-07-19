@@ -4,6 +4,7 @@ import json
 
 import vnedge.research.pine_script_research as pine_research
 from vnedge.research.pine_script_research import (
+    build_pine_coverage_audit,
     default_pine_research_payload,
     discover_tradingview_catalog_urls,
     extract_tradingview_catalog_page_urls,
@@ -77,6 +78,9 @@ def test_load_pine_research_payload_summarizes_generated_artifact(tmp_path):
     }
     assert payload["backtest_evidence"]["completed_cells"] == 1
     assert payload["backtest_evidence"]["status_counts"] == {"failed": 1, "queued": 1}
+    assert payload["coverage_audit"]["coverage_id"] == "pine_coverage_auditor_v1"
+    assert payload["coverage_audit"]["visible_records"] == 2
+    assert payload["coverage_audit"]["catalog_only_loaded"] == 2
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
 
@@ -377,6 +381,9 @@ alertcondition(golden, "bullish golden zone")
     assert payload["source_extraction"]["attempted"] == 2
     assert payload["source_extraction"]["extracted"] == 1
     assert payload["source_extraction"]["blocked"] == 1
+    assert payload["source_extraction"]["source_tab_failures"] == 1
+    assert payload["coverage_audit"]["source_tab_failures"] == 1
+    assert payload["coverage_audit"]["deduped_source_exports"] == 0
     record = payload["records"][0]
     assert record["url"] == (
         "https://www.tradingview.com/script/gmmtYKS3-Advanced-Fibonacci-Golden-Zone-HexaTrades/"
@@ -415,6 +422,97 @@ def test_load_and_summarize_pine_extraction_manifest(tmp_path):
     assert summary["attempted"] == 2
     assert summary["extracted"] == 1
     assert summary["errors"] == 1
+    assert summary["retryable_errors"] == 1
+
+
+def test_pine_coverage_auditor_explains_missing_discovery_backlog(tmp_path):
+    source_dir = tmp_path / "sources"
+    source_dir.mkdir()
+    (source_dir / "open_breakout.pine").write_text(
+        """
+//@version=6
+strategy("Open Breakout", overlay=true)
+long = close > ta.highest(high[1], 20)
+if long
+    strategy.entry("L", strategy.long)
+""",
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        "\n".join([
+            json.dumps({
+                "started_at": "2026-07-18T13:00:00Z",
+                "status": "extracted",
+                "url": "https://www.tradingview.com/script/AAAA1111-Open-Breakout/",
+                "output": str(source_dir / "open_breakout.pine"),
+            }),
+            json.dumps({
+                "started_at": "2026-07-18T13:01:00Z",
+                "status": "error",
+                "url": "https://www.tradingview.com/script/BBBB2222-Browser-Failed/",
+            }),
+            json.dumps({
+                "started_at": "2026-07-18T13:02:00Z",
+                "status": "failed_no_source_after_click",
+                "url": "https://www.tradingview.com/script/CCCC3333-No-Source/",
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    payload = publish_pine_research_kb(
+        source_dir=source_dir,
+        extraction_manifest_files=[manifest],
+        output_path=tmp_path / "kb.json",
+        include_defaults=False,
+        discovered_total=10,
+    )
+
+    audit = payload["coverage_audit"]
+    assert audit["discovered_records"] == 10
+    assert audit["visible_records"] == 1
+    assert audit["unloaded_catalog_backlog"] == 9
+    assert audit["retryable_browser_errors"] == 1
+    assert audit["source_tab_failures"] == 1
+    assert audit["unresolved_source_backlog"] == 11
+    assert {gap["bucket"] for gap in audit["gaps"]} >= {
+        "CATALOG_BACKLOG_NOT_LOADED",
+        "RETRYABLE_BROWSER_ERRORS",
+        "SOURCE_TAB_NOT_CAPTURED",
+    }
+    assert audit["can_trade"] is False
+    assert audit["can_promote"] is False
+
+
+def test_pine_coverage_auditor_marks_negative_completed_cells():
+    audit = build_pine_coverage_audit(
+        [
+            {
+                "script_id": "x",
+                "title": "X",
+                "url": "user_supplied",
+                "source_available": True,
+                "crypto_portability": "PORTABLE",
+                "backtests": [{"timeframe": "5m", "status": "queued"}],
+            }
+        ],
+        source_extraction={
+            "attempted": 1,
+            "extracted": 1,
+            "errors": 0,
+            "status_counts": {"extracted": 1},
+        },
+        backtest_evidence={
+            "completed_cells": 2,
+            "positive_completed_cells": 0,
+            "status_counts": {"failed": 2},
+        },
+    )
+
+    assert audit["completed_backtest_cells"] == 2
+    assert audit["failed_completed_cells"] == 2
+    assert any(gap["bucket"] == "COMPLETED_BUT_NEGATIVE_AFTER_COST" for gap in audit["gaps"])
 
 
 def test_pine_research_priority_queue_prefers_source_backed_port(tmp_path):

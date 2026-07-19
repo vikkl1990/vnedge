@@ -269,6 +269,8 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
     assert "Edge Uplift Executor" in page.text
+    assert "Pine Coverage Auditor" in page.text
+    assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
     assert "renderUpliftAgent" in page.text
     assert "renderUpliftExecutor" in page.text
@@ -289,6 +291,8 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     payload = r.json()
     assert payload["summary"]["total"] == 1
     assert payload["summary"]["portable"] == 1
+    assert payload["coverage_audit"]["coverage_id"] == "pine_coverage_auditor_v1"
+    assert payload["coverage_audit"]["visible_records"] == 1
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
     d = client.get("/pine-research/distiller?token=t3st-token")

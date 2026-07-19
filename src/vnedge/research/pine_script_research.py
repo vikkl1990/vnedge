@@ -155,6 +155,9 @@ class PineReviewRecord:
 
 
 def empty_pine_research_payload() -> dict:
+    source_extraction = _empty_extraction_summary()
+    records: list[dict] = []
+    backtest_evidence = _empty_backtest_evidence_summary()
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": "fallback_empty",
@@ -171,9 +174,14 @@ def empty_pine_research_payload() -> dict:
             "blocked_repaint": 0,
             "backtests_queued": 0,
         },
-        "backtest_evidence": _empty_backtest_evidence_summary(),
-        "source_extraction": _empty_extraction_summary(),
-        "records": [],
+        "backtest_evidence": backtest_evidence,
+        "source_extraction": source_extraction,
+        "coverage_audit": build_pine_coverage_audit(
+            records,
+            source_extraction=source_extraction,
+            backtest_evidence=backtest_evidence,
+        ),
+        "records": records,
         "priorities": [],
         "policy": _policy(),
         "operator_answer": (
@@ -323,6 +331,21 @@ def load_pine_research_payload(path: Path | None) -> dict:
         if isinstance(raw.get("backtest_evidence"), dict)
         else _empty_backtest_evidence_summary()
     )
+    source_extraction = (
+        raw.get("source_extraction")
+        if isinstance(raw.get("source_extraction"), dict)
+        else _empty_extraction_summary()
+    )
+    coverage_audit = build_pine_coverage_audit(
+        enriched,
+        source_extraction=source_extraction,
+        backtest_evidence=backtest_evidence,
+        previous_coverage=(
+            raw.get("coverage_audit")
+            if isinstance(raw.get("coverage_audit"), dict)
+            else None
+        ),
+    )
     return {
         "generated_at": str(raw.get("generated_at") or datetime.now(UTC).isoformat()),
         "source": str(raw.get("source") or path),
@@ -330,11 +353,8 @@ def load_pine_research_payload(path: Path | None) -> dict:
         "backtest_evidence": backtest_evidence,
         "records": enriched,
         "priorities": _priority_queue(enriched),
-        "source_extraction": (
-            raw.get("source_extraction")
-            if isinstance(raw.get("source_extraction"), dict)
-            else _empty_extraction_summary()
-        ),
+        "source_extraction": source_extraction,
+        "coverage_audit": coverage_audit,
         "policy": raw.get("policy") if isinstance(raw.get("policy"), dict) else _policy(),
         "operator_answer": str(
             raw.get("operator_answer")
@@ -351,14 +371,21 @@ def build_pine_research_payload(
     source: str,
 ) -> dict:
     rows = enrich_pine_research_records(record.to_dict() for record in records)
+    source_extraction = _empty_extraction_summary()
+    backtest_evidence = _empty_backtest_evidence_summary()
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source,
         "summary": summarize_records(rows),
-        "backtest_evidence": _empty_backtest_evidence_summary(),
+        "backtest_evidence": backtest_evidence,
         "records": rows,
         "priorities": _priority_queue(rows),
-        "source_extraction": _empty_extraction_summary(),
+        "source_extraction": source_extraction,
+        "coverage_audit": build_pine_coverage_audit(
+            rows,
+            source_extraction=source_extraction,
+            backtest_evidence=backtest_evidence,
+        ),
         "policy": _policy(),
         "operator_answer": (
             "Pine reviews are a research funnel. A script can become a VNEDGE "
@@ -383,6 +410,7 @@ def publish_pine_research_kb(
     max_catalog_records: int = 250,
     catalog_discovery_depth: int = 0,
     max_catalog_pages: int = 40,
+    discovered_total: int | None = None,
     source_label: str = "pine_research_publisher",
 ) -> dict:
     """Review public/user-supplied Pine files and write the dashboard KB.
@@ -426,6 +454,7 @@ def publish_pine_research_kb(
         _dedupe_record_dicts(records),
         source=source_label,
         source_extraction=summarize_extraction_manifest(extraction_entries),
+        discovered_total=discovered_total,
     )
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -495,6 +524,22 @@ def summarize_extraction_manifest(entries: Iterable[dict]) -> dict:
     rows = tuple(entries)
     statuses = Counter(str(row.get("status") or "unknown") for row in rows)
     extracted = [row for row in rows if row.get("status") == "extracted"]
+    source_tab_failures = sum(
+        count
+        for status, count in statuses.items()
+        if status.startswith("failed_no_source")
+        or status.startswith("blocked_missing_source")
+        or status.startswith("blocked_no_source")
+    )
+    blocked = sum(
+        count
+        for status, count in statuses.items()
+        if status.startswith("blocked")
+    ) + sum(
+        count
+        for status, count in statuses.items()
+        if status.startswith("failed_no_source")
+    )
     latest_at = max(
         (str(row.get("started_at") or "") for row in rows if row.get("started_at")),
         default="",
@@ -506,12 +551,10 @@ def summarize_extraction_manifest(entries: Iterable[dict]) -> dict:
     return {
         "attempted": len(rows),
         "extracted": len(extracted),
-        "blocked": sum(
-            count
-            for status, count in statuses.items()
-            if status.startswith("blocked")
-        ),
+        "blocked": blocked,
         "errors": statuses["error"],
+        "retryable_errors": statuses["error"],
+        "source_tab_failures": source_tab_failures,
         "status_counts": dict(sorted(statuses.items())),
         "latest_attempt_at": latest_at,
         "latest_success_at": latest_success_at,
@@ -656,15 +699,25 @@ def _build_payload_from_dicts(
     *,
     source: str,
     source_extraction: dict | None = None,
+    discovered_total: int | None = None,
 ) -> dict:
     rows = enrich_pine_research_records(records)
+    extraction = source_extraction or _empty_extraction_summary()
+    backtest_evidence = _empty_backtest_evidence_summary()
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source,
         "summary": summarize_records(rows),
+        "backtest_evidence": backtest_evidence,
         "records": rows,
         "priorities": _priority_queue(rows),
-        "source_extraction": source_extraction or _empty_extraction_summary(),
+        "source_extraction": extraction,
+        "coverage_audit": build_pine_coverage_audit(
+            rows,
+            source_extraction=extraction,
+            backtest_evidence=backtest_evidence,
+            discovered_total=discovered_total,
+        ),
         "policy": _policy(),
         "operator_answer": (
             "Pine KB published from local public/user-supplied source files "
@@ -1017,6 +1070,224 @@ def summarize_records(records: Iterable[dict]) -> dict:
         "blocked_repaint": verdicts["BLOCKED_REPAINT_RISK"],
         "backtests_queued": backtests_queued,
     }
+
+
+def build_pine_coverage_audit(
+    records: Iterable[dict],
+    *,
+    source_extraction: dict,
+    backtest_evidence: dict | None = None,
+    discovered_total: int | None = None,
+    previous_coverage: dict | None = None,
+) -> dict:
+    """Explain exactly what happened to the broad Pine discovery universe.
+
+    The research KB can be source-backed-only after publication, which makes the
+    original TradingView discovery count look like it vanished.  This audit keeps
+    the non-executable backlog visible without treating catalog metadata as
+    source or proof.
+    """
+
+    rows = tuple(records)
+    summary = summarize_records(rows)
+    evidence = backtest_evidence or {}
+    status_counts = (
+        source_extraction.get("status_counts")
+        if isinstance(source_extraction.get("status_counts"), dict)
+        else {}
+    )
+    previous_discovered = _bounded_int(
+        (previous_coverage or {}).get("discovered_records"),
+        0,
+        10_000_000,
+    )
+    explicit_discovered = _bounded_int(discovered_total, 0, 10_000_000)
+    discovered_records = max(
+        explicit_discovered,
+        previous_discovered,
+        summary["total"],
+    )
+    visible_records = summary["total"]
+    source_backed = summary["source_backed"]
+    catalog_only_loaded = summary["catalog_only"]
+    browser_attempted = _bounded_int(source_extraction.get("attempted"), 0, 10_000_000)
+    browser_extracted = _bounded_int(source_extraction.get("extracted"), 0, 10_000_000)
+    retryable_errors = _bounded_int(
+        source_extraction.get("retryable_errors", source_extraction.get("errors")),
+        0,
+        10_000_000,
+    )
+    source_tab_failures = _bounded_int(
+        source_extraction.get("source_tab_failures"),
+        0,
+        10_000_000,
+    )
+    if not source_tab_failures:
+        source_tab_failures = sum(
+            _bounded_int(count, 0, 10_000_000)
+            for status, count in status_counts.items()
+            if str(status).startswith("failed_no_source")
+            or str(status).startswith("blocked_missing_source")
+            or str(status).startswith("blocked_no_source")
+        )
+    deduped_source_exports = max(0, browser_extracted - source_backed)
+    unloaded_catalog_backlog = max(0, discovered_records - visible_records)
+    unresolved_source_backlog = (
+        catalog_only_loaded
+        + unloaded_catalog_backlog
+        + retryable_errors
+        + source_tab_failures
+    )
+    completed_cells = _bounded_int(evidence.get("completed_cells"), 0, 10_000_000)
+    positive_completed = _bounded_int(
+        evidence.get("positive_completed_cells"),
+        0,
+        10_000_000,
+    )
+    failed_completed = 0
+    evidence_counts = evidence.get("status_counts")
+    if isinstance(evidence_counts, dict):
+        failed_completed = _bounded_int(evidence_counts.get("failed"), 0, 10_000_000)
+
+    gaps = []
+    if unloaded_catalog_backlog:
+        gaps.append({
+            "bucket": "CATALOG_BACKLOG_NOT_LOADED",
+            "count": unloaded_catalog_backlog,
+            "severity": "WARN",
+            "action": "REPUBLISH_WITH_CATALOG_DISCOVERY_OR_ARCHIVE_AS_PROTECTED",
+            "explanation": (
+                "Discovered script metadata exists outside the active KB rows. "
+                "Load catalog rows or explicitly archive them as no-source/protected."
+            ),
+        })
+    if retryable_errors:
+        gaps.append({
+            "bucket": "RETRYABLE_BROWSER_ERRORS",
+            "count": retryable_errors,
+            "severity": "WARN",
+            "action": "RETRY_EXTRACTION_IN_SMALLER_BROWSER_CHUNKS",
+            "explanation": "Browser/session errors are intake failures, not strategy verdicts.",
+        })
+    if source_tab_failures:
+        gaps.append({
+            "bucket": "SOURCE_TAB_NOT_CAPTURED",
+            "count": source_tab_failures,
+            "severity": "WARN",
+            "action": "REOPEN_PAGE_AND_VERIFY_OPEN_SOURCE_TAB",
+            "explanation": "The page was opened, but executable Pine was not captured.",
+        })
+    if summary["blocked_repaint"]:
+        gaps.append({
+            "bucket": "CAUSALITY_QUARANTINE",
+            "count": summary["blocked_repaint"],
+            "severity": "INFO",
+            "action": "REWRITE_CLOSED_BAR_HTF_AND_REMOVE_DISPLAY_STATE",
+            "explanation": "These source-backed rows cannot be replayed until repaint risk is removed.",
+        })
+    if summary["port_queue"]:
+        gaps.append({
+            "bucket": "SOURCE_BACKED_PORT_QUEUE",
+            "count": summary["port_queue"],
+            "severity": "INFO",
+            "action": "PORT_TOP_PRIMITIVES_THEN_REPLAY_WITH_FEES",
+            "explanation": "These are the fastest actionable scripts for the alpha factory.",
+        })
+    if completed_cells and not positive_completed:
+        gaps.append({
+            "bucket": "COMPLETED_BUT_NEGATIVE_AFTER_COST",
+            "count": completed_cells,
+            "severity": "WARN",
+            "action": "MINE_FAILURES_FOR_EXIT_AND_ROUTING_UPLIFT",
+            "explanation": "Completed cells are useful rejection data, but none can promote.",
+        })
+
+    replay_status_counts = (
+        evidence_counts
+        if isinstance(evidence_counts, dict)
+        else _backtest_status_counts(rows)
+    )
+    return {
+        "coverage_id": "pine_coverage_auditor_v1",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "discovered_records": discovered_records,
+        "visible_records": visible_records,
+        "source_backed_records": source_backed,
+        "catalog_only_loaded": catalog_only_loaded,
+        "unloaded_catalog_backlog": unloaded_catalog_backlog,
+        "browser_attempted": browser_attempted,
+        "browser_extracted": browser_extracted,
+        "retryable_browser_errors": retryable_errors,
+        "source_tab_failures": source_tab_failures,
+        "deduped_source_exports": deduped_source_exports,
+        "unresolved_source_backlog": unresolved_source_backlog,
+        "port_ready_records": summary["port_queue"],
+        "causality_quarantine": summary["blocked_repaint"],
+        "feature_only_records": summary["research_only"],
+        "queued_backtest_cells": summary["backtests_queued"],
+        "completed_backtest_cells": completed_cells,
+        "failed_completed_cells": failed_completed,
+        "positive_completed_cells": positive_completed,
+        "replay_status_counts": dict(sorted(replay_status_counts.items())),
+        "source_status_counts": _source_status_counts(rows),
+        "extraction_status_counts": dict(sorted(status_counts.items())),
+        "gaps": gaps,
+        "operator_answer": _coverage_operator_answer(
+            discovered_records=discovered_records,
+            visible_records=visible_records,
+            source_backed=source_backed,
+            unresolved_source_backlog=unresolved_source_backlog,
+            port_queue=summary["port_queue"],
+            positive_completed=positive_completed,
+        ),
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def _backtest_status_counts(records: Iterable[dict]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in records:
+        for cell in row.get("backtests") or []:
+            if isinstance(cell, dict):
+                counts[str(cell.get("status") or "unknown")] += 1
+    return dict(counts)
+
+
+def _source_status_counts(records: Iterable[dict]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in records:
+        counts[_source_status(row)] += 1
+    return dict(sorted(counts.items()))
+
+
+def _coverage_operator_answer(
+    *,
+    discovered_records: int,
+    visible_records: int,
+    source_backed: int,
+    unresolved_source_backlog: int,
+    port_queue: int,
+    positive_completed: int,
+) -> str:
+    if not visible_records:
+        return "No Pine KB rows are loaded; publish the source/catalog artifact first."
+    if unresolved_source_backlog:
+        return (
+            f"{visible_records}/{discovered_records} discovered Pine rows are visible, "
+            f"with {source_backed} source-backed. {unresolved_source_backlog} rows still "
+            "need source, extraction retry, or explicit protected/no-source archiving."
+        )
+    if port_queue and not positive_completed:
+        return (
+            f"All visible discovery rows are accounted for. {port_queue} source-backed "
+            "rows are ready for causal port/replay, but none has promotable positive "
+            "evidence yet."
+        )
+    return (
+        "Pine coverage is accounted for. Continue through causal port, fee-aware "
+        "replay, and untouched-window judgment before any promotion."
+    )
 
 
 def review_pine_source(
@@ -1523,6 +1794,15 @@ def main(argv: list[str] | None = None) -> int:
         help="maximum discovered TradingView script URLs to add",
     )
     parser.add_argument(
+        "--discovery-total",
+        type=int,
+        default=None,
+        help=(
+            "optional total records seen by an external/bulk crawler; used only "
+            "for coverage auditing when the active KB is source-backed-only"
+        ),
+    )
+    parser.add_argument(
         "--no-defaults",
         action="store_true",
         help="do not include built-in seed records",
@@ -1545,6 +1825,7 @@ def main(argv: list[str] | None = None) -> int:
         max_catalog_records=max(0, args.max_catalog_records),
         catalog_discovery_depth=max(0, args.discovery_depth),
         max_catalog_pages=max(0, args.max_discovery_pages),
+        discovered_total=args.discovery_total,
         source_label="pine_research_publisher",
     )
     if args.json:

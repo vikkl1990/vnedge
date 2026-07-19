@@ -207,6 +207,13 @@ Each record contains:
 
 Promotion flags are always false at this layer.
 
+The artifact also contains `coverage_audit` (`pine_coverage_auditor_v1`), which
+explains the full discovery funnel: discovered records, visible KB rows,
+source-backed rows, catalog backlog, browser retry errors, source-tab failures,
+port queue, causality quarantine, and completed replay cells. Use
+`--discovery-total` when a bulk crawler has a larger catalog count than the
+active source-backed KB.
+
 `next_action` is the operator queue:
 
 - `REQUEST_OPEN_SOURCE_EXPORT`: catalog hit only; source is still required.
