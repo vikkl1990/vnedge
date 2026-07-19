@@ -44,6 +44,19 @@ def test_pine_backtest_evidence_refreshes_matrix_overlay():
     }
 
 
+def test_scanner_tournament_lowers_only_research_discovery_governance():
+    service = compose_services()["scanner-tournament"]
+
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.scanner_tournament"]
+    assert "--profile" in service["command"]
+    assert "${SCANNER_TOURNAMENT_PROFILE:-discovery_relaxed}" in service["command"]
+    assert "--timeframes" in service["command"]
+    assert "${SCANNER_TOURNAMENT_TIMEFRAMES:-1m,5m,15m,1h,4h}" in service["command"]
+    assert "./data:/app/data:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert "RESEARCH_EXCHANGES" in service["environment"]
+
+
 def test_event_leadlag_shadow_can_refresh_public_candle_context():
     services = compose_services()
     service = services["event-leadlag-shadow"]
@@ -94,6 +107,7 @@ def test_alpha_council_waits_for_research_artifact_producers():
     assert set(service["depends_on"]) >= {
         "daily-scalper-pack",
         "alpha-distillation",
+        "scanner-tournament",
         "event-leadlag-miner",
         "orderflow-footprint-miner",
         "bitcoin-regime-sensor",
