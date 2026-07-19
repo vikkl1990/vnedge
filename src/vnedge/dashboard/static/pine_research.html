@@ -205,8 +205,8 @@
         <div class="metric"><span>Completed</span><b id="bt_completed">--</b><i>passed + failed cells</i></div>
         <div class="metric"><span>Queued</span><b id="bt_queued">--</b><i>needs causal port</i></div>
         <div class="metric"><span>Blocked</span><b id="bt_blocked">--</b><i>source/repaint/data</i></div>
-        <div class="metric"><span>Best avg bps</span><b id="bt_best_bps">--</b><i>completed cells only</i></div>
-        <div class="metric"><span>Best PF</span><b id="bt_best_pf">--</b><i>completed cells only</i></div>
+        <div class="metric"><span>Best positive bps</span><b id="bt_best_bps">--</b><i>cost-positive cells only</i></div>
+        <div class="metric"><span>Best positive PF</span><b id="bt_best_pf">--</b><i>paired with positive bps</i></div>
       </div>
       <div class="policy" id="btEvidenceAnswer">Loading backtest evidence.</div>
     </section>
@@ -296,30 +296,54 @@
     span.className="mini"; span.textContent=label; return span;
   }
   function summarizeCells(cells){
-    const counts={total:0,queued:0,running:0,passed:0,failed:0,blocked:0,not_applicable:0,completed:0};
-    let bestBps=null,bestPf=null;
+    const counts={total:0,queued:0,running:0,passed:0,failed:0,blocked:0,not_applicable:0,completed:0,positiveCompleted:0};
+    let bestBps=null,bestPf=null,bestCompletedBps=null,bestCompletedPf=null;
     (cells||[]).forEach(cell=>{
       const status=String(cell.status||"queued").toLowerCase();
       counts.total+=1;
       counts[status]=(counts[status]||0)+1;
-      if(status==="passed"||status==="failed")counts.completed+=1;
-      if(cell.avg_net_bps!=null){
-        const v=Number(cell.avg_net_bps);
-        if(Number.isFinite(v))bestBps=bestBps==null?v:Math.max(bestBps,v);
-      }
-      if(cell.profit_factor!=null){
-        const v=Number(cell.profit_factor);
-        if(Number.isFinite(v))bestPf=bestPf==null?v:Math.max(bestPf,v);
+      const completed=(status==="passed"||status==="failed");
+      const bps=finiteNumber(cell.avg_net_bps);
+      const pf=finiteNumber(cell.profit_factor);
+      if(completed){
+        counts.completed+=1;
+        if(betterCellScore(bps,pf,bestCompletedBps,bestCompletedPf)){
+          bestCompletedBps=bps;
+          bestCompletedPf=pf;
+        }
+        if(bps!=null&&bps>0){
+          counts.positiveCompleted+=1;
+          if(betterCellScore(bps,pf,bestBps,bestPf)){
+            bestBps=bps;
+            bestPf=pf;
+          }
+        }
       }
     });
     counts.bestBps=bestBps;
     counts.bestPf=bestPf;
+    counts.bestCompletedBps=bestCompletedBps;
+    counts.bestCompletedPf=bestCompletedPf;
     return counts;
+  }
+  function finiteNumber(value){
+    if(value==null)return null;
+    const n=Number(value);
+    return Number.isFinite(n)?n:null;
+  }
+  function betterCellScore(nextBps,nextPf,currentBps,currentPf){
+    if(nextBps==null)return false;
+    if(currentBps==null)return true;
+    if(nextBps!==currentBps)return nextBps>currentBps;
+    if(nextPf==null)return false;
+    if(currentPf==null)return true;
+    return nextPf>currentPf;
   }
   function publisherEvidenceCounts(payload, fallback){
     const evidence=(payload&&payload.backtest_evidence)||{};
     const statusCounts=evidence.status_counts||{};
     const completedRaw=Number(evidence.completed_cells);
+    const positiveRaw=Number(evidence.positive_completed_cells);
     const failed=Number(statusCounts.failed??fallback.failed);
     const passed=Number(statusCounts.passed??fallback.passed);
     const derivedCompleted=Number.isFinite(failed)&&Number.isFinite(passed)?failed+passed:null;
@@ -336,6 +360,12 @@
       failed,
       passed,
       not_applicable:Number(statusCounts.not_applicable??fallback.not_applicable),
+      positiveCompleted:Number.isFinite(positiveRaw)?positiveRaw:fallback.positiveCompleted,
+      bestBps:finiteNumber(evidence.best_positive_avg_net_bps)??fallback.bestBps,
+      bestPf:finiteNumber(evidence.best_positive_profit_factor)??fallback.bestPf,
+      bestCompletedBps:finiteNumber(evidence.best_completed_avg_net_bps)??fallback.bestCompletedBps,
+      bestCompletedPf:finiteNumber(evidence.best_completed_profit_factor)??fallback.bestCompletedPf,
+      headlineVerdict:evidence.headline_verdict||"",
     };
   }
   function backtestTone(counts){
@@ -403,7 +433,11 @@
       tr.children[3].appendChild(pill(backtestLine(cellSummary),backtestTone(cellSummary)));
       tr.children[3].appendChild(small(
         cellSummary.completed
-          ? "best avg "+(cellSummary.bestBps==null?"--":cellSummary.bestBps.toFixed(2)+" bps")+" | best PF "+(cellSummary.bestPf==null?"--":cellSummary.bestPf.toFixed(2))
+          ? (
+              cellSummary.bestBps==null
+                ? "no positive completed cell | best completed avg "+(cellSummary.bestCompletedBps==null?"--":cellSummary.bestCompletedBps.toFixed(2)+" bps")
+                : "best positive avg "+cellSummary.bestBps.toFixed(2)+" bps | PF "+(cellSummary.bestPf==null?"--":cellSummary.bestPf.toFixed(2))
+            )
           : "no completed VNEDGE replay yet"
       ));
       tr.children[4].textContent=(r.priority_score==null?"--":String(r.priority_score));
@@ -482,8 +516,10 @@
       answer="No backtest cells are published in the KB yet.";
     }else if(!counts.completed){
       answer="No completed VNEDGE replay/backtest results are published yet. Current cells are queued or blocked because the Pine ideas still need source review, causal Python ports, and cost-aware replay.";
+    }else if(!counts.positiveCompleted){
+      answer="Completed VNEDGE cells exist, but none are positive after costs. Best PF is hidden here unless its cell also has positive net bps; failed cells remain useful evidence for rejection and refactor mining.";
     }else{
-      answer="Completed cells are visible in the row and selected matrix. They remain research-only and cannot promote without causal port, fee-aware replay, and untouched-window judgment. Failed cells are evidence too: they prove a mapped VNEDGE primitive did not clear gates.";
+      answer="At least one completed cell is positive after costs, but it remains research-only and cannot promote without causal port, fee-aware replay, and untouched-window judgment.";
     }
     text("btEvidenceAnswer",answer);
   }
