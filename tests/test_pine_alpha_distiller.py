@@ -212,5 +212,5 @@ if long
     ])
 
     assert rc == 0
-    assert capsys.readouterr().out.strip() == str(out)
+    assert str(out) in capsys.readouterr().out
     assert json.loads(out.read_text(encoding="utf-8"))["summary"]["port_candidates"] == 1

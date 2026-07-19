@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 from statistics import median
 from tempfile import NamedTemporaryFile
+import time
 from typing import Iterable
 
 from vnedge.research.pine_script_research import (
@@ -369,27 +370,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="exclude repaint-risk rows and emit only portable port candidates",
     )
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=0,
+        help="repeat forever at this cadence; 0 means one-shot publish",
+    )
     parser.add_argument("--no-write", action="store_true", help="print JSON only")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    payload = run_pine_alpha_distiller(
-        kb_path=args.kb,
-        source_dir=args.source_dir,
-        source_files=args.source_file,
-        max_scripts=args.max_scripts,
-        include_repaint=args.include_repaint or not args.portable_only,
-    )
-    if args.no_write:
-        encoded = json.dumps(payload, indent=2, sort_keys=True)
-        _assert_no_pine_source_leak(encoded)
-        print(encoded)
-        return 0
-    path = publish_pine_alpha_distiller(payload, out=args.out, feed=args.feed)
-    print(path)
-    return 0
+    while True:
+        payload = run_pine_alpha_distiller(
+            kb_path=args.kb,
+            source_dir=args.source_dir,
+            source_files=args.source_file,
+            max_scripts=args.max_scripts,
+            include_repaint=args.include_repaint or not args.portable_only,
+        )
+        if args.no_write:
+            encoded = json.dumps(payload, indent=2, sort_keys=True)
+            _assert_no_pine_source_leak(encoded)
+            print(encoded)
+        else:
+            path = publish_pine_alpha_distiller(payload, out=args.out, feed=args.feed)
+            summary = payload.get("summary", {})
+            print(
+                "pine alpha distiller published: "
+                f"path={path} "
+                f"reviewed={summary.get('source_backed_reviewed', 0)} "
+                f"clusters={summary.get('intention_clusters', 0)} "
+                f"top_intention={summary.get('top_intention_family', '')} "
+                f"top_task={summary.get('top_task', '')}",
+                flush=True,
+            )
+        if args.interval_seconds <= 0:
+            return 0
+        time.sleep(max(30, args.interval_seconds))
 
 
 def _source_backed_records(records: Iterable[dict], *, include_repaint: bool) -> list[dict]:

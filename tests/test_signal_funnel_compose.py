@@ -41,7 +41,22 @@ def test_pine_backtest_evidence_refreshes_matrix_overlay():
         "orderflow-footprint-miner",
         "event-leadlag-miner",
         "candidate-replay-executor",
+        "pine-alpha-distiller",
     }
+
+
+def test_pine_alpha_distiller_refreshes_source_intention_artifact():
+    service = compose_services()["pine-alpha-distiller"]
+
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    assert service["command"][:3] == ["python", "-m", "vnedge.research.pine_alpha_distiller"]
+    assert "--interval-seconds" in service["command"]
+    assert "--source-dir" in service["command"]
+    assert "research/pine_scripts/sources" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/pine_alpha_distiller_latest.json" in service["command"]
+    assert "./research/pine_scripts:/app/research/pine_scripts:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
 
 
 def test_pine_edge_uplift_agent_recycles_failed_evidence_only():
