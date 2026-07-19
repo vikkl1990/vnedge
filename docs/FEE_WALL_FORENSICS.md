@@ -46,3 +46,39 @@ Interpretation:
 If the CLI reports a missing candle lane, treat that as a data/config problem,
 not a market verdict. Fix the downloader, symbol alias, or container volume
 mount before judging edge.
+
+## Batch Scanner Sweep
+
+The batch runner turns the single-lane router into an operator artifact:
+
+```bash
+python -m vnedge.research.fee_wall_forensics \
+  --timeframes 5m,15m,1h,4h \
+  --lookback-days 30 \
+  --min-samples 10 \
+  --min-edge-bps 8 \
+  --min-profit-factor 1.15
+```
+
+Published files:
+
+- `research/live_research/fee_wall_forensics_latest.json`: every compact
+  venue/symbol/timeframe/strategy report, top rows, sparse-positive candidates,
+  and exit-salvage candidates.
+- `research/live_research/fee_wall_forensics_progress.json`: current unit,
+  progress percentage, row count, and route count for UI visibility.
+- `research/live_research/fee_wall_forensics_routes_latest.jsonl`: every
+  routed or skipped opportunity row for later edge-model training.
+- `research/live_research/fee_wall_forensics_feed.jsonl`: compact historical
+  feed for the council/workbench.
+
+Use `sample_expansion_candidates` for the exact situation we saw on the VM:
+large net bps and `CAPTURED_AFTER_COST`, but fewer than the required samples.
+The next research step is not promotion; it is expanding the sample honestly by
+longer lookback, lower-timeframe trigger replay, or widening the symbol/venue
+universe.
+
+Use `exit_salvage_candidates` when `avg_mfe_after_cost_bps` is positive but
+realized net is not. That means the entry found enough movement to beat fees,
+but the stop/target/trail/horizon failed to capture it. Those are the best
+rows for sniper-target and trailing-stop work.

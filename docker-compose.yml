@@ -553,6 +553,35 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Fee-wall forensics: batch trade-geometry truth for scanner families. It
+  # preserves every compact lane report plus a full route JSONL so sparse
+  # winners and exit-giveback failures can be mined into the next scanner
+  # uplift. Research-only: no credentials, no orders, no promotion path.
+  fee-wall-forensics:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.fee_wall_forensics",
+              "--interval-seconds", "${FEE_WALL_FORENSICS_INTERVAL_SECONDS:-21600}",
+              "--timeframes", "${FEE_WALL_FORENSICS_TIMEFRAMES:-5m,15m,1h,4h}",
+              "--lookback-days", "${FEE_WALL_FORENSICS_LOOKBACK_DAYS:-30}",
+              "--max-targets", "${FEE_WALL_FORENSICS_MAX_TARGETS:-18}",
+              "--min-samples", "${FEE_WALL_FORENSICS_MIN_SAMPLES:-10}",
+              "--min-edge-bps", "${FEE_WALL_FORENSICS_MIN_EDGE_BPS:-8}",
+              "--min-profit-factor", "${FEE_WALL_FORENSICS_MIN_PROFIT_FACTOR:-1.15}",
+              "--output", "research/live_research/fee_wall_forensics_latest.json",
+              "--feed", "research/live_research/fee_wall_forensics_feed.jsonl",
+              "--progress", "research/live_research/fee_wall_forensics_progress.json",
+              "--routes-output", "research/live_research/fee_wall_forensics_routes_latest.jsonl"]
+    environment:
+      RESEARCH_EXCHANGES: "binanceusdm,bybit,delta_india"
+      RESEARCH_SYMBOLS: "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,DOGE/USDT:USDT"
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Bitcoin-native regime sensor: read-only node/mempool/fee telemetry that
   # tags research windows as calm/building/stressed/panic. It is context only:
   # no wallet RPCs, no exchange credentials, no data/execution mounts.
