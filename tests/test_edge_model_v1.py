@@ -11,6 +11,7 @@ from vnedge.research.edge_model_v1 import (
     backtest_edge_model,
     backtest_edge_model_timeframe_matrix,
     build_opportunity_dataset,
+    load_strategy_opportunities,
 )
 from vnedge.research.execution_edge_router import OpportunityRoute
 from vnedge.research.universe import ResearchTarget
@@ -194,3 +195,24 @@ def test_target_data_coverage_reports_missing_timeframe_without_reading_parquet(
     assert coverage["missing_targets"] == [
         {"exchange": "delta_india", "symbol": "ETH/USD:USD", "timeframe": "1m"}
     ]
+
+
+def test_load_strategy_opportunities_reports_progress_for_missing_candles(tmp_path):
+    events = []
+    routes = load_strategy_opportunities(
+        data_root=tmp_path,
+        targets=(ResearchTarget("delta_india", "ETH/USD:USD", "5m"),),
+        strategy_ids=("stealth_trail_bbp_v1", "luxara_live_plan_qtm_v1"),
+        progress_callback=events.append,
+    )
+
+    assert routes == ()
+    assert events[0]["phase"] == "missing_candles"
+    assert events[0]["completed_work_units"] == 0
+    assert events[-1]["completed_work_units"] == 2
+    assert events[-1]["total_work_units"] == 2
+    assert events[-1]["target"] == {
+        "exchange": "delta_india",
+        "symbol": "ETH/USD:USD",
+        "timeframe": "5m",
+    }

@@ -181,6 +181,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     provider.publish({"mode": "shadow", "equity": 500.0})
     kb = tmp_path / "pine_research_kb.json"
     distiller = tmp_path / "pine_alpha_distiller_latest.json"
+    progress = tmp_path / "scanner_tournament_progress.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -202,11 +203,28 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    progress.write_text(json.dumps({
+        "truth_layer": "scanner_tournament_progress_v1",
+        "status": "running",
+        "phase": "labeling_opportunities",
+        "started_at": "2026-07-19T00:00:00+00:00",
+        "heartbeat_at": "2026-07-19T00:01:00+00:00",
+        "target_count": 2,
+        "strategy_count": 3,
+        "total_work_units": 6,
+        "completed_work_units": 2,
+        "progress_pct": 33.33,
+        "current_target": {"exchange": "delta_india", "symbol": "ETH/USD:USD", "timeframe": "5m"},
+        "current_strategy": "stealth_trail_bbp_v1",
+        "can_trade": False,
+        "can_promote": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
         pine_research_path=kb,
         pine_alpha_distiller_path=distiller,
+        backtest_progress_path=progress,
     )
     client = TestClient(app)
 
@@ -216,7 +234,10 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "Pine Research Lab" in page.text
     assert "/pine-research/kb" in page.text
     assert "/pine-research/distiller" in page.text
+    assert "/pine-research/progress" in page.text
     assert "Backtest Evidence" in page.text
+    assert "Backtest Progress" in page.text
+    assert "renderBacktestProgress" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -226,6 +247,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
 
     assert client.get("/pine-research/kb").status_code == 401
     assert client.get("/pine-research/distiller").status_code == 401
+    assert client.get("/pine-research/progress").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -239,6 +261,14 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert distiller_payload["summary"]["port_candidates"] == 1
     assert distiller_payload["can_trade"] is False
     assert distiller_payload["can_promote"] is False
+    p = client.get("/pine-research/progress?token=t3st-token")
+    assert p.status_code == 200
+    progress_payload = p.json()
+    assert progress_payload["truth_layer"] == "scanner_tournament_progress_v1"
+    assert progress_payload["status"] == "running"
+    assert progress_payload["current_strategy"] == "stealth_trail_bbp_v1"
+    assert progress_payload["can_trade"] is False
+    assert progress_payload["can_promote"] is False
 
 
 def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):

@@ -388,6 +388,7 @@ def create_app(
     realtime_scanner_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
+    backtest_progress_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -475,6 +476,10 @@ def create_app(
     pine_alpha_distiller_file = (
         pine_alpha_distiller_path
         or Path("research/live_research/pine_alpha_distiller_latest.json")
+    )
+    pine_backtest_progress_file = (
+        backtest_progress_path
+        or Path("research/live_research/scanner_tournament_progress.json")
     )
 
     @app.get("/")
@@ -817,6 +822,44 @@ def create_app(
                     "port_tasks": [],
                     "script_distillations": [],
                     "operator_answer": "pine alpha distiller artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/progress")
+    async def pine_backtest_progress(request: Request) -> JSONResponse:
+        """Live scanner tournament/backtest progress.
+
+        This is operational visibility only: it reports the in-flight research
+        worker heartbeat and never grants trade or promotion permission.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                pine_backtest_progress_file,
+                {
+                    "truth_layer": "scanner_tournament_progress_v1",
+                    "status": "idle",
+                    "phase": "no_progress_artifact",
+                    "started_at": None,
+                    "heartbeat_at": None,
+                    "completed_at": None,
+                    "profile": None,
+                    "lookback_days": None,
+                    "target_count": 0,
+                    "strategy_count": 0,
+                    "total_work_units": 0,
+                    "completed_work_units": 0,
+                    "progress_pct": 0.0,
+                    "current_target": None,
+                    "current_strategy": None,
+                    "current_rows": None,
+                    "current_routes": None,
+                    "output_path": None,
+                    "last_error": None,
                     "can_trade": False,
                     "can_promote": False,
                 },

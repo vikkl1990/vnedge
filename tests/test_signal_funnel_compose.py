@@ -52,6 +52,8 @@ def test_scanner_tournament_lowers_only_research_discovery_governance():
     assert "${SCANNER_TOURNAMENT_PROFILE:-discovery_relaxed}" in service["command"]
     assert "--timeframes" in service["command"]
     assert "${SCANNER_TOURNAMENT_TIMEFRAMES:-1m,5m,15m,1h,4h}" in service["command"]
+    assert "--progress" in service["command"]
+    assert "research/live_research/scanner_tournament_progress.json" in service["command"]
     assert "./data:/app/data:ro" in service["volumes"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
     assert "RESEARCH_EXCHANGES" in service["environment"]

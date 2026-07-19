@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.edge_model_v1 import (
@@ -41,6 +41,7 @@ TournamentVerdict = Literal[
     "REJECT_NEGATIVE_AFTER_COST",
     "NO_ROUTED_TRADES",
 ]
+ProgressStatus = Literal["running", "completed", "failed"]
 
 
 @dataclass(frozen=True)
@@ -240,6 +241,60 @@ def build_scanner_tournament_report(
     }
 
 
+def build_scanner_tournament_progress(
+    *,
+    status: ProgressStatus,
+    phase: str,
+    started_at: str,
+    profile: ScannerTournamentProfile,
+    targets: Iterable[ResearchTarget],
+    strategy_ids: Iterable[str],
+    lookback_days: int,
+    completed_work_units: int = 0,
+    total_work_units: int | None = None,
+    current_target: dict | ResearchTarget | None = None,
+    current_strategy: str | None = None,
+    rows: int | None = None,
+    routes: int | None = None,
+    output_path: Path | str | None = None,
+    last_error: str | None = None,
+) -> dict:
+    targets_tuple = tuple(targets)
+    strategies_tuple = tuple(strategy_ids)
+    computed_total = len(targets_tuple) * len(strategies_tuple)
+    total = computed_total if total_work_units is None else max(0, int(total_work_units))
+    completed = max(0, int(completed_work_units))
+    if total:
+        completed = min(completed, total)
+    progress_pct = round((completed / total) * 100.0, 2) if total else 100.0
+    now = datetime.now(UTC).isoformat()
+    return {
+        "generated_at": now,
+        "truth_layer": "scanner_tournament_progress_v1",
+        "status": status,
+        "phase": phase,
+        "started_at": started_at,
+        "heartbeat_at": now,
+        "completed_at": now if status in {"completed", "failed"} else None,
+        "profile": profile.name,
+        "lookback_days": lookback_days,
+        "target_count": len(targets_tuple),
+        "strategy_count": len(strategies_tuple),
+        "total_work_units": total,
+        "completed_work_units": completed,
+        "progress_pct": progress_pct,
+        "current_target": _target_payload(current_target),
+        "current_strategy": current_strategy,
+        "current_rows": rows,
+        "current_routes": routes,
+        "output_path": str(output_path) if output_path is not None else None,
+        "last_error": last_error,
+        "policy": _research_policy(),
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
 def run_scanner_tournament(
     *,
     data_root: Path | str,
@@ -248,6 +303,7 @@ def run_scanner_tournament(
     lookback_days: int = 30,
     profile: ScannerTournamentProfile = discovery_relaxed_profile(),
     max_candidates: int = 50,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> dict:
     targets_tuple = tuple(targets)
     strategies_tuple = tuple(strategy_ids)
@@ -257,7 +313,21 @@ def run_scanner_tournament(
         strategy_ids=strategies_tuple,
         lookback_days=lookback_days,
         router_config=profile.router_config,
+        progress_callback=progress_callback,
     )
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "building_report",
+                "target": None,
+                "strategy_id": None,
+                "total_work_units": len(targets_tuple) * len(strategies_tuple),
+                "completed_work_units": len(targets_tuple) * len(strategies_tuple),
+                "rows": None,
+                "routes": len(routes),
+                "last_error": None,
+            }
+        )
     return build_scanner_tournament_report(
         routes,
         profile=profile,
@@ -280,6 +350,14 @@ def publish_report(report: dict, output: Path | str, feed: Path | str | None = N
         feed_path.parent.mkdir(parents=True, exist_ok=True)
         with feed_path.open("a") as fh:
             fh.write(json.dumps(_feed_record(report), sort_keys=True) + "\n")
+
+
+def publish_progress(progress: dict, output: Path | str) -> None:
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(progress, indent=2, sort_keys=True))
+    tmp_path.replace(output_path)
 
 
 def _rank_candidates(
@@ -629,6 +707,14 @@ def _fmt(value: float | None) -> str:
     return "--" if value is None else f"{float(value):.2f}"
 
 
+def _target_payload(target: dict | ResearchTarget | None) -> dict | None:
+    if target is None:
+        return None
+    if isinstance(target, ResearchTarget):
+        return asdict(target)
+    return dict(target)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="run a research-only relaxed scanner tournament"
@@ -661,22 +747,94 @@ def main(argv: list[str] | None = None) -> int:
         "--feed",
         default="research/live_research/scanner_tournament_feed.jsonl",
     )
+    parser.add_argument(
+        "--progress",
+        default="research/live_research/scanner_tournament_progress.json",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     while True:
+        started_at = datetime.now(UTC).isoformat()
         timeframes = _resolve_timeframes(args.timeframes)
         targets = _load_targets(args, timeframes)
+        strategies = _split_csv(args.strategies)
         profile = scanner_tournament_profile(args.profile)
-        report = run_scanner_tournament(
-            data_root=args.data_root,
-            targets=targets,
-            strategy_ids=_split_csv(args.strategies),
-            lookback_days=args.lookback_days,
-            profile=profile,
-            max_candidates=args.max_candidates,
-        )
-        publish_report(report, args.output, args.feed)
+        total_work_units = len(targets) * len(strategies)
+        last_event: dict = {
+            "phase": "initializing",
+            "completed_work_units": 0,
+            "total_work_units": total_work_units,
+            "target": None,
+            "strategy_id": None,
+            "rows": None,
+            "routes": None,
+            "last_error": None,
+        }
+
+        def publish_state(
+            status: ProgressStatus,
+            phase: str,
+            event: dict | None = None,
+            last_error: str | None = None,
+        ) -> None:
+            payload = event or last_event
+            publish_progress(
+                build_scanner_tournament_progress(
+                    status=status,
+                    phase=phase,
+                    started_at=started_at,
+                    profile=profile,
+                    targets=targets,
+                    strategy_ids=strategies,
+                    lookback_days=args.lookback_days,
+                    completed_work_units=int(payload.get("completed_work_units") or 0),
+                    total_work_units=int(payload.get("total_work_units") or total_work_units),
+                    current_target=payload.get("target"),
+                    current_strategy=payload.get("strategy_id"),
+                    rows=payload.get("rows"),
+                    routes=payload.get("routes"),
+                    output_path=args.output,
+                    last_error=last_error or payload.get("last_error"),
+                ),
+                args.progress,
+            )
+
+        def progress_callback(event: dict) -> None:
+            nonlocal last_event
+            last_event = dict(event)
+            publish_state(
+                "running",
+                str(event.get("phase") or "running"),
+                event=last_event,
+            )
+
+        publish_state("running", "initializing")
+        try:
+            report = run_scanner_tournament(
+                data_root=args.data_root,
+                targets=targets,
+                strategy_ids=strategies,
+                lookback_days=args.lookback_days,
+                profile=profile,
+                max_candidates=args.max_candidates,
+                progress_callback=progress_callback,
+            )
+            publish_report(report, args.output, args.feed)
+            last_event = {
+                **last_event,
+                "phase": "published_report",
+                "completed_work_units": total_work_units,
+                "total_work_units": total_work_units,
+                "target": None,
+                "strategy_id": None,
+                "routes": report.get("summary", {}).get("opportunities"),
+                "last_error": None,
+            }
+            publish_state("completed", "published_report")
+        except Exception as exc:
+            publish_state("failed", "failed", last_error=str(exc))
+            raise
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:

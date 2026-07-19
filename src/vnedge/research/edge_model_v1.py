@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -537,30 +537,78 @@ def load_strategy_opportunities(
     strategy_ids: Iterable[str] = DEFAULT_SCALPER_STRATEGIES,
     lookback_days: int = 30,
     router_config: OpportunityRouterConfig = OpportunityRouterConfig(),
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> tuple[OpportunityRoute, ...]:
     store = ParquetStore(data_root)
     out: list[OpportunityRoute] = []
-    for target in targets:
+    targets_tuple = tuple(targets)
+    strategy_tuple = tuple(strategy_ids)
+    total_work_units = len(targets_tuple) * len(strategy_tuple)
+    completed_work_units = 0
+    for target in targets_tuple:
         try:
             candles = _window(
                 store.read_candles(target.exchange, target.symbol, target.timeframe),
                 lookback_days,
             )
         except FileNotFoundError:
+            for strategy_id in strategy_tuple:
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "missing_candles",
+                            "target": asdict(target),
+                            "strategy_id": strategy_id,
+                            "total_work_units": total_work_units,
+                            "completed_work_units": completed_work_units,
+                            "rows": 0,
+                            "routes": 0,
+                            "last_error": "missing candle parquet",
+                        }
+                    )
+                completed_work_units += 1
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "phase": "missing_candles",
+                            "target": asdict(target),
+                            "strategy_id": strategy_id,
+                            "total_work_units": total_work_units,
+                            "completed_work_units": completed_work_units,
+                            "rows": 0,
+                            "routes": 0,
+                            "last_error": "missing candle parquet",
+                        }
+                    )
             continue
-        for strategy_id in strategy_ids:
+        for strategy_id in strategy_tuple:
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "phase": "labeling_opportunities",
+                        "target": asdict(target),
+                        "strategy_id": strategy_id,
+                        "total_work_units": total_work_units,
+                        "completed_work_units": completed_work_units,
+                        "rows": len(candles),
+                        "routes": 0,
+                        "last_error": None,
+                    }
+                )
             strategy = _instantiate_strategy(
                 get_strategy_class(strategy_id),
                 store,
                 target.exchange,
                 target.symbol,
             )
+            route_count = 0
             for route in label_strategy_opportunities(
                 candles,
                 strategy,
                 exchange=target.exchange,
                 config=router_config,
             ):
+                route_count += 1
                 meta = dict(route.metadata)
                 meta.update(
                     {
@@ -570,6 +618,20 @@ def load_strategy_opportunities(
                     }
                 )
                 out.append(replace(route, metadata=meta))
+            completed_work_units += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "phase": "labeling_opportunities",
+                        "target": asdict(target),
+                        "strategy_id": strategy_id,
+                        "total_work_units": total_work_units,
+                        "completed_work_units": completed_work_units,
+                        "rows": len(candles),
+                        "routes": route_count,
+                        "last_error": None,
+                    }
+                )
     return tuple(out)
 
 
