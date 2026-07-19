@@ -431,6 +431,26 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Pine source-backed intention distiller. Publishes the artifact consumed by
+  # Pine evidence/uplift services so UI code deploys cannot leave stale
+  # distiller JSON behind.
+  pine-alpha-distiller:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    command: ["python", "-m", "vnedge.research.pine_alpha_distiller",
+              "--interval-seconds", "${PINE_ALPHA_DISTILLER_INTERVAL_SECONDS:-1800}",
+              "--kb", "research/pine_scripts/pine_research_kb.json",
+              "--source-dir", "research/pine_scripts/sources",
+              "--out", "research/live_research/pine_alpha_distiller_latest.json",
+              "--feed", "research/live_research/pine_alpha_distiller_feed.jsonl"]
+    volumes:
+      - ./research/pine_scripts:/app/research/pine_scripts:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Pine research evidence overlay: maps source-backed Pine distiller tasks onto
   # VNEDGE-owned primitive backtest/replay artifacts so the Pine Lab matrix
   # shows completed/blocked evidence instead of stale "queued" placeholders.
@@ -446,6 +466,7 @@ services:
       - orderflow-footprint-miner
       - event-leadlag-miner
       - candidate-replay-executor
+      - pine-alpha-distiller
     command: ["python", "-m", "vnedge.research.pine_backtest_evidence",
               "--interval-seconds", "${PINE_BACKTEST_EVIDENCE_INTERVAL_SECONDS:-1800}",
               "--kb", "research/pine_scripts/pine_research_kb.json",

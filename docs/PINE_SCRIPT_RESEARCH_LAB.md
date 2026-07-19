@@ -49,6 +49,11 @@ The source-backed distiller publishes:
 research/live_research/pine_alpha_distiller_latest.json
 ```
 
+In production Compose this is refreshed by the `pine-alpha-distiller` service
+at startup and on `PINE_ALPHA_DISTILLER_INTERVAL_SECONDS` cadence. This keeps
+the distiller JSON in sync with UI/code deploys instead of relying on a manual
+one-shot artifact publish.
+
 The backtest matrix is refreshed by a third artifact step:
 
 ```bash
