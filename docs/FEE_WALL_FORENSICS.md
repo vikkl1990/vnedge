@@ -63,8 +63,8 @@ python -m vnedge.research.fee_wall_forensics \
 Published files:
 
 - `research/live_research/fee_wall_forensics_latest.json`: every compact
-  venue/symbol/timeframe/strategy report, top rows, sparse-positive candidates,
-  and exit-salvage candidates.
+  venue/symbol/timeframe/strategy report, top rows, strict fee-wall candidates,
+  sparse-positive candidates, and exit-salvage candidates.
 - `research/live_research/fee_wall_forensics_progress.json`: current unit,
   progress percentage, row count, and route count for UI visibility.
 - `research/live_research/fee_wall_forensics_routes_latest.jsonl`: every
@@ -77,6 +77,11 @@ large net bps and `CAPTURED_AFTER_COST`, but fewer than the required samples.
 The next research step is not promotion; it is expanding the sample honestly by
 longer lookback, lower-timeframe trigger replay, or widening the symbol/venue
 universe.
+
+Use `strict_fee_wall_candidates` when the row already clears the configured
+sample, net-bps, and PF floors inside this research run. That still is not a
+promotion. The correct next action is a pre-registered untouched-window
+judgment, not immediate paper/live deployment.
 
 Use `exit_salvage_candidates` when `avg_mfe_after_cost_bps` is positive but
 realized net is not. That means the entry found enough movement to beat fees,

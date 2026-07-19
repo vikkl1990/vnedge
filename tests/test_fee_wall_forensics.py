@@ -186,6 +186,10 @@ def test_fee_wall_forensics_publishers_are_atomic_and_feed_is_compact(tmp_path):
     saved = json.loads(out.read_text())
     feed_row = json.loads(feed.read_text().splitlines()[-1])
     assert saved["truth_layer"] == "fee_wall_forensics_v1"
+    assert saved["summary"]["strict_fee_wall_candidates"] == 1
+    assert saved["strict_fee_wall_candidates"][0]["recommended_action"] == (
+        "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW"
+    )
     assert feed_row["truth_layer"] == "fee_wall_forensics_v1"
     assert feed_row["can_trade"] is False
     assert stat.S_IMODE(out.stat().st_mode) == 0o644
