@@ -100,6 +100,7 @@
     .task span{display:block;margin-top:7px;color:var(--muted);font-size:11px;line-height:1.35}
     .task .score{margin-top:9px;font:900 20px/1 var(--mono);color:var(--cyan)}
     .evidence{margin-top:14px}
+    .coverage-panel{margin-top:14px}
     .progress-panel{margin-top:14px}
     .progress-track{height:9px;margin:0 12px 12px;border:1px solid #18334a;background:#070c12}
     .progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--cyan));transition:width .2s ease}
@@ -187,6 +188,22 @@
           </table>
         </div>
       </section>
+    </section>
+
+    <section class="panel coverage-panel">
+      <h2>Pine Coverage Auditor</h2>
+      <div class="summary">
+        <div class="metric"><span>Discovered</span><b id="cov_discovered">--</b><i>catalog universe</i></div>
+        <div class="metric"><span>Visible rows</span><b id="cov_visible">--</b><i>active KB</i></div>
+        <div class="metric"><span>Unloaded backlog</span><b id="cov_unloaded">--</b><i>catalog not in KB</i></div>
+        <div class="metric"><span>Source-backed</span><b id="cov_source">--</b><i>hash-backed</i></div>
+        <div class="metric"><span>Retry errors</span><b id="cov_retry">--</b><i>browser chunks</i></div>
+        <div class="metric"><span>Source-tab misses</span><b id="cov_source_tab">--</b><i>opened, not captured</i></div>
+        <div class="metric"><span>Port-ready</span><b id="cov_port">--</b><i>causal work queue</i></div>
+        <div class="metric"><span>Quarantine</span><b id="cov_quarantine">--</b><i>repaint/HTF</i></div>
+      </div>
+      <div class="task-list" id="coverageGaps"></div>
+      <div class="policy" id="coverageAnswer">Loading Pine coverage audit.</div>
     </section>
 
     <section class="panel distiller">
@@ -669,6 +686,41 @@
     }
     text("btEvidenceAnswer",answer);
   }
+  function renderCoverageAudit(payload){
+    const audit=(payload&&payload.coverage_audit)||{};
+    text("cov_discovered",audit.discovered_records);
+    text("cov_visible",audit.visible_records);
+    text("cov_unloaded",audit.unloaded_catalog_backlog);
+    text("cov_source",audit.source_backed_records);
+    text("cov_retry",audit.retryable_browser_errors);
+    text("cov_source_tab",audit.source_tab_failures);
+    text("cov_port",audit.port_ready_records);
+    text("cov_quarantine",audit.causality_quarantine);
+    text("coverageAnswer",audit.operator_answer||"No Pine coverage audit is published yet.");
+    const listEl=$("coverageGaps"); listEl.innerHTML="";
+    (audit.gaps||[]).slice(0,8).forEach(gap=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=gap.bucket||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=gap.count==null?"--":String(gap.count);
+      const meta=document.createElement("span");
+      const tone=String(gap.severity||"INFO");
+      meta.textContent=tone+" | "+(gap.action||"--");
+      const why=document.createElement("span");
+      why.textContent=gap.explanation||"No explanation published.";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(why);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No coverage gaps published.";
+      listEl.appendChild(div);
+    }
+  }
   function render(payload){
     state.records=Array.isArray(payload.records)?payload.records:[];
     state.selected=state.records.find(hasCompletedEvidence)||state.records[0]||null;
@@ -691,6 +743,7 @@
     text("operatorAnswer",payload.operator_answer||"research-only");
     text("footer","source "+(payload.source||"--")+" | generated "+(payload.generated_at||"--"));
     const chip=$("statusChip"); chip.textContent="loaded"; chip.className="chip good";
+    renderCoverageAudit(payload);
     renderBacktestEvidence(payload);
     renderRows();
   }
