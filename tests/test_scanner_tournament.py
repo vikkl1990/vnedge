@@ -6,9 +6,11 @@ import pandas as pd
 
 from vnedge.research.execution_edge_router import OpportunityRoute
 from vnedge.research.scanner_tournament import (
+    build_scanner_tournament_progress,
     build_scanner_tournament_report,
     discovery_relaxed_profile,
     paper_probe_profile,
+    publish_progress,
     publish_report,
     scanner_tournament_profile,
     strict_proof_profile,
@@ -144,3 +146,37 @@ def test_publish_report_writes_atomic_latest_and_feed(tmp_path):
     assert saved["summary"]["can_trade"] is False
     assert feed_rows[-1]["can_promote"] is False
     assert feed_rows[-1]["truth_layer"] == "scanner_tournament_v1"
+
+
+def test_progress_payload_is_visibility_only_and_atomic(tmp_path):
+    target = ResearchTarget("delta_india", "ETH/USD:USD", "5m")
+    progress = build_scanner_tournament_progress(
+        status="running",
+        phase="labeling_opportunities",
+        started_at="2026-07-19T00:00:00+00:00",
+        profile=discovery_relaxed_profile(),
+        targets=(target,),
+        strategy_ids=("stealth_trail_bbp_v1", "luxara_live_plan_qtm_v1"),
+        lookback_days=30,
+        completed_work_units=1,
+        total_work_units=2,
+        current_target=target,
+        current_strategy="luxara_live_plan_qtm_v1",
+        rows=1440,
+        routes=12,
+        output_path="research/live_research/scanner_tournament_latest.json",
+    )
+
+    assert progress["truth_layer"] == "scanner_tournament_progress_v1"
+    assert progress["progress_pct"] == 50.0
+    assert progress["current_target"]["exchange"] == "delta_india"
+    assert progress["current_strategy"] == "luxara_live_plan_qtm_v1"
+    assert progress["can_trade"] is False
+    assert progress["can_promote"] is False
+    assert progress["policy"]["can_trade"] is False
+
+    output = tmp_path / "scanner_tournament_progress.json"
+    publish_progress(progress, output)
+    saved = json.loads(output.read_text())
+    assert saved["status"] == "running"
+    assert saved["current_rows"] == 1440

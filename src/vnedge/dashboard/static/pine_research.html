@@ -100,6 +100,9 @@
     .task span{display:block;margin-top:7px;color:var(--muted);font-size:11px;line-height:1.35}
     .task .score{margin-top:9px;font:900 20px/1 var(--mono);color:var(--cyan)}
     .evidence{margin-top:14px}
+    .progress-panel{margin-top:14px}
+    .progress-track{height:9px;margin:0 12px 12px;border:1px solid #18334a;background:#070c12}
+    .progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--cyan));transition:width .2s ease}
     .footer{margin-top:14px;color:var(--muted);font-size:11px;text-align:center}
     @media(max-width:1100px){
       .grid,.detail{grid-template-columns:1fr}
@@ -209,6 +212,18 @@
         <div class="metric"><span>Best positive PF</span><b id="bt_best_pf">--</b><i>paired with positive bps</i></div>
       </div>
       <div class="policy" id="btEvidenceAnswer">Loading backtest evidence.</div>
+    </section>
+
+    <section class="panel progress-panel">
+      <h2>Backtest Progress</h2>
+      <div class="summary">
+        <div class="metric"><span>Status</span><b id="bp_status">--</b><i id="bp_phase">phase --</i></div>
+        <div class="metric"><span>Progress</span><b id="bp_pct">--</b><i id="bp_work">0 / 0 units</i></div>
+        <div class="metric"><span>Current lane</span><b id="bp_current">--</b><i id="bp_strategy">strategy --</i></div>
+        <div class="metric"><span>Heartbeat</span><b id="bp_heartbeat">--</b><i id="bp_started">started --</i></div>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="bp_bar"></div></div>
+      <div class="policy" id="btProgressAnswer">Loading scanner tournament progress.</div>
     </section>
 
     <section class="detail">
@@ -409,6 +424,64 @@
     if(String(r.url||"").includes("/script/"))return "warn";
     return "bad";
   }
+  function ageSeconds(iso){
+    if(!iso)return null;
+    const ms=Date.now()-Date.parse(iso);
+    return Number.isFinite(ms)?Math.max(0,Math.round(ms/1000)):null;
+  }
+  function ageLabel(seconds){
+    if(seconds==null)return "--";
+    if(seconds<60)return seconds+"s ago";
+    if(seconds<3600)return Math.floor(seconds/60)+"m ago";
+    return Math.floor(seconds/3600)+"h "+Math.floor((seconds%3600)/60)+"m ago";
+  }
+  function shortIso(iso){
+    return iso?String(iso).slice(0,19).replace("T"," "):"--";
+  }
+  function targetLabel(target){
+    if(!target)return "--";
+    return [target.exchange,target.symbol,target.timeframe].filter(Boolean).join(" ");
+  }
+  function renderBacktestProgress(payload){
+    payload=payload||{};
+    const total=Number(payload.total_work_units||0);
+    const completed=Number(payload.completed_work_units||0);
+    const pct=Number.isFinite(Number(payload.progress_pct))
+      ? Number(payload.progress_pct)
+      : (total?completed/total*100:0);
+    const boundedPct=Math.max(0,Math.min(100,pct));
+    const age=ageSeconds(payload.heartbeat_at);
+    const status=String(payload.status||"idle").toUpperCase();
+    const stale=status==="RUNNING"&&age!=null&&age>300;
+    text("bp_status",stale?"STALE":status);
+    text("bp_phase",payload.phase?"phase "+payload.phase:"phase --");
+    text("bp_pct",boundedPct.toFixed(1)+"%");
+    text("bp_work",completed+" / "+total+" units");
+    text("bp_current",targetLabel(payload.current_target));
+    text("bp_strategy",payload.current_strategy||"strategy --");
+    text("bp_heartbeat",ageLabel(age));
+    text("bp_started","started "+shortIso(payload.started_at));
+    const bar=$("bp_bar");
+    if(bar)bar.style.width=boundedPct.toFixed(1)+"%";
+    let answer="";
+    if(payload.last_error){
+      answer="Backtest worker reported an error: "+payload.last_error+". Results are not complete until the progress status returns to COMPLETED and evidence is republished.";
+    }else if(stale){
+      answer="Scanner tournament progress heartbeat is stale. The worker may be stalled or the dashboard may be reading an old artifact; check the scanner-tournament container before trusting queued cells.";
+    }else if(status==="RUNNING"){
+      answer="Scanner tournament is actively replaying strategy/venue/timeframe work units. Current rows and routes are research-only labels; no paper/live promotion can happen from this progress stream.";
+    }else if(status==="COMPLETED"){
+      answer="Latest scanner tournament completed and wrote its final report. Backtest Evidence updates when the Pine evidence publisher reconciles the completed report.";
+    }else if(status==="FAILED"){
+      answer="Latest scanner tournament failed. Treat all queued cells as pending until the worker completes a clean run.";
+    }else{
+      answer="No live scanner tournament progress artifact is published yet.";
+    }
+    if(payload.current_rows!=null||payload.current_routes!=null){
+      answer+=" Last unit rows="+(payload.current_rows??"--")+", routes="+(payload.current_routes??"--")+".";
+    }
+    text("btProgressAnswer",answer);
+  }
   function renderRows(){
     const q=($("searchBox").value||"").toLowerCase();
     const verdict=$("verdictFilter").value||"";
@@ -579,6 +652,12 @@
       listEl.appendChild(div);
     }
   }
+  function loadProgress(){
+    fetch("/pine-research/progress",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderBacktestProgress)
+      .catch(err=>{$("btProgressAnswer").textContent=String(err);renderBacktestProgress({});});
+  }
   function load(){
     const chip=$("statusChip"); chip.textContent="loading"; chip.className="chip info";
     fetch("/pine-research/kb",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
@@ -589,11 +668,13 @@
       .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(renderDistiller)
       .catch(err=>{$("distillerAnswer").textContent=String(err);renderDistiller({});});
+    loadProgress();
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);
   $("refreshBtn").addEventListener("click",load);
   load();
+  setInterval(loadProgress,10000);
 })();
 </script>
 </body>
