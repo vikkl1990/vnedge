@@ -473,6 +473,7 @@ services:
               "--distiller", "research/live_research/pine_alpha_distiller_latest.json",
               "--report-dir", "research/live_research"]
     volumes:
+      - ./data:/app/data:ro
       - ./research/pine_scripts:/app/research/pine_scripts
       - ./research/live_research:/app/research/live_research
     logging:
