@@ -257,3 +257,59 @@ def test_edge_uplift_executor_uses_fee_wall_support_when_scanner_is_missing(tmp_
     assert task["scanner_support"]["state"] == "DISCOVERY_WATCHLIST"
     assert task["candidate_matches"][0]["evidence_source"] == "fee_wall_forensics_latest.json"
     assert task["candidate_matches"][0]["strategy_id"] == "luxy_ut_bot_forecast_v1"
+
+
+def test_edge_uplift_executor_recognizes_registered_confluence_ports(tmp_path):
+    uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
+    scanner = tmp_path / "scanner_tournament_latest.json"
+    uplift.write_text(json.dumps({
+        "agent_id": "pine_edge_uplift_agent_v1",
+        "summary": {"experiments": 2},
+        "experiments": [
+            {
+                "experiment_id": "range_confluence",
+                "experiment_type": "confluence_stack_replay",
+                "recommended_port": "range_expansion_breakout_v1",
+                "primitive_stack": ["range_breakout", "volume_participation"],
+                "source_script_ids": ["luxara"],
+                "source_titles": ["Luxara"],
+                "failed_cells": 9,
+                "positive_cells": 5,
+                "best_avg_net_bps": 15.2,
+                "best_profit_factor": 1.34,
+                "salvage_score": 92,
+            },
+            {
+                "experiment_id": "trend_context",
+                "experiment_type": "context_feature_bank",
+                "recommended_port": "trend_momentum_context_v1",
+                "primitive_stack": ["bbp_histogram", "adx_er_quality"],
+                "source_script_ids": ["bbp"],
+                "source_titles": ["BBP"],
+                "failed_cells": 4,
+                "positive_cells": 3,
+                "best_avg_net_bps": 6.0,
+                "best_profit_factor": 1.1,
+                "salvage_score": 80,
+            },
+        ],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    scanner.write_text(json.dumps({"candidates": []}))
+
+    payload = run_edge_uplift_executor(
+        uplift_path=uplift,
+        scanner_path=scanner,
+        fee_wall_path=None,
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    by_id = {row["experiment_id"]: row for row in payload["tasks"]}
+    assert by_id["range_confluence"]["status"] == "READY_FOR_REPLAY"
+    assert by_id["range_confluence"]["port_implementation"]["state"] == "VNEDGE_PORT_REGISTERED"
+    assert "luxara_live_plan_qtm_v1" in by_id["range_confluence"]["port_implementation"]["registered_strategy_aliases"]
+    assert by_id["trend_context"]["status"] == "FEATURE_BANK_ONLY"
+    assert by_id["trend_context"]["port_implementation"]["state"] == "VNEDGE_PORT_REGISTERED"
+    assert payload["summary"]["ready_for_replay"] == 1
+    assert payload["summary"]["feature_bank_only"] == 1
