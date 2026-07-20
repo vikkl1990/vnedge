@@ -129,6 +129,7 @@ def test_edge_uplift_executor_builds_research_only_queue(tmp_path):
     payload = run_edge_uplift_executor(
         uplift_path=uplift,
         scanner_path=scanner,
+        fee_wall_path=None,
         now=datetime(2026, 7, 19, tzinfo=UTC),
     )
 
@@ -159,7 +160,11 @@ def test_edge_uplift_executor_builds_research_only_queue(tmp_path):
 
 def test_publish_edge_uplift_executor_is_feed_safe_and_readable(tmp_path):
     uplift, scanner = _write_inputs(tmp_path)
-    payload = run_edge_uplift_executor(uplift_path=uplift, scanner_path=scanner)
+    payload = run_edge_uplift_executor(
+        uplift_path=uplift,
+        scanner_path=scanner,
+        fee_wall_path=None,
+    )
     out = tmp_path / "edge_uplift_experiments_latest.json"
     feed = tmp_path / "edge_uplift_experiments_feed.jsonl"
 
@@ -185,6 +190,8 @@ def test_edge_uplift_executor_cli_writes_artifact(tmp_path, capsys):
         str(uplift),
         "--scanner",
         str(scanner),
+        "--fee-wall",
+        str(tmp_path / "missing_fee_wall.json"),
         "--out",
         str(out),
         "--feed",
@@ -195,3 +202,58 @@ def test_edge_uplift_executor_cli_writes_artifact(tmp_path, capsys):
     payload = json.loads(out.read_text())
     assert "edge uplift executor" in printed
     assert payload["summary"]["ready_for_replay"] == 1
+
+
+def test_edge_uplift_executor_uses_fee_wall_support_when_scanner_is_missing(tmp_path):
+    uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
+    scanner = tmp_path / "missing_scanner.json"
+    fee_wall = tmp_path / "fee_wall_forensics_latest.json"
+    uplift.write_text(json.dumps({
+        "agent_id": "pine_edge_uplift_agent_v1",
+        "summary": {"experiments": 1},
+        "experiments": [
+            {
+                "experiment_id": "trail_replay",
+                "experiment_type": "execution_filtered_replay",
+                "recommended_port": "trail_exit_lab_v1",
+                "primitive_stack": ["trend_trail", "momentum_confirm"],
+                "source_script_ids": ["luxy"],
+                "source_titles": ["Luxy"],
+                "failed_cells": 4,
+                "positive_cells": 2,
+                "best_avg_net_bps": 13.5,
+                "best_profit_factor": 1.72,
+                "salvage_score": 88,
+            }
+        ],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    fee_wall.write_text(json.dumps({
+        "strict_fee_wall_candidates": [
+            {
+                "exchange": "binanceusdm",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "verdict": "MIXED_ROUTE_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 16,
+                "avg_selected_net_bps": 13.54,
+                "profit_factor": 1.73,
+            }
+        ],
+    }))
+
+    payload = run_edge_uplift_executor(
+        uplift_path=uplift,
+        scanner_path=scanner,
+        fee_wall_path=fee_wall,
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    task = payload["tasks"][0]
+    assert task["status"] == "READY_FOR_REPLAY"
+    assert task["scanner_support"]["state"] == "DISCOVERY_WATCHLIST"
+    assert task["candidate_matches"][0]["evidence_source"] == "fee_wall_forensics_latest.json"
+    assert task["candidate_matches"][0]["strategy_id"] == "luxy_ut_bot_forecast_v1"

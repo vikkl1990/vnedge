@@ -477,6 +477,7 @@ services:
       - orderflow-footprint-miner
       - event-leadlag-miner
       - candidate-replay-executor
+      - fee-wall-forensics
       - pine-alpha-distiller
     command: ["python", "-m", "vnedge.research.pine_backtest_evidence",
               "--interval-seconds", "${PINE_BACKTEST_EVIDENCE_INTERVAL_SECONDS:-1800}",
@@ -515,7 +516,7 @@ services:
       options: { max-size: "10m", max-file: "3" }
 
   # Research-only executor queue. Converts Pine edge-uplift experiments plus
-  # scanner tournament evidence into concrete causal-port, replay, feature-bank,
+  # scanner/fee-wall evidence into concrete causal-port, replay, feature-bank,
   # and untouched-judgment tasks. It never trades or promotes.
   edge-uplift-executor:
     build: .
@@ -524,10 +525,12 @@ services:
     depends_on:
       - pine-edge-uplift-agent
       - scanner-tournament
+      - fee-wall-forensics
     command: ["python", "-m", "vnedge.research.edge_uplift_executor",
               "--interval-seconds", "${EDGE_UPLIFT_EXECUTOR_INTERVAL_SECONDS:-1800}",
               "--uplift", "research/live_research/pine_edge_uplift_agent_latest.json",
               "--scanner", "research/live_research/scanner_tournament_latest.json",
+              "--fee-wall", "research/live_research/fee_wall_forensics_latest.json",
               "--out", "research/live_research/edge_uplift_experiments_latest.json",
               "--feed", "research/live_research/edge_uplift_experiments_feed.jsonl"]
     volumes:

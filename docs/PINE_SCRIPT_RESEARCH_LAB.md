@@ -66,9 +66,12 @@ python -m vnedge.research.pine_backtest_evidence \
 This command overlays VNEDGE-owned primitive evidence from artifacts such as
 `alpha_distillation_latest.json`, `daily_scalper_cadence_latest.json`,
 `orderflow_footprint_latest.json`, `candidate_replay_latest.json`, and
-`event_leadlag_latest.json` onto each source-backed Pine row. A completed cell
-means "the matching VNEDGE primitive has evidence"; it does **not** mean the
-original Pine script was executed, copied, or approved for shadow/paper/live.
+`event_leadlag_latest.json` onto each source-backed Pine row. It also consumes
+`fee_wall_forensics_latest.json`, which is the broadest current fee-aware
+replay surface for Luxara/Luxy/Stealth/SATS-style causal Python scanners. A
+completed cell means "the matching VNEDGE primitive has evidence"; it does
+**not** mean the original Pine script was executed, copied, or approved for
+shadow/paper/live.
 Rows still require a causal Python port and untouched-window judgment before
 any promotion discussion.
 
