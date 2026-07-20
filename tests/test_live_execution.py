@@ -51,7 +51,7 @@ class FakeCcxt:
 
 def adapter(client, **kw) -> CcxtExecutionAdapter:
     return CcxtExecutionAdapter(
-        api_key="k", api_secret="s", testnet=True, client=client, **kw
+        api_key="k", api_secret="s", live_confirmed=True, client=client, **kw
     )
 
 
@@ -64,6 +64,20 @@ def test_mainnet_requires_explicit_confirmation():
 def test_missing_keys_refused():
     with pytest.raises(ValueError, match="credentials"):
         CcxtExecutionAdapter(api_key="", api_secret="", client=FakeCcxt([]))
+
+
+def test_delta_india_requires_native_execution_adapter():
+    with pytest.raises(ValueError, match="DeltaRestExecutionAdapter"):
+        CcxtExecutionAdapter(
+            "delta_india", api_key="k", api_secret="s", live_confirmed=True,
+            client=FakeCcxt([]),
+        )
+
+
+def test_testnet_execution_is_disabled():
+    with pytest.raises(ValueError, match="testnet"):
+        CcxtExecutionAdapter(api_key="k", api_secret="s", testnet=True,
+                             client=FakeCcxt([]))
 
 
 async def test_happy_path_uses_journaled_client_id():

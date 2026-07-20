@@ -1,4 +1,4 @@
-"""Live / testnet trader runtime.
+"""Live trader runtime.
 
 The paper session's counterpart that submits REAL orders through the
 CcxtExecutionAdapter. Every safety property is preserved and one is added:
@@ -6,8 +6,9 @@ CcxtExecutionAdapter. Every safety property is preserved and one is added:
 - THREE-GATE ENFORCEMENT: the session refuses to construct unless
   settings.is_live (a live_* mode AND live_trading_enabled AND the exact
   confirmation phrase). There is no way to run it with a real adapter
-  without all three. Mainnet adds a fourth gate inside the adapter
-  (live_confirmed); testnet stops at three.
+  without all three. The adapter adds ``live_confirmed`` as a fourth
+  mainnet-construction gate; testnet/sandbox execution is not a validation
+  path for scalping.
 - No bypass of PreTradeRiskGateway: every intent goes through OrderManager,
   exactly as in paper.
 - emergency_reduce_only mode blocks new entries; only reduce-only exits flow.

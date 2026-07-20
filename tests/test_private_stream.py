@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from vnedge.config.risk_config import RiskConfig
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
@@ -238,6 +240,7 @@ async def test_ccxt_private_stream_applies_orders_and_fills(tmp_path):
     stream = CcxtPrivateStream(
         api_key="k",
         api_secret="s",
+        live_confirmed=True,
         client=client,
         applier=applier,
     )
@@ -255,3 +258,16 @@ async def test_ccxt_private_stream_applies_orders_and_fills(tmp_path):
 
     await stream.close()
     assert client.closed
+
+
+def test_ccxt_private_stream_refuses_testnet(tmp_path):
+    om = manager(tmp_path)
+    applier = PrivateStreamEventApplier(om)
+    with pytest.raises(ValueError, match="testnet"):
+        CcxtPrivateStream(
+            api_key="k",
+            api_secret="s",
+            testnet=True,
+            client=FakePrivateClient("coid"),
+            applier=applier,
+        )

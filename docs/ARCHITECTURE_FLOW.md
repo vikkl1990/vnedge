@@ -264,7 +264,7 @@ RESEARCH_TIMEFRAME=1h
 | Scalper scanners and edge miner | Branch | Discover all derivative pairs; rank lanes by liquidity, PF, route cost, fill evidence, sample sufficiency, and microstructure hypothesis expectancy. |
 | Structural alpha factory | Branch | Mines forced-flow, absorption, microprice, thin-book, and volatility-impulse hypotheses; queues replay only. |
 | Scalper parameter registry | Branch | Frozen TF/horizon, family, fee, route, and exit-policy map published into research payloads. |
-| Live Binance testnet execution | Next | Required before any live mode. |
+| Bounded production mainnet execution drill | Current | Required before any live mode; testnet/sandbox liquidity is not accepted as scalper evidence. |
 | Private order/fill stream | Current | CCXT-Pro private order/fill events update OrderManager through legal state transitions and WAL. |
 | Private stream reconciliation | Partial | Orders/fills are real-time; positions/balances/margin/leverage still need REST truth pass before live. |
 | L2 order book builder | Current | Recorder writes L2 shards with L1 aliases for replay. |

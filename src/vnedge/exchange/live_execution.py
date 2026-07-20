@@ -1,12 +1,13 @@
-"""Live/testnet execution adapter — the last link in the execution chain.
+"""Live execution adapter — the last link in the execution chain.
 
 Implements the same ExecutionAdapter protocol the paper broker does, against
 a real venue via CCXT. Safety posture:
 
-- **Testnet by default.** Constructing with ``testnet=False`` additionally
-  requires ``live_confirmed=True`` — wired only from the (future) live
-  trader after the three-gate settings check. There is no code path that
-  reaches mainnet by accident.
+- **Production-data only.** Testnet/sandbox execution is refused because fake
+  liquidity and matching behavior are not valid scalper evidence. Real orders
+  require ``live_confirmed=True`` — wired only from the live trader or bounded
+  execution drill after the three-gate settings check. There is no code path
+  that reaches mainnet by accident.
 - **Idempotent by client_order_id**: the venue receives our journaled id as
   the client order id. A duplicate-id rejection is resolved by fetching the
   existing order — never by minting a new id.
@@ -27,6 +28,8 @@ from vnedge.execution.order_state import ManagedOrder
 
 logger = logging.getLogger(__name__)
 
+_NATIVE_EXECUTION_ONLY_IDS = frozenset({"delta", "delta_india", "deltaindia"})
+
 
 class CcxtExecutionAdapter:
     def __init__(
@@ -35,14 +38,24 @@ class CcxtExecutionAdapter:
         *,
         api_key: str,
         api_secret: str,
-        testnet: bool = True,
+        testnet: bool = False,
         live_confirmed: bool = False,
         max_submit_attempts: int = 2,
         client: object | None = None,  # injectable for tests
     ) -> None:
+        if exchange_id in _NATIVE_EXECUTION_ONLY_IDS:
+            raise ValueError(
+                "Delta India execution requires DeltaRestExecutionAdapter; "
+                "the CCXT adapter is public/research-only for Delta in VNEDGE"
+            )
+        if testnet:
+            raise ValueError(
+                "testnet execution is disabled: use production market data with "
+                "dry-run/shadow, then gated mainnet drill/live_small only"
+            )
         if not api_key or not api_secret:
             raise ValueError("execution adapter requires API credentials (trade-only keys)")
-        if not testnet and not live_confirmed:
+        if not live_confirmed:
             raise ValueError(
                 "mainnet execution requires live_confirmed=True — only the live "
                 "trader sets this, after the three-gate settings check"
@@ -67,8 +80,6 @@ class CcxtExecutionAdapter:
             overrides = _API_URL_OVERRIDES.get(exchange_id)
             if overrides:
                 self._ex.urls["api"] = {**self._ex.urls.get("api", {}), **overrides}
-            if testnet:
-                self._ex.set_sandbox_mode(True)
 
     # --- read-only helpers (drill + reconciliation surface) -------------------
     async def fetch_balance(self) -> dict:
