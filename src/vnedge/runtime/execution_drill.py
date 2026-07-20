@@ -45,6 +45,7 @@ from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
 
 logger = logging.getLogger(__name__)
 
+_DELTA_NATIVE_EXECUTION_IDS = frozenset({"delta", "delta_india", "deltaindia"})
 _HARD_MAX_DRILL_NOTIONAL = 25.0   # USD; code constant, not configurable
 _DEFAULT_NOTIONAL = 8.0
 _FAR_OFFSET_PCT = 15.0            # limit buy this far below mid — cannot fill
@@ -111,6 +112,17 @@ async def run_execution_drill(
         journal.append("execution_drill", {"report": _to_dict(report)})
         return report
     report.add("pre_live_checklist", True, "all checks cleared")
+
+    if config.exchange_id in _DELTA_NATIVE_EXECUTION_IDS and adapter_factory is None:
+        report.add(
+            "delta_native_drill",
+            False,
+            "Delta India submit/cancel/status is native, but the mainnet drill "
+            "also requires native balance, position, open-order, mid-price, and "
+            "precision reads before it can safely validate order lifecycle",
+        )
+        journal.append("execution_drill", {"report": _to_dict(report)})
+        return report
 
     # --- Notional cap: code constant wins over any configuration ---
     notional = min(config.order_notional_usd, _HARD_MAX_DRILL_NOTIONAL)
@@ -228,7 +240,7 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="bounded mainnet execution drill")
     p.add_argument("--exchange", required=True,
-                   help="ccxt id: binanceusdm | bybit | delta_india")
+                   help="execution id: binanceusdm | bybit (Delta native drill pending)")
     p.add_argument("--symbol", default="DOGE/USDT:USDT")
     p.add_argument("--notional", type=float, default=_DEFAULT_NOTIONAL,
                    help=f"order notional USD (hard cap {_HARD_MAX_DRILL_NOTIONAL})")

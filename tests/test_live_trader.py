@@ -35,7 +35,7 @@ def live_settings(mode=TradingMode.LIVE_SMALL, enabled=True,
 
 
 class FakeFeed:
-    exchange_id = "binanceusdm-testnet"
+    exchange_id = "binanceusdm"
 
     def __init__(self, rows, quote=(99.99, 100.01)):
         self.closed_candles = asyncio.Queue()

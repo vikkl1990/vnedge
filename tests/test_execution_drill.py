@@ -139,3 +139,17 @@ async def test_drill_blocked_by_checklist(tmp_path, monkeypatch):
     assert not report.cleared
     assert any(s.name == "pre_live_checklist" and not s.ok for s in report.steps)
     assert fake.submitted == []
+
+
+async def test_delta_drill_requires_native_read_surfaces(tmp_path, monkeypatch):
+    _env(monkeypatch, tmp_path)
+    settings = Settings(**LIVE_ENV)
+    report = await run_execution_drill(
+        settings,
+        DrillConfig(exchange_id="delta_india", symbol="BTC/USD:USD"),
+        journal=DecisionJournal(tmp_path / "drill.jsonl"),
+    )
+    assert not report.cleared
+    check = next(s for s in report.steps if s.name == "delta_native_drill")
+    assert not check.ok
+    assert "balance" in check.detail and "position" in check.detail

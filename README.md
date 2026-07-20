@@ -31,14 +31,16 @@ bot, not a leverage casino, not a profit machine.
 3. **Backtester** — fee/slippage/funding-aware, walk-forward validation.
 4. **Strategies** — hybrid regime-filtered strategies; Freqtrade used for rapid research.
 5. **Paper trading** — live data, simulated broker, drift monitoring vs backtest.
-6. **Live execution** — only after the 10-point pre-live checklist passes; starts
-   on Binance testnet, then smallest viable capital on one venue.
+6. **Live execution** — only after the 10-point pre-live checklist passes; uses
+   production market data and a bounded mainnet drill, then smallest viable
+   capital on one venue. Testnet data is not accepted as scalper evidence.
 7. **Monitoring** — Streamlit dashboard, Telegram alerts, Prometheus optional.
 
 ## Exchange sequencing
 
-- **Binance Futures** first: best documentation, real testnet, deepest liquidity —
-  the development and validation venue.
+- **Binance Futures** first: best documentation and deepest production
+  liquidity — the development and validation venue for real market-data
+  paper/shadow lanes. Testnet/sandbox liquidity is not used for edge proof.
 - **Delta Exchange India** second: India-domiciled, smaller contract sizes that
   suit micro capital, candidate first live venue.
 - **Bybit** third, once the `BaseExchange` interface is proven by two implementations.

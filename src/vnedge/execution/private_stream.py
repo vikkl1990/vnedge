@@ -164,7 +164,8 @@ class CcxtPrivateStream:
     """Thin CCXT-Pro private stream wrapper.
 
     A fake `client` can be injected for tests. Without a client this constructs
-    a real `ccxt.pro` exchange in sandbox mode by default.
+    a real `ccxt.pro` exchange on production endpoints only; testnet/sandbox
+    private streams are refused because they are not valid execution evidence.
     """
 
     def __init__(
@@ -174,14 +175,19 @@ class CcxtPrivateStream:
         api_key: str,
         api_secret: str,
         applier: PrivateStreamEventApplier,
-        testnet: bool = True,
+        testnet: bool = False,
         live_confirmed: bool = False,
         client: object | None = None,
         health: PrivateStreamHealth | None = None,
     ) -> None:
         if not api_key or not api_secret:
             raise ValueError("private stream requires API credentials (trade-only keys)")
-        if not testnet and not live_confirmed:
+        if testnet:
+            raise ValueError(
+                "testnet private streams are disabled: use production private "
+                "truth behind live_confirmed gates"
+            )
+        if not live_confirmed:
             raise ValueError("mainnet private stream requires live_confirmed=True")
         self.exchange_id = exchange_id
         self.testnet = testnet
@@ -195,8 +201,6 @@ class CcxtPrivateStream:
             self._ex = getattr(ccxt_pro, exchange_id)(
                 {"apiKey": api_key, "secret": api_secret, "enableRateLimit": True}
             )
-            if testnet:
-                self._ex.set_sandbox_mode(True)
 
     async def close(self) -> None:
         close = getattr(self._ex, "close", None)

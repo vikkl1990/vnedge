@@ -50,8 +50,9 @@ Rules:
   unknown-state-inducing. Retries use bounded backoff and respect venue rate
   limits.
 - Emergency flatten: cancel all working orders, close all positions
-  reduce-only, in one idempotent operation. Tested on testnet before any live
-  enablement (pre-live checklist item).
+  reduce-only, in one idempotent operation. Validated with the bounded
+  production mainnet execution drill before any live enablement; testnet data
+  and fills are not accepted as scalper execution evidence.
 
 ## 3. Exchange reconciliation engine (milestone 6)
 
