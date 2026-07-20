@@ -211,6 +211,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "phase": "labeling_opportunities",
         "started_at": "2026-07-19T00:00:00+00:00",
         "heartbeat_at": "2026-07-19T00:01:00+00:00",
+        "stale_after_seconds": 900,
         "target_count": 2,
         "strategy_count": 3,
         "total_work_units": 6,
@@ -306,6 +307,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     progress_payload = p.json()
     assert progress_payload["truth_layer"] == "scanner_tournament_progress_v1"
     assert progress_payload["status"] == "running"
+    assert progress_payload["stale_after_seconds"] == 900
     assert progress_payload["current_strategy"] == "stealth_trail_bbp_v1"
     assert progress_payload["can_trade"] is False
     assert progress_payload["can_promote"] is False
