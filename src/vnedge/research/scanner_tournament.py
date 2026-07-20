@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import signal
+import threading
 import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -42,6 +44,8 @@ TournamentVerdict = Literal[
     "NO_ROUTED_TRADES",
 ]
 ProgressStatus = Literal["running", "completed", "failed"]
+DEFAULT_PROGRESS_HEARTBEAT_SECONDS = 60
+DEFAULT_PROGRESS_STALE_AFTER_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -258,6 +262,7 @@ def build_scanner_tournament_progress(
     routes: int | None = None,
     output_path: Path | str | None = None,
     last_error: str | None = None,
+    stale_after_seconds: int = DEFAULT_PROGRESS_STALE_AFTER_SECONDS,
 ) -> dict:
     targets_tuple = tuple(targets)
     strategies_tuple = tuple(strategy_ids)
@@ -275,6 +280,7 @@ def build_scanner_tournament_progress(
         "phase": phase,
         "started_at": started_at,
         "heartbeat_at": now,
+        "stale_after_seconds": max(1, int(stale_after_seconds)),
         "completed_at": now if status in {"completed", "failed"} else None,
         "profile": profile.name,
         "lookback_days": lookback_days,
@@ -756,6 +762,18 @@ def main(argv: list[str] | None = None) -> int:
         "--progress",
         default="research/live_research/scanner_tournament_progress.json",
     )
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=int,
+        default=DEFAULT_PROGRESS_HEARTBEAT_SECONDS,
+        help="refresh running progress this often during long per-lane replays",
+    )
+    parser.add_argument(
+        "--stale-after-seconds",
+        type=int,
+        default=DEFAULT_PROGRESS_STALE_AFTER_SECONDS,
+        help="UI stale threshold for a missing scanner tournament heartbeat",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -776,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
             "routes": None,
             "last_error": None,
         }
+        publish_lock = threading.RLock()
+        stop_heartbeat = threading.Event()
 
         def publish_state(
             status: ProgressStatus,
@@ -783,27 +803,29 @@ def main(argv: list[str] | None = None) -> int:
             event: dict | None = None,
             last_error: str | None = None,
         ) -> None:
-            payload = event or last_event
-            publish_progress(
-                build_scanner_tournament_progress(
-                    status=status,
-                    phase=phase,
-                    started_at=started_at,
-                    profile=profile,
-                    targets=targets,
-                    strategy_ids=strategies,
-                    lookback_days=args.lookback_days,
-                    completed_work_units=int(payload.get("completed_work_units") or 0),
-                    total_work_units=int(payload.get("total_work_units") or total_work_units),
-                    current_target=payload.get("target"),
-                    current_strategy=payload.get("strategy_id"),
-                    rows=payload.get("rows"),
-                    routes=payload.get("routes"),
-                    output_path=args.output,
-                    last_error=last_error or payload.get("last_error"),
-                ),
-                args.progress,
-            )
+            payload = dict(event or last_event)
+            with publish_lock:
+                publish_progress(
+                    build_scanner_tournament_progress(
+                        status=status,
+                        phase=phase,
+                        started_at=started_at,
+                        profile=profile,
+                        targets=targets,
+                        strategy_ids=strategies,
+                        lookback_days=args.lookback_days,
+                        completed_work_units=int(payload.get("completed_work_units") or 0),
+                        total_work_units=int(payload.get("total_work_units") or total_work_units),
+                        current_target=payload.get("target"),
+                        current_strategy=payload.get("strategy_id"),
+                        rows=payload.get("rows"),
+                        routes=payload.get("routes"),
+                        output_path=args.output,
+                        last_error=last_error or payload.get("last_error"),
+                        stale_after_seconds=args.stale_after_seconds,
+                    ),
+                    args.progress,
+                )
 
         def progress_callback(event: dict) -> None:
             nonlocal last_event
@@ -814,8 +836,41 @@ def main(argv: list[str] | None = None) -> int:
                 event=last_event,
             )
 
-        publish_state("running", "initializing")
+        def heartbeat_loop() -> None:
+            interval = max(1, int(args.heartbeat_seconds))
+            while not stop_heartbeat.wait(interval):
+                publish_state(
+                    "running",
+                    str(last_event.get("phase") or "running"),
+                )
+
+        heartbeat_thread: threading.Thread | None = None
+        if args.heartbeat_seconds > 0:
+            heartbeat_thread = threading.Thread(
+                target=heartbeat_loop,
+                name="scanner-tournament-progress-heartbeat",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        previous_sigint = signal.getsignal(signal.SIGINT)
+
+        def handle_shutdown(signum: int, _frame: object) -> None:
+            publish_state(
+                "failed",
+                "interrupted",
+                last_error=(
+                    f"received signal {signum}; scanner tournament stopped "
+                    "before publishing a complete report"
+                ),
+            )
+            raise SystemExit(128 + signum)
+
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGINT, handle_shutdown)
         try:
+            publish_state("running", "initializing")
             report = run_scanner_tournament(
                 data_root=args.data_root,
                 targets=targets,
@@ -840,6 +895,12 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             publish_state("failed", "failed", last_error=str(exc))
             raise
+        finally:
+            stop_heartbeat.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=1)
+            signal.signal(signal.SIGTERM, previous_sigterm)
+            signal.signal(signal.SIGINT, previous_sigint)
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))
         else:

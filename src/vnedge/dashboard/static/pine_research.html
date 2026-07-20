@@ -519,7 +519,8 @@
     const boundedPct=Math.max(0,Math.min(100,pct));
     const age=ageSeconds(payload.heartbeat_at);
     const status=String(payload.status||"idle").toUpperCase();
-    const stale=status==="RUNNING"&&age!=null&&age>300;
+    const staleAfter=Number(payload.stale_after_seconds||300);
+    const stale=status==="RUNNING"&&age!=null&&age>staleAfter;
     text("bp_status",stale?"STALE":status);
     text("bp_phase",payload.phase?"phase "+payload.phase:"phase --");
     text("bp_pct",boundedPct.toFixed(1)+"%");
@@ -534,7 +535,7 @@
     if(payload.last_error){
       answer="Backtest worker reported an error: "+payload.last_error+". Results are not complete until the progress status returns to COMPLETED and evidence is republished.";
     }else if(stale){
-      answer="Scanner tournament progress heartbeat is stale. The worker may be stalled or the dashboard may be reading an old artifact; check the scanner-tournament container before trusting queued cells.";
+      answer="Scanner tournament progress heartbeat is stale after "+Math.round(staleAfter)+"s. The worker may be stalled or the dashboard may be reading an old artifact; check the scanner-tournament container before trusting queued cells.";
     }else if(status==="RUNNING"){
       answer="Scanner tournament is actively replaying strategy/venue/timeframe work units. Current rows and routes are research-only labels; no paper/live promotion can happen from this progress stream.";
     }else if(status==="COMPLETED"){

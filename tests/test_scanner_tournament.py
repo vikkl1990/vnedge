@@ -168,10 +168,12 @@ def test_progress_payload_is_visibility_only_and_atomic(tmp_path):
         rows=1440,
         routes=12,
         output_path="research/live_research/scanner_tournament_latest.json",
+        stale_after_seconds=900,
     )
 
     assert progress["truth_layer"] == "scanner_tournament_progress_v1"
     assert progress["progress_pct"] == 50.0
+    assert progress["stale_after_seconds"] == 900
     assert progress["current_target"]["exchange"] == "delta_india"
     assert progress["current_strategy"] == "luxara_live_plan_qtm_v1"
     assert progress["can_trade"] is False
