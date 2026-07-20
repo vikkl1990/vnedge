@@ -384,7 +384,14 @@ def fee_wall_paper_probe_lanes(
     """
     if not _truthy(environ, "MULTI_LANE_FEE_WALL_PAPER_PROBES", "0"):
         return []
-    path = Path(
+    manifest_path = Path(
+        environ.get(
+            "MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH",
+            "research/live_research/fee_wall_paper_probes.json",
+        )
+    )
+    source_is_manifest = manifest_path.exists()
+    path = manifest_path if source_is_manifest else Path(
         environ.get(
             "MULTI_LANE_FEE_WALL_FORENSICS_PATH",
             "research/live_research/fee_wall_forensics_latest.json",
@@ -399,7 +406,7 @@ def fee_wall_paper_probe_lanes(
         logger.warning("fee-wall paper probes requested but %s is invalid: %s", path, exc)
         return []
 
-    if _artifact_is_stale(payload, environ):
+    if not source_is_manifest and _artifact_is_stale(payload, environ):
         logger.warning(
             "fee-wall paper probes skipped: %s generated_at=%r is stale",
             path, payload.get("generated_at"),
@@ -415,7 +422,7 @@ def fee_wall_paper_probe_lanes(
     )
 
     specs: list[LaneSpec] = []
-    for candidate in payload.get("strict_fee_wall_candidates") or []:
+    for candidate in _paper_probe_candidates(payload):
         if not _candidate_ok_for_paper_probe(
             candidate,
             min_routed=min_routed,
@@ -447,6 +454,15 @@ def fee_wall_paper_probe_lanes(
             )
         )
     return dedupe_lane_specs(specs)
+
+
+def _paper_probe_candidates(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
+    raw = payload.get("paper_probes")
+    if raw is None:
+        raw = payload.get("strict_fee_wall_candidates")
+    if not isinstance(raw, list):
+        return []
+    return [row for row in raw if isinstance(row, Mapping)]
 
 
 def _artifact_is_stale(

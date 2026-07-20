@@ -93,6 +93,13 @@ MULTI_LANE_FEE_WALL_PAPER_PROBES=1 \
 python -m vnedge.runtime.multi_lane_shadow
 ```
 
+The preferred durable source is
+`research/live_research/fee_wall_paper_probes.json` with a `paper_probes` list.
+If that file is absent, the runner can bootstrap from a fresh
+`fee_wall_forensics_latest.json`. This prevents an approved multi-day paper
+probe from disappearing on restart just because the original research artifact
+aged out.
+
 These lanes simulate fills on live public market data through the same gateway,
 journal, order manager, and `PaperBroker` path as every other paper lane. They
 are not live-capital lanes, do not mount a live adapter, and write separate
@@ -103,6 +110,8 @@ Default probe guards:
 
 - latest artifact path:
   `research/live_research/fee_wall_forensics_latest.json`
+- durable manifest path:
+  `research/live_research/fee_wall_paper_probes.json`
 - max artifact age: 72 hours
 - routed opportunities: >= 10
 - average selected net edge: >= 8 bps

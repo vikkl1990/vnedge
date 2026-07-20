@@ -423,6 +423,38 @@ def test_fee_wall_paper_probes_are_disabled_and_freshness_guarded(tmp_path):
     }) == []
 
 
+def test_fee_wall_probe_manifest_is_durable_after_source_artifact_ages(tmp_path):
+    manifest = {
+        "approved_by": "human",
+        "approval": "promote to live-data paper probes",
+        "generated_at": "2000-01-01T00:00:00+00:00",
+        "paper_probes": [
+            {
+                "exchange": "binanceusdm",
+                "symbol": "SOL/USDT:USDT",
+                "timeframe": "1h",
+                "strategy": "luxara_live_plan_qtm_v1",
+                "verdict": "MAKER_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 10,
+                "avg_selected_net_bps": 15.2,
+                "profit_factor": 1.34,
+            },
+        ],
+    }
+    path = tmp_path / "fee_wall_paper_probes.json"
+    path.write_text(json.dumps(manifest))
+
+    probes = fee_wall_paper_probe_lanes({
+        "MULTI_LANE_FEE_WALL_PAPER_PROBES": "1",
+        "MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH": str(path),
+    })
+
+    assert [probe.lane_id for probe in probes] == [
+        "fee_wall_luxara_live_plan_qtm_binanceusdm_sol_usdt_usdt_1h_paper_probe"
+    ]
+
+
 def test_lane_specs_reject_unknown_mode():
     import pytest
     with pytest.raises(ValueError, match="unknown multi-lane mode"):
