@@ -37,6 +37,15 @@ TaskStatus = Literal[
     "BLOCKED_NO_PORT",
 ]
 
+REPLAY_EXPERIMENT_TYPES = {
+    "execution_filtered_replay",
+    "confluence_stack_replay",
+}
+FEATURE_BANK_EXPERIMENT_TYPES = {
+    "edge_model_feature_bank",
+    "context_feature_bank",
+}
+
 
 @dataclass(frozen=True)
 class PortDefinition:
@@ -77,6 +86,7 @@ class EdgeUpliftTask:
     positive_cells: int
     best_avg_net_bps: float | None
     best_profit_factor: float | None
+    port_implementation: dict
     scanner_support: dict
     candidate_matches: tuple[dict, ...]
     required_data: tuple[str, ...]
@@ -425,7 +435,8 @@ def _task_for_experiment(
     port_id = port.port_id if port is not None else raw_port
     matches = _candidate_matches(port, scanner_candidates)
     support = _scanner_support(matches)
-    status = _status(experiment_type, raw_port, port, support)
+    implementation = _port_implementation(port)
+    status = _status(experiment_type, raw_port, port, support, implementation)
     priority = _priority(experiment, support, status)
     task_id = _task_id(index, port_id, experiment_type)
     primitives = tuple(
@@ -457,6 +468,7 @@ def _task_for_experiment(
         positive_cells=_int(experiment.get("positive_cells")),
         best_avg_net_bps=_float(experiment.get("best_avg_net_bps")),
         best_profit_factor=_float(experiment.get("best_profit_factor")),
+        port_implementation=implementation,
         scanner_support=support,
         candidate_matches=matches,
         required_data=tuple(experiment.get("required_data") or ()) or (
@@ -631,18 +643,56 @@ def _status(
     raw_port: str,
     port: PortDefinition | None,
     support: dict,
+    implementation: dict,
 ) -> TaskStatus:
     if port is None or not raw_port and experiment_type != "edge_model_feature_bank":
         return "BLOCKED_NO_PORT"
-    if experiment_type == "edge_model_feature_bank" or port.family == "feature_bank":
+    if experiment_type in FEATURE_BANK_EXPERIMENT_TYPES or port.family == "feature_bank":
         return "FEATURE_BANK_ONLY"
     if experiment_type == "untouched_judgment_candidate":
         return "READY_FOR_UNTOUCHED_JUDGMENT"
-    if experiment_type == "execution_filtered_replay":
-        return "READY_FOR_REPLAY"
+    if experiment_type in REPLAY_EXPERIMENT_TYPES:
+        if implementation.get("state") == "VNEDGE_PORT_REGISTERED":
+            return "READY_FOR_REPLAY"
+        return "NEEDS_CAUSAL_PORT"
     if support.get("state") in {"STRICT_WATCHLIST", "DISCOVERY_WATCHLIST"}:
         return "READY_FOR_REPLAY"
     return "NEEDS_CAUSAL_PORT"
+
+
+def _port_implementation(port: PortDefinition | None) -> dict:
+    if port is None:
+        return {
+            "state": "NO_PORT_DEFINITION",
+            "registered_strategy_aliases": [],
+            "missing_strategy_aliases": [],
+        }
+    if port.family == "feature_bank":
+        return {
+            "state": "FEATURE_BANK_PORT",
+            "registered_strategy_aliases": [],
+            "missing_strategy_aliases": [],
+        }
+    registry = _strategy_registry_ids()
+    registered = sorted(alias for alias in port.strategy_aliases if alias in registry)
+    missing = sorted(alias for alias in port.strategy_aliases if alias not in registry)
+    if registered:
+        state = "VNEDGE_PORT_REGISTERED"
+    elif port.strategy_aliases:
+        state = "PORT_ALIASES_UNREGISTERED"
+    else:
+        state = "NO_RUNTIME_ALIAS"
+    return {
+        "state": state,
+        "registered_strategy_aliases": registered,
+        "missing_strategy_aliases": missing,
+    }
+
+
+def _strategy_registry_ids() -> set[str]:
+    from vnedge.strategy.strategy_registry import STRATEGIES
+
+    return set(STRATEGIES)
 
 
 def _executor_action(status: TaskStatus) -> str:
