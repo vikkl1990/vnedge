@@ -3,6 +3,7 @@
 data/
 logs/
 models/
+research/live_research/
 __pycache__/
 *.pyc
 .pytest_cache/
