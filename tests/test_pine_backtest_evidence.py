@@ -198,3 +198,106 @@ def test_pine_backtest_evidence_does_not_headline_pf_without_positive_net(tmp_pa
     assert evidence["best_completed_avg_net_bps"] == -15.57
     assert evidence["best_completed_profit_factor"] == 999.0
     assert evidence["headline_verdict"] == "NO_POSITIVE_COMPLETED_EDGE"
+
+
+def test_pine_backtest_evidence_ingests_fee_wall_forensics(tmp_path):
+    kb = tmp_path / "kb.json"
+    distiller = tmp_path / "distiller.json"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    kb.write_text(json.dumps({
+        "generated_at": "2026-07-18T00:00:00+00:00",
+        "source": "unit",
+        "records": [
+            {
+                "script_id": "range_source",
+                "title": "Range Source",
+                "source_available": True,
+                "crypto_portability": "PORTABLE",
+                "crypto_fit_score": 80,
+            },
+            {
+                "script_id": "trail_source",
+                "title": "Trail Source",
+                "source_available": True,
+                "crypto_portability": "PORTABLE_WITH_CHANGES",
+                "crypto_fit_score": 75,
+            },
+        ],
+    }), encoding="utf-8")
+    distiller.write_text(json.dumps({
+        "script_distillations": [
+            {
+                "script_id": "range_source",
+                "recommended_port": "range_expansion_breakout_v1",
+                "action": "PORT_CANDIDATE",
+            },
+            {
+                "script_id": "trail_source",
+                "recommended_port": "trail_exit_lab_v1",
+                "action": "PORT_CANDIDATE",
+            },
+        ]
+    }), encoding="utf-8")
+    (reports / "fee_wall_forensics_latest.json").write_text(json.dumps({
+        "generated_at": "2026-07-19T12:00:00+00:00",
+        "reports": [
+            {
+                "exchange": "binanceusdm",
+                "symbol": "SOL/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxara_live_plan_qtm_v1",
+                "generated_at": "2026-07-19T12:01:00+00:00",
+                "opportunity_count": 12,
+                "summary": {
+                    "verdict": "MAKER_EDGE",
+                    "routed": 12,
+                    "avg_selected_net_bps": 18.25,
+                    "profit_factor": 1.32,
+                    "win_rate_pct": 58.3,
+                    "primary_blocker": "maker-first opportunities clear edge gate",
+                    "exit_diagnosis_counts": {"CAPTURED_AFTER_COST": 8},
+                },
+            },
+            {
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "opportunity_count": 2,
+                "summary": {
+                    "verdict": "UNDER_SAMPLED",
+                    "routed": 2,
+                    "avg_selected_net_bps": 42.0,
+                    "profit_factor": 999.0,
+                    "win_rate_pct": 100.0,
+                    "primary_blocker": "only 2 routed events; need >= 10",
+                    "exit_diagnosis_counts": {"CAPTURED_AFTER_COST": 2},
+                },
+            },
+        ],
+    }), encoding="utf-8")
+
+    payload = publish_pine_backtest_evidence(
+        kb_path=kb,
+        distiller_path=distiller,
+        report_dir=reports,
+        output_path=tmp_path / "out.json",
+        feed_path=None,
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    by_id = {row["script_id"]: row for row in payload["records"]}
+    range_cells = {cell["timeframe"]: cell for cell in by_id["range_source"]["backtests"]}
+    trail_cells = {cell["timeframe"]: cell for cell in by_id["trail_source"]["backtests"]}
+    assert range_cells["15m"]["status"] == "passed"
+    assert range_cells["15m"]["evidence_source"] == "fee_wall_forensics_latest.json"
+    assert range_cells["15m"]["tested_strategy"] == "luxara_live_plan_qtm_v1"
+    assert range_cells["15m"]["samples"] == 12
+    assert range_cells["15m"]["avg_net_bps"] == 18.25
+    assert "MAKER_EDGE" in range_cells["15m"]["blocker"]
+    assert trail_cells["5m"]["status"] == "failed"
+    assert trail_cells["5m"]["avg_net_bps"] == 42.0
+    assert "UNDER_SAMPLED" in trail_cells["5m"]["blocker"]
+    assert payload["backtest_evidence"]["completed_cells"] == 2
+    assert payload["backtest_evidence"]["positive_completed_cells"] == 2

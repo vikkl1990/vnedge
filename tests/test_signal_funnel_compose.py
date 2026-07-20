@@ -41,6 +41,7 @@ def test_pine_backtest_evidence_refreshes_matrix_overlay():
         "orderflow-footprint-miner",
         "event-leadlag-miner",
         "candidate-replay-executor",
+        "fee-wall-forensics",
         "pine-alpha-distiller",
     }
 
@@ -83,10 +84,16 @@ def test_edge_uplift_executor_materializes_agent_tasks():
     assert "research/live_research/pine_edge_uplift_agent_latest.json" in service["command"]
     assert "--scanner" in service["command"]
     assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "--fee-wall" in service["command"]
+    assert "research/live_research/fee_wall_forensics_latest.json" in service["command"]
     assert "--out" in service["command"]
     assert "research/live_research/edge_uplift_experiments_latest.json" in service["command"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
-    assert set(service["depends_on"]) == {"pine-edge-uplift-agent", "scanner-tournament"}
+    assert set(service["depends_on"]) == {
+        "pine-edge-uplift-agent",
+        "scanner-tournament",
+        "fee-wall-forensics",
+    }
 
 
 def test_scanner_tournament_lowers_only_research_discovery_governance():

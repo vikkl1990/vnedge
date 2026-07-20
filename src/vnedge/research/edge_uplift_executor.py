@@ -25,6 +25,7 @@ from typing import Iterable, Literal
 EDGE_UPLIFT_EXECUTOR_ID = "edge_uplift_executor_v1"
 DEFAULT_UPLIFT = Path("research/live_research/pine_edge_uplift_agent_latest.json")
 DEFAULT_SCANNER = Path("research/live_research/scanner_tournament_latest.json")
+DEFAULT_FEE_WALL = Path("research/live_research/fee_wall_forensics_latest.json")
 DEFAULT_OUT = Path("research/live_research/edge_uplift_experiments_latest.json")
 DEFAULT_FEED = Path("research/live_research/edge_uplift_experiments_feed.jsonl")
 
@@ -93,6 +94,7 @@ def run_edge_uplift_executor(
     *,
     uplift_path: Path | str = DEFAULT_UPLIFT,
     scanner_path: Path | str = DEFAULT_SCANNER,
+    fee_wall_path: Path | str | None = DEFAULT_FEE_WALL,
     max_experiments: int = 12,
     now: datetime | None = None,
 ) -> dict:
@@ -101,6 +103,7 @@ def run_edge_uplift_executor(
     generated = now or datetime.now(UTC)
     uplift = _read_json(Path(uplift_path))
     scanner = _read_json(Path(scanner_path))
+    fee_wall = _read_json(Path(fee_wall_path)) if fee_wall_path is not None else {}
     experiments = [
         dict(row)
         for row in uplift.get("experiments", [])
@@ -110,7 +113,7 @@ def run_edge_uplift_executor(
         dict(row)
         for row in scanner.get("candidates", [])
         if isinstance(row, dict)
-    )
+    ) + _fee_wall_support_candidates(fee_wall)
     ports = causal_port_pack_v1()
     tasks = tuple(
         _task_for_experiment(
@@ -128,6 +131,7 @@ def run_edge_uplift_executor(
         "source": {
             "uplift": str(uplift_path),
             "scanner": str(scanner_path),
+            "fee_wall": str(fee_wall_path) if fee_wall_path is not None else None,
         },
         "summary": summary,
         "port_pack": [port.to_dict() for port in ports.values()],
@@ -498,6 +502,7 @@ def _candidate_matches(
             "profit_factor": row.get("profit_factor"),
             "dominant_route": row.get("dominant_route"),
             "strict_watchlist": row.get("strict_watchlist"),
+            "evidence_source": row.get("evidence_source"),
         })
     return tuple(
         sorted(
@@ -539,6 +544,86 @@ def _scanner_support(matches: tuple[dict, ...]) -> dict:
         "best_profit_factor": best.get("profit_factor"),
         "best_routed": best.get("routed") or 0,
     }
+
+
+def _fee_wall_support_candidates(report: dict) -> tuple[dict, ...]:
+    rows: list[dict] = []
+    for key, default_verdict in (
+        ("strict_fee_wall_candidates", "DISCOVERY_WATCHLIST"),
+        ("sample_expansion_candidates", "NEEDS_MORE_SAMPLES"),
+        ("exit_salvage_candidates", "REJECT_NEGATIVE_AFTER_COST"),
+    ):
+        raw_rows = report.get(key, [])
+        iterable = raw_rows if isinstance(raw_rows, list) else []
+        for index, row in enumerate(iterable, start=1):
+            if not isinstance(row, dict):
+                continue
+            strategy = str(row.get("strategy") or "")
+            if not strategy:
+                continue
+            avg = _float(row.get("avg_selected_net_bps"))
+            pf = _float(row.get("profit_factor"))
+            routed = _int(row.get("routed"))
+            verdict = default_verdict
+            if (
+                key == "strict_fee_wall_candidates"
+                and routed >= 20
+                and avg is not None
+                and avg >= 25.0
+                and pf is not None
+                and pf >= 1.5
+            ):
+                verdict = "STRICT_PROOF_WATCHLIST"
+            rows.append({
+                "rank": index,
+                "candidate_id": _fee_wall_candidate_id(row, key),
+                "verdict": verdict,
+                "recommended_action": row.get("recommended_action"),
+                "score": _fee_wall_score(row, verdict),
+                "exchange": row.get("exchange"),
+                "symbol": row.get("symbol"),
+                "timeframe": row.get("timeframe"),
+                "strategy_id": strategy,
+                "routed": routed,
+                "avg_selected_net_bps": avg,
+                "profit_factor": pf,
+                "dominant_route": _dominant_fee_wall_route(row),
+                "strict_watchlist": verdict == "STRICT_PROOF_WATCHLIST",
+                "evidence_source": "fee_wall_forensics_latest.json",
+            })
+    return tuple(rows)
+
+
+def _fee_wall_candidate_id(row: dict, bucket: str) -> str:
+    strategy = _safe_id(str(row.get("strategy") or "strategy"))
+    exchange = _safe_id(str(row.get("exchange") or "exchange"))
+    symbol = _safe_id(str(row.get("symbol") or "symbol"))
+    timeframe = _safe_id(str(row.get("timeframe") or "tf"))
+    return f"fee_wall_{bucket}|{strategy}|{exchange}|{symbol}|{timeframe}"
+
+
+def _fee_wall_score(row: dict, verdict: str) -> float:
+    avg = _float(row.get("avg_selected_net_bps")) or -50.0
+    pf = min(_float(row.get("profit_factor")) or 0.0, 5.0)
+    routed = min(_int(row.get("routed")), 100)
+    if verdict == "STRICT_PROOF_WATCHLIST":
+        bonus = 25.0
+    elif verdict == "DISCOVERY_WATCHLIST":
+        bonus = 8.0
+    else:
+        bonus = 0.0
+    return round(avg + pf * 4.0 + routed ** 0.5 + bonus, 4)
+
+
+def _dominant_fee_wall_route(row: dict) -> str | None:
+    verdict = str(row.get("verdict") or "")
+    if verdict == "MAKER_EDGE":
+        return "MAKER"
+    if verdict == "TAKER_EDGE":
+        return "TAKER"
+    if verdict == "MIXED_ROUTE_EDGE":
+        return "MAKER_THEN_TAKER"
+    return None
 
 
 def _status(
@@ -786,6 +871,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="build edge-uplift executor queue")
     parser.add_argument("--uplift", default=str(DEFAULT_UPLIFT))
     parser.add_argument("--scanner", default=str(DEFAULT_SCANNER))
+    parser.add_argument("--fee-wall", default=str(DEFAULT_FEE_WALL))
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--feed", default=str(DEFAULT_FEED))
     parser.add_argument("--max-experiments", type=int, default=12)
@@ -800,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = run_edge_uplift_executor(
             uplift_path=args.uplift,
             scanner_path=args.scanner,
+            fee_wall_path=args.fee_wall,
             max_experiments=args.max_experiments,
         )
         publish_edge_uplift_executor(payload, out=args.out, feed=args.feed)

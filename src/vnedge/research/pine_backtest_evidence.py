@@ -48,6 +48,34 @@ DIRECT_15M_PORTS = {
     "trend_momentum_context_v1",
 }
 
+STRATEGY_TO_PORTS: dict[str, tuple[str, ...]] = {
+    "luxara_break_bounce_v27_v1": (
+        "fvg_liquidity_breakout_v1",
+        "range_expansion_breakout_v1",
+    ),
+    "luxara_live_plan_qtm_v1": (
+        "range_expansion_breakout_v1",
+        "trend_momentum_context_v1",
+    ),
+    "luxy_ut_bot_forecast_v1": (
+        "trail_exit_lab_v1",
+        "trend_momentum_context_v1",
+    ),
+    "momentum_cascade_lyro_v1": (
+        "trail_exit_lab_v1",
+        "trend_momentum_context_v1",
+    ),
+    "sats_5m_scalper_v1": (
+        "range_expansion_breakout_v1",
+        "trend_momentum_context_v1",
+    ),
+    "stealth_trail_bbp_v1": (
+        "orderflow_proxy_v1",
+        "trail_exit_lab_v1",
+        "trend_momentum_context_v1",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class PrimitiveEvidence:
@@ -160,6 +188,7 @@ def build_evidence_index(report_dir: Path) -> dict[str, dict[str, PrimitiveEvide
     _ingest_orderflow(index, _read_json(report_dir / "orderflow_footprint_latest.json"))
     _ingest_candidate_replay(index, _read_json(report_dir / "candidate_replay_latest.json"))
     _ingest_event_leadlag(index, _read_json(report_dir / "event_leadlag_latest.json"))
+    _ingest_fee_wall_forensics(index, _read_json(report_dir / "fee_wall_forensics_latest.json"))
     return index
 
 
@@ -348,6 +377,34 @@ def _ingest_event_leadlag(index: dict, report: dict) -> None:
     )
 
 
+def _ingest_fee_wall_forensics(index: dict, report: dict) -> None:
+    """Map fee-wall scanner truth onto Pine primitive port families.
+
+    Fee-wall forensics is the current broadest source of VNEDGE-owned replay
+    evidence for Pine-inspired scanners.  It is strategy-level evidence, not
+    original Pine execution, so rows retain the tested VNEDGE strategy and
+    remain research-only.
+    """
+
+    for row in _report_rows(report):
+        strategy = str(row.get("strategy") or "")
+        ports = STRATEGY_TO_PORTS.get(strategy, ())
+        if not ports:
+            continue
+        summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+        for port in ports:
+            _add_evidence(
+                index,
+                _evidence_from_fee_wall_report(
+                    row,
+                    summary,
+                    port=port,
+                    source="fee_wall_forensics_latest.json",
+                    updated_at=str(row.get("generated_at") or report.get("generated_at") or ""),
+                ),
+            )
+
+
 def _evidence_from_wf_row(row: dict, *, port: str, source: str) -> PrimitiveEvidence:
     status = "passed" if str(row.get("verdict")) == "PASS" else "failed"
     samples = _int(row.get("oos_trades"))
@@ -370,6 +427,41 @@ def _evidence_from_wf_row(row: dict, *, port: str, source: str) -> PrimitiveEvid
         symbol=str(row.get("symbol") or ""),
         verdict=str(row.get("verdict") or ""),
         updated_at=str(row.get("updated") or ""),
+    )
+
+
+def _evidence_from_fee_wall_report(
+    row: dict,
+    summary: dict,
+    *,
+    port: str,
+    source: str,
+    updated_at: str,
+) -> PrimitiveEvidence:
+    verdict = str(summary.get("verdict") or "UNKNOWN")
+    status = "passed" if verdict in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"} else "failed"
+    blocker = str(summary.get("primary_blocker") or verdict)
+    exit_counts = summary.get("exit_diagnosis_counts")
+    if isinstance(exit_counts, dict) and exit_counts:
+        top_exit = max(exit_counts.items(), key=lambda item: int(item[1] or 0))
+        blocker = f"{verdict}: {blocker}; exit={top_exit[0]}:{top_exit[1]}"
+    else:
+        blocker = f"{verdict}: {blocker}"
+    return PrimitiveEvidence(
+        port=port,
+        timeframe=str(row.get("timeframe") or ""),
+        status=status,
+        samples=_int(summary.get("routed") or row.get("opportunity_count")),
+        avg_net_bps=_float_or_none(summary.get("avg_selected_net_bps")),
+        profit_factor=_float_or_none(summary.get("profit_factor")),
+        win_rate_pct=_float_or_none(summary.get("win_rate_pct")),
+        blocker=blocker,
+        source=source,
+        strategy=str(row.get("strategy") or ""),
+        exchange=str(row.get("exchange") or ""),
+        symbol=str(row.get("symbol") or ""),
+        verdict=verdict,
+        updated_at=updated_at,
     )
 
 
@@ -443,7 +535,7 @@ def _add_evidence(index: dict[str, dict[str, PrimitiveEvidence]], evidence: Prim
 def _report_rows(report: dict) -> list[dict]:
     if not isinstance(report, dict):
         return []
-    for key in ("results", "rows", "candidates", "hypotheses", "recommendations"):
+    for key in ("results", "rows", "reports", "candidates", "hypotheses", "recommendations"):
         value = report.get(key)
         if isinstance(value, list):
             return [dict(row) for row in value if isinstance(row, dict)]
