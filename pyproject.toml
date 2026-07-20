@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Explainable, risk-controlled crypto F&O/perpetuals trading assistant"
 requires-python = ">=3.11"
 dependencies = [
+    "delta-rest-client>=1.0.14",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "ccxt>=4.3",
