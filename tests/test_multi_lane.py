@@ -1,14 +1,19 @@
 """Multi-lane shadow — provider fan-in, primary flat snapshot, comparison array."""
 
+import json
+
 from vnedge.runtime import multi_lane
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
 from vnedge.runtime.multi_lane_shadow import (
     build_lane_specs_from_env,
     desired_lane_specs,
+    fee_wall_paper_probe_lanes,
     lane_specs_fingerprint,
     paper_observation_lanes,
 )
 from vnedge.runtime.runner_config import RunnerMode
+from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
+from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.stealth_trail_bbp import STEALTH_TRAIL_BBP_ID, StealthTrailBBPScanner
 
 
@@ -134,6 +139,18 @@ def test_multi_lane_builds_stealth_trail_bbp_strategy():
     strategy = multi_lane._build_single_strategy(STEALTH_TRAIL_BBP_ID, {}, None, None)
 
     assert isinstance(strategy, StealthTrailBBPScanner)
+
+
+def test_multi_lane_builds_lux_scanner_strategies():
+    luxy = multi_lane._build_single_strategy(
+        "luxy_ut_bot_forecast_v1", {}, None, None
+    )
+    luxara = multi_lane._build_single_strategy(
+        "luxara_live_plan_qtm_v1", {}, None, None
+    )
+
+    assert isinstance(luxy, LuxyUTBotForecastScanner)
+    assert isinstance(luxara, LuxaraLivePlanQTMScanner)
 
 
 def test_publish_error_adds_faulted_lane():
@@ -307,6 +324,103 @@ def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors(
         spec.exchange == "delta_india" and spec.mode is RunnerMode.PAPER
         for spec in specs
     )
+
+
+def test_fee_wall_strict_candidates_become_isolated_paper_probes(tmp_path):
+    report = {
+        "generated_at": "2999-01-01T00:00:00+00:00",
+        "strict_fee_wall_candidates": [
+            {
+                "exchange": "binanceusdm",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "verdict": "MIXED_ROUTE_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 16,
+                "avg_selected_net_bps": 13.5,
+                "profit_factor": 1.72,
+            },
+            {
+                "exchange": "delta_india",
+                "symbol": "SOL/USD:USD",
+                "timeframe": "15m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "verdict": "MIXED_ROUTE_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 23,
+                "avg_selected_net_bps": 12.2,
+                "profit_factor": 1.43,
+            },
+            {
+                "exchange": "bybit",
+                "symbol": "SOL/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "stealth_trail_bbp_v1",
+                "verdict": "MAKER_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 72,
+                "avg_selected_net_bps": 8.4,
+                "profit_factor": 1.22,
+            },
+            {
+                "exchange": "binanceusdm",
+                "symbol": "ETH/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "verdict": "UNDER_SAMPLED",
+                "recommended_action": "EXPAND_SAMPLE_OR_LOWER_TIMEFRAME_TRIGGER",
+                "routed": 2,
+                "avg_selected_net_bps": 50.0,
+                "profit_factor": 999.0,
+            },
+        ],
+    }
+    path = tmp_path / "fee_wall_forensics_latest.json"
+    path.write_text(json.dumps(report))
+
+    probes = fee_wall_paper_probe_lanes({
+        "MULTI_LANE_FEE_WALL_PAPER_PROBES": "1",
+        "MULTI_LANE_FEE_WALL_FORENSICS_PATH": str(path),
+    })
+
+    ids = {probe.lane_id for probe in probes}
+    assert ids == {
+        "fee_wall_luxy_ut_bot_forecast_binanceusdm_btc_usdt_usdt_15m_paper_probe",
+        "fee_wall_luxy_ut_bot_forecast_delta_india_sol_usd_usd_15m_paper_probe",
+        "fee_wall_stealth_trail_bbp_bybit_sol_usdt_usdt_15m_paper_probe",
+    }
+    assert all(probe.mode is RunnerMode.PAPER for probe in probes)
+    assert all(not probe.is_primary for probe in probes)
+
+
+def test_fee_wall_paper_probes_are_disabled_and_freshness_guarded(tmp_path):
+    stale = {
+        "generated_at": "2000-01-01T00:00:00+00:00",
+        "strict_fee_wall_candidates": [
+            {
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxy_ut_bot_forecast_v1",
+                "verdict": "MIXED_ROUTE_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 20,
+                "avg_selected_net_bps": 20.0,
+                "profit_factor": 2.0,
+            },
+        ],
+    }
+    path = tmp_path / "fee_wall_forensics_latest.json"
+    path.write_text(json.dumps(stale))
+
+    assert fee_wall_paper_probe_lanes({
+        "MULTI_LANE_FEE_WALL_FORENSICS_PATH": str(path),
+    }) == []
+    assert fee_wall_paper_probe_lanes({
+        "MULTI_LANE_FEE_WALL_PAPER_PROBES": "1",
+        "MULTI_LANE_FEE_WALL_FORENSICS_PATH": str(path),
+    }) == []
 
 
 def test_lane_specs_reject_unknown_mode():

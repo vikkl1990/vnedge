@@ -50,6 +50,16 @@ services:
       # MULTI_LANE_PAPER_OBSERVE_ALL flag is enabled.
       MULTI_LANE_SATS_5M_DELTA: "${MULTI_LANE_SATS_5M_DELTA:-1}"
       MULTI_LANE_SATS_5M_SYMBOLS: "${MULTI_LANE_SATS_5M_SYMBOLS:-ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT}"
+      # Human-approved live-data PAPER probes from fee_wall_forensics strict
+      # candidates. These are simulated fills only, isolated ledgers, and NOT
+      # live-capital promotion. The artifact must be fresh and still clear the
+      # configured floors before any probe lane is launched.
+      MULTI_LANE_FEE_WALL_PAPER_PROBES: "${MULTI_LANE_FEE_WALL_PAPER_PROBES:-1}"
+      MULTI_LANE_FEE_WALL_FORENSICS_PATH: "${MULTI_LANE_FEE_WALL_FORENSICS_PATH:-research/live_research/fee_wall_forensics_latest.json}"
+      MULTI_LANE_FEE_WALL_PROBE_MAX_AGE_HOURS: "${MULTI_LANE_FEE_WALL_PROBE_MAX_AGE_HOURS:-72}"
+      MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED: "${MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED:-10}"
+      MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS: "${MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS:-8}"
+      MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR: "${MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR:-1.15}"
       # Runtime control-plane guard: if research/live_research/shadow_lanes.json
       # changes after startup, exit deliberately so Docker reloads the exact
       # desired lane set. This prevents MISSING/STALE/ORPHAN drift.

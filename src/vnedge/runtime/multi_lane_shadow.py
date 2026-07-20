@@ -36,6 +36,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from vnedge.runtime.multi_lane import (
@@ -76,6 +77,13 @@ STEALTH_TRAIL_BBP_PARAMS: dict = {
     "min_body_atr": 0.45,
     "min_body_percentile": 0.60,
 }
+FEE_WALL_PAPER_PROBE_STRATEGIES = {
+    "luxara_live_plan_qtm_v1",
+    "luxy_ut_bot_forecast_v1",
+    "stealth_trail_bbp_v1",
+}
+FEE_WALL_PAPER_PROBE_VERDICTS = {"MAKER_EDGE", "MIXED_ROUTE_EDGE"}
+FEE_WALL_PAPER_PROBE_ACTION = "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW"
 
 DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
@@ -357,6 +365,148 @@ def stealth_trail_bbp_delta_lanes(
     ]
 
 
+def fee_wall_paper_probe_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Promote strict fee-wall candidates into isolated live-data PAPER probes.
+
+    This is deliberately weaker than a governed paper trial and stronger than a
+    chart screenshot:
+
+    - enabled only by ``MULTI_LANE_FEE_WALL_PAPER_PROBES=1``;
+    - reads the latest research artifact and accepts only strict fee-wall rows;
+    - writes separate ``*_paper_probe`` ledgers, never the governed trial ids;
+    - keeps real orders impossible because the multi-lane runner mounts only the
+      simulated PaperBroker.
+
+    The artifact can still say ``can_promote=false`` because these probes are
+    live-market sample expansion, not a live-capital promotion.
+    """
+    if not _truthy(environ, "MULTI_LANE_FEE_WALL_PAPER_PROBES", "0"):
+        return []
+    path = Path(
+        environ.get(
+            "MULTI_LANE_FEE_WALL_FORENSICS_PATH",
+            "research/live_research/fee_wall_forensics_latest.json",
+        )
+    )
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        logger.warning("fee-wall paper probes requested but %s is missing", path)
+        return []
+    except json.JSONDecodeError as exc:
+        logger.warning("fee-wall paper probes requested but %s is invalid: %s", path, exc)
+        return []
+
+    if _artifact_is_stale(payload, environ):
+        logger.warning(
+            "fee-wall paper probes skipped: %s generated_at=%r is stale",
+            path, payload.get("generated_at"),
+        )
+        return []
+
+    min_routed = int(environ.get("MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED", "10"))
+    min_avg_net_bps = float(
+        environ.get("MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS", "8.0")
+    )
+    min_profit_factor = float(
+        environ.get("MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR", "1.15")
+    )
+
+    specs: list[LaneSpec] = []
+    for candidate in payload.get("strict_fee_wall_candidates") or []:
+        if not _candidate_ok_for_paper_probe(
+            candidate,
+            min_routed=min_routed,
+            min_avg_net_bps=min_avg_net_bps,
+            min_profit_factor=min_profit_factor,
+        ):
+            continue
+        try:
+            exchange = str(candidate["exchange"])
+            symbol = str(candidate["symbol"])
+            timeframe = str(candidate["timeframe"])
+            strategy_id = str(candidate["strategy"])
+        except KeyError:
+            continue
+        if exchange == DELTA_EXCHANGE:
+            symbol = _delta_india_symbol(symbol)
+        specs.append(
+            LaneSpec(
+                lane_id=_fee_wall_probe_lane_id(
+                    exchange, symbol, timeframe, strategy_id
+                ),
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_id=strategy_id,
+                strategy_params=_default_params_for_strategy(strategy_id),
+                mode=RunnerMode.PAPER,
+                is_primary=False,
+            )
+        )
+    return dedupe_lane_specs(specs)
+
+
+def _artifact_is_stale(
+    payload: Mapping[str, object], environ: Mapping[str, str]
+) -> bool:
+    raw_hours = environ.get("MULTI_LANE_FEE_WALL_PROBE_MAX_AGE_HOURS", "72")
+    try:
+        max_age_hours = float(raw_hours)
+    except ValueError:
+        max_age_hours = 72.0
+    if max_age_hours <= 0:
+        return False
+    generated_at = payload.get("generated_at")
+    if not isinstance(generated_at, str) or not generated_at:
+        return True
+    try:
+        ts = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds() > max_age_hours * 3600
+
+
+def _candidate_ok_for_paper_probe(
+    candidate: Mapping[str, object],
+    *,
+    min_routed: int,
+    min_avg_net_bps: float,
+    min_profit_factor: float,
+) -> bool:
+    strategy_id = str(candidate.get("strategy", ""))
+    verdict = str(candidate.get("verdict", ""))
+    action = str(candidate.get("recommended_action", ""))
+    try:
+        routed = int(candidate.get("routed") or candidate.get("opportunities") or 0)
+        avg_net = float(candidate.get("avg_selected_net_bps"))
+        profit_factor = float(candidate.get("profit_factor"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        strategy_id in FEE_WALL_PAPER_PROBE_STRATEGIES
+        and verdict in FEE_WALL_PAPER_PROBE_VERDICTS
+        and action == FEE_WALL_PAPER_PROBE_ACTION
+        and routed >= min_routed
+        and avg_net >= min_avg_net_bps
+        and profit_factor >= min_profit_factor
+    )
+
+
+def _fee_wall_probe_lane_id(
+    exchange: str, symbol: str, timeframe: str, strategy_id: str
+) -> str:
+    strategy_slug = strategy_id.removesuffix("_v1")
+    return (
+        f"fee_wall_{strategy_slug}_{exchange}_{_slug_symbol(symbol)}_"
+        f"{timeframe}_paper_probe"
+    )
+
+
 def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     raw = environ.get(name, default)
     return [part.strip() for part in raw.split(",") if part.strip()]
@@ -528,6 +678,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + delta_funding_mr_lanes(environ)
         + sats_5m_delta_lanes(environ)
         + stealth_trail_bbp_delta_lanes(environ)
+        + fee_wall_paper_probe_lanes(environ)
     )
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 

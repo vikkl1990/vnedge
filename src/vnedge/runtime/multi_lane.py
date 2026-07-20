@@ -48,6 +48,8 @@ from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
+from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.sats_5m_scalper import Sats5mScalper
@@ -392,6 +394,10 @@ def _build_single_strategy(
         return Sats5mScalper(seed_funding, **params)
     if strategy_id == "stealth_trail_bbp_v1":
         return StealthTrailBBPScanner(seed_funding, **params)
+    if strategy_id == "luxy_ut_bot_forecast_v1":
+        return LuxyUTBotForecastScanner(seed_funding, **params)
+    if strategy_id == "luxara_live_plan_qtm_v1":
+        return LuxaraLivePlanQTMScanner(seed_funding, **params)
     if strategy_id == "smc_playbook_scalper_v1":
         return SMCPlaybookScalper(seed_funding, **params)
     if strategy_id == "trend_retest_v1":

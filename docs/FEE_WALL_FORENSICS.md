@@ -83,6 +83,38 @@ sample, net-bps, and PF floors inside this research run. That still is not a
 promotion. The correct next action is a pre-registered untouched-window
 judgment, not immediate paper/live deployment.
 
+## Live-Data Paper Probes
+
+After explicit human approval, the multi-lane runtime can turn strict fee-wall
+rows into isolated **paper probes**:
+
+```bash
+MULTI_LANE_FEE_WALL_PAPER_PROBES=1 \
+python -m vnedge.runtime.multi_lane_shadow
+```
+
+These lanes simulate fills on live public market data through the same gateway,
+journal, order manager, and `PaperBroker` path as every other paper lane. They
+are not live-capital lanes, do not mount a live adapter, and write separate
+`fee_wall_*_paper_probe` account/journal/fill ledgers so they cannot collide
+with governed paper trials.
+
+Default probe guards:
+
+- latest artifact path:
+  `research/live_research/fee_wall_forensics_latest.json`
+- max artifact age: 72 hours
+- routed opportunities: >= 10
+- average selected net edge: >= 8 bps
+- profit factor: >= 1.15
+- verdict: `MAKER_EDGE` or `MIXED_ROUTE_EDGE`
+- recommended action:
+  `PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW`
+
+A paper probe is for live-data sample expansion and execution-behaviour
+evidence. It still cannot promote to shadow/live without the normal untouched
+judgment and ladder evidence.
+
 Use `exit_salvage_candidates` when `avg_mfe_after_cost_bps` is positive but
 realized net is not. That means the entry found enough movement to beat fees,
 but the stop/target/trail/horizon failed to capture it. Those are the best
