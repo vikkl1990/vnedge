@@ -222,3 +222,68 @@ the default smart runner improves the result but remains negative after costs.
 The next build should test a VNEDGE-owned execution uplift around this signal:
 maker-first entry, stricter participation filter, faster invalidation, and taker
 fallback only when forecasted move exceeds fees plus buffer.
+
+## Repeatable Contract-Risk Matrix
+
+The one-off VM loop is now a first-class research command:
+
+```bash
+python -m vnedge.research.vnedge_algo_ml_pro_contract_matrix \
+  --data-root data \
+  --exchange delta_india \
+  --symbols BTCUSD ETHUSD SOLUSD XRPUSD BNBUSD DOGEUSD \
+  --timeframes 1m 5m 15m 1h 4h \
+  --capture-modes pine_tp3 smart_ladder \
+  --lookback-days 30 \
+  --sizing-mode delta_contract_risk \
+  --delta-live-product-spec \
+  --account-equity-usd 500 \
+  --risk-per-trade-pct 1 \
+  --paper-margin-usd 100 \
+  --paper-leverage 25 \
+  --acknowledge-high-leverage \
+  --fee-cost-bps 12.5 \
+  --out research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json
+```
+
+The matching uplift agent is:
+
+```bash
+python -m vnedge.research.scanner_backtest_uplift \
+  --input research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json \
+  --source-name vnedge_algo_ml_pro_contract_matrix \
+  --input research/live_research/scanner_tournament_latest.json \
+  --source-name scanner_tournament \
+  --out research/live_research/scanner_backtest_uplift_latest.json
+```
+
+Both commands are wired into Docker Compose as scheduled research-only services:
+
+- `vnedge-algo-ml-pro-contract-matrix`
+- `scanner-backtest-uplift`
+
+The latest 30-day Delta India matrix with live contract specs produced:
+
+- `60` rows: 6 pairs x 5 timeframes x 2 capture modes.
+- `0` promotable proof candidates.
+- `1` positive-after-cost sparse row: `BTCUSD 1h smart_ladder`
+  (`+3.97 bps`, 11 trades), which is below both sample and 25 bps gates.
+- `9` fee-wall near misses.
+- `15` visual-only positives, meaning the chart can look good before costs but
+  fails after fees/slippage.
+
+Top uplift targets:
+
+| Rank | Pair | TF | Mode | Fee-Aware Avg | PF(R) | Needed Uplift |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| 1 | DOGEUSD | 15m | smart_ladder | -1.44 bps | 1.20 | +26.44 bps |
+| 2 | BTCUSD | 15m | smart_ladder | -3.18 bps | 1.35 | +28.18 bps |
+| 3 | BTCUSD | 15m | pine_tp3 | -3.86 bps | 1.40 | +28.86 bps |
+| 4 | DOGEUSD | 15m | pine_tp3 | -3.29 bps | 1.15 | +28.29 bps |
+| 5 | XRPUSD | 15m | pine_tp3 | -6.62 bps | 1.48 | +31.62 bps |
+
+Architecture read: the candidate family is not dead as a visual detector, but it
+is not an executable bot edge yet. The correct next experiment is
+`maker_first_context_filtered_replay` on 15m DOGE/BTC/XRP and ETH 5m/15m:
+require HTF bias, BBP/ADX agreement, volume impulse, room-to-liquidity, and
+maker-first route evidence before any taker fallback.

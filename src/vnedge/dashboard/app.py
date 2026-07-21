@@ -391,6 +391,7 @@ def create_app(
     backtest_progress_path: Path | None = None,
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
+    scanner_backtest_uplift_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -490,6 +491,10 @@ def create_app(
     edge_uplift_executor_file = (
         edge_uplift_executor_path
         or Path("research/live_research/edge_uplift_experiments_latest.json")
+    )
+    scanner_backtest_uplift_file = (
+        scanner_backtest_uplift_path
+        or Path("research/live_research/scanner_backtest_uplift_latest.json")
     )
 
     @app.get("/")
@@ -911,6 +916,26 @@ def create_app(
                     "port_pack": [],
                     "tasks": [],
                     "operator_answer": "edge uplift executor artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/scanner-uplift")
+    async def scanner_backtest_uplift(request: Request) -> JSONResponse:
+        """Backtest-failure classifications and scanner uplift experiments."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                scanner_backtest_uplift_file,
+                {
+                    "agent_id": "scanner_backtest_uplift_v1",
+                    "summary": {},
+                    "top_uplifts": [],
+                    "experiments": [],
+                    "operator_answer": "scanner backtest uplift artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },

@@ -31,6 +31,8 @@ New route:
 - `/pine-research/kb` serves the token-gated JSON knowledge base.
 - `/pine-research/distiller` serves the token-gated source-backed primitive
   and VNEDGE port-task queue.
+- `/pine-research/scanner-uplift` serves the token-gated fee-wall/near-miss
+  uplift report from completed scanner backtests.
 
 The endpoint falls back to a seed payload when the generated artifact is absent,
 so the page remains useful during early deployment. The expected generated
@@ -74,6 +76,44 @@ completed cell means "the matching VNEDGE primitive has evidence"; it does
 shadow/paper/live.
 Rows still require a causal Python port and untouched-window judgment before
 any promotion discussion.
+
+For the supplied `VNEDGE ALGO ML Pro` Pine scanner, the Pine Lab now has a
+dedicated exact-lifecycle Delta contract-risk matrix:
+
+```bash
+python -m vnedge.research.vnedge_algo_ml_pro_contract_matrix \
+  --data-root data \
+  --exchange delta_india \
+  --symbols BTCUSD ETHUSD SOLUSD XRPUSD BNBUSD DOGEUSD \
+  --timeframes 1m 5m 15m 1h 4h \
+  --capture-modes pine_tp3 smart_ladder \
+  --sizing-mode delta_contract_risk \
+  --delta-live-product-spec \
+  --account-equity-usd 500 \
+  --risk-per-trade-pct 1 \
+  --paper-margin-usd 100 \
+  --paper-leverage 25 \
+  --acknowledge-high-leverage \
+  --fee-cost-bps 12.5
+```
+
+The scanner backtest uplift layer then reads that matrix plus the broad scanner
+tournament and classifies every row as promotable, sparse-positive, fee-wall
+near-miss, visual-only, overscalp bleed, or reject:
+
+```bash
+python -m vnedge.research.scanner_backtest_uplift \
+  --input research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json \
+  --source-name vnedge_algo_ml_pro_contract_matrix \
+  --input research/live_research/scanner_tournament_latest.json \
+  --source-name scanner_tournament \
+  --out research/live_research/scanner_backtest_uplift_latest.json
+```
+
+Production Compose refreshes both artifacts through
+`vnedge-algo-ml-pro-contract-matrix` and `scanner-backtest-uplift`, so the
+operator should no longer see a static "queued" answer after the backtest has
+actually completed.
 
 The production Compose dashboard mounts this directory read-only:
 
