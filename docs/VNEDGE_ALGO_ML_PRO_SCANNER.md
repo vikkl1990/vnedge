@@ -51,6 +51,33 @@ python -m vnedge.research.execution_edge_router \
   --paper-leverage 25
 ```
 
+Pine-parity replay (same entry/exit lifecycle as the supplied TradingView
+indicator):
+
+```bash
+python -m vnedge.research.vnedge_algo_ml_pro_pine_replay \
+  --data-root data \
+  --exchange delta_india \
+  --symbol ETHUSD \
+  --timeframe 5m \
+  --lookback-days 30 \
+  --paper-margin-usd 100 \
+  --paper-leverage 25
+```
+
+The Pine-parity replay is deliberately separate from the generic fee-wall
+router. It uses the indicator's chart lifecycle exactly:
+
+- enter on the confirmed signal bar's close;
+- stop out only when the bar closes beyond the trailing stop;
+- mark TP1/TP2/TP3 on wick touch, with only TP3 closing the whole trade;
+- update the trailing stop after TP/SL checks;
+- reverse at the current signal close when the opposite signal fires.
+
+The report shows both `visual_*` results, which match the indicator's no-fee
+chart economics, and `fee_aware_*` results, which subtract the venue taker
+round-trip cost. Only fee-aware evidence can ever feed VNEDGE promotion review.
+
 Batch forensics:
 
 ```bash
@@ -108,3 +135,34 @@ after fees. The useful evidence is not "promote as-is"; it is that many entries
 show positive MFE after costs, so the next research uplift should test faster
 target capture, BE-after-TP1, and trail tightening before trying to promote the
 lane.
+
+## Pine-Parity VM Replay
+
+After adding the dedicated Pine-parity lifecycle replay, the same Delta India
+`ETHUSD` lane was rerun with exact chart-style entry/exit mechanics:
+
+| Timeframe | Closed Trades | Win % | PF(R) | Visual Avg | Fee-Aware Avg | Fee-Aware USD | Verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1m | 1,626 | 33.21% | 0.83 | -2.35 bps | -14.85 bps | -$6,036.68 | fail |
+| 5m | 121 | 34.71% | 1.07 | +4.12 bps | -8.38 bps | -$253.56 | fail |
+| 15m | 88 | 32.95% | 1.31 | +1.22 bps | -11.28 bps | -$248.17 | fail |
+| 1h | 12 | 33.33% | 1.30 | -8.94 bps | -21.44 bps | -$64.33 | fail |
+| 4h | 0 | -- | -- | -- | -- | $0.00 | no trades |
+
+Delta India 5m pair sweep:
+
+| Pair | Closed Trades | PF(R) | Visual Avg | Fee-Aware Avg | Fee-Aware USD |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BTCUSD | 308 | 0.88 | -1.25 bps | -13.75 bps | -$1,058.95 |
+| ETHUSD | 121 | 1.07 | +4.12 bps | -8.38 bps | -$253.56 |
+| SOLUSD | 303 | 1.00 | +3.40 bps | -9.10 bps | -$689.21 |
+| XRPUSD | 327 | 0.79 | -6.99 bps | -19.49 bps | -$1,593.29 |
+| BNBUSD | 421 | 0.75 | -1.95 bps | -14.45 bps | -$1,521.17 |
+| DOGEUSD | 365 | 0.73 | -3.74 bps | -16.24 bps | -$1,482.04 |
+
+Conclusion: the TradingView parity gap is fixed. The chart lifecycle explains
+why ETH/SOL can look mildly positive before fees, but no tested lane clears the
+Delta taker fee wall. The next build should not keep retesting this exact entry;
+it should test a VNEDGE-owned execution uplift around this signal: maker-first
+entry, BE/partial-risk reduction after TP1, tighter trail after TP2, and taker
+fallback only when forecasted move exceeds fees plus buffer.
