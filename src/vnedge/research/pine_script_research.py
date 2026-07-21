@@ -522,8 +522,13 @@ def load_pine_extraction_manifest(
 
 def summarize_extraction_manifest(entries: Iterable[dict]) -> dict:
     rows = tuple(entries)
-    statuses = Counter(str(row.get("status") or "unknown") for row in rows)
+    raw_statuses = Counter(str(row.get("status") or "unknown") for row in rows)
+    current_rows = _latest_extraction_entries(rows)
+    statuses = Counter(str(row.get("status") or "unknown") for row in current_rows)
     extracted = [row for row in rows if row.get("status") == "extracted"]
+    current_extracted = [
+        row for row in current_rows if row.get("status") == "extracted"
+    ]
     source_tab_failures = sum(
         count
         for status, count in statuses.items()
@@ -550,15 +555,38 @@ def summarize_extraction_manifest(entries: Iterable[dict]) -> dict:
     )
     return {
         "attempted": len(rows),
-        "extracted": len(extracted),
+        "current_attempts": len(current_rows),
+        "extracted": len(current_extracted),
         "blocked": blocked,
         "errors": statuses["error"],
         "retryable_errors": statuses["error"],
         "source_tab_failures": source_tab_failures,
         "status_counts": dict(sorted(statuses.items())),
+        "raw_status_counts": dict(sorted(raw_statuses.items())),
+        "raw_extracted": len(extracted),
         "latest_attempt_at": latest_at,
         "latest_success_at": latest_success_at,
     }
+
+
+def _latest_extraction_entries(entries: Iterable[dict]) -> tuple[dict, ...]:
+    """Return the latest manifest row per TradingView URL or output artifact."""
+
+    by_key: dict[str, dict] = {}
+    unkeyed: list[dict] = []
+    for row in entries:
+        key = str(row.get("url") or "").strip()
+        if not key:
+            key = str(row.get("output") or row.get("output_name") or "").strip()
+        if not key:
+            unkeyed.append(row)
+            continue
+        existing = by_key.get(key)
+        if existing is None or str(row.get("started_at") or "") >= str(
+            existing.get("started_at") or ""
+        ):
+            by_key[key] = row
+    return tuple([*by_key.values(), *unkeyed])
 
 
 def discover_tradingview_catalog_urls(
@@ -814,10 +842,13 @@ def _with_priority_fields(record: dict) -> dict:
 def _empty_extraction_summary() -> dict:
     return {
         "attempted": 0,
+        "current_attempts": 0,
         "extracted": 0,
         "blocked": 0,
         "errors": 0,
         "status_counts": {},
+        "raw_status_counts": {},
+        "raw_extracted": 0,
         "latest_attempt_at": "",
         "latest_success_at": "",
     }

@@ -425,6 +425,47 @@ def test_load_and_summarize_pine_extraction_manifest(tmp_path):
     assert summary["retryable_errors"] == 1
 
 
+def test_summarize_pine_extraction_manifest_uses_latest_url_status(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        "\n".join([
+            json.dumps({
+                "started_at": "2026-07-18T13:01:00Z",
+                "status": "error",
+                "url": "https://www.tradingview.com/script/BBBB2222-Browser-Failed/",
+                "error": "source tab timed out",
+            }),
+            json.dumps({
+                "started_at": "2026-07-18T13:05:00Z",
+                "status": "extracted",
+                "url": "https://www.tradingview.com/script/BBBB2222-Browser-Failed/",
+                "output": "/tmp/browser_failed_retry.pine",
+                "source_lines": 120,
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    entries = load_pine_extraction_manifest([manifest])
+    summary = summarize_extraction_manifest(entries)
+    audit = build_pine_coverage_audit(
+        [],
+        source_extraction=summary,
+        discovered_total=1,
+    )
+
+    assert summary["attempted"] == 2
+    assert summary["current_attempts"] == 1
+    assert summary["extracted"] == 1
+    assert summary["raw_extracted"] == 1
+    assert summary["errors"] == 0
+    assert summary["retryable_errors"] == 0
+    assert summary["status_counts"] == {"extracted": 1}
+    assert summary["raw_status_counts"] == {"error": 1, "extracted": 1}
+    assert audit["retryable_browser_errors"] == 0
+    assert all(gap["bucket"] != "RETRYABLE_BROWSER_ERRORS" for gap in audit["gaps"])
+
+
 def test_pine_coverage_auditor_explains_missing_discovery_backlog(tmp_path):
     source_dir = tmp_path / "sources"
     source_dir.mkdir()
