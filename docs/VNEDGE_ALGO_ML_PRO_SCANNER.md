@@ -65,6 +65,20 @@ python -m vnedge.research.vnedge_algo_ml_pro_pine_replay \
   --paper-leverage 25
 ```
 
+Smart-capture replay (VNEDGE bot overlay; not exact TradingView parity):
+
+```bash
+python -m vnedge.research.vnedge_algo_ml_pro_pine_replay \
+  --data-root data \
+  --exchange delta_india \
+  --symbol ETHUSD \
+  --timeframe 5m \
+  --lookback-days 30 \
+  --paper-margin-usd 100 \
+  --paper-leverage 25 \
+  --capture-mode smart_ladder
+```
+
 The Pine-parity replay is deliberately separate from the generic fee-wall
 router. It uses the indicator's chart lifecycle exactly:
 
@@ -85,6 +99,15 @@ auditable.
 The report shows both `visual_*` results, which match the indicator's no-fee
 chart economics, and `fee_aware_*` results, which subtract the venue taker
 round-trip cost. Only fee-aware evidence can ever feed VNEDGE promotion review.
+
+`smart_ladder` is a research-only bot overlay for the question "should VNEDGE
+bank or protect the movement instead of waiting passively for TP3?" By default
+it keeps the full runner, moves the stop to breakeven after TP1, and can lock
+TP1 after TP2. Optional `--tp1-capture-fraction` and
+`--tp2-capture-fraction` allow partial banking, but the first VM sweep found
+that early partials improved win rate while reducing expectancy. This is not
+exact Pine parity, but it is the right execution experiment for fee-wall
+recovery.
 
 Batch forensics:
 
@@ -168,9 +191,18 @@ Delta India 5m pair sweep:
 | BNBUSD | 421 | 0.75 | -1.95 bps | -14.45 bps | -$1,521.17 |
 | DOGEUSD | 365 | 0.73 | -3.74 bps | -16.24 bps | -$1,482.04 |
 
+Smart-capture comparison on Delta India `ETHUSD` 5m:
+
+| Mode | Closed Trades | Win % | PF(R) | Visual Avg | Fee-Aware Avg | Fee-Aware USD | Avg Hold |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `pine_tp3` | 121 | 34.71% | 1.07 | +4.12 bps | -8.38 bps | -$253.56 | 16.54 bars |
+| `smart_ladder` default | 121 | 37.19% | 1.19 | +5.44 bps | -7.06 bps | -$213.60 | 14.77 bars |
+| `smart_ladder` 35%/35% partial | 121 | 49.59% | 1.08 | +2.55 bps | -9.95 bps | -$301.06 | 14.77 bars |
+
 Conclusion: the TradingView parity gap is fixed. The chart lifecycle explains
 why ETH/SOL can look mildly positive before fees, but no tested lane clears the
 Delta taker fee wall. The next build should not keep retesting this exact entry;
-it should test a VNEDGE-owned execution uplift around this signal: maker-first
-entry, BE/partial-risk reduction after TP1, tighter trail after TP2, and taker
+the default smart runner improves the result but remains negative after costs.
+The next build should test a VNEDGE-owned execution uplift around this signal:
+maker-first entry, stricter participation filter, faster invalidation, and taker
 fallback only when forecasted move exceeds fees plus buffer.

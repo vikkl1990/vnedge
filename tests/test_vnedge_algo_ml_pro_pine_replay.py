@@ -160,3 +160,66 @@ def test_pine_replay_summary_keeps_visual_and_fee_aware_results_separate():
     assert summary["hold_bars"]["median"] == 1
     assert summary["hold_bars"]["by_exit_reason_avg"] == {"TP3": 1.0}
     assert summary["promotion_gate"]["passed"] is False
+
+
+def test_smart_ladder_captures_tp1_and_moves_runner_to_breakeven():
+    df = _prepared(
+        [
+            {
+                "open": 99.0,
+                "high": 100.0,
+                "low": 98.5,
+                "close": 100.0,
+                "atr_value": 1.0,
+                "st_band": 98.0,
+                "confirmed_long": True,
+            },
+            {
+                "open": 100.0,
+                "high": 102.2,
+                "low": 99.4,
+                "close": 101.0,
+                "atr_value": 1.0,
+                "st_band": 99.0,
+            },
+            {
+                "open": 101.0,
+                "high": 101.2,
+                "low": 98.5,
+                "close": 99.0,
+                "atr_value": 1.0,
+                "st_band": 99.0,
+            },
+        ]
+    )
+    config = PineReplayConfig(
+        fee_cost_bps=12.0,
+        capture_mode="smart_ladder",
+        tp1_capture_fraction=0.35,
+        tp2_capture_fraction=0.35,
+        mark_open_at_end=False,
+    )
+
+    trades = replay_prepared_vnedge_algo_ml_pro(
+        df,
+        params=VNEDGEAlgoMLProParams(use_mtf=False),
+        config=config,
+        fee_cost_bps=12.0,
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.capture_mode == "smart_ladder"
+    assert trade.exit_reason == "SL"
+    assert trade.tp1_hit is True
+    assert trade.tp2_hit is False
+    assert trade.remaining_fraction_closed_at_final == pytest.approx(0.65)
+    assert trade.realized_gross_bps_before_final == pytest.approx(70.0)
+    assert trade.gross_bps == pytest.approx(5.0)
+    assert trade.fee_aware_net_bps == pytest.approx(-7.0)
+
+    summary = summarize_pine_replay_trades(trades, config=config)
+    assert summary["capture_mode"] == "smart_ladder"
+    assert summary["bar_timing"]["tp1_tp2_are_markers_only"] is False
+    assert summary["smart_capture"]["enabled"] is True
+    assert summary["smart_capture"]["runner_fraction"] == pytest.approx(0.30)

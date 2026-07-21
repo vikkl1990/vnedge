@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean, median
+from typing import Literal
 
 import pandas as pd
 
@@ -36,6 +37,9 @@ from vnedge.strategy.vnedge_algo_ml_pro import (
 )
 
 
+CaptureMode = Literal["pine_tp3", "smart_ladder"]
+
+
 @dataclass(frozen=True)
 class PineReplayConfig:
     """Research-only sizing and cost lens for Pine-parity replay."""
@@ -43,6 +47,11 @@ class PineReplayConfig:
     paper_margin_usd: float = 100.0
     paper_leverage: float = 25.0
     fee_cost_bps: float | None = None
+    capture_mode: CaptureMode = "pine_tp3"
+    tp1_capture_fraction: float = 0.0
+    tp2_capture_fraction: float = 0.0
+    move_stop_to_be_after_tp1: bool = True
+    lock_tp1_after_tp2: bool = True
     lookback_days: int = 30
     mark_open_at_end: bool = True
     include_trades: bool = False
@@ -54,6 +63,16 @@ class PineReplayConfig:
             raise ValueError("paper_leverage must be in [1, 30]")
         if self.fee_cost_bps is not None and self.fee_cost_bps < 0:
             raise ValueError("fee_cost_bps cannot be negative")
+        if self.capture_mode not in ("pine_tp3", "smart_ladder"):
+            raise ValueError("capture_mode must be pine_tp3 or smart_ladder")
+        for name, value in (
+            ("tp1_capture_fraction", self.tp1_capture_fraction),
+            ("tp2_capture_fraction", self.tp2_capture_fraction),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if self.tp1_capture_fraction + self.tp2_capture_fraction >= 1.0:
+            raise ValueError("tp1/tp2 capture fractions must leave a runner")
         if self.lookback_days <= 0:
             raise ValueError("lookback_days must be positive")
 
@@ -88,6 +107,9 @@ class PineReplayTrade:
     visual_net_bps: float
     paper_visual_usd: float
     paper_fee_aware_usd: float
+    capture_mode: CaptureMode = "pine_tp3"
+    remaining_fraction_closed_at_final: float = 1.0
+    realized_gross_bps_before_final: float = 0.0
     open_at_end: bool = False
 
     def to_dict(self) -> dict:
@@ -109,6 +131,9 @@ class _OpenPosition:
     tp1_hit: bool = False
     tp2_hit: bool = False
     tp3_hit: bool = False
+    remaining_fraction: float = 1.0
+    realized_gross_bps: float = 0.0
+    realized_r_multiple: float = 0.0
 
 
 def run_vnedge_algo_ml_pro_pine_replay(
@@ -145,12 +170,15 @@ def run_vnedge_algo_ml_pro_pine_replay(
         "paper_leverage": config.paper_leverage,
         "paper_notional_usd": config.paper_notional_usd,
         "fee_cost_bps": fee_cost,
+        "capture_mode": config.capture_mode,
         "bars": len(prepared),
         "policy": {
             "research_only": True,
             "can_trade": False,
             "can_promote": False,
             "matches_tradingview_lifecycle": True,
+            "exact_pine_exit_lifecycle": config.capture_mode == "pine_tp3",
+            "smart_capture_overlay": config.capture_mode == "smart_ladder",
             "visual_result_is_not_fee_aware": True,
         },
         "summary": summary,
@@ -263,7 +291,28 @@ def summarize_pine_replay_trades(
             "stop_check": "close_only",
             "tp_check": "wick_touch_tp1_tp2_tp3",
             "tp3_closes_position": True,
-            "tp1_tp2_are_markers_only": True,
+            "tp1_tp2_are_markers_only": config.capture_mode == "pine_tp3",
+        },
+        "capture_mode": config.capture_mode,
+        "smart_capture": {
+            "enabled": config.capture_mode == "smart_ladder",
+            "tp1_capture_fraction": (
+                config.tp1_capture_fraction if config.capture_mode == "smart_ladder" else 0.0
+            ),
+            "tp2_capture_fraction": (
+                config.tp2_capture_fraction if config.capture_mode == "smart_ladder" else 0.0
+            ),
+            "runner_fraction": (
+                max(0.0, 1.0 - config.tp1_capture_fraction - config.tp2_capture_fraction)
+                if config.capture_mode == "smart_ladder"
+                else 1.0
+            ),
+            "move_stop_to_be_after_tp1": (
+                config.move_stop_to_be_after_tp1 if config.capture_mode == "smart_ladder" else False
+            ),
+            "lock_tp1_after_tp2": (
+                config.lock_tp1_after_tp2 if config.capture_mode == "smart_ladder" else False
+            ),
         },
         "trades": len(trades),
         "closed_trades": len(closed),
@@ -328,12 +377,20 @@ def _maybe_close_by_stop_or_tp3(
             )
         if not position.tp1_hit and high >= position.tp1_price:
             position.tp1_hit = True
+            if config.capture_mode == "smart_ladder":
+                _capture_partial(position, position.tp1_price, config.tp1_capture_fraction)
+                if config.move_stop_to_be_after_tp1:
+                    position.sl_price = max(position.sl_price, position.entry_price)
         if (
             position.tp2_price is not None
             and not position.tp2_hit
             and high >= position.tp2_price
         ):
             position.tp2_hit = True
+            if config.capture_mode == "smart_ladder":
+                _capture_partial(position, position.tp2_price, config.tp2_capture_fraction)
+                if config.lock_tp1_after_tp2:
+                    position.sl_price = max(position.sl_price, position.tp1_price)
         if (
             position.tp3_price is not None
             and not position.tp3_hit
@@ -363,12 +420,20 @@ def _maybe_close_by_stop_or_tp3(
         )
     if not position.tp1_hit and low <= position.tp1_price:
         position.tp1_hit = True
+        if config.capture_mode == "smart_ladder":
+            _capture_partial(position, position.tp1_price, config.tp1_capture_fraction)
+            if config.move_stop_to_be_after_tp1:
+                position.sl_price = min(position.sl_price, position.entry_price)
     if (
         position.tp2_price is not None
         and not position.tp2_hit
         and low <= position.tp2_price
     ):
         position.tp2_hit = True
+        if config.capture_mode == "smart_ladder":
+            _capture_partial(position, position.tp2_price, config.tp2_capture_fraction)
+            if config.lock_tp1_after_tp2:
+                position.sl_price = min(position.sl_price, position.tp1_price)
     if (
         position.tp3_price is not None
         and not position.tp3_hit
@@ -433,18 +498,21 @@ def _close_position(
     fee_cost_bps: float,
     open_at_end: bool = False,
 ) -> PineReplayTrade:
-    gross_bps = (
+    final_leg_gross_bps = (
         (float(exit_price) - position.entry_price)
         * position.direction
         / position.entry_price
         * 10_000.0
     )
     risk = abs(position.entry_price - position.entry_sl)
-    r_multiple = (
+    final_leg_r_multiple = (
         (float(exit_price) - position.entry_price) * position.direction / risk
         if risk > 0
         else 0.0
     )
+    final_fraction = max(0.0, min(position.remaining_fraction, 1.0))
+    gross_bps = position.realized_gross_bps + final_fraction * final_leg_gross_bps
+    r_multiple = position.realized_r_multiple + final_fraction * final_leg_r_multiple
     fee_aware = gross_bps - fee_cost_bps
     return PineReplayTrade(
         entry_ts=position.entry_ts,
@@ -471,8 +539,36 @@ def _close_position(
         visual_net_bps=gross_bps,
         paper_visual_usd=gross_bps / 10_000.0 * config.paper_notional_usd,
         paper_fee_aware_usd=fee_aware / 10_000.0 * config.paper_notional_usd,
+        capture_mode=config.capture_mode,
+        remaining_fraction_closed_at_final=final_fraction,
+        realized_gross_bps_before_final=position.realized_gross_bps,
         open_at_end=open_at_end,
     )
+
+
+def _capture_partial(
+    position: _OpenPosition,
+    exit_price: float,
+    fraction: float,
+) -> None:
+    if fraction <= 0.0 or position.remaining_fraction <= 0.0:
+        return
+    leg_fraction = min(fraction, position.remaining_fraction)
+    leg_gross_bps = (
+        (float(exit_price) - position.entry_price)
+        * position.direction
+        / position.entry_price
+        * 10_000.0
+    )
+    risk = abs(position.entry_price - position.entry_sl)
+    leg_r_multiple = (
+        (float(exit_price) - position.entry_price) * position.direction / risk
+        if risk > 0
+        else 0.0
+    )
+    position.realized_gross_bps += leg_fraction * leg_gross_bps
+    position.realized_r_multiple += leg_fraction * leg_r_multiple
+    position.remaining_fraction = max(0.0, position.remaining_fraction - leg_fraction)
 
 
 def _update_trailing(
@@ -589,6 +685,7 @@ def _render_summary(payload: dict) -> str:
             f"x {payload['paper_leverage']:.0f} = ${payload['paper_notional_usd']:.0f}"
         ),
         f"fee cost: {payload['fee_cost_bps']:.2f} bps round trip",
+        f"capture mode: {payload['capture_mode']}",
         (
             f"closed trades: {summary['closed_trades']} | "
             f"win% {summary['win_rate_pct']:.2f} | "
@@ -632,6 +729,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--paper-margin-usd", type=float, default=100.0)
     parser.add_argument("--paper-leverage", type=float, default=25.0)
     parser.add_argument("--fee-cost-bps", type=float)
+    parser.add_argument(
+        "--capture-mode",
+        choices=("pine_tp3", "smart_ladder"),
+        default="pine_tp3",
+        help="pine_tp3 matches TradingView exactly; smart_ladder captures TP1/TP2",
+    )
+    parser.add_argument("--tp1-capture-fraction", type=float, default=0.0)
+    parser.add_argument("--tp2-capture-fraction", type=float, default=0.0)
+    parser.add_argument("--no-be-after-tp1", action="store_true")
+    parser.add_argument("--no-lock-tp1-after-tp2", action="store_true")
     parser.add_argument("--include-trades", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output")
@@ -641,6 +748,11 @@ def main(argv: list[str] | None = None) -> int:
         paper_margin_usd=args.paper_margin_usd,
         paper_leverage=args.paper_leverage,
         fee_cost_bps=args.fee_cost_bps,
+        capture_mode=args.capture_mode,
+        tp1_capture_fraction=args.tp1_capture_fraction,
+        tp2_capture_fraction=args.tp2_capture_fraction,
+        move_stop_to_be_after_tp1=not args.no_be_after_tp1,
+        lock_tp1_after_tp2=not args.no_lock_tp1_after_tp2,
         lookback_days=args.lookback_days,
         include_trades=args.include_trades,
     )
