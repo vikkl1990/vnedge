@@ -96,6 +96,10 @@ def test_positive_edge_prefers_maker_when_fill_confidence_is_good():
     assert routes[0].capture_ratio == 0.7143
     assert routes[0].exit_diagnosis == "CAPTURED_AFTER_COST"
     assert routes[0].can_trade is False
+    assert routes[0].paper_margin_usd == 100.0
+    assert routes[0].paper_leverage == 25.0
+    assert routes[0].paper_notional_usd == 2500.0
+    assert routes[0].selected_net_usd == 23.25
 
 
 def test_low_maker_confidence_uses_fallback_only_when_taker_clears_buffer():
@@ -214,6 +218,10 @@ def test_strategy_opportunities_summarize_paper_candidate_without_trade_permissi
     assert summary.avg_hold_bars == 1.0
     assert summary.avg_mfe_after_cost_bps > 120.0
     assert summary.fee_wall_break_rate_pct == 100.0
+    assert summary.paper_margin_usd == 100.0
+    assert summary.paper_leverage == 25.0
+    assert summary.paper_notional_usd == 2500.0
+    assert summary.selected_net_usd == 46.2525
     assert summary.exit_diagnosis_counts == {"CAPTURED_AFTER_COST": 2}
     assert summary.can_trade is False
     assert report["policy"]["decision_uses_forward_truth"] is False

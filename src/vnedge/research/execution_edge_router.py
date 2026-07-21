@@ -59,6 +59,7 @@ DEFAULT_SCALPER_STRATEGIES = (
     "momentum_cascade_lyro_v1",
     "luxara_live_plan_qtm_v1",
     "luxara_break_bounce_v27_v1",
+    "vnedge_algo_ml_pro_v1",
     "smc_playbook_scalper_v1",
     "quant_signal_pack_v1",
     "alpha_stack_confluence_v1",
@@ -78,6 +79,8 @@ class OpportunityRouterConfig:
     maker_fallback_fill_floor: float = 0.25
     taker_extra_buffer_bps: float = 5.0
     default_lookback_days: int = 30
+    paper_margin_usd: float = 100.0
+    paper_leverage: float = 25.0
 
     def __post_init__(self) -> None:
         if self.horizon_bars < 1:
@@ -97,6 +100,14 @@ class OpportunityRouterConfig:
             raise ValueError("min_profit_factor must be >= 1")
         if self.taker_extra_buffer_bps < 0:
             raise ValueError("taker_extra_buffer_bps cannot be negative")
+        if self.paper_margin_usd <= 0:
+            raise ValueError("paper_margin_usd must be positive")
+        if not 1.0 <= self.paper_leverage <= 30.0:
+            raise ValueError("paper_leverage must be in [1, 30]")
+
+    @property
+    def paper_notional_usd(self) -> float:
+        return self.paper_margin_usd * self.paper_leverage
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,13 @@ class OpportunityRoute:
     can_promote: bool = False
     requires_untouched_judgment: bool = True
     decision_uses_forward_truth: bool = False
+    paper_margin_usd: float | None = None
+    paper_leverage: float | None = None
+    paper_notional_usd: float | None = None
+    selected_net_usd: float | None = None
+    selected_gross_usd: float | None = None
+    maker_net_usd: float | None = None
+    taker_net_usd: float | None = None
 
     @property
     def routed(self) -> bool:
@@ -171,6 +189,11 @@ class OpportunityRouterSummary:
     can_trade: bool = False
     can_promote: bool = False
     requires_untouched_judgment: bool = True
+    paper_margin_usd: float | None = None
+    paper_leverage: float | None = None
+    paper_notional_usd: float | None = None
+    selected_net_usd: float | None = None
+    selected_gross_usd: float | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -356,6 +379,15 @@ def route_opportunity(
             selected.exit_diagnosis if selected is not None else maker.exit_diagnosis
         ),
         metadata=dict(maker.metadata),
+        paper_margin_usd=config.paper_margin_usd,
+        paper_leverage=config.paper_leverage,
+        paper_notional_usd=config.paper_notional_usd,
+        selected_net_usd=_paper_usd(selected.net_bps if selected is not None else None, config),
+        selected_gross_usd=_paper_usd(
+            selected.gross_bps if selected is not None else None, config
+        ),
+        maker_net_usd=_paper_usd(maker.net_bps, config),
+        taker_net_usd=_paper_usd(taker.net_bps, config),
     )
 
 
@@ -394,6 +426,16 @@ def summarize_routes(
         for row in routed
         if row.capture_ratio is not None
     ]
+    net_usd = [
+        float(row.selected_net_usd)
+        for row in routed
+        if row.selected_net_usd is not None
+    ]
+    gross_usd = [
+        float(row.selected_gross_usd)
+        for row in routed
+        if row.selected_gross_usd is not None
+    ]
     action_counts = dict(Counter(row.action for row in rows))
     verdict, blocker = _summary_verdict(rows, routed, avg_net, pf, config)
     paper_candidate = verdict in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"}
@@ -421,6 +463,11 @@ def summarize_routes(
         exit_diagnosis_counts=dict(Counter(row.exit_diagnosis for row in routed)),
         primary_blocker=blocker,
         paper_candidate=paper_candidate,
+        paper_margin_usd=config.paper_margin_usd,
+        paper_leverage=config.paper_leverage,
+        paper_notional_usd=config.paper_notional_usd,
+        selected_net_usd=_round_or_none(sum(net_usd) if net_usd else None),
+        selected_gross_usd=_round_or_none(sum(gross_usd) if gross_usd else None),
     )
 
 
@@ -556,6 +603,18 @@ def _round_or_none(value: float | None) -> float | None:
     return round(float(value), 4)
 
 
+def _paper_usd(value_bps: float | None, config: OpportunityRouterConfig) -> float | None:
+    if value_bps is None:
+        return None
+    try:
+        value = float(value_bps)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(value / 10_000.0 * config.paper_notional_usd, 4)
+
+
 def _fee_wall_break_rate(rows: Iterable[OpportunityRoute]) -> float:
     rows = tuple(rows)
     if not rows:
@@ -684,6 +743,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-edge-bps", type=float, default=25.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.5)
     parser.add_argument("--maker-fill-probability", type=float, default=0.60)
+    parser.add_argument("--paper-margin-usd", type=float, default=100.0)
+    parser.add_argument("--paper-leverage", type=float, default=25.0)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output", help="optional JSON report path")
     args = parser.parse_args(argv)
@@ -713,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
         min_profit_factor=args.min_profit_factor,
         maker_fill_probability=args.maker_fill_probability,
         default_lookback_days=args.lookback_days,
+        paper_margin_usd=args.paper_margin_usd,
+        paper_leverage=args.paper_leverage,
     )
     reports: list[dict] = []
     for strategy_id in _split_csv(args.strategies):

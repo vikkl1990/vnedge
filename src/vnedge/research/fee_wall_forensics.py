@@ -46,6 +46,7 @@ DEFAULT_HORIZON_BY_TIMEFRAME = {
     "4h": 3,
 }
 DEFAULT_SELECTED_STRATEGIES = (
+    "vnedge_algo_ml_pro_v1",
     "luxara_live_plan_qtm_v1",
     "luxara_break_bounce_v27_v1",
     "sats_5m_scalper_v1",
@@ -66,6 +67,8 @@ def run_fee_wall_forensics(
     min_edge_bps: float = 8.0,
     min_profit_factor: float = 1.15,
     maker_fill_probability: float = 0.60,
+    paper_margin_usd: float = 100.0,
+    paper_leverage: float = 25.0,
     include_opportunities: bool = False,
     progress_callback: Callable[[dict], None] | None = None,
     route_sink: Callable[[OpportunityRoute], None] | None = None,
@@ -130,6 +133,8 @@ def run_fee_wall_forensics(
                 min_profit_factor=min_profit_factor,
                 maker_fill_probability=maker_fill_probability,
                 lookback_days=lookback_days,
+                paper_margin_usd=paper_margin_usd,
+                paper_leverage=paper_leverage,
             )
             last_error: str | None = None
             try:
@@ -189,6 +194,8 @@ def run_fee_wall_forensics(
         min_edge_bps=min_edge_bps,
         min_profit_factor=min_profit_factor,
         include_opportunities=include_opportunities,
+        paper_margin_usd=paper_margin_usd,
+        paper_leverage=paper_leverage,
     )
 
 
@@ -204,6 +211,8 @@ def build_fee_wall_forensics_report(
     min_edge_bps: float = 8.0,
     min_profit_factor: float = 1.15,
     include_opportunities: bool = False,
+    paper_margin_usd: float = 100.0,
+    paper_leverage: float = 25.0,
     max_top: int = 25,
 ) -> dict:
     report_rows = tuple(reports)
@@ -244,6 +253,9 @@ def build_fee_wall_forensics_report(
             "min_edge_bps": min_edge_bps,
             "min_profit_factor": min_profit_factor,
             "include_opportunities": include_opportunities,
+            "paper_margin_usd": paper_margin_usd,
+            "paper_leverage": paper_leverage,
+            "paper_notional_usd": paper_margin_usd * paper_leverage,
         },
         "scope": {
             "target_count": len(targets_tuple),
@@ -358,6 +370,8 @@ def _config_for_timeframe(
     min_profit_factor: float,
     maker_fill_probability: float,
     lookback_days: int,
+    paper_margin_usd: float,
+    paper_leverage: float,
 ) -> OpportunityRouterConfig:
     return OpportunityRouterConfig(
         horizon_bars=int(horizon_by_timeframe.get(timeframe, 12)),
@@ -366,6 +380,8 @@ def _config_for_timeframe(
         min_profit_factor=min_profit_factor,
         maker_fill_probability=maker_fill_probability,
         default_lookback_days=lookback_days,
+        paper_margin_usd=paper_margin_usd,
+        paper_leverage=paper_leverage,
     )
 
 
@@ -558,6 +574,11 @@ def _summary_card(report: dict) -> dict:
         "avg_hold_bars": summary.get("avg_hold_bars"),
         "avg_time_to_mfe_bars": summary.get("avg_time_to_mfe_bars"),
         "avg_capture_ratio": summary.get("avg_capture_ratio"),
+        "paper_margin_usd": summary.get("paper_margin_usd"),
+        "paper_leverage": summary.get("paper_leverage"),
+        "paper_notional_usd": summary.get("paper_notional_usd"),
+        "selected_net_usd": summary.get("selected_net_usd"),
+        "selected_gross_usd": summary.get("selected_gross_usd"),
         "exit_diagnosis_counts": summary.get("exit_diagnosis_counts"),
         "primary_blocker": summary.get("primary_blocker"),
         "can_trade": False,
@@ -771,6 +792,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-edge-bps", type=float, default=8.0)
     parser.add_argument("--min-profit-factor", type=float, default=1.15)
     parser.add_argument("--maker-fill-probability", type=float, default=0.60)
+    parser.add_argument("--paper-margin-usd", type=float, default=100.0)
+    parser.add_argument("--paper-leverage", type=float, default=25.0)
     parser.add_argument("--max-targets", type=int)
     parser.add_argument("--include-opportunities", action="store_true")
     parser.add_argument(
@@ -861,6 +884,8 @@ def main(argv: list[str] | None = None) -> int:
                 min_edge_bps=args.min_edge_bps,
                 min_profit_factor=args.min_profit_factor,
                 maker_fill_probability=args.maker_fill_probability,
+                paper_margin_usd=args.paper_margin_usd,
+                paper_leverage=args.paper_leverage,
                 include_opportunities=args.include_opportunities,
                 progress_callback=progress_callback,
                 route_sink=route_sink,

@@ -26,6 +26,7 @@ from vnedge.strategy.stealth_trail_bbp import (
 )
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
+from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
@@ -46,6 +47,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     MomentumCascadeLyroScanner.strategy_id: MomentumCascadeLyroScanner,
     LuxaraLivePlanQTMScanner.strategy_id: LuxaraLivePlanQTMScanner,
     LuxaraBreakBounceV27Scanner.strategy_id: LuxaraBreakBounceV27Scanner,
+    VNEDGEAlgoMLProScanner.strategy_id: VNEDGEAlgoMLProScanner,
 }
 
 
