@@ -3,6 +3,7 @@
 import pytest
 import pandas as pd
 
+from vnedge.exchange.delta_contracts import DeltaContractSpec
 from vnedge.research.vnedge_algo_ml_pro_pine_replay import (
     PineReplayConfig,
     replay_prepared_vnedge_algo_ml_pro,
@@ -223,3 +224,64 @@ def test_smart_ladder_captures_tp1_and_moves_runner_to_breakeven():
     assert summary["bar_timing"]["tp1_tp2_are_markers_only"] is False
     assert summary["smart_capture"]["enabled"] is True
     assert summary["smart_capture"]["runner_fraction"] == pytest.approx(0.30)
+
+
+def test_delta_contract_risk_sizing_uses_rounded_contract_notional():
+    df = _prepared(
+        [
+            {
+                "open": 1878.0,
+                "high": 1882.0,
+                "low": 1870.0,
+                "close": 1881.0,
+                "atr_value": 5.0,
+                "st_band": 1856.0,
+                "confirmed_long": True,
+            },
+            {
+                "open": 1881.0,
+                "high": 1912.0,
+                "low": 1880.0,
+                "close": 1911.0,
+                "atr_value": 5.0,
+                "st_band": 1890.0,
+            },
+        ]
+    )
+    config = PineReplayConfig(
+        sizing_mode="delta_contract_risk",
+        delta_contract_spec=DeltaContractSpec(
+            symbol="ETHUSD",
+            product_id=3136,
+            contract_value=0.01,
+            contract_unit_currency="ETH",
+            initial_margin_pct=0.5,
+            maintenance_margin_pct=0.25,
+        ),
+        account_equity_usd=500.0,
+        risk_per_trade_pct=1.0,
+        paper_leverage=25.0,
+        acknowledge_high_leverage=True,
+        fee_cost_bps=0.0,
+        mark_open_at_end=False,
+    )
+
+    trades = replay_prepared_vnedge_algo_ml_pro(
+        df,
+        params=VNEDGEAlgoMLProParams(use_mtf=False, use_trailing=False),
+        config=config,
+        fee_cost_bps=0.0,
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.paper_contracts == 20
+    assert trade.paper_base_quantity == pytest.approx(0.2)
+    assert trade.paper_notional_usd == pytest.approx(376.2)
+    assert trade.paper_margin_usd == pytest.approx(15.048)
+    assert trade.paper_leverage == pytest.approx(25.0)
+    assert trade.paper_fee_aware_usd == pytest.approx(6.0)
+
+    summary = summarize_pine_replay_trades(trades, config=config)
+    assert summary["position_sizing"]["mode"] == "delta_contract_risk"
+    assert summary["position_sizing"]["contracts_avg"] == pytest.approx(20.0)

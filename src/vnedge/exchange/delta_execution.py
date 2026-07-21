@@ -29,6 +29,10 @@ import asyncio
 from dataclasses import dataclass
 import logging
 
+from vnedge.exchange.delta_contracts import (
+    DeltaContractSpec,
+    contracts_from_base_quantity,
+)
 from vnedge.execution.order_manager import AdapterRejection, AdapterTimeout
 from vnedge.execution.order_state import ManagedOrder
 
@@ -60,6 +64,7 @@ class DeltaRestExecutionAdapter:
         dry_run: bool | None = None,
         base_url: str | None = None,
         product_ids: dict[str, int] | None = None,
+        contract_specs: dict[str, DeltaContractSpec] | None = None,
         max_submit_attempts: int = 2,
         client: object | None = None,  # injectable for tests
     ) -> None:
@@ -84,6 +89,7 @@ class DeltaRestExecutionAdapter:
         self.testnet = testnet
         self.max_submit_attempts = max_submit_attempts
         self._product_ids = dict(product_ids or {})
+        self._contract_specs = dict(contract_specs or {})
         self._client = client
         self._base_url = candidate_base_url
         self._creds = (api_key, api_secret)
@@ -106,6 +112,33 @@ class DeltaRestExecutionAdapter:
             raise AdapterRejection(f"no product_id mapping for {symbol} — load products first")
         return pid
 
+    def _order_contracts(self, intent) -> int:
+        spec = self._contract_specs.get(intent.symbol)
+        if spec is None:
+            # Legacy compatibility for already-contract-shaped tests/configs.
+            contracts = int(intent.quantity)
+        else:
+            if intent.limit_price is not None:
+                price = float(intent.limit_price)
+            elif intent.quantity > 0 and intent.notional_usd > 0:
+                price = float(intent.notional_usd) / float(intent.quantity)
+            else:
+                raise AdapterRejection(
+                    f"cannot convert {intent.symbol} quantity to Delta contracts without "
+                    "limit_price or notional/quantity reference price"
+                )
+            contracts = contracts_from_base_quantity(
+                base_quantity=float(intent.quantity),
+                entry_price=price,
+                spec=spec,
+            )
+        if contracts <= 0:
+            raise AdapterRejection(
+                f"Delta size rounds to {contracts} contracts for {intent.symbol}; "
+                "quantity is below one contract after rounding down"
+            )
+        return contracts
+
     # --- ExecutionAdapter protocol -------------------------------------------
     async def submit_order(self, order: ManagedOrder) -> str:
         intent = order.intent
@@ -118,7 +151,7 @@ class DeltaRestExecutionAdapter:
         reduce_only = "true" if intent.reduce_only else "false"
         args = dict(
             product_id=self._product_id(intent.symbol),
-            size=int(intent.quantity),          # Delta sizes in integer contracts
+            size=self._order_contracts(intent),  # Delta sizes in integer contracts
             side=side,
             limit_price=intent.limit_price,
             order_type=order_type,

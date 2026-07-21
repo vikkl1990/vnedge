@@ -28,6 +28,11 @@ from typing import Literal
 import pandas as pd
 
 from vnedge.data.parquet_store import ParquetStore
+from vnedge.exchange.delta_contracts import (
+    DeltaContractSpec,
+    fetch_india_contract_spec,
+    size_delta_risk_trade,
+)
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 from vnedge.strategy.vnedge_algo_ml_pro import (
     VNEDGE_ALGO_ML_PRO_ID,
@@ -38,6 +43,7 @@ from vnedge.strategy.vnedge_algo_ml_pro import (
 
 
 CaptureMode = Literal["pine_tp3", "smart_ladder"]
+SizingMode = Literal["fixed_notional", "delta_contract_risk"]
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,11 @@ class PineReplayConfig:
 
     paper_margin_usd: float = 100.0
     paper_leverage: float = 25.0
+    account_equity_usd: float = 500.0
+    risk_per_trade_pct: float = 1.0
+    acknowledge_high_leverage: bool = False
+    sizing_mode: SizingMode = "fixed_notional"
+    delta_contract_spec: DeltaContractSpec | None = None
     fee_cost_bps: float | None = None
     capture_mode: CaptureMode = "pine_tp3"
     tp1_capture_fraction: float = 0.0
@@ -61,6 +72,14 @@ class PineReplayConfig:
             raise ValueError("paper_margin_usd must be positive")
         if not 1.0 <= self.paper_leverage <= 30.0:
             raise ValueError("paper_leverage must be in [1, 30]")
+        if self.account_equity_usd <= 0:
+            raise ValueError("account_equity_usd must be positive")
+        if self.risk_per_trade_pct <= 0:
+            raise ValueError("risk_per_trade_pct must be positive")
+        if self.sizing_mode not in ("fixed_notional", "delta_contract_risk"):
+            raise ValueError("sizing_mode must be fixed_notional or delta_contract_risk")
+        if self.sizing_mode == "delta_contract_risk" and self.delta_contract_spec is None:
+            raise ValueError("delta_contract_risk sizing requires delta_contract_spec")
         if self.fee_cost_bps is not None and self.fee_cost_bps < 0:
             raise ValueError("fee_cost_bps cannot be negative")
         if self.capture_mode not in ("pine_tp3", "smart_ladder"):
@@ -107,6 +126,13 @@ class PineReplayTrade:
     visual_net_bps: float
     paper_visual_usd: float
     paper_fee_aware_usd: float
+    paper_notional_usd: float = 0.0
+    paper_margin_usd: float = 0.0
+    paper_leverage: float = 0.0
+    paper_contracts: int | None = None
+    paper_base_quantity: float | None = None
+    paper_liquidation_price: float | None = None
+    sizing_mode: SizingMode = "fixed_notional"
     capture_mode: CaptureMode = "pine_tp3"
     remaining_fraction_closed_at_final: float = 1.0
     realized_gross_bps_before_final: float = 0.0
@@ -134,6 +160,12 @@ class _OpenPosition:
     remaining_fraction: float = 1.0
     realized_gross_bps: float = 0.0
     realized_r_multiple: float = 0.0
+    paper_notional_usd: float = 0.0
+    paper_margin_usd: float = 0.0
+    paper_leverage: float = 0.0
+    paper_contracts: int | None = None
+    paper_base_quantity: float | None = None
+    paper_liquidation_price: float | None = None
 
 
 def run_vnedge_algo_ml_pro_pine_replay(
@@ -169,6 +201,13 @@ def run_vnedge_algo_ml_pro_pine_replay(
         "paper_margin_usd": config.paper_margin_usd,
         "paper_leverage": config.paper_leverage,
         "paper_notional_usd": config.paper_notional_usd,
+        "sizing_mode": config.sizing_mode,
+        "account_equity_usd": config.account_equity_usd,
+        "risk_per_trade_pct": config.risk_per_trade_pct,
+        "acknowledge_high_leverage": config.acknowledge_high_leverage,
+        "delta_contract_spec": (
+            asdict(config.delta_contract_spec) if config.delta_contract_spec is not None else None
+        ),
         "fee_cost_bps": fee_cost,
         "capture_mode": config.capture_mode,
         "bars": len(prepared),
@@ -240,7 +279,7 @@ def replay_prepared_vnedge_algo_ml_pro(
                     open_at_end=False,
                 )
             )
-        position = _open_position(signal_side, new_direction, row, index, params)
+        position = _open_position(signal_side, new_direction, row, index, params, config)
 
     if position is not None and config.mark_open_at_end:
         row = df.iloc[-1]
@@ -329,6 +368,7 @@ def summarize_pine_replay_trades(
         "visual_paper_usd": sum(t.paper_visual_usd for t in closed),
         "fee_aware_paper_usd": sum(t.paper_fee_aware_usd for t in closed),
         "paper_notional_usd": config.paper_notional_usd,
+        "position_sizing": _position_sizing_summary(closed, config),
         "hold_bars": {
             "avg": _avg_int(hold_values),
             "median": median(hold_values) if hold_values else None,
@@ -458,10 +498,19 @@ def _open_position(
     row: pd.Series,
     index: int,
     params: VNEDGEAlgoMLProParams,
-) -> _OpenPosition:
+    config: PineReplayConfig,
+) -> _OpenPosition | None:
     entry = float(row["close"])
     atr_value = _finite_or(float(row.get("atr_value", row.get("atr_base", 0.0))), 0.0)
     stop = _pine_stop_price(direction, entry, atr_value, row, params)
+    sizing = _paper_sizing_for_entry(
+        side=side,
+        entry_price=entry,
+        stop_price=stop,
+        config=config,
+    )
+    if sizing is None:
+        return None
     tp1 = entry + direction * params.tp1_atr_multiplier * atr_value
     tp2 = (
         entry + direction * params.tp2_atr_multiplier * atr_value
@@ -484,7 +533,54 @@ def _open_position(
         tp1_price=tp1,
         tp2_price=tp2,
         tp3_price=tp3,
+        paper_notional_usd=sizing["notional_usd"],
+        paper_margin_usd=sizing["margin_usd"],
+        paper_leverage=sizing["leverage"],
+        paper_contracts=sizing["contracts"],
+        paper_base_quantity=sizing["base_quantity"],
+        paper_liquidation_price=sizing["liquidation_price"],
     )
+
+
+def _paper_sizing_for_entry(
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    config: PineReplayConfig,
+) -> dict[str, float | int | None] | None:
+    if config.sizing_mode == "fixed_notional":
+        return {
+            "notional_usd": config.paper_notional_usd,
+            "margin_usd": config.paper_margin_usd,
+            "leverage": config.paper_leverage,
+            "contracts": None,
+            "base_quantity": config.paper_notional_usd / entry_price,
+            "liquidation_price": None,
+        }
+
+    if config.delta_contract_spec is None:
+        raise ValueError("delta_contract_risk sizing requires delta_contract_spec")
+    sized = size_delta_risk_trade(
+        account_equity_usd=config.account_equity_usd,
+        risk_per_trade_pct=config.risk_per_trade_pct,
+        entry_price=entry_price,
+        stop_price=stop_price,
+        side=side,
+        requested_leverage=config.paper_leverage,
+        acknowledge_high_leverage=config.acknowledge_high_leverage,
+        spec=config.delta_contract_spec,
+    )
+    if not sized.approved:
+        return None
+    return {
+        "notional_usd": sized.notional_usd,
+        "margin_usd": sized.margin_usd,
+        "leverage": sized.effective_leverage,
+        "contracts": sized.contracts,
+        "base_quantity": sized.base_quantity,
+        "liquidation_price": sized.liquidation_price,
+    }
 
 
 def _close_position(
@@ -537,8 +633,15 @@ def _close_position(
         fee_cost_bps=fee_cost_bps,
         fee_aware_net_bps=fee_aware,
         visual_net_bps=gross_bps,
-        paper_visual_usd=gross_bps / 10_000.0 * config.paper_notional_usd,
-        paper_fee_aware_usd=fee_aware / 10_000.0 * config.paper_notional_usd,
+        paper_visual_usd=gross_bps / 10_000.0 * position.paper_notional_usd,
+        paper_fee_aware_usd=fee_aware / 10_000.0 * position.paper_notional_usd,
+        paper_notional_usd=position.paper_notional_usd,
+        paper_margin_usd=position.paper_margin_usd,
+        paper_leverage=position.paper_leverage,
+        paper_contracts=position.paper_contracts,
+        paper_base_quantity=position.paper_base_quantity,
+        paper_liquidation_price=position.paper_liquidation_price,
+        sizing_mode=config.sizing_mode,
         capture_mode=config.capture_mode,
         remaining_fraction_closed_at_final=final_fraction,
         realized_gross_bps_before_final=position.realized_gross_bps,
@@ -663,6 +766,35 @@ def _hold_by_reason(trades: list[PineReplayTrade]) -> dict[str, float]:
     return {reason: float(mean(values)) for reason, values in sorted(grouped.items())}
 
 
+def _position_sizing_summary(trades: list[PineReplayTrade], config: PineReplayConfig) -> dict:
+    notionals = [t.paper_notional_usd for t in trades if t.paper_notional_usd > 0.0]
+    margins = [t.paper_margin_usd for t in trades if t.paper_margin_usd > 0.0]
+    leverages = [t.paper_leverage for t in trades if t.paper_leverage > 0.0]
+    contracts = [t.paper_contracts for t in trades if t.paper_contracts is not None]
+    quantities = [t.paper_base_quantity for t in trades if t.paper_base_quantity is not None]
+    return {
+        "mode": config.sizing_mode,
+        "requested_margin_usd": config.paper_margin_usd,
+        "requested_leverage": config.paper_leverage,
+        "requested_notional_usd": config.paper_notional_usd,
+        "account_equity_usd": config.account_equity_usd,
+        "risk_per_trade_pct": config.risk_per_trade_pct,
+        "acknowledge_high_leverage": config.acknowledge_high_leverage,
+        "actual_notional_usd_avg": _avg(notionals),
+        "actual_notional_usd_min": min(notionals) if notionals else None,
+        "actual_notional_usd_max": max(notionals) if notionals else None,
+        "margin_usd_avg": _avg(margins),
+        "effective_leverage_avg": _avg(leverages),
+        "contracts_avg": _avg([float(c) for c in contracts]),
+        "contracts_min": min(contracts) if contracts else None,
+        "contracts_max": max(contracts) if contracts else None,
+        "base_quantity_avg": _avg([float(q) for q in quantities]),
+        "delta_contract_spec": (
+            asdict(config.delta_contract_spec) if config.delta_contract_spec is not None else None
+        ),
+    }
+
+
 def _pct(count: int, total: int) -> float:
     return count / total * 100.0 if total else 0.0
 
@@ -677,12 +809,18 @@ def _pf(gross_win: float, gross_loss: float) -> float | None:
 
 def _render_summary(payload: dict) -> str:
     summary = payload["summary"]
+    sizing = summary["position_sizing"]
     rows = [
         "VNEDGE Algo ML Pro Pine-Parity Replay",
         (
             f"{payload['exchange']} {payload['symbol']} {payload['timeframe']} "
             f"{payload['lookback_days']}d | paper ${payload['paper_margin_usd']:.0f} "
             f"x {payload['paper_leverage']:.0f} = ${payload['paper_notional_usd']:.0f}"
+        ),
+        (
+            f"sizing mode: {sizing['mode']} | actual notional avg "
+            f"${_fmt(sizing['actual_notional_usd_avg'])} | margin avg "
+            f"${_fmt(sizing['margin_usd_avg'])}"
         ),
         f"fee cost: {payload['fee_cost_bps']:.2f} bps round trip",
         f"capture mode: {payload['capture_mode']}",
@@ -728,6 +866,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--paper-margin-usd", type=float, default=100.0)
     parser.add_argument("--paper-leverage", type=float, default=25.0)
+    parser.add_argument("--account-equity-usd", type=float, default=500.0)
+    parser.add_argument("--risk-per-trade-pct", type=float, default=1.0)
+    parser.add_argument("--acknowledge-high-leverage", action="store_true")
+    parser.add_argument(
+        "--sizing-mode",
+        choices=("fixed_notional", "delta_contract_risk"),
+        default="fixed_notional",
+    )
+    parser.add_argument(
+        "--delta-live-product-spec",
+        action="store_true",
+        help="Fetch Delta India product metadata for --symbol and apply contract sizing",
+    )
+    parser.add_argument("--delta-contract-value", type=float)
+    parser.add_argument("--delta-contract-unit-currency")
+    parser.add_argument("--delta-initial-margin-pct", type=float)
+    parser.add_argument("--delta-maintenance-margin-pct", type=float)
+    parser.add_argument("--delta-min-contracts", type=int, default=1)
     parser.add_argument("--fee-cost-bps", type=float)
     parser.add_argument(
         "--capture-mode",
@@ -743,10 +899,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--output")
     args = parser.parse_args(argv)
+    delta_spec = _delta_contract_spec_from_args(args)
 
     config = PineReplayConfig(
         paper_margin_usd=args.paper_margin_usd,
         paper_leverage=args.paper_leverage,
+        account_equity_usd=args.account_equity_usd,
+        risk_per_trade_pct=args.risk_per_trade_pct,
+        acknowledge_high_leverage=args.acknowledge_high_leverage,
+        sizing_mode=args.sizing_mode,
+        delta_contract_spec=delta_spec,
         fee_cost_bps=args.fee_cost_bps,
         capture_mode=args.capture_mode,
         tp1_capture_fraction=args.tp1_capture_fraction,
@@ -776,6 +938,21 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(_render_summary(payload))
     return 0
+
+
+def _delta_contract_spec_from_args(args: argparse.Namespace) -> DeltaContractSpec | None:
+    if args.delta_live_product_spec:
+        return fetch_india_contract_spec(args.symbol)
+    if args.delta_contract_value is None:
+        return None
+    return DeltaContractSpec(
+        symbol=args.symbol.replace("/", "").replace(":USD", ""),
+        contract_value=args.delta_contract_value,
+        contract_unit_currency=args.delta_contract_unit_currency or "",
+        initial_margin_pct=args.delta_initial_margin_pct,
+        maintenance_margin_pct=args.delta_maintenance_margin_pct,
+        min_contracts=args.delta_min_contracts,
+    )
 
 
 if __name__ == "__main__":

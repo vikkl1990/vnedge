@@ -30,6 +30,22 @@ The execution-edge router now reports paper USD PnL using:
 - `paper_leverage = 25`
 - `paper_notional_usd = 2500`
 
+Delta India live compatibility note:
+
+- VNEDGE order intents carry base quantity, but Delta native orders require
+  integer contract counts. ETHUSD is not `0.2` native size; with the current
+  Delta product contract value (`0.01 ETH`), `0.2 ETH` is `20` contracts.
+- Pine-parity replay therefore has two explicit lenses:
+  `fixed_notional` preserves older `$100 x 25 = $2500` proof comparisons, while
+  `delta_contract_risk` mirrors the Pine position-size block:
+  risk USD = account equity x risk %, quantity = risk / stop distance,
+  rounded down to Delta contracts, then margin = actual notional / effective
+  leverage.
+- Use `--delta-live-product-spec --sizing-mode delta_contract_risk` for current
+  Delta India product metadata. High leverage follows the Pine/VNEDGE clamp:
+  >10x requires `--acknowledge-high-leverage`; otherwise 25x displays and
+  replays as 10x clamped.
+
 This is a reporting lens only. It does not change live leverage caps, position
 sizing, risk-per-trade, or the `PreTradeRiskGateway`.
 
