@@ -22,7 +22,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 
 import pandas as pd
 
@@ -250,8 +250,21 @@ def summarize_pine_replay_trades(
     fee_l = sum(-t.fee_aware_net_bps for t in closed if t.fee_aware_net_bps < 0.0)
     visual_w = sum(t.visual_net_bps for t in closed if t.visual_net_bps > 0.0)
     visual_l = sum(-t.visual_net_bps for t in closed if t.visual_net_bps < 0.0)
+    hold_values = [t.hold_bars for t in closed]
 
     return {
+        "bar_timing": {
+            "entry_bar": "signal_close",
+            "fixed_exit_wait_bars": None,
+            "first_exit_check_delay_bars": 1,
+            "self_learning_eval_horizon_bars": VNEDGEAlgoMLProParams().eval_horizon_bars,
+            "self_learning_horizon_affects_trade_exit": False,
+            "exit_wait_rule": "wait_until_sl_close_tp3_wick_reverse_or_open_mark",
+            "stop_check": "close_only",
+            "tp_check": "wick_touch_tp1_tp2_tp3",
+            "tp3_closes_position": True,
+            "tp1_tp2_are_markers_only": True,
+        },
         "trades": len(trades),
         "closed_trades": len(closed),
         "open_marked_trades": len(trades) - len(closed),
@@ -267,6 +280,13 @@ def summarize_pine_replay_trades(
         "visual_paper_usd": sum(t.paper_visual_usd for t in closed),
         "fee_aware_paper_usd": sum(t.paper_fee_aware_usd for t in closed),
         "paper_notional_usd": config.paper_notional_usd,
+        "hold_bars": {
+            "avg": _avg_int(hold_values),
+            "median": median(hold_values) if hold_values else None,
+            "min": min(hold_values) if hold_values else None,
+            "max": max(hold_values) if hold_values else None,
+            "by_exit_reason_avg": _hold_by_reason(closed),
+        },
         "tp1_hits": sum(1 for t in trades if t.tp1_hit),
         "tp2_hits": sum(1 for t in trades if t.tp2_hit),
         "tp3_hits": sum(1 for t in trades if t.tp3_hit),
@@ -536,6 +556,17 @@ def _avg(values: list[float]) -> float | None:
     return mean(values) if values else None
 
 
+def _avg_int(values: list[int]) -> float | None:
+    return float(mean(values)) if values else None
+
+
+def _hold_by_reason(trades: list[PineReplayTrade]) -> dict[str, float]:
+    grouped: dict[str, list[int]] = {}
+    for trade in trades:
+        grouped.setdefault(trade.exit_reason, []).append(trade.hold_bars)
+    return {reason: float(mean(values)) for reason, values in sorted(grouped.items())}
+
+
 def _pct(count: int, total: int) -> float:
     return count / total * 100.0 if total else 0.0
 
@@ -570,6 +601,12 @@ def _render_summary(payload: dict) -> str:
         (
             f"visual USD: {_fmt(summary['visual_paper_usd'])} | "
             f"fee-aware USD: {_fmt(summary['fee_aware_paper_usd'])}"
+        ),
+        (
+            "bars: fixed wait none | first check +"
+            f"{summary['bar_timing']['first_exit_check_delay_bars']} | "
+            f"avg hold {_fmt(summary['hold_bars']['avg'])} | "
+            f"median hold {_fmt(summary['hold_bars']['median'])}"
         ),
         f"exits: {summary['exit_reason_counts']}",
         f"promotion gate passed: {summary['promotion_gate']['passed']}",

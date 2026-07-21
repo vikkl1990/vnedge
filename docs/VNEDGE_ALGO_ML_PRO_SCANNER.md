@@ -69,10 +69,18 @@ The Pine-parity replay is deliberately separate from the generic fee-wall
 router. It uses the indicator's chart lifecycle exactly:
 
 - enter on the confirmed signal bar's close;
+- first TP/SL check starts on the next confirmed bar (`+1` bar after entry);
+- there is no fixed exit wait: trades remain open until SL, TP3, reverse, or
+  the final open-position mark;
 - stop out only when the bar closes beyond the trailing stop;
 - mark TP1/TP2/TP3 on wick touch, with only TP3 closing the whole trade;
 - update the trailing stop after TP/SL checks;
 - reverse at the current signal close when the opposite signal fires.
+
+The Pine input `Evaluation Horizon (bars) = 15` belongs to the script's
+self-learning ML gate. It does not close trades after 15 bars. The replay records
+that distinction in `summary.bar_timing` so the TradingView comparison is
+auditable.
 
 The report shows both `visual_*` results, which match the indicator's no-fee
 chart economics, and `fee_aware_*` results, which subtract the venue taker

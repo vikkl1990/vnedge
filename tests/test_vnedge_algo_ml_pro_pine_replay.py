@@ -151,4 +151,12 @@ def test_pine_replay_summary_keeps_visual_and_fee_aware_results_separate():
     assert summary["fee_aware_avg_bps"] == pytest.approx(588.0)
     assert summary["visual_paper_usd"] == pytest.approx(150.0)
     assert summary["fee_aware_paper_usd"] == pytest.approx(147.0)
+    assert summary["bar_timing"]["entry_bar"] == "signal_close"
+    assert summary["bar_timing"]["fixed_exit_wait_bars"] is None
+    assert summary["bar_timing"]["first_exit_check_delay_bars"] == 1
+    assert summary["bar_timing"]["self_learning_eval_horizon_bars"] == 15
+    assert summary["bar_timing"]["self_learning_horizon_affects_trade_exit"] is False
+    assert summary["hold_bars"]["avg"] == pytest.approx(1.0)
+    assert summary["hold_bars"]["median"] == 1
+    assert summary["hold_bars"]["by_exit_reason_avg"] == {"TP3": 1.0}
     assert summary["promotion_gate"]["passed"] is False
