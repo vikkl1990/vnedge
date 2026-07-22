@@ -55,6 +55,7 @@ DEFAULT_SCALPER_STRATEGIES = (
     "sats_5m_scalper_v1",
     "stealth_trail_bbp_v1",
     "human_trade_fingerprint_v1",
+    "datrend_nomada_scalper_v1",
     "luxy_ut_bot_forecast_v1",
     "momentum_cascade_lyro_v1",
     "fvg_liquidity_breakout_v1",
