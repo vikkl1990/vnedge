@@ -4,6 +4,11 @@ import pandas as pd
 
 from vnedge.data.schemas import normalize_candles
 from vnedge.research.execution_edge_labeler import strategy_signal_events
+from vnedge.runtime.multi_lane_shadow import (
+    desired_lane_specs,
+    fvg_liquidity_breakout_delta_lanes,
+)
+from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.fvg_liquidity_breakout import (
     FVG_LIQUIDITY_BREAKOUT_ID,
     FvgLiquidityBreakoutParams,
@@ -166,3 +171,48 @@ def test_fvg_liquidity_breakout_rebuilds_smart_capture_exit_plan():
 def test_fvg_liquidity_breakout_is_registered():
     assert get_strategy_class(FVG_LIQUIDITY_BREAKOUT_ID) is FvgLiquidityBreakoutScanner
     assert FVG_LIQUIDITY_BREAKOUT_ID in STRATEGIES
+
+
+def test_fvg_liquidity_breakout_delta_lanes_are_mainline_shadow_5m():
+    lanes = fvg_liquidity_breakout_delta_lanes({})
+
+    assert {lane.symbol for lane in lanes} == {
+        "ETH/USD:USD",
+        "BTC/USD:USD",
+        "SOL/USD:USD",
+        "XRP/USD:USD",
+    }
+    assert all(lane.exchange == "delta_india" for lane in lanes)
+    assert all(lane.timeframe == "5m" for lane in lanes)
+    assert all(lane.strategy_id == FVG_LIQUIDITY_BREAKOUT_ID for lane in lanes)
+    assert all(lane.mode is RunnerMode.SHADOW for lane in lanes)
+    assert all(
+        lane.strategy_params["min_expected_net_edge_bps"] == 25.0
+        for lane in lanes
+    )
+
+
+def test_fvg_liquidity_breakout_lanes_can_be_paper_observed_without_promotion():
+    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    ids = {spec.lane_id for spec in specs}
+
+    assert "fvg_liquidity_breakout_delta_india_eth_usd_usd_shadow" in ids
+    assert "fvg_liquidity_breakout_delta_india_eth_usd_usd_paper_observation" in ids
+    observed = next(
+        spec
+        for spec in specs
+        if spec.lane_id
+        == "fvg_liquidity_breakout_delta_india_eth_usd_usd_paper_observation"
+    )
+    assert observed.mode is RunnerMode.PAPER
+    assert observed.timeframe == "5m"
+    assert observed.is_primary is False
+
+
+def test_fvg_liquidity_breakout_mainline_lanes_can_be_disabled():
+    assert (
+        fvg_liquidity_breakout_delta_lanes(
+            {"MULTI_LANE_FVG_LIQUIDITY_DELTA": "0"}
+        )
+        == []
+    )
