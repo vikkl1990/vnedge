@@ -57,6 +57,7 @@ DEFAULT_SCALPER_STRATEGIES = (
     "human_trade_fingerprint_v1",
     "luxy_ut_bot_forecast_v1",
     "momentum_cascade_lyro_v1",
+    "fvg_liquidity_breakout_v1",
     "luxara_live_plan_qtm_v1",
     "luxara_break_bounce_v27_v1",
     "vnedge_algo_ml_pro_v1",

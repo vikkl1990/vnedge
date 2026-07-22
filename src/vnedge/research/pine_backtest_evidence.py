@@ -74,6 +74,10 @@ STRATEGY_TO_PORTS: dict[str, tuple[str, ...]] = {
         "trail_exit_lab_v1",
         "trend_momentum_context_v1",
     ),
+    "fvg_liquidity_breakout_v1": (
+        "fvg_liquidity_breakout_v1",
+        "trail_exit_lab_v1",
+    ),
 }
 
 

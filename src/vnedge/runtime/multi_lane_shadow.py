@@ -78,6 +78,7 @@ STEALTH_TRAIL_BBP_PARAMS: dict = {
     "min_body_percentile": 0.60,
 }
 FEE_WALL_PAPER_PROBE_STRATEGIES = {
+    "fvg_liquidity_breakout_v1",
     "luxara_live_plan_qtm_v1",
     "luxy_ut_bot_forecast_v1",
     "stealth_trail_bbp_v1",

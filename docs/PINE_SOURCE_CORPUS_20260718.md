@@ -85,9 +85,10 @@ Reject or quarantine these before backtesting:
    distiller. It parses accessible Pine artifacts into zone, sweep,
    displacement, volume impulse, MTF bias, trail, target/stop geometry, and
    repaint-risk queues without emitting Pine source.
-2. `fvg_liquidity_breakout_v1`: first executable port family from the corpus.
-   Use 1h bias, 15m setup, 5m trigger, volume/displacement confirmation, and a
-   25 bps expected-net floor.
+2. `fvg_liquidity_breakout_v1`: built as the first executable port family from
+   the corpus. It uses 1h bias, 15m setup, 5m trigger, FVG retest/sweep/structure
+   events, volume/displacement confirmation, smart capture metadata, and a 25 bps
+   expected-net floor.
 3. `trail_exit_lab_v1`: evaluate ATR/Supertrend/Kalman/chandelier exits across
    existing VNEDGE entries. Exit quality may improve faster than entry alpha.
 4. `orderflow_proxy_v1`: convert source-backed CVD/delta/volume-profile ideas

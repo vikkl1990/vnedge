@@ -47,6 +47,7 @@ from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
+from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
 from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
@@ -394,6 +395,8 @@ def _build_single_strategy(
         return Sats5mScalper(seed_funding, **params)
     if strategy_id == "stealth_trail_bbp_v1":
         return StealthTrailBBPScanner(seed_funding, **params)
+    if strategy_id == "fvg_liquidity_breakout_v1":
+        return FvgLiquidityBreakoutScanner(seed_funding, **params)
     if strategy_id == "luxy_ut_bot_forecast_v1":
         return LuxyUTBotForecastScanner(seed_funding, **params)
     if strategy_id == "luxara_live_plan_qtm_v1":

@@ -56,6 +56,22 @@ split into two clear playbooks:
   or rejection away from the zone, volume confirmation, maker-first execution
   where possible.
 
+## Executable Port Status
+
+`fvg_liquidity_breakout_v1` is now a VNEDGE-owned strategy implementation, not
+just a queue label. It runs as a causal 5m trigger / 15m setup / 1h bias scanner
+with:
+
+- active FVG zone state and one-bar-minimum retest age
+- sweep/reclaim, structure-break, displacement, and volume-z gates
+- room-to-liquidity and expected-net-bps checks against taker fallback costs
+- structural SL plus TP1/TP2/TP3 metadata, `BE_after_TP1`, and
+  `smart_capture=TP1_or_trail`
+
+The next step is evidence, not promotion: run the scanner through fee-wall
+forensics and the Pine backtest publisher across venues/timeframes, then judge
+only fresh windows that survive sample/PF/net-bps gates.
+
 ## Why This Matters
 
 The bot should not blindly copy Pine chart code.  Most public indicators mix

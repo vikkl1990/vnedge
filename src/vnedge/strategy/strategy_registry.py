@@ -10,6 +10,7 @@ from __future__ import annotations
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
@@ -35,6 +36,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     VolatilityExpansionBreakout.strategy_id: VolatilityExpansionBreakout,
     PanicReversal.strategy_id: PanicReversal,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
+    FvgLiquidityBreakoutScanner.strategy_id: FvgLiquidityBreakoutScanner,
     AlphaStackConfluence.strategy_id: AlphaStackConfluence,
     QuantSignalPack.strategy_id: QuantSignalPack,
     Sats5mScalper.strategy_id: Sats5mScalper,
