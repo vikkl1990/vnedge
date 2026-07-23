@@ -281,6 +281,18 @@
     </section>
 
     <section class="panel distiller">
+      <h2>Quant Loop Governance</h2>
+      <div class="summary">
+        <div class="metric"><span>Readiness</span><b id="ql_score">--</b><i id="ql_level">loop level --</i></div>
+        <div class="metric"><span>Healthy loops</span><b id="ql_ok">--</b><i id="ql_wait">waiting --</i></div>
+        <div class="metric"><span>Collisions</span><b id="ql_collisions">--</b><i>candidate lock conflicts</i></div>
+        <div class="metric"><span>Budget alerts</span><b id="ql_budgets">--</b><i>run-loop pressure</i></div>
+      </div>
+      <div class="task-list" id="quantLoopTasks"></div>
+      <div class="policy" id="quantLoopAnswer">Loading Quant Loop Governance.</div>
+    </section>
+
+    <section class="panel distiller">
       <h2>Edge Uplift Executor</h2>
       <div class="summary">
         <div class="metric"><span>Tasks</span><b id="ux_tasks">--</b><i>agent output queued</i></div>
@@ -949,6 +961,60 @@
       .then(renderAlphaArenaLite)
       .catch(err=>{$("alphaArenaAnswer").textContent=String(err);renderAlphaArenaLite({});});
   }
+  function renderQuantLoopGovernance(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("ql_score",s.readiness_score==null?"--":s.readiness_score+"/100");
+    text("ql_level",s.readiness_level||"loop level --");
+    text("ql_ok",(s.loops_ok??0)+" / "+(s.loops_total??0));
+    text("ql_wait","waiting "+(s.loops_waiting??0)+" | stale "+(s.loops_stale??0)+" | missing "+(s.loops_missing??0));
+    text("ql_collisions",s.collisions);
+    text("ql_budgets",s.budget_alerts);
+    text("quantLoopAnswer",payload.operator_answer||"No Quant Loop Governance artifact published yet.");
+    const listEl=$("quantLoopTasks"); listEl.innerHTML="";
+    (payload.loop_cards||[]).slice(0,6).forEach(card=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=card.loop_id||"--";
+      const score=document.createElement("div");
+      const status=String(card.status||"--");
+      score.className="score";
+      score.textContent=status;
+      if(status==="OK")score.style.color="var(--green)";
+      if(status==="STALE"||status==="WAITING")score.style.color="var(--amber)";
+      if(status==="BLOCKED"||status==="MISSING")score.style.color="var(--red)";
+      const meta=document.createElement("span");
+      meta.textContent=(card.reason||"--")+" | age "+(card.age_minutes==null?"--":Number(card.age_minutes).toFixed(1)+"m");
+      const action=document.createElement("span");
+      action.textContent=card.action||"review loop";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if((payload.collisions||[]).length){
+      const div=document.createElement("div");
+      div.className="task";
+      const c=payload.collisions[0];
+      div.innerHTML="<b></b><div class='score' style='color:var(--red)'></div><span></span><span></span>";
+      div.querySelector("b").textContent="candidate collision";
+      div.querySelector(".score").textContent=String((payload.collisions||[]).length);
+      div.children[2].textContent=c.lock_key||"--";
+      div.children[3].textContent=c.action||"serialize duplicate tasks";
+      listEl.prepend(div);
+    }
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No Quant Loop Governance rows published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadQuantLoopGovernance(){
+    fetch("/pine-research/quant-loop-governance",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderQuantLoopGovernance)
+      .catch(err=>{$("quantLoopAnswer").textContent=String(err);renderQuantLoopGovernance({});});
+  }
   function renderUpliftExecutor(payload){
     payload=payload||{};
     const s=payload.summary||{};
@@ -998,6 +1064,7 @@
       .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
     loadScannerUplift();
     loadAlphaArenaLite();
+    loadQuantLoopGovernance();
     loadExecutor();
   }
   $("searchBox").addEventListener("input",renderRows);
@@ -1007,6 +1074,7 @@
   setInterval(loadProgress,10000);
   setInterval(loadScannerUplift,30000);
   setInterval(loadAlphaArenaLite,30000);
+  setInterval(loadQuantLoopGovernance,30000);
   setInterval(loadExecutor,30000);
 })();
 </script>

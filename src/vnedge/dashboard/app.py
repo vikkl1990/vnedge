@@ -398,6 +398,7 @@ def create_app(
     edge_uplift_executor_path: Path | None = None,
     scanner_backtest_uplift_path: Path | None = None,
     alpha_arena_lite_path: Path | None = None,
+    quant_loop_governance_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -510,6 +511,10 @@ def create_app(
     alpha_arena_lite_file = (
         alpha_arena_lite_path
         or Path("research/live_research/alpha_arena_lite_latest.json")
+    )
+    quant_loop_governance_file = (
+        quant_loop_governance_path
+        or Path("research/live_research/quant_loop_governance_latest.json")
     )
 
     @app.get("/")
@@ -1007,6 +1012,30 @@ def create_app(
                     "operator_answer": "alpha arena lite artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/quant-loop-governance")
+    async def quant_loop_governance(request: Request) -> JSONResponse:
+        """Research-loop readiness, collision, and budget governance."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                quant_loop_governance_file,
+                {
+                    "governance_id": "quant_loop_governance_v1",
+                    "summary": {},
+                    "gate_checks": [],
+                    "loop_cards": [],
+                    "candidate_locks": [],
+                    "collisions": [],
+                    "budget_alerts": [],
+                    "operator_answer": "quant loop governance artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                    "live_orders_enabled": False,
                 },
             ),
             headers=_identity(user),

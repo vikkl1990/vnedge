@@ -153,6 +153,36 @@ def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
     assert set(service["depends_on"]) == {"scanner-backtest-uplift", "scanner-tournament"}
 
 
+def test_quant_loop_governance_publishes_loop_readiness():
+    service = compose_services()["quant-loop-governance"]
+
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.quant_loop_governance",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${QUANT_LOOP_GOVERNANCE_INTERVAL_SECONDS:-1800}" in service["command"]
+    assert "governance/loop_gates.yaml" in service["command"]
+    assert "research/quant_loop_state.json" in service["command"]
+    assert "research/live_research/alpha_arena_lite_latest.json" in service["command"]
+    assert "research/live_research/scanner_backtest_uplift_latest.json" in service["command"]
+    assert "research/live_research/scanner_tournament_progress.json" in service["command"]
+    assert "logs/agent_gateway/quant_os/snapshot.json" in service["command"]
+    assert "research/live_research/quant_loop_governance_latest.json" in service["command"]
+    assert "research/live_research/quant_loop_run_log.jsonl" in service["command"]
+    assert "./governance:/app/governance:ro" in service["volumes"]
+    assert "./logs/agent_gateway:/app/logs/agent_gateway:ro" in service["volumes"]
+    assert "./research/quant_loop_state.json:/app/research/quant_loop_state.json:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "alpha-arena-lite",
+        "scanner-backtest-uplift",
+        "scanner-tournament",
+    }
+
+
 def test_scanner_tournament_lowers_only_research_discovery_governance():
     service = compose_services()["scanner-tournament"]
 

@@ -57,6 +57,10 @@ python -m vnedge.research.alpha_arena_lite \
 
 Docker Compose runs this continuously as `alpha-arena-lite`.
 
+`quant_loop_governance_v1` watches this output for stale artifacts, duplicate
+candidate locks, and budget pressure before the operator trusts the next sample
+expansion step. See [QUANT_LOOP_GOVERNANCE.md](QUANT_LOOP_GOVERNANCE.md).
+
 ## Operator Rule
 
 Alpha Arena Lite can prove that a row deserves more research. It cannot approve

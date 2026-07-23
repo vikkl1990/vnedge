@@ -263,12 +263,15 @@ Operator dashboard reads:
 - `GET /quant-os/agent-gateway`
 - `GET /quant-os/agent-gateway/events`
 - `GET /pine-research/alpha-arena-lite`
+- `GET /pine-research/quant-loop-governance`
 
 The events route also returns finite Server-Sent Event frames when requested
 with `Accept: text/event-stream`, useful for thin operator consoles.
 
 `alpha_arena_lite_v1` now uses this gateway to attach durable scanner
 sample-expansion scorecards. See [ALPHA_ARENA_LITE.md](ALPHA_ARENA_LITE.md).
+`quant_loop_governance_v1` supervises loop state, collision locks, and run
+budgets. See [QUANT_LOOP_GOVERNANCE.md](QUANT_LOOP_GOVERNANCE.md).
 
 Seed the starter jobs manually:
 

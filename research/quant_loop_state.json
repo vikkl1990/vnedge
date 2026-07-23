@@ -1,0 +1,14 @@
+{
+  "state_id": "quant_loop_state_v1",
+  "status": "bootstrapping",
+  "generated_at": "2026-07-23T00:00:00+00:00",
+  "active_locks": [],
+  "notes": [
+    "Seed state for the Quant Loop Governance service.",
+    "Runtime writes live snapshots to research/live_research/quant_loop_governance_latest.json.",
+    "This state never grants trade or promotion permission."
+  ],
+  "can_trade": false,
+  "can_promote": false,
+  "live_orders_enabled": false
+}

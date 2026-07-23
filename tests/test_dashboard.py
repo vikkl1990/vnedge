@@ -186,6 +186,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     executor = tmp_path / "edge_uplift_experiments_latest.json"
     scanner_uplift = tmp_path / "scanner_backtest_uplift_latest.json"
     alpha_arena = tmp_path / "alpha_arena_lite_latest.json"
+    quant_loop = tmp_path / "quant_loop_governance_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -301,6 +302,34 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    quant_loop.write_text(json.dumps({
+        "governance_id": "quant_loop_governance_v1",
+        "summary": {
+            "readiness_score": 84,
+            "readiness_level": "L3_GOVERNED_RESEARCH_READY",
+            "loops_total": 6,
+            "loops_ok": 5,
+            "loops_waiting": 1,
+            "loops_stale": 0,
+            "loops_missing": 0,
+            "collisions": 0,
+            "budget_alerts": 0,
+        },
+        "loop_cards": [
+            {
+                "loop_id": "alpha_arena_lite",
+                "status": "OK",
+                "reason": "artifact is usable",
+                "age_minutes": 2.5,
+                "action": "EXPAND_SAMPLES_OR_PRE_REGISTER_JUDGMENT",
+            }
+        ],
+        "gate_checks": [{"gate_id": "research_only_scope", "status": "PASS"}],
+        "operator_answer": "loop governance ready",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -311,6 +340,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         edge_uplift_executor_path=executor,
         scanner_backtest_uplift_path=scanner_uplift,
         alpha_arena_lite_path=alpha_arena,
+        quant_loop_governance_path=quant_loop,
     )
     client = TestClient(app)
 
@@ -325,11 +355,13 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/uplift-executor" in page.text
     assert "/pine-research/scanner-uplift" in page.text
     assert "/pine-research/alpha-arena-lite" in page.text
+    assert "/pine-research/quant-loop-governance" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
     assert "Scanner Backtest Uplift" in page.text
     assert "Alpha Arena Lite" in page.text
+    assert "Quant Loop Governance" in page.text
     assert "Edge Uplift Executor" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
@@ -337,6 +369,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "renderUpliftAgent" in page.text
     assert "renderScannerUplift" in page.text
     assert "renderAlphaArenaLite" in page.text
+    assert "renderQuantLoopGovernance" in page.text
     assert "renderUpliftExecutor" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
@@ -352,6 +385,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/uplift-executor").status_code == 401
     assert client.get("/pine-research/scanner-uplift").status_code == 401
     assert client.get("/pine-research/alpha-arena-lite").status_code == 401
+    assert client.get("/pine-research/quant-loop-governance").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -397,6 +431,14 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert alpha_payload["summary"]["candidate_count"] == 1
     assert alpha_payload["can_trade"] is False
     assert alpha_payload["can_promote"] is False
+    ql = client.get("/pine-research/quant-loop-governance?token=t3st-token")
+    assert ql.status_code == 200
+    quant_payload = ql.json()
+    assert quant_payload["governance_id"] == "quant_loop_governance_v1"
+    assert quant_payload["summary"]["readiness_score"] == 84
+    assert quant_payload["can_trade"] is False
+    assert quant_payload["can_promote"] is False
+    assert quant_payload["live_orders_enabled"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()
