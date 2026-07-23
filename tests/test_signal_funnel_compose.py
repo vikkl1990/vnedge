@@ -93,6 +93,45 @@ def test_edge_uplift_executor_materializes_agent_tasks():
         "pine-edge-uplift-agent",
         "scanner-tournament",
         "fee-wall-forensics",
+        "scanner-backtest-uplift",
+    }
+
+
+def test_vnedge_algo_ml_pro_contract_matrix_refreshes_delta_replay():
+    service = compose_services()["vnedge-algo-ml-pro-contract-matrix"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.vnedge_algo_ml_pro_contract_matrix",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--sizing-mode" in service["command"]
+    assert "delta_contract_risk" in service["command"]
+    assert "--delta-live-product-spec" in service["command"]
+    assert "--acknowledge-high-leverage" in service["command"]
+    assert "research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json" in service["command"]
+    assert "./data:/app/data:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["pine-backtest-evidence"]
+
+
+def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
+    service = compose_services()["scanner-backtest-uplift"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.scanner_backtest_uplift",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json" in service["command"]
+    assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "research/live_research/scanner_backtest_uplift_latest.json" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "vnedge-algo-ml-pro-contract-matrix",
+        "scanner-tournament",
     }
 
 

@@ -44,6 +44,11 @@ from vnedge.agent_gateway.jobs import (
     TERMINAL_STATUSES,
     list_jobs,
 )
+from vnedge.agent_gateway.task_registry import (
+    QuantOSAgentGateway,
+    env_quant_os_agent_gateway_dir,
+    quant_os_event_stream,
+)
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.pine_script_research import load_pine_research_payload
@@ -391,10 +396,12 @@ def create_app(
     backtest_progress_path: Path | None = None,
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
+    scanner_backtest_uplift_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
     agent_jobs_dir: Path | None = None,
+    quant_os_agent_gateway_dir: Path | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
 
@@ -428,6 +435,9 @@ def create_app(
     )
 
     agent_jobs_path = agent_jobs_dir or env_agent_jobs_dir()
+    quant_os_gateway = QuantOSAgentGateway(
+        quant_os_agent_gateway_dir or env_quant_os_agent_gateway_dir()
+    )
     resolved_agent_store = (
         agent_token_store if agent_token_store is not None else AgentTokenStore.from_env()
     )
@@ -439,6 +449,7 @@ def create_app(
             token_store=resolved_agent_store,
             audit_logger=AgentAuditLogger(agent_audit_path or env_agent_audit_path()),
             jobs_dir=agent_jobs_path,
+            quant_os_gateway_dir=quant_os_gateway.root,
             artifacts=AgentGatewayArtifacts(
                 research_path=research_path,
                 alpha_council_path=alpha_council_path,
@@ -490,6 +501,10 @@ def create_app(
     edge_uplift_executor_file = (
         edge_uplift_executor_path
         or Path("research/live_research/edge_uplift_experiments_latest.json")
+    )
+    scanner_backtest_uplift_file = (
+        scanner_backtest_uplift_path
+        or Path("research/live_research/scanner_backtest_uplift_latest.json")
     )
 
     @app.get("/")
@@ -763,6 +778,40 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/quant-os/agent-gateway")
+    async def quant_os_agent_gateway(request: Request, limit: int = 100) -> JSONResponse:
+        """Operator-facing Quant OS Agent Gateway v2 ledger.
+
+        This is dashboard-token gated and read-only. Agent-token write routes
+        live under /api/agent/v2 and still cannot trade or promote.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            quant_os_gateway.snapshot(limit=max(1, min(int(limit), 250))),
+            headers=_identity(user),
+        )
+
+    @app.get("/quant-os/agent-gateway/events")
+    async def quant_os_agent_gateway_events(request: Request, limit: int = 100) -> Response:
+        """Recent Agent Gateway v2 events as JSON or finite SSE frames."""
+        user = _authorized(request)
+        snapshot = quant_os_gateway.snapshot(limit=max(1, min(int(limit), 250)))
+        if "text/event-stream" in request.headers.get("accept", ""):
+            return StreamingResponse(
+                iter(quant_os_event_stream(snapshot)),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", **_identity(user)},
+            )
+        return JSONResponse(
+            {
+                "gateway_id": snapshot["gateway_id"],
+                "events": snapshot["events"],
+                "can_trade": False,
+                "can_promote": False,
+            },
+            headers=_identity(user),
+        )
+
     @app.get("/lane-readiness")
     async def lane_readiness(request: Request) -> JSONResponse:
         """Latest lane firing/promotability report."""
@@ -911,6 +960,26 @@ def create_app(
                     "port_pack": [],
                     "tasks": [],
                     "operator_answer": "edge uplift executor artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/scanner-uplift")
+    async def scanner_backtest_uplift(request: Request) -> JSONResponse:
+        """Backtest-failure classifications and scanner uplift experiments."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                scanner_backtest_uplift_file,
+                {
+                    "agent_id": "scanner_backtest_uplift_v1",
+                    "summary": {},
+                    "top_uplifts": [],
+                    "experiments": [],
+                    "operator_answer": "scanner backtest uplift artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },

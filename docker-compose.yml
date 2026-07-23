@@ -492,6 +492,62 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Exact TradingView-lifecycle replay for the supplied VNEDGE Algo ML Pro
+  # scanner under Delta India contract sizing. This is the operator answer to
+  # "why does the 5m chart look good but the bot cannot promote it?" It writes
+  # a 6-pair x 5-TF x 2-exit-mode fee-aware matrix. Research-only.
+  vnedge-algo-ml-pro-contract-matrix:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - pine-backtest-evidence
+    command: ["python", "-m", "vnedge.research.vnedge_algo_ml_pro_contract_matrix",
+              "--interval-seconds", "${VNEDGE_ALGO_ML_PRO_MATRIX_INTERVAL_SECONDS:-21600}",
+              "--data-root", "data",
+              "--exchange", "delta_india",
+              "--symbols", "BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD", "DOGEUSD",
+              "--timeframes", "1m", "5m", "15m", "1h", "4h",
+              "--capture-modes", "pine_tp3", "smart_ladder",
+              "--lookback-days", "${VNEDGE_ALGO_ML_PRO_MATRIX_LOOKBACK_DAYS:-30}",
+              "--sizing-mode", "delta_contract_risk",
+              "--delta-live-product-spec",
+              "--account-equity-usd", "${VNEDGE_ALGO_ML_PRO_ACCOUNT_EQUITY_USD:-500}",
+              "--risk-per-trade-pct", "${VNEDGE_ALGO_ML_PRO_RISK_PER_TRADE_PCT:-1}",
+              "--paper-margin-usd", "${VNEDGE_ALGO_ML_PRO_PAPER_MARGIN_USD:-100}",
+              "--paper-leverage", "${VNEDGE_ALGO_ML_PRO_PAPER_LEVERAGE:-25}",
+              "--acknowledge-high-leverage",
+              "--fee-cost-bps", "${VNEDGE_ALGO_ML_PRO_FEE_COST_BPS:-12.5}",
+              "--out", "research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Scanner backtest uplift: classifies every completed matrix/tournament row
+  # into promotable, sparse, fee-wall near-miss, overscalp bleed, or reject, then
+  # publishes concrete next experiments. It does not promote or trade.
+  scanner-backtest-uplift:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - vnedge-algo-ml-pro-contract-matrix
+      - scanner-tournament
+    command: ["python", "-m", "vnedge.research.scanner_backtest_uplift",
+              "--interval-seconds", "${SCANNER_BACKTEST_UPLIFT_INTERVAL_SECONDS:-1800}",
+              "--input", "research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json",
+              "--source-name", "vnedge_algo_ml_pro_contract_matrix",
+              "--input", "research/live_research/scanner_tournament_latest.json",
+              "--source-name", "scanner_tournament",
+              "--out", "research/live_research/scanner_backtest_uplift_latest.json",
+              "--feed", "research/live_research/scanner_backtest_uplift_feed.jsonl"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Agentic failure-salvage planner for Pine-derived evidence.  It turns
   # failed/positive/queued replay cells into ranked research-only uplift
   # experiments: confluence stacks, feature-bank candidates, execution-filtered
@@ -526,6 +582,7 @@ services:
       - pine-edge-uplift-agent
       - scanner-tournament
       - fee-wall-forensics
+      - scanner-backtest-uplift
     command: ["python", "-m", "vnedge.research.edge_uplift_executor",
               "--interval-seconds", "${EDGE_UPLIFT_EXECUTOR_INTERVAL_SECONDS:-1800}",
               "--uplift", "research/live_research/pine_edge_uplift_agent_latest.json",

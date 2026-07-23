@@ -257,6 +257,18 @@
     </section>
 
     <section class="panel distiller">
+      <h2>Scanner Backtest Uplift</h2>
+      <div class="summary">
+        <div class="metric"><span>Evidence rows</span><b id="su_rows">--</b><i>matrix + tournament</i></div>
+        <div class="metric"><span>Fee-wall near</span><b id="su_near">--</b><i>execution salvage</i></div>
+        <div class="metric"><span>Visual only</span><b id="su_visual">--</b><i>positive before costs</i></div>
+        <div class="metric"><span>Experiments</span><b id="su_experiments">--</b><i>next replay queue</i></div>
+      </div>
+      <div class="task-list" id="scannerUpliftTasks"></div>
+      <div class="policy" id="scannerUpliftAnswer">Loading scanner backtest uplift.</div>
+    </section>
+
+    <section class="panel distiller">
       <h2>Edge Uplift Executor</h2>
       <div class="summary">
         <div class="metric"><span>Tasks</span><b id="ux_tasks">--</b><i>agent output queued</i></div>
@@ -849,6 +861,43 @@
       .then(renderUpliftExecutor)
       .catch(err=>{$("executorAnswer").textContent=String(err);renderUpliftExecutor({});});
   }
+  function renderScannerUplift(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("su_rows",s.evidence_rows);
+    text("su_near",s.fee_wall_near_misses);
+    text("su_visual",s.visual_only_positive);
+    text("su_experiments",s.experiments);
+    text("scannerUpliftAnswer",payload.operator_answer||"No scanner uplift artifact published yet.");
+    const listEl=$("scannerUpliftTasks"); listEl.innerHTML="";
+    (payload.top_uplifts||[]).slice(0,6).forEach(row=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=(row.symbol||"--")+" "+(row.timeframe||"--")+" "+(row.mode||"");
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=row.avg_net_bps==null?"--":Number(row.avg_net_bps).toFixed(2)+" bps";
+      const meta=document.createElement("span");
+      meta.textContent=(row.failure_mode||"--")+" | PF "+(row.profit_factor==null?"--":Number(row.profit_factor).toFixed(2))+" | need "+(row.required_uplift_bps==null?"--":Number(row.required_uplift_bps).toFixed(2))+" bps";
+      const action=document.createElement("span");
+      action.textContent=row.uplift_action||row.rationale||"awaiting uplift action";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No scanner uplift rows published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadScannerUplift(){
+    fetch("/pine-research/scanner-uplift",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderScannerUplift)
+      .catch(err=>{$("scannerUpliftAnswer").textContent=String(err);renderScannerUplift({});});
+  }
   function renderUpliftExecutor(payload){
     payload=payload||{};
     const s=payload.summary||{};
@@ -896,6 +945,7 @@
       .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(renderUpliftAgent)
       .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
+    loadScannerUplift();
     loadExecutor();
   }
   $("searchBox").addEventListener("input",renderRows);
@@ -903,6 +953,7 @@
   $("refreshBtn").addEventListener("click",load);
   load();
   setInterval(loadProgress,10000);
+  setInterval(loadScannerUplift,30000);
   setInterval(loadExecutor,30000);
 })();
 </script>

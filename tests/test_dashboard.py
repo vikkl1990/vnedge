@@ -184,6 +184,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     progress = tmp_path / "scanner_tournament_progress.json"
     uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
     executor = tmp_path / "edge_uplift_experiments_latest.json"
+    scanner_uplift = tmp_path / "scanner_backtest_uplift_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -246,6 +247,31 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    scanner_uplift.write_text(json.dumps({
+        "agent_id": "scanner_backtest_uplift_v1",
+        "summary": {
+            "evidence_rows": 60,
+            "fee_wall_near_misses": 9,
+            "visual_only_positive": 15,
+            "experiments": 4,
+        },
+        "top_uplifts": [
+            {
+                "symbol": "DOGEUSD",
+                "timeframe": "15m",
+                "mode": "smart_ladder",
+                "failure_mode": "FEE_WALL_NEAR_MISS",
+                "avg_net_bps": -1.44,
+                "profit_factor": 1.2,
+                "required_uplift_bps": 26.44,
+                "uplift_action": "TEST_MAKER_FIRST_CONTEXT_FILTERED_ROUTE",
+            }
+        ],
+        "experiments": [{"experiment_type": "maker_first_context_filtered_replay"}],
+        "operator_answer": "scanner uplift ready",
+        "can_trade": False,
+        "can_promote": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -254,6 +280,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         backtest_progress_path=progress,
         pine_edge_uplift_path=uplift,
         edge_uplift_executor_path=executor,
+        scanner_backtest_uplift_path=scanner_uplift,
     )
     client = TestClient(app)
 
@@ -266,14 +293,17 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/progress" in page.text
     assert "/pine-research/uplift-agent" in page.text
     assert "/pine-research/uplift-executor" in page.text
+    assert "/pine-research/scanner-uplift" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
+    assert "Scanner Backtest Uplift" in page.text
     assert "Edge Uplift Executor" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
     assert "renderUpliftAgent" in page.text
+    assert "renderScannerUplift" in page.text
     assert "renderUpliftExecutor" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
@@ -287,6 +317,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/progress").status_code == 401
     assert client.get("/pine-research/uplift-agent").status_code == 401
     assert client.get("/pine-research/uplift-executor").status_code == 401
+    assert client.get("/pine-research/scanner-uplift").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -318,6 +349,13 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert uplift_payload["summary"]["promotable_proofs"] == 1
     assert uplift_payload["can_trade"] is False
     assert uplift_payload["can_promote"] is False
+    su = client.get("/pine-research/scanner-uplift?token=t3st-token")
+    assert su.status_code == 200
+    scanner_uplift_payload = su.json()
+    assert scanner_uplift_payload["agent_id"] == "scanner_backtest_uplift_v1"
+    assert scanner_uplift_payload["summary"]["fee_wall_near_misses"] == 9
+    assert scanner_uplift_payload["can_trade"] is False
+    assert scanner_uplift_payload["can_promote"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()

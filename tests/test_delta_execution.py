@@ -5,6 +5,7 @@ import asyncio
 
 import pytest
 
+from vnedge.exchange.delta_contracts import DeltaContractSpec
 from vnedge.exchange.delta_execution import DeltaRestExecutionAdapter
 from vnedge.execution.order_manager import AdapterRejection
 from vnedge.execution.order_state import ManagedOrder
@@ -115,6 +116,97 @@ def test_maps_long_to_buy_with_post_only_and_idempotent_id():
     assert call["product_id"] == 27
     assert call["order_type"].value == "limit_order"
     assert call["time_in_force"] is None         # PO is post_only, not Delta TIF
+
+
+def test_delta_contract_spec_converts_base_quantity_to_integer_contracts():
+    fake = FakeDelta()
+    a = DeltaRestExecutionAdapter(
+        dry_run=False,
+        api_key="k",
+        api_secret="s",
+        live_confirmed=True,
+        client=fake,
+        product_ids={"ETHUSD": 3136},
+        contract_specs={
+            "ETHUSD": DeltaContractSpec(
+                symbol="ETHUSD",
+                product_id=3136,
+                contract_value=0.01,
+                contract_unit_currency="ETH",
+            )
+        },
+    )
+
+    _run(
+        a.submit_order(
+            _order(
+                symbol="ETHUSD",
+                quantity=0.2,
+                notional_usd=376.2,
+                limit_price=1881.0,
+            )
+        )
+    )
+
+    assert fake.calls[0]["size"] == 20
+
+
+def test_delta_contract_spec_rejects_base_quantity_below_one_contract():
+    fake = FakeDelta()
+    a = DeltaRestExecutionAdapter(
+        dry_run=False,
+        api_key="k",
+        api_secret="s",
+        live_confirmed=True,
+        client=fake,
+        product_ids={"ETHUSD": 3136},
+        contract_specs={
+            "ETHUSD": DeltaContractSpec(
+                symbol="ETHUSD",
+                product_id=3136,
+                contract_value=0.01,
+                contract_unit_currency="ETH",
+            )
+        },
+    )
+
+    with pytest.raises(AdapterRejection, match="below one contract"):
+        _run(a.submit_order(_order(symbol="ETHUSD", quantity=0.009, limit_price=1881.0)))
+
+
+def test_delta_contract_spec_market_order_uses_notional_reference_price():
+    fake = FakeDelta()
+    a = DeltaRestExecutionAdapter(
+        dry_run=False,
+        api_key="k",
+        api_secret="s",
+        live_confirmed=True,
+        client=fake,
+        product_ids={"ETHUSD": 3136},
+        contract_specs={
+            "ETHUSD": DeltaContractSpec(
+                symbol="ETHUSD",
+                product_id=3136,
+                contract_value=0.01,
+                contract_unit_currency="ETH",
+            )
+        },
+    )
+
+    _run(
+        a.submit_order(
+            _order(
+                symbol="ETHUSD",
+                quantity=0.2,
+                notional_usd=376.2,
+                limit_price=None,
+                order_type="market_order",
+                time_in_force=None,
+            )
+        )
+    )
+
+    assert fake.calls[0]["size"] == 20
 
 
 def test_short_reduce_only_exit_maps_to_sell_reduce_only():
