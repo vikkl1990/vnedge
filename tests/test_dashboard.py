@@ -185,6 +185,9 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
     executor = tmp_path / "edge_uplift_experiments_latest.json"
     scanner_uplift = tmp_path / "scanner_backtest_uplift_latest.json"
+    alpha_arena = tmp_path / "alpha_arena_lite_latest.json"
+    quant_loop = tmp_path / "quant_loop_governance_latest.json"
+    evidence_index = tmp_path / "evidence_index_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -272,6 +275,94 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    alpha_arena.write_text(json.dumps({
+        "arena_id": "alpha_arena_lite_v1",
+        "summary": {
+            "candidate_count": 1,
+            "task_count": 1,
+            "sample_valid": 0,
+            "ready_for_untouched_judgment": 0,
+        },
+        "scorecards": [
+            {
+                "strategy_id": "luxara_live_plan_qtm_v1",
+                "exchange": "delta_india",
+                "symbol": "ETH/USD:USD",
+                "arena_verdict": "EXPAND_UNTOUCHED_SAMPLE",
+                "next_action": "RUN_FROZEN_SETUP_ON_NEXT_UNTOUCHED_WINDOW",
+                "task_id": "qtask_test",
+                "metrics": {
+                    "top_avg_net_bps": 497.8,
+                    "best_profit_factor": 999.0,
+                    "max_samples": 3,
+                    "sample_required": 20,
+                },
+            }
+        ],
+        "operator_answer": "arena ready",
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    quant_loop.write_text(json.dumps({
+        "governance_id": "quant_loop_governance_v1",
+        "summary": {
+            "readiness_score": 84,
+            "readiness_level": "L3_GOVERNED_RESEARCH_READY",
+            "loops_total": 6,
+            "loops_ok": 5,
+            "loops_waiting": 1,
+            "loops_stale": 0,
+            "loops_missing": 0,
+            "collisions": 0,
+            "budget_alerts": 0,
+        },
+        "loop_cards": [
+            {
+                "loop_id": "alpha_arena_lite",
+                "status": "OK",
+                "reason": "artifact is usable",
+                "age_minutes": 2.5,
+                "action": "EXPAND_SAMPLES_OR_PRE_REGISTER_JUDGMENT",
+            }
+        ],
+        "gate_checks": [{"gate_id": "research_only_scope", "status": "PASS"}],
+        "operator_answer": "loop governance ready",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
+    evidence_index.write_text(json.dumps({
+        "evidence_store_id": "research_evidence_index_v1",
+        "summary": {
+            "total_records": 3,
+            "completed_records": 3,
+            "positive_after_cost": 2,
+            "strict_fee_wall_breakers": 1,
+            "sparse_positives": 1,
+            "best_avg_net_bps": 31.25,
+            "best_profit_factor": 1.72,
+        },
+        "fee_wall_breakers": [
+            {
+                "record_id": "r1",
+                "source_kind": "fee_wall_forensics",
+                "strategy_id": "sats_5m_scalper_v1",
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "samples": 31,
+                "avg_net_bps": 31.25,
+                "profit_factor": 1.72,
+                "next_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT",
+                "can_trade": False,
+                "can_promote": False,
+            }
+        ],
+        "operator_answer": "evidence index ready",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -281,6 +372,9 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         pine_edge_uplift_path=uplift,
         edge_uplift_executor_path=executor,
         scanner_backtest_uplift_path=scanner_uplift,
+        alpha_arena_lite_path=alpha_arena,
+        quant_loop_governance_path=quant_loop,
+        evidence_index_path=evidence_index,
     )
     client = TestClient(app)
 
@@ -294,17 +388,26 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/uplift-agent" in page.text
     assert "/pine-research/uplift-executor" in page.text
     assert "/pine-research/scanner-uplift" in page.text
+    assert "/pine-research/alpha-arena-lite" in page.text
+    assert "/pine-research/quant-loop-governance" in page.text
+    assert "/pine-research/evidence-index" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
     assert "Scanner Backtest Uplift" in page.text
+    assert "Alpha Arena Lite" in page.text
+    assert "Quant Loop Governance" in page.text
     assert "Edge Uplift Executor" in page.text
+    assert "Unified Evidence Index" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
     assert "renderUpliftAgent" in page.text
     assert "renderScannerUplift" in page.text
+    assert "renderAlphaArenaLite" in page.text
+    assert "renderQuantLoopGovernance" in page.text
     assert "renderUpliftExecutor" in page.text
+    assert "renderEvidenceIndex" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -318,6 +421,9 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/uplift-agent").status_code == 401
     assert client.get("/pine-research/uplift-executor").status_code == 401
     assert client.get("/pine-research/scanner-uplift").status_code == 401
+    assert client.get("/pine-research/alpha-arena-lite").status_code == 401
+    assert client.get("/pine-research/quant-loop-governance").status_code == 401
+    assert client.get("/pine-research/evidence-index").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -356,6 +462,29 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert scanner_uplift_payload["summary"]["fee_wall_near_misses"] == 9
     assert scanner_uplift_payload["can_trade"] is False
     assert scanner_uplift_payload["can_promote"] is False
+    aal = client.get("/pine-research/alpha-arena-lite?token=t3st-token")
+    assert aal.status_code == 200
+    alpha_payload = aal.json()
+    assert alpha_payload["arena_id"] == "alpha_arena_lite_v1"
+    assert alpha_payload["summary"]["candidate_count"] == 1
+    assert alpha_payload["can_trade"] is False
+    assert alpha_payload["can_promote"] is False
+    ql = client.get("/pine-research/quant-loop-governance?token=t3st-token")
+    assert ql.status_code == 200
+    quant_payload = ql.json()
+    assert quant_payload["governance_id"] == "quant_loop_governance_v1"
+    assert quant_payload["summary"]["readiness_score"] == 84
+    assert quant_payload["can_trade"] is False
+    assert quant_payload["can_promote"] is False
+    assert quant_payload["live_orders_enabled"] is False
+    ei = client.get("/pine-research/evidence-index?token=t3st-token")
+    assert ei.status_code == 200
+    evidence_payload = ei.json()
+    assert evidence_payload["evidence_store_id"] == "research_evidence_index_v1"
+    assert evidence_payload["summary"]["strict_fee_wall_breakers"] == 1
+    assert evidence_payload["fee_wall_breakers"][0]["can_trade"] is False
+    assert evidence_payload["can_promote"] is False
+    assert evidence_payload["live_orders_enabled"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()
