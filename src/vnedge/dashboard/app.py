@@ -397,6 +397,7 @@ def create_app(
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
     scanner_backtest_uplift_path: Path | None = None,
+    alpha_arena_lite_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -505,6 +506,10 @@ def create_app(
     scanner_backtest_uplift_file = (
         scanner_backtest_uplift_path
         or Path("research/live_research/scanner_backtest_uplift_latest.json")
+    )
+    alpha_arena_lite_file = (
+        alpha_arena_lite_path
+        or Path("research/live_research/alpha_arena_lite_latest.json")
     )
 
     @app.get("/")
@@ -980,6 +985,26 @@ def create_app(
                     "top_uplifts": [],
                     "experiments": [],
                     "operator_answer": "scanner backtest uplift artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/alpha-arena-lite")
+    async def alpha_arena_lite(request: Request) -> JSONResponse:
+        """Durable Arena task/scorecard layer for scanner uplift candidates."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                alpha_arena_lite_file,
+                {
+                    "arena_id": "alpha_arena_lite_v1",
+                    "summary": {},
+                    "scorecards": [],
+                    "gateway": {},
+                    "operator_answer": "alpha arena lite artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },

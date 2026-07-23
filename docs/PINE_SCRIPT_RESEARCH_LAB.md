@@ -115,6 +115,11 @@ Production Compose refreshes both artifacts through
 operator should no longer see a static "queued" answer after the backtest has
 actually completed.
 
+`alpha-arena-lite` consumes the scanner uplift artifact and publishes
+`research/live_research/alpha_arena_lite_latest.json`. It converts sparse or
+near-fee-wall positives into durable Quant OS tasks and scorecards, without
+granting paper/live permission.
+
 The production Compose dashboard mounts this directory read-only:
 
 ```text

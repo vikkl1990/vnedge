@@ -269,6 +269,18 @@
     </section>
 
     <section class="panel distiller">
+      <h2>Alpha Arena Lite</h2>
+      <div class="summary">
+        <div class="metric"><span>Candidates</span><b id="aal_candidates">--</b><i>arena scorecards</i></div>
+        <div class="metric"><span>Task refs</span><b id="aal_tasks">--</b><i>Quant OS durable</i></div>
+        <div class="metric"><span>Sample valid</span><b id="aal_sample">--</b><i>min trade gate</i></div>
+        <div class="metric"><span>Judgment ready</span><b id="aal_judgment">--</b><i>still human gated</i></div>
+      </div>
+      <div class="task-list" id="alphaArenaTasks"></div>
+      <div class="policy" id="alphaArenaAnswer">Loading Alpha Arena Lite.</div>
+    </section>
+
+    <section class="panel distiller">
       <h2>Edge Uplift Executor</h2>
       <div class="summary">
         <div class="metric"><span>Tasks</span><b id="ux_tasks">--</b><i>agent output queued</i></div>
@@ -898,6 +910,45 @@
       .then(renderScannerUplift)
       .catch(err=>{$("scannerUpliftAnswer").textContent=String(err);renderScannerUplift({});});
   }
+  function renderAlphaArenaLite(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("aal_candidates",s.candidate_count);
+    text("aal_tasks",s.task_count);
+    text("aal_sample",s.sample_valid);
+    text("aal_judgment",s.ready_for_untouched_judgment);
+    text("alphaArenaAnswer",payload.operator_answer||"No Alpha Arena Lite artifact published yet.");
+    const listEl=$("alphaArenaTasks"); listEl.innerHTML="";
+    (payload.scorecards||[]).slice(0,6).forEach(card=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=(card.strategy_id||"--")+" "+(card.exchange||"--")+" "+(card.symbol||"--");
+      const score=document.createElement("div");
+      score.className="score";
+      const m=card.metrics||{};
+      score.textContent=m.top_avg_net_bps==null?"--":Number(m.top_avg_net_bps).toFixed(2)+" bps";
+      const meta=document.createElement("span");
+      const pf=m.best_profit_factor==null?"--":Number(m.best_profit_factor).toFixed(2);
+      meta.textContent=(card.arena_verdict||"--")+" | samples "+(m.max_samples??0)+"/"+(m.sample_required??20)+" | PF "+pf;
+      const action=document.createElement("span");
+      action.textContent=(card.next_action||"--")+" | task "+(card.task_id||"not synced");
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No Alpha Arena scorecards published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadAlphaArenaLite(){
+    fetch("/pine-research/alpha-arena-lite",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderAlphaArenaLite)
+      .catch(err=>{$("alphaArenaAnswer").textContent=String(err);renderAlphaArenaLite({});});
+  }
   function renderUpliftExecutor(payload){
     payload=payload||{};
     const s=payload.summary||{};
@@ -946,6 +997,7 @@
       .then(renderUpliftAgent)
       .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
     loadScannerUplift();
+    loadAlphaArenaLite();
     loadExecutor();
   }
   $("searchBox").addEventListener("input",renderRows);
@@ -954,6 +1006,7 @@
   load();
   setInterval(loadProgress,10000);
   setInterval(loadScannerUplift,30000);
+  setInterval(loadAlphaArenaLite,30000);
   setInterval(loadExecutor,30000);
 })();
 </script>

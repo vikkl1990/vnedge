@@ -135,6 +135,24 @@ def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
     }
 
 
+def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
+    service = compose_services()["alpha-arena-lite"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.alpha_arena_lite",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "research/live_research/scanner_backtest_uplift_latest.json" in service["command"]
+    assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "research/live_research/alpha_arena_lite_latest.json" in service["command"]
+    assert "${QUANT_OS_AGENT_GATEWAY_DIR:-logs/agent_gateway/quant_os}" in service["command"]
+    assert "./logs/agent_gateway:/app/logs/agent_gateway" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {"scanner-backtest-uplift", "scanner-tournament"}
+
+
 def test_scanner_tournament_lowers_only_research_discovery_governance():
     service = compose_services()["scanner-tournament"]
 

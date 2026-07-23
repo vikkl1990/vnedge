@@ -185,6 +185,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     uplift = tmp_path / "pine_edge_uplift_agent_latest.json"
     executor = tmp_path / "edge_uplift_experiments_latest.json"
     scanner_uplift = tmp_path / "scanner_backtest_uplift_latest.json"
+    alpha_arena = tmp_path / "alpha_arena_lite_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -272,6 +273,34 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    alpha_arena.write_text(json.dumps({
+        "arena_id": "alpha_arena_lite_v1",
+        "summary": {
+            "candidate_count": 1,
+            "task_count": 1,
+            "sample_valid": 0,
+            "ready_for_untouched_judgment": 0,
+        },
+        "scorecards": [
+            {
+                "strategy_id": "luxara_live_plan_qtm_v1",
+                "exchange": "delta_india",
+                "symbol": "ETH/USD:USD",
+                "arena_verdict": "EXPAND_UNTOUCHED_SAMPLE",
+                "next_action": "RUN_FROZEN_SETUP_ON_NEXT_UNTOUCHED_WINDOW",
+                "task_id": "qtask_test",
+                "metrics": {
+                    "top_avg_net_bps": 497.8,
+                    "best_profit_factor": 999.0,
+                    "max_samples": 3,
+                    "sample_required": 20,
+                },
+            }
+        ],
+        "operator_answer": "arena ready",
+        "can_trade": False,
+        "can_promote": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -281,6 +310,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         pine_edge_uplift_path=uplift,
         edge_uplift_executor_path=executor,
         scanner_backtest_uplift_path=scanner_uplift,
+        alpha_arena_lite_path=alpha_arena,
     )
     client = TestClient(app)
 
@@ -294,16 +324,19 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/uplift-agent" in page.text
     assert "/pine-research/uplift-executor" in page.text
     assert "/pine-research/scanner-uplift" in page.text
+    assert "/pine-research/alpha-arena-lite" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
     assert "Scanner Backtest Uplift" in page.text
+    assert "Alpha Arena Lite" in page.text
     assert "Edge Uplift Executor" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
     assert "renderUpliftAgent" in page.text
     assert "renderScannerUplift" in page.text
+    assert "renderAlphaArenaLite" in page.text
     assert "renderUpliftExecutor" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
@@ -318,6 +351,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/uplift-agent").status_code == 401
     assert client.get("/pine-research/uplift-executor").status_code == 401
     assert client.get("/pine-research/scanner-uplift").status_code == 401
+    assert client.get("/pine-research/alpha-arena-lite").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -356,6 +390,13 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert scanner_uplift_payload["summary"]["fee_wall_near_misses"] == 9
     assert scanner_uplift_payload["can_trade"] is False
     assert scanner_uplift_payload["can_promote"] is False
+    aal = client.get("/pine-research/alpha-arena-lite?token=t3st-token")
+    assert aal.status_code == 200
+    alpha_payload = aal.json()
+    assert alpha_payload["arena_id"] == "alpha_arena_lite_v1"
+    assert alpha_payload["summary"]["candidate_count"] == 1
+    assert alpha_payload["can_trade"] is False
+    assert alpha_payload["can_promote"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()
