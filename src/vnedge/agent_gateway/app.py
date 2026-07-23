@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from vnedge.agent_gateway.audit import AgentAuditEvent, AgentAuditLogger
 from vnedge.agent_gateway.auth import AgentPrincipal, AgentTokenStore
 from vnedge.agent_gateway.jobs import create_backtest_job, list_jobs, read_job
+from vnedge.agent_gateway.task_registry import (
+    QuantOSAgentGateway,
+    env_quant_os_agent_gateway_dir,
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,54 @@ class BacktestRequest(BaseModel):
         return self
 
 
+class QuantOSTaskRequest(BaseModel):
+    """Research-only durable task request for Agent Gateway v2."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    objective: str = Field(min_length=1, max_length=2_000)
+    priority: int = Field(default=50, ge=0, le=100)
+    target: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    live_orders_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _research_only(self) -> QuantOSTaskRequest:
+        if self.live_orders_enabled:
+            raise ValueError("Quant OS tasks cannot enable live orders")
+        return self
+
+
+class QuantOSEventRequest(BaseModel):
+    """Append one progress event to an existing Quant OS task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    message: str = Field(min_length=1, max_length=2_000)
+    level: str = Field(default="info", max_length=20)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuantOSArtifactRequest(BaseModel):
+    """Publish a hash-backed research artifact for one Quant OS task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_type: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    summary: str = Field(min_length=1, max_length=2_000)
+    content: str | dict[str, Any] | None = None
+    path: str | None = Field(default=None, max_length=2_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _has_artifact_source(self) -> QuantOSArtifactRequest:
+        if self.content is None and not self.path:
+            raise ValueError("artifact request must include content or path")
+        return self
+
+
 def env_agent_audit_path(env: dict[str, str] | None = None) -> Path:
     source = os.environ if env is None else env
     return Path(source.get("AGENT_GATEWAY_AUDIT_PATH", "logs/agent_gateway/audit.jsonl"))
@@ -79,8 +131,11 @@ def mount_agent_gateway(
     audit_logger: AgentAuditLogger,
     jobs_dir: Path,
     artifacts: AgentGatewayArtifacts,
+    quant_os_gateway_dir: Path | None = None,
 ) -> None:
     router = APIRouter(prefix="/api/agent/v1", tags=["agent-gateway"])
+    v2 = APIRouter(prefix="/api/agent/v2", tags=["agent-gateway-v2"])
+    quant_os_gateway = QuantOSAgentGateway(quant_os_gateway_dir or env_quant_os_agent_gateway_dir())
 
     def _read_json_payload(path: Path | None, fallback: dict[str, Any]) -> dict[str, Any]:
         if path is None or not path.exists():
@@ -231,6 +286,9 @@ def mount_agent_gateway(
                 "realtime-scanner",
                 "jobs",
                 "backtests",
+                "v2/tasks",
+                "v2/events",
+                "v2/artifacts",
             ],
         }
 
@@ -410,3 +468,185 @@ def mount_agent_gateway(
 
     app.include_router(router)
 
+    def _enforce_optional_market_target(
+        principal: AgentPrincipal,
+        request: Request,
+        target: dict[str, Any],
+        *,
+        action: str,
+        scope: str,
+    ) -> None:
+        exchange = target.get("exchange")
+        symbol = target.get("symbol")
+        if exchange is None or symbol is None:
+            return
+        if principal.market_allowed(str(exchange), str(symbol)):
+            return
+        audit_logger.write(
+            AgentAuditEvent(
+                agent=principal.name,
+                token_prefix=principal.token_prefix,
+                method=request.method,
+                path=request.url.path,
+                action=action,
+                scope=scope,
+                outcome="DENIED",
+                reason="market not allowed for agent token",
+                paper_only=principal.paper_only,
+            )
+        )
+        raise HTTPException(status_code=403, detail="market not allowed for agent token")
+
+    @v2.get("/health")
+    async def quant_os_health() -> dict[str, Any]:
+        snapshot = quant_os_gateway.snapshot(limit=20)
+        return {
+            "status": "ok",
+            "gateway": "quant_os_agent_gateway_v2",
+            "version": 2,
+            "task_root": str(quant_os_gateway.root),
+            "summary": snapshot["summary"],
+            "live_orders_available": False,
+            "can_trade": False,
+            "can_promote": False,
+        }
+
+    @v2.get("/tasks")
+    async def quant_os_tasks(request: Request, limit: int = 100) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "R", request, action="read_quant_os_tasks")
+        payload = quant_os_gateway.snapshot(limit=max(1, min(int(limit), 250)))
+        _audit_ok(request, principal, action="read_quant_os_tasks", scope="R")
+        return JSONResponse(payload, headers={"X-Agent-Name": principal.name})
+
+    @v2.post("/tasks", status_code=202)
+    async def create_quant_os_task(
+        request: Request,
+        payload: QuantOSTaskRequest,
+    ) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "W_RESEARCH", request, action="create_quant_os_task")
+        _enforce_optional_market_target(
+            principal,
+            request,
+            payload.target,
+            action="create_quant_os_task",
+            scope="W_RESEARCH",
+        )
+        task = quant_os_gateway.create_task(
+            kind=payload.kind,
+            objective=payload.objective,
+            priority=payload.priority,
+            requested_by=principal.name,
+            target=payload.target,
+            payload=payload.payload,
+        )
+        _audit_ok(
+            request,
+            principal,
+            action="create_quant_os_task",
+            scope="W_RESEARCH",
+            job_id=str(task["task_id"]),
+        )
+        return JSONResponse(task, status_code=202, headers={"X-Agent-Name": principal.name})
+
+    @v2.get("/events")
+    async def quant_os_events(request: Request, limit: int = 100) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "R", request, action="read_quant_os_events")
+        payload = quant_os_gateway.snapshot(limit=max(1, min(int(limit), 250)))
+        _audit_ok(request, principal, action="read_quant_os_events", scope="R")
+        return JSONResponse(
+            {
+                "gateway_id": payload["gateway_id"],
+                "events": payload["events"],
+                "can_trade": False,
+                "can_promote": False,
+            },
+            headers={"X-Agent-Name": principal.name},
+        )
+
+    @v2.post("/tasks/{task_id}/events", status_code=202)
+    async def append_quant_os_event(
+        request: Request,
+        task_id: str,
+        payload: QuantOSEventRequest,
+    ) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "W_RESEARCH", request, action="append_quant_os_event")
+        try:
+            event = quant_os_gateway.emit_event(
+                task_id,
+                event_type=payload.event_type,
+                message=payload.message,
+                level=payload.level,
+                payload=payload.payload,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        _audit_ok(
+            request,
+            principal,
+            action="append_quant_os_event",
+            scope="W_RESEARCH",
+            job_id=task_id,
+        )
+        return JSONResponse(event, status_code=202, headers={"X-Agent-Name": principal.name})
+
+    @v2.get("/artifacts")
+    async def quant_os_artifacts(request: Request, limit: int = 100) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "R", request, action="read_quant_os_artifacts")
+        payload = quant_os_gateway.snapshot(limit=max(1, min(int(limit), 250)))
+        _audit_ok(request, principal, action="read_quant_os_artifacts", scope="R")
+        return JSONResponse(
+            {
+                "gateway_id": payload["gateway_id"],
+                "artifacts": payload["artifacts"],
+                "can_trade": False,
+                "can_promote": False,
+            },
+            headers={"X-Agent-Name": principal.name},
+        )
+
+    @v2.post("/tasks/{task_id}/artifacts", status_code=202)
+    async def publish_quant_os_artifact(
+        request: Request,
+        task_id: str,
+        payload: QuantOSArtifactRequest,
+    ) -> JSONResponse:
+        principal = _agent_from_request(request)
+        _require_scope(principal, "W_RESEARCH", request, action="publish_quant_os_artifact")
+        try:
+            if payload.content is not None:
+                artifact = quant_os_gateway.register_content_artifact(
+                    task_id,
+                    artifact_type=payload.artifact_type,
+                    summary=payload.summary,
+                    content=payload.content,
+                    metadata=payload.metadata,
+                )
+            else:
+                artifact = quant_os_gateway.register_artifact(
+                    task_id,
+                    artifact_path=Path(str(payload.path)),
+                    artifact_type=payload.artifact_type,
+                    summary=payload.summary,
+                    metadata=payload.metadata,
+                )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"artifact path not found: {exc}")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _audit_ok(
+            request,
+            principal,
+            action="publish_quant_os_artifact",
+            scope="W_RESEARCH",
+            job_id=task_id,
+        )
+        return JSONResponse(artifact, status_code=202, headers={"X-Agent-Name": principal.name})
+
+    app.include_router(v2)
