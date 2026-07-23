@@ -46,8 +46,8 @@ class LuxaraLivePlanQTMParams:
     min_grade_score: int = 3
     min_volume_ratio: float = 1.50
     volume_sma_window: int = 20
-    min_expected_net_edge_bps: float = 120.0
-    min_room_to_liquidity_bps: float = 150.0
+    min_expected_net_edge_bps: float = 30.0
+    min_room_to_liquidity_bps: float = 50.0
     min_fill_probability: float = 0.35
 
     stop_atr_mult: float = 1.20
