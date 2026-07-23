@@ -187,6 +187,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     scanner_uplift = tmp_path / "scanner_backtest_uplift_latest.json"
     alpha_arena = tmp_path / "alpha_arena_lite_latest.json"
     quant_loop = tmp_path / "quant_loop_governance_latest.json"
+    evidence_index = tmp_path / "evidence_index_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -330,6 +331,38 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_promote": False,
         "live_orders_enabled": False,
     }))
+    evidence_index.write_text(json.dumps({
+        "evidence_store_id": "research_evidence_index_v1",
+        "summary": {
+            "total_records": 3,
+            "completed_records": 3,
+            "positive_after_cost": 2,
+            "strict_fee_wall_breakers": 1,
+            "sparse_positives": 1,
+            "best_avg_net_bps": 31.25,
+            "best_profit_factor": 1.72,
+        },
+        "fee_wall_breakers": [
+            {
+                "record_id": "r1",
+                "source_kind": "fee_wall_forensics",
+                "strategy_id": "sats_5m_scalper_v1",
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "samples": 31,
+                "avg_net_bps": 31.25,
+                "profit_factor": 1.72,
+                "next_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT",
+                "can_trade": False,
+                "can_promote": False,
+            }
+        ],
+        "operator_answer": "evidence index ready",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -341,6 +374,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         scanner_backtest_uplift_path=scanner_uplift,
         alpha_arena_lite_path=alpha_arena,
         quant_loop_governance_path=quant_loop,
+        evidence_index_path=evidence_index,
     )
     client = TestClient(app)
 
@@ -356,6 +390,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/scanner-uplift" in page.text
     assert "/pine-research/alpha-arena-lite" in page.text
     assert "/pine-research/quant-loop-governance" in page.text
+    assert "/pine-research/evidence-index" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
@@ -363,6 +398,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "Alpha Arena Lite" in page.text
     assert "Quant Loop Governance" in page.text
     assert "Edge Uplift Executor" in page.text
+    assert "Unified Evidence Index" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
@@ -371,6 +407,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "renderAlphaArenaLite" in page.text
     assert "renderQuantLoopGovernance" in page.text
     assert "renderUpliftExecutor" in page.text
+    assert "renderEvidenceIndex" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -386,6 +423,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/scanner-uplift").status_code == 401
     assert client.get("/pine-research/alpha-arena-lite").status_code == 401
     assert client.get("/pine-research/quant-loop-governance").status_code == 401
+    assert client.get("/pine-research/evidence-index").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -439,6 +477,14 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert quant_payload["can_trade"] is False
     assert quant_payload["can_promote"] is False
     assert quant_payload["live_orders_enabled"] is False
+    ei = client.get("/pine-research/evidence-index?token=t3st-token")
+    assert ei.status_code == 200
+    evidence_payload = ei.json()
+    assert evidence_payload["evidence_store_id"] == "research_evidence_index_v1"
+    assert evidence_payload["summary"]["strict_fee_wall_breakers"] == 1
+    assert evidence_payload["fee_wall_breakers"][0]["can_trade"] is False
+    assert evidence_payload["can_promote"] is False
+    assert evidence_payload["live_orders_enabled"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()
