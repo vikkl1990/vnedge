@@ -35,6 +35,9 @@ New route:
   uplift report from completed scanner backtests.
 - `/pine-research/quant-loop-governance` serves the token-gated research-loop
   readiness, collision, budget, and gate status.
+- `/pine-research/evidence-index` serves the token-gated unified evidence
+  table across Pine Lab, scanner tournament, scanner uplift, Alpha Arena,
+  fee-wall, contract-matrix, and replay artifacts.
 
 The endpoint falls back to a seed payload when the generated artifact is absent,
 so the page remains useful during early deployment. The expected generated
@@ -137,6 +140,23 @@ python -m vnedge.research.quant_loop_governance \
 Its output is a control-plane artifact only. It can mark the research loop
 healthy, stale, over-budget, or blocked by duplicate candidate locks, but it
 cannot start paper/shadow/live lanes.
+
+`evidence-index-publisher` reconciles the research artifacts into one operator
+truth table every few minutes:
+
+```bash
+python -m vnedge.research.evidence_store \
+  --interval-seconds 300 \
+  --report-dir research/live_research \
+  --pine-kb research/pine_scripts/pine_research_kb.json \
+  --out research/live_research/evidence_index_latest.json \
+  --sqlite research/live_research/evidence_index.sqlite \
+  --feed research/live_research/evidence_index_feed.jsonl
+```
+
+The index is still research-only. A strict fee-wall breaker in the index is a
+candidate for causal-port/replay/untouched-window judgment, not paper/live
+permission.
 
 The production Compose dashboard mounts this directory read-only:
 
