@@ -33,6 +33,10 @@ The index does not replace walk-forward gates or burn-registry judgment. It is
 an operator truth table for "what has evidence, what is sparse-positive, what
 actually clears the fee wall, and what failed by mode/source."
 
+In production Compose, `evidence-index-publisher` refreshes the JSON, SQLite,
+and feed artifacts on `EVIDENCE_INDEX_INTERVAL_SECONDS` cadence after the Pine,
+scanner, Arena, fee-wall, and replay producers publish their own reports.
+
 ## Safety Boundary
 
 The ranker is not a strategy and not a promotion gate. Its payload carries:

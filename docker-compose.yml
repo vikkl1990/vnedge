@@ -604,6 +604,35 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Unified research evidence index publisher. It reconciles Pine Lab,
+  # scanner tournament/uplift, Alpha Arena, fee-wall, contract-matrix, and
+  # replay artifacts into one read-optimized truth table for the dashboard and
+  # operator queries. Research-only: it grants no paper/live permission.
+  evidence-index-publisher:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    depends_on:
+      - pine-backtest-evidence
+      - scanner-backtest-uplift
+      - alpha-arena-lite
+      - fee-wall-forensics
+      - candidate-replay-executor
+      - vnedge-algo-ml-pro-contract-matrix
+    command: ["python", "-m", "vnedge.research.evidence_store",
+              "--interval-seconds", "${EVIDENCE_INDEX_INTERVAL_SECONDS:-300}",
+              "--report-dir", "research/live_research",
+              "--pine-kb", "research/pine_scripts/pine_research_kb.json",
+              "--out", "research/live_research/evidence_index_latest.json",
+              "--sqlite", "research/live_research/evidence_index.sqlite",
+              "--feed", "research/live_research/evidence_index_feed.jsonl"]
+    volumes:
+      - ./research/pine_scripts:/app/research/pine_scripts:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Agentic failure-salvage planner for Pine-derived evidence.  It turns
   # failed/positive/queued replay cells into ranked research-only uplift
   # experiments: confluence stacks, feature-bank candidates, execution-filtered

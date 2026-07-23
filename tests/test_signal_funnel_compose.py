@@ -183,6 +183,32 @@ def test_quant_loop_governance_publishes_loop_readiness():
     }
 
 
+def test_evidence_index_publisher_reconciles_research_artifacts():
+    service = compose_services()["evidence-index-publisher"]
+
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.evidence_store",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${EVIDENCE_INDEX_INTERVAL_SECONDS:-300}" in service["command"]
+    assert "research/live_research/evidence_index_latest.json" in service["command"]
+    assert "research/live_research/evidence_index.sqlite" in service["command"]
+    assert "research/live_research/evidence_index_feed.jsonl" in service["command"]
+    assert "./research/pine_scripts:/app/research/pine_scripts:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "pine-backtest-evidence",
+        "scanner-backtest-uplift",
+        "alpha-arena-lite",
+        "fee-wall-forensics",
+        "candidate-replay-executor",
+        "vnedge-algo-ml-pro-contract-matrix",
+    }
+
+
 def test_scanner_tournament_lowers_only_research_discovery_governance():
     service = compose_services()["scanner-tournament"]
 
