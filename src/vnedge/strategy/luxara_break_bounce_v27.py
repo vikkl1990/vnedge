@@ -40,14 +40,14 @@ class LuxaraBreakBounceV27Params:
 
     atr_window: int = 14
     volume_sma_window: int = 20
-    min_volume_ratio: float = 2.50
+    min_volume_ratio: float = 1.50
     liquidity_lookback: int = 90
     measured_move_fraction: float = 0.75
 
-    min_grade_score: int = 4
+    min_grade_score: int = 3
     min_box_width_atr: float = 0.55
     max_box_width_atr: float = 2.50
-    min_breakout_bps: float = 12.0
+    min_breakout_bps: float = 8.0
     min_room_to_liquidity_bps: float = 0.0
     min_expected_net_edge_bps: float = 80.0
     min_fill_probability: float = 0.55
