@@ -2177,6 +2177,11 @@
 
   /* Deploy / provenance panel. */
   .provenance-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px 12px}
+  .qos-grid{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:8px;padding:0 12px 12px}
+  .qos-grid .table-wrap{border:1px solid var(--line);border-radius:var(--radius);overflow:auto}
+  .qos-grid table{min-width:620px}
+  .qos-grid .wide{grid-column:1 / -1}
+  .qos-event{font-family:var(--mono);font-size:10.5px}
 
   /* Persistent app footer (version + UTC clock + read-only disclaimer). */
   .app-footer{
@@ -2369,7 +2374,8 @@
   @media(max-width:900px){
     .activity-spine{grid-template-columns:repeat(2,minmax(0,1fr))}
     .venue-strip{grid-template-columns:1fr}
-    .doc-grid,.cost-grid,.provenance-grid{grid-template-columns:1fr}
+    .doc-grid,.cost-grid,.provenance-grid,.qos-grid{grid-template-columns:1fr}
+    .qos-grid .wide{grid-column:auto}
   }
   @media(max-width:1040px){
     .nav-rail{position:sticky;top:8px}
@@ -2975,6 +2981,36 @@
       <div class="cost-foot">Container split, service bus, ONNX hot paths and sub-3ms targets are deliberately deferred until evidence demands them (architecture review 2026-07-02).</div>
     </section>
 
+    <section id="quantOsAgentGatewayBoard" data-view="system" aria-label="quant os agent gateway">
+      <h2>Quant OS Agent Gateway <span class="tag" id="qos_policy">durable tasks, event stream, artifact registry; cannot trade or promote</span></h2>
+      <div class="mini-grid" aria-label="quant os agent gateway summary">
+        <div class="mini-card info"><div class="small-label">Tasks</div><div class="big" id="qos_tasks">--</div><div class="tiny" id="qos_task_split">queued -- / running --</div></div>
+        <div class="mini-card plan"><div class="small-label">Active</div><div class="big" id="qos_active">--</div><div class="tiny">agent work units</div></div>
+        <div class="mini-card good"><div class="small-label">Artifacts</div><div class="big" id="qos_artifacts">--</div><div class="tiny" id="qos_artifact_kinds">hash-backed evidence</div></div>
+        <div class="mini-card"><div class="small-label">Events</div><div class="big" id="qos_events">--</div><div class="tiny" id="qos_event_age">stream heartbeat --</div></div>
+        <div class="mini-card"><div class="small-label">Arena Lite</div><div class="big" id="qos_arena">--</div><div class="tiny">foundation status</div></div>
+      </div>
+      <div class="qos-grid">
+        <div class="table-wrap">
+          <table id="qosTaskTable"><thead><tr>
+            <th>Status</th><th>Priority</th><th>Kind</th><th>Objective</th><th>Owner</th><th>Updated</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="table-wrap">
+          <table id="qosArtifactTable"><thead><tr>
+            <th>Type</th><th>Summary</th><th>Bytes</th><th>SHA256</th><th>Task</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="table-wrap wide">
+          <table id="qosEventTable"><thead><tr>
+            <th>Time</th><th>Level</th><th>Event</th><th>Task</th><th>Message</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="empty" id="qos_empty">Quant OS Agent Gateway ledger is empty; Alpha Arena Lite can start once agents publish tasks and evidence.</div>
+      <div class="cost-foot">Operator route: <code>GET /quant-os/agent-gateway</code>. Agent route: <code>/api/agent/v2/tasks</code>. This is a research control plane only; there are no order, risk, config, or promotion controls.</div>
+    </section>
+
     <section id="costModelBoard" class="institutional-board" data-view="system" aria-label="fee wall cost model">
       <h2>Fee Wall &amp; Cost Model <span class="tag" id="cost_source">two honest round-trip cost models, read from research/paper constants</span></h2>
       <div class="cost-grid">
@@ -3134,6 +3170,7 @@
   let lastRealtimeScanner={summary:{},rows:[]};
   let lastLaneReadiness={summary:{},rows:[]};
   let lastTradeJournal={summary:{},positions:[],orders:[],closed_trades:[],events:[]};
+  let lastQuantOsGateway={summary:{},tasks:[],events:{recent:[]},artifacts:{recent:[]}};
   let lastSnapshot=null;
   let lastOperatorCtx=null;
   let lastCostModel=null;
@@ -3505,6 +3542,7 @@
     tradeMonitor:"overview",performanceWorkbench:"overview",readinessRibbon:"overview",
     quantDeck:"overview",lanesBoard:"trading",realtimeScannerBoard:"trading",
     costModelBoard:"system",connectionsBoard:"incidents",incidentsBoard:"incidents",
+    quantOsAgentGatewayBoard:"system",
     architectureMap:"system",deployProvenance:"system"
   };
   function currentView(){
@@ -5509,6 +5547,98 @@
     el.className="dc-value"+(enabled===true?" good":enabled===false?" idle":"");
   }
 
+  function quantTaskTone(status){
+    const s=String(status||"");
+    if(s.includes("COMPLETED"))return "good";
+    if(s.includes("RUNNING"))return "plan";
+    if(s.includes("QUEUED"))return "info";
+    if(s.includes("FAILED"))return "bad";
+    if(s.includes("CANCELLED"))return "warn";
+    return "idle";
+  }
+
+  function quantEventTone(level){
+    const s=String(level||"").toLowerCase();
+    if(s==="error"||s==="critical")return "bad";
+    if(s==="warn"||s==="warning")return "warn";
+    if(s==="debug")return "idle";
+    return "info";
+  }
+
+  function renderQuantOsAgentGateway(payload){
+    const data=payload||{summary:{},tasks:[],events:{recent:[]},artifacts:{recent:[]}};
+    lastQuantOsGateway=data;
+    const s=data.summary||{};
+    const tasks=Array.isArray(data.tasks)?data.tasks:[];
+    const events=(data.events&&Array.isArray(data.events.recent))?data.events.recent:[];
+    const artifacts=(data.artifacts&&Array.isArray(data.artifacts.recent))?data.artifacts.recent:[];
+    text("qos_tasks",num(s.total_tasks));
+    text("qos_task_split","queued "+num(s.queued)+" / running "+num(s.running)+
+      " / done "+num(s.completed));
+    text("qos_active",num(s.active));
+    text("qos_artifacts",num(s.artifacts));
+    const kinds=Object.entries(s.artifact_kinds||{}).slice(0,4)
+      .map(([k,v])=>String(k)+" "+num(v)).join(" / ");
+    text("qos_artifact_kinds",kinds||"hash-backed evidence");
+    text("qos_events",num(s.events));
+    text("qos_event_age",events.length?"latest "+timeAgoFromIso(events[events.length-1].created_at):"stream heartbeat --");
+    text("qos_arena",(data.alpha_arena_lite&&data.alpha_arena_lite.foundation_ready)?"READY":"WAIT");
+    text("qos_policy",(data.policy&&data.policy.surface)||"research_only_control_plane");
+    setMiniCardTone("qos_active",num(s.running)>0?"plan":num(s.queued)>0?"info":"idle");
+    setMiniCardTone("qos_artifacts",num(s.artifacts)>0?"good":"idle");
+    setMiniCardTone("qos_events",num(s.events)>0?"info":"idle");
+    setMiniCardTone("qos_arena",(data.alpha_arena_lite&&data.alpha_arena_lite.foundation_ready)?"good":"idle");
+
+    const taskTable=$("qosTaskTable");
+    if(taskTable){
+      const body=taskTable.querySelector("tbody");
+      body.replaceChildren();
+      tasks.slice(0,12).forEach(task=>{
+        const tr=body.insertRow();
+        appendBadge(tr.insertCell(),String(task.status||"--").replaceAll("_"," "),quantTaskTone(task.status));
+        appendCell(tr,String(num(task.priority)),"mono");
+        appendCell(tr,task.kind||"--","clip");
+        appendCell(tr,task.objective||"--","clip",task.last_event||task.objective||"");
+        appendCell(tr,task.lease_owner||task.requested_by||"--","clip");
+        appendCell(tr,task.updated_at?utcClock(task.updated_at):"--","mono",task.updated_at||"");
+      });
+      taskTable.style.display=tasks.length?"table":"none";
+    }
+
+    const artifactTable=$("qosArtifactTable");
+    if(artifactTable){
+      const body=artifactTable.querySelector("tbody");
+      body.replaceChildren();
+      artifacts.slice(0,10).forEach(artifact=>{
+        const tr=body.insertRow();
+        appendBadge(tr.insertCell(),artifact.artifact_type||"--","good");
+        appendCell(tr,artifact.summary||"--","clip",artifact.path||"");
+        appendCell(tr,finite(artifact.bytes)?Number(artifact.bytes).toLocaleString():"--","mono");
+        appendCell(tr,String(artifact.sha256||"--").slice(0,16),"mono",artifact.sha256||"");
+        appendCell(tr,artifact.task_id||"--","clip");
+      });
+      artifactTable.style.display=artifacts.length?"table":"none";
+    }
+
+    const eventTable=$("qosEventTable");
+    if(eventTable){
+      const body=eventTable.querySelector("tbody");
+      body.replaceChildren();
+      events.slice().reverse().slice(0,14).forEach(event=>{
+        const tr=body.insertRow();
+        tr.className="qos-event";
+        appendCell(tr,event.created_at?utcClock(event.created_at):"--","mono",event.created_at||"");
+        appendBadge(tr.insertCell(),event.level||"--",quantEventTone(event.level));
+        appendCell(tr,event.event_type||"--","clip");
+        appendCell(tr,event.task_id||"--","clip");
+        appendCell(tr,event.message||"--","clip",event.message||"");
+      });
+      eventTable.style.display=events.length?"table":"none";
+    }
+    const empty=$("qos_empty");
+    if(empty)empty.style.display=(tasks.length||events.length||artifacts.length)?"none":"block";
+  }
+
   function fmtNet(side){
     if(!side)return "--";
     return (num(side.net_usd)>=0?"+$":"-$")+Math.abs(num(side.net_usd)).toFixed(0)+" ("+num(side.trades)+")";
@@ -5975,6 +6105,10 @@
     fetchJSON("/lane-readiness").then(d=>{renderLaneReadiness(d);reapplyView();}).catch(()=>{});
   }
 
+  function loadQuantOsAgentGateway(){
+    fetchJSON("/quant-os/agent-gateway").then(d=>{renderQuantOsAgentGateway(d);reapplyView();}).catch(()=>{});
+  }
+
   // Runbooks deep-link (token-scoped, opens the rendered docs/RUNBOOKS.md).
   (function(){
     const a=$("runbooksLink");
@@ -5988,6 +6122,7 @@
   loadRealtimeScanner();
   loadTradeJournal();
   loadLaneReadiness();
+  loadQuantOsAgentGateway();
   loadIncidents();
   loadCostModel();
   setInterval(loadResearch,60000);
@@ -5995,6 +6130,7 @@
   setInterval(loadRealtimeScanner,30000);
   setInterval(loadTradeJournal,30000);
   setInterval(loadLaneReadiness,30000);
+  setInterval(loadQuantOsAgentGateway,30000);
   setInterval(loadIncidents,60000);
   setInterval(loadCostModel,300000);
 

@@ -1,9 +1,10 @@
 # VNEDGE Agent Gateway
 
 The Agent Gateway is the first slice of the **VNEDGE AI Quant OS** surface:
-an AI-facing, scoped API under `/api/agent/v1` that lets research agents read
-the bot's state and request research work without touching exchange keys,
-strategy source, order routing, or live controls.
+an AI-facing, scoped API under `/api/agent/v1` and `/api/agent/v2` that lets
+research agents read the bot's state, request proof work, append task events,
+and publish evidence artifacts without touching exchange keys, strategy source,
+order routing, or live controls.
 
 It is deliberately separate from the human dashboard API:
 
@@ -19,8 +20,11 @@ This first phase is research-only.
 - No order route is exposed.
 - No live trading route is exposed.
 - Backtest requests are recorded as `PENDING_RESEARCH_ONLY` jobs.
+- Quant OS v2 tasks are recorded as `*_RESEARCH_ONLY` durable tasks.
 - Every job has `can_trade=false`, `can_promote=false`, and
   `live_orders_enabled=false`.
+- Every task, event, and artifact has `can_trade=false`, `can_promote=false`,
+  and `live_orders_enabled=false`.
 - Every authenticated agent route appends a hash-chained JSONL audit record.
 - Tokens are paper-only by default.
 
@@ -71,7 +75,7 @@ immediately at startup. The raw token is not retained on the token object.
 |---|---|
 | `R` | Read gateway-safe bot state and research artifacts. |
 | `B` | Submit research-only backtest job requests. |
-| `W_RESEARCH` | Reserved for future sandboxed research artifact writes. |
+| `W_RESEARCH` | Create durable Quant OS research tasks, append progress events, and publish evidence artifacts. |
 | `T_PAPER` | Reserved for future paper-only agent actions. No route uses it yet. |
 
 There is intentionally no live-trading scope in this phase.
@@ -95,6 +99,13 @@ All routes except `/health` require `Authorization: Bearer <agent-token>`.
 | `GET /api/agent/v1/jobs` | `R` | List agent research jobs. |
 | `GET /api/agent/v1/jobs/{job_id}` | `R` | Read one agent research job. |
 | `POST /api/agent/v1/backtests` | `B` | Record a strict, research-only backtest request. |
+| `GET /api/agent/v2/health` | none | Quant OS task/event/artifact ledger status. |
+| `GET /api/agent/v2/tasks` | `R` | Read durable Quant OS task snapshot. |
+| `POST /api/agent/v2/tasks` | `W_RESEARCH` | Create a research-only task. |
+| `GET /api/agent/v2/events` | `R` | Read recent Quant OS event stream payloads. |
+| `POST /api/agent/v2/tasks/{task_id}/events` | `W_RESEARCH` | Append task progress / heartbeat / failure context. |
+| `GET /api/agent/v2/artifacts` | `R` | Read artifact registry metadata. |
+| `POST /api/agent/v2/tasks/{task_id}/artifacts` | `W_RESEARCH` | Publish hash-backed research evidence. |
 
 ## Backtest Request Example
 
@@ -191,6 +202,70 @@ Quant OS Job Ledger panel. This is deliberately separate from
 even when the Agent Gateway HTTP surface is not mounted because no agent tokens
 are configured.
 
+## Quant OS Agent Gateway v2
+
+Agent Gateway v2 is the durable task bus for the next Alpha Arena Lite phase.
+It is not an executor. It gives agents a reliable way to say:
+
+- what research task exists;
+- what happened while the task ran;
+- what artifact proves the result.
+
+Artifacts published with inline `content` are written under
+`<QUANT_OS_AGENT_GATEWAY_DIR>/artifacts/<task_id>/` and registered with byte
+size and SHA-256. Artifacts published by `path` must already live under
+`<QUANT_OS_AGENT_GATEWAY_DIR>`; they are hashed in place and registered by
+metadata only. The dashboard never serves artifact contents directly.
+
+Create a task:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "alpha_arena.experiment",
+    "objective": "rank ETH Delta FVG and trail-exit ports before replay",
+    "priority": 90,
+    "target": {"exchange": "delta_india", "symbol": "ETH/USD:USD", "timeframe": "5m"},
+    "payload": {"families": ["fvg_liquidity_breakout_v1", "trail_exit_lab_v1"]},
+    "live_orders_enabled": false
+  }' \
+  http://127.0.0.1:8080/api/agent/v2/tasks
+```
+
+Append progress:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"event_type":"BACKTEST_STARTED","message":"started causal replay"}' \
+  http://127.0.0.1:8080/api/agent/v2/tasks/$TASK_ID/events
+```
+
+Publish a scorecard artifact:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "artifact_type": "arena_scorecard",
+    "summary": "first OOS route scorecard",
+    "content": {"pf": 1.21, "net_bps": -4.5, "strict": true}
+  }' \
+  http://127.0.0.1:8080/api/agent/v2/tasks/$TASK_ID/artifacts
+```
+
+Operator dashboard reads:
+
+- `GET /quant-os/agent-gateway`
+- `GET /quant-os/agent-gateway/events`
+
+The events route also returns finite Server-Sent Event frames when requested
+with `Accept: text/event-stream`, useful for thin operator consoles.
+
 Seed the starter jobs manually:
 
 ```bash
@@ -261,6 +336,7 @@ Defaults:
 
 - `AGENT_GATEWAY_AUDIT_PATH=logs/agent_gateway/audit.jsonl`
 - `AGENT_GATEWAY_JOBS_DIR=logs/agent_gateway/jobs`
+- `QUANT_OS_AGENT_GATEWAY_DIR=logs/agent_gateway/quant_os`
 
 Each audit record includes `prev_hash` and `hash`, so the gateway call stream
 is tamper-evident without mixing it into the order decision journal.
@@ -268,6 +344,7 @@ is tamper-evident without mixing it into the order decision journal.
 ## Next Phases
 
 1. Agent Gateway OpenAPI document and MCP wrapper.
-2. Replay/tick-job adapters for microstructure candidates.
-3. UI panels for agent tokens, jobs, and audit trail.
-4. Paper-only agent action scope, after a separate review.
+2. Alpha Arena Lite scorer consuming v2 task artifacts.
+3. Replay/tick-job adapters for microstructure candidates.
+4. UI panels for agent tokens and audit trail.
+5. Paper-only agent action scope, after a separate review.
