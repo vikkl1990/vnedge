@@ -413,6 +413,81 @@ def fvg_liquidity_breakout_delta_lanes(
     ]
 
 
+def luxara_live_plan_qtm_delta_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Curated 5m Delta India Luxara live-plan QTM observation lanes.
+
+    The Pine-derived ATR live-plan scanner (trailing-stop-first, BE-after-TP1)
+    in SHADOW only. Runs on the loosened selective gates (30 bps expected net
+    edge, 50 bps room-to-liquidity) so it accumulates real firing evidence
+    without being silent; promotion still requires untouched-window judgment.
+    """
+    if not _truthy(environ, "MULTI_LANE_LUXARA_LIVE_PLAN_DELTA", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_LUXARA_LIVE_PLAN_SYMBOLS",
+        "ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT",
+        environ,
+    )
+    symbols = [_delta_india_symbol(symbol) for symbol in raw_symbols]
+    return [
+        LaneSpec(
+            lane_id=(
+                f"luxara_live_plan_qtm_{DELTA_EXCHANGE}_"
+                f"{_slug_symbol(symbol)}_shadow"
+            ),
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="5m",
+            strategy_id="luxara_live_plan_qtm_v1",
+            strategy_params={},
+            mode=RunnerMode.SHADOW,
+        )
+        for symbol in symbols
+    ]
+
+
+def luxara_break_bounce_v27_delta_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Curated 5m Delta India Luxara Break & Bounce v27 observation lanes.
+
+    The Pine-derived box-breakout/bounce scanner in SHADOW only, on the loosened
+    selective gates (1.5x volume, grade >= 3, 8 bps breakout). The expected-net
+    edge floor is aligned to the other Delta scalper lanes (25 bps) so it fires
+    on the free-exit BTC/ETH scalper venue; promotion still requires untouched-
+    window judgment.
+    """
+    if not _truthy(environ, "MULTI_LANE_LUXARA_BREAK_BOUNCE_DELTA", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_LUXARA_BREAK_BOUNCE_SYMBOLS",
+        "ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT",
+        environ,
+    )
+    symbols = [_delta_india_symbol(symbol) for symbol in raw_symbols]
+    return [
+        LaneSpec(
+            lane_id=(
+                f"luxara_break_bounce_v27_{DELTA_EXCHANGE}_"
+                f"{_slug_symbol(symbol)}_shadow"
+            ),
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="5m",
+            strategy_id="luxara_break_bounce_v27_v1",
+            strategy_params={"min_expected_net_edge_bps": 25.0},
+            mode=RunnerMode.SHADOW,
+        )
+        for symbol in symbols
+    ]
+
+
 def fee_wall_paper_probe_lanes(
     environ: Mapping[str, str] = os.environ,
 ) -> list[LaneSpec]:
@@ -743,6 +818,8 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + sats_5m_delta_lanes(environ)
         + stealth_trail_bbp_delta_lanes(environ)
         + fvg_liquidity_breakout_delta_lanes(environ)
+        + luxara_live_plan_qtm_delta_lanes(environ)
+        + luxara_break_bounce_v27_delta_lanes(environ)
         + fee_wall_paper_probe_lanes(environ)
     )
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
