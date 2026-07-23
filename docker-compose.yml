@@ -572,6 +572,38 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Quant Loop Governance: control-plane heartbeat for the AI Quant OS. It
+  # reads Alpha Arena, scanner uplift/progress, gateway snapshots, and the
+  # machine-readable loop gates, then publishes readiness/collision/budget
+  # status. It never trades or promotes.
+  quant-loop-governance:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    depends_on:
+      - alpha-arena-lite
+      - scanner-backtest-uplift
+      - scanner-tournament
+    command: ["python", "-m", "vnedge.research.quant_loop_governance",
+              "--interval-seconds", "${QUANT_LOOP_GOVERNANCE_INTERVAL_SECONDS:-1800}",
+              "--gates", "governance/loop_gates.yaml",
+              "--state", "research/quant_loop_state.json",
+              "--alpha-arena", "research/live_research/alpha_arena_lite_latest.json",
+              "--scanner-uplift", "research/live_research/scanner_backtest_uplift_latest.json",
+              "--scanner-progress", "research/live_research/scanner_tournament_progress.json",
+              "--gateway-snapshot", "logs/agent_gateway/quant_os/snapshot.json",
+              "--out", "research/live_research/quant_loop_governance_latest.json",
+              "--feed", "research/live_research/quant_loop_governance_feed.jsonl",
+              "--run-log", "research/live_research/quant_loop_run_log.jsonl"]
+    volumes:
+      - ./governance:/app/governance:ro
+      - ./logs/agent_gateway:/app/logs/agent_gateway:ro
+      - ./research/quant_loop_state.json:/app/research/quant_loop_state.json:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Agentic failure-salvage planner for Pine-derived evidence.  It turns
   # failed/positive/queued replay cells into ranked research-only uplift
   # experiments: confluence stacks, feature-bank candidates, execution-filtered

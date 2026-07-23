@@ -33,6 +33,8 @@ New route:
   and VNEDGE port-task queue.
 - `/pine-research/scanner-uplift` serves the token-gated fee-wall/near-miss
   uplift report from completed scanner backtests.
+- `/pine-research/quant-loop-governance` serves the token-gated research-loop
+  readiness, collision, budget, and gate status.
 
 The endpoint falls back to a seed payload when the generated artifact is absent,
 so the page remains useful during early deployment. The expected generated
@@ -119,6 +121,22 @@ actually completed.
 `research/live_research/alpha_arena_lite_latest.json`. It converts sparse or
 near-fee-wall positives into durable Quant OS tasks and scorecards, without
 granting paper/live permission.
+
+`quant-loop-governance` then watches the Pine/Scanner/Arena loop:
+
+```bash
+python -m vnedge.research.quant_loop_governance \
+  --gates governance/loop_gates.yaml \
+  --state research/quant_loop_state.json \
+  --alpha-arena research/live_research/alpha_arena_lite_latest.json \
+  --scanner-uplift research/live_research/scanner_backtest_uplift_latest.json \
+  --scanner-progress research/live_research/scanner_tournament_progress.json \
+  --gateway-snapshot logs/agent_gateway/quant_os/snapshot.json
+```
+
+Its output is a control-plane artifact only. It can mark the research loop
+healthy, stale, over-budget, or blocked by duplicate candidate locks, but it
+cannot start paper/shadow/live lanes.
 
 The production Compose dashboard mounts this directory read-only:
 

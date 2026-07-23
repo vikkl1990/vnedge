@@ -232,6 +232,20 @@
       <div class="policy" id="btEvidenceAnswer">Loading backtest evidence.</div>
     </section>
 
+    <section class="panel evidence">
+      <h2>Unified Evidence Index</h2>
+      <div class="summary">
+        <div class="metric"><span>Records</span><b id="ei_records">--</b><i>normalized rows</i></div>
+        <div class="metric"><span>Completed</span><b id="ei_completed">--</b><i>rows with net bps</i></div>
+        <div class="metric"><span>Strict breakers</span><b id="ei_strict">--</b><i>25bps / PF1.5 / 20 trades</i></div>
+        <div class="metric"><span>Sparse positives</span><b id="ei_sparse">--</b><i>sample expansion queue</i></div>
+        <div class="metric"><span>Best bps</span><b id="ei_best_bps">--</b><i>all research artifacts</i></div>
+        <div class="metric"><span>Best PF</span><b id="ei_best_pf">--</b><i>paired with best bps</i></div>
+      </div>
+      <div class="task-list" id="evidenceIndexRows"></div>
+      <div class="policy" id="evidenceIndexAnswer">Loading unified evidence index.</div>
+    </section>
+
     <section class="panel progress-panel">
       <h2>Backtest Progress</h2>
       <div class="summary">
@@ -278,6 +292,18 @@
       </div>
       <div class="task-list" id="alphaArenaTasks"></div>
       <div class="policy" id="alphaArenaAnswer">Loading Alpha Arena Lite.</div>
+    </section>
+
+    <section class="panel distiller">
+      <h2>Quant Loop Governance</h2>
+      <div class="summary">
+        <div class="metric"><span>Readiness</span><b id="ql_score">--</b><i id="ql_level">loop level --</i></div>
+        <div class="metric"><span>Healthy loops</span><b id="ql_ok">--</b><i id="ql_wait">waiting --</i></div>
+        <div class="metric"><span>Collisions</span><b id="ql_collisions">--</b><i>candidate lock conflicts</i></div>
+        <div class="metric"><span>Budget alerts</span><b id="ql_budgets">--</b><i>run-loop pressure</i></div>
+      </div>
+      <div class="task-list" id="quantLoopTasks"></div>
+      <div class="policy" id="quantLoopAnswer">Loading Quant Loop Governance.</div>
     </section>
 
     <section class="panel distiller">
@@ -711,6 +737,54 @@
     }
     text("btEvidenceAnswer",answer);
   }
+  function renderEvidenceIndex(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("ei_records",s.total_records);
+    text("ei_completed",s.completed_records);
+    text("ei_strict",s.strict_fee_wall_breakers);
+    text("ei_sparse",s.sparse_positives);
+    text("ei_best_bps",s.best_avg_net_bps==null?"--":Number(s.best_avg_net_bps).toFixed(2));
+    text("ei_best_pf",s.best_profit_factor==null?"--":Number(s.best_profit_factor).toFixed(2));
+    text("evidenceIndexAnswer",payload.operator_answer||"No unified evidence index artifact published yet.");
+    const listEl=$("evidenceIndexRows"); listEl.innerHTML="";
+    const rows=[
+      ...(payload.fee_wall_breakers||[]).map(row=>({...row, bucket:"STRICT"})),
+      ...(payload.sparse_positives||[]).map(row=>({...row, bucket:"SPARSE"})),
+      ...(payload.top_positive||[]).map(row=>({...row, bucket:"POSITIVE"})),
+    ];
+    const seen=new Set();
+    rows.forEach(row=>{
+      if(seen.has(row.record_id)||listEl.children.length>=8)return;
+      seen.add(row.record_id);
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=[row.strategy_id,row.exchange,row.symbol,row.timeframe].filter(Boolean).join(" ")||row.source_kind||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=row.avg_net_bps==null?"--":Number(row.avg_net_bps).toFixed(2)+" bps";
+      const meta=document.createElement("span");
+      const pf=row.profit_factor==null?"--":Number(row.profit_factor).toFixed(2);
+      meta.textContent=(row.bucket||"--")+" | "+(row.source_kind||"--")+" | samples "+(row.samples??0)+" | PF "+pf;
+      const action=document.createElement("span");
+      action.textContent=row.next_action||row.failure_mode||row.verdict||"review evidence row";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No indexed evidence rows published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadEvidenceIndex(){
+    fetch("/pine-research/evidence-index",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderEvidenceIndex)
+      .catch(err=>{$("evidenceIndexAnswer").textContent=String(err);renderEvidenceIndex({});});
+  }
   function renderCoverageAudit(payload){
     const audit=(payload&&payload.coverage_audit)||{};
     text("cov_discovered",audit.discovered_records);
@@ -949,6 +1023,60 @@
       .then(renderAlphaArenaLite)
       .catch(err=>{$("alphaArenaAnswer").textContent=String(err);renderAlphaArenaLite({});});
   }
+  function renderQuantLoopGovernance(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("ql_score",s.readiness_score==null?"--":s.readiness_score+"/100");
+    text("ql_level",s.readiness_level||"loop level --");
+    text("ql_ok",(s.loops_ok??0)+" / "+(s.loops_total??0));
+    text("ql_wait","waiting "+(s.loops_waiting??0)+" | stale "+(s.loops_stale??0)+" | missing "+(s.loops_missing??0));
+    text("ql_collisions",s.collisions);
+    text("ql_budgets",s.budget_alerts);
+    text("quantLoopAnswer",payload.operator_answer||"No Quant Loop Governance artifact published yet.");
+    const listEl=$("quantLoopTasks"); listEl.innerHTML="";
+    (payload.loop_cards||[]).slice(0,6).forEach(card=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=card.loop_id||"--";
+      const score=document.createElement("div");
+      const status=String(card.status||"--");
+      score.className="score";
+      score.textContent=status;
+      if(status==="OK")score.style.color="var(--green)";
+      if(status==="STALE"||status==="WAITING")score.style.color="var(--amber)";
+      if(status==="BLOCKED"||status==="MISSING")score.style.color="var(--red)";
+      const meta=document.createElement("span");
+      meta.textContent=(card.reason||"--")+" | age "+(card.age_minutes==null?"--":Number(card.age_minutes).toFixed(1)+"m");
+      const action=document.createElement("span");
+      action.textContent=card.action||"review loop";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if((payload.collisions||[]).length){
+      const div=document.createElement("div");
+      div.className="task";
+      const c=payload.collisions[0];
+      div.innerHTML="<b></b><div class='score' style='color:var(--red)'></div><span></span><span></span>";
+      div.querySelector("b").textContent="candidate collision";
+      div.querySelector(".score").textContent=String((payload.collisions||[]).length);
+      div.children[2].textContent=c.lock_key||"--";
+      div.children[3].textContent=c.action||"serialize duplicate tasks";
+      listEl.prepend(div);
+    }
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No Quant Loop Governance rows published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadQuantLoopGovernance(){
+    fetch("/pine-research/quant-loop-governance",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderQuantLoopGovernance)
+      .catch(err=>{$("quantLoopAnswer").textContent=String(err);renderQuantLoopGovernance({});});
+  }
   function renderUpliftExecutor(payload){
     payload=payload||{};
     const s=payload.summary||{};
@@ -998,7 +1126,9 @@
       .catch(err=>{$("upliftAnswer").textContent=String(err);renderUpliftAgent({});});
     loadScannerUplift();
     loadAlphaArenaLite();
+    loadQuantLoopGovernance();
     loadExecutor();
+    loadEvidenceIndex();
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);
@@ -1007,7 +1137,9 @@
   setInterval(loadProgress,10000);
   setInterval(loadScannerUplift,30000);
   setInterval(loadAlphaArenaLite,30000);
+  setInterval(loadQuantLoopGovernance,30000);
   setInterval(loadExecutor,30000);
+  setInterval(loadEvidenceIndex,30000);
 })();
 </script>
 </body>
