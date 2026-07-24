@@ -31,12 +31,12 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
 from vnedge.exchange.live_feed import LiveMarketFeed, RestPollingMarketFeed
+from vnedge.exchange.venue_specs import venue_fill_model, venue_symbol_limits
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
 from vnedge.paper.account_store import PaperAccountStore
-from vnedge.paper.fill_model import FillModel
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
@@ -521,11 +521,13 @@ async def build_lane(
     risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
-                          starting_equity_usd=spec.starting_equity, risk=risk)
+                          starting_equity_usd=spec.starting_equity, risk=risk,
+                          limits=venue_symbol_limits(spec.exchange, spec.symbol))
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path
     )
-    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    exchange = SimulatedExchange(
+        venue_fill_model(spec.exchange), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
