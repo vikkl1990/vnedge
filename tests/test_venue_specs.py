@@ -14,7 +14,7 @@ from vnedge.exchange.venue_specs import (
     venue_symbol_limits,
     venue_taker_bps,
 )
-from vnedge.risk.position_sizer import size_position
+from vnedge.risk.position_sizer import SymbolLimits, size_position
 
 
 # --- fees -------------------------------------------------------------------
@@ -57,13 +57,55 @@ def test_bybit_symbol_limits_match_live_instruments_info(symbol, min_qty, step):
     assert limits.min_notional_usd == 5.0
 
 
-def test_non_bybit_and_unknown_fall_back_to_default():
-    # Binance keeps the historical BTC-shaped default (out of scope here).
-    binance = venue_symbol_limits("binanceusdm", "BTC/USDT:USDT")
-    assert binance.qty_step == 0.0001
-    # A Bybit symbol we haven't tabulated also falls back, safely.
+@pytest.mark.parametrize(
+    "symbol,step,min_notional",
+    [
+        ("BTC/USDT:USDT", 0.001, 50.0),  # Binance BTC min-notional is 50, not 5
+        ("ETH/USDT:USDT", 0.001, 20.0),  # ETH is 20
+        ("SOL/USDT:USDT", 0.01, 5.0),
+        ("XRP/USDT:USDT", 0.1, 5.0),
+        ("DOGE/USDT:USDT", 1.0, 5.0),
+        ("BNB/USDT:USDT", 0.01, 5.0),
+    ],
+)
+def test_binance_symbol_limits_match_live_exchange_info(symbol, step, min_notional):
+    limits = venue_symbol_limits("binanceusdm", symbol)
+    assert limits.qty_step == step
+    assert limits.min_notional_usd == min_notional
+
+
+def test_unknown_venue_and_symbol_fall_back_to_default():
+    # An untabulated venue falls back to the historical default.
+    other = venue_symbol_limits("delta_india", "BTC/USD:USD")
+    assert other.qty_step == 0.0001
+    # A tabulated venue but untabulated symbol also falls back, safely.
     unknown = venue_symbol_limits("bybit", "PEPE/USDT:USDT")
     assert unknown.qty_step == 0.0001
+
+
+def test_binance_btc_min_notional_rejects_below_50():
+    """A BTC order that clears min-qty but whose notional is under Binance's
+    50 USDT floor must be rejected — the old flat 5 USDT default let it pass.
+    A min-lot (0.001 BTC) is only < 50 USDT when price is < 50k, so use 40k."""
+    limits = venue_symbol_limits("binanceusdm", "BTC/USDT:USDT")
+    sizing = size_position(
+        equity_usd=100.0,
+        entry_price=40000.0,
+        stop_price=39000.0,
+        side="long",
+        config=RiskConfig(risk_per_trade_pct=1.0),
+        limits=limits,
+    )
+    # qty floors to the 0.001 min-lot = 40 USDT notional, under the 50 floor
+    assert not sizing.approved
+    assert any("notional" in r.lower() for r in sizing.reasons)
+    # ...and the SAME sizing would have been ACCEPTED under the old flat-5 default
+    old = size_position(
+        equity_usd=100.0, entry_price=40000.0, stop_price=39000.0, side="long",
+        config=RiskConfig(risk_per_trade_pct=1.0),
+        limits=SymbolLimits(0.0001, 0.0001, 5.0, 0.005),
+    )
+    assert old.approved
 
 
 # --- the correctness payoff: sizing a whole-coin instrument -----------------
