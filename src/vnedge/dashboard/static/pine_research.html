@@ -246,6 +246,20 @@
       <div class="policy" id="evidenceIndexAnswer">Loading unified evidence index.</div>
     </section>
 
+    <section class="panel evidence">
+      <h2>Execution Replay Profile</h2>
+      <div class="summary">
+        <div class="metric"><span>Records</span><b id="ep_records">--</b><i>profiled evidence</i></div>
+        <div class="metric"><span>Strict economics</span><b id="ep_strict">--</b><i>25bps / PF1.5 / 20</i></div>
+        <div class="metric"><span>Execution ready</span><b id="ep_ready">--</b><i>L3/L4 proof</i></div>
+        <div class="metric"><span>Paper blocked</span><b id="ep_blocked">--</b><i>needs fill proof</i></div>
+        <div class="metric"><span>L3/L4 rows</span><b id="ep_l3l4">--</b><i>tick/L2 evidence</i></div>
+        <div class="metric"><span>Settlement blocks</span><b id="ep_settlement">--</b><i>PM logic unsafe</i></div>
+      </div>
+      <div class="task-list" id="executionProfileRows"></div>
+      <div class="policy" id="executionProfileAnswer">Loading execution replay profile.</div>
+    </section>
+
     <section class="panel progress-panel">
       <h2>Backtest Progress</h2>
       <div class="summary">
@@ -788,6 +802,58 @@
       .then(renderEvidenceIndex)
       .catch(err=>{$("evidenceIndexAnswer").textContent=String(err);renderEvidenceIndex({});});
   }
+  function renderExecutionProfile(payload){
+    payload=payload||{};
+    const s=payload.summary||{};
+    text("ep_records",s.records);
+    text("ep_strict",s.strict_economic_rows);
+    text("ep_ready",s.execution_truth_ready);
+    text("ep_blocked",s.requires_execution_replay_before_paper);
+    text("ep_l3l4",s.l3_or_l4_rows);
+    text("ep_settlement",s.settlement_blocked_rows);
+    text("executionProfileAnswer",payload.operator_answer||"No execution replay profile artifact published yet.");
+    const listEl=$("executionProfileRows"); listEl.innerHTML="";
+    const rows=[
+      ...(payload.execution_ready_rows||[]).map(row=>({...row,bucket:"EXECUTION_READY"})),
+      ...(payload.paper_blocked_rows||[]).map(row=>({...row,bucket:"NEEDS_EXECUTION_REPLAY"})),
+      ...(payload.rows||[]).map(row=>({...row,bucket:row.strict_economic_edge?"STRICT_REVIEW":"PROFILED"})),
+    ];
+    const seen=new Set();
+    rows.forEach(row=>{
+      const key=row.row_id||[row.strategy_id,row.exchange,row.symbol,row.timeframe,row.profile_id].join("|");
+      if(seen.has(key)||listEl.children.length>=8)return;
+      seen.add(key);
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=[row.strategy_id,row.exchange,row.symbol,row.timeframe].filter(Boolean).join(" ")||row.source_kind||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=row.avg_net_bps==null?"--":Number(row.avg_net_bps).toFixed(2)+" bps";
+      if(row.execution_truth_ready)score.style.color="var(--green)";
+      if(row.settlement_portability==="BLOCKED_PREDICTION_MARKET_ASSUMPTION")score.style.color="var(--red)";
+      const meta=document.createElement("span");
+      const pf=row.profit_factor==null?"--":Number(row.profit_factor).toFixed(2);
+      meta.textContent=(row.bucket||"--")+" | "+(row.profile_id||"--")+" | samples "+(row.samples??0)+" | PF "+pf;
+      const action=document.createElement("span");
+      const blockers=Array.isArray(row.blockers)?row.blockers.slice(0,2).join(", "):"";
+      action.textContent=(row.next_action||"review execution profile")+(blockers?" | "+blockers:"");
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!listEl.children.length){
+      const div=document.createElement("div");
+      div.className="task";
+      div.textContent="No execution-profile rows published.";
+      listEl.appendChild(div);
+    }
+  }
+  function loadExecutionProfile(){
+    fetch("/pine-research/execution-profile",{headers:{Authorization:"Bearer "+token},cache:"no-store"})
+      .then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(renderExecutionProfile)
+      .catch(err=>{$("executionProfileAnswer").textContent=String(err);renderExecutionProfile({});});
+  }
   function renderCoverageAudit(payload){
     const audit=(payload&&payload.coverage_audit)||{};
     text("cov_discovered",audit.discovered_records);
@@ -1132,6 +1198,7 @@
     loadQuantLoopGovernance();
     loadExecutor();
     loadEvidenceIndex();
+    loadExecutionProfile();
   }
   $("searchBox").addEventListener("input",renderRows);
   $("verdictFilter").addEventListener("change",renderRows);
@@ -1143,6 +1210,7 @@
   setInterval(loadQuantLoopGovernance,30000);
   setInterval(loadExecutor,30000);
   setInterval(loadEvidenceIndex,30000);
+  setInterval(loadExecutionProfile,30000);
 })();
 </script>
 </body>

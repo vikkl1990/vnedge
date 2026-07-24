@@ -214,6 +214,30 @@ def test_evidence_index_publisher_reconciles_research_artifacts():
     }
 
 
+def test_execution_replay_profile_publishes_execution_truth_surface():
+    service = compose_services()["execution-replay-profile"]
+
+    assert service["user"] == "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.execution_replay_profile",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${EXECUTION_REPLAY_PROFILE_INTERVAL_SECONDS:-300}" in service["command"]
+    assert "research/live_research/evidence_index_latest.json" in service["command"]
+    assert "research/live_research/fee_wall_forensics_latest.json" in service["command"]
+    assert "research/live_research/candidate_replay_latest.json" in service["command"]
+    assert "research/live_research/execution_replay_profile_latest.json" in service["command"]
+    assert "research/live_research/execution_replay_profile_feed.jsonl" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "evidence-index-publisher",
+        "fee-wall-forensics",
+        "candidate-replay-executor",
+    }
+
+
 def test_scanner_tournament_lowers_only_research_discovery_governance():
     service = compose_services()["scanner-tournament"]
 
