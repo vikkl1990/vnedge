@@ -558,10 +558,12 @@ services:
     depends_on:
       - scanner-backtest-uplift
       - scanner-tournament
+      - fee-wall-forensics
     command: ["python", "-m", "vnedge.research.alpha_arena_lite",
               "--interval-seconds", "${ALPHA_ARENA_LITE_INTERVAL_SECONDS:-1800}",
               "--uplift", "research/live_research/scanner_backtest_uplift_latest.json",
               "--scanner", "research/live_research/scanner_tournament_latest.json",
+              "--fee-wall", "research/live_research/fee_wall_forensics_latest.json",
               "--gateway-dir", "${QUANT_OS_AGENT_GATEWAY_DIR:-logs/agent_gateway/quant_os}",
               "--out", "research/live_research/alpha_arena_lite_latest.json",
               "--feed", "research/live_research/alpha_arena_lite_feed.jsonl"]

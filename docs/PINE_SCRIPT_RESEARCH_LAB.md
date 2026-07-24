@@ -120,9 +120,10 @@ Production Compose refreshes both artifacts through
 operator should no longer see a static "queued" answer after the backtest has
 actually completed.
 
-`alpha-arena-lite` consumes the scanner uplift artifact and publishes
-`research/live_research/alpha_arena_lite_latest.json`. It converts sparse or
-near-fee-wall positives into durable Quant OS tasks and scorecards, without
+`alpha-arena-lite` consumes scanner uplift, scanner tournament, and fee-wall
+artifacts, then publishes `research/live_research/alpha_arena_lite_latest.json`.
+It converts sparse or near-fee-wall positives into durable Quant OS tasks and
+canonical strict fee-wall breakers into untouched-judgment tasks, without
 granting paper/live permission.
 
 `quant-loop-governance` then watches the Pine/Scanner/Arena loop:

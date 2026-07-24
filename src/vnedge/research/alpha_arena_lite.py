@@ -29,6 +29,7 @@ from vnedge.agent_gateway.task_registry import (
 ALPHA_ARENA_LITE_ID = "alpha_arena_lite_v1"
 DEFAULT_UPLIFT = Path("research/live_research/scanner_backtest_uplift_latest.json")
 DEFAULT_SCANNER = Path("research/live_research/scanner_tournament_latest.json")
+DEFAULT_FEE_WALL = Path("research/live_research/fee_wall_forensics_latest.json")
 DEFAULT_OUT = Path("research/live_research/alpha_arena_lite_latest.json")
 DEFAULT_FEED = Path("research/live_research/alpha_arena_lite_feed.jsonl")
 
@@ -55,6 +56,7 @@ def run_alpha_arena_lite(
     *,
     uplift_payload: dict[str, Any],
     scanner_payload: dict[str, Any] | None = None,
+    fee_wall_payload: dict[str, Any] | None = None,
     config: AlphaArenaGateConfig = AlphaArenaGateConfig(),
     gateway_dir: Path | str | None = None,
     sync_gateway: bool = True,
@@ -63,12 +65,22 @@ def run_alpha_arena_lite(
     generated = now or datetime.now(UTC)
     scanner_index = _scanner_candidate_index(scanner_payload or {})
     top_rows = _top_rows(uplift_payload)
-    scorecards = _scorecards_from_experiments(
+    strict_scorecards = _scorecards_from_strict_candidates(
+        uplift_payload=uplift_payload,
+        fee_wall_payload=fee_wall_payload or {},
+        scanner_index=scanner_index,
+        config=config,
+    )
+    experiment_scorecards = _scorecards_from_experiments(
         uplift_payload.get("experiments") or [],
         top_rows=top_rows,
         scanner_index=scanner_index,
         config=config,
-    )[: config.max_scorecards]
+    )
+    scorecards = _dedupe_scorecards(
+        [*strict_scorecards, *experiment_scorecards],
+        max_scorecards=config.max_scorecards,
+    )
     gateway_summary = (
         _sync_gateway(scorecards, gateway_dir=gateway_dir)
         if sync_gateway
@@ -146,6 +158,97 @@ def _scorecards_from_experiments(
         key=lambda row: (float(row.get("arena_score") or 0.0), -int(row.get("priority") or 0)),
         reverse=True,
     )
+
+
+def _scorecards_from_strict_candidates(
+    *,
+    uplift_payload: dict[str, Any],
+    fee_wall_payload: dict[str, Any],
+    scanner_index: dict[tuple[str, str, str, str], dict[str, Any]],
+    config: AlphaArenaGateConfig,
+) -> list[dict[str, Any]]:
+    rows_by_key: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for row in _strict_rows_from_uplift(uplift_payload, config=config):
+        rows_by_key.setdefault(_strict_row_key(row), []).append(row)
+    for row in _strict_rows_from_fee_wall(fee_wall_payload, config=config):
+        rows_by_key.setdefault(_strict_row_key(row), []).append(row)
+
+    scorecards: list[dict[str, Any]] = []
+    for ordinal, ((strategy_id, exchange, symbol, timeframe), rows) in enumerate(
+        sorted(rows_by_key.items(), key=lambda item: _strict_group_rank(item[1]), reverse=True),
+        start=1,
+    ):
+        best = max(rows, key=_strict_row_rank)
+        target_rows = tuple(
+            str(row.get("row_id") or row.get("candidate_id") or row.get("source_ref") or "")
+            for row in rows
+            if str(row.get("row_id") or row.get("candidate_id") or row.get("source_ref") or "")
+        )
+        experiment = {
+            "experiment_id": f"untouched_judgment|{exchange}|{symbol}|{strategy_id}|{timeframe}",
+            "priority": ordinal,
+            "experiment_type": "untouched_judgment",
+            "target_rows": target_rows,
+            "exchange": exchange,
+            "symbol": symbol,
+            "timeframes": [timeframe],
+            "strategy_id": strategy_id,
+            "hypothesis": (
+                f"{strategy_id} on {exchange} {symbol} {timeframe} cleared the "
+                "strict fee-wall screen across canonical evidence sources."
+            ),
+            "required_change": "Freeze the causal port and pre-register a one-shot untouched-window judgment.",
+            "expected_effect": "Separate real edge from already-seen scanner/replay evidence.",
+            "guardrails": [
+                "research-only output; no paper/live promotion",
+                "do not tune on the seen strict-candidate slice",
+                "use burn registry before the judgment run",
+                "paper manifest only after untouched judgment passes",
+            ],
+        }
+        card = _scorecard(
+            experiment,
+            rows=tuple(rows),
+            scanner_index=scanner_index,
+            ordinal=ordinal,
+            config=config,
+        )
+        card["candidate_id"] = _strict_candidate_id(
+            strategy_id=strategy_id,
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+        card["experiment_id"] = str(experiment["experiment_id"])
+        card["experiment_type"] = "untouched_judgment"
+        card["task_kind"] = "alpha_arena_lite.untouched_judgment"
+        card["next_action"] = "ASK_OPERATOR_TO_APPROVE_ONE_SHOT_UNTOUCHED_JUDGMENT"
+        card["source_evidence"] = [
+            {
+                "source_kind": row.get("source_kind"),
+                "source_artifact": row.get("source_artifact"),
+                "row_id": row.get("row_id") or row.get("candidate_id"),
+                "samples": row.get("samples"),
+                "avg_net_bps": row.get("avg_net_bps"),
+                "profit_factor": row.get("profit_factor"),
+            }
+            for row in sorted(rows, key=lambda item: str(item.get("source_kind") or ""))
+        ]
+        card["metrics"]["source_evidence_count"] = len(rows)
+        card["metrics"]["source_kinds"] = sorted(
+            {str(row.get("source_kind") or "") for row in rows if row.get("source_kind")}
+        )
+        card["metrics"]["top_avg_net_bps"] = _float(best.get("avg_net_bps"))
+        card["metrics"]["best_profit_factor"] = _float(best.get("profit_factor"))
+        card["metrics"]["max_samples"] = _int(best.get("samples"))
+        card["metrics"]["sample_gap"] = 0
+        card["untouched_window_plan"]["status"] = "READY_FOR_OPERATOR_PRE_REGISTRATION"
+        card["untouched_window_plan"]["required_trade_gap"] = 0
+        card["operator_note"] = (
+            "Canonical evidence clears the arena screen; request a one-shot untouched judgment."
+        )
+        scorecards.append(card)
+    return scorecards
 
 
 def _scorecard(
@@ -391,6 +494,170 @@ def _rows_for_experiment(
         "timeframe": (experiment.get("timeframes") or ["unknown"])[0],
         "samples": 0,
     },)
+
+
+def _strict_rows_from_uplift(
+    payload: dict[str, Any],
+    *,
+    config: AlphaArenaGateConfig,
+) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for row in payload.get("top_uplifts") or []:
+        if not isinstance(row, dict):
+            continue
+        normalized = {
+            "source_kind": "scanner_uplift",
+            "source_artifact": "scanner_backtest_uplift_latest.json",
+            "row_id": row.get("row_id"),
+            "failure_mode": str(row.get("failure_mode") or ""),
+            "strategy_id": str(row.get("strategy_id") or ""),
+            "exchange": str(row.get("exchange") or ""),
+            "symbol": str(row.get("symbol") or ""),
+            "timeframe": str(row.get("timeframe") or ""),
+            "mode": str(row.get("mode") or ""),
+            "samples": _int(row.get("samples")),
+            "avg_net_bps": _float(row.get("avg_net_bps")),
+            "visual_avg_bps": _float(row.get("visual_avg_bps")),
+            "profit_factor": _float(row.get("profit_factor")),
+            "win_rate_pct": _float(row.get("win_rate_pct")),
+            "required_uplift_bps": _float(row.get("required_uplift_bps")),
+            "fee_drag_bps": _float(row.get("fee_drag_bps")),
+        }
+        if _passes_strict_gate(normalized, config=config):
+            normalized["failure_mode"] = "PROMOTABLE_PROOF_CANDIDATE"
+            rows.append(normalized)
+    return tuple(rows)
+
+
+def _strict_rows_from_fee_wall(
+    payload: dict[str, Any],
+    *,
+    config: AlphaArenaGateConfig,
+) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for row in payload.get("strict_fee_wall_candidates") or []:
+        if not isinstance(row, dict):
+            continue
+        normalized = {
+            "source_kind": "fee_wall_forensics",
+            "source_artifact": "fee_wall_forensics_latest.json",
+            "row_id": row.get("candidate_id") or row.get("row_id"),
+            "failure_mode": "PROMOTABLE_PROOF_CANDIDATE",
+            "strategy_id": str(row.get("strategy") or row.get("strategy_id") or ""),
+            "exchange": str(row.get("exchange") or ""),
+            "symbol": str(row.get("symbol") or ""),
+            "timeframe": str(row.get("timeframe") or ""),
+            "mode": str(row.get("mode") or row.get("route") or ""),
+            "samples": _int(row.get("routed") or row.get("opportunities")),
+            "avg_net_bps": _float(row.get("avg_selected_net_bps")),
+            "visual_avg_bps": _float(row.get("avg_selected_gross_bps")),
+            "profit_factor": _float(row.get("profit_factor")),
+            "win_rate_pct": _float(row.get("win_rate_pct")),
+            "fee_drag_bps": None,
+        }
+        if _passes_strict_gate(normalized, config=config):
+            rows.append(normalized)
+    for report in payload.get("reports") or []:
+        if not isinstance(report, dict):
+            continue
+        summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        normalized = {
+            "source_kind": "fee_wall_forensics",
+            "source_artifact": "fee_wall_forensics_latest.json",
+            "row_id": report.get("candidate_id") or report.get("row_id"),
+            "failure_mode": "PROMOTABLE_PROOF_CANDIDATE",
+            "strategy_id": str(report.get("strategy") or report.get("strategy_id") or ""),
+            "exchange": str(report.get("exchange") or ""),
+            "symbol": str(report.get("symbol") or ""),
+            "timeframe": str(report.get("timeframe") or ""),
+            "mode": str(summary.get("dominant_route") or report.get("route") or ""),
+            "samples": _int(summary.get("routed") or report.get("opportunity_count")),
+            "avg_net_bps": _float(summary.get("avg_selected_net_bps")),
+            "visual_avg_bps": _float(summary.get("avg_selected_gross_bps")),
+            "profit_factor": _float(summary.get("profit_factor")),
+            "win_rate_pct": _float(summary.get("win_rate_pct")),
+            "fee_drag_bps": None,
+        }
+        if (
+            str(summary.get("verdict") or "") in {"MAKER_EDGE", "TAKER_EDGE", "MIXED_ROUTE_EDGE"}
+            and _passes_strict_gate(normalized, config=config)
+        ):
+            rows.append(normalized)
+    return tuple(rows)
+
+
+def _passes_strict_gate(row: dict[str, Any], *, config: AlphaArenaGateConfig) -> bool:
+    avg = _float(row.get("avg_net_bps"))
+    pf = _float(row.get("profit_factor"))
+    return (
+        bool(row.get("strategy_id"))
+        and bool(row.get("exchange"))
+        and bool(row.get("symbol"))
+        and bool(row.get("timeframe"))
+        and _int(row.get("samples")) >= config.min_trades
+        and avg is not None
+        and avg >= config.min_net_bps
+        and pf is not None
+        and pf >= config.min_profit_factor
+    )
+
+
+def _strict_row_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("strategy_id") or ""),
+        str(row.get("exchange") or ""),
+        str(row.get("symbol") or ""),
+        str(row.get("timeframe") or ""),
+    )
+
+
+def _strict_row_rank(row: dict[str, Any]) -> tuple[float, float, int]:
+    return (
+        _float(row.get("avg_net_bps")) or -999999.0,
+        min(_float(row.get("profit_factor")) or -1.0, 999.0),
+        _int(row.get("samples")),
+    )
+
+
+def _strict_group_rank(rows: list[dict[str, Any]]) -> tuple[float, float, int, int]:
+    best = max(rows, key=_strict_row_rank)
+    avg, pf, samples = _strict_row_rank(best)
+    return avg, pf, samples, len(rows)
+
+
+def _dedupe_scorecards(
+    scorecards: list[dict[str, Any]],
+    *,
+    max_scorecards: int,
+) -> list[dict[str, Any]]:
+    by_lane: dict[tuple[str, str, str, tuple[str, ...]], dict[str, Any]] = {}
+    for scorecard in scorecards:
+        key = (
+            str(scorecard.get("strategy_id") or ""),
+            str(scorecard.get("exchange") or ""),
+            str(scorecard.get("symbol") or ""),
+            tuple(str(tf) for tf in (scorecard.get("timeframes") or [])),
+        )
+        existing = by_lane.get(key)
+        if existing is None or _scorecard_rank(scorecard) > _scorecard_rank(existing):
+            by_lane[key] = scorecard
+    return sorted(by_lane.values(), key=_scorecard_rank, reverse=True)[:max_scorecards]
+
+
+def _scorecard_rank(scorecard: dict[str, Any]) -> tuple[int, float, int]:
+    verdict_rank = {
+        "PRE_REGISTER_UNTOUCHED_JUDGMENT": 4,
+        "EXPAND_UNTOUCHED_SAMPLE": 3,
+        "EXECUTION_SALVAGE_REQUIRED": 2,
+        "SELECTIVITY_OR_EXIT_UPLIFT": 1,
+        "FEATURE_BANK_OR_REJECT": 0,
+    }.get(str(scorecard.get("arena_verdict") or ""), 0)
+    metrics = scorecard.get("metrics") if isinstance(scorecard.get("metrics"), dict) else {}
+    return (
+        verdict_rank,
+        float(scorecard.get("arena_score") or 0.0),
+        _int(metrics.get("max_samples")),
+    )
 
 
 def _best_row(rows: tuple[dict[str, Any], ...]) -> dict[str, Any]:
@@ -652,6 +919,24 @@ def _candidate_id(experiment: dict[str, Any]) -> str:
     )
 
 
+def _strict_candidate_id(
+    *,
+    strategy_id: str,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+) -> str:
+    return "|".join(
+        (
+            "strict_judgment",
+            exchange,
+            _compact_symbol(symbol),
+            timeframe,
+            strategy_id,
+        )
+    )
+
+
 def _task_objective(scorecard: dict[str, Any]) -> str:
     return (
         f"{scorecard['arena_verdict']}: {scorecard['strategy_id']} "
@@ -733,6 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--uplift", default=str(DEFAULT_UPLIFT))
     parser.add_argument("--scanner", default=str(DEFAULT_SCANNER))
+    parser.add_argument("--fee-wall", default=str(DEFAULT_FEE_WALL))
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--feed", default=str(DEFAULT_FEED))
     parser.add_argument("--gateway-dir", default=str(env_quant_os_agent_gateway_dir()))
@@ -754,6 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = run_alpha_arena_lite(
             uplift_payload=_read_json(Path(args.uplift)),
             scanner_payload=_read_json(Path(args.scanner)),
+            fee_wall_payload=_read_json(Path(args.fee_wall)),
             config=AlphaArenaGateConfig(
                 min_net_bps=args.min_net_bps,
                 min_profit_factor=args.min_profit_factor,

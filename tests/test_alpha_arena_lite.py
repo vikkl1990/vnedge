@@ -75,6 +75,56 @@ def _scanner_payload() -> dict:
     }
 
 
+def _strict_uplift_payload() -> dict:
+    row_id = "luxara_live_plan_qtm_v1|bybit|SOLUSDTUSDT|15m|MAKER"
+    return {
+        "agent_id": "scanner_backtest_uplift_v1",
+        "summary": {"promotable_proof_candidates": 1, "experiments": 0},
+        "top_uplifts": [
+            {
+                "rank": 1,
+                "row_id": row_id,
+                "failure_mode": "PROMOTABLE_PROOF_CANDIDATE",
+                "exchange": "bybit",
+                "symbol": "SOL/USDT:USDT",
+                "timeframe": "15m",
+                "strategy_id": "luxara_live_plan_qtm_v1",
+                "mode": "MAKER",
+                "samples": 31,
+                "avg_net_bps": 31.3993,
+                "visual_avg_bps": 43.8,
+                "profit_factor": 2.0975,
+                "win_rate_pct": 61.3,
+                "required_uplift_bps": 0.0,
+                "fee_drag_bps": 12.5,
+                "uplift_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT",
+            }
+        ],
+        "experiments": [],
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def _strict_fee_wall_payload() -> dict:
+    return {
+        "truth_layer": "fee_wall_forensics_v1",
+        "strict_fee_wall_candidates": [
+            {
+                "exchange": "bybit",
+                "symbol": "SOL/USDT:USDT",
+                "timeframe": "15m",
+                "strategy": "luxara_live_plan_qtm_v1",
+                "routed": 31,
+                "avg_selected_net_bps": 31.3993,
+                "profit_factor": 2.0975,
+                "win_rate_pct": 61.3,
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+            }
+        ],
+    }
+
+
 def test_sparse_positive_becomes_durable_research_task_not_paper(tmp_path):
     payload = run_alpha_arena_lite(
         uplift_payload=_sparse_uplift_payload(),
@@ -106,6 +156,33 @@ def test_sparse_positive_becomes_durable_research_task_not_paper(tmp_path):
     assert snapshot["summary"]["total_tasks"] == 1
     assert snapshot["summary"]["artifacts"] == 1
     assert snapshot["tasks"][0]["payload"]["alpha_arena_lite"]["candidate_id"] == card["candidate_id"]
+
+
+def test_strict_candidate_becomes_canonical_untouched_judgment_task(tmp_path):
+    payload = run_alpha_arena_lite(
+        uplift_payload=_strict_uplift_payload(),
+        scanner_payload={},
+        fee_wall_payload=_strict_fee_wall_payload(),
+        gateway_dir=tmp_path / "quant_os",
+        now=datetime(2026, 7, 24, tzinfo=UTC),
+    )
+
+    assert payload["summary"]["candidate_count"] == 1
+    assert payload["summary"]["ready_for_untouched_judgment"] == 1
+    assert payload["summary"]["sparse_positive"] == 0
+    assert payload["summary"]["task_count"] == 1
+
+    card = payload["scorecards"][0]
+    assert card["candidate_id"] == "strict_judgment|bybit|SOLUSDTUSDT|15m|luxara_live_plan_qtm_v1"
+    assert card["task_kind"] == "alpha_arena_lite.untouched_judgment"
+    assert card["arena_verdict"] == "PRE_REGISTER_UNTOUCHED_JUDGMENT"
+    assert card["next_action"] == "ASK_OPERATOR_TO_APPROVE_ONE_SHOT_UNTOUCHED_JUDGMENT"
+    assert card["metrics"]["source_evidence_count"] == 2
+    assert card["metrics"]["max_samples"] == 31
+    assert card["gate_checks"]["sample_valid"] is True
+    assert card["untouched_window_plan"]["status"] == "READY_FOR_OPERATOR_PRE_REGISTRATION"
+    assert card["execution_plan"]["paper_ready"] is False
+    assert card["can_trade"] is False
 
 
 def test_gateway_sync_is_idempotent_for_unchanged_scorecards(tmp_path):

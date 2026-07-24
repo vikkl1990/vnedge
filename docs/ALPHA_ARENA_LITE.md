@@ -1,7 +1,7 @@
 # Alpha Arena Lite
 
-`alpha_arena_lite_v1` is the research-only bridge between scanner uplift rows
-and the Quant OS Agent Gateway.
+`alpha_arena_lite_v1` is the research-only bridge between scanner uplift rows,
+strict fee-wall evidence, and the Quant OS Agent Gateway.
 
 It exists because the scanner uplift panel can surface rows like:
 
@@ -10,17 +10,23 @@ It exists because the scanner uplift panel can surface rows like:
 - PF `999.00`
 - fewer than 20 trades
 
-That is useful, but it is not paper-ready. Alpha Arena Lite converts each
-scanner uplift experiment into a durable task plus a hash-backed scorecard so
-the next proof step is explicit and repeatable.
+That is useful, but it is not paper-ready. Alpha Arena Lite converts scanner
+uplift experiments and canonical strict fee-wall candidates into durable tasks
+plus hash-backed scorecards so the next proof step is explicit and repeatable.
 
 ## Inputs
 
 - `research/live_research/scanner_backtest_uplift_latest.json`
 - `research/live_research/scanner_tournament_latest.json`
+- `research/live_research/fee_wall_forensics_latest.json`
 
 The tournament payload is optional, but when present it enriches scorecards with
 MFE/MAE, routed count, and opportunity count.
+
+Strict candidates are de-duplicated by strategy, venue, symbol, and timeframe.
+If scanner uplift and fee-wall forensics both describe the same lane, Arena
+emits one `PRE_REGISTER_UNTOUCHED_JUDGMENT` scorecard with both evidence
+sources attached.
 
 ## Output
 
@@ -51,6 +57,7 @@ The output is always:
 python -m vnedge.research.alpha_arena_lite \
   --uplift research/live_research/scanner_backtest_uplift_latest.json \
   --scanner research/live_research/scanner_tournament_latest.json \
+  --fee-wall research/live_research/fee_wall_forensics_latest.json \
   --out research/live_research/alpha_arena_lite_latest.json \
   --feed research/live_research/alpha_arena_lite_feed.jsonl
 ```
@@ -65,4 +72,5 @@ expansion step. See [QUANT_LOOP_GOVERNANCE.md](QUANT_LOOP_GOVERNANCE.md).
 
 Alpha Arena Lite can prove that a row deserves more research. It cannot approve
 paper, shadow, or live trading. Sparse positives must be expanded on the next
-untouched window with frozen parameters.
+untouched window with frozen parameters. Strict candidates must be judged on a
+pre-registered untouched window before any paper manifest is discussed.
