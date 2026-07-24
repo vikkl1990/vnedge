@@ -633,6 +633,30 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Execution-realistic replay profile publisher. It classifies research rows
+  # by the fill evidence they actually cleared and blocks prediction-market
+  # terminal-settlement assumptions from leaking into crypto-perp promotion.
+  execution-replay-profile:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    depends_on:
+      - evidence-index-publisher
+      - fee-wall-forensics
+      - candidate-replay-executor
+    command: ["python", "-m", "vnedge.research.execution_replay_profile",
+              "--interval-seconds", "${EXECUTION_REPLAY_PROFILE_INTERVAL_SECONDS:-300}",
+              "--evidence-index", "research/live_research/evidence_index_latest.json",
+              "--fee-wall", "research/live_research/fee_wall_forensics_latest.json",
+              "--candidate-replay", "research/live_research/candidate_replay_latest.json",
+              "--out", "research/live_research/execution_replay_profile_latest.json",
+              "--feed", "research/live_research/execution_replay_profile_feed.jsonl"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Agentic failure-salvage planner for Pine-derived evidence.  It turns
   # failed/positive/queued replay cells into ranked research-only uplift
   # experiments: confluence stacks, feature-bank candidates, execution-filtered

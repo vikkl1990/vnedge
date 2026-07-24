@@ -188,6 +188,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     alpha_arena = tmp_path / "alpha_arena_lite_latest.json"
     quant_loop = tmp_path / "quant_loop_governance_latest.json"
     evidence_index = tmp_path / "evidence_index_latest.json"
+    execution_profile = tmp_path / "execution_replay_profile_latest.json"
     kb.write_text(json.dumps({
         "generated_at": "2026-07-18T00:00:00+00:00",
         "source": "unit",
@@ -363,6 +364,56 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         "can_promote": False,
         "live_orders_enabled": False,
     }))
+    execution_profile.write_text(json.dumps({
+        "execution_profile_id": "execution_realistic_replay_profile_v1",
+        "summary": {
+            "records": 2,
+            "strict_economic_rows": 1,
+            "execution_truth_ready": 0,
+            "requires_execution_replay_before_paper": 1,
+            "l3_or_l4_rows": 0,
+            "settlement_blocked_rows": 0,
+        },
+        "rows": [
+            {
+                "row_id": "er1",
+                "source_kind": "fee_wall_forensics",
+                "strategy_id": "sats_5m_scalper_v1",
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "samples": 31,
+                "avg_net_bps": 31.25,
+                "profit_factor": 1.72,
+                "profile_id": "L1_CANDLE_FORWARD_ROUTE_LABEL",
+                "strict_economic_edge": True,
+                "execution_truth_ready": False,
+                "requires_execution_replay_before_paper": True,
+                "next_action": "RUN_EXECUTION_REPLAY_PROFILE_L3_OR_L4",
+                "blockers": ["candle_forward_label_is_not_order_fill_evidence"],
+                "can_trade": False,
+                "can_promote": False,
+            }
+        ],
+        "paper_blocked_rows": [
+            {
+                "row_id": "er1",
+                "strategy_id": "sats_5m_scalper_v1",
+                "exchange": "bybit",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "samples": 31,
+                "avg_net_bps": 31.25,
+                "profit_factor": 1.72,
+                "profile_id": "L1_CANDLE_FORWARD_ROUTE_LABEL",
+                "next_action": "RUN_EXECUTION_REPLAY_PROFILE_L3_OR_L4",
+            }
+        ],
+        "operator_answer": "strict row needs execution replay",
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     app = create_app(
         provider,
         token="t3st-token",
@@ -375,6 +426,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
         alpha_arena_lite_path=alpha_arena,
         quant_loop_governance_path=quant_loop,
         evidence_index_path=evidence_index,
+        execution_replay_profile_path=execution_profile,
     )
     client = TestClient(app)
 
@@ -391,6 +443,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "/pine-research/alpha-arena-lite" in page.text
     assert "/pine-research/quant-loop-governance" in page.text
     assert "/pine-research/evidence-index" in page.text
+    assert "/pine-research/execution-profile" in page.text
     assert "Backtest Evidence" in page.text
     assert "Backtest Progress" in page.text
     assert "Agentic Edge Uplift" in page.text
@@ -399,6 +452,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "Quant Loop Governance" in page.text
     assert "Edge Uplift Executor" in page.text
     assert "Unified Evidence Index" in page.text
+    assert "Execution Replay Profile" in page.text
     assert "Pine Coverage Auditor" in page.text
     assert "renderCoverageAudit" in page.text
     assert "renderBacktestProgress" in page.text
@@ -408,6 +462,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert "renderQuantLoopGovernance" in page.text
     assert "renderUpliftExecutor" in page.text
     assert "renderEvidenceIndex" in page.text
+    assert "renderExecutionProfile" in page.text
     assert "AI review" in page.text
     assert "hasCompletedEvidence" in page.text
     assert "publisherEvidenceCounts" in page.text
@@ -424,6 +479,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert client.get("/pine-research/alpha-arena-lite").status_code == 401
     assert client.get("/pine-research/quant-loop-governance").status_code == 401
     assert client.get("/pine-research/evidence-index").status_code == 401
+    assert client.get("/pine-research/execution-profile").status_code == 401
     r = client.get("/pine-research/kb?token=t3st-token")
     assert r.status_code == 200
     payload = r.json()
@@ -485,6 +541,15 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert evidence_payload["fee_wall_breakers"][0]["can_trade"] is False
     assert evidence_payload["can_promote"] is False
     assert evidence_payload["live_orders_enabled"] is False
+    ep = client.get("/pine-research/execution-profile?token=t3st-token")
+    assert ep.status_code == 200
+    execution_payload = ep.json()
+    assert execution_payload["execution_profile_id"] == "execution_realistic_replay_profile_v1"
+    assert execution_payload["summary"]["requires_execution_replay_before_paper"] == 1
+    assert execution_payload["rows"][0]["can_trade"] is False
+    assert execution_payload["can_trade"] is False
+    assert execution_payload["can_promote"] is False
+    assert execution_payload["live_orders_enabled"] is False
     x = client.get("/pine-research/uplift-executor?token=t3st-token")
     assert x.status_code == 200
     executor_payload = x.json()

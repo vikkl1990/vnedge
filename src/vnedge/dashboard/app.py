@@ -400,6 +400,7 @@ def create_app(
     alpha_arena_lite_path: Path | None = None,
     quant_loop_governance_path: Path | None = None,
     evidence_index_path: Path | None = None,
+    execution_replay_profile_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -520,6 +521,10 @@ def create_app(
     evidence_index_file = (
         evidence_index_path
         or Path("research/live_research/evidence_index_latest.json")
+    )
+    execution_replay_profile_file = (
+        execution_replay_profile_path
+        or Path("research/live_research/execution_replay_profile_latest.json")
     )
 
     @app.get("/")
@@ -1062,6 +1067,30 @@ def create_app(
                     "sparse_positives": [],
                     "failure_clusters": [],
                     "operator_answer": "research evidence index artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                    "live_orders_enabled": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/pine-research/execution-profile")
+    async def pine_research_execution_profile(request: Request) -> JSONResponse:
+        """Execution-realistic replay profile for research evidence rows."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                execution_replay_profile_file,
+                {
+                    "execution_profile_id": "execution_realistic_replay_profile_v1",
+                    "summary": {},
+                    "profiles": [],
+                    "settlement_logic_evaluation": {"components": []},
+                    "rows": [],
+                    "execution_ready_rows": [],
+                    "paper_blocked_rows": [],
+                    "operator_answer": "execution replay profile artifact unavailable",
                     "can_trade": False,
                     "can_promote": False,
                     "live_orders_enabled": False,
