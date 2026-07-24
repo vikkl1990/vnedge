@@ -14,8 +14,10 @@ The Bybit contract specs below were verified against the Bybit V5
 interval is 480m (8h) for all of these symbols, so the codebase-wide 8h funding
 assumption is correct for our universe (kept as a note, not a code path).
 
-Non-Bybit venues fall through to the historical defaults, so this module only
-changes Bybit lane economics — Binance and Delta behaviour is unchanged.
+Bybit and Binance USDT-M specs are tabulated from their live APIs; other venues
+(Delta and any untabulated symbol) fall through to the historical default, so
+their behaviour is unchanged. Fees are still routed per-venue: Bybit taker 5.5,
+Binance/others 5.0.
 """
 
 from __future__ import annotations
@@ -68,8 +70,23 @@ _BYBIT_LIMITS: dict[str, SymbolLimits] = {
     "BNB/USDT:USDT": SymbolLimits(0.01, 0.01, 5.0, 0.005),
 }
 
+# Real Binance USDT-M linear-perp specs (fapi /fapi/v1/exchangeInfo, 2026-07-24).
+# NOTE the min-notional: Binance requires >= 50 USDT for BTC and >= 20 USDT for
+# ETH (not the flat 5 that Bybit and our default assume), so risk-based sizes
+# below those are rejected by the venue — our sizer must reject them too.
+# fundingInfo confirms 8h interval for all of these symbols.
+_BINANCE_LIMITS: dict[str, SymbolLimits] = {
+    "BTC/USDT:USDT": SymbolLimits(0.001, 0.001, 50.0, 0.005),
+    "ETH/USDT:USDT": SymbolLimits(0.001, 0.001, 20.0, 0.005),
+    "SOL/USDT:USDT": SymbolLimits(0.01, 0.01, 5.0, 0.005),
+    "XRP/USDT:USDT": SymbolLimits(0.1, 0.1, 5.0, 0.005),
+    "DOGE/USDT:USDT": SymbolLimits(1.0, 1.0, 5.0, 0.005),
+    "BNB/USDT:USDT": SymbolLimits(0.01, 0.01, 5.0, 0.005),
+}
+
 _LIMITS_BY_EXCHANGE: dict[str, dict[str, SymbolLimits]] = {
     "bybit": _BYBIT_LIMITS,
+    "binanceusdm": _BINANCE_LIMITS,
 }
 
 
