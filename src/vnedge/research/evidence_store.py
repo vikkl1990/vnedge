@@ -100,7 +100,13 @@ def build_research_evidence_index(
         records.extend(loader(payload, source_artifact=path.name))
 
     deduped = _dedupe(records)
-    summary = _summary(deduped, loaded_artifacts, missing_artifacts)
+    canonical_candidates = _canonical_strict_candidates(deduped, limit=25)
+    summary = _summary(
+        deduped,
+        loaded_artifacts,
+        missing_artifacts,
+        canonical_candidates=canonical_candidates,
+    )
     return {
         "evidence_store_id": EVIDENCE_STORE_ID,
         "generated_at": generated.isoformat(),
@@ -108,6 +114,12 @@ def build_research_evidence_index(
         "records": [record.to_dict() for record in _sort_records(deduped)],
         "top_positive": [record.to_dict() for record in _top_positive(deduped, limit=12)],
         "fee_wall_breakers": [record.to_dict() for record in _fee_wall_breakers(deduped, limit=12)],
+        "canonical_candidates": canonical_candidates,
+        "untouched_judgment_queue": [
+            candidate
+            for candidate in canonical_candidates
+            if candidate.get("next_action") == "PRE_REGISTER_UNTOUCHED_JUDGMENT"
+        ],
         "sparse_positives": [record.to_dict() for record in _sparse_positives(deduped, limit=12)],
         "failure_clusters": _failure_clusters(deduped),
         "operator_answer": _operator_answer(summary),
@@ -492,6 +504,8 @@ def _summary(
     records: list[EvidenceRecord],
     loaded_artifacts: list[dict[str, Any]],
     missing_artifacts: list[str],
+    *,
+    canonical_candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
     source_counts = Counter(record.source_kind for record in records)
     status_counts = Counter(record.status for record in records)
@@ -512,6 +526,12 @@ def _summary(
         "positive_after_cost": positive,
         "negative_after_cost": negative,
         "strict_fee_wall_breakers": len(strict),
+        "canonical_strict_candidates": len(canonical_candidates),
+        "untouched_judgment_queue": sum(
+            1
+            for candidate in canonical_candidates
+            if candidate.get("next_action") == "PRE_REGISTER_UNTOUCHED_JUDGMENT"
+        ),
         "sparse_positives": len(sparse),
         "best_avg_net_bps": best[0].avg_net_bps if best else None,
         "best_profit_factor": best[0].profit_factor if best else None,
@@ -528,14 +548,16 @@ def _summary(
 def _operator_answer(summary: dict[str, Any]) -> str:
     total = int(summary.get("total_records") or 0)
     strict = int(summary.get("strict_fee_wall_breakers") or 0)
+    canonical = int(summary.get("canonical_strict_candidates") or 0)
     sparse = int(summary.get("sparse_positives") or 0)
     positive = int(summary.get("positive_after_cost") or 0)
     completed = int(summary.get("completed_records") or 0)
     if strict:
         return (
-            f"Evidence index found {strict} strict fee-wall breaker(s) across "
-            f"{total} normalized rows. They are still research-only until causal "
-            "port, replay, and untouched-window judgment clear."
+            f"Evidence index found {strict} strict fee-wall breaker row(s), "
+            f"canonicalized into {canonical} untouched-judgment candidate(s) "
+            f"across {total} normalized rows. They are still research-only until "
+            "causal port, replay, and untouched-window judgment clear."
         )
     if sparse:
         return (
@@ -585,6 +607,100 @@ def _sparse_positives(records: Iterable[EvidenceRecord], *, limit: int) -> list[
         for row in _sort_records(records)
         if row.avg_net_bps is not None and row.avg_net_bps > 0 and row.samples < STRICT_MIN_SAMPLES
     ][:limit]
+
+
+def _canonical_strict_candidates(
+    records: Iterable[EvidenceRecord],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str, str], list[EvidenceRecord]] = {}
+    for record in _fee_wall_breakers(records, limit=10_000):
+        key = (
+            record.strategy_id,
+            record.exchange,
+            record.symbol,
+            record.timeframe,
+        )
+        if all(key):
+            groups.setdefault(key, []).append(record)
+
+    candidates: list[dict[str, Any]] = []
+    for (strategy_id, exchange, symbol, timeframe), rows in groups.items():
+        best = max(rows, key=_record_rank)
+        source_kinds = sorted({row.source_kind for row in rows})
+        source_artifacts = sorted({row.source_artifact for row in rows})
+        routes = sorted({row.route for row in rows if row.route})
+        modes = sorted({row.mode for row in rows if row.mode})
+        evidence_sources = [
+            {
+                "source_kind": row.source_kind,
+                "source_artifact": row.source_artifact,
+                "record_id": row.record_id,
+                "status": row.status,
+                "verdict": row.verdict,
+                "samples": row.samples,
+                "avg_net_bps": row.avg_net_bps,
+                "profit_factor": row.profit_factor,
+                "next_action": row.next_action,
+            }
+            for row in sorted(rows, key=lambda item: (item.source_kind, item.source_artifact))
+        ]
+        candidates.append(
+            {
+                "candidate_id": _canonical_candidate_id(
+                    strategy_id=strategy_id,
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                ),
+                "strategy_id": strategy_id,
+                "exchange": exchange,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "route": ",".join(routes),
+                "mode": ",".join(modes),
+                "samples": best.samples,
+                "avg_net_bps": best.avg_net_bps,
+                "profit_factor": best.profit_factor,
+                "win_rate_pct": best.win_rate_pct,
+                "source_kinds": source_kinds,
+                "source_artifacts": source_artifacts,
+                "evidence_record_ids": [row.record_id for row in rows],
+                "evidence_sources": evidence_sources,
+                "evidence_count": len(rows),
+                "strict_gate": {
+                    "min_net_bps": STRICT_MIN_NET_BPS,
+                    "min_profit_factor": STRICT_MIN_PROFIT_FACTOR,
+                    "min_samples": STRICT_MIN_SAMPLES,
+                    "sample_valid": best.samples >= STRICT_MIN_SAMPLES,
+                    "fee_wall_valid": (
+                        best.avg_net_bps is not None
+                        and best.avg_net_bps >= STRICT_MIN_NET_BPS
+                    ),
+                    "profit_factor_valid": (
+                        best.profit_factor is not None
+                        and best.profit_factor >= STRICT_MIN_PROFIT_FACTOR
+                    ),
+                    "passed": True,
+                },
+                "next_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT",
+                "requires_untouched_judgment": True,
+                "can_trade": False,
+                "can_promote": False,
+                "live_orders_enabled": False,
+            }
+        )
+    return sorted(
+        candidates,
+        key=lambda row: (
+            _float(row.get("avg_net_bps")) or -999999.0,
+            _float(row.get("profit_factor")) or -1.0,
+            _int(row.get("samples")),
+            str(row.get("candidate_id") or ""),
+        ),
+        reverse=True,
+    )[:limit]
 
 
 def _failure_clusters(records: Iterable[EvidenceRecord]) -> list[dict[str, Any]]:
@@ -703,6 +819,26 @@ def _record_id(payload: dict[str, Any]) -> str:
     ]
     raw = "\x1f".join(str(part) for part in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _canonical_candidate_id(
+    *,
+    strategy_id: str,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+) -> str:
+    raw = "|".join(
+        (
+            "strict",
+            strategy_id,
+            exchange,
+            symbol.replace("/", "").replace(":", "").replace("-", ""),
+            timeframe,
+        )
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{raw}|{digest}"
 
 
 def _feed_record(payload: dict[str, Any]) -> dict[str, Any]:

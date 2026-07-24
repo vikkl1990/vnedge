@@ -146,11 +146,16 @@ def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
     assert "--interval-seconds" in service["command"]
     assert "research/live_research/scanner_backtest_uplift_latest.json" in service["command"]
     assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "research/live_research/fee_wall_forensics_latest.json" in service["command"]
     assert "research/live_research/alpha_arena_lite_latest.json" in service["command"]
     assert "${QUANT_OS_AGENT_GATEWAY_DIR:-logs/agent_gateway/quant_os}" in service["command"]
     assert "./logs/agent_gateway:/app/logs/agent_gateway" in service["volumes"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
-    assert set(service["depends_on"]) == {"scanner-backtest-uplift", "scanner-tournament"}
+    assert set(service["depends_on"]) == {
+        "scanner-backtest-uplift",
+        "scanner-tournament",
+        "fee-wall-forensics",
+    }
 
 
 def test_quant_loop_governance_publishes_loop_readiness():

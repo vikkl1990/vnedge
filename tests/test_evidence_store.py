@@ -73,6 +73,29 @@ def test_evidence_store_normalizes_pine_scanner_arena_and_fee_wall(tmp_path):
         ),
         encoding="utf-8",
     )
+    (reports / "scanner_tournament_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-07-23T00:01:30+00:00",
+                "candidates": [
+                    {
+                        "candidate_id": "sats_btc_bybit_5m",
+                        "strategy_id": "sats_5m_scalper_v1",
+                        "exchange": "bybit",
+                        "symbol": "BTC/USDT:USDT",
+                        "timeframe": "5m",
+                        "verdict": "STRICT_PROOF_WATCHLIST",
+                        "routed": 31,
+                        "avg_selected_net_bps": 31.25,
+                        "profit_factor": 1.72,
+                        "win_rate_pct": 61.0,
+                        "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     (reports / "alpha_arena_lite_latest.json").write_text(
         json.dumps(
             {
@@ -130,18 +153,25 @@ def test_evidence_store_normalizes_pine_scanner_arena_and_fee_wall(tmp_path):
     )
 
     assert payload["evidence_store_id"] == "research_evidence_index_v1"
-    assert payload["summary"]["total_records"] == 4
-    assert payload["summary"]["completed_records"] == 4
-    assert payload["summary"]["positive_after_cost"] == 3
-    assert payload["summary"]["strict_fee_wall_breakers"] == 1
+    assert payload["summary"]["total_records"] == 5
+    assert payload["summary"]["completed_records"] == 5
+    assert payload["summary"]["positive_after_cost"] == 4
+    assert payload["summary"]["strict_fee_wall_breakers"] == 2
+    assert payload["summary"]["canonical_strict_candidates"] == 1
+    assert payload["summary"]["untouched_judgment_queue"] == 1
     assert payload["summary"]["sparse_positives"] == 2
     assert payload["summary"]["source_counts"]["pine_script_backtest"] == 1
     assert payload["summary"]["source_counts"]["fee_wall_forensics"] == 1
+    assert payload["summary"]["source_counts"]["scanner_tournament"] == 1
     assert payload["fee_wall_breakers"][0]["strategy_id"] == "sats_5m_scalper_v1"
     assert payload["fee_wall_breakers"][0]["can_trade"] is False
     assert payload["fee_wall_breakers"][0]["can_promote"] is False
+    assert payload["canonical_candidates"][0]["strategy_id"] == "sats_5m_scalper_v1"
+    assert payload["canonical_candidates"][0]["evidence_count"] == 2
+    assert payload["canonical_candidates"][0]["next_action"] == "PRE_REGISTER_UNTOUCHED_JUDGMENT"
+    assert payload["untouched_judgment_queue"][0]["can_trade"] is False
     assert payload["top_positive"][0]["avg_net_bps"] == 497.83
-    assert payload["operator_answer"].startswith("Evidence index found 1 strict fee-wall")
+    assert payload["operator_answer"].startswith("Evidence index found 2 strict fee-wall")
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
 
