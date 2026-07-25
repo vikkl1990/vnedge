@@ -96,7 +96,7 @@ if [ "$NEED_BUILD" = 1 ]; then
     # 20+ identical images in one BuildKit bake has wedged this VM in futex
     # waits. Build the canonical app service once, then tag that image for the
     # sibling app services so `up --no-build` can recreate from local images.
-    if ! docker compose build "$APP_BUILD_SERVICE"; then
+    if ! docker compose build --build-arg VNEDGE_BUILD_SHA="$HEAD_SHA" "$APP_BUILD_SERVICE"; then
         echo "IMAGE BUILD FAILED — aborting deploy, nothing recreated" >&2
         exit 1
     fi

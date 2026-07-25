@@ -61,6 +61,21 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_meta_and_fleet_endpoints_auth_gated(client):
+    """Read-only /meta (build/host/uptime) and /fleet (container status, empty
+    until the host reporter runs) are token-gated and JSON-shaped."""
+    for path in ("/meta", "/fleet"):
+        assert client.get(path).status_code == 401
+        assert client.get(path + "?token=wrong").status_code == 401
+    meta = client.get("/meta?token=t3st-token")
+    assert meta.status_code == 200
+    body = meta.json()
+    assert "build_sha" in body and "host" in body and "uptime_seconds" in body
+    fleet = client.get("/fleet?token=t3st-token")
+    assert fleet.status_code == 200
+    assert isinstance(fleet.json().get("services"), list)
+
+
 def test_dashboard_shell_is_the_perps_desk(client):
     r = client.get("/")
     assert r.status_code == 200
