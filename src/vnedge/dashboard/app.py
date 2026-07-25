@@ -880,7 +880,7 @@ def create_app(
         return JSONResponse(
             {
                 "build_sha": _build_sha(),
-                "host": socket.gethostname(),
+                "host": os.environ.get("VNEDGE_HOST") or socket.gethostname(),
                 "uptime_seconds": int(max(0.0, time.time() - _APP_START)),
             }
         )
