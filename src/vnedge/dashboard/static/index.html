@@ -461,30 +461,20 @@
     <div class="main">
       <div class="col">
         <section class="panel">
-          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">deny-by-default · permutation-gated</span></div>
+          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">by strategy · live snapshot</span></div>
           <div>
-            <div class="scrow head"><span></span><span>Strategy</span><span>Best edge</span><span>Perm p</span><span class="hidem">Live fires</span><span>Status</span></div>
-            <div class="scrow"><span class="st pos"></span><div class="strat"><b>funding_mean_rev</b><span>BTC · Binance + Bybit</span></div><span class="num up">+6.4 bps</span><span class="num">0.03</span><span class="num hidem">199</span><span class="pill active">Active · trial</span></div>
-            <div class="scrow"><span class="st fire"></span><div class="strat"><b>stealth_trail_bbp</b><span>Delta · maker-first edge</span></div><span class="num up">+65 bps</span><span class="num">0.06</span><span class="num hidem">188</span><span class="pill review">In review</span></div>
-            <div class="scrow"><span class="st watch"></span><div class="strat"><b>sats_5m_scalper</b><span>Delta 5m · all symbols</span></div><span class="num up">+2.1 bps</span><span class="num">0.09</span><span class="num hidem">1,555</span><span class="pill prob">Probation</span></div>
-            <div class="scrow"><span class="st watch"></span><div class="strat"><b>luxara_live_plan</b><span>Delta · +16 bps median</span></div><span class="num up">+16 bps</span><span class="num">0.12</span><span class="num hidem">6</span><span class="pill prob">Probation</span></div>
-            <div class="scrow"><span class="st watch"></span><div class="strat"><b>alpha_stack_conf</b><span>edge below fee wall</span></div><span class="num">+0.8 bps</span><span class="num">0.21</span><span class="num hidem">48</span><span class="pill supp">Suppressed</span></div>
-            <div class="scrow"><span class="st watch"></span><div class="strat"><b>luxara_break_bounce</b><span>fee-walled · median −3.8</span></div><span class="num dn">−3.8 bps</span><span class="num">0.51</span><span class="num hidem">0</span><span class="pill supp">Suppressed</span></div>
-            <div class="scrow"><span class="st watch"></span><div class="strat"><b>fvg_liquidity_brk</b><span>2.7% clear the wall</span></div><span class="num dn">−0.4 bps</span><span class="num">0.42</span><span class="num hidem">0</span><span class="pill supp">Suppressed</span></div>
+            <div class="scrow head"><span></span><span>Strategy</span><span>Shadow P&amp;L</span><span>Lanes</span><span class="hidem">Evals</span><span>Live status</span></div>
+            <div id="scorecard"></div>
           </div>
         </section>
         <section class="panel">
           <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
-          <div>
-            <div class="qrow"><div><div class="qt">stealth_trail_bbp — maker liquidation-style fade</div><div class="qs">+65 bps projected maker edge · fires 188× · awaiting pre-registered judgment</div></div><span class="pill review">Review</span></div>
-            <div class="qrow"><div><div class="qt">funding_mean_rev — BTC</div><div class="qs">3rd consecutive OOS-positive slice · running as a governed paper trial</div></div><span class="pill trial">Trial · day 21</span></div>
-            <div class="qrow"><div><div class="qt">luxara_live_plan_qtm — Delta</div><div class="qs">+16 bps median edge · accumulating shadow evidence before it can be judged</div></div><span class="pill prob">Watch</span></div>
-          </div>
+          <div id="promoQueue"></div>
         </section>
       </div>
       <div class="col">
         <section class="panel">
-          <div class="phead"><h2>Fee-Wall Economics</h2><span class="meta">net edge vs 5.5 bps taker</span></div>
+          <div class="phead"><h2>Shadow P&amp;L by Strategy</h2><span class="meta">realized + unrealized · live</span></div>
           <div class="feebar" id="feebar"></div>
         </section>
         <section class="panel">
@@ -560,44 +550,18 @@
           </div>
         </section>
         <section class="panel">
-          <div class="phead"><h2>Container Fleet</h2><span class="meta">42 / 42 up</span></div>
-          <div class="svcgrid">
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>multi-lane-shadow</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>realtime-scanner</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>liquidation-recorder</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>liquidation-rec-bybit</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>shadow-recorder</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>tick-recorder</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>research-loop</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>scanner-tournament</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>fee-wall-forensics</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>evidence-index-pub</div>
-            <div class="svc"><span class="dot" style="background:var(--long)"></span>dashboard-tls</div>
-            <div class="svc"><span class="dot" style="background:var(--warn)"></span>execution-replay <span style="color:var(--txt-faint)">· idle</span></div>
-          </div>
+          <div class="phead"><h2>Lane Health</h2><span class="meta" id="laneFleetMeta">--</span></div>
+          <div id="laneFleet" class="svcgrid"></div>
         </section>
       </div>
       <div class="col">
         <section class="panel">
           <div class="phead"><h2>Data Integrity</h2><span class="tag">quality gate</span></div>
-          <div>
-            <div class="kvrow"><span class="k">Binance USDⓈ-M feed</span><span class="num up">fresh · 31 ms</span></div>
-            <div class="kvrow"><span class="k">Bybit V5 feed</span><span class="num up">fresh · 44 ms</span></div>
-            <div class="kvrow"><span class="k">Delta India feed</span><span class="num" style="color:var(--warn)">210 ms · watch</span></div>
-            <div class="kvrow"><span class="k">Clock skew</span><span class="num up">&lt; 5 ms</span></div>
-            <div class="kvrow"><span class="k">Sequence / checksum</span><span class="num up">clean</span></div>
-            <div class="kvrow"><span class="k">Reconciliation</span><span class="num up">matched</span></div>
-          </div>
+          <div id="dataIntegrity"></div>
         </section>
         <section class="panel">
-          <div class="phead"><h2>Deploy Provenance</h2></div>
-          <div>
-            <div class="kvrow"><span class="k">Branch</span><span class="num">main</span></div>
-            <div class="kvrow"><span class="k">Build</span><span class="num">541e1af</span></div>
-            <div class="kvrow"><span class="k">Host</span><span class="num">vn-edge-sg-01</span></div>
-            <div class="kvrow"><span class="k">Deployed</span><span class="num">3h ago · clean</span></div>
-            <div class="kvrow"><span class="k">Uptime</span><span class="num">72 d</span></div>
-          </div>
+          <div class="phead"><h2>Runtime &amp; Provenance</h2></div>
+          <div id="deployProv"></div>
         </section>
       </div>
     </div>
@@ -798,6 +762,85 @@
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
     tapeFromLanes(lanes);
+
+    // research + system, live from the same snapshot
+    renderScorecard(lanes); renderPromo(lanes); renderFeeWall(lanes);
+    renderLaneFleet(s); renderDataIntegrity(s,vs); renderDeployProv(s);
+  }
+
+  /* ---- research + system renderers (all from /state) ---- */
+  function stratAgg(lanes){
+    var by={};
+    lanes.forEach(function(l){
+      var k=stratShort(l.strategy_id); if(!k)return;
+      if(!by[k])by[k]={strat:k,ven:{},lanes:0,evals:0,pnl:0,fired:0,probe:false,trial:false};
+      var g=by[k],f=l.funnel||{},id=String(l.lane_id||"");
+      g.lanes++; g.ven[l.exchange]=1; g.evals+=num(f.live_evals||f.evals||0); g.pnl+=lpnl(l);
+      if(l.last_eval&&l.last_eval.fired)g.fired++;
+      if(id.indexOf("fee_wall")>=0||id.indexOf("paper_probe")>=0)g.probe=true;
+      if((l.mode||"").indexOf("paper")>=0&&id.indexOf("observation")<0&&id.indexOf("shadow")<0)g.trial=true;
+    });
+    return Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){return b.pnl-a.pnl;});
+  }
+  function statusFor(g){
+    if(g.trial)return["trial","Trial"]; if(g.probe)return["review","Probe"];
+    if(g.evals===0)return["supp","Idle"]; if(g.pnl>0.005)return["active","Positive"];
+    if(g.pnl<-0.005)return["supp","Negative"]; return["prob","Flat"];
+  }
+  function renderScorecard(lanes){
+    var el=$("scorecard"); if(!el)return;
+    el.innerHTML=stratAgg(lanes).map(function(g){
+      var st=statusFor(g),venc=Object.keys(g.ven).length,pc=g.pnl>0?"up":g.pnl<0?"dn":"",dot=g.fired?"fire":g.pnl>0?"pos":"watch";
+      return '<div class="scrow"><span class="st '+dot+'"></span>'+
+        '<div class="strat"><b>'+g.strat+'</b><span>'+venc+' venue'+(venc===1?"":"s")+'</span></div>'+
+        '<span class="num '+pc+'">'+(g.pnl>=0?"+":"")+"$"+g.pnl.toFixed(2)+'</span>'+
+        '<span class="num">'+g.lanes+'</span><span class="num hidem">'+g.evals.toLocaleString()+'</span>'+
+        '<span class="pill '+st[0]+'">'+st[1]+'</span></div>';
+    }).join('')||'<div class="note">no lanes in snapshot</div>';
+  }
+  function renderPromo(lanes){
+    var el=$("promoQueue"); if(!el)return; var seen={},items=[];
+    lanes.forEach(function(l){var id=String(l.lane_id||"");var probe=id.indexOf("fee_wall")>=0||id.indexOf("paper_probe")>=0;var trial=(l.mode||"").indexOf("paper")>=0&&id.indexOf("observation")<0&&id.indexOf("shadow")<0;if(!probe&&!trial)return;var k=stratShort(l.strategy_id)+"|"+(probe?"p":"t");if(seen[k])return;seen[k]=1;items.push({strat:stratShort(l.strategy_id),sym:symShort(l.symbol),ex:l.exchange,probe:probe,pnl:lpnl(l)});});
+    if(!items.length){el.innerHTML='<div class="qrow"><div><div class="qt">No candidates in queue</div><div class="qs">nothing is in a governed trial or fee-wall probe right now</div></div></div>';return;}
+    el.innerHTML=items.slice(0,8).map(function(it){var st=it.probe?["review","Probe"]:["trial","Trial"];
+      return '<div class="qrow"><div><div class="qt">'+it.strat+' — '+it.sym+'</div>'+
+        '<div class="qs">'+ven(it.ex).lab+' · '+(it.probe?"fee-wall maker-first probe":"governed paper trial")+' · shadow '+(it.pnl>=0?"+":"")+"$"+it.pnl.toFixed(2)+'</div></div>'+
+        '<span class="pill '+st[0]+'">'+st[1]+'</span></div>';}).join('');
+  }
+  function renderFeeWall(lanes){
+    var el=$("feebar"); if(!el)return; var rows=stratAgg(lanes);
+    var mx=Math.max.apply(null,rows.map(function(g){return Math.abs(g.pnl);}).concat([1]));
+    el.innerHTML=rows.map(function(g){var w=Math.min(48,Math.abs(g.pnl)/mx*48),pos=g.pnl>=0;
+      var bar='<i style="'+(pos?"left:50%":"right:50%")+';width:'+w+'%;background:'+(pos?"var(--long)":"var(--short)")+'"></i>';
+      return '<div class="feerow"><span class="fn">'+g.strat+'</span><div class="feetrack">'+bar+'</div>'+
+        '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+"$"+g.pnl.toFixed(2)+'</span></div>';}).join('')+
+      '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · realized + unrealized shadow P&amp;L</div>';
+  }
+  function renderLaneFleet(s){
+    var lh=s.lane_health||{},tot=lh.totals||{},meta=$("laneFleetMeta"),lanes=Array.isArray(s.lanes)?s.lanes:[];
+    if(meta)meta.textContent=(lh.healthy?"healthy":"degraded")+" · "+lanes.length+" lanes";
+    var el=$("laneFleet"); if(!el)return; var cells=[];
+    Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
+    (lh.problems||[]).slice(0,6).forEach(function(p){cells.push('<div class="svc"><span class="dot" style="background:var(--short)"></span>'+String(p).slice(0,26)+'</div>');});
+    el.innerHTML=cells.join('')||'<div class="svc"><span class="dot" style="background:var(--long)"></span>all lanes healthy</div>';
+  }
+  function renderDataIntegrity(s,vs){
+    var el=$("dataIntegrity"); if(!el)return;
+    var rows=Object.keys(vs).map(function(x){var v=ven(x),g=vs[x],lat=g.st/g.n,fresh=(lat<9000&&g.ok>0);
+      return '<div class="kvrow"><span class="k">'+v.lab+' feed</span><span class="num" style="color:'+(fresh?"var(--long)":"var(--warn)")+'">'+(fresh?"fresh · ":"stale · ")+ageMs(lat)+'</span></div>';}).join('');
+    rows+='<div class="kvrow"><span class="k">Journal (WAL)</span><span class="num" style="color:'+(s.last_journal_write==="ok"?"var(--long)":"var(--short)")+'">'+(s.last_journal_write||"--")+'</span></div>';
+    rows+='<div class="kvrow"><span class="k">Risk gateway</span><span class="num" style="color:'+(s.risk_status==="ok"?"var(--long)":"var(--short)")+'">'+(s.risk_status||"--")+'</span></div>';
+    el.innerHTML=rows;
+  }
+  function renderDeployProv(s){
+    var el=$("deployProv"); if(!el)return; var rc=s.runtime_control||{},se=s.session||{};
+    function row(k,v){return '<div class="kvrow"><span class="k">'+k+'</span><span class="num">'+v+'</span></div>';}
+    el.innerHTML=row("Mode",s.mode||"--")+
+      row("Lane set",(rc.configured_lanes!=null?rc.configured_lanes+" lanes":"--")+(rc.lane_set_hash?" · "+String(rc.lane_set_hash).slice(0,8):""))+
+      row("Mode ladder",((rc.mode_ladder||[]).join(" → "))||"--")+
+      row("Bars processed",num(se.bars_processed).toLocaleString())+
+      row("Evals live/total",num(se.live_evals).toLocaleString()+" / "+num(se.evals).toLocaleString())+
+      row("Signals",num(se.signals).toLocaleString());
   }
 
   /* ---- WebSocket to the read-only /state stream ---- */
@@ -813,28 +856,6 @@
     ws.onerror=function(){ try{ws.close();}catch(e){} };
   }
   renderTape(); connect();
-
-  /* ---- fee-wall economics bars (research illustration) ---- */
-  var fees=[
-    {n:"stealth_trail (maker)", v:65, cap:true},
-    {n:"luxara_live_plan", v:16},
-    {n:"funding_mean_rev", v:6.4},
-    {n:"sats_5m_scalper", v:2.1},
-    {n:"alpha_stack_conf", v:0.8},
-    {n:"fvg_liquidity_brk", v:-0.4},
-    {n:"luxara_break_bnc", v:-3.8}
-  ];
-  var fb=document.getElementById("feebar");
-  if(fb){
-    fb.innerHTML=fees.map(function(f){
-      var w=Math.min(48,Math.abs(f.v)/20*48);
-      var pos=f.v>=0;
-      var bar='<i style="'+(pos?"left:50%":"right:50%")+';width:'+w+'%;background:'+(pos?"var(--long)":"var(--short)")+'"></i>';
-      return '<div class="feerow"><span class="fn">'+f.n+'</span>'+
-        '<div class="feetrack">'+bar+'</div>'+
-        '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+f.v+(f.cap?"*":"")+'</span></div>';
-    }).join('')+'<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even after fees · *maker-fill projection</div>';
-  }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");
