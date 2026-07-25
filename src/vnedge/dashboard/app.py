@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+import socket
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +59,18 @@ logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_APP_START = time.time()
+
+
+def _build_sha() -> str:
+    for p in (Path("/app/BUILD_SHA"), _REPO_ROOT / "BUILD_SHA"):
+        try:
+            sha = p.read_text().strip()
+            if sha:
+                return sha
+        except OSError:
+            continue
+    return "dev"
 
 # --- incident timeline --------------------------------------------------------
 # Journal kinds that are operator incidents (not routine order flow), mapped to
@@ -855,6 +869,30 @@ def create_app(
             ),
             headers=_identity(user),
         )
+
+    fleet_status_file = Path("logs/fleet.json")
+
+    @app.get("/meta")
+    async def meta(request: Request) -> JSONResponse:
+        """Build provenance: deployed git sha (baked at image build), host, and
+        dashboard-process uptime. Read-only."""
+        _authorized(request)
+        return JSONResponse(
+            {
+                "build_sha": _build_sha(),
+                "host": socket.gethostname(),
+                "uptime_seconds": int(max(0.0, time.time() - _APP_START)),
+            }
+        )
+
+    @app.get("/fleet")
+    async def fleet(request: Request) -> JSONResponse:
+        """Container fleet status, written host-side by scripts/fleet_status.sh
+        (the dashboard container has no docker access). Empty until the host
+        timer runs. Read-only."""
+        _authorized(request)
+        payload = _read_json_payload(fleet_status_file, {"services": [], "written_at": None})
+        return JSONResponse(payload)
 
     @app.get("/scorecard")
     async def scorecard(request: Request) -> JSONResponse:

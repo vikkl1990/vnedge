@@ -199,6 +199,10 @@ class MultiLaneProvider:
                 # label paper vs shadow and which strategy each lane runs
                 "mode": self._lanes[lid].get("mode", ""),
                 "strategy_id": self._lanes[lid].get("strategy_id", ""),
+                # per-lane last price + funding so the dashboard watchlist can
+                # show real per-symbol quotes (one live price per lane symbol)
+                "price": self._lanes[lid].get("price"),
+                "funding_rate": self._lanes[lid].get("funding_rate"),
                 "equity": self._lanes[lid].get("equity", 0.0),
                 "realized_pnl": self._lanes[lid].get("realized_pnl", 0.0),
                 "unrealized_pnl": self._lanes[lid].get("unrealized_pnl", 0.0),

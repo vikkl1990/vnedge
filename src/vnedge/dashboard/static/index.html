@@ -550,7 +550,7 @@
           </div>
         </section>
         <section class="panel">
-          <div class="phead"><h2>Lane Health</h2><span class="meta" id="laneFleetMeta">--</span></div>
+          <div class="phead"><h2>Container Fleet</h2><span class="meta" id="laneFleetMeta">--</span></div>
           <div id="laneFleet" class="svcgrid"></div>
         </section>
       </div>
@@ -705,16 +705,18 @@
     text("snap", s.ts?ageMs(Math.max(0,Date.now()-Date.parse(s.ts))):"--");
     text("laneCount",lanes.length);
 
-    // coverage strip (per symbol — /state carries one live price, so this is activity, not per-symbol quotes)
+    // watchlist — real per-symbol price + funding (each lane forwards its quote)
     var bySym={};
-    lanes.forEach(function(l){var k=symShort(l.symbol);if(!k)return;if(!bySym[k])bySym[k]={sym:k,ven:{},lanes:0,sig:0,fired:0};var g=bySym[k];g.lanes++;g.ven[l.exchange]=1;var f=l.funnel||{};g.sig+=num(f.live_evals||f.evals||0);if(l.last_eval&&l.last_eval.fired)g.fired++;});
-    var cov=Object.keys(bySym).map(function(k){return bySym[k];}).sort(function(a,b){return b.lanes-a.lanes;});
+    lanes.forEach(function(l){var k=symShort(l.symbol);if(!k)return;if(!bySym[k])bySym[k]={sym:k,ven:{},lanes:0,sig:0,fired:0,price:null,fund:null};var g=bySym[k];g.lanes++;g.ven[l.exchange]=1;var f=l.funnel||{};g.sig+=num(f.live_evals||f.evals||0);if(l.last_eval&&l.last_eval.fired)g.fired++;if(g.price==null&&l.price&&fin(l.price.mid))g.price=l.price.mid;if(g.fund==null&&fin(l.funding_rate))g.fund=l.funding_rate;});
+    var cov=Object.keys(bySym).map(function(k){return bySym[k];}).sort(function(a,b){return ((b.price!=null)-(a.price!=null))||(b.lanes-a.lanes);});
     if($("watch"))$("watch").innerHTML=cov.map(function(g){
       var chips=Object.keys(g.ven).map(function(x){var v=ven(x);return '<i style="background:'+v.col+'">'+v.sh+'</i>';}).join('');
+      var px=g.price!=null?("$"+(g.price>=1000?g.price.toLocaleString(undefined,{maximumFractionDigits:1}):g.price>=1?g.price.toFixed(2):g.price.toFixed(4))):(g.lanes+" lanes");
+      var sub=g.fund!=null?((g.fund>=0?"+":"")+(g.fund*100).toFixed(3)+"% fund"):(g.sig.toLocaleString()+" evals");
       return '<div class="wcard">'+(g.fired?'<span class="fire">◆ '+g.fired+' firing</span>':'')+
         '<div class="sym"><b>'+g.sym+'</b></div>'+
-        '<div class="px num" style="font-size:19px">'+g.lanes+' <span style="font-size:11px;color:var(--txt-faint)">lanes</span></div>'+
-        '<div class="sub"><span class="fund num">'+g.sig.toLocaleString()+' evals</span></div>'+
+        '<div class="px num">'+px+'</div>'+
+        '<div class="sub"><span class="fund num">'+sub+'</span><span class="fund num" style="color:var(--txt-faint)">'+g.lanes+'L</span></div>'+
         '<div class="vch">'+chips+'</div></div>';
     }).join('');
 
@@ -764,7 +766,7 @@
     var lh=s.lane_health||{}; text("sysLane",(lh.healthy?"healthy":"degraded")+(lh.summary?" · "+lh.summary:""));
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
-    renderLaneFleet(s); renderDataIntegrity(s,vs); renderDeployProv(s);
+    lastSnap=s; renderFleet(); renderDataIntegrity(s,vs); renderDeployProv(s);
   }
 
   /* ---- research: scorecard / promotion / fee-wall, from /scorecard ---- */
@@ -813,31 +815,40 @@
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
   }
-  function renderLaneFleet(s){
-    var lh=s.lane_health||{},tot=lh.totals||{},meta=$("laneFleetMeta"),lanes=Array.isArray(s.lanes)?s.lanes:[];
-    if(meta)meta.textContent=(lh.healthy?"healthy":"degraded")+" · "+lanes.length+" lanes";
-    var el=$("laneFleet"); if(!el)return; var cells=[];
-    Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
-    (lh.problems||[]).slice(0,6).forEach(function(p){cells.push('<div class="svc"><span class="dot" style="background:var(--short)"></span>'+String(p).slice(0,26)+'</div>');});
-    el.innerHTML=cells.join('')||'<div class="svc"><span class="dot" style="background:var(--long)"></span>all lanes healthy</div>';
+  var lastSnap={}, fleetData=null, metaData=null;
+  function renderFleet(){
+    var s=lastSnap||{},lh=s.lane_health||{},tot=lh.totals||{},meta=$("laneFleetMeta"),el=$("laneFleet");
+    var svcs=(fleetData&&fleetData.services)||[];
+    if(meta)meta.textContent=svcs.length?(svcs.filter(function(x){return x.up;}).length+" / "+svcs.length+" up"):(tot.active!=null?tot.active+" / "+tot.desired+" lanes":"--");
+    if(!el)return;
+    if(svcs.length){
+      el.innerHTML=svcs.map(function(x){return '<div class="svc"><span class="dot" style="background:'+(x.up?"var(--long)":"var(--short)")+'"></span>'+String(x.name).slice(0,22)+'</div>';}).join('');
+    }else{
+      var cells=[];
+      Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing"||k==="orphan")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
+      el.innerHTML=cells.join('')||'<div class="svc"><span class="dot" style="background:var(--long)"></span>fleet reporter pending</div>';
+    }
   }
   function renderDataIntegrity(s,vs){
-    var el=$("dataIntegrity"); if(!el)return;
+    var el=$("dataIntegrity"); if(!el)return; var lh=s.lane_health||{},tot=lh.totals||{};
     var rows=Object.keys(vs).map(function(x){var v=ven(x),g=vs[x],lat=g.st/g.n,fresh=(lat<9000&&g.ok>0);
       return '<div class="kvrow"><span class="k">'+v.lab+' feed</span><span class="num" style="color:'+(fresh?"var(--long)":"var(--warn)")+'">'+(fresh?"fresh · ":"stale · ")+ageMs(lat)+'</span></div>';}).join('');
     rows+='<div class="kvrow"><span class="k">Journal (WAL)</span><span class="num" style="color:'+(s.last_journal_write==="ok"?"var(--long)":"var(--short)")+'">'+(s.last_journal_write||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Risk gateway</span><span class="num" style="color:'+(s.risk_status==="ok"?"var(--long)":"var(--short)")+'">'+(s.risk_status||"--")+'</span></div>';
+    rows+='<div class="kvrow"><span class="k">Reconciliation</span><span class="num" style="color:'+(s.risk_status==="reconciling"?"var(--warn)":"var(--long)")+'">'+(s.risk_status==="reconciling"?"rebuilding":"matched")+'</span></div>';
+    rows+='<div class="kvrow"><span class="k">Lanes healthy</span><span class="num up">'+(tot.ok!=null?tot.ok+" / "+tot.desired:"--")+'</span></div>';
     el.innerHTML=rows;
   }
   function renderDeployProv(s){
-    var el=$("deployProv"); if(!el)return; var rc=s.runtime_control||{},se=s.session||{};
+    var el=$("deployProv"); if(!el)return; var rc=s.runtime_control||{},se=s.session||{},m=metaData||{};
     function row(k,v){return '<div class="kvrow"><span class="k">'+k+'</span><span class="num">'+v+'</span></div>';}
-    el.innerHTML=row("Mode",s.mode||"--")+
+    function upt(x){x=num(x);var d=Math.floor(x/86400),h=Math.floor(x%86400/3600),mn=Math.floor(x%3600/60);return d?d+"d "+h+"h":h?h+"h "+mn+"m":mn+"m";}
+    el.innerHTML=row("Build",m.build_sha?String(m.build_sha).slice(0,10):"--")+
+      row("Host",m.host||"--")+
+      row("Uptime",m.uptime_seconds!=null?upt(m.uptime_seconds):"--")+
+      row("Mode",s.mode||"--")+
       row("Lane set",(rc.configured_lanes!=null?rc.configured_lanes+" lanes":"--")+(rc.lane_set_hash?" · "+String(rc.lane_set_hash).slice(0,8):""))+
-      row("Mode ladder",((rc.mode_ladder||[]).join(" → "))||"--")+
-      row("Bars processed",num(se.bars_processed).toLocaleString())+
-      row("Evals live/total",num(se.live_evals).toLocaleString()+" / "+num(se.evals).toLocaleString())+
-      row("Signals",num(se.signals).toLocaleString());
+      row("Bars / signals",num(se.bars_processed).toLocaleString()+" / "+num(se.signals).toLocaleString());
   }
 
   /* ---- WebSocket to the read-only /state stream ---- */
@@ -861,8 +872,10 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
-  pollScorecard(); pollScanner();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); }
+  function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
+  function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
+  pollScorecard(); pollScanner(); pollMeta(); pollFleet();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");
