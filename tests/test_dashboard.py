@@ -48,102 +48,38 @@ def test_state_with_token(client):
     assert client.get("/state?token=t3st-token").status_code == 200
 
 
-def test_dashboard_shell_contains_quant_cockpit_panels(client):
+def test_dashboard_shell_is_the_perps_desk(client):
     r = client.get("/")
     assert r.status_code == 200
     html = r.text
-    # Overview leads with the plain-language "at a glance" hero (2026-07 UI
-    # cleanup); the dense operator cockpit panels below moved to the Trading tab
-    # but remain in the shell (asserted throughout this test).
-    assert 'id="glanceHeadline"' in html
-    assert "at a glance" in html
-    assert "workspace navigation" in html
-    assert "Quant Command Deck" in html
-    assert "why no trade console" in html
-    assert "Maker fee wall" in html
-    assert "Route Radar" in html
-    assert "Signal Pressure" in html
-    assert "Real-Time Scanner" in html
-    assert "operator actionability matrix" in html
-    assert "Multi-exchange Lane Matrix" in html
-    assert "Fee Wall" in html
-    assert "Signal Pressure &amp; Trade Journal" in html
-    assert "Trade Journal Ledger" in html
-    assert "Pine Lab" in html
-    assert "/pine-research" in html
-    assert 'id="tradeLedgerBoard"' in html
-    assert "/trade-journal" in html
-    assert "scanner-style hot/cold pressure" in html
-    # Alpha Council / Proof Queue / Job Ledger removed in the operational-core
-    # cleanup (2026-07-16) — they were no-trade research surface.
-    assert "LIVE ARMED" in html
-    assert "Live Readiness Ladder" in html
-    assert 'id="rd_state"' in html
-    assert 'id="rd_capital"' in html
-    assert 'id="rd_data"' in html
-    assert 'id="rd_execution"' in html
-    assert 'id="rd_research"' in html
-    assert 'id="rd_cost"' in html
-    assert 'id="rd_governance"' in html
-    assert "/lane-readiness" in html
-    assert "loadLaneReadiness" in html
-    assert "L2 depth levels absent from snapshot" in html
-    assert "book metrics wired" in html
-    assert "snapshot.lanes missing; no planned venue fallback" in html
-    assert "no lane snapshot published; planned exchange lane fallbacks are hidden" in html
-    assert "renderAgent(" not in html
-    assert "ea_proposals" not in html
-    assert "pending L2" not in html
-    assert "tick recorder next" not in html
-    assert "bybit-shadow" not in html
-    assert "planned shadow" not in html
-    assert "tick_l2_recorder.parquet" not in html
-    assert "pending live adapter" not in html
+    # Redesigned dashboard (2026-07): an autonomous perps *desk*, not a lab.
+    # Four views — Desk / Research / System / About — reading the read-only
+    # /state stream. The VN-monogram mark + the desk cockpit are the shell.
+    assert "Autonomous Perps Desk" in html
+    assert 'id="vnmark"' in html                       # the logo mark
+    for view in ("desk", "research", "system", "about"):
+        assert f'data-view="{view}"' in html
+    # desk cockpit containers, wired to the snapshot in JS
+    assert 'id="lanes"' in html                        # active-lanes blotter
+    assert 'id="tape"' in html                         # live signal tape
+    assert 'id="watch"' in html                        # coverage strip
+    assert 'id="eqChart"' in html                      # equity curve
+    assert "Active Lanes" in html
+    assert "Live Signal Tape" in html
+    assert "Exchange Connections" in html
+    assert "Safety Gates" in html
+    # honest safety posture stays visible
+    assert "no live orders" in html
+    assert "SHADOW" in html
+    # reads the read-only websocket stream (backend contract unchanged)
+    assert "/ws?token=" in html
+    assert "new WebSocket" in html
+    assert 'id="profile"' in html                      # account menu
+    # the old lab surface is gone
+    assert "Quant Command Deck" not in html
+    assert "Live Readiness Ladder" not in html
+    assert "Trade Journal Ledger" not in html
     assert "next live phase" not in html
-
-
-def test_dashboard_shell_preserves_operator_instruments(client):
-    r = client.get("/")
-    assert r.status_code == 200
-    html = r.text
-    # Acceptance guard for the #116 fix-forward restyle: visual polish must
-    # keep the operator instruments wired into the current dashboard.
-    assert "What changed" in html
-    assert 'id="funnelBody"' in html
-    assert 'id="tradeJournalBody"' in html
-    assert 'id="rtScannerBody"' in html
-    assert "/realtime-scanner" in html
-    assert 'id="mode"' in html and 'id="symbol"' in html and 'id="strategy"' in html
-    assert 'id="risk"' in html and 'id="kill"' in html and 'id="conn"' in html
-    assert 'id="connectionsBoard"' in html
-    assert 'id="zoneTradingFloor"' in html
-    # Research Lab zone removed in the operational-core cleanup (2026-07-16).
-    assert 'id="zoneResearchLab"' not in html
-    assert 'id="zoneInfrastructure"' in html
-    assert 'className="v-badge"' in html
-    assert "virtual PnL -- shadow lane, no real orders" in html
-    assert 'id="laneHealthBadge"' in html
-
-
-def test_dashboard_shell_service_ui(client):
-    """Acceptance guard for the service-shell UI batch: incident timeline,
-    history range selector + CSV export, and the mobile summary strip."""
-    html = client.get("/").text
-    # incidents panel in the infrastructure zone, runbook-linked
-    assert 'id="incidentsBoard"' in html
-    assert 'id="incidentsList"' in html
-    assert "loadIncidents" in html and "/incidents" in html
-    assert "/runbooks?token=" in html
-    # equity range selector + export
-    assert 'data-days="7"' in html and 'data-days="30"' in html
-    assert 'id="exportCsv"' in html
-    assert "/export.csv?token=" in html
-    # mobile summary strip, desktop-hidden via the 520px media query
-    assert 'id="mobileStrip"' in html
-    for el in ("ms_equity", "ms_daily", "ms_lanes", "ms_positions", "ms_incident"):
-        assert f'id="{el}"' in html
-    assert "@media(max-width:520px)" in html
-    assert "renderMobileStrip" in html
 
 
 def test_cost_model_route_auth_gated_and_real_numbers(client):
@@ -583,85 +519,6 @@ def test_cost_model_route_has_no_control_verbs(client):
         assert getattr(client, method)("/cost-model?token=t3st-token").status_code in (404, 405)
 
 
-def test_dashboard_shell_has_multiview_nav_and_legal(client):
-    """Operational-core shell (2026-07-16): only the views we actually use are
-    navigable; the research + microstructure-workspace views were removed.
-    Risk warning, about, legal, and the real fee-wall cost-model panel remain."""
-    html = client.get("/").text
-    # the operational-core nav views are present
-    for view in ("overview", "trading", "incidents", "system", "about", "legal"):
-        assert f'data-nav="{view}"' in html
-    # the research + microstructure views are GONE (nav and sections)
-    for gone in ("research", "microstructure"):
-        assert f'data-nav="{gone}"' not in html
-        assert f'data-view="{gone}"' not in html
-    # commercial risk warning: first-visit banner + dedicated legal view
-    assert 'id="riskBanner"' in html
-    assert "Extreme-risk research software" in html
-    assert 'id="legalView"' in html
-    assert "Risk Disclosure" in html
-    assert "you can lose all" in html.lower()
-    assert "past" in html.lower() and "not indicative of future" in html.lower()
-    # about view
-    assert 'id="aboutView"' in html
-    assert "About VN Edge" in html
-    assert "mode ladder" in html.lower()
-    # fee-wall / cost-model panel wired to the real route
-    assert "Fee Wall &amp; Cost Model" in html
-    assert 'id="cost_maker_first"' in html and 'id="cost_taker_rt"' in html
-    assert "/cost-model" in html
-    assert "loadCostModel" in html
-    # the hardcoded fake fee assignment is gone from the source
-    assert 'text("obi_fee_wall","10.0 bps taker RT")' not in html
-    # persistent footer: version + read-only disclaimer + UTC clock
-    assert 'id="footVersion"' in html and 'id="footClock"' in html
-    assert "read-only research build" in html
-    # router present
-    assert "function setView" in html and "hashchange" in html
-
-
-def test_dashboard_operational_core_cut(client):
-    """Operational-core cleanup (2026-07-16): the no-trade research panels
-    (cascade reversion, lead-lag echo, AI candidates, alpha council, shadow
-    manifest) and the microstructure workspace were removed — they never
-    produced a CANDIDATE verdict and were dead surface. The Trading-view
-    real-time shadow scalp panel is a keeper and must remain."""
-    html = client.get("/").text
-    # removed research-view panels are gone (DOM ids + titles)
-    for el in ("cascadeReversionBoard", "leadlagEchoBoard", "aiCandidatesBoard",
-               "agentBoard", "shadowManifestBoard", "microstructureWorkspace"):
-        assert f'id="{el}"' not in html
-    assert "AI Strategy Candidates (sandbox)" not in html
-    assert "Alpha Council" not in html
-    # the research data-polling was neutralised (no more /research, /agent-jobs,
-    # /alpha-council, /vibe-intelligence fetches firing into removed DOM)
-    assert 'fetchJSON("/research")' not in html
-    assert 'fetchJSON("/agent-jobs")' not in html
-    assert 'fetchJSON("/alpha-council")' not in html
-    # kept: the Trading-view real-time shadow scalp panel + its live wiring
-    assert 'id="realtimeShadowScalpBoard"' in html
-    assert 'id="rssLanes"' in html
-    assert "function renderRealtimeShadowScalp(" in html
-    # kept: the real fee-wall cost model, now folded under the System view
-    assert 'id="costModelBoard"' in html
-    assert "Fee Wall &amp; Cost Model" in html
-    # the live-firing scalp panel stays in the Trading view
-    assert 'id="realtimeShadowScalpBoard" data-view="trading"' in html
-
-
-def test_dashboard_shell_has_lane_health_table_and_agent_gateway(client):
-    """Lane health audit table (Incidents) and the read-only agent-gateway
-    status chip (System) are present and wired to the snapshot."""
-    html = client.get("/").text
-    assert 'id="laneHealthBoard" data-view="incidents"' in html
-    assert 'id="lh_rows"' in html
-    assert "renderLaneHealthTable" in html
-    # agent gateway status chip in the deploy/provenance (system) panel
-    assert 'id="prov_agent_gateway"' in html
-    assert "dormant (no agent tokens)" in html
-    assert "renderAgentGateway" in html
-
-
 def _synthetic_research_doc() -> dict:
     """Mirror how continuous_research folds the scalp/AI surfaces into
     latest.json, with one row per panel so the round-trip test can assert the
@@ -794,29 +651,6 @@ def test_dashboard_inline_js_parses_under_node():
         result = subprocess.run([node, "--check", path],
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-
-
-def test_dashboard_realtime_scanner_prefers_primary_blocker_pressure():
-    from pathlib import Path as _Path
-
-    html = (_Path(__file__).resolve().parents[1]
-            / "src/vnedge/dashboard/static/index.html").read_text()
-
-    assert "const blocker=diag.primary_blocker||{};" in html
-    assert "if(blocker.name)" in html
-    assert "if(diag.all_gates_passed)return \"all gates passed\";" in html
-    assert "const failed=prox.filter(p=>num(p.gap)>0);" in html
-    assert "Paper Fresh" in html
-    assert "num(s.paper_fresh_lanes)+\"/\"+num(s.paper_lanes)" in html
-    assert "num(s.paper_order_intents_1h)" in html
-    assert "num(s.paper_stale_lanes)" in html
-    assert "activity-spine" in html
-    assert "qd_paper_fresh" in html
-    assert "function renderDeckActivity()" in html
-    assert "function renderDeckVenues(lanes)" in html
-    assert "function renderDeckJournal(lanes)" in html
-    assert "tr.className=\"scanner-row \"+scannerTone(row.state);" in html
-    assert "tr.className=\"journal-row \"+eventTone(e.event);" in html
 
 
 def test_no_snapshot_yet_is_503():
