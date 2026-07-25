@@ -76,6 +76,14 @@ def test_meta_and_fleet_endpoints_auth_gated(client):
     assert isinstance(fleet.json().get("services"), list)
 
 
+def test_dashboard_shell_is_not_cached(client):
+    """The SPA ships on every deploy — the shell must not be browser-cached, or
+    a stale cached page shows empty panels against a live backend."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "").lower()
+
+
 def test_dashboard_shell_is_the_perps_desk(client):
     r = client.get("/")
     assert r.status_code == 200

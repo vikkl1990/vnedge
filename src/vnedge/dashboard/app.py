@@ -550,7 +550,12 @@ def create_app(
     @app.get("/")
     async def index() -> FileResponse:
         # The shell page contains no data; all data endpoints require the token.
-        return FileResponse(_STATIC_DIR / "index.html")
+        # no-store: the SPA ships on every deploy, so never let a browser serve a
+        # stale cached shell — that showed empty panels against a live backend.
+        return FileResponse(
+            _STATIC_DIR / "index.html",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
 
     @app.get("/pine-research")
     async def pine_research_page() -> FileResponse:
