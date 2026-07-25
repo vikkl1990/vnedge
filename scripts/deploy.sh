@@ -36,6 +36,8 @@ echo "deploying $(git rev-parse --short HEAD)"
 # Compose services that write mounted research artifacts must use the host
 # deploy user's UID/GID. OCI Ubuntu images can be 1001 rather than 1000, so
 # detect it here instead of baking in a default that may poison the worktree.
+export VNEDGE_BUILD_SHA="${VNEDGE_BUILD_SHA:-$HEAD_SHA}"
+export VNEDGE_HOST="${VNEDGE_HOST:-$(hostname)}"
 export VNEDGE_CONTAINER_UID="${VNEDGE_CONTAINER_UID:-$(id -u)}"
 export VNEDGE_CONTAINER_GID="${VNEDGE_CONTAINER_GID:-$(id -g)}"
 echo "compose artifact writer uid/gid: ${VNEDGE_CONTAINER_UID}:${VNEDGE_CONTAINER_GID}"
