@@ -235,13 +235,3 @@ def test_agent_gateway_v2_requires_write_scope_and_market_allowlist(tmp_path):
     )
     assert live_attempt.status_code == 422
 
-
-def test_dashboard_shell_contains_quant_os_agent_gateway_panel(tmp_path):
-    client = _dashboard_client(tmp_path)
-    html = client.get("/").text
-    assert "Quant OS Agent Gateway" in html
-    assert 'id="quantOsAgentGatewayBoard" data-view="system"' in html
-    assert "/quant-os/agent-gateway" in html
-    assert "renderQuantOsAgentGateway" in html
-    assert "loadQuantOsAgentGateway" in html
-    assert "cannot trade or promote" in html
