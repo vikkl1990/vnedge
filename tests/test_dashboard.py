@@ -52,7 +52,11 @@ def test_dashboard_shell_contains_quant_cockpit_panels(client):
     r = client.get("/")
     assert r.status_code == 200
     html = r.text
-    assert "Commercial Operator Workstation" in html
+    # Overview leads with the plain-language "at a glance" hero (2026-07 UI
+    # cleanup); the dense operator cockpit panels below moved to the Trading tab
+    # but remain in the shell (asserted throughout this test).
+    assert 'id="glanceHeadline"' in html
+    assert "at a glance" in html
     assert "workspace navigation" in html
     assert "Quant Command Deck" in html
     assert "why no trade console" in html
