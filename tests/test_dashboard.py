@@ -48,6 +48,19 @@ def test_state_with_token(client):
     assert client.get("/state?token=t3st-token").status_code == 200
 
 
+def test_scorecard_endpoint_auth_gated_and_shaped(client):
+    """Read-only /scorecard: auth-gated, returns per-strategy edge rows + the
+    promotion-probe queue (empty fallback when the artifact is absent, as here)."""
+    assert client.get("/scorecard").status_code == 401
+    assert client.get("/scorecard?token=wrong").status_code == 401
+    r = client.get("/scorecard?token=t3st-token")
+    assert r.status_code == 200
+    payload = r.json()
+    assert isinstance(payload["strategies"], list)
+    assert isinstance(payload["probes"], list)
+    assert payload["can_trade"] is False and payload["can_promote"] is False
+
+
 def test_dashboard_shell_is_the_perps_desk(client):
     r = client.get("/")
     assert r.status_code == 200

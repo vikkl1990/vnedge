@@ -461,9 +461,9 @@
     <div class="main">
       <div class="col">
         <section class="panel">
-          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">by strategy · live snapshot</span></div>
+          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">fee-wall forensics · net edge after fees</span></div>
           <div>
-            <div class="scrow head"><span></span><span>Strategy</span><span>Shadow P&amp;L</span><span>Lanes</span><span class="hidem">Evals</span><span>Live status</span></div>
+            <div class="scrow head"><span></span><span>Strategy</span><span>Net edge</span><span>Wall</span><span class="hidem">Samples</span><span>Verdict</span></div>
             <div id="scorecard"></div>
           </div>
         </section>
@@ -474,7 +474,7 @@
       </div>
       <div class="col">
         <section class="panel">
-          <div class="phead"><h2>Shadow P&amp;L by Strategy</h2><span class="meta">realized + unrealized · live</span></div>
+          <div class="phead"><h2>Fee-Wall Economics</h2><span class="meta">best net edge (bps) vs fee wall</span></div>
           <div class="feebar" id="feebar"></div>
         </section>
         <section class="panel">
@@ -662,28 +662,31 @@
       '<circle cx="'+lx.toFixed(1)+'" cy="'+ly.toFixed(1)+'" r="4" fill="'+c+'"/>';
   }
 
-  /* ---- live signal tape from real lane fires ---- */
-  var seenSig={}, tapeRows=[];
-  function tapeFromLanes(lanes){
-    var added=false;
-    lanes.forEach(function(l){
-      var ev=l.last_eval; if(!ev||!ev.fired)return;
-      var key=l.lane_id+"|"+(ev.bar_ts||ev.ts||"");
-      if(seenSig[key])return; seenSig[key]=1; added=true;
-      tapeRows.unshift({t:nowUTC(),strat:l.strategy_id,ex:l.exchange,sym:l.symbol,side:String(ev.side||"").toLowerCase(),why:ev.signal_reason||""});
-    });
-    if(tapeRows.length>14)tapeRows=tapeRows.slice(0,14);
-    if(added) renderTape();
+  /* ---- live signal tape from the real-time scanner ---- */
+  function fmtTs(ts){ if(!ts)return nowUTC(); var d=new Date(ts); return isNaN(d)?nowUTC():(pad2(d.getUTCHours())+":"+pad2(d.getUTCMinutes())+":"+pad2(d.getUTCSeconds())); }
+  function routeTag(strat){
+    var v=verdictByStrat[stratShort(strat)];
+    if(v==="MAKER_EDGE"||v==="MIXED_ROUTE_EDGE")return["maker","maker-first"];
+    if(v==="TAKER_EDGE")return["pass","tradeable"];
+    if(v==="NEGATIVE_AFTER_COST")return["wall","fee-walled"];
+    return null;
   }
-  function renderTape(){
+  function renderScannerTape(rows){
     var el=$("tape"); if(!el)return;
-    if(!tapeRows.length){el.innerHTML='<div class="sig"><span class="t">--</span><div class="body"><div class="why">no live fires in this snapshot — lanes evaluating each bar</div></div></div>';return;}
-    el.innerHTML=tapeRows.map(function(r){
-      var v=ven(r.ex),sc=r.side==="short"?"s":"l",sl=r.side==="short"?"SHORT":"LONG";
-      return '<div class="sig"><span class="t">'+r.t+'</span><div class="body"><div class="line1">'+
-        '<span class="vchip" style="background:'+v.col+'">'+v.sh+'</span><b>'+stratShort(r.strat)+'</b>'+
-        (r.side?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.sym)+'</span>'+
-        '</div><div class="why">'+String(r.why).slice(0,72)+'</div></div></div>';
+    rows=(rows||[]).filter(function(r){return r.strategy_id;});
+    rows.sort(function(a,b){var af=a.state==="FIRING"?1:0,bf=b.state==="FIRING"?1:0;return (bf-af)||((b.live_fire_rate||0)-(a.live_fire_rate||0));});
+    var top=rows.slice(0,14);
+    if(!top.length){el.innerHTML='<div class="sig"><span class="t">--</span><div class="body"><div class="why">scanner report loading…</div></div></div>';return;}
+    el.innerHTML=top.map(function(r){
+      var v=ven(r.exchange),fired=r.state==="FIRING",ev=r.latest_eval||r.latest_shadow_intent||{};
+      var side=String(ev.side||"").toLowerCase(),sc=side==="short"?"s":"l",sl=side==="short"?"SHORT":side==="long"?"LONG":"";
+      var rt=routeTag(r.strategy_id);
+      var tag=fired?'<span class="route pass">FIRING</span>':rt?'<span class="route '+rt[0]+'">'+rt[1]+'</span>':'<span class="route" style="background:var(--bg-3);color:var(--txt-faint)">'+String(r.state||"").toLowerCase()+'</span>';
+      return '<div class="sig"><span class="t">'+fmtTs(r.latest_eval_ts||r.latest_bar_ts)+'</span>'+
+        '<div class="body"><div class="line1">'+
+        '<span class="vchip" style="background:'+v.col+'">'+v.sh+'</span><b>'+stratShort(r.strategy_id)+'</b>'+
+        (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
+        '</div><div class="why">'+String(r.why||"").slice(0,72)+'</div></div>'+tag+'</div>';
     }).join('');
   }
 
@@ -761,60 +764,54 @@
     var lh=s.lane_health||{}; text("sysLane",(lh.healthy?"healthy":"degraded")+(lh.summary?" · "+lh.summary:""));
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
-    tapeFromLanes(lanes);
-
-    // research + system, live from the same snapshot
-    renderScorecard(lanes); renderPromo(lanes); renderFeeWall(lanes);
     renderLaneFleet(s); renderDataIntegrity(s,vs); renderDeployProv(s);
   }
 
-  /* ---- research + system renderers (all from /state) ---- */
-  function stratAgg(lanes){
-    var by={};
-    lanes.forEach(function(l){
-      var k=stratShort(l.strategy_id); if(!k)return;
-      if(!by[k])by[k]={strat:k,ven:{},lanes:0,evals:0,pnl:0,fired:0,probe:false,trial:false};
-      var g=by[k],f=l.funnel||{},id=String(l.lane_id||"");
-      g.lanes++; g.ven[l.exchange]=1; g.evals+=num(f.live_evals||f.evals||0); g.pnl+=lpnl(l);
-      if(l.last_eval&&l.last_eval.fired)g.fired++;
-      if(id.indexOf("fee_wall")>=0||id.indexOf("paper_probe")>=0)g.probe=true;
-      if((l.mode||"").indexOf("paper")>=0&&id.indexOf("observation")<0&&id.indexOf("shadow")<0)g.trial=true;
-    });
-    return Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){return b.pnl-a.pnl;});
+  /* ---- research: scorecard / promotion / fee-wall, from /scorecard ---- */
+  var verdictByStrat={};
+  function verdictPill(v){
+    if(v==="MAKER_EDGE")return["active","Maker edge"];
+    if(v==="MIXED_ROUTE_EDGE")return["review","Mixed edge"];
+    if(v==="TAKER_EDGE")return["active","Taker edge"];
+    if(v==="NEGATIVE_AFTER_COST")return["supp","Fee-walled"];
+    if(v==="INSUFFICIENT_SAMPLES")return["prob","Sparse"];
+    return["prob",v?String(v).toLowerCase().replace(/_/g," "):"—"];
   }
-  function statusFor(g){
-    if(g.trial)return["trial","Trial"]; if(g.probe)return["review","Probe"];
-    if(g.evals===0)return["supp","Idle"]; if(g.pnl>0.005)return["active","Positive"];
-    if(g.pnl<-0.005)return["supp","Negative"]; return["prob","Flat"];
-  }
-  function renderScorecard(lanes){
-    var el=$("scorecard"); if(!el)return;
-    el.innerHTML=stratAgg(lanes).map(function(g){
-      var st=statusFor(g),venc=Object.keys(g.ven).length,pc=g.pnl>0?"up":g.pnl<0?"dn":"",dot=g.fired?"fire":g.pnl>0?"pos":"watch";
+  function renderScorecard(sc){
+    var el=$("scorecard"); if(!el)return; var rows=(sc&&sc.strategies)||[];
+    if(!rows.length){el.innerHTML='<div class="note">scorecard loading…</div>';return;}
+    el.innerHTML=rows.map(function(g){
+      var net=num(g.best_net_bps),pc=net>0?"up":net<0?"dn":"",pill=verdictPill(g.verdict),venc=(g.venues||[]).length;
+      var dot=net>0?"pos":"watch";
       return '<div class="scrow"><span class="st '+dot+'"></span>'+
-        '<div class="strat"><b>'+g.strat+'</b><span>'+venc+' venue'+(venc===1?"":"s")+'</span></div>'+
-        '<span class="num '+pc+'">'+(g.pnl>=0?"+":"")+"$"+g.pnl.toFixed(2)+'</span>'+
-        '<span class="num">'+g.lanes+'</span><span class="num hidem">'+g.evals.toLocaleString()+'</span>'+
-        '<span class="pill '+st[0]+'">'+st[1]+'</span></div>';
-    }).join('')||'<div class="note">no lanes in snapshot</div>';
+        '<div class="strat"><b>'+stratShort(g.strategy)+'</b><span>'+venc+' venue'+(venc===1?"":"s")+' · PF '+(g.profit_factor!=null?Number(g.profit_factor).toFixed(2):"--")+'</span></div>'+
+        '<span class="num '+pc+'">'+(net>=0?"+":"")+net.toFixed(1)+' bps</span>'+
+        '<span class="num">'+(g.break_rate_pct!=null?Math.round(g.break_rate_pct)+"%":"--")+'</span>'+
+        '<span class="num hidem">'+num(g.samples).toLocaleString()+'</span>'+
+        '<span class="pill '+pill[0]+'">'+pill[1]+'</span></div>';
+    }).join('');
   }
-  function renderPromo(lanes){
-    var el=$("promoQueue"); if(!el)return; var seen={},items=[];
-    lanes.forEach(function(l){var id=String(l.lane_id||"");var probe=id.indexOf("fee_wall")>=0||id.indexOf("paper_probe")>=0;var trial=(l.mode||"").indexOf("paper")>=0&&id.indexOf("observation")<0&&id.indexOf("shadow")<0;if(!probe&&!trial)return;var k=stratShort(l.strategy_id)+"|"+(probe?"p":"t");if(seen[k])return;seen[k]=1;items.push({strat:stratShort(l.strategy_id),sym:symShort(l.symbol),ex:l.exchange,probe:probe,pnl:lpnl(l)});});
-    if(!items.length){el.innerHTML='<div class="qrow"><div><div class="qt">No candidates in queue</div><div class="qs">nothing is in a governed trial or fee-wall probe right now</div></div></div>';return;}
-    el.innerHTML=items.slice(0,8).map(function(it){var st=it.probe?["review","Probe"]:["trial","Trial"];
-      return '<div class="qrow"><div><div class="qt">'+it.strat+' — '+it.sym+'</div>'+
-        '<div class="qs">'+ven(it.ex).lab+' · '+(it.probe?"fee-wall maker-first probe":"governed paper trial")+' · shadow '+(it.pnl>=0?"+":"")+"$"+it.pnl.toFixed(2)+'</div></div>'+
-        '<span class="pill '+st[0]+'">'+st[1]+'</span></div>';}).join('');
+  function renderPromo(sc){
+    var el=$("promoQueue"); if(!el)return; var pp=(sc&&sc.probes)||[];
+    if(!pp.length){el.innerHTML='<div class="qrow"><div><div class="qt">No candidates in queue</div><div class="qs">no approved fee-wall paper probes right now</div></div></div>';return;}
+    el.innerHTML=pp.slice(0,8).map(function(p){var net=num(p.avg_selected_net_bps);
+      return '<div class="qrow"><div><div class="qt">'+stratShort(p.strategy||p.strategy_id||"candidate")+(p.symbol?" — "+symShort(p.symbol):"")+'</div>'+
+        '<div class="qs">'+ven(p.exchange).lab+' · '+String(p.primary_blocker||"maker-first probe")+' · net '+(net>=0?"+":"")+net.toFixed(1)+' bps</div></div>'+
+        '<span class="pill review">Probe</span></div>';}).join('');
   }
-  function renderFeeWall(lanes){
-    var el=$("feebar"); if(!el)return; var rows=stratAgg(lanes);
-    var mx=Math.max.apply(null,rows.map(function(g){return Math.abs(g.pnl);}).concat([1]));
-    el.innerHTML=rows.map(function(g){var w=Math.min(48,Math.abs(g.pnl)/mx*48),pos=g.pnl>=0;
+  function renderFeeWall(sc){
+    var el=$("feebar"); if(!el)return; var rows=(sc&&sc.strategies)||[];
+    if(!rows.length){el.innerHTML='';return;}
+    var mx=Math.max.apply(null,rows.map(function(g){return Math.abs(num(g.best_net_bps));}).concat([10]));
+    el.innerHTML=rows.map(function(g){var net=num(g.best_net_bps),w=Math.min(48,Math.abs(net)/mx*48),pos=net>=0;
       var bar='<i style="'+(pos?"left:50%":"right:50%")+';width:'+w+'%;background:'+(pos?"var(--long)":"var(--short)")+'"></i>';
-      return '<div class="feerow"><span class="fn">'+g.strat+'</span><div class="feetrack">'+bar+'</div>'+
-        '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+"$"+g.pnl.toFixed(2)+'</span></div>';}).join('')+
-      '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · realized + unrealized shadow P&amp;L</div>';
+      return '<div class="feerow"><span class="fn">'+stratShort(g.strategy)+'</span><div class="feetrack">'+bar+'</div>'+
+        '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+net.toFixed(1)+'</span></div>';}).join('')+
+      '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · best net edge (bps) after fees</div>';
+  }
+  function applyScorecard(sc){
+    verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
+    renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
   }
   function renderLaneFleet(s){
     var lh=s.lane_health||{},tot=lh.totals||{},meta=$("laneFleetMeta"),lanes=Array.isArray(s.lanes)?s.lanes:[];
@@ -855,7 +852,17 @@
     ws.onclose=function(){ setTimeout(connect,backoff); backoff=Math.min(backoff*2,15000); };
     ws.onerror=function(){ try{ws.close();}catch(e){} };
   }
-  renderTape(); connect();
+  connect();
+
+  /* ---- polled read-only endpoints: scorecard + scanner tape ---- */
+  function poll(path,cb){
+    fetch(path+(path.indexOf("?")<0?"?":"&")+"token="+encodeURIComponent(token),{cache:"no-store"})
+      .then(function(r){return r.ok?r.json():null;}).then(function(d){if(d)try{cb(d);}catch(e){}}).catch(function(){});
+  }
+  function pollScorecard(){ poll("/scorecard", applyScorecard); }
+  function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  pollScorecard(); pollScanner();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");

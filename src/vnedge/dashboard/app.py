@@ -518,6 +518,12 @@ def create_app(
         quant_loop_governance_path
         or Path("research/live_research/quant_loop_governance_latest.json")
     )
+    fee_wall_forensics_file = Path(
+        "research/live_research/fee_wall_forensics_latest.json"
+    )
+    fee_wall_probes_file = Path(
+        "research/live_research/fee_wall_paper_probes.json"
+    )
     evidence_index_file = (
         evidence_index_path
         or Path("research/live_research/evidence_index_latest.json")
@@ -848,6 +854,54 @@ def create_app(
                 },
             ),
             headers=_identity(user),
+        )
+
+    @app.get("/scorecard")
+    async def scorecard(request: Request) -> JSONResponse:
+        """Per-strategy scanner scorecard: best net edge (bps), fee-wall verdict,
+        profit factor and break rate from the fee-wall forensics artifact, plus
+        the approved paper-probe promotion queue. Read-only research surface —
+        cannot trade or promote."""
+        _authorized(request)
+        forensics = _read_json_payload(fee_wall_forensics_file, {"reports": []})
+        probes = _read_json_payload(fee_wall_probes_file, {"paper_probes": []})
+        by: dict = {}
+        for r in forensics.get("reports", []):
+            strat = r.get("strategy")
+            summ = r.get("summary") or {}
+            net = summ.get("avg_selected_net_bps")
+            if not strat or net is None:
+                continue
+            g = by.setdefault(
+                strat,
+                {
+                    "strategy": strat, "best_net_bps": None, "verdict": None,
+                    "profit_factor": None, "break_rate_pct": None,
+                    "samples": 0, "venues": set(),
+                },
+            )
+            if r.get("exchange"):
+                g["venues"].add(r["exchange"])
+            g["samples"] += int(summ.get("opportunities") or 0)
+            if g["best_net_bps"] is None or net > g["best_net_bps"]:
+                g["best_net_bps"] = net
+                g["verdict"] = summ.get("verdict")
+                g["profit_factor"] = summ.get("profit_factor")
+                g["break_rate_pct"] = summ.get("fee_wall_break_rate_pct")
+        rows = []
+        for g in by.values():
+            g = dict(g)
+            g["venues"] = sorted(v for v in g["venues"] if v)
+            rows.append(g)
+        rows.sort(key=lambda r: (r["best_net_bps"] is None, -(r["best_net_bps"] or -1e9)))
+        return JSONResponse(
+            {
+                "generated_at": forensics.get("generated_at"),
+                "strategies": rows,
+                "probes": probes.get("paper_probes", []),
+                "can_trade": False,
+                "can_promote": False,
+            }
         )
 
     @app.get("/realtime-scanner")
