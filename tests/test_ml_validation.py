@@ -80,15 +80,18 @@ def test_pbo_zero_for_a_genuinely_dominant_config():
     assert probability_of_backtest_overfitting(m, n_blocks=8) == 0.0
 
 
-def test_pbo_high_when_is_winner_flips_oos():
-    # Two anticorrelated configs: whichever wins in one half loses in the other.
-    # The in-sample winner is systematically the out-of-sample loser => high PBO.
-    t = 400
-    half = t // 2
-    a = np.concatenate([np.full(half, 0.02), np.full(t - half, -0.02)])
-    b = -a
-    m = np.column_stack([a, b]) + 1e-6  # avoid exact-zero std
-    pbo = probability_of_backtest_overfitting(m, n_blocks=8)
+def test_pbo_high_for_a_classic_overfit_generator():
+    # Each config has a real edge in exactly ONE block and only noise elsewhere.
+    # Whichever config wins in-sample spiked inside the IS blocks, so it has no
+    # edge out-of-sample and lands below the OOS median => PBO near 1. This is
+    # the textbook "looks great in the backtest, dead live" pattern.
+    rng = np.random.default_rng(7)
+    n_blocks, block = 8, 100
+    n = n_blocks
+    m = rng.normal(0.0, 0.01, (n_blocks * block, n))
+    for c in range(n):
+        m[c * block : (c + 1) * block, c] += 0.05 + 0.002 * c  # distinct spikes
+    pbo = probability_of_backtest_overfitting(m, n_blocks=n_blocks)
     assert pbo > 0.5
 
 
