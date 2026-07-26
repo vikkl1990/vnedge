@@ -223,6 +223,18 @@
   .note:last-child{border-bottom:none}
   .note b{color:var(--txt)}
   .note .k{color:var(--long);font-weight:700}
+  .funnelgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:14px}
+  .fstep{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 10px;min-width:0;position:relative}
+  .fstep:after{content:"";position:absolute;right:-8px;top:50%;width:8px;height:1px;background:var(--line-2)}
+  .fstep:last-child:after{display:none}
+  .fstep.zero{opacity:.54}
+  .fstep .fl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fstep .fc{font-family:var(--mono);font-size:24px;font-weight:800;margin-top:4px;color:var(--txt)}
+  .fstep .fs{font-size:10.5px;color:var(--txt-dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fstep.hot{border-color:var(--brand-line);box-shadow:inset 0 0 0 1px rgba(246,169,59,.08)}
+  .fstep.hot .fc{color:var(--brand)}
+  .fblocker{padding:0 15px 13px;font-size:11px;color:var(--txt-faint);line-height:1.5}
+  .fblocker b{color:var(--txt-dim)}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -298,6 +310,8 @@
     .cmd-spacer{display:none}
     .scrow{grid-template-columns:12px 1.4fr 70px 78px;gap:8px}
     .scrow .hidem{display:none}
+    .funnelgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .fstep:after{display:none}
     .pmeta{display:none}
     .conn{grid-template-columns:36px 1fr;gap:11px}
     .conn .cacct{display:none}
@@ -504,6 +518,10 @@
     <p class="intro"><b>Research lab.</b> Where edges are found and judged against untouched data. Nothing here trades or promotes on its own — every candidate needs human-gated approval before it can reach the desk.</p>
     <div class="main">
       <div class="col">
+        <section class="panel">
+          <div class="phead"><h2>Canonical Lane Funnel</h2><span class="meta" id="laneFunnelMeta">loading…</span></div>
+          <div id="laneFunnel"></div>
+        </section>
         <section class="panel">
           <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">fee-wall forensics · net edge after fees</span></div>
           <div>
@@ -830,7 +848,8 @@
     text("gLive",live?"ARMED":"LOCKED");
     text("gKill",kill?"TRIPPED":"ARMED");
     text("gJournal",s.last_journal_write||"--");
-    var lh=s.lane_health||{}; text("sysLane",(lh.healthy?"healthy":"degraded")+(lh.summary?" · "+lh.summary:""));
+    var lh=s.lane_health||{},lhTrade=(lh.production_healthy!=null?lh.production_healthy:lh.healthy);
+    text("sysLane",(lhTrade?"trade-ready":"blocked")+(lh.production_summary||lh.summary?" · "+(lh.production_summary||lh.summary):""));
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
     lastSnap=s; renderFleet(); renderDataIntegrity(s,vs); renderDeployProv(s);
@@ -878,6 +897,22 @@
         '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+net.toFixed(1)+'</span></div>';}).join('')+
       '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · best net edge (bps) after fees</div>';
   }
+  function renderLaneFunnel(d){
+    var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
+    var stages=(d&&d.canonical_funnel)||[],sum=(d&&d.summary)||{};
+    if(meta)meta.textContent=(sum.total_rows!=null?sum.total_rows+" lanes":"readiness")+(sum.paper_review_ready!=null?" · "+sum.paper_review_ready+" paper-review":"");
+    if(!stages.length){el.innerHTML='<div class="note">lane readiness report loading…</div>';return;}
+    var nonzero=stages.filter(function(s){return num(s.count)>0;});
+    el.innerHTML='<div class="funnelgrid">'+stages.map(function(s){
+      var states=s.state_counts||{},top=Object.keys(states).sort(function(a,b){return num(states[b])-num(states[a]);})[0]||"empty";
+      var hot=num(s.count)>0&&(s.stage==="SHADOW"||s.stage==="PAPER");
+      return '<div class="fstep '+(num(s.count)?"":"zero")+' '+(hot?"hot":"")+'">'+
+        '<div class="fl">'+String(s.label||s.stage||"stage")+'</div>'+
+        '<div class="fc">'+num(s.count).toLocaleString()+'</div>'+
+        '<div class="fs">'+String(top).toLowerCase().replace(/_/g," ")+'</div></div>';
+    }).join('')+'</div>'+
+    '<div class="fblocker"><b>Top blocker:</b> '+(nonzero.map(function(s){var b=(s.top_blockers||[])[0];return b?String(s.label)+": "+String(b.blocker).slice(0,92):"";}).filter(Boolean)[0]||"none published")+'</div>';
+  }
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
@@ -892,7 +927,7 @@
       el.innerHTML=svcs.map(function(x){return '<div class="svc"><span class="dot" style="background:'+(x.up?"var(--long)":"var(--short)")+'"></span>'+String(x.name).slice(0,22)+'</div>';}).join('');
     }else{
       var cells=[];
-      Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing"||k==="orphan")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
+      Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing"||k==="orphan"||k==="probation"||k==="production_blockers")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
       el.innerHTML=cells.join('')||'<div class="svc"><span class="dot" style="background:var(--long)"></span>fleet reporter pending</div>';
     }
   }
@@ -903,7 +938,9 @@
     rows+='<div class="kvrow"><span class="k">Journal (WAL)</span><span class="num" style="color:'+(s.last_journal_write==="ok"?"var(--long)":"var(--short)")+'">'+(s.last_journal_write||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Risk gateway</span><span class="num" style="color:'+(s.risk_status==="ok"?"var(--long)":"var(--short)")+'">'+(s.risk_status||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Reconciliation</span><span class="num" style="color:'+(s.risk_status==="reconciling"?"var(--warn)":"var(--long)")+'">'+(s.risk_status==="reconciling"?"rebuilding":"matched")+'</span></div>';
-    rows+='<div class="kvrow"><span class="k">Lanes healthy</span><span class="num up">'+(tot.ok!=null?tot.ok+" / "+tot.desired:"--")+'</span></div>';
+    var lhTrade=(lh.production_healthy!=null?lh.production_healthy:lh.healthy);
+    rows+='<div class="kvrow"><span class="k">Lane production ready</span><span class="num" style="color:'+(lhTrade?"var(--long)":"var(--warn)")+'">'+(lh.production_summary||lh.summary||"--")+'</span></div>';
+    rows+='<div class="kvrow"><span class="k">Trade-compatible lanes</span><span class="num '+(lhTrade?"up":"")+'">'+(tot.trade_compatible!=null?tot.trade_compatible+" / "+tot.desired:"--")+'</span></div>';
     el.innerHTML=rows;
   }
   function renderDeployProv(s){
@@ -941,6 +978,7 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
 
@@ -997,8 +1035,8 @@
   }
   function pollJournal(){ poll("/trade-journal?limit=120", renderJournal); }
 
-  pollScorecard(); pollScanner(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");

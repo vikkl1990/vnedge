@@ -27,7 +27,9 @@ Per-lane verdicts:
 
 The auditor is read-only and side-effect free. Exit-code contract for cron:
 ``python -m vnedge.runtime.lane_health`` returns 1 if any lane is MISSING or
-STALE, 0 otherwise.
+STALE, 0 otherwise. That is the process-health contract. Production readiness
+is stricter: every row must be OK/trade-compatible, so probation/silent/orphan
+lanes can never look trade-ready on the dashboard.
 """
 
 from __future__ import annotations
@@ -127,6 +129,13 @@ class LaneHealthReport:
             row.verdict in (VERDICT_MISSING, VERDICT_STALE) for row in self.rows
         )
 
+    @property
+    def production_healthy(self) -> bool:
+        """Trading-readiness contract: no non-OK or non-compatible lanes."""
+        return bool(self.rows) and all(
+            row.verdict == VERDICT_OK and row.trade_compatible for row in self.rows
+        )
+
     def summary(self) -> str:
         """Dashboard badge text: '18/18 OK' or '2 STALE, 1 MISSING'."""
         if any(
@@ -152,12 +161,23 @@ class LaneHealthReport:
             )
         return f"{self.totals.get('ok', 0)}/{self.totals.get('desired', 0)} OK"
 
+    def production_summary(self) -> str:
+        """Stricter operator badge text for paper/live promotion readiness."""
+        if not self.production_healthy:
+            return self.summary()
+        compatible = self.totals.get("trade_compatible", self.totals.get("ok", 0))
+        desired = self.totals.get("desired", compatible)
+        return f"{compatible}/{desired} trade-compatible"
+
     def to_dict(self) -> dict:
         return {
             "generated_at": self.generated_at,
             "journal_dir": self.journal_dir,
             "healthy": self.healthy,
+            "process_healthy": self.healthy,
+            "production_healthy": self.production_healthy,
             "summary": self.summary(),
+            "production_summary": self.production_summary(),
             "totals": dict(self.totals),
             "rows": [row.to_dict() for row in self.rows],
         }
@@ -167,7 +187,10 @@ class LaneHealthReport:
         return {
             "generated_at": self.generated_at,
             "healthy": self.healthy,
+            "process_healthy": self.healthy,
+            "production_healthy": self.production_healthy,
             "summary": self.summary(),
+            "production_summary": self.production_summary(),
             "totals": dict(self.totals),
             "problems": [
                 {
@@ -476,6 +499,12 @@ def audit_lanes(
         "silent": sum(1 for r in rows if r.verdict == VERDICT_SILENT),
         "missing": sum(1 for r in rows if r.verdict == VERDICT_MISSING),
         "orphan": sum(1 for r in rows if r.verdict == VERDICT_ORPHAN),
+        "trade_compatible": sum(
+            1
+            for r in rows
+            if r.trade_compatible and r.verdict != VERDICT_ORPHAN
+        ),
+        "production_blockers": sum(1 for r in rows if r.verdict != VERDICT_OK),
     }
     return LaneHealthReport(
         generated_at=datetime.fromtimestamp(now, tz=UTC).isoformat(),
@@ -527,6 +556,7 @@ def _print_table(report: LaneHealthReport) -> None:
         f"missing={totals['missing']} orphan={totals['orphan']}"
     )
     print(f"lane health: {report.summary()}")
+    print(f"production readiness: {report.production_summary()}")
 
 
 def main(

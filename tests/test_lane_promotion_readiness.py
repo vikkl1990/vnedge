@@ -3,6 +3,11 @@
 import json
 
 from vnedge.research.lane_promotion_readiness import (
+    FUNNEL_PAPER,
+    FUNNEL_REPLAY,
+    FUNNEL_RESEARCH,
+    FUNNEL_SHADOW,
+    FUNNEL_STAGE_ORDER,
     STATUS_PAPER_ACTIVE,
     STATUS_PAPER_REVIEW_READY,
     STATUS_REPLAY_NEEDS_ADAPTER,
@@ -114,6 +119,10 @@ def test_manifest_lane_without_shadow_outcomes_is_not_firing(tmp_path):
     assert payload["summary"]["paper_review_ready"] == 0
     row = payload["rows"][0]
     assert row["status"] == STATUS_SHADOW_NOT_FIRING
+    assert row["canonical_status"] == "SHADOW:WAITING_FOR_OUTCOMES"
+    assert row["funnel"]["stage"] == FUNNEL_SHADOW
+    assert row["funnel"]["next_stage"] == FUNNEL_SHADOW
+    assert "no resolved shadow_outcome" in row["primary_blocker"]
     assert row["paper_review_ready"] is False
     assert "no resolved shadow_outcome" in row["blockers"][0]
     assert payload["can_trade"] is False
@@ -153,7 +162,12 @@ def test_positive_mature_shadow_lane_is_paper_review_ready_not_live_ready(tmp_pa
     assert row["can_promote"] is False
     assert payload["summary"]["paper_review_ready"] == 1
     assert payload["summary"]["live_ready"] == 0
+    assert payload["summary"]["funnel_stage_counts"][FUNNEL_SHADOW] == 1
+    assert payload["summary"]["funnel_state_counts"]["READY_FOR_PAPER_REVIEW"] == 1
     assert "paper trial not completed" in row["live_blockers"]
+    assert row["canonical_status"] == "SHADOW:READY_FOR_PAPER_REVIEW"
+    assert row["funnel"]["stage"] == FUNNEL_SHADOW
+    assert row["funnel"]["next_stage"] == FUNNEL_PAPER
     assert row["triage"]["bucket"] == "PAPER_REVIEW_CANDIDATE"
 
 
@@ -177,6 +191,8 @@ def test_negative_stop_dominated_shadow_lane_gets_refactor_triage(tmp_path):
 
     row = payload["rows"][0]
     assert row["status"] == STATUS_SHADOW_NEGATIVE
+    assert row["canonical_status"] == "SHADOW:NEGATIVE_EDGE_BLOCKED"
+    assert row["funnel"]["stage"] == FUNNEL_SHADOW
     assert row["triage"]["bucket"] == "EARLY_STOP_DOMINATED"
     assert row["triage"]["priority"] == "refactor"
     assert "exit geometry" in row["next_action"]
@@ -232,6 +248,9 @@ def test_active_paper_trial_is_reported_separately_from_shadow_readiness(tmp_pat
     row = payload["rows"][0]
     assert row["row_type"] == "paper_trial_lane"
     assert row["status"] == STATUS_PAPER_ACTIVE
+    assert row["canonical_status"] == "PAPER:PAPER_RUNNING"
+    assert row["funnel"]["stage"] == FUNNEL_PAPER
+    assert row["funnel"]["next_stage"] == "LIVE_SMALL"
     assert row["paper_active"] is True
     assert row["paper_review_ready"] is False
     assert row["live_ready"] is False
@@ -239,6 +258,8 @@ def test_active_paper_trial_is_reported_separately_from_shadow_readiness(tmp_pat
     assert row["evidence"]["paper_exits"] == 1
     assert row["evidence"]["realized_pnl_usd"] == 8.5
     assert payload["summary"]["paper_active"] == 1
+    assert payload["summary"]["funnel_stage_counts"][FUNNEL_PAPER] == 1
+    assert payload["summary"]["funnel_state_counts"]["PAPER_RUNNING"] == 1
     assert payload["summary"]["paper_order_intents"] == 1
     assert payload["summary"]["paper_exits"] == 1
     assert "1 approved paper lane(s) active" in payload["operator_answer"]
@@ -271,10 +292,43 @@ def test_filtered_replay_trial_is_adapter_blocked(tmp_path):
 
     row = payload["rows"][0]
     assert row["status"] == STATUS_REPLAY_NEEDS_ADAPTER
+    assert row["canonical_status"] == "REPLAY:NEEDS_SHADOW_ADAPTER"
+    assert row["funnel"]["stage"] == FUNNEL_REPLAY
+    assert row["funnel"]["next_stage"] == FUNNEL_SHADOW
     assert row["paper_review_ready"] is False
     assert row["evidence"]["filtered_replay"]["verdict"] == "REPLAY_CANDIDATE"
     assert "no runtime shadow adapter" in row["blockers"][0]
     assert payload["summary"]["filtered_replay_shadow_trials"] == 1
+    assert payload["summary"]["funnel_stage_counts"][FUNNEL_REPLAY] == 1
+
+
+def test_canonical_funnel_lists_every_stage_and_blockers(tmp_path):
+    research = tmp_path / "research"
+    journals = tmp_path / "logs"
+    research.mkdir()
+    journals.mkdir()
+    manifest = generate_shadow_manifest([_pair()])
+    manifest["blocked"] = [{
+        "exchange": "delta_india",
+        "symbol": "BTC/USD:USD",
+        "strategy_id": "rejected_lane",
+        "reason": "untouched judgment rejected",
+    }]
+    write_shadow_manifest(manifest, research)
+
+    payload = build_lane_promotion_readiness(research_dir=research, journal_dir=journals)
+
+    stages = payload["canonical_funnel"]
+    assert [stage["stage"] for stage in stages] == list(FUNNEL_STAGE_ORDER)
+    by_stage = {stage["stage"]: stage for stage in stages}
+    assert by_stage[FUNNEL_RESEARCH]["count"] == 1
+    assert by_stage[FUNNEL_SHADOW]["count"] == 1
+    assert by_stage[FUNNEL_RESEARCH]["state_counts"]["BLOCKED"] == 1
+    assert by_stage[FUNNEL_SHADOW]["state_counts"]["WAITING_FOR_OUTCOMES"] == 1
+    assert by_stage[FUNNEL_RESEARCH]["top_blockers"][0]["blocker"] == (
+        "untouched judgment rejected"
+    )
+    assert payload["summary"]["primary_blocker_counts"]["untouched judgment rejected"] == 1
 
 
 def test_publish_readiness_is_atomic_and_appends_feed(tmp_path):

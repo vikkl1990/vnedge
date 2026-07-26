@@ -41,6 +41,31 @@ STATUS_BLOCKED = "BLOCKED"
 STATUS_PAPER_ACTIVE = "PAPER_ACTIVE"
 STATUS_PAPER_WAITING = "PAPER_WAITING_FOR_SIGNAL"
 
+FUNNEL_RESEARCH = "RESEARCH"
+FUNNEL_REPLAY = "REPLAY"
+FUNNEL_UNTOUCHED = "UNTOUCHED_JUDGMENT"
+FUNNEL_SHADOW = "SHADOW"
+FUNNEL_PAPER = "PAPER"
+FUNNEL_LIVE_SMALL = "LIVE_SMALL"
+
+FUNNEL_STAGE_ORDER = (
+    FUNNEL_RESEARCH,
+    FUNNEL_REPLAY,
+    FUNNEL_UNTOUCHED,
+    FUNNEL_SHADOW,
+    FUNNEL_PAPER,
+    FUNNEL_LIVE_SMALL,
+)
+
+_FUNNEL_LABELS = {
+    FUNNEL_RESEARCH: "Research",
+    FUNNEL_REPLAY: "Fee-aware replay",
+    FUNNEL_UNTOUCHED: "Untouched judgment",
+    FUNNEL_SHADOW: "Shadow evidence",
+    FUNNEL_PAPER: "Paper trial",
+    FUNNEL_LIVE_SMALL: "Live-small",
+}
+
 
 @dataclass(frozen=True)
 class ReadinessConfig:
@@ -82,6 +107,7 @@ def build_lane_promotion_readiness(
         if isinstance(blocked, Mapping)
     )
     rows.extend(_paper_trial_rows(Path(journal_dir)))
+    rows = [_attach_canonical_funnel(row) for row in rows]
     rows.sort(key=_row_sort_key)
 
     summary = _summary(rows)
@@ -101,6 +127,7 @@ def build_lane_promotion_readiness(
             "shadow_manifest": str(research_dir / "shadow_lanes.json"),
         },
         "summary": summary,
+        "canonical_funnel": _canonical_funnel(rows),
         "rows": rows,
         "shadow_perf": {
             "available": bool(shadow_perf.get("available")),
@@ -138,12 +165,19 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 30) -> str:
             f"{summary.get('live_ready', 0)} live-ready"
         ),
     ]
+    funnel = payload.get("canonical_funnel") or []
+    if funnel:
+        lines.append("funnel: " + " → ".join(
+            f"{stage.get('stage')}={stage.get('count', 0)}"
+            for stage in funnel
+        ))
     for row in list(payload.get("rows", []))[:limit]:
         evidence = row.get("evidence", {})
+        funnel_state = row.get("funnel", {}).get("state", row.get("status", "UNKNOWN"))
         trades = evidence.get("virtual_trades", evidence.get("paper_order_intents", 0))
         net = evidence.get("net_usd", evidence.get("realized_pnl_usd"))
         lines.append(
-            f"  {row.get('status', 'UNKNOWN'):<38} "
+            f"  {funnel_state:<38} "
             f"{row.get('exchange', '')} {row.get('symbol', '')} "
             f"{row.get('strategy_id') or row.get('family') or row.get('source', '')} "
             f"trades={trades} "
@@ -589,11 +623,119 @@ def _paper_triage(status: str, evidence: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _attach_canonical_funnel(row: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    stage, state = _canonical_stage_state(out)
+    primary_blocker = _primary_blocker(out)
+    next_stage = _next_funnel_stage(stage, state)
+    out["canonical_status"] = f"{stage}:{state}"
+    out["primary_blocker"] = primary_blocker
+    out["funnel"] = {
+        "stage": stage,
+        "stage_label": _FUNNEL_LABELS.get(stage, stage.replace("_", " ").title()),
+        "state": state,
+        "rank": _funnel_rank(stage, state),
+        "primary_blocker": primary_blocker,
+        "next_stage": next_stage,
+        "next_stage_label": _FUNNEL_LABELS.get(next_stage, ""),
+        "promotion_path": list(FUNNEL_STAGE_ORDER),
+        "trade_blocked": not bool(out.get("can_trade")),
+        "promotion_blocked": not bool(out.get("can_promote")),
+    }
+    return out
+
+
+def _canonical_stage_state(row: Mapping[str, Any]) -> tuple[str, str]:
+    status = str(row.get("status") or "")
+    row_type = str(row.get("row_type") or "")
+    if bool(row.get("live_ready")):
+        return FUNNEL_LIVE_SMALL, "READY_FOR_LIVE_SMALL"
+    if row_type == "paper_trial_lane":
+        if status == STATUS_PAPER_ACTIVE:
+            return FUNNEL_PAPER, "PAPER_RUNNING"
+        return FUNNEL_PAPER, "PAPER_WAITING_FOR_SIGNAL"
+    if status == STATUS_PAPER_REVIEW_READY:
+        return FUNNEL_SHADOW, "READY_FOR_PAPER_REVIEW"
+    if row_type == "runtime_shadow_lane":
+        if status == STATUS_SHADOW_NOT_FIRING:
+            return FUNNEL_SHADOW, "WAITING_FOR_OUTCOMES"
+        if status == STATUS_SHADOW_COLLECTING:
+            return FUNNEL_SHADOW, "COLLECTING_EVIDENCE"
+        if status == STATUS_SHADOW_PF_TOO_LOW:
+            return FUNNEL_SHADOW, "QUALITY_BLOCKED"
+        if status == STATUS_SHADOW_NEGATIVE:
+            return FUNNEL_SHADOW, "NEGATIVE_EDGE_BLOCKED"
+        return FUNNEL_SHADOW, status or "UNKNOWN_SHADOW"
+    if row_type == "filtered_replay_shadow_trial":
+        return FUNNEL_REPLAY, "NEEDS_SHADOW_ADAPTER"
+    if row_type == "blocked_manifest_candidate":
+        return FUNNEL_RESEARCH, "BLOCKED"
+    return FUNNEL_RESEARCH, status or "UNKNOWN"
+
+
+def _primary_blocker(row: Mapping[str, Any]) -> str:
+    blockers = row.get("blockers")
+    if isinstance(blockers, list):
+        for blocker in blockers:
+            if blocker:
+                return str(blocker)
+    triage = row.get("triage")
+    if isinstance(triage, Mapping) and triage.get("rationale"):
+        return str(triage["rationale"])
+    if row.get("next_action"):
+        return str(row["next_action"])
+    return "no blocker recorded"
+
+
+def _next_funnel_stage(stage: str, state: str) -> str | None:
+    if stage == FUNNEL_RESEARCH:
+        return FUNNEL_REPLAY
+    if stage == FUNNEL_REPLAY:
+        return FUNNEL_SHADOW if state == "NEEDS_SHADOW_ADAPTER" else FUNNEL_UNTOUCHED
+    if stage == FUNNEL_UNTOUCHED:
+        return FUNNEL_SHADOW
+    if stage == FUNNEL_SHADOW:
+        return FUNNEL_PAPER if state == "READY_FOR_PAPER_REVIEW" else FUNNEL_SHADOW
+    if stage == FUNNEL_PAPER:
+        return FUNNEL_LIVE_SMALL
+    return None
+
+
+def _funnel_rank(stage: str, state: str) -> int:
+    stage_base = {
+        FUNNEL_PAPER: 0,
+        FUNNEL_SHADOW: 10,
+        FUNNEL_REPLAY: 20,
+        FUNNEL_UNTOUCHED: 30,
+        FUNNEL_RESEARCH: 40,
+        FUNNEL_LIVE_SMALL: 50,
+    }.get(stage, 90)
+    state_rank = {
+        "PAPER_RUNNING": 0,
+        "PAPER_WAITING_FOR_SIGNAL": 1,
+        "READY_FOR_PAPER_REVIEW": 2,
+        "COLLECTING_EVIDENCE": 3,
+        "QUALITY_BLOCKED": 4,
+        "NEGATIVE_EDGE_BLOCKED": 5,
+        "WAITING_FOR_OUTCOMES": 6,
+        "NEEDS_SHADOW_ADAPTER": 7,
+        "BLOCKED": 8,
+    }.get(state, 9)
+    return stage_base + state_rank
+
+
 def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     statuses: dict[str, int] = {}
+    funnel_stages: dict[str, int] = {}
+    funnel_states: dict[str, int] = {}
     for row in rows:
         status = str(row.get("status") or "UNKNOWN")
         statuses[status] = statuses.get(status, 0) + 1
+        funnel = row.get("funnel") or {}
+        stage = str(funnel.get("stage") or "UNKNOWN")
+        state = str(funnel.get("state") or "UNKNOWN")
+        funnel_stages[stage] = funnel_stages.get(stage, 0) + 1
+        funnel_states[state] = funnel_states.get(state, 0) + 1
     return {
         "total_rows": len(rows),
         "runtime_shadow_lanes": sum(
@@ -629,6 +771,13 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "paper_review_ready": sum(1 for row in rows if row.get("paper_review_ready")),
         "live_ready": sum(1 for row in rows if row.get("live_ready")),
         "status_counts": statuses,
+        "funnel_stage_counts": {
+            stage: funnel_stages.get(stage, 0) for stage in FUNNEL_STAGE_ORDER
+        },
+        "funnel_state_counts": dict(
+            sorted(funnel_states.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
+        "primary_blocker_counts": _primary_blocker_counts(rows),
     }
 
 
@@ -663,8 +812,79 @@ def _triage_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def _primary_blocker_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        blocker = str(row.get("primary_blocker") or "")
+        if not blocker or blocker == "no blocker recorded":
+            continue
+        counts[blocker] = counts.get(blocker, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:12])
+
+
+def _canonical_funnel(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for stage in FUNNEL_STAGE_ORDER:
+        stage_rows = [
+            row
+            for row in rows
+            if isinstance(row.get("funnel"), Mapping)
+            and row["funnel"].get("stage") == stage
+        ]
+        if not stage_rows:
+            out.append({
+                "stage": stage,
+                "label": _FUNNEL_LABELS.get(stage, stage),
+                "count": 0,
+                "state_counts": {},
+                "top_blockers": [],
+                "next_action": "no rows currently parked here",
+            })
+            continue
+        state_counts: dict[str, int] = {}
+        blocker_counts: dict[str, int] = {}
+        for row in stage_rows:
+            state = str(row.get("funnel", {}).get("state") or "UNKNOWN")
+            state_counts[state] = state_counts.get(state, 0) + 1
+            blocker = str(row.get("primary_blocker") or "")
+            if blocker and blocker != "no blocker recorded":
+                blocker_counts[blocker] = blocker_counts.get(blocker, 0) + 1
+        top_blockers = [
+            {"blocker": blocker, "count": count}
+            for blocker, count in sorted(
+                blocker_counts.items(), key=lambda kv: (-kv[1], kv[0])
+            )[:3]
+        ]
+        out.append({
+            "stage": stage,
+            "label": _FUNNEL_LABELS.get(stage, stage),
+            "count": len(stage_rows),
+            "state_counts": dict(sorted(state_counts.items())),
+            "top_blockers": top_blockers,
+            "next_action": _stage_next_action(stage, stage_rows),
+        })
+    return out
+
+
+def _stage_next_action(stage: str, rows: list[dict[str, Any]]) -> str:
+    if stage == FUNNEL_PAPER:
+        return "observe approved paper trials; judge only against locked manifests"
+    if stage == FUNNEL_SHADOW:
+        ready = sum(1 for row in rows if row.get("paper_review_ready"))
+        if ready:
+            return f"review {ready} paper candidate(s) for human-approved trial"
+        return "collect/refactor shadow outcomes before paper promotion"
+    if stage == FUNNEL_REPLAY:
+        return "build runtime shadow adapters for replay-positive ideas"
+    if stage == FUNNEL_UNTOUCHED:
+        return "run only pre-registered untouched-window judgments"
+    if stage == FUNNEL_RESEARCH:
+        return "resolve blockers or archive rejected candidates"
+    return "keep live locked until paper verdict and live gates clear"
+
+
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str, str]:
-    rank = {
+    rank = int(row.get("funnel", {}).get("rank") or {
         STATUS_PAPER_ACTIVE: 0,
         STATUS_PAPER_WAITING: 1,
         STATUS_PAPER_REVIEW_READY: 2,
@@ -674,7 +894,7 @@ def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str, str]:
         STATUS_SHADOW_NOT_FIRING: 6,
         STATUS_REPLAY_NEEDS_ADAPTER: 7,
         STATUS_BLOCKED: 8,
-    }.get(str(row.get("status") or ""), 9)
+    }.get(str(row.get("status") or ""), 9))
     return (
         rank,
         str(row.get("exchange") or ""),
