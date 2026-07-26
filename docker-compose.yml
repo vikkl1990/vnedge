@@ -51,11 +51,25 @@ services:
       # MULTI_LANE_DELTA_PAPER_OBSERVE=0.
       MULTI_LANE_PAPER_OBSERVE_ALL: "${MULTI_LANE_PAPER_OBSERVE_ALL:-0}"
       MULTI_LANE_DELTA_PAPER_OBSERVE: "${MULTI_LANE_DELTA_PAPER_OBSERVE:-1}"
-      # Curated 5m Delta India SATS-style scalper observation lanes. Shadow by
-      # default; isolated simulated paper twins appear only when the existing
-      # MULTI_LANE_PAPER_OBSERVE_ALL flag is enabled.
-      MULTI_LANE_SATS_5M_DELTA: "${MULTI_LANE_SATS_5M_DELTA:-1}"
+      # --- Evidence-aligned roster (second_eye_grid backtest) ---------------
+      # The independent position-aware grid backtest showed the edge lives at
+      # 4h/1h, not 5m: the 5m Delta scanner lanes below were zero-trade or
+      # net-negative at honest taker fees. So they default OFF here and are
+      # replaced by evidence_aligned_shadow_lanes() (the 4h/1h survivors,
+      # led by vnedge_algo_ml_pro ETH 4h). All reversible: set any flag to 1
+      # to restore a lane group. SHADOW-only; promotion still needs untouched
+      # judgment. See docs/EVIDENCE_ALIGNED_ROSTER.md.
+      MULTI_LANE_EVIDENCE_ALIGNED: "${MULTI_LANE_EVIDENCE_ALIGNED:-1}"
+      # Curated 5m Delta India SATS-style scalper observation lanes. Disabled by
+      # default (grid: SOL 5m PF 0.64, XRP 5m PF 0.41). Re-enable with =1.
+      MULTI_LANE_SATS_5M_DELTA: "${MULTI_LANE_SATS_5M_DELTA:-0}"
       MULTI_LANE_SATS_5M_SYMBOLS: "${MULTI_LANE_SATS_5M_SYMBOLS:-ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT,XRP/USDT:USDT}"
+      # 5m Delta scanner lanes superseded by the evidence-aligned 4h/1h set
+      # (grid: zero-trade or net-negative at 5m). Re-enable any with =1.
+      MULTI_LANE_STEALTH_TRAIL_BBP_DELTA: "${MULTI_LANE_STEALTH_TRAIL_BBP_DELTA:-0}"
+      MULTI_LANE_FVG_LIQUIDITY_DELTA: "${MULTI_LANE_FVG_LIQUIDITY_DELTA:-0}"
+      MULTI_LANE_LUXARA_LIVE_PLAN_DELTA: "${MULTI_LANE_LUXARA_LIVE_PLAN_DELTA:-0}"
+      MULTI_LANE_LUXARA_BREAK_BOUNCE_DELTA: "${MULTI_LANE_LUXARA_BREAK_BOUNCE_DELTA:-0}"
       # Human-approved live-data PAPER probes from fee_wall_forensics strict
       # candidates. These are simulated fills only, isolated ledgers, and NOT
       # live-capital promotion. The artifact must be fresh and still clear the
