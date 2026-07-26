@@ -60,6 +60,7 @@ from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
 from vnedge.strategy.stealth_trail_bbp import StealthTrailBBPScanner
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
+from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 
@@ -414,6 +415,8 @@ def _build_single_strategy(
         return TrendRetest(seed_funding, **params)
     if strategy_id == "alpha_distillation_pack_v1":
         return AlphaDistillationPack(seed_funding, **params)
+    if strategy_id == "vnedge_algo_ml_pro_v1":
+        return VNEDGEAlgoMLProScanner(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 

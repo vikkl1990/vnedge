@@ -316,6 +316,10 @@ def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors(
     specs = desired_lane_specs({
         "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
         "MULTI_LANE_DELTA_PAPER_OBSERVE": "0",
+        # Isolate the observation-mirror behavior under test from the deliberate
+        # native Delta PAPER trial lane (its own MULTI_LANE_EVIDENCE_PAPER_TRIAL
+        # flag), which is not a mirror.
+        "MULTI_LANE_EVIDENCE_PAPER_TRIAL": "0",
     })
     ids = {spec.lane_id for spec in specs}
 

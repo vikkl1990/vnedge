@@ -799,6 +799,106 @@ def build_lane_specs_from_env(
     return specs
 
 
+#: Grid-proven Delta-India survivors from the independent second-eye backtest
+#: (research/second_eye_grid.py). Each (strategy, symbol, timeframe) cell
+#: cleared >=20 trades AND taker profit_factor >= 1.5 in the position-aware
+#: backtester on Delta-India data -- unlike the 5m fee-wall scanner lanes,
+#: which were zero-trade or net-negative there.
+EVIDENCE_ALIGNED_DELTA_LANES: tuple[tuple[str, str, str], ...] = (
+    ("vnedge_algo_ml_pro_v1", "ETH/USDT:USDT", "4h"),   # grid PF 3.64, n=22
+    ("vnedge_algo_ml_pro_v1", "DOGE/USDT:USDT", "1h"),  # grid PF 1.54, n=128
+    ("stealth_trail_bbp_v1", "ETH/USDT:USDT", "4h"),    # grid PF 1.79, n=49
+    ("luxy_ut_bot_forecast_v1", "XRP/USDT:USDT", "1h"), # grid PF 1.66, n=44
+    ("quant_signal_pack_v1", "BNB/USDT:USDT", "4h"),    # grid PF 1.65, n=39
+)
+
+
+def evidence_aligned_shadow_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Evidence-aligned Delta-India shadow lanes (the 4h/1h survivors).
+
+    Replaces the 5m fee-wall scanner lanes with the timeframe/pair cells that
+    actually survived the independent second-eye grid backtest at honest taker
+    fees and >=20 trades. SHADOW only; default strategy params so each lane
+    matches exactly what the backtest measured. Nothing here implies promotion:
+    a positive shadow result still requires the usual pre-registered
+    untouched-window judgment before any paper or live permission.
+    """
+    if not _truthy(environ, "MULTI_LANE_EVIDENCE_ALIGNED", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    specs: list[LaneSpec] = []
+    for strategy_id, raw_symbol, timeframe in EVIDENCE_ALIGNED_DELTA_LANES:
+        symbol = _delta_india_symbol(raw_symbol)
+        specs.append(
+            LaneSpec(
+                lane_id=(
+                    f"evidence_{strategy_id}_{DELTA_EXCHANGE}_"
+                    f"{_slug_symbol(symbol)}_{timeframe}_shadow"
+                ),
+                exchange=DELTA_EXCHANGE,
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_id=strategy_id,
+                strategy_params={},
+                mode=RunnerMode.SHADOW,
+            )
+        )
+    return specs
+
+
+#: Crown-jewel candidate(s) promoted from the shadow watchlist to a live-forward
+#: PAPER trial. Simulated fills on live Delta data through the full risk gateway
+#: (real fees/funding/slippage, paper capital) -- the "real-money-equivalent but
+#: paper money" forward test that stands in for a historical walk-forward.
+#: Forward data is genuinely unseen, so it cannot be overfit. Pre-registered
+#: pass/fail criteria: research/paper_trials/vnedge_algo_ml_pro_eth_4h_20260726.yaml
+EVIDENCE_PAPER_TRIAL_LANES: tuple[tuple[str, str, str], ...] = (
+    ("vnedge_algo_ml_pro_v1", "ETH/USDT:USDT", "4h"),   # crown jewel, grid PF 3.64
+    ("vnedge_algo_ml_pro_v1", "DOGE/USDT:USDT", "1h"),  # faster-sampling companion, PF 1.54 n=128
+)
+
+
+def evidence_paper_trial_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Live-forward PAPER trial of the top evidence-aligned candidate(s).
+
+    PAPER mode: simulated fills through the full gateway on live Delta data
+    (real fees/funding/slippage, paper capital) -- a forward test on genuinely
+    unseen data, a stronger out-of-sample check than a historical walk-forward
+    (the grid data was already seen). NOT a promotion: criteria are locked in
+    research/paper_trials/vnedge_algo_ml_pro_eth_4h_20260726.yaml and a PASS
+    still needs explicit human sign-off before any live permission. Requires
+    ``paper`` in MULTI_LANE_MODES (the default). Toggle with
+    MULTI_LANE_EVIDENCE_PAPER_TRIAL.
+    """
+    if not _truthy(environ, "MULTI_LANE_EVIDENCE_PAPER_TRIAL", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    specs: list[LaneSpec] = []
+    for strategy_id, raw_symbol, timeframe in EVIDENCE_PAPER_TRIAL_LANES:
+        symbol = _delta_india_symbol(raw_symbol)
+        specs.append(
+            LaneSpec(
+                lane_id=(
+                    f"papertrial_{strategy_id}_{DELTA_EXCHANGE}_"
+                    f"{_slug_symbol(symbol)}_{timeframe}"
+                ),
+                exchange=DELTA_EXCHANGE,
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_id=strategy_id,
+                strategy_params={},
+                mode=RunnerMode.PAPER,
+            )
+        )
+    return specs
+
+
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """The full deduped spec list the runner is SUPPOSED to run.
 
@@ -815,6 +915,8 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         build_lane_specs_from_env(environ)
         + candidate_shadow_lanes(environ)
         + delta_funding_mr_lanes(environ)
+        + evidence_aligned_shadow_lanes(environ)
+        + evidence_paper_trial_lanes(environ)
         + sats_5m_delta_lanes(environ)
         + stealth_trail_bbp_delta_lanes(environ)
         + fvg_liquidity_breakout_delta_lanes(environ)
