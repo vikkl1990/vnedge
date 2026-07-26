@@ -235,6 +235,23 @@
   .fstep.hot .fc{color:var(--brand)}
   .fblocker{padding:0 15px 13px;font-size:11px;color:var(--txt-faint);line-height:1.5}
   .fblocker b{color:var(--txt-dim)}
+  .causegrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 14px 0}
+  .causek{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .causek .ck{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .causek .cv{font-family:var(--mono);font-size:20px;font-weight:800;margin-top:3px}
+  .causerow{display:grid;grid-template-columns:110px 1.25fr 92px 86px 1.5fr;gap:10px;align-items:center;padding:10px 15px;border-top:1px solid var(--line);font-size:12px}
+  .causerow.head{margin-top:12px;padding-top:9px}
+  .causerow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .flowbits{display:flex;gap:4px;flex-wrap:wrap}
+  .flowbit{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:800;padding:2px 5px;border-radius:5px;background:var(--bg-3);color:var(--txt-faint)}
+  .flowbit.pass{background:var(--long-soft);color:var(--long)}
+  .flowbit.wait,.flowbit.review{background:rgba(255,201,77,.12);color:var(--warn)}
+  .flowbit.block,.flowbit.unknown{background:var(--short-soft);color:var(--short)}
+  .flowbit.not_reached{background:var(--bg-3);color:var(--txt-faint)}
+  .boardrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:11px 15px;border-top:1px solid var(--line);font-size:12px}
+  .boardrow:first-child{border-top:none}
+  .boardrow .bt{font-weight:700}
+  .boardrow .bs{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -310,6 +327,9 @@
     .cmd-spacer{display:none}
     .scrow{grid-template-columns:12px 1.4fr 70px 78px;gap:8px}
     .scrow .hidem{display:none}
+    .causegrid{grid-template-columns:repeat(2,1fr)}
+    .causerow{grid-template-columns:1fr;gap:5px}
+    .causerow.head{display:none}
     .funnelgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
     .fstep:after{display:none}
     .pmeta{display:none}
@@ -523,6 +543,10 @@
           <div id="laneFunnel"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Signal Causality Board</h2><span class="meta" id="causalityMeta">loading…</span></div>
+          <div id="causalityBoard"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">fee-wall forensics · net edge after fees</span></div>
           <div>
             <div class="scrow head"><span></span><span>Strategy</span><span>Net edge</span><span>Wall</span><span class="hidem">Samples</span><span>Verdict</span></div>
@@ -535,6 +559,10 @@
         </section>
       </div>
       <div class="col">
+        <section class="panel">
+          <div class="phead"><h2>Paper Promotion Board</h2><span class="meta" id="paperBoardMeta">read-only</span></div>
+          <div id="paperPromotionBoard"></div>
+        </section>
         <section class="panel">
           <div class="phead"><h2>Fee-Wall Economics</h2><span class="meta">best net edge (bps) vs fee wall</span></div>
           <div class="feebar" id="feebar"></div>
@@ -724,6 +752,7 @@
   function ageMs(ms){ms=num(ms);return ms<1000?Math.round(ms)+" ms":ms<60000?(ms/1000).toFixed(1)+" s":Math.round(ms/60000)+" m";}
   function symShort(s){return String(s||"").split(":")[0];}
   function stratShort(s){return String(s||"").replace(/_v\d+$/,"");}
+  function safe(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 
   var VEN={binanceusdm:{lab:"BINANCE",sh:"B",col:"var(--binance)"},bybit:{lab:"BYBIT",sh:"By",col:"var(--bybit)"},delta_india:{lab:"DELTA",sh:"Δ",col:"var(--delta)"}};
   function ven(x){return VEN[x]||{lab:String(x||"?").toUpperCase().slice(0,7),sh:"•",col:"var(--txt-faint)"};}
@@ -913,6 +942,51 @@
     }).join('')+'</div>'+
     '<div class="fblocker"><b>Top blocker:</b> '+(nonzero.map(function(s){var b=(s.top_blockers||[])[0];return b?String(s.label)+": "+String(b.blocker).slice(0,92):"";}).filter(Boolean)[0]||"none published")+'</div>';
   }
+  function flowCls(v){return String(v||"").toLowerCase();}
+  function renderCausality(d){
+    var el=$("causalityBoard"),meta=$("causalityMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=(s.total_rows!=null?s.total_rows+" lanes":"causality")+" · "+num(s.firing_now)+" firing · "+num(s.near_trigger)+" near";
+    if(!rows.length){el.innerHTML='<div class="note">lane causality report loading…</div>';return;}
+    var tiles=[
+      ["Firing",num(s.firing_now),"var(--long)"],
+      ["Near trigger",num(s.near_trigger),"var(--warn)"],
+      ["Paper review",num(s.paper_review_ready),"var(--info)"],
+      ["No scanner",num(s.no_live_scanner),"var(--short)"]
+    ].map(function(x){return '<div class="causek"><div class="ck">'+x[0]+'</div><div class="cv" style="color:'+x[2]+'">'+x[1]+'</div></div>';}).join('');
+    var head='<div class="causerow head"><span>Lane</span><span>Flow</span><span>State</span><span>Paper</span><span>Why no trade</span></div>';
+    var body=rows.slice(0,12).map(function(r){
+      var flow=r.flow||{},bits=["data","setup","trigger","risk","execution","promotion"].map(function(k){
+        var st=(flow[k]&&flow[k].state)||"UNKNOWN";
+        return '<span class="flowbit '+flowCls(st)+'">'+k.slice(0,4)+':'+st.slice(0,1)+'</span>';
+      }).join('');
+      var dec=(r.paper_decision&&r.paper_decision.state)||"--";
+      var pill=dec==="READY_FOR_PAPER_REVIEW"?"review":dec==="PAPER_RUNNING"?"trial":dec.indexOf("BLOCK")>=0?"supp":"prob";
+      return '<div class="causerow"><div class="strat"><b>'+safe(stratShort(r.strategy_id))+'</b><span>'+safe(ven(r.exchange).lab+" · "+symShort(r.symbol)+" · "+(r.timeframe||"--"))+'</span></div>'+
+        '<div class="flowbits">'+bits+'</div>'+
+        '<span class="pill '+(r.scanner_state==="FIRING"?"active":r.scanner_state==="NEAR_TRIGGER"?"review":r.scanner_state==="STALE"?"supp":"prob")+'">'+safe(String(r.scanner_state||"--").toLowerCase().replace(/_/g," "))+'</span>'+
+        '<span class="pill '+pill+'">'+safe(dec.toLowerCase().replace(/_/g," "))+'</span>'+
+        '<div class="strat"><span>'+safe(String(r.why_no_trade_minute||"").slice(0,96))+'</span></div></div>';
+    }).join('');
+    var top=s.blocker_categories||{},first=Object.keys(top)[0];
+    el.innerHTML='<div class="causegrid">'+tiles+'</div>'+head+body+
+      '<div class="fblocker"><b>Top blocker category:</b> '+safe(first?first+" · "+top[first]:"none published")+'</div>';
+  }
+  function renderPaperBoard(d){
+    var el=$("paperPromotionBoard"),meta=$("paperBoardMeta"); if(!el)return;
+    var board=(d&&d.promotion_board)||{},s=(d&&d.summary)||{};
+    if(meta)meta.textContent=num(s.paper_review_ready)+" review · "+num(s.paper_running)+" running · "+num(s.paper_waiting)+" waiting";
+    var rows=[].concat(board.ready_for_review||[],board.paper_running||[],board.paper_waiting||[],board.fix_first||[]).slice(0,9);
+    if(!rows.length){el.innerHTML='<div class="boardrow"><div><div class="bt">No paper candidates yet</div><div class="bs">watch causality blockers first</div></div><span class="pill supp">idle</span></div>';return;}
+    el.innerHTML=rows.map(function(r){
+      var dcn=(r.paper_decision&&r.paper_decision.state)||"--",act=(r.paper_decision&&r.paper_decision.action)||((r.blocker&&r.blocker.action)||"observe");
+      var cls=dcn==="READY_FOR_PAPER_REVIEW"?"review":dcn==="PAPER_RUNNING"?"trial":dcn==="PAPER_WAITING_FOR_SIGNAL"?"prob":"supp";
+      return '<div class="boardrow"><div><div class="bt">'+safe(stratShort(r.strategy_id))+' · '+safe(symShort(r.symbol))+'</div>'+
+        '<div class="bs">'+safe(ven(r.exchange).lab+" · "+(r.timeframe||"--")+" · "+act)+'</div></div>'+
+        '<span class="pill '+cls+'">'+safe(dcn.toLowerCase().replace(/_/g," "))+'</span></div>';
+    }).join('');
+  }
+  function applyCausality(d){renderCausality(d);renderPaperBoard(d);}
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
@@ -979,6 +1053,7 @@
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
+  function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
 
@@ -1035,8 +1110,8 @@
   }
   function pollJournal(){ poll("/trade-journal?limit=120", renderJournal); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");

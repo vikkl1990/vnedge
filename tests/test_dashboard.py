@@ -733,6 +733,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     vibe = tmp_path / "vibe_intelligence_latest.json"
     readiness = tmp_path / "lane_promotion_readiness_latest.json"
     scanner = tmp_path / "realtime_scanner_latest.json"
+    causality = tmp_path / "lane_firing_causality_latest.json"
     council.write_text(json.dumps({
         "summary": {"debated": 2},
         "debates": [{"next_action": "RUN_CONSERVATIVE_L2_REPLAY"}],
@@ -764,6 +765,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    causality.write_text(json.dumps({
+        "report_id": "lane_firing_causality_v1",
+        "summary": {"near_trigger": 1, "paper_review_ready": 1},
+        "promotion_board": {"ready_for_review": [{"strategy_id": "alpha"}]},
+        "rows": [{"scanner_state": "NEAR_TRIGGER"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -774,6 +783,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         vibe_intelligence_path=vibe,
         lane_readiness_path=readiness,
         realtime_scanner_path=scanner,
+        lane_firing_causality_path=causality,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -781,6 +791,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/vibe-intelligence").status_code == 401
     assert client.get("/lane-readiness").status_code == 401
     assert client.get("/realtime-scanner").status_code == 401
+    assert client.get("/lane-firing-causality").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
@@ -794,6 +805,10 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert scanner_payload["summary"]["near_trigger"] == 1
     assert scanner_payload["mode"] == "live_observation_not_replay"
     assert scanner_payload["can_trade"] is False
+    causality_payload = client.get("/lane-firing-causality?token=t3st-token").json()
+    assert causality_payload["summary"]["paper_review_ready"] == 1
+    assert causality_payload["promotion_board"]["ready_for_review"][0]["strategy_id"] == "alpha"
+    assert causality_payload["can_promote"] is False
 
 
 def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):
@@ -859,6 +874,7 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         vibe_intelligence_path=tmp_path / "missing_vibe.json",
         lane_readiness_path=tmp_path / "missing_readiness.json",
         realtime_scanner_path=tmp_path / "missing_scanner.json",
+        lane_firing_causality_path=tmp_path / "missing_causality.json",
     ))
 
     council = client.get("/alpha-council?token=t3st-token").json()
@@ -866,6 +882,7 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     vibe = client.get("/vibe-intelligence?token=t3st-token").json()
     readiness = client.get("/lane-readiness?token=t3st-token").json()
     scanner = client.get("/realtime-scanner?token=t3st-token").json()
+    causality = client.get("/lane-firing-causality?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
     assert vibe == {"summary": {}, "cards": [], "can_trade": False, "can_promote": False}
@@ -881,6 +898,14 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         "rows": [],
         "operator_answer": "real-time scanner report unavailable",
         "mode": "live_observation_not_replay",
+        "can_trade": False,
+        "can_promote": False,
+    }
+    assert causality == {
+        "summary": {},
+        "promotion_board": {},
+        "rows": [],
+        "operator_answer": "lane firing causality report unavailable",
         "can_trade": False,
         "can_promote": False,
     }
@@ -1409,6 +1434,7 @@ def test_identity_header_on_all_data_routes():
         "/alpha-workbench",
         "/lane-readiness",
         "/realtime-scanner",
+        "/lane-firing-causality",
     ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path

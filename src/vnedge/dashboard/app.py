@@ -405,6 +405,7 @@ def create_app(
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
+    lane_firing_causality_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
@@ -523,6 +524,10 @@ def create_app(
     scanner_backtest_uplift_file = (
         scanner_backtest_uplift_path
         or Path("research/live_research/scanner_backtest_uplift_latest.json")
+    )
+    lane_firing_causality_file = (
+        lane_firing_causality_path
+        or Path("research/live_research/lane_firing_causality_latest.json")
     )
     alpha_arena_lite_file = (
         alpha_arena_lite_path
@@ -963,6 +968,26 @@ def create_app(
                     "rows": [],
                     "operator_answer": "real-time scanner report unavailable",
                     "mode": "live_observation_not_replay",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/lane-firing-causality")
+    async def lane_firing_causality(request: Request) -> JSONResponse:
+        """Joined lane truth: live scanner cause, risk/execution route, and
+        paper promotion state. Read-only and non-promoting."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                lane_firing_causality_file,
+                {
+                    "summary": {},
+                    "promotion_board": {},
+                    "rows": [],
+                    "operator_answer": "lane firing causality report unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },

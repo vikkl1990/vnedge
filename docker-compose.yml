@@ -364,6 +364,21 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Joined operator truth layer: why each lane did or did not fire, whether it
+  # reached risk/execution, and where it sits in the paper/live promotion ladder.
+  # Read-only: can_trade=false/can_promote=false.
+  lane-firing-causality:
+    build: .
+    restart: unless-stopped
+    depends_on: [lane-promotion-readiness, realtime-scanner]
+    command: ["python", "-m", "vnedge.research.lane_firing_causality",
+              "--interval-seconds", "${LANE_FIRING_CAUSALITY_INTERVAL_SECONDS:-60}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Real-time shadow scalp: drives the cascade + lead-lag echo detectors on the
   # LIVE tick stream (Binance USDM trades + liquidations, Delta native L2), firing
   # shadow intents the instant a setup forms and resolving them into virtual PnL.
