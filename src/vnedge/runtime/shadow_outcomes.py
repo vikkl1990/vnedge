@@ -54,6 +54,8 @@ class _PendingIntent:
     decision_bar_ts: pd.Timestamp  # bar whose close produced the intent
     signal_reason: str = ""
     bars_held: int = -1  # -1 = virtual fill not reached yet; fill bar = 0
+    take_profit_levels: tuple[float, ...] = ()  # TP ladder (tp1, tp2, …) for the journal
+    mfe_price: float = 0.0  # max-favourable price since entry — observation only
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,17 @@ class VirtualOutcome:
     exit_price: float
     fees_usd: float
     resolved_bar_ts: str
+    take_profit_levels: tuple[float, ...] = ()
+    tp_reached: int = 0  # how many ladder levels the trade's excursion crossed
+
+
+def _tp_reached(side: str, mfe_price: float, levels: tuple[float, ...]) -> int:
+    """How many TP-ladder levels the max-favourable excursion crossed."""
+    if not levels:
+        return 0
+    if side == "long":
+        return sum(1 for level in levels if mfe_price >= level)
+    return sum(1 for level in levels if mfe_price <= level)
 
 
 class ShadowOutcomeTracker:
@@ -137,16 +150,20 @@ class ShadowOutcomeTracker:
         if stop is None or bar_ts is None or quantity <= 0 or notional <= 0:
             return None
         tp = payload.get("take_profit_price")
+        levels = payload.get("take_profit_levels") or ()
+        entry_price = notional / quantity
         return _PendingIntent(
             intent_key=key,
             side=str(intent.get("side", "long")),
             quantity=quantity,
             notional_usd=notional,
-            entry_price=notional / quantity,
+            entry_price=entry_price,
             stop_price=float(stop),
             take_profit_price=float(tp) if tp is not None else None,
             decision_bar_ts=pd.Timestamp(bar_ts),
             signal_reason=str(payload.get("signal_reason") or ""),
+            take_profit_levels=tuple(float(x) for x in levels),
+            mfe_price=entry_price,
         )
 
     # --- live registration -------------------------------------------------------
@@ -161,22 +178,26 @@ class ShadowOutcomeTracker:
         take_profit_price: float | None,
         decision_bar_ts: pd.Timestamp,
         signal_reason: str = "",
+        take_profit_levels: tuple[float, ...] = (),
     ) -> None:
         """Register a just-approved shadow intent for forward resolution."""
         if intent_key in self._pending or intent_key in self._resolved_keys:
             return  # restart re-prime can re-journal the same decision
         if quantity <= 0 or notional_usd <= 0:
             return
+        entry_price = notional_usd / quantity
         self._pending[intent_key] = _PendingIntent(
             intent_key=intent_key,
             side=side,
             quantity=quantity,
             notional_usd=notional_usd,
-            entry_price=notional_usd / quantity,
+            entry_price=entry_price,
             stop_price=stop_price,
             take_profit_price=take_profit_price,
             decision_bar_ts=pd.Timestamp(decision_bar_ts),
             signal_reason=signal_reason,
+            take_profit_levels=tuple(take_profit_levels),
+            mfe_price=entry_price,  # starts at entry; updated each active bar
         )
 
     @property
@@ -197,6 +218,13 @@ class ShadowOutcomeTracker:
             if bar_ts <= pending.decision_bar_ts:
                 continue
             pending.bars_held += 1  # fill bar counts as 0, like run_backtest
+            # Track max-favourable excursion for the TP-ladder journal. This is
+            # pure observation — it never feeds _check_exit, so the exit and P&L
+            # are byte-identical to before.
+            if pending.side == "long":
+                pending.mfe_price = max(pending.mfe_price, high)
+            else:
+                pending.mfe_price = min(pending.mfe_price, low)
             resolution, exit_price = self._check_exit(pending, high, low, close)
             if resolution is None:
                 continue
@@ -247,6 +275,7 @@ class ShadowOutcomeTracker:
             pending.quantity * exit_price
         )
         net = gross - fees
+        tp_reached = _tp_reached(pending.side, pending.mfe_price, pending.take_profit_levels)
         outcome = VirtualOutcome(
             intent_key=pending.intent_key,
             resolution=resolution,
@@ -257,6 +286,8 @@ class ShadowOutcomeTracker:
             exit_price=round(exit_price, 8),
             fees_usd=round(fees, 6),
             resolved_bar_ts=bar_ts.isoformat(),
+            take_profit_levels=pending.take_profit_levels,
+            tp_reached=tp_reached,
         )
         del self._pending[pending.intent_key]
         self._resolved_keys.add(pending.intent_key)
@@ -272,6 +303,9 @@ class ShadowOutcomeTracker:
             "fees_usd": outcome.fees_usd,
             "bar_ts": outcome.resolved_bar_ts,
             "signal_reason": pending.signal_reason,
+            "take_profit_levels": list(pending.take_profit_levels),
+            "tp_reached": tp_reached,
+            "mfe_price": round(pending.mfe_price, 8),
         })
         logger.info(
             "shadow outcome: %s %s -> %s after %d bars, virtual %+0.2f USD",
