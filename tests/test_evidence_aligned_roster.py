@@ -52,17 +52,22 @@ def test_lane_factory_builds_vnedge_algo_ml_pro():
     assert isinstance(strategy, VNEDGEAlgoMLProScanner)
 
 
-def test_paper_trial_lanes_run_the_candidate_in_paper_mode():
+def test_paper_trial_lanes_run_the_candidates_in_paper_mode():
     lanes = evidence_paper_trial_lanes({})
 
     assert len(lanes) == len(EVIDENCE_PAPER_TRIAL_LANES)
     # Real-money-equivalent forward test => PAPER (simulated fills), not SHADOW.
     assert all(lane.mode is RunnerMode.PAPER for lane in lanes)
     assert all(lane.exchange == "delta_india" for lane in lanes)
-    assert all(lane.strategy_id == "vnedge_algo_ml_pro_v1" for lane in lanes)
-    # The crown jewel (ETH 4h) is the trial's primary lane.
-    present = {(lane.symbol, lane.timeframe) for lane in lanes}
-    assert ("ETH/USD:USD", "4h") in present
+    assert all(lane.strategy_params == {} for lane in lanes)  # default = the grid config
+    # Diversified portfolio: the crown jewel plus the other cross-venue survivors.
+    present = {(lane.strategy_id, lane.symbol, lane.timeframe) for lane in lanes}
+    assert ("vnedge_algo_ml_pro_v1", "ETH/USD:USD", "4h") in present
+    assert ("stealth_trail_bbp_v1", "ETH/USD:USD", "4h") in present
+    assert ("luxy_ut_bot_forecast_v1", "XRP/USD:USD", "1h") in present
+    assert ("quant_signal_pack_v1", "BNB/USD:USD", "4h") in present
+    # More than one distinct strategy under trial (not single-threaded).
+    assert len({lane.strategy_id for lane in lanes}) >= 3
 
 
 def test_paper_trial_lanes_toggle_off():
@@ -89,3 +94,22 @@ def test_pre_registered_trial_manifest_exists_and_is_paper_only():
     assert data["live_orders_enabled"] is False
     assert data["approved_by"] == "human"
     assert data["strategy_params"] == {}  # default config, matches the grid
+
+
+def test_diversification_manifest_covers_the_added_paper_trials():
+    import yaml
+
+    manifest = Path("research/paper_trials/evidence_survivors_20260726.yaml")
+    assert manifest.exists()
+    data = yaml.safe_load(manifest.read_text())
+    assert data["live_orders_enabled"] is False
+    assert data["approved_by"] == "human"
+    strategies = {c["strategy"] for c in data["candidates"]}
+    # Every diversified paper-trial lane that isn't the vnedge crown jewel must
+    # have a pre-registered, locked criteria entry here.
+    extra = {
+        s for (s, _sym, _tf) in EVIDENCE_PAPER_TRIAL_LANES
+        if s != "vnedge_algo_ml_pro_v1"
+    }
+    assert extra <= strategies, extra - strategies
+    assert all(c.get("strategy_params") == {} for c in data["candidates"])

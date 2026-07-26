@@ -50,14 +50,28 @@ the full risk gateway (real fees / funding / slippage, paper capital). This is
 than a backtest — forward data is genuinely unseen, so it cannot be overfit and
 there is zero lookahead.
 
-- **Primary:** `vnedge_algo_ml_pro` ETH/USD 4h. **Companion:** DOGE/USD 1h
-  (fires ~2.5×/week, so the trial accumulates trades faster).
-- Requires `paper` in `MULTI_LANE_MODES` (the default). Toggle with
+Run in parallel so several candidates mature at once (a portfolio read, not a
+one-shot on a single strategy):
+
+| strategy | symbol | tf | grid PF | n |
+|---|---|---|---|---|
+| vnedge_algo_ml_pro_v1 | ETH/USD | 4h | 3.64 | 22 |
+| vnedge_algo_ml_pro_v1 | DOGE/USD | 1h | 1.54 | 128 |
+| stealth_trail_bbp_v1 | ETH/USD | 4h | 1.79 | 49 |
+| luxy_ut_bot_forecast_v1 | XRP/USD | 1h | 1.66 | 44 |
+| quant_signal_pack_v1 | BNB/USD | 4h | 1.65 | 39 |
+
+- Requires `paper` in `MULTI_LANE_MODES` (the default). Toggle the whole set with
   `MULTI_LANE_EVIDENCE_PAPER_TRIAL`.
-- **Pre-registered pass/fail criteria** are locked in
-  `research/paper_trials/vnedge_algo_ml_pro_eth_4h_20260726.yaml` (net positive
-  after cost, PF ≥ 1.3, ≥ 15 trades over ≥ 30 days, DD ≤ 8%). A PASS makes it
-  *eligible* for live — never an auto-promotion.
+- **Pre-registered pass/fail criteria** are locked, per candidate:
+  `vnedge_algo_ml_pro_eth_4h_20260726.yaml` (the crown jewel) and
+  `evidence_survivors_20260726.yaml` (the diversification round). Bar: net
+  positive after cost, PF ≥ 1.3, ≥ 15 trades over ≥ 30 days, DD ≤ 8%. A PASS
+  makes a candidate *eligible* for live — never an auto-promotion.
+- `stealth_trail_bbp` carries a caveat: its backtest drawdown ran high, so the
+  trial specifically tests whether live DD stays inside the 8% bar; it is also a
+  known duplicate of `human_trade_fingerprint_v1` (registry cleanup tracked
+  separately).
 - **Sample-rate reality:** 4h fires ~2×/week, so a meaningful trial takes
   **weeks, not days**. This is a slow, honest forward test.
 
