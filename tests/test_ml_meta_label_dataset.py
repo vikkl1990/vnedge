@@ -57,6 +57,23 @@ def test_parse_journal_trades_reads_intent_key_entry_time():
     assert t.entry_ts == pd.Timestamp(ts).tz_convert("UTC")
 
 
+def test_parse_reads_nested_payload_records():
+    # Real decision-journal rows nest their fields under "payload".
+    ts = pd.Timestamp("2024-06-01T04:00:00Z")
+    records = [{
+        "ts": ts.isoformat(), "kind": "shadow_outcome", "lane": "papertrial_x",
+        "payload": {
+            "intent_key": f"stealth_trail_bbp_v1|ETH/USD:USD|long|{_ms(ts)}",
+            "virtual_net_usd": 2.5, "symbol": "ETH/USD:USD", "side": "long",
+        },
+    }]
+    trades = parse_journal_trades(records)
+    assert len(trades) == 1
+    assert trades[0].symbol == "ETH/USD:USD"
+    assert trades[0].side == "long" and trades[0].net_usd == 2.5
+    assert trades[0].entry_ts == ts
+
+
 def test_build_dataset_labels_and_features_align():
     candles = _candles()
     entries = candles["timestamp"].iloc[[300, 350, 400]]
