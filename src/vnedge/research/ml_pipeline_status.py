@@ -40,24 +40,30 @@ _ROLE_ORDER = ("meta_labeling", "regime_permission", "standalone_direction")
 
 
 def _load_candles(data_root: Path) -> dict:
-    """Load every normalized Delta-India candle frame, keyed by ccxt symbol."""
+    """Load normalized candle frames keyed by the ccxt symbol the journals use.
+
+    Covers every venue so binance/bybit (USDT-margined) and Delta (USD) trades
+    all resolve. One timeframe per symbol is enough for entry-bar feature lookup;
+    when a symbol exists on multiple venues the first frame wins (the candles
+    track closely and the journal symbol carries no venue).
+    """
     try:
         import pandas as pd
     except ImportError:  # pragma: no cover
         return {}
-    out: dict = {}
-    for path in data_root.glob("exchange=delta_india/symbol=*/timeframe=*/candles.parquet"):
+    paths: dict = {}
+    for path in data_root.glob("exchange=*/symbol=*/timeframe=*/candles.parquet"):
         parts = {p.split("=", 1)[0]: p.split("=", 1)[1] for p in path.parts if "=" in p}
         raw = parts.get("symbol", "")
-        # DELTA files are e.g. ETHUSD -> the journals use ETH/USD:USD
-        if raw.endswith("USD"):
-            base = raw[:-3]
-            symbol = f"{base}/USD:USD"
-            # one timeframe per symbol is enough for entry-bar feature lookup;
-            # prefer the smallest tf present so entry timestamps resolve.
-            out.setdefault(symbol, path)
+        if raw.endswith("USDT"):
+            symbol = f"{raw[:-4]}/USDT:USDT"   # ETHUSDT -> ETH/USDT:USDT
+        elif raw.endswith("USD"):
+            symbol = f"{raw[:-3]}/USD:USD"      # ETHUSD  -> ETH/USD:USD
+        else:
+            continue
+        paths.setdefault(symbol, path)
     frames = {}
-    for symbol, path in out.items():
+    for symbol, path in paths.items():
         try:
             frames[symbol] = pd.read_parquet(path)
         except Exception:  # noqa: BLE001
