@@ -392,6 +392,7 @@ def _activation_state(
     status = str(readiness_row.get("status") if readiness_row else "")
     journal_orders = int((journal or {}).get("paper_order_intents") or 0)
     journal_evals = int((journal or {}).get("evals") or 0)
+    journal_heartbeats = int((journal or {}).get("paper_lane_heartbeats") or 0)
     scanner_state = str(scanner_row.get("state") if scanner_row else "")
     scanner_why = str(scanner_row.get("why") if scanner_row else "")
 
@@ -402,8 +403,8 @@ def _activation_state(
             [],
             "monitor paper PnL, exits, drawdown, and journal health",
         )
-    if status == STATUS_PAPER_WAITING or journal_evals > 0:
-        why = scanner_why or "waiting for next strategy signal"
+    if status == STATUS_PAPER_WAITING or journal_evals > 0 or journal_heartbeats > 0:
+        why = scanner_why or str((journal or {}).get("latest_why") or "waiting for next strategy signal")
         return (
             ACTIVATION_PAPER_ONLINE_WAITING,
             ROUTE_RUNNING,
@@ -772,6 +773,7 @@ def _paper_journal_evidence(path: Path) -> dict[str, Any] | None:
     first_ts: str | None = None
     last_ts: str | None = None
     last_why: str | None = None
+    latest_heartbeat: dict[str, Any] | None = None
 
     for record in _iter_jsonl(path, max_bytes=3_000_000):
         ts = str(record.get("ts") or "")
@@ -785,7 +787,25 @@ def _paper_journal_evidence(path: Path) -> dict[str, Any] | None:
             exchange = str(payload.get("exchange") or exchange)
             symbol = str(payload.get("symbol") or symbol)
             timeframe = str(payload.get("timeframe") or timeframe)
-            last_why = str(payload.get("why") or payload.get("signal_reason") or last_why or "")
+            last_why = str(
+                payload.get("why")
+                or payload.get("skip_reason")
+                or payload.get("signal_reason")
+                or last_why
+                or ""
+            )
+        elif kind == "paper_lane_heartbeat":
+            strategy_id = str(payload.get("strategy_id") or strategy_id)
+            exchange = str(payload.get("exchange") or exchange)
+            symbol = str(payload.get("symbol") or symbol)
+            timeframe = str(payload.get("timeframe") or timeframe)
+            last_why = str(
+                payload.get("why_no_trade")
+                or payload.get("reason")
+                or last_why
+                or ""
+            )
+            latest_heartbeat = dict(payload)
         elif kind == "order_intent":
             intent = payload.get("intent") if isinstance(payload, Mapping) else {}
             if isinstance(intent, Mapping):
@@ -803,6 +823,7 @@ def _paper_journal_evidence(path: Path) -> dict[str, Any] | None:
         "journal": str(path),
         "trial_id": path.name.removesuffix(".journal.jsonl"),
         "evals": int(counters.get("lane_eval") or 0),
+        "paper_lane_heartbeats": int(counters.get("paper_lane_heartbeat") or 0),
         "risk_decisions": int(counters.get("risk_decision") or 0),
         "paper_order_intents": int(counters.get("order_intent") or 0),
         "paper_order_acknowledged": int(counters.get("order_acknowledged") or 0),
@@ -815,6 +836,7 @@ def _paper_journal_evidence(path: Path) -> dict[str, Any] | None:
         "symbol": symbol,
         "timeframe": timeframe,
         "strategy_id": strategy_id,
+        "latest_heartbeat": latest_heartbeat,
     }
 
 
@@ -871,6 +893,18 @@ def _summary(
         "paper_waiting": waiting,
         "route_ready_no_journal": no_journal,
         "paper_online": running + waiting,
+        "paper_journal_heartbeats": sum(
+            int(r.get("evidence", {}).get("paper_journal", {}).get("paper_lane_heartbeats") or 0)
+            for r in rows
+        ),
+        "paper_journal_evals": sum(
+            int(r.get("evidence", {}).get("paper_journal", {}).get("evals") or 0)
+            for r in rows
+        ),
+        "paper_journal_order_intents": sum(
+            int(r.get("evidence", {}).get("paper_journal", {}).get("paper_order_intents") or 0)
+            for r in rows
+        ),
         "needs_human_approval": activation_counts[ACTIVATION_NEEDS_HUMAN_APPROVAL],
         "route_blocked": activation_counts[ACTIVATION_ROUTE_BLOCKED],
         "manifest_unsafe": activation_counts[ACTIVATION_MANIFEST_UNSAFE],
@@ -905,6 +939,7 @@ def _boards(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
             "activation_state": row.get("activation_state"),
             "route_status": row.get("route_status"),
             "next_action": row.get("next_action"),
+            "latest_heartbeat": row.get("evidence", {}).get("paper_journal", {}).get("latest_heartbeat"),
             "requested_100_margin_25x_allowed": row.get("requested_experiment", {}).get("can_run_requested"),
         }
 

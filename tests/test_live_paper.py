@@ -182,6 +182,29 @@ async def test_paper_mode_is_not_primed_on_startup(tmp_path):
     assert exchange.get_positions() == []
 
 
+async def test_paper_runner_heartbeats_even_without_signals_or_new_bars(tmp_path):
+    feed = FakeFeed([])
+    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
+
+    await session.run(max_bars=0)
+
+    assert session.orders_submitted == 0
+    assert exchange.get_positions() == []
+    heartbeats = [
+        r["payload"]
+        for r in session.journal.read_all()
+        if r["kind"] == "paper_lane_heartbeat"
+    ]
+    assert len(heartbeats) == 1
+    assert heartbeats[0]["reason"] == "runner_started"
+    assert heartbeats[0]["mode"] == "paper"
+    assert heartbeats[0]["strategy_id"] == "always_long"
+    assert heartbeats[0]["symbol"] == SYM
+    assert heartbeats[0]["evals"] == 0
+    assert heartbeats[0]["orders_submitted"] == 0
+    assert heartbeats[0]["why_no_trade"] == "runner_started"
+
+
 async def test_paper_observation_prime_journals_without_restart_order(tmp_path):
     feed = FakeFeed([])
     session, exchange = build_session(

@@ -3,6 +3,7 @@ import json
 from vnedge.research.paper_lane_activation import (
     ACTIVATION_MANIFEST_UNSAFE,
     ACTIVATION_NEEDS_HUMAN_APPROVAL,
+    ACTIVATION_PAPER_ONLINE_WAITING,
     ACTIVATION_PAPER_RUNNING,
     ACTIVATION_ROUTE_BLOCKED,
     PaperLaneActivationConfig,
@@ -89,6 +90,75 @@ max_leverage: 5
     assert row["sizing_profiles"]["live"]["can_apply_from_dashboard"] is False
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
+
+
+def test_paper_activation_marks_heartbeat_only_lane_online_waiting(tmp_path):
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "stealth.yaml").write_text(
+        """
+trial_id: stealth_trial
+strategy: stealth_trail_bbp_v1
+exchange: delta_india
+symbol: "ETH/USD:USD"
+timeframe: 5m
+approved_by: human
+live_orders_enabled: false
+max_leverage: 25
+""",
+        encoding="utf-8",
+    )
+    journal_dir = tmp_path / "journals"
+    journal_dir.mkdir()
+    (journal_dir / "stealth_trial.journal.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-07-26T00:00:00+00:00",
+                "kind": "paper_lane_heartbeat",
+                "payload": {
+                    "strategy_id": "stealth_trail_bbp_v1",
+                    "exchange": "delta_india",
+                    "symbol": "ETH/USD:USD",
+                    "timeframe": "5m",
+                    "mode": "paper",
+                    "reason": "waiting_for_closed_candle",
+                    "why_no_trade": "last_eval_no_signal",
+                    "bars_processed": 0,
+                    "evals": 0,
+                    "orders_submitted": 0,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = build_paper_lane_activation(
+        manifest_dir=manifest_dir,
+        journal_dir=journal_dir,
+        readiness={"rows": []},
+        scanner={"rows": []},
+        desired_specs=[
+            {
+                "lane_id": "stealth_trial",
+                "exchange": "delta_india",
+                "symbol": "ETH/USD:USD",
+                "timeframe": "5m",
+                "strategy_id": "stealth_trail_bbp_v1",
+                "mode": "paper",
+            }
+        ],
+        config=PaperLaneActivationConfig(high_leverage_ack=True),
+    )
+
+    row = payload["rows"][0]
+    assert row["activation_state"] == ACTIVATION_PAPER_ONLINE_WAITING
+    assert row["route_checks"]["journal_seen"] is True
+    assert row["evidence"]["paper_journal"]["paper_lane_heartbeats"] == 1
+    assert row["evidence"]["paper_journal"]["evals"] == 0
+    assert row["blockers"] == ["last_eval_no_signal"]
+    assert payload["summary"]["paper_online"] == 1
+    assert payload["summary"]["paper_journal_heartbeats"] == 1
 
 
 def test_paper_activation_surfaces_paper_review_ready_without_manifest(tmp_path):
