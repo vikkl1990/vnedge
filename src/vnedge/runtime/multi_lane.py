@@ -47,6 +47,7 @@ from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
+from vnedge.strategy.context_scalper_v2 import ContextScalperV2
 from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
@@ -60,6 +61,7 @@ from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
 from vnedge.strategy.stealth_trail_bbp import StealthTrailBBPScanner
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
+from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 
@@ -400,6 +402,10 @@ def _build_single_strategy(
         return Sats5mScalper(seed_funding, **params)
     if strategy_id == "stealth_trail_bbp_v1":
         return StealthTrailBBPScanner(seed_funding, **params)
+    if strategy_id == "vnedge_algo_ml_pro_v1":
+        return VNEDGEAlgoMLProScanner(seed_funding, **params)
+    if strategy_id == "context_scalper_v2":
+        return ContextScalperV2(seed_funding, **params)
     if strategy_id == "fvg_liquidity_breakout_v1":
         return FvgLiquidityBreakoutScanner(seed_funding, **params)
     if strategy_id == "luxy_ut_bot_forecast_v1":
