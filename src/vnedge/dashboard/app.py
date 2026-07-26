@@ -405,6 +405,7 @@ def create_app(
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
+    paper_lane_activation_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
@@ -545,6 +546,10 @@ def create_app(
     execution_replay_profile_file = (
         execution_replay_profile_path
         or Path("research/live_research/execution_replay_profile_latest.json")
+    )
+    paper_lane_activation_file = (
+        paper_lane_activation_path
+        or Path("research/live_research/paper_lane_activation_latest.json")
     )
 
     @app.get("/")
@@ -868,6 +873,30 @@ def create_app(
                     "summary": {},
                     "rows": [],
                     "operator_answer": "lane readiness report unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-lane-activation")
+    async def paper_lane_activation(request: Request) -> JSONResponse:
+        """Latest paper activation truth board.
+
+        This reconciles paper manifests, runtime paper routes, scanner pressure,
+        and paper journals. It is read-only and cannot start or promote a lane.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_lane_activation_file,
+                {
+                    "summary": {},
+                    "boards": {},
+                    "rows": [],
+                    "operator_answer": "paper lane activation report unavailable",
+                    "mode": "read_only_activation_truth",
                     "can_trade": False,
                     "can_promote": False,
                 },
