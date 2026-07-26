@@ -89,11 +89,11 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert r.status_code == 200
     html = r.text
     # Redesigned dashboard (2026-07): an autonomous perps *desk*, not a lab.
-    # Four views — Desk / Research / System / About — reading the read-only
-    # /state stream. The VN-monogram mark + the desk cockpit are the shell.
+    # Views — Desk / Journal / Promote / Research / System / About — reading the
+    # read-only /state stream. The VN-monogram mark + the desk cockpit are the shell.
     assert "Autonomous Perps Desk" in html
     assert 'id="vnmark"' in html                       # the logo mark
-    for view in ("desk", "research", "system", "about"):
+    for view in ("desk", "journal", "promote", "research", "system", "about"):
         assert f'data-view="{view}"' in html
     # desk cockpit containers, wired to the snapshot in JS
     assert 'id="lanes"' in html                        # active-lanes blotter
