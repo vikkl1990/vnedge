@@ -40,6 +40,27 @@ lanes. Over the full exchange × symbol × timeframe grid it found:
   `MULTI_LANE_LUXARA_BREAK_BOUNCE_DELTA`. Set any to `1` to restore that group.
   Toggle the whole survivor set with `MULTI_LANE_EVIDENCE_ALIGNED` (default `1`).
 
+## Live-forward paper trial (the promotion test)
+
+Instead of a historical walk-forward, the top candidate is validated by a
+**live-forward PAPER trial** — `evidence_paper_trial_lanes()` runs
+`vnedge_algo_ml_pro` on live Delta data in PAPER mode: simulated fills through
+the full risk gateway (real fees / funding / slippage, paper capital). This is
+"real-money-equivalent, paper money", and it's a *stronger* out-of-sample test
+than a backtest — forward data is genuinely unseen, so it cannot be overfit and
+there is zero lookahead.
+
+- **Primary:** `vnedge_algo_ml_pro` ETH/USD 4h. **Companion:** DOGE/USD 1h
+  (fires ~2.5×/week, so the trial accumulates trades faster).
+- Requires `paper` in `MULTI_LANE_MODES` (the default). Toggle with
+  `MULTI_LANE_EVIDENCE_PAPER_TRIAL`.
+- **Pre-registered pass/fail criteria** are locked in
+  `research/paper_trials/vnedge_algo_ml_pro_eth_4h_20260726.yaml` (net positive
+  after cost, PF ≥ 1.3, ≥ 15 trades over ≥ 30 days, DD ≤ 8%). A PASS makes it
+  *eligible* for live — never an auto-promotion.
+- **Sample-rate reality:** 4h fires ~2×/week, so a meaningful trial takes
+  **weeks, not days**. This is a slow, honest forward test.
+
 ## What did NOT change
 
 - **Still SHADOW-only.** No paper promotion, no live orders. Every gate and the
