@@ -105,8 +105,13 @@ def build_feature_matrix(
     # Momentum acceleration (backward shift) and volatility expansion.
     df["ret_accel"] = df["ret_6"] - df["ret_6"].shift(6)
     df["vol_ratio"] = df["vol_24"] / df["vol_24"].rolling(params.vol_ratio_window).mean()
-    # Funding extremity (complements the percentile).
-    df["funding_z"] = zscore(df["funding_rate"], params.z_window)
+    # Funding extremity (complements the percentile). A constant/absent funding
+    # series has zero dispersion => 0 (no extremity); warmup stays NaN (not
+    # computable), matching every other feature. Without this guard a funding-
+    # free venue would NaN every row and purge the whole matrix.
+    _froll = df["funding_rate"].rolling(params.z_window)
+    _fstd = _froll.std()
+    df["funding_z"] = ((df["funding_rate"] - _froll.mean()) / _fstd).mask(_fstd == 0.0, 0.0)
     # Session: cyclical hour-of-day (depends only on the bar's own timestamp).
     hour = pd.to_datetime(df["timestamp"], utc=True).dt.hour.to_numpy()
     df["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
