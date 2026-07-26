@@ -283,6 +283,15 @@
   .plan .pv{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .plan.ok{border-color:rgba(42,217,132,.45)} .plan.ok .pt{color:var(--long)}
   .plan.bad{border-color:rgba(255,91,106,.45)} .plan.bad .pt{color:var(--short)}
+  .perfgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px 14px 0}
+  .perfk{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .perfk .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .perfk .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
+  .perfrows{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px}
+  .perfrow{display:grid;grid-template-columns:1.1fr .7fr .55fr .55fr 1.15fr;gap:9px;align-items:center;
+    background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .perfrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .perfrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -601,6 +610,10 @@
         <section class="panel">
           <div class="phead"><h2>Paper Promotion Board</h2><span class="meta" id="paperBoardMeta">read-only</span></div>
           <div id="paperPromotionBoard"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Paper Performance Ledger</h2><span class="meta" id="paperPerfMeta">loading…</span></div>
+          <div id="paperPerformance"></div>
         </section>
         <section class="panel">
           <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
@@ -1170,6 +1183,39 @@
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper activation pending")+'</div>';
     bindSizeControls(cfg);
   }
+  function perfCls(st){
+    st=String(st||"");
+    if(st==="PAPER_PROMOTION_CANDIDATE"||st==="PAPER_ACTIVE_PROFITABLE")return"ok";
+    if(st==="PAPER_ONLINE_NO_TRADES"||st==="PAPER_ACTIVE_FLAT")return"wait";
+    if(st==="PAPER_ACTIVE_NEGATIVE"||st==="LEDGER_CORRUPT")return"bad";
+    return"fix";
+  }
+  function renderPaperPerformance(d){
+    var el=$("paperPerformance"),meta=$("paperPerfMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+usd(s.net_pnl_usd)+" net · $"+num(s.fees_usd).toFixed(2)+" fees";
+    if(!rows.length){el.innerHTML='<div class="note">paper performance report loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Candidates</div><div class="v" style="color:var(--long)">'+num(s.promotion_candidates)+'</div></div>'+
+      '<div class="perfk"><div class="l">Profitable</div><div class="v" style="color:var(--long)">'+num(s.profitable_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Negative</div><div class="v" style="color:var(--short)">'+num(s.negative_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">No closed trades</div><div class="v" style="color:var(--warn)">'+num(s.online_no_trades)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var pf=r.profit_factor==null?"--":num(r.profit_factor).toFixed(2);
+      var wr=r.win_rate==null?"--":(num(r.win_rate)*100).toFixed(0)+"%";
+      var net=num(r.net_pnl_usd),cls=perfCls(r.state);
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(String(r.state||"unknown").replace(/^PAPER_/,"").toLowerCase().replace(/_/g," "))+'</span><small>'+esc(String(r.latest_why_no_trade||r.next_action||"").slice(0,54))+'</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>fees $'+num(r.fees_usd).toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+pf+'</b><small>PF · WR '+wr+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+num(r.live_signals)+' signals · '+num(r.paper_order_intents)+' intents · '+num(r.fills)+' fills</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
+  }
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
@@ -1238,6 +1284,7 @@
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
+  function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
 
@@ -1333,8 +1380,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperPerformance(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperPerformance,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");

@@ -407,6 +407,7 @@ def create_app(
     realtime_scanner_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
+    paper_lane_performance_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
@@ -556,6 +557,10 @@ def create_app(
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
+    )
+    paper_lane_performance_file = (
+        paper_lane_performance_path
+        or Path("research/live_research/paper_lane_performance_latest.json")
     )
     ml_pipeline_status_file = (
         ml_pipeline_status_path
@@ -931,6 +936,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper lane activation report unavailable",
                     "mode": "read_only_activation_truth",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-lane-performance")
+    async def paper_lane_performance(request: Request) -> JSONResponse:
+        """Latest paper performance ledger.
+
+        This summarizes paper journals and hash-chained fill ledgers into
+        per-lane PnL/PF/sample status. It is read-only and cannot promote.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_lane_performance_file,
+                {
+                    "summary": {},
+                    "boards": {},
+                    "rows": [],
+                    "operator_answer": "paper performance report unavailable",
+                    "mode": "read_only_paper_performance",
                     "can_trade": False,
                     "can_promote": False,
                 },
