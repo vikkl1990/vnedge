@@ -257,7 +257,7 @@
   .actk .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
   .actk .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:3px;color:var(--txt)}
   .actrows{padding:12px 14px 14px;display:flex;flex-direction:column;gap:8px}
-  .actrow{display:grid;grid-template-columns:1.25fr .58fr .64fr 1.3fr;gap:10px;align-items:center;
+  .actrow{display:grid;grid-template-columns:1.05fr .55fr 1.25fr 1.25fr;gap:10px;align-items:center;
     background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px;font-size:11.5px}
   .actrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .actrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -267,6 +267,22 @@
   .actstate.fix{background:rgba(255,201,77,.13);color:var(--warn)}
   .actstate.bad{background:var(--short-soft);color:var(--short)}
   .actnote{font-size:10.5px;color:var(--txt-dim);line-height:1.35}
+  .sizectl{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;padding:12px 14px 0;align-items:end}
+  .sizeprof{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .sizeprof b{display:block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+  .sizefields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sizefield span{display:block;font-size:9px;color:var(--txt-faint);text-transform:uppercase;letter-spacing:.09em;margin-bottom:4px}
+  .sizefield input{width:100%;box-sizing:border-box;background:#07111b;border:1px solid var(--line-2);color:var(--txt);
+    border-radius:6px;padding:7px 8px;font:800 12px var(--mono)}
+  .sizeack{display:flex;align-items:center;gap:8px;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px;
+    color:var(--txt-dim);font-size:10.5px;line-height:1.25}
+  .sizeack input{accent-color:var(--warn)}
+  .plans{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .plan{border:1px solid var(--line);border-radius:6px;padding:6px 7px;background:#07111b}
+  .plan .pt{display:flex;justify-content:space-between;gap:6px;font-size:9px;letter-spacing:.08em;text-transform:uppercase;font-weight:900}
+  .plan .pv{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plan.ok{border-color:rgba(42,217,132,.45)} .plan.ok .pt{color:var(--long)}
+  .plan.bad{border-color:rgba(255,91,106,.45)} .plan.bad .pt{color:var(--short)}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -1015,31 +1031,91 @@
     return"fix";
   }
   function actLabel(st){return String(st||"UNKNOWN").replace(/^PAPER_/,"").replace(/_/g," ").toLowerCase();}
+  var lastPaperActivation=null, sizeKey="vnedge:size-profiles:v1";
+  function loadSizePrefs(d){
+    var cfg=(d&&d.config)||{},raw={};
+    try{raw=JSON.parse(localStorage.getItem(sizeKey)||"{}")||{};}catch(e){raw={};}
+    function val(k,def){var x=Number(raw[k]);return isFinite(x)&&x>0?x:def;}
+    return {
+      paperMargin:val("paperMargin",num(cfg.requested_margin_usd)||100),
+      paperLev:val("paperLev",num(cfg.requested_leverage)||25),
+      liveMargin:val("liveMargin",num(cfg.live_margin_usd)||100),
+      liveLev:val("liveLev",num(cfg.live_leverage)||5),
+      ack:raw.ack!=null?!!raw.ack:!!cfg.high_leverage_ack
+    };
+  }
+  function saveSizePrefs(c){
+    try{localStorage.setItem(sizeKey,JSON.stringify(c));}catch(e){}
+  }
+  function sizeControls(c){
+    return '<div class="sizectl">'+
+      '<div class="sizeprof"><b>Paper profile</b><div class="sizefields">'+
+        '<label class="sizefield"><span>Margin USD</span><input id="paperMarginInput" type="number" min="1" step="1" value="'+esc(c.paperMargin)+'"></label>'+
+        '<label class="sizefield"><span>Leverage</span><input id="paperLevInput" type="number" min="1" step="0.5" value="'+esc(c.paperLev)+'"></label>'+
+      '</div></div>'+
+      '<div class="sizeprof"><b>Live profile</b><div class="sizefields">'+
+        '<label class="sizefield"><span>Margin USD</span><input id="liveMarginInput" type="number" min="1" step="1" value="'+esc(c.liveMargin)+'"></label>'+
+        '<label class="sizefield"><span>Leverage</span><input id="liveLevInput" type="number" min="1" step="0.5" value="'+esc(c.liveLev)+'"></label>'+
+      '</div></div>'+
+      '<label class="sizeack"><input id="sizeAckInput" type="checkbox" '+(c.ack?"checked":"")+'> <span>Acknowledge &gt;10x plan<br><small>planner only · no runtime change</small></span></label>'+
+    '</div>';
+  }
+  function bindSizeControls(c){
+    function n(id,cur){var e=$(id);var v=e?Number(e.value):cur;return isFinite(v)&&v>0?v:cur;}
+    function changed(){
+      var next={paperMargin:n("paperMarginInput",c.paperMargin),paperLev:n("paperLevInput",c.paperLev),
+        liveMargin:n("liveMarginInput",c.liveMargin),liveLev:n("liveLevInput",c.liveLev),
+        ack:!!($("sizeAckInput")&&$("sizeAckInput").checked)};
+      saveSizePrefs(next);
+      if(lastPaperActivation)renderPaperActivation(lastPaperActivation);
+    }
+    ["paperMarginInput","paperLevInput","liveMarginInput","liveLevInput","sizeAckInput"].forEach(function(id){
+      var e=$(id); if(e)e.addEventListener("change",changed);
+    });
+  }
+  function localPlan(row,profile,c){
+    var base=((row.sizing_profiles||{})[profile])||row.requested_experiment||{},margin=profile==="paper"?c.paperMargin:c.liveMargin,lev=profile==="paper"?c.paperLev:c.liveLev;
+    var notional=margin*lev,abs=num(base.absolute_max_leverage)||30,high=num(base.high_leverage_threshold)||10,max=Number(base.manifest_max_leverage),minNot=num(base.venue_min_notional_usd)||0,blockers=[];
+    if(lev>abs)blockers.push("above "+abs+"x absolute cap");
+    if(isFinite(max)&&max>0&&lev>max)blockers.push("above manifest "+max+"x");
+    if(lev>high&&!c.ack)blockers.push("needs >"+high+"x ack");
+    if(notional<minNot)blockers.push("below min $"+minNot.toFixed(0));
+    return {profile:profile,ok:!blockers.length,margin:margin,lev:lev,notional:notional,blockers:blockers,source:base.venue_spec_source||""};
+  }
+  function planHtml(label,plan){
+    return '<div class="plan '+(plan.ok?"ok":"bad")+'"><div class="pt"><span>'+label+'</span><span>'+(plan.ok?(label==="Live"?"risk ok":"ok"):"block")+'</span></div>'+
+      '<div class="pv">$'+Math.round(plan.margin)+' × '+Number(plan.lev).toFixed(plan.lev%1?1:0)+'x = $'+Math.round(plan.notional).toLocaleString()+'</div>'+
+      '<div class="pv" title="'+esc((plan.blockers||[]).join(" · ")||plan.source)+'">'+esc((plan.blockers||[])[0]||(label==="Live"?"plan only":plan.source||"manifest ok"))+'</div></div>';
+  }
   function renderPaperActivation(d){
+    lastPaperActivation=d;
     var el=$("paperActivation"),meta=$("paperActivationMeta"); if(!el)return;
     var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
-    var online=num(s.paper_online),ready=num(s.route_ready_no_journal),blocked=num(s.route_blocked)+num(s.manifest_unsafe)+num(s.negative_blocked)+num(s.needs_adapter);
-    if(meta)meta.textContent=(online+" online · "+ready+" ready/no journal · "+blocked+" blocked");
+    var cfg=loadSizePrefs(d),online=num(s.paper_online);
+    var paperOk=0,liveOk=0; rows.forEach(function(r){if(localPlan(r,"paper",cfg).ok)paperOk++;if(localPlan(r,"live",cfg).ok)liveOk++;});
+    if(meta)meta.textContent=(online+" online · paper "+paperOk+"/"+rows.length+" · live-risk "+liveOk+"/"+rows.length);
     if(!rows.length){el.innerHTML='<div class="note">paper activation report loading…</div>';return;}
     var k='<div class="actkpis">'+
       '<div class="actk"><div class="l">Paper online</div><div class="v">'+online+'</div></div>'+
       '<div class="actk"><div class="l">Waiting</div><div class="v">'+num(s.paper_waiting)+'</div></div>'+
-      '<div class="actk"><div class="l">Route ready</div><div class="v">'+ready+'</div></div>'+
-      '<div class="actk"><div class="l">25x allowed</div><div class="v">'+num(s.requested_100_margin_25x_allowed)+'</div></div>'+
+      '<div class="actk"><div class="l">Paper plan OK</div><div class="v">'+paperOk+'</div></div>'+
+      '<div class="actk"><div class="l">Live risk OK</div><div class="v">'+liveOk+'</div></div>'+
     '</div>';
+    k+=sizeControls(cfg);
     var top=rows.slice(0,7).map(function(r){
-      var req=r.requested_experiment||{},rt=r.runtime||{},state=String(r.activation_state||"UNKNOWN"),cls=actCls(state);
-      var reqTxt=req.can_run_requested?"$100 margin · 25x ok":((req.blockers||[])[0]||"25x not checked");
+      var rt=r.runtime||{},state=String(r.activation_state||"UNKNOWN"),cls=actCls(state);
       var stat=rt.scanner_state?String(rt.scanner_state).toLowerCase().replace(/_/g," "):(rt.readiness_status?String(rt.readiness_status).toLowerCase().replace(/_/g," "):"no journal");
+      var pplan=localPlan(r,"paper",cfg),lplan=localPlan(r,"live",cfg);
       return '<div class="actrow">'+
         '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe)+'</small></div>'+
         '<div><span class="actstate '+cls+'">'+esc(actLabel(state))+'</span><small>'+esc(stat)+'</small></div>'+
-        '<div><span class="pill '+(req.can_run_requested?"active":"prob")+'">'+(req.can_run_requested?"100/25 OK":"100/25 BLOCK")+'</span><small>'+esc(req.venue_spec_source||"")+'</small></div>'+
-        '<div class="actnote">'+esc(r.next_action||reqTxt)+'</div>'+
+        '<div class="plans">'+planHtml("Paper",pplan)+planHtml("Live",lplan)+'</div>'+
+        '<div class="actnote">'+esc(r.next_action||"planner only; no runtime change")+'</div>'+
       '</div>';
     }).join('');
     el.innerHTML=k+'<div class="actrows">'+top+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper activation pending")+'</div>';
+    bindSizeControls(cfg);
   }
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});

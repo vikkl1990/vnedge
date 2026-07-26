@@ -23,6 +23,7 @@ from typing import Any
 
 import yaml
 
+from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, HIGH_LEVERAGE_THRESHOLD
 from vnedge.exchange.venue_specs import venue_symbol_limits
 from vnedge.strategy.strategy_registry import get_strategy_class
 
@@ -64,6 +65,8 @@ class PaperLaneActivationConfig:
 
     requested_margin_usd: float = 100.0
     requested_leverage: float = 25.0
+    live_margin_usd: float = 100.0
+    live_leverage: float = 5.0
     high_leverage_ack: bool = False
     max_rows: int = 160
 
@@ -147,6 +150,11 @@ def build_paper_lane_activation(
             "requires_manifest": True,
             "requires_runtime_route": True,
             "requires_journal_evidence_for_active": True,
+            "dashboard_inputs_are_plan_only": True,
+        },
+        "risk_limits": {
+            "high_leverage_threshold": HIGH_LEVERAGE_THRESHOLD,
+            "absolute_max_leverage": ABSOLUTE_MAX_LEVERAGE,
         },
         "config": config.to_dict(),
         "inputs": {
@@ -236,7 +244,8 @@ def _manifest_activation_row(
         route_checks=route_checks,
         journal=journal,
     )
-    requested = _requested_experiment(manifest, config)
+    sizing_profiles = _sizing_profiles(manifest, config)
+    requested = sizing_profiles["paper"]
 
     return {
         "row_type": "paper_manifest_candidate",
@@ -254,6 +263,7 @@ def _manifest_activation_row(
         "paper_decision": _paper_decision(activation_state, requested),
         "route_checks": route_checks,
         "requested_experiment": requested,
+        "sizing_profiles": sizing_profiles,
         "runtime": {
             "desired_lane_ids": [str(r.get("lane_id") or "") for r in route_matches],
             "journal": journal,
@@ -332,6 +342,7 @@ def _readiness_only_rows(
             "paper_decision": _paper_decision(activation_state, None),
             "route_checks": route_checks,
             "requested_experiment": _requested_experiment(pseudo_manifest, config),
+            "sizing_profiles": _sizing_profiles(pseudo_manifest, config),
             "runtime": {
                 "desired_lane_ids": [str(r.get("lane_id") or "") for r in route_matches],
                 "journal": journal,
@@ -524,25 +535,59 @@ def _paper_decision(
     }
 
 
-def _requested_experiment(
+def _sizing_profiles(
     manifest: Mapping[str, Any],
     config: PaperLaneActivationConfig,
 ) -> dict[str, Any]:
+    return {
+        "paper": _requested_experiment(
+            manifest,
+            config,
+            profile="paper",
+            margin_usd=config.requested_margin_usd,
+            leverage=config.requested_leverage,
+        ),
+        "live": _requested_experiment(
+            manifest,
+            config,
+            profile="live",
+            margin_usd=config.live_margin_usd,
+            leverage=config.live_leverage,
+        ),
+    }
+
+
+def _requested_experiment(
+    manifest: Mapping[str, Any],
+    config: PaperLaneActivationConfig,
+    *,
+    profile: str = "paper",
+    margin_usd: float | None = None,
+    leverage: float | None = None,
+) -> dict[str, Any]:
     exchange = str(manifest.get("exchange") or "")
     symbol = str(manifest.get("symbol") or "")
-    notional = float(config.requested_margin_usd) * float(config.requested_leverage)
+    margin = float(config.requested_margin_usd if margin_usd is None else margin_usd)
+    lev = float(config.requested_leverage if leverage is None else leverage)
+    notional = margin * lev
     max_leverage = _optional_float(manifest.get("max_leverage"))
     limits = venue_symbol_limits(exchange, symbol)
-    blockers: list[str] = []
+    risk_blockers: list[str] = []
 
-    if max_leverage is not None and config.requested_leverage > max_leverage:
-        blockers.append(
-            f"requested leverage {config.requested_leverage:g}x exceeds manifest max {max_leverage:g}x"
+    if lev > ABSOLUTE_MAX_LEVERAGE:
+        risk_blockers.append(
+            f"requested leverage {lev:g}x exceeds absolute max {ABSOLUTE_MAX_LEVERAGE:g}x"
         )
-    if config.requested_leverage > 10 and not config.high_leverage_ack:
-        blockers.append("requested leverage above 10x needs explicit high-leverage acknowledgement")
+    if max_leverage is not None and lev > max_leverage:
+        risk_blockers.append(
+            f"requested leverage {lev:g}x exceeds manifest max {max_leverage:g}x"
+        )
+    if lev > HIGH_LEVERAGE_THRESHOLD and not config.high_leverage_ack:
+        risk_blockers.append(
+            f"requested leverage above {HIGH_LEVERAGE_THRESHOLD:g}x needs explicit high-leverage acknowledgement"
+        )
     if notional < limits.min_notional_usd:
-        blockers.append(
+        risk_blockers.append(
             f"requested notional ${notional:.2f} below venue min ${limits.min_notional_usd:.2f}"
         )
     spec_source = "fallback_limits"
@@ -552,16 +597,29 @@ def _requested_experiment(
         spec_source = "delta_fallback_limits_contract_lookup_required_before_live"
 
     return {
-        "requested_margin_usd": config.requested_margin_usd,
-        "requested_leverage": config.requested_leverage,
+        "profile": profile,
+        "requested_margin_usd": margin,
+        "requested_leverage": lev,
         "requested_notional_usd": notional,
         "manifest_max_leverage": max_leverage,
         "venue_min_qty": limits.min_qty,
         "venue_qty_step": limits.qty_step,
         "venue_min_notional_usd": limits.min_notional_usd,
         "venue_spec_source": spec_source,
-        "can_run_requested": not blockers,
-        "blockers": blockers,
+        "high_leverage_threshold": HIGH_LEVERAGE_THRESHOLD,
+        "absolute_max_leverage": ABSOLUTE_MAX_LEVERAGE,
+        "risk_compatible": not risk_blockers,
+        "can_run_requested": not risk_blockers,
+        "can_apply_from_dashboard": False,
+        "execution_permission": (
+            "paper_manifest_and_runner_required"
+            if profile == "paper"
+            else "live_ladder_pre_live_checklist_and_code_config_required"
+        ),
+        "blockers": risk_blockers,
+        "control_blockers": [
+            "dashboard input is a local sizing plan only; no runtime config is changed"
+        ],
     }
 
 
@@ -821,6 +879,12 @@ def _summary(
         "requested_100_margin_25x_allowed": sum(
             1 for r in rows if r.get("requested_experiment", {}).get("can_run_requested")
         ),
+        "paper_profile_risk_compatible": sum(
+            1 for r in rows if r.get("sizing_profiles", {}).get("paper", {}).get("risk_compatible")
+        ),
+        "live_profile_risk_compatible": sum(
+            1 for r in rows if r.get("sizing_profiles", {}).get("live", {}).get("risk_compatible")
+        ),
         "activation_counts": dict(sorted(activation_counts.items())),
         "route_counts": dict(sorted(route_counts.items())),
         "next_action_counts": dict(sorted(actions.items())),
@@ -1010,6 +1074,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--interval-seconds", type=float, default=60.0)
     parser.add_argument("--requested-margin-usd", type=float, default=100.0)
     parser.add_argument("--requested-leverage", type=float, default=25.0)
+    parser.add_argument("--live-margin-usd", type=float, default=100.0)
+    parser.add_argument("--live-leverage", type=float, default=5.0)
     parser.add_argument("--ack-high-leverage", action="store_true")
     return parser.parse_args(argv)
 
@@ -1019,6 +1085,8 @@ def main(argv: list[str] | None = None) -> int:
     config = PaperLaneActivationConfig(
         requested_margin_usd=args.requested_margin_usd,
         requested_leverage=args.requested_leverage,
+        live_margin_usd=args.live_margin_usd,
+        live_leverage=args.live_leverage,
         high_leverage_ack=args.ack_high_leverage,
     )
     while True:
