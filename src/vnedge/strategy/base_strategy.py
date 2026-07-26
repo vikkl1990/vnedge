@@ -27,6 +27,11 @@ class SignalIntent:
     side: Literal["long", "short"]
     stop_price: float
     take_profit_price: float | None = None
+    #: optional TP ladder (tp1, tp2, tp3 …) — RECORDED for the journal so the
+    #: operator can see how far a trade travelled. It is NEVER an exit trigger:
+    #: the single ``take_profit_price`` remains the only take-profit exit level,
+    #: so adding a ladder cannot change trading behaviour or P&L.
+    take_profit_levels: tuple[float, ...] = ()
     reason: str = ""  # human-readable trigger explanation — explainability is a feature
 
     def __post_init__(self) -> None:

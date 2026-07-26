@@ -27,6 +27,16 @@ VNEDGE_ALGO_ML_PRO_ID = "vnedge_algo_ml_pro_v1"
 VNEDGE_ALGO_ML_PRO_SIDES: tuple[str, ...] = ("long", "short")
 
 
+def _tp_ladder(row: pd.Series, side: str) -> tuple[float, ...]:
+    """The (tp1, tp2, tp3) take-profit ladder for the journal — NaN-safe."""
+    out: list[float] = []
+    for i in (1, 2, 3):
+        value = row.get(f"tp{i}_{side}")
+        if value is not None and not pd.isna(value):
+            out.append(float(value))
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class VNEDGEAlgoMLProParams:
     """Frozen parameters matching the supplied Pine defaults where executable."""
@@ -225,6 +235,7 @@ class VNEDGEAlgoMLProScanner(BaseStrategy):
                 "long",
                 stop_price=float(row["stop_long"]),
                 take_profit_price=float(row["tp3_long"]),
+                take_profit_levels=_tp_ladder(row, "long"),
                 reason=self._reason(row, "long"),
             )
         if self._ready(row, "short"):
@@ -232,6 +243,7 @@ class VNEDGEAlgoMLProScanner(BaseStrategy):
                 "short",
                 stop_price=float(row["stop_short"]),
                 take_profit_price=float(row["tp3_short"]),
+                take_profit_levels=_tp_ladder(row, "short"),
                 reason=self._reason(row, "short"),
             )
         return None

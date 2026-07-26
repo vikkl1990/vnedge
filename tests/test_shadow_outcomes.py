@@ -104,6 +104,53 @@ def test_target_resolution_and_fee_math(tmp_path):
     assert outcomes[0].virtual_net_usd == pytest.approx(10.0 - (0.05 + 0.055))
 
 
+# --- TP ladder: recorded, never an exit trigger ----------------------------------
+
+
+def test_tp_ladder_records_max_reached_without_changing_exit(tmp_path):
+    tracker, journal = tracker_for(tmp_path)
+    tracker.track(
+        intent_key="k", side="long", quantity=1.0, notional_usd=100.0,
+        stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0),
+        take_profit_levels=(102.0, 105.0, 110.0),
+    )
+    # bar runs UP to 106 (crosses tp1=102, tp2=105) then also hits the stop.
+    outcomes = tracker.resolve_bar(bar(1, high=106.0, low=94.0))
+    out = outcomes[0]
+    # exit + P&L are byte-identical to the no-ladder case: stop still wins.
+    assert out.resolution == "stop" and out.exit_price == 95.0
+    assert out.virtual_net_usd == pytest.approx(-5.0 - (0.05 + 0.0475))
+    # ...but we record how far it travelled: reached TP2 of 3.
+    assert out.tp_reached == 2
+    assert out.take_profit_levels == (102.0, 105.0, 110.0)
+    payload = [r for r in journal.read_all() if r["kind"] == "shadow_outcome"][0]["payload"]
+    assert payload["tp_reached"] == 2
+    assert payload["take_profit_levels"] == [102.0, 105.0, 110.0]
+
+
+def test_tp_ladder_short_side_and_empty_default(tmp_path):
+    tracker, journal = tracker_for(tmp_path)
+    # short: favourable = price DOWN. tp1=98, tp2=95 (=stop). Runs to 96 then stops.
+    tracker.track(
+        intent_key="s", side="short", quantity=1.0, notional_usd=100.0,
+        stop_price=105.0, take_profit_price=90.0, decision_bar_ts=ts(0),
+        take_profit_levels=(98.0, 95.0, 90.0),
+    )
+    out = tracker.resolve_bar(bar(1, high=105.5, low=96.0))[0]
+    assert out.resolution == "stop"          # exit unchanged
+    assert out.tp_reached == 1               # low 96 crossed tp1=98 only
+    # a plain intent with no ladder records tp_reached 0 (backward compatible)
+    tracker.track(intent_key="p", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
+    plain = tracker.resolve_bar(bar(2, high=111.0, low=99.0))[0]
+    assert plain.tp_reached == 0 and plain.take_profit_levels == ()
+
+
+def test_signal_intent_take_profit_levels_defaults_empty():
+    intent = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    assert intent.take_profit_levels == ()
+
+
 def test_custom_fee_model_applied_both_sides(tmp_path):
     tracker, journal = tracker_for(tmp_path)
     journal_intent(journal, "k1", stop=95.0, tp=110.0, bar_index=0)

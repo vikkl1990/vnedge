@@ -499,6 +499,8 @@ def _shadow_outcome_trade(lane: str, ts: str, payload: dict[str, Any]) -> dict[s
         "fees_usd": _float(payload.get("fees_usd")),
         "intent_key": payload.get("intent_key", ""),
         "signal_reason": payload.get("signal_reason", ""),
+        "take_profit_levels": payload.get("take_profit_levels") or [],
+        "tp_reached": int(payload.get("tp_reached") or 0),
         "source": "decision_journal",
     }
 

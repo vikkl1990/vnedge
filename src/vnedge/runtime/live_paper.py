@@ -242,6 +242,7 @@ class LivePaperSession:
                 # virtual outcome later (and on restart, from the journal)
                 "stop_price": sig.stop_price,
                 "take_profit_price": sig.take_profit_price,
+                "take_profit_levels": list(sig.take_profit_levels),
                 "bar_ts": decision_bar_ts.isoformat(),
             })
             if decision.approved:
@@ -255,6 +256,7 @@ class LivePaperSession:
                         take_profit_price=sig.take_profit_price,
                         decision_bar_ts=decision_bar_ts,
                         signal_reason=sig.reason,
+                        take_profit_levels=sig.take_profit_levels,
                     )
                 self._log_trade_event(
                     "shadow_approved",
