@@ -122,8 +122,8 @@
   .tag{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;padding:3px 8px;border-radius:6px;background:var(--bg-3);color:var(--txt-dim)}
 
   /* lanes blotter */
-  .blotter{width:100%}
-  .brow{display:grid;grid-template-columns:16px 1.5fr 74px .8fr 96px 54px;gap:10px;align-items:center;
+  .blotter{width:100%;overflow-x:auto}
+  .brow{display:grid;grid-template-columns:14px minmax(150px,1.7fr) 66px minmax(78px,.7fr) 92px 46px;gap:10px;align-items:center;min-width:560px;
     padding:10px 15px;border-bottom:1px solid var(--line);font-size:12.5px}
   .brow.head{padding:8px 15px;border-bottom:1px solid var(--line-2)}
   .brow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
@@ -336,6 +336,21 @@
   .badge.gate{background:var(--info-soft);color:var(--info)}
   .badge.net{background:var(--brand-soft);color:var(--brand)}
 
+  /* ML pipeline view */
+  .mlstage{display:grid;grid-template-columns:16px 1fr auto;gap:12px;align-items:center;padding:11px 15px;border-top:1px solid var(--line)}
+  .mlstage:first-child{border-top:none}
+  .mldot{width:14px;height:14px;border-radius:50%;border:2px solid var(--line-2)}
+  .mldot.done{background:var(--long);border-color:var(--long)}
+  .mldot.active{background:var(--brand);border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+  .mlstage .mst b{font-size:12.5px;color:var(--txt)}
+  .mlstage .mst span{display:block;font-size:10.5px;color:var(--txt-faint);margin-top:1px}
+  .mlbar{height:8px;border-radius:5px;background:var(--bg-inset);overflow:hidden;margin-top:9px}
+  .mlbar>i{display:block;height:100%;background:var(--brand)}
+  .gaterow2{display:flex;justify-content:space-between;gap:10px;padding:10px 15px;border-top:1px solid var(--line);font-size:12px}
+  .gaterow2:first-child{border-top:none}
+  .gaterow2 .gk{color:var(--txt-dim)}
+  .gaterow2 .gv{font-family:var(--mono);color:var(--txt);font-weight:700}
+
   /* trade journal tables */
   .jtbl{width:100%;overflow-x:auto}
   .jrow{display:grid;gap:10px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line);font-size:12px;min-width:660px}
@@ -343,7 +358,7 @@
   .jrow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
   .jrow:last-child{border-bottom:none}
   .jrow:hover{background:var(--bg-3)}
-  .jrow-ct{grid-template-columns:66px 1.4fr 78px 50px 74px 1.15fr 88px 60px}
+  .jrow-ct{grid-template-columns:66px 1.3fr 74px 46px 70px 1fr 54px 80px 54px}
   .jrow-fl{grid-template-columns:66px 1.4fr 58px 82px 44px 92px 96px 60px}
   .jrow-or{grid-template-columns:66px 1.6fr 92px 50px 84px 96px 1fr}
   .jrow .lane{color:var(--txt-dim);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -418,7 +433,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="promote">Promote</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -542,7 +557,7 @@
     <section class="panel" style="margin-top:14px">
       <div class="phead"><h2>Closed Trades</h2><span class="meta" id="jctMeta">—</span></div>
       <div class="jtbl">
-        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Net</span><span>Fees</span></div>
+        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
         <div id="jClosed"><div class="jempty">Loading…</div></div>
       </div>
     </section>
@@ -590,6 +605,30 @@
         <section class="panel">
           <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
           <div id="promoQueue"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ML VIEW ===== -->
+  <div class="view" data-view="ml" hidden>
+    <p class="intro"><b>ML pipeline.</b> Meta-labeling on top of the rule-based signals — a model that learns <i>P(this signal wins after costs)</i> and gates/sizes accordingly. Data-gated: it trains only once enough real trade outcomes accumulate, then must clear the locked overfit gates on untouched data. Nothing here trades; a model runs only through the gateway.</p>
+    <div class="kpis" id="mlkpis" style="margin-top:0"></div>
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>Pipeline</h2><span class="meta" id="mlStageMeta">loading…</span></div>
+      <div id="mlStages"><div class="jempty">ml pipeline status loading…</div></div>
+    </section>
+    <div class="main" style="margin-top:14px">
+      <div class="col">
+        <section class="panel">
+          <div class="phead"><h2>Training data</h2><span class="meta">meta-labels from live journals</span></div>
+          <div id="mlData"></div>
+        </section>
+      </div>
+      <div class="col">
+        <section class="panel">
+          <div class="phead"><h2>Promotion gates</h2><span class="tag">locked · pre-registered</span></div>
+          <div id="mlGates"></div>
         </section>
       </div>
     </div>
@@ -890,7 +929,7 @@
       var bar=p===0?'<i style="width:0"></i>':'<i style="'+(p>0?'left:50%;background:var(--long)':'right:50%;background:var(--short)')+';width:'+(w/2)+'%"></i>';
       var why=ev.signal_reason||ev.skip_reason||(l.trade_compatibility&&l.trade_compatibility.state)||"evaluating";
       return '<div class="brow"><span class="st '+st+'"></span>'+
-        '<div class="strat"><b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
+        '<div class="strat" title="'+stratShort(l.strategy_id)+'"><b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
         '<span class="vchip" style="background:'+v.col+'">'+v.lab+'</span>'+
         '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
         '<div class="pnlbar"><span class="v '+pc+'">'+(p===0?"—":(p>0?"+":"")+"$"+p.toFixed(2))+'</span><div class="track">'+bar+'</div></div>'+
@@ -1220,12 +1259,14 @@
     document.getElementById("jctMeta").textContent=ct.length+" shown · "+(s.journals_scanned||0)+" journals";
     document.getElementById("jClosed").innerHTML= ct.length? ct.map(function(t){
       var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]), net=+t.virtual_net_usd||0;
+      var bps=(t.captured_bps==null?null:+t.captured_bps);
       var rc=t.resolution==="take_profit"?"var(--long)":t.resolution==="stop"?"var(--short)":"var(--txt-dim)";
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
         "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
         "<span class='num'>"+jEsc(sym)+"</span><span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||"").toUpperCase())+"</span>"+
         "<span style='color:"+rc+"'>"+jEsc(String(t.resolution||"—").replace(/_/g," "))+"</span>"+
         "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" &rarr; "+jPx(t.exit_price)+"</span>"+
+        "<span class='num "+(bps==null?"":bps<0?"dn":"up")+"' title='"+(t.captured_bps_basis||"")+" bps captured'>"+(bps==null?"—":(bps>0?"+":"")+bps.toFixed(0))+"</span>"+
         "<span class='num "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span>"+
         "<span class='num' style='color:var(--txt-dim)'>$"+(+t.fees_usd||0).toFixed(2)+"</span></div>";
     }).join("") : "<div class='jempty'>No closed trades yet — lanes are still warming up.</div>";
@@ -1252,8 +1293,42 @@
   }
   function pollJournal(){ poll("/trade-journal?limit=120", renderJournal); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  /* ---- ML pipeline ---- */
+  function mlGate(k,v){ return "<div class='gaterow2'><span class='gk'>"+jEsc(k)+"</span><span class='gv'>"+jEsc(v)+"</span></div>"; }
+  function renderMLStatus(d){
+    if(!d) return;
+    var ds=d.dataset||{},f=d.foundation||{},g=d.gates||{};
+    document.getElementById("mlkpis").innerHTML=
+      jTile("Active role","<span style='font-size:13px;font-weight:800'>meta-labeling</span>",String(d.stage||"").toLowerCase().replace(/_/g," "))+
+      jTile("Training labels","<span class='num'>"+num(ds.samples)+"</span>","target "+num(ds.min_to_train))+
+      jTile("Label win rate","<span class='num'>"+num(ds.win_rate_pct)+"%</span>","of collected trades")+
+      jTile("Causal features","<span class='num'>"+num(f.feature_count)+"</span>","fee-wall aware");
+    var stg=d.stages||[];
+    document.getElementById("mlStageMeta").textContent=stg.filter(function(s){return s.done;}).length+" / "+stg.length+" complete";
+    document.getElementById("mlStages").innerHTML=stg.map(function(s){
+      var cls=s.done?"done":s.active?"active":"";
+      return "<div class='mlstage'><span class='mldot "+cls+"'></span>"+
+        "<div class='mst'><b>"+jEsc(s.label)+"</b><span>"+jEsc(s.detail||"")+"</span></div>"+
+        "<span class='pill "+(s.done?"active":s.active?"trial":"supp")+"'>"+(s.done?"done":s.active?"in progress":"pending")+"</span></div>";
+    }).join("");
+    var by=ds.by_strategy||{},keys=Object.keys(by);
+    document.getElementById("mlData").innerHTML=
+      "<div style='padding:15px'>"+
+        "<div class='num' style='font-size:26px;font-weight:800'>"+num(ds.samples)+" <span style='font-size:13px;color:var(--txt-faint);font-weight:400'>/ "+num(ds.min_to_train)+" labels to train</span></div>"+
+        "<div class='mlbar'><i style='width:"+Math.min(100,num(ds.progress_pct))+"%'></i></div>"+
+        "<div style='font-size:11px;color:var(--txt-faint);margin-top:9px'>"+(keys.length?keys.map(function(k){return jEsc(k.replace(/_v1$/,""))+" · "+by[k];}).join(" &nbsp; "):"no labeled trades yet — the paper trials are still warming up (4h fires ~2/wk)")+"</div>"+
+      "</div>";
+    document.getElementById("mlGates").innerHTML=
+      mlGate("Deflated Sharpe","≥ "+g.deflated_sharpe_min)+
+      mlGate("Prob. backtest overfit","≤ "+g.pbo_max)+
+      mlGate("CPCV median PF","≥ "+g.cpcv_median_profit_factor_min)+
+      mlGate("Beat rule-based baseline", g.must_beat_rule_based_baseline?"required":"—")+
+      "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>"+jEsc(d.note||"")+"</div>";
+  }
+  function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
+
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");

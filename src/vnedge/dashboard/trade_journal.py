@@ -56,7 +56,9 @@ def build_trade_journal(
     order_rows, journal_events, virtual_trades = _project_journals(journal_rows)
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
-    closed_trades = _closed_actual_trades(fills) + virtual_trades
+    closed_trades = [
+        _with_captured_bps(t) for t in _closed_actual_trades(fills) + virtual_trades
+    ]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
     fills = _sort_recent(fills)[:limit]
@@ -425,6 +427,36 @@ def _event_detail(kind: str, payload: dict[str, Any]) -> str:
     if kind == "daily_report":
         return str(payload.get("summary") or "")
     return ", ".join(f"{key}={value}" for key, value in list(payload.items())[:5])
+
+
+def _with_captured_bps(trade: dict[str, Any]) -> dict[str, Any]:
+    """Attach `captured_bps` — how much the trade actually captured, in basis
+    points (the fee-wall yardstick). Gross price move when entry+exit prices are
+    known (shadow), else net PnL on notional (paper fills). `captured_bps_basis`
+    says which.
+
+    NOTE: TP1/TP2/TP3 ladder progress is deliberately absent — the v1 bar-close
+    exit engine closes on a SINGLE take-profit price, so partial scale-outs are
+    never recorded. Surfacing them needs a runtime change, not a display change.
+    """
+    entry = _float(trade.get("entry_price"))
+    exit_ = _float(trade.get("exit_price"))
+    side = str(trade.get("side", "")).lower()
+    direction = 1.0 if side in ("long", "buy") else -1.0 if side in ("short", "sell") else 0.0
+    captured, basis = None, None
+    if entry > 0 and exit_ > 0 and direction != 0.0:
+        captured = round((exit_ / entry - 1.0) * direction * 1e4, 1)
+        basis = "gross"
+    else:
+        realized = _float(trade.get("realized_pnl_usd"))
+        qty = abs(_float(trade.get("quantity")))
+        if realized != 0.0 and exit_ > 0 and qty > 0:
+            captured = round(realized / (exit_ * qty) * 1e4, 1)
+            basis = "net"
+    out = dict(trade)
+    out["captured_bps"] = captured
+    out["captured_bps_basis"] = basis
+    return out
 
 
 def _closed_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:

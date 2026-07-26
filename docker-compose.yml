@@ -396,6 +396,22 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ML pipeline status: runs the real meta-label dataset builder over the live
+  # journals + candles so the dashboard ML view shows the training set GROWING
+  # as trials mature. Read-only; trains/promotes nothing.
+  ml-pipeline-status:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.ml_pipeline_status",
+              "--interval-seconds", "${ML_PIPELINE_STATUS_INTERVAL_SECONDS:-300}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Real-time shadow scalp: drives the cascade + lead-lag echo detectors on the
   # LIVE tick stream (Binance USDM trades + liquidations, Delta native L2), firing
   # shadow intents the instant a setup forms and resolving them into virtual PnL.
