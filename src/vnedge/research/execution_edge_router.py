@@ -62,6 +62,7 @@ DEFAULT_SCALPER_STRATEGIES = (
     "luxara_live_plan_qtm_v1",
     "luxara_break_bounce_v27_v1",
     "vnedge_algo_ml_pro_v1",
+    "context_scalper_v2",
     "smc_playbook_scalper_v1",
     "quant_signal_pack_v1",
     "alpha_stack_confluence_v1",

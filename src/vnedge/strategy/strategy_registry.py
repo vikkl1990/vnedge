@@ -10,6 +10,7 @@ from __future__ import annotations
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.context_scalper_v2 import ContextScalperV2
 from vnedge.strategy.datrend_nomada_scalper import DATrendNomadaScalper
 from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
@@ -52,6 +53,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     LuxaraLivePlanQTMScanner.strategy_id: LuxaraLivePlanQTMScanner,
     LuxaraBreakBounceV27Scanner.strategy_id: LuxaraBreakBounceV27Scanner,
     VNEDGEAlgoMLProScanner.strategy_id: VNEDGEAlgoMLProScanner,
+    ContextScalperV2.strategy_id: ContextScalperV2,
 }
 
 

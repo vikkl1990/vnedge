@@ -84,7 +84,24 @@ FVG_LIQUIDITY_BREAKOUT_PARAMS: dict = {
     "min_body_atr": 0.55,
     "min_body_percentile": 0.60,
 }
+CONTEXT_SCALPER_V2_ALGO_PARAMS: dict = {
+    "engine": "algo_ml",
+    "min_expected_net_edge_bps": 25.0,
+    "min_fill_probability": 0.50,
+    "maker_fill_probability": 0.60,
+    "taker_extra_buffer_bps": 5.0,
+    "algo_use_ml_filter": True,
+    "algo_ml_gate": 20.0,
+}
+CONTEXT_SCALPER_V2_STEALTH_PARAMS: dict = {
+    "engine": "stealth",
+    "min_expected_net_edge_bps": 25.0,
+    "min_fill_probability": 0.50,
+    "maker_fill_probability": 0.60,
+    "taker_extra_buffer_bps": 5.0,
+}
 FEE_WALL_PAPER_PROBE_STRATEGIES = {
+    "context_scalper_v2",
     "fvg_liquidity_breakout_v1",
     "luxara_live_plan_qtm_v1",
     "luxy_ut_bot_forecast_v1",
@@ -411,6 +428,52 @@ def fvg_liquidity_breakout_delta_lanes(
         )
         for symbol in symbols
     ]
+
+
+def context_scalper_v2_delta_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Curated 5m Delta India context-scalper v2 observation lanes.
+
+    ETH uses the VNEDGE Algo ML Pro engine because the latest fee-wall scan
+    found the strongest ETH watchlist rows there. XRP uses the Stealth/BBP
+    engine because that family produced the strongest XRP watchlist rows.
+    Both remain SHADOW-only unless the explicit paper observation mirror is
+    enabled; no promotion or live permission is implied.
+    """
+    if not _truthy(environ, "MULTI_LANE_CONTEXT_SCALPER_V2_DELTA", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_CONTEXT_SCALPER_V2_SYMBOLS",
+        "ETH/USDT:USDT,XRP/USDT:USDT",
+        environ,
+    )
+    symbols = [_delta_india_symbol(symbol) for symbol in raw_symbols]
+    specs: list[LaneSpec] = []
+    for symbol in symbols:
+        base = symbol.split("/", maxsplit=1)[0].upper()
+        params = (
+            CONTEXT_SCALPER_V2_STEALTH_PARAMS
+            if base == "XRP"
+            else CONTEXT_SCALPER_V2_ALGO_PARAMS
+        )
+        specs.append(
+            LaneSpec(
+                lane_id=(
+                    f"context_scalper_v2_{DELTA_EXCHANGE}_"
+                    f"{_slug_symbol(symbol)}_shadow"
+                ),
+                exchange=DELTA_EXCHANGE,
+                symbol=symbol,
+                timeframe="5m",
+                strategy_id="context_scalper_v2",
+                strategy_params=params,
+                mode=RunnerMode.SHADOW,
+            )
+        )
+    return specs
 
 
 def luxara_live_plan_qtm_delta_lanes(
@@ -926,6 +989,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + sats_5m_delta_lanes(environ)
         + stealth_trail_bbp_delta_lanes(environ)
         + fvg_liquidity_breakout_delta_lanes(environ)
+        + context_scalper_v2_delta_lanes(environ)
         + luxara_live_plan_qtm_delta_lanes(environ)
         + luxara_break_bounce_v27_delta_lanes(environ)
         + fee_wall_paper_probe_lanes(environ)
