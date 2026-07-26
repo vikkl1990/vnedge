@@ -96,10 +96,13 @@ def test_verdict_ok(tmp_path):
     assert row.verdict == VERDICT_OK
     assert row.exists_active and row.evaluating and not row.stale
     assert report.healthy
+    assert report.production_healthy
+    assert report.production_summary() == "1/1 trade-compatible"
     assert report.summary() == "1/1 OK"
     assert report.totals == {
         "desired": 1, "active": 1, "ok": 1,
         "stale": 0, "probation": 0, "silent": 0, "missing": 0, "orphan": 0,
+        "trade_compatible": 1, "production_blockers": 0,
     }
 
 
@@ -137,6 +140,7 @@ def test_verdict_silent_journaling_but_not_evaluating(tmp_path):
     assert row.last_eval_age_seconds is None
     # SILENT alone does not trip the cron contract (MISSING/STALE only).
     assert report.healthy
+    assert not report.production_healthy
 
 
 def test_verdict_silent_when_last_eval_older_than_24h(tmp_path):
@@ -176,6 +180,7 @@ def test_verdict_orphan_journal_without_desired_spec(tmp_path):
     assert by_id["left_behind"].exists_active
     # orphans are attention noise, not a cron failure
     assert report.healthy
+    assert not report.production_healthy
     assert report.totals["orphan"] == 1
     assert report.totals["active"] == 1  # orphans not counted as active desired lanes
 
@@ -201,7 +206,9 @@ def test_shadow_probation_when_virtual_outcomes_are_net_negative(tmp_path):
     assert row.shadow_net_usd == -5.25
     assert row.trade_compatible is False
     assert report.healthy  # warning, not a missing/stale process failure
+    assert not report.production_healthy
     assert report.summary() == "1 SHADOW_PROBATION"
+    assert report.production_summary() == "1 SHADOW_PROBATION"
 
 
 def test_equity_file_freshness_counts_for_staleness(tmp_path):
@@ -249,6 +256,7 @@ def test_summary_orders_problems_by_severity(tmp_path):
     )
     assert report.summary() == "1 MISSING, 1 STALE, 1 SILENT, 1 ORPHAN"
     assert not report.healthy
+    assert not report.production_healthy
 
 
 def test_report_dict_and_snapshot_shapes(tmp_path):
@@ -257,12 +265,17 @@ def test_report_dict_and_snapshot_shapes(tmp_path):
 
     full = report.to_dict()
     assert full["healthy"] is False
+    assert full["process_healthy"] is False
+    assert full["production_healthy"] is False
     assert full["journal_dir"] == str(tmp_path)
     assert {row["lane_id"] for row in full["rows"]} == {"lane_a", "gone"}
 
     snap = report.to_snapshot()
     assert snap["healthy"] is False
+    assert snap["process_healthy"] is False
+    assert snap["production_healthy"] is False
     assert snap["summary"] == "1 MISSING"
+    assert snap["production_summary"] == "1 MISSING"
     assert snap["totals"]["ok"] == 1
     # only problem lanes are listed, keeping the dashboard payload small
     assert snap["problems"] == [
@@ -291,6 +304,12 @@ def test_healthy_property_contract():
     assert report_with(VERDICT_ORPHAN).healthy
     assert not report_with(VERDICT_STALE).healthy
     assert not report_with(VERDICT_MISSING).healthy
+    assert report_with(VERDICT_OK).production_healthy
+    assert not report_with(VERDICT_SILENT).production_healthy
+    assert not report_with(VERDICT_PROBATION).production_healthy
+    assert not report_with(VERDICT_ORPHAN).production_healthy
+    assert not report_with(VERDICT_STALE).production_healthy
+    assert not report_with(VERDICT_MISSING).production_healthy
 
 
 # --- CLI exit-code contract -------------------------------------------------------
@@ -344,7 +363,10 @@ def test_cli_json_output(tmp_path, capsys):
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["healthy"] is True
+    assert payload["process_healthy"] is True
+    assert payload["production_healthy"] is True
     assert payload["summary"] == "1/1 OK"
+    assert payload["production_summary"] == "1/1 trade-compatible"
     assert payload["rows"][0]["lane_id"] == lane.lane_id
 
 
@@ -382,7 +404,9 @@ def test_provider_snapshot_exposes_lane_health(tmp_path):
     out = provider.latest()
     health = out["lane_health"]
     assert health["healthy"] is True
+    assert health["production_healthy"] is True
     assert health["summary"] == "1/1 OK"
+    assert health["production_summary"] == "1/1 trade-compatible"
     assert health["problems"] == []
 
 
@@ -395,6 +419,7 @@ def test_provider_lane_health_flags_missing_lane(tmp_path):
     provider.sink("lane_a", "binanceusdm").publish(lane_snap())
     health = provider.latest()["lane_health"]
     assert health["healthy"] is False
+    assert health["production_healthy"] is False
     assert health["totals"]["missing"] == 1
     assert health["problems"][0]["lane_id"] == "never_started"
 
@@ -407,6 +432,7 @@ def test_provider_survives_absent_journal_dir(tmp_path):
     provider.sink("lane_a", "binanceusdm").publish(lane_snap())
     out = provider.latest()  # must not raise
     assert out["lane_health"]["healthy"] is False
+    assert out["lane_health"]["production_healthy"] is False
     assert out["lane_health"]["totals"]["missing"] == 1
 
 

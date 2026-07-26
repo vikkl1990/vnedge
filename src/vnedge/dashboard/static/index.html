@@ -830,7 +830,8 @@
     text("gLive",live?"ARMED":"LOCKED");
     text("gKill",kill?"TRIPPED":"ARMED");
     text("gJournal",s.last_journal_write||"--");
-    var lh=s.lane_health||{}; text("sysLane",(lh.healthy?"healthy":"degraded")+(lh.summary?" · "+lh.summary:""));
+    var lh=s.lane_health||{},lhTrade=(lh.production_healthy!=null?lh.production_healthy:lh.healthy);
+    text("sysLane",(lhTrade?"trade-ready":"blocked")+(lh.production_summary||lh.summary?" · "+(lh.production_summary||lh.summary):""));
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
     lastSnap=s; renderFleet(); renderDataIntegrity(s,vs); renderDeployProv(s);
@@ -892,7 +893,7 @@
       el.innerHTML=svcs.map(function(x){return '<div class="svc"><span class="dot" style="background:'+(x.up?"var(--long)":"var(--short)")+'"></span>'+String(x.name).slice(0,22)+'</div>';}).join('');
     }else{
       var cells=[];
-      Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing"||k==="orphan")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
+      Object.keys(tot).forEach(function(k){var bad=(k==="problems"||k==="stale"||k==="silent"||k==="missing"||k==="orphan"||k==="probation"||k==="production_blockers")&&num(tot[k])>0;cells.push('<div class="svc"><span class="dot" style="background:'+(bad?"var(--warn)":"var(--long)")+'"></span>'+k+' · '+tot[k]+'</div>');});
       el.innerHTML=cells.join('')||'<div class="svc"><span class="dot" style="background:var(--long)"></span>fleet reporter pending</div>';
     }
   }
@@ -903,7 +904,9 @@
     rows+='<div class="kvrow"><span class="k">Journal (WAL)</span><span class="num" style="color:'+(s.last_journal_write==="ok"?"var(--long)":"var(--short)")+'">'+(s.last_journal_write||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Risk gateway</span><span class="num" style="color:'+(s.risk_status==="ok"?"var(--long)":"var(--short)")+'">'+(s.risk_status||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Reconciliation</span><span class="num" style="color:'+(s.risk_status==="reconciling"?"var(--warn)":"var(--long)")+'">'+(s.risk_status==="reconciling"?"rebuilding":"matched")+'</span></div>';
-    rows+='<div class="kvrow"><span class="k">Lanes healthy</span><span class="num up">'+(tot.ok!=null?tot.ok+" / "+tot.desired:"--")+'</span></div>';
+    var lhTrade=(lh.production_healthy!=null?lh.production_healthy:lh.healthy);
+    rows+='<div class="kvrow"><span class="k">Lane production ready</span><span class="num" style="color:'+(lhTrade?"var(--long)":"var(--warn)")+'">'+(lh.production_summary||lh.summary||"--")+'</span></div>';
+    rows+='<div class="kvrow"><span class="k">Trade-compatible lanes</span><span class="num '+(lhTrade?"up":"")+'">'+(tot.trade_compatible!=null?tot.trade_compatible+" / "+tot.desired:"--")+'</span></div>';
     el.innerHTML=rows;
   }
   function renderDeployProv(s){
