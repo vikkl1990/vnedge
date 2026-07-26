@@ -134,6 +134,7 @@ class LivePaperSession:
         self.evals = self.live_evals = self.backfill_evals = 0
         self.live_signals = self.backfill_signals = 0
         self.tick_stop_exits = 0
+        self._last_heartbeat_at: datetime | None = None
         # SHADOW lanes never fill, so per-lane edge is invisible without
         # virtual resolution: approved intents are resolved forward on
         # closed bars with backtester semantics (journal = durable store).
@@ -202,6 +203,73 @@ class LivePaperSession:
         if self.config.mode is RunnerMode.SHADOW:
             return "shadow (live data)"
         return "paper (live data)"
+
+    _RUNNER_HEARTBEAT_SECONDS = 60.0
+
+    def _why_no_trade(self, reason: str) -> str:
+        if self._plan is not None:
+            return "position_open: managing exit plan"
+        if self.feed.quote is None:
+            return "waiting_for_quote"
+        if len(self.candles) <= self.strategy.warmup_bars:
+            return "warming_up: not enough closed candles"
+        if self.last_eval:
+            skip = self.last_eval.get("skip_reason")
+            if skip:
+                return str(skip)
+            if self.last_eval.get("fired"):
+                if self.sizing_skips > 0 and self.orders_submitted == 0:
+                    return "last_signal_rejected_by_sizing"
+                if self.risk_rejects > 0 and self.orders_submitted == 0:
+                    return "last_signal_rejected_by_gateway"
+                return "last_eval_fired: awaiting order/fill/reconciliation state"
+            return "last_eval_no_signal"
+        return reason
+
+    def _record_runner_heartbeat(
+        self, reason: str, now: datetime, *, force: bool = False
+    ) -> None:
+        if (
+            not force
+            and self._last_heartbeat_at is not None
+            and (now - self._last_heartbeat_at).total_seconds() < self._RUNNER_HEARTBEAT_SECONDS
+        ):
+            return
+        self._last_heartbeat_at = now
+        last_bar_ts = None
+        if len(self.candles):
+            last_bar_ts = self.candles["timestamp"].iloc[-1].isoformat()
+        self.journal.append("paper_lane_heartbeat", {
+            "reason": reason,
+            "why_no_trade": self._why_no_trade(reason),
+            "started_at": self._started_at.isoformat(),
+            "strategy_id": self.strategy.strategy_id,
+            "exchange": getattr(self.feed, "exchange_id", ""),
+            "symbol": self.config.symbol,
+            "timeframe": self.config.timeframe,
+            "mode": self.config.mode.value,
+            "runner_state": "in_position" if self._plan is not None else "waiting",
+            "bars_processed": self.bars_processed,
+            "evals": self.evals,
+            "live_evals": self.live_evals,
+            "backfill_evals": self.backfill_evals,
+            "signals": self.signals,
+            "live_signals": self.live_signals,
+            "backfill_signals": self.backfill_signals,
+            "orders_submitted": self.orders_submitted,
+            "risk_rejects": self.risk_rejects,
+            "sizing_skips": self.sizing_skips,
+            "shadow_approved": self.shadow_approved,
+            "shadow_rejected": self.shadow_rejected,
+            "recon_mismatches": self.recon_mismatches,
+            "dropped_candles": self.dropped_candles,
+            "quote_seen": self.feed.quote is not None,
+            "feed_staleness_seconds": float(self.feed.staleness_seconds()),
+            "last_bar_ts": last_bar_ts,
+            "last_eval": self.last_eval,
+            "trial_id": (self.trial_meta or {}).get("trial_id"),
+            "journal_path": str(self.journal.path),
+        })
 
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
         bid, ask = self.feed.quote
@@ -961,6 +1029,7 @@ class LivePaperSession:
 
         await self._shadow_prime()
         await self._paper_observation_prime()
+        self._record_runner_heartbeat("runner_started", started, force=True)
 
         while True:
             if max_bars is not None and bars >= max_bars:
@@ -976,7 +1045,9 @@ class LivePaperSession:
             except asyncio.TimeoutError:
                 # capital protection between bars: stops (and ONLY stops) are
                 # evaluated against the current quote on every idle tick
-                await self._check_tick_stop(datetime.now(UTC))
+                idle_now = datetime.now(UTC)
+                await self._check_tick_stop(idle_now)
+                self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
                 self._publish_snapshot()  # keep the dashboard honest while idle
                 continue
 
@@ -1026,6 +1097,7 @@ class LivePaperSession:
                 self._bars_since_reconcile = 0
 
             self._ledger_new_fills(now)
+            self._record_runner_heartbeat("bar_processed", now, force=True)
 
             if self.account_store is not None:
                 self.account_store.save_from(

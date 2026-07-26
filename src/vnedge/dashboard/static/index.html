@@ -252,7 +252,7 @@
   .boardrow:first-child{border-top:none}
   .boardrow .bt{font-weight:700}
   .boardrow .bs{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
-  .actkpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px 14px 0}
+  .actkpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:14px 14px 0}
   .actk{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
   .actk .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
   .actk .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:3px;color:var(--txt)}
@@ -1102,26 +1102,29 @@
     lastPaperActivation=d;
     var el=$("paperActivation"),meta=$("paperActivationMeta"); if(!el)return;
     var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
-    var cfg=loadSizePrefs(d),online=num(s.paper_online);
-    var paperOk=0,liveOk=0; rows.forEach(function(r){if(localPlan(r,"paper",cfg).ok)paperOk++;if(localPlan(r,"live",cfg).ok)liveOk++;});
-    if(meta)meta.textContent=(online+" online · paper "+paperOk+"/"+rows.length+" · live-risk "+liveOk+"/"+rows.length);
+    var cfg=loadSizePrefs(d),online=num(s.paper_online),hbs=num(s.paper_journal_heartbeats),evals=num(s.paper_journal_evals),orders=num(s.paper_journal_order_intents);
+    if(meta)meta.textContent=(online+" online · "+hbs+" pulses · "+evals+" evals · "+orders+" intents");
     if(!rows.length){el.innerHTML='<div class="note">paper activation report loading…</div>';return;}
     var k='<div class="actkpis">'+
       '<div class="actk"><div class="l">Paper online</div><div class="v">'+online+'</div></div>'+
       '<div class="actk"><div class="l">Waiting</div><div class="v">'+num(s.paper_waiting)+'</div></div>'+
-      '<div class="actk"><div class="l">Paper plan OK</div><div class="v">'+paperOk+'</div></div>'+
-      '<div class="actk"><div class="l">Live risk OK</div><div class="v">'+liveOk+'</div></div>'+
+      '<div class="actk"><div class="l">No journal</div><div class="v">'+num(s.route_ready_no_journal)+'</div></div>'+
+      '<div class="actk"><div class="l">Heartbeats</div><div class="v">'+hbs+'</div></div>'+
+      '<div class="actk"><div class="l">Evals</div><div class="v">'+evals+'</div></div>'+
+      '<div class="actk"><div class="l">Order intents</div><div class="v">'+orders+'</div></div>'+
     '</div>';
     k+=sizeControls(cfg);
     var top=rows.slice(0,7).map(function(r){
-      var rt=r.runtime||{},state=String(r.activation_state||"UNKNOWN"),cls=actCls(state);
+      var rt=r.runtime||{},pj=((r.evidence||{}).paper_journal)||{},hb=pj.latest_heartbeat||{},state=String(r.activation_state||"UNKNOWN"),cls=actCls(state);
       var stat=rt.scanner_state?String(rt.scanner_state).toLowerCase().replace(/_/g," "):(rt.readiness_status?String(rt.readiness_status).toLowerCase().replace(/_/g," "):"no journal");
       var pplan=localPlan(r,"paper",cfg),lplan=localPlan(r,"live",cfg);
+      var proof="hb "+num(pj.paper_lane_heartbeats)+" · eval "+num(pj.evals)+" · intent "+num(pj.paper_order_intents);
+      var why=String((hb&&hb.why_no_trade)||pj.latest_why||r.next_action||"waiting");
       return '<div class="actrow">'+
         '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe)+'</small></div>'+
-        '<div><span class="actstate '+cls+'">'+esc(actLabel(state))+'</span><small>'+esc(stat)+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(actLabel(state))+'</span><small>'+esc(stat)+' · '+esc(proof)+'</small></div>'+
         '<div class="plans">'+planHtml("Paper",pplan)+planHtml("Live",lplan)+'</div>'+
-        '<div class="actnote">'+esc(r.next_action||"planner only; no runtime change")+'</div>'+
+        '<div class="actnote">'+esc(why.slice(0,120))+'</div>'+
       '</div>';
     }).join('');
     el.innerHTML=k+'<div class="actrows">'+top+'</div>'+
