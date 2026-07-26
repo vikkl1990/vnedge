@@ -396,6 +396,25 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper performance ledger: reads paper decision journals + hash-chained fill
+  # ledgers and publishes per-lane PnL/PF/sample status for the Promote view.
+  # Read-only: no route can trade or promote from this service.
+  paper-lane-performance:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-activation]
+    command: ["python", "-m", "vnedge.research.paper_lane_performance",
+              "--interval-seconds", "${PAPER_LANE_PERFORMANCE_INTERVAL_SECONDS:-60}",
+              "--min-closed-trades", "${PAPER_LANE_PERFORMANCE_MIN_CLOSED_TRADES:-20}",
+              "--min-profit-factor", "${PAPER_LANE_PERFORMANCE_MIN_PROFIT_FACTOR:-1.5}",
+              "--stale-after-hours", "${PAPER_LANE_PERFORMANCE_STALE_AFTER_HOURS:-3}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ML pipeline status: runs the real meta-label dataset builder over the live
   # journals + candles so the dashboard ML view shows the training set GROWING
   # as trials mature. Read-only; trains/promotes nothing.
