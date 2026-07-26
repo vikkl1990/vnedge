@@ -84,6 +84,9 @@ max_leverage: 5
     assert row["route_checks"]["journal_seen"] is True
     assert row["requested_experiment"]["can_run_requested"] is False
     assert "exceeds manifest max" in row["requested_experiment"]["blockers"][0]
+    assert row["sizing_profiles"]["paper"]["profile"] == "paper"
+    assert row["sizing_profiles"]["live"]["profile"] == "live"
+    assert row["sizing_profiles"]["live"]["can_apply_from_dashboard"] is False
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False
 
@@ -145,6 +148,49 @@ max_leverage: 25
     assert row["route_checks"]["strategy_registered"] is True
     assert row["route_checks"]["desired_paper_route"] is False
     assert row["requested_experiment"]["can_run_requested"] is True
+    assert row["sizing_profiles"]["paper"]["requested_notional_usd"] == 2500.0
+    assert row["sizing_profiles"]["live"]["requested_notional_usd"] == 500.0
+    assert payload["summary"]["paper_profile_risk_compatible"] == 1
+    assert payload["summary"]["live_profile_risk_compatible"] == 1
+
+
+def test_paper_activation_live_profile_uses_own_margin_and_leverage(tmp_path):
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "stealth.yaml").write_text(
+        """
+trial_id: stealth_trial
+strategy: stealth_trail_bbp_v1
+symbol: "ETH/USD:USD"
+timeframe: 4h
+approved_by: human
+live_orders_enabled: false
+max_leverage: 30
+""",
+        encoding="utf-8",
+    )
+
+    payload = build_paper_lane_activation(
+        manifest_dir=manifest_dir,
+        journal_dir=tmp_path / "journals",
+        readiness={"rows": []},
+        scanner={"rows": []},
+        desired_specs=[],
+        config=PaperLaneActivationConfig(
+            requested_margin_usd=80.0,
+            requested_leverage=8.0,
+            live_margin_usd=40.0,
+            live_leverage=31.0,
+            high_leverage_ack=True,
+        ),
+    )
+
+    row = payload["rows"][0]
+    assert row["sizing_profiles"]["paper"]["risk_compatible"] is True
+    assert row["sizing_profiles"]["paper"]["requested_notional_usd"] == 640.0
+    assert row["sizing_profiles"]["live"]["risk_compatible"] is False
+    assert row["sizing_profiles"]["live"]["requested_notional_usd"] == 1240.0
+    assert "absolute max" in row["sizing_profiles"]["live"]["blockers"][0]
 
 
 def test_paper_activation_refuses_unsafe_live_orders_manifest(tmp_path):

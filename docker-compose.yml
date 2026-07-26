@@ -374,7 +374,9 @@ services:
     command: ["python", "-m", "vnedge.research.paper_lane_activation",
               "--interval-seconds", "${PAPER_LANE_ACTIVATION_INTERVAL_SECONDS:-60}",
               "--requested-margin-usd", "${PAPER_LANE_ACTIVATION_MARGIN_USD:-100}",
-              "--requested-leverage", "${PAPER_LANE_ACTIVATION_LEVERAGE:-25}"]
+              "--requested-leverage", "${PAPER_LANE_ACTIVATION_LEVERAGE:-25}",
+              "--live-margin-usd", "${PAPER_LANE_ACTIVATION_LIVE_MARGIN_USD:-100}",
+              "--live-leverage", "${PAPER_LANE_ACTIVATION_LIVE_LEVERAGE:-5}"]
     volumes:
       - ./logs:/app/logs:ro
       - ./research/live_research:/app/research/live_research
