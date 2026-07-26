@@ -407,6 +407,7 @@ def create_app(
     realtime_scanner_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
+    ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
@@ -555,6 +556,10 @@ def create_app(
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
+    )
+    ml_pipeline_status_file = (
+        ml_pipeline_status_path
+        or Path("research/live_research/ml_pipeline_status.json")
     )
 
     @app.get("/")
@@ -880,6 +885,30 @@ def create_app(
                     "operator_answer": "lane readiness report unavailable",
                     "can_trade": False,
                     "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/ml-status")
+    async def ml_status(request: Request) -> JSONResponse:
+        """ML pipeline status — the meta-labeling training set accumulating from
+        live journals, the pipeline stage, and the locked promotion gates.
+        Read-only; no model trades outside the gateway/registry."""
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                ml_pipeline_status_file,
+                {
+                    "stage": "COLLECTING_LABELS",
+                    "stages": [],
+                    "dataset": {"samples": 0, "min_to_train": 200, "progress_pct": 0.0, "by_strategy": {}},
+                    "foundation": {},
+                    "gates": {},
+                    "model": None,
+                    "can_trade": False,
+                    "can_promote": False,
+                    "note": "ml pipeline status unavailable",
                 },
             ),
             headers=_identity(user),

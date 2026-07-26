@@ -68,10 +68,14 @@ def parse_journal_trades(records: Iterable[Mapping[str, Any]]) -> list[TradeOutc
     for record in records:
         if record.get("kind") not in _OUTCOME_KINDS:
             continue
-        net = _first_present(record, _NET_FIELDS)
+        # Decision-journal rows nest their fields under `payload`; accept both a
+        # nested record and a flat one (the fields fall back to the record).
+        payload = record.get("payload")
+        body = payload if isinstance(payload, dict) else record
+        net = _first_present(body, _NET_FIELDS)
         if net is None:
             continue
-        parts = str(record.get("intent_key") or "").split("|")
+        parts = str(body.get("intent_key") or "").split("|")
         if len(parts) < 4:
             continue
         strategy, ik_symbol, ik_side, entry_ms = parts[0], parts[1], parts[2], parts[3]
@@ -79,8 +83,8 @@ def parse_journal_trades(records: Iterable[Mapping[str, Any]]) -> list[TradeOutc
             entry_ts = pd.to_datetime(int(entry_ms), unit="ms", utc=True)
         except (TypeError, ValueError):
             continue
-        symbol = str(record.get("symbol") or "").strip() or ik_symbol
-        side = str(record.get("side") or "").strip() or ik_side
+        symbol = str(body.get("symbol") or "").strip() or ik_symbol
+        side = str(body.get("side") or "").strip() or ik_side
         out.append(
             TradeOutcome(
                 strategy=strategy,
@@ -88,7 +92,7 @@ def parse_journal_trades(records: Iterable[Mapping[str, Any]]) -> list[TradeOutc
                 side=side,
                 entry_ts=entry_ts,
                 net_usd=float(net),
-                lane=str(record.get("lane") or ""),
+                lane=str(record.get("lane") or body.get("lane") or ""),
             )
         )
     return out
