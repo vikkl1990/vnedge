@@ -1263,7 +1263,8 @@
     var ct=d.closed_trades||[];
     document.getElementById("jctMeta").textContent=ct.length+" shown · "+(s.journals_scanned||0)+" journals";
     document.getElementById("jClosed").innerHTML= ct.length? ct.map(function(t){
-      var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]), net=+t.virtual_net_usd||0;
+      var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]);
+      var net=(t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0);
       var bps=(t.captured_bps==null?null:+t.captured_bps);
       var rc=t.resolution==="take_profit"?"var(--long)":t.resolution==="stop"?"var(--short)":"var(--txt-dim)";
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
