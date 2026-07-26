@@ -364,6 +364,25 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper activation truth board: reconciles approved paper manifests, runtime
+  # paper lane routes, scanner pressure, and paper journals into one read-only
+  # answer: running, waiting, route-ready, or blocked.
+  paper-lane-activation:
+    build: .
+    restart: unless-stopped
+    depends_on: [lane-promotion-readiness, realtime-scanner]
+    command: ["python", "-m", "vnedge.research.paper_lane_activation",
+              "--interval-seconds", "${PAPER_LANE_ACTIVATION_INTERVAL_SECONDS:-60}",
+              "--requested-margin-usd", "${PAPER_LANE_ACTIVATION_MARGIN_USD:-100}",
+              "--requested-leverage", "${PAPER_LANE_ACTIVATION_LEVERAGE:-25}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+      - ./research/paper_trials:/app/research/paper_trials:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Real-time shadow scalp: drives the cascade + lead-lag echo detectors on the
   # LIVE tick stream (Binance USDM trades + liquidations, Delta native L2), firing
   # shadow intents the instant a setup forms and resolving them into virtual PnL.
