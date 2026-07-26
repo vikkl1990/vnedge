@@ -858,6 +858,12 @@ def evidence_aligned_shadow_lanes(
 EVIDENCE_PAPER_TRIAL_LANES: tuple[tuple[str, str, str], ...] = (
     ("vnedge_algo_ml_pro_v1", "ETH/USDT:USDT", "4h"),   # crown jewel, grid PF 3.64
     ("vnedge_algo_ml_pro_v1", "DOGE/USDT:USDT", "1h"),  # faster-sampling companion, PF 1.54 n=128
+    # Diversification round: the other cross-venue survivors, run in parallel so
+    # several candidates mature at once (portfolio read, not a one-shot). Locked
+    # criteria: research/paper_trials/evidence_survivors_20260726.yaml.
+    ("stealth_trail_bbp_v1", "ETH/USDT:USDT", "4h"),    # grid PF 1.79, n=49 (watch DD)
+    ("luxy_ut_bot_forecast_v1", "XRP/USDT:USDT", "1h"), # grid PF 1.66, n=44
+    ("quant_signal_pack_v1", "BNB/USDT:USDT", "4h"),    # grid PF 1.65, n=39
 )
 
 
