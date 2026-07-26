@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from vnedge.strategy.indicators import (
@@ -28,6 +29,7 @@ class FeatureParams:
     funding_pct_window: int = 240
     vol_window: int = 24
     z_window: int = 48
+    vol_ratio_window: int = 96  # trailing baseline for the vol-expansion ratio
 
     @property
     def warmup_bars(self) -> int:
@@ -37,6 +39,7 @@ class FeatureParams:
             regime_warmup_bars(self.regime),
             self.funding_pct_window,
             self.z_window + 1,
+            self.vol_window + self.vol_ratio_window,
         )
 
 
@@ -49,6 +52,12 @@ FEATURE_COLUMNS = [
     "funding_rate", "funding_pct",
     "volume_z", "range_atr", "close_z",
     "regime_up", "regime_down",
+    # --- fee-wall / microstructure / session (appended; order-stable) ---
+    "atr_bps", "range_bps",              # volatility in bps — the fee-wall yardstick
+    "body_atr", "upper_wick_atr", "lower_wick_atr",  # displacement vs rejection
+    "ret_accel", "vol_ratio",            # momentum acceleration, vol expansion
+    "funding_z",                         # funding extremity
+    "hour_sin", "hour_cos",              # session (cyclical hour-of-day)
 ]
 
 
@@ -79,4 +88,27 @@ def build_feature_matrix(
     df["close_z"] = zscore(close, params.z_window)
     df["regime_up"] = df["regime_trend_up"].astype(float)
     df["regime_down"] = df["regime_trend_down"].astype(float)
+
+    # --- fee-wall / microstructure / session features (all causal: bar i uses
+    # only bars 0..i; the causality test iterates FEATURE_COLUMNS at row 300) ---
+    open_, high, low = df["open"], df["high"], df["low"]
+    # Volatility in basis points — directly comparable to the taker fee wall
+    # (~5 bps): a move that is only a few bps cannot pay costs.
+    df["atr_bps"] = atr / close * 1e4
+    df["range_bps"] = (high - low) / close * 1e4
+    # Candle anatomy: body = displacement/conviction, wicks = rejection.
+    body_top = np.maximum(open_, close)
+    body_bot = np.minimum(open_, close)
+    df["body_atr"] = (close - open_).abs() / atr
+    df["upper_wick_atr"] = (high - body_top) / atr
+    df["lower_wick_atr"] = (body_bot - low) / atr
+    # Momentum acceleration (backward shift) and volatility expansion.
+    df["ret_accel"] = df["ret_6"] - df["ret_6"].shift(6)
+    df["vol_ratio"] = df["vol_24"] / df["vol_24"].rolling(params.vol_ratio_window).mean()
+    # Funding extremity (complements the percentile).
+    df["funding_z"] = zscore(df["funding_rate"], params.z_window)
+    # Session: cyclical hour-of-day (depends only on the bar's own timestamp).
+    hour = pd.to_datetime(df["timestamp"], utc=True).dt.hour.to_numpy()
+    df["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
+    df["hour_cos"] = np.cos(2.0 * np.pi * hour / 24.0)
     return df
