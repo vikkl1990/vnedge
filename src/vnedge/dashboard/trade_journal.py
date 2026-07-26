@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,7 +58,7 @@ def build_trade_journal(
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
     closed_trades = [
-        _with_captured_bps(t) for t in _closed_actual_trades(fills) + virtual_trades
+        _with_captured_bps(t) for t in _paired_actual_trades(fills) + virtual_trades
     ]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
@@ -457,6 +458,51 @@ def _with_captured_bps(trade: dict[str, Any]) -> dict[str, Any]:
     out["captured_bps"] = captured
     out["captured_bps_basis"] = basis
     return out
+
+
+def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reconstruct COMPLETE paper trades by pairing each opening fill (realized
+    PnL 0) with its closing fill (realized != 0) per lane, FIFO.
+
+    A single closing fill only knows the exit price; pairing recovers the ENTRY
+    price so the journal shows a real entry -> exit and gross captured bps for
+    the paper trials, matching the shadow lanes.
+    """
+    by_lane: dict[str, list[dict]] = defaultdict(list)
+    for fill in fills:
+        by_lane[str(fill.get("lane", ""))].append(fill)
+
+    rows: list[dict[str, Any]] = []
+    for lane, lane_fills in by_lane.items():
+        lane_fills = sorted(lane_fills, key=lambda f: str(f.get("ts", "")))
+        open_fifo: list[dict] = []
+        for fill in lane_fills:
+            realized = _float(fill.get("realized_pnl_usd"))
+            if abs(realized) <= 1e-12:
+                open_fifo.append(fill)  # opening fill — records the entry
+                continue
+            entry = open_fifo.pop(0) if open_fifo else None
+            entry_price = _float(entry.get("price")) if entry else None
+            open_side = str(entry.get("side", "")).lower() if entry else ""
+            # trade side = the ENTRY direction (buy opens long, sell opens short)
+            side = "long" if open_side == "buy" else "short" if open_side == "sell" else fill.get("side", "")
+            fee = _float(fill.get("fee_usd")) + (_float(entry.get("fee_usd")) if entry else 0.0)
+            rows.append({
+                "lane": lane,
+                "ts": fill.get("ts", ""),
+                "kind": "actual_closing_fill",
+                "symbol": fill.get("symbol", ""),
+                "side": side,
+                "quantity": fill.get("quantity", 0.0),
+                "entry_price": entry_price if entry_price and entry_price > 0 else None,
+                "exit_price": fill.get("price", 0.0),
+                "realized_pnl_usd": round(realized, 6),
+                "fee_usd": round(fee, 6),
+                "net_after_this_fill_fee_usd": round(realized - fee, 6),
+                "client_order_id": fill.get("client_order_id", ""),
+                "source": fill.get("source", "fill_ledger"),
+            })
+    return rows
 
 
 def _closed_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
