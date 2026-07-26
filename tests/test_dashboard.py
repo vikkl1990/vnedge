@@ -773,6 +773,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_activation = tmp_path / "paper_activation.json"
+    paper_activation.write_text(json.dumps({
+        "mode": "read_only_activation_truth",
+        "summary": {"paper_online": 2},
+        "rows": [{"activation_state": "PAPER_ONLINE_WAITING"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -784,6 +792,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         lane_readiness_path=readiness,
         realtime_scanner_path=scanner,
         lane_firing_causality_path=causality,
+        paper_lane_activation_path=paper_activation,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -792,6 +801,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/lane-readiness").status_code == 401
     assert client.get("/realtime-scanner").status_code == 401
     assert client.get("/lane-firing-causality").status_code == 401
+    assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
@@ -809,6 +819,10 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert causality_payload["summary"]["paper_review_ready"] == 1
     assert causality_payload["promotion_board"]["ready_for_review"][0]["strategy_id"] == "alpha"
     assert causality_payload["can_promote"] is False
+    paper_activation_payload = client.get("/paper-lane-activation?token=t3st-token").json()
+    assert paper_activation_payload["summary"]["paper_online"] == 2
+    assert paper_activation_payload["mode"] == "read_only_activation_truth"
+    assert paper_activation_payload["can_trade"] is False
 
 
 def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):
@@ -875,6 +889,7 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         lane_readiness_path=tmp_path / "missing_readiness.json",
         realtime_scanner_path=tmp_path / "missing_scanner.json",
         lane_firing_causality_path=tmp_path / "missing_causality.json",
+        paper_lane_activation_path=tmp_path / "missing_paper_activation.json",
     ))
 
     council = client.get("/alpha-council?token=t3st-token").json()
@@ -883,6 +898,7 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     readiness = client.get("/lane-readiness?token=t3st-token").json()
     scanner = client.get("/realtime-scanner?token=t3st-token").json()
     causality = client.get("/lane-firing-causality?token=t3st-token").json()
+    paper_activation = client.get("/paper-lane-activation?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
     assert vibe == {"summary": {}, "cards": [], "can_trade": False, "can_promote": False}
@@ -906,6 +922,15 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         "promotion_board": {},
         "rows": [],
         "operator_answer": "lane firing causality report unavailable",
+        "can_trade": False,
+        "can_promote": False,
+    }
+    assert paper_activation == {
+        "summary": {},
+        "boards": {},
+        "rows": [],
+        "operator_answer": "paper lane activation report unavailable",
+        "mode": "read_only_activation_truth",
         "can_trade": False,
         "can_promote": False,
     }
@@ -1435,6 +1460,7 @@ def test_identity_header_on_all_data_routes():
         "/lane-readiness",
         "/realtime-scanner",
         "/lane-firing-causality",
+        "/paper-lane-activation",
     ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path
