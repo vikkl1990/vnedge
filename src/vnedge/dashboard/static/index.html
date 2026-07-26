@@ -418,7 +418,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="promote">Promote</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -565,14 +565,10 @@
   </div><!-- /journal -->
 
   <!-- ===== RESEARCH VIEW ===== -->
-  <div class="view" data-view="research" hidden>
-    <p class="intro"><b>Research lab.</b> Where edges are found and judged against untouched data. Nothing here trades or promotes on its own — every candidate needs human-gated approval before it can reach the desk.</p>
+  <div class="view" data-view="promote" hidden>
+    <p class="intro"><b>Path to live.</b> Where each lane sits on the promotion ladder — research → replay → untouched judgment → shadow → paper → live-small — and exactly why it is or isn't progressing. Read-only; promotion is human-gated on untouched data.</p>
     <div class="main">
       <div class="col">
-        <section class="panel">
-          <div class="phead"><h2>Paper Activation Board</h2><span class="meta" id="paperActivationMeta">loading…</span></div>
-          <div id="paperActivation"></div>
-        </section>
         <section class="panel">
           <div class="phead"><h2>Canonical Lane Funnel</h2><span class="meta" id="laneFunnelMeta">loading…</span></div>
           <div id="laneFunnel"></div>
@@ -582,15 +578,8 @@
           <div id="causalityBoard"></div>
         </section>
         <section class="panel">
-          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">fee-wall forensics · net edge after fees</span></div>
-          <div>
-            <div class="scrow head"><span></span><span>Strategy</span><span>Net edge</span><span>Wall</span><span class="hidem">Samples</span><span>Verdict</span></div>
-            <div id="scorecard"></div>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
-          <div id="promoQueue"></div>
+          <div class="phead"><h2>Paper Activation Board</h2><span class="meta" id="paperActivationMeta">loading…</span></div>
+          <div id="paperActivation"></div>
         </section>
       </div>
       <div class="col">
@@ -599,9 +588,31 @@
           <div id="paperPromotionBoard"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
+          <div id="promoQueue"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== RESEARCH VIEW ===== -->
+  <div class="view" data-view="research" hidden>
+    <p class="intro"><b>Research lab.</b> Where edges are found and judged against untouched data. Nothing here trades or promotes on its own — every candidate needs human-gated approval before it can reach the desk.</p>
+    <div class="main">
+      <div class="col">
+        <section class="panel">
+          <div class="phead"><h2>Scanner Scorecard</h2><span class="meta">fee-wall forensics · net edge after fees</span></div>
+          <div>
+            <div class="scrow head"><span></span><span>Strategy</span><span>Net edge</span><span>Wall</span><span class="hidem">Samples</span><span>Verdict</span></div>
+            <div id="scorecard"></div>
+          </div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Fee-Wall Economics</h2><span class="meta">best net edge (bps) vs fee wall</span></div>
           <div class="feebar" id="feebar"></div>
         </section>
+      </div>
+      <div class="col">
         <section class="panel">
           <div class="phead"><h2>Standing Findings</h2></div>
           <div class="note"><b>The one surviving edge</b> is the maker liquidation-exhaustion fade on BTC/ETH — <span class="k">+6 bps net</span> at true base fees, survives even worst-case 7 bps. Thin (n≈53) but robust.</div>
