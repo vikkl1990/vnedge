@@ -275,6 +275,19 @@
   .badge.off{background:var(--bg-3);color:var(--txt-faint)}
   .badge.gate{background:var(--info-soft);color:var(--info)}
   .badge.net{background:var(--brand-soft);color:var(--brand)}
+
+  /* trade journal tables */
+  .jtbl{width:100%;overflow-x:auto}
+  .jrow{display:grid;gap:10px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line);font-size:12px;min-width:660px}
+  .jrow.head{border-bottom:1px solid var(--line-2)}
+  .jrow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
+  .jrow:last-child{border-bottom:none}
+  .jrow:hover{background:var(--bg-3)}
+  .jrow-ct{grid-template-columns:66px 1.4fr 78px 50px 74px 1.15fr 88px 60px}
+  .jrow-fl{grid-template-columns:66px 1.4fr 58px 82px 44px 92px 96px 60px}
+  .jrow-or{grid-template-columns:66px 1.6fr 92px 50px 84px 96px 1fr}
+  .jrow .lane{color:var(--txt-dim);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .jempty{padding:22px 15px;color:var(--txt-faint);font-size:12px;text-align:center}
   .conn .cacct{text-align:right;min-width:max-content}
   .conn .cacct .v{font-family:var(--mono);font-weight:700;font-size:14px}
   .conn .cacct .s{font-size:10px;color:var(--txt-faint);margin-top:2px}
@@ -340,7 +353,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -454,6 +467,37 @@
     </div>
   </div>
   </div><!-- /desk -->
+
+  <!-- ===== TRADE JOURNAL VIEW ===== -->
+  <div class="view" data-view="journal" hidden>
+    <p class="intro"><b>Trade journal.</b> Every fill and closed trade across all lanes, reconstructed from the append-only decision journals and hash-chained fill ledgers — the same immutable record the audit/tax trail is built from. Read-only; nothing here places or cancels an order.</p>
+
+    <div class="kpis" id="jkpis" style="margin-top:0"></div>
+
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>Closed Trades</h2><span class="meta" id="jctMeta">—</span></div>
+      <div class="jtbl">
+        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Net</span><span>Fees</span></div>
+        <div id="jClosed"><div class="jempty">Loading…</div></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>Fills</h2><span class="meta" id="jfMeta">—</span></div>
+      <div class="jtbl">
+        <div class="jrow head jrow-fl"><span>Time</span><span>Lane</span><span>Mode</span><span>Symbol</span><span>Side</span><span>Qty</span><span>Price</span><span>Fee</span></div>
+        <div id="jFills"><div class="jempty">Loading…</div></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>Open Orders</h2><span class="meta" id="joMeta">—</span></div>
+      <div class="jtbl">
+        <div class="jrow head jrow-or"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Type</span><span>Qty</span><span>State</span></div>
+        <div id="jOrders"><div class="jempty">Loading…</div></div>
+      </div>
+    </section>
+  </div><!-- /journal -->
 
   <!-- ===== RESEARCH VIEW ===== -->
   <div class="view" data-view="research" hidden>
@@ -899,8 +943,62 @@
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
-  pollScorecard(); pollScanner(); pollMeta(); pollFleet();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); }
+
+  /* ---- trade journal ---- */
+  function jEsc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+  function jTime(ts){ if(!ts)return"—"; var d=new Date(ts); return isNaN(d)?"—":d.toISOString().slice(11,19); }
+  function jMoney(x){ x=+x||0; return (x<0?"-$":"+$")+Math.abs(x).toFixed(2); }
+  function jPx(x){ x=+x; if(!isFinite(x))return"—"; return x>=100?x.toFixed(2):x>=1?x.toFixed(4):x.toPrecision(4); }
+  function jQty(x){ x=+x||0; return Math.abs(x)>=1000?x.toLocaleString("en-US"):(""+x); }
+  function jLane(l){ return String(l||"—").replace(/_paper_observation$/,"·paper").replace(/_shadow$/,"·shadow").replace(/_v1_/g,"·").replace(/_/g," "); }
+  function jSym(s){ s=String(s==null?"":s); var i=s.indexOf(":"); return (i>0?s.slice(0,i):s)||"—"; }
+  function jSideCls(s){ s=String(s||"").toLowerCase(); return (s==="long"||s==="buy")?"up":(s==="short"||s==="sell")?"dn":""; }
+  function jTile(lbl,v,sub){ return "<div class='kpi'><div class='lbl'>"+lbl+"</div><div class='v'>"+v+"</div><div class='s'>"+sub+"</div></div>"; }
+  function renderJournal(d){
+    var s=d.summary||{}, rp=+s.actual_realized_pnl_usd||0, vn=+s.virtual_net_usd||0;
+    document.getElementById("jkpis").innerHTML=
+      jTile("Realized P&amp;L","<span class='num "+(rp<0?"dn":"up")+"'>"+jMoney(rp)+"</span>","actual fills")+
+      jTile("Fees paid","<span class='num' style='color:var(--txt-dim)'>$"+(+s.fees_usd||0).toFixed(2)+"</span>",(s.fills||0)+" fills")+
+      jTile("Closed trades","<span class='num'>"+(s.closed_trades||0)+"</span>",jMoney(vn)+" shadow net")+
+      jTile("Open orders","<span class='num'>"+(s.open_orders||0)+"</span>",(s.orders||0)+" total");
+    var ct=d.closed_trades||[];
+    document.getElementById("jctMeta").textContent=ct.length+" shown · "+(s.journals_scanned||0)+" journals";
+    document.getElementById("jClosed").innerHTML= ct.length? ct.map(function(t){
+      var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]), net=+t.virtual_net_usd||0;
+      var rc=t.resolution==="take_profit"?"var(--long)":t.resolution==="stop"?"var(--short)":"var(--txt-dim)";
+      return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
+        "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
+        "<span class='num'>"+jEsc(sym)+"</span><span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||"").toUpperCase())+"</span>"+
+        "<span style='color:"+rc+"'>"+jEsc(String(t.resolution||"—").replace(/_/g," "))+"</span>"+
+        "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" &rarr; "+jPx(t.exit_price)+"</span>"+
+        "<span class='num "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span>"+
+        "<span class='num' style='color:var(--txt-dim)'>$"+(+t.fees_usd||0).toFixed(2)+"</span></div>";
+    }).join("") : "<div class='jempty'>No closed trades yet — lanes are still warming up.</div>";
+    var fl=d.fills||[];
+    document.getElementById("jfMeta").textContent=(s.fill_ledgers_scanned||0)+" ledgers · hash-chained";
+    document.getElementById("jFills").innerHTML= fl.length? fl.map(function(f){
+      return "<div class='jrow jrow-fl'><span class='num'>"+jTime(f.ts)+"</span>"+
+        "<span class='lane' title='"+jEsc(f.lane)+"'>"+jEsc(f.strategy_id||jLane(f.lane))+"</span>"+
+        "<span><span class='badge "+(f.mode==="paper"?"net":"gate")+"'>"+jEsc(f.mode||"—")+"</span></span>"+
+        "<span class='num'>"+jEsc(jSym(f.symbol))+"</span><span class='"+jSideCls(f.side)+"'>"+jEsc(String(f.side||"").toUpperCase())+"</span>"+
+        "<span class='num'>"+jQty(f.quantity)+"</span><span class='num'>"+jPx(f.price)+"</span>"+
+        "<span class='num' style='color:var(--txt-dim)'>$"+(+f.fee_usd||0).toFixed(3)+"</span></div>";
+    }).join("") : "<div class='jempty'>No fills yet.</div>";
+    var or=(d.orders||[]).filter(function(o){var st=String(o.state||"").toLowerCase();return st&&!/fill|cancel|clos|reject|expire/.test(st);});
+    document.getElementById("joMeta").textContent=or.length+" open · "+((d.orders||[]).length)+" total";
+    document.getElementById("jOrders").innerHTML= or.length? or.map(function(o){
+      return "<div class='jrow jrow-or'><span class='num'>"+jTime(o.ts)+"</span>"+
+        "<span class='lane' title='"+jEsc(o.lane)+"'>"+jEsc(o.strategy_id||jLane(o.lane))+"</span>"+
+        "<span class='num'>"+jEsc(jSym(o.symbol))+"</span><span class='"+jSideCls(o.side)+"'>"+jEsc(String(o.side||"").toUpperCase())+"</span>"+
+        "<span>"+jEsc(o.order_type||"—")+(o.reduce_only?" · RO":"")+"</span>"+
+        "<span class='num'>"+jQty(o.quantity)+"</span>"+
+        "<span class='num' style='color:var(--txt-dim)'>"+jEsc(o.state||"—")+"</span></div>";
+    }).join("") : "<div class='jempty'>No open orders.</div>";
+  }
+  function pollJournal(){ poll("/trade-journal?limit=120", renderJournal); }
+
+  pollScorecard(); pollScanner(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");
@@ -909,6 +1007,7 @@
     var v=a.getAttribute("data-v");
     Array.prototype.forEach.call(nav.querySelectorAll("a"),function(x){x.classList.toggle("on",x===a)});
     Array.prototype.forEach.call(document.querySelectorAll(".view"),function(vw){vw.hidden=vw.getAttribute("data-view")!==v});
+    if(v==="journal") pollJournal();
     window.scrollTo({top:0,behavior:reduce?"auto":"smooth"});
   });
   function gotoView(v){
