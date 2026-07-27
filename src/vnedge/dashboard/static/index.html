@@ -292,6 +292,14 @@
     background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
   .perfrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .perfrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .profilematrix{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px}
+  .profrow{display:grid;grid-template-columns:1fr .45fr .7fr .7fr 1.15fr;gap:9px;align-items:center;
+    background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .profrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .profrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .proftype{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:900;padding:4px 7px;border-radius:6px;width:max-content}
+  .proftype.paper{background:var(--info-soft);color:var(--info)}
+  .proftype.live{background:rgba(255,201,77,.13);color:var(--warn)}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -682,6 +690,10 @@
         <section class="panel">
           <div class="phead"><h2>Paper Activation Board</h2><span class="meta" id="paperActivationMeta">loading…</span></div>
           <div id="paperActivation"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Trade Profile Matrix</h2><span class="meta" id="tradeProfileMeta">loading…</span></div>
+          <div id="tradeProfileMatrix"></div>
         </section>
       </div>
       <div class="col">
@@ -1310,6 +1322,32 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
   }
+  function profileCls(st){
+    st=String(st||"");
+    if(st==="PAPER_PROFILE_READY")return"ok";
+    if(st==="LIVE_PROFILE_RISK_OK_PRELIVE_REQUIRED"||st==="PAPER_PROFILE_NEEDS_ROUTE")return"wait";
+    if(st==="PAPER_PROFILE_BLOCKED_BY_RISK"||st==="LIVE_PROFILE_BLOCKED_BY_RISK")return"bad";
+    return"fix";
+  }
+  function renderTradeProfileMatrix(d){
+    var el=$("tradeProfileMatrix"),meta=$("tradeProfileMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.paper_profile_ready)+" paper ready · "+num(s.live_profile_risk_ok_prelive_required)+" live risk-ok · "+(num(s.paper_profile_blocked_by_risk)+num(s.live_profile_blocked_by_risk))+" blocked";
+    if(!rows.length){el.innerHTML='<div class="note">trade profile matrix loading…</div>';return;}
+    var body=rows.slice(0,10).map(function(r){
+      var profile=String(r.profile||"unknown"),lev=num(r.requested_leverage),margin=num(r.requested_margin_usd),notional=num(r.requested_notional_usd);
+      var blockers=(r.blockers||[]).join(" · "),source=String(r.venue_spec_source||"");
+      return '<div class="profrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="proftype '+esc(profile)+'">'+esc(profile)+'</span><small>'+esc(String(r.activation_state||"--").toLowerCase().replace(/_/g," "))+'</small></div>'+
+        '<div><b class="num">$'+Math.round(margin)+'</b><small>'+lev.toFixed(lev%1?1:0)+'x leverage</small></div>'+
+        '<div><b class="num">$'+Math.round(notional).toLocaleString()+'</b><small>min $'+Math.round(num(r.venue_min_notional_usd))+'</small></div>'+
+        '<div><span class="actstate '+profileCls(r.profile_state)+'">'+esc(String(r.profile_state||"unknown").replace(/_PROFILE_/," ").toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(blockers||source)+'">'+esc((blockers||r.next_action||source||"plan only").slice(0,70))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML='<div class="profilematrix">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"trade profile matrix pending")+'</div>';
+  }
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
@@ -1379,6 +1417,7 @@
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
 
@@ -1489,8 +1528,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperPerformance(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperPerformance,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

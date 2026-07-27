@@ -993,6 +993,33 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/trade-profile-matrix")
+    async def trade_profile_matrix(request: Request) -> JSONResponse:
+        """Read-only paper/live sizing profile matrix.
+
+        It is derived from the paper activation artifact. Dashboard inputs are
+        planner-only; this endpoint cannot apply margin/leverage changes.
+        """
+        user = _authorized(request)
+        from vnedge.research.trade_profile_matrix import build_trade_profile_matrix
+
+        activation = _read_json_payload(
+            paper_lane_activation_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane activation report unavailable",
+                "mode": "read_only_activation_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        return JSONResponse(
+            build_trade_profile_matrix(activation),
+            headers=_identity(user),
+        )
+
     fleet_status_file = Path("logs/fleet.json")
 
     @app.get("/meta")
