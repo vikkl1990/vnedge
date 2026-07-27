@@ -459,7 +459,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="calc">Calculator</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="pipeline">Pipeline</a><a data-v="journal">Journal</a><a data-v="calc">Calculator</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -576,6 +576,31 @@
     </div>
   </div>
   </div><!-- /desk -->
+
+  <!-- ===== PIPELINE (strategy lifecycle) VIEW ===== -->
+  <style>
+    .pltable{overflow-x:auto}
+    .plrow{display:grid;grid-template-columns:minmax(180px,1.7fr) minmax(150px,1.4fr) .95fr 1.35fr .6fr 1fr;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line);min-width:840px}
+    .plrow.plhead{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-dim);font-weight:700;background:var(--bg-inset);position:sticky;top:0}
+    .plcell{min-width:0}
+    .plcell b{display:block;font-size:13px}
+    .plcell small{display:block;font-size:10.5px;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .plpill{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:2px 6px;border-radius:5px}
+    .plpill.fire{background:var(--long-soft);color:var(--long)}
+    .plpill.pos{background:rgba(77,178,255,.14);color:var(--accent)}
+    .plpill.wait{background:var(--bg-3);color:var(--txt-faint)}
+    .veltag{font-size:8px;font-weight:800;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line);padding:1px 4px;border-radius:4px;margin-right:5px;vertical-align:middle}
+  </style>
+  <div class="view" data-view="pipeline" hidden>
+    <p class="intro"><b>Strategy pipeline.</b> Each lane threaded across its whole life — <b>live</b> status → <b>shadow</b> evidence → <b>research</b> verdict → <b>ML</b> labels — so you can follow one strategy end to end instead of hopping between views. Read-only; nothing here trades or promotes.</p>
+    <section class="panel">
+      <div class="phead"><h2>Live → Shadow → Research → ML</h2><span class="meta" id="pipelineMeta">loading…</span></div>
+      <div class="pltable">
+        <div class="plrow plhead"><span>Strategy · Symbol · TF</span><span>Live</span><span>Shadow P&amp;L</span><span>Research edge</span><span>ML labels</span><span>Gate</span></div>
+        <div id="pipeline"><div class="jempty">Loading…</div></div>
+      </div>
+    </section>
+  </div><!-- /pipeline -->
 
   <!-- ===== TRADE JOURNAL VIEW ===== -->
   <div class="view" data-view="journal" hidden>
@@ -1103,6 +1128,7 @@
     Object.keys(vs).forEach(function(x){var g=vs[x],fresh=(g.st/g.n)<9000&&g.ok>0,e=$("conn_"+x);if(e){e.textContent=fresh?"Market data live":"Market data stale";e.className="badge "+(fresh?"ok":"off");}});
 
     lastSnap=s; renderFleet(); renderDataIntegrity(s,vs); renderDeployProv(s);
+    if(curView==="pipeline") renderPipeline(s);
   }
 
   /* ---- research: scorecard / promotion / fee-wall, from /scorecard ---- */
@@ -1394,9 +1420,47 @@
     el.innerHTML='<div class="profilematrix">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"trade profile matrix pending")+'</div>';
   }
+  var scoreByStrat={}, mlByStrat={};   // research verdict/bps + ML labels, for the pipeline thread
   function applyScorecard(sc){
-    verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
+    verdictByStrat={}; scoreByStrat={};
+    ((sc&&sc.strategies)||[]).forEach(function(g){var k=stratShort(g.strategy);verdictByStrat[k]=g.verdict;scoreByStrat[k]=g;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
+    if(curView==="pipeline") renderPipeline(lastSnap);
+  }
+
+  /* ---- strategy pipeline: thread each lane live -> shadow -> research -> ML ---- */
+  function plStatus(l){
+    if(num(l.positions)>0) return ["IN-POS","pos"];
+    if(l.last_eval&&l.last_eval.fired) return ["FIRING","fire"];
+    return ["WAITING","wait"];
+  }
+  function renderPipeline(s){
+    var el=$("pipeline"); if(!el)return;
+    var lanes=Array.isArray(s&&s.lanes)?s.lanes:[];
+    var meta=$("pipelineMeta"); if(meta)meta.textContent=lanes.length+" lanes threaded";
+    if(!lanes.length){el.innerHTML="<div class='jempty'>waiting for lanes…</div>";return;}
+    var sorted=lanes.slice().sort(function(a,b){
+      var af=(a.last_eval&&a.last_eval.fired)?1:0,bf=(b.last_eval&&b.last_eval.fired)?1:0;
+      var at=num((a.shadow_perf||{}).virtual_trades),bt=num((b.shadow_perf||{}).virtual_trades);
+      return (bf-af)||(bt-at);
+    });
+    el.innerHTML=sorted.map(function(l){
+      var short=stratShort(l.strategy_id), isVel=String(l.lane_id||"").indexOf("velocity_")===0;
+      var st=plStatus(l), sp=l.shadow_perf||{}, tc=l.trade_compatibility||{}, f=l.funnel||{};
+      var vt=num(sp.virtual_trades), vn=num(sp.net_usd), vc=vn>0?"up":vn<0?"dn":"";
+      var sc=scoreByStrat[short], rb=sc?num(sc.best_net_bps):null, rs=sc?num(sc.samples):0;
+      var ml=mlByStrat[l.strategy_id]; if(ml==null)ml=mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")];
+      var gate=tc.state||(String(l.mode||"").indexOf("shadow")>=0?"SHADOW_ONLY":"PAPER_COMPATIBLE");
+      var gcls=(gate.indexOf("PAPER_COMPAT")>=0)?"maker":(gate.indexOf("PROBATION")>=0||gate.indexOf("BLOCK")>=0)?"wall":"pass";
+      return "<div class='plrow'>"+
+        "<div class='plcell'>"+(isVel?"<span class='veltag'>VEL</span>":"")+"<b style='display:inline'>"+jEsc(short)+"</b><small>"+jEsc(symShort(l.symbol))+" · "+jEsc(l.timeframe||"?")+" · "+jEsc(ven(l.exchange).lab)+"</small></div>"+
+        "<div class='plcell'><span class='plpill "+st[1]+"'>"+st[0]+"</span><small>"+(l.last_fired_ts?"fired "+agoShort(l.last_fired_ts):"no fire yet")+" · "+num(f.live_evals||f.evals)+" evals</small></div>"+
+        "<div class='plcell'><b class='num "+vc+"'>"+(vt?usd(vn):"—")+"</b><small>"+vt+" shadow trades</small></div>"+
+        "<div class='plcell'>"+(sc?("<span class='route "+(rb>=0?"pass":"wall")+"'>"+(rb>=0?"+":"")+rb.toFixed(0)+" bps</span><small>"+jEsc(String(sc.verdict||"").toLowerCase().replace(/_/g," "))+" · "+rs.toLocaleString()+" smpl</small>"):"<b style='color:var(--txt-faint)'>—</b><small>not on scorecard</small>")+"</div>"+
+        "<div class='plcell'><b class='num'>"+(ml!=null?ml:"—")+"</b><small>meta-label"+((ml!=null&&ml!==1)?"s":"")+"</small></div>"+
+        "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span></div>"+
+      "</div>";
+    }).join("");
   }
   var lastSnap={}, fleetData=null, metaData=null;
   function renderFleet(){
@@ -1560,6 +1624,8 @@
         "<span class='pill "+(s.done?"active":s.active?"trial":"supp")+"'>"+(s.done?"done":s.active?"in progress":"pending")+"</span></div>";
     }).join("");
     var by=ds.by_strategy||{},keys=Object.keys(by);
+    mlByStrat=by;
+    if(curView==="pipeline") renderPipeline(lastSnap);
     document.getElementById("mlData").innerHTML=
       "<div style='padding:15px'>"+
         "<div class='num' style='font-size:26px;font-weight:800'>"+num(ds.samples)+" <span style='font-size:13px;color:var(--txt-faint);font-weight:400'>/ "+num(ds.min_to_train)+" labels to train</span></div>"+
@@ -1661,19 +1727,25 @@
   calcInit(); pollCostModel();
 
   /* ---- view switcher ---- */
-  var nav=document.getElementById("nav");
+  var nav=document.getElementById("nav"), curView="desk";
+  function onView(v){
+    curView=v;
+    if(v==="journal") pollJournal();
+    if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
+    if(v==="pipeline") renderPipeline(lastSnap);
+  }
   nav.addEventListener("click",function(e){
     var a=e.target.closest("a[data-v]"); if(!a)return;
     var v=a.getAttribute("data-v");
     Array.prototype.forEach.call(nav.querySelectorAll("a"),function(x){x.classList.toggle("on",x===a)});
     Array.prototype.forEach.call(document.querySelectorAll(".view"),function(vw){vw.hidden=vw.getAttribute("data-view")!==v});
-    if(v==="journal") pollJournal();
-    if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
+    onView(v);
     window.scrollTo({top:0,behavior:reduce?"auto":"smooth"});
   });
   function gotoView(v){
     Array.prototype.forEach.call(nav.querySelectorAll("a"),function(x){x.classList.toggle("on",x.getAttribute("data-v")===v)});
     Array.prototype.forEach.call(document.querySelectorAll(".view"),function(vw){vw.hidden=vw.getAttribute("data-view")!==v});
+    onView(v);
     window.scrollTo({top:0,behavior:reduce?"auto":"smooth"});
   }
 
