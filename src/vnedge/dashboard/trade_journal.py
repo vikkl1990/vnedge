@@ -76,6 +76,15 @@ def build_trade_journal(
             trade["tp_reached"] = ladder["tp_reached"]
             if ladder.get("resolution"):
                 trade["resolution"] = ladder["resolution"]
+
+    # Leverage + margin from the journaled intents: paper trades join to their
+    # ENTRY order_intent by client_order_id; shadow outcomes to their
+    # shadow_intent by intent_key. margin = notional / leverage.
+    econ_by_coid, econ_by_key = _intent_economics(journal_rows)
+    for trade in paired:
+        _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
+    for trade in virtual_trades:
+        _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
     closed_trades = [_with_captured_bps(t) for t in paired + virtual_trades]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
@@ -505,6 +514,55 @@ def _with_captured_bps(trade: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _intent_economics(
+    journal_rows: list[tuple[str, dict[str, Any]]]
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Leverage + notional from journaled intents so trades can show margin.
+
+    order_intent is keyed by client_order_id (paper trades join on their entry
+    order); shadow_intent by intent_key (shadow outcomes join on that)."""
+    by_coid: dict[str, dict[str, float]] = {}
+    by_key: dict[str, dict[str, float]] = {}
+    for _lane, record in journal_rows:
+        kind = str(record.get("kind") or "")
+        if kind not in ("order_intent", "shadow_intent"):
+            continue
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
+        intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+        if not intent:
+            continue
+        econ = {
+            "leverage": _float(intent.get("leverage")),
+            "notional_usd": _float(intent.get("notional_usd")),
+        }
+        if econ["leverage"] <= 0 and econ["notional_usd"] <= 0:
+            continue
+        if kind == "order_intent":
+            coid = str(payload.get("client_order_id") or intent.get("client_order_id") or "")
+            if coid:
+                by_coid[coid] = econ
+        else:
+            key = str(payload.get("intent_key") or "")
+            if key:
+                by_key[key] = econ
+    return by_coid, by_key
+
+
+def _attach_economics(trade: dict[str, Any], econ: dict[str, float] | None) -> None:
+    """Attach leverage / notional / margin to a trade in place. Notional falls
+    back to entry_price × quantity when the intent didn't carry it."""
+    if not econ:
+        return
+    lev = _float(econ.get("leverage"))
+    notional = _float(econ.get("notional_usd"))
+    if notional <= 0:
+        notional = _float(trade.get("entry_price")) * abs(_float(trade.get("quantity")))
+    trade["leverage"] = round(lev, 2) if lev > 0 else None
+    trade["notional_usd"] = round(notional, 2) if notional > 0 else None
+    if lev > 0 and notional > 0:
+        trade["margin_usd"] = round(notional / lev, 2)
+
+
 def _paper_exit_ladders(
     journal_rows: list[tuple[str, dict[str, Any]]]
 ) -> dict[str, dict[str, Any]]:
@@ -569,6 +627,8 @@ def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "fee_usd": round(fee, 6),
                 "net_after_this_fill_fee_usd": round(realized - fee, 6),
                 "client_order_id": fill.get("client_order_id", ""),
+                # the ENTRY order's id — joins to its order_intent for leverage
+                "entry_client_order_id": entry.get("client_order_id", "") if entry else "",
                 "source": fill.get("source", "fill_ledger"),
             })
     return rows

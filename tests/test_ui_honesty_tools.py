@@ -108,6 +108,38 @@ def test_paper_tp_ladder_joins_by_client_order_id(tmp_path):
     assert trade["captured_bps_basis"] == "gross"
 
 
+def test_journal_shows_margin_and_leverage(tmp_path):
+    # paper trade: entry order_intent carries leverage 5 + notional 500
+    _write(tmp_path / "pt.fills.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "lane": "pt", "side": "buy", "price": 100,
+         "quantity": 5, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "entry-1"},
+        {"ts": "2026-07-27T02:00:00Z", "lane": "pt", "side": "sell", "price": 106,
+         "quantity": 5, "realized_pnl_usd": 30, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "exit-1"},
+    ])
+    _write(tmp_path / "pt.journal.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "kind": "order_intent", "payload": {
+            "client_order_id": "entry-1",
+            "intent": {"leverage": 5.0, "notional_usd": 500.0, "quantity": 5}}},
+        # a shadow lane trade: shadow_intent (lev 3 / notional 300) -> outcome
+        {"ts": "2026-07-27T01:00:00Z", "kind": "shadow_intent", "payload": {
+            "intent_key": "k1", "approved": True,
+            "intent": {"leverage": 3.0, "notional_usd": 300.0}}},
+        {"ts": "2026-07-27T03:00:00Z", "kind": "shadow_outcome", "payload": {
+            "intent_key": "k1", "side": "long", "resolution": "take_profit",
+            "entry_price": 50, "exit_price": 52, "virtual_net_usd": 1.5}},
+    ])
+    snap = {"lane_id": "pt", "lanes": [{"lane_id": "pt"}]}
+    payload = build_trade_journal(snapshot=snap, journal_dir=tmp_path, lane="", limit=200)
+    paper = next(t for t in payload["closed_trades"] if t.get("kind") == "actual_closing_fill")
+    assert paper["leverage"] == 5.0
+    assert paper["margin_usd"] == 100.0  # 500 notional / 5x
+    shadow = next(t for t in payload["closed_trades"] if t.get("kind") == "shadow_outcome")
+    assert shadow["leverage"] == 3.0
+    assert shadow["margin_usd"] == 100.0  # 300 / 3x
+
+
 def test_cost_model_exposes_all_venues():
     cm = _cost_model_payload()
     by = {e["exchange"]: e for e in cm["exchanges"]}
