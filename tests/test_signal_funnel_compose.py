@@ -116,6 +116,22 @@ def test_vnedge_algo_ml_pro_contract_matrix_refreshes_delta_replay():
     assert service["depends_on"] == ["pine-backtest-evidence"]
 
 
+def test_paper_lane_activation_publishes_server_side_profile_ack():
+    service = compose_services()["paper-lane-activation"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_lane_activation",
+    ]
+    assert "--requested-margin-usd" in service["command"]
+    assert "--requested-leverage" in service["command"]
+    assert "--live-margin-usd" in service["command"]
+    assert "--live-leverage" in service["command"]
+    assert "--high-leverage-ack" in service["command"]
+    assert "${PAPER_LANE_ACTIVATION_HIGH_LEVERAGE_ACK:-0}" in service["command"]
+
+
 def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
     service = compose_services()["scanner-backtest-uplift"]
 

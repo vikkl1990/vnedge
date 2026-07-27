@@ -7,6 +7,7 @@ from vnedge.research.paper_lane_activation import (
     ACTIVATION_PAPER_RUNNING,
     ACTIVATION_ROUTE_BLOCKED,
     PaperLaneActivationConfig,
+    _parse_args,
     build_paper_lane_activation,
 )
 
@@ -261,6 +262,12 @@ max_leverage: 30
     assert row["sizing_profiles"]["live"]["risk_compatible"] is False
     assert row["sizing_profiles"]["live"]["requested_notional_usd"] == 1240.0
     assert "absolute max" in row["sizing_profiles"]["live"]["blockers"][0]
+
+
+def test_paper_activation_cli_accepts_env_friendly_high_leverage_ack():
+    args = _parse_args(["--high-leverage-ack", "true"])
+
+    assert args.high_leverage_ack is True
 
 
 def test_paper_activation_refuses_unsafe_live_orders_manifest(tmp_path):
