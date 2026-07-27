@@ -499,7 +499,7 @@
         <div class="eqwrap">
           <div class="eqtop">
             <div>
-              <div class="lbl">Net asset value · all lanes</div>
+              <div class="lbl">Paper book NAV · deployed capital</div>
               <div class="eqbig num" id="eqBig">--</div>
               <div class="lbl" style="margin-top:2px" id="eqPrimary">primary lane --</div>
             </div>
@@ -986,10 +986,11 @@
   function render(s){
     var lanes=Array.isArray(s.lanes)?s.lanes:[];
     var kill=!!s.kill_switch_active, live=!!s.live_trading_enabled, pnl=num(s.daily_pnl);
-    // FLEET NAV — portfolio across every tracked lane, never one lane pretending
-    // to be the whole book. Falls back to the flat primary equity in demo mode.
+    // Headline = the PAPER book (lanes that actually deploy capital), never one
+    // lane pretending to be the whole book, and never diluted by static shadow
+    // accounts. Falls back to the flat primary equity in demo mode.
     var fleet=s.fleet||null;
-    var nav=fleet?num(fleet.equity):num(s.equity);
+    var nav=fleet?num(fleet.paper_equity):num(s.equity);
 
     // command bar
     text("eqTop",moneyAbs(nav));
@@ -1034,11 +1035,11 @@
     // equity + KPIs — the headline curve + number track the FLEET, not one lane
     pushEq(nav); drawEq();
     text("eqBig",moneyAbs(nav));
-    var navPct=fleet?num(fleet.return_pct):((num(s.equity)-500)/500*100),ep=$("eqPct");
+    var navPct=fleet?num(fleet.paper_return_pct):((num(s.equity)-500)/500*100),ep=$("eqPct");
     if(ep){ep.textContent=(navPct>=0?"+":"")+navPct.toFixed(2)+"% net";ep.className="eqchg "+(navPct>=0?"up":"dn");}
     if(fleet){
-      text("eqStart","across "+num(fleet.lanes)+" lanes · $"+num(fleet.starting_equity).toLocaleString(undefined,{maximumFractionDigits:0})+" deployed");
-      text("eqPrimary","primary lane "+moneyAbs(s.equity));
+      text("eqStart",num(fleet.paper_lanes)+" paper lanes · $"+num(fleet.paper_starting_equity).toLocaleString(undefined,{maximumFractionDigits:0})+" deployed · "+num(fleet.shadow_lanes)+" shadow observing");
+      text("eqPrimary","total book "+moneyAbs(fleet.equity)+" · primary "+moneyAbs(s.equity));
       var rp=num(fleet.realized_pnl),kp=$("kPaper"); if(kp)kp.className="v num "+(rp>=0?"up":"dn");
       text("kPaper",usd(rp)); text("kPaperSub",num(fleet.paper_lanes)+" paper · "+num(fleet.profitable_lanes)+"↑ / "+num(fleet.losing_lanes)+"↓");
       var sv=num(fleet.shadow_virtual_net_usd),ksh=$("kShadow"); if(ksh)ksh.className="v num "+(sv>=0?"up":"dn");

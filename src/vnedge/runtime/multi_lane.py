@@ -299,6 +299,10 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
     other. Error lanes are excluded — a crashed lane is not a $0 account.
     """
     eq = start = realized = unrealized = fees = 0.0
+    # paper_* = only the lanes that actually deploy capital. Shadow lanes hold a
+    # static nominal account that never moves, so folding them into the headline
+    # return dilutes it to ~0 and hides how the traded book is really doing.
+    paper_eq = paper_start = 0.0
     paper_n = shadow_n = profitable = losing = 0
     shadow_net = 0.0
     shadow_trades = 0
@@ -315,7 +319,8 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
         realized += r
         unrealized += u
         fees += f
-        start += (e - r - u)  # starting = equity - realized - unrealized
+        lane_start = e - r - u  # starting = equity - realized - unrealized
+        start += lane_start
         if "shadow" in str(lane.get("mode") or "").lower():
             shadow_n += 1
             sp = lane.get("shadow_perf") or {}
@@ -323,11 +328,14 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
             shadow_trades += int(sp.get("virtual_trades") or 0)
         else:
             paper_n += 1
+            paper_eq += e
+            paper_start += lane_start
         if r > 1e-9:
             profitable += 1
         elif r < -1e-9:
             losing += 1
     ret_pct = ((eq - start) / start * 100.0) if start > 1e-9 else 0.0
+    paper_ret_pct = ((paper_eq - paper_start) / paper_start * 100.0) if paper_start > 1e-9 else 0.0
     return {
         "lanes": counted,
         "equity": round(eq, 2),
@@ -338,6 +346,10 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
         "return_pct": round(ret_pct, 3),
         "paper_lanes": paper_n,
         "shadow_lanes": shadow_n,
+        # the traded book, undiluted by static shadow accounts
+        "paper_equity": round(paper_eq, 2),
+        "paper_starting_equity": round(paper_start, 2),
+        "paper_return_pct": round(paper_ret_pct, 3),
         "shadow_virtual_net_usd": round(shadow_net, 2),
         "shadow_virtual_trades": shadow_trades,
         "profitable_lanes": profitable,
