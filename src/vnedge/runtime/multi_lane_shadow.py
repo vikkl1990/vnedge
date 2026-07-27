@@ -968,6 +968,46 @@ def evidence_paper_trial_lanes(
     return specs
 
 
+def velocity_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
+    """Small, clearly-labelled VELOCITY cohort — fast 5m lanes whose ONLY job is
+    to accelerate ML meta-label collection and keep the live tape visibly active.
+
+    These are NOT edge candidates. The 5m Delta scanner setups are fee-wall
+    losers — that is exactly why the evidence-aligned roster runs 4h/1h instead
+    — so the value here is the opposite: a steady stream of win/loss examples
+    (mostly losses) the meta-labeler needs to learn to REJECT bad setups. They
+    are SHADOW-only, never mirrored to paper, and structurally unpromotable (no
+    lane ever promotes without pre-registered untouched-data judgment, which a
+    velocity lane never receives). The `velocity_` lane-id prefix makes that
+    unmistakable in the cockpit and the journals. Gated off with
+    MULTI_LANE_VELOCITY=0; kept deliberately small.
+    """
+    if not _truthy(environ, "MULTI_LANE_VELOCITY", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    symbols = [
+        _delta_india_symbol(symbol)
+        for symbol in _csv_env(
+            "MULTI_LANE_VELOCITY_SYMBOLS",
+            "ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT",
+            environ,
+        )
+    ]
+    return [
+        LaneSpec(
+            lane_id=f"velocity_sats_5m_scalper_{DELTA_EXCHANGE}_{_slug_symbol(symbol)}_shadow",
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="5m",
+            strategy_id="sats_5m_scalper_v1",
+            strategy_params=SATS_5M_PARAMS,
+            mode=RunnerMode.SHADOW,
+        )
+        for symbol in symbols
+    ]
+
+
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """The full deduped spec list the runner is SUPPOSED to run.
 
@@ -993,6 +1033,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + luxara_live_plan_qtm_delta_lanes(environ)
         + luxara_break_bounce_v27_delta_lanes(environ)
         + fee_wall_paper_probe_lanes(environ)
+        + velocity_delta_lanes(environ)
     )
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 
