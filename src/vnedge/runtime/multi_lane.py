@@ -37,6 +37,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
 from vnedge.paper.account_store import PaperAccountStore
+from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
@@ -239,6 +240,10 @@ class MultiLaneProvider:
                 # latest strategy evaluation (features + thresholds) so the
                 # lane matrix can explain WHY a lane is waiting/near trigger
                 "last_eval": self._lanes[lid].get("session", {}).get("last_eval"),
+                # cumulative funnel survives restarts (LaneFunnelStore); these
+                # two let the dashboard show "last fired 2d ago · 4h bars"
+                "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
+                "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),
             }
@@ -622,6 +627,8 @@ async def build_lane(
             journal_dir / f"{spec.lane_id}.account.json", spec.lane_id),
         equity_history_path=journal_dir / f"{spec.lane_id}.equity.jsonl",
         fill_ledger=FillLedger(journal_dir / f"{spec.lane_id}.fills.jsonl"),
+        funnel_store=LaneFunnelStore(
+            journal_dir / f"{spec.lane_id}.funnel.json", spec.lane_id),
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
@@ -637,6 +644,9 @@ async def build_lane(
     if resumed:
         state = session.account_store.load() or {}
         session.restore_plan(state.get("plan"))
+    # Resume the funnel counters so the live activity view doesn't reset to 0
+    # on every deploy (display-only; never gates a trade).
+    session.funnel_store.restore_into(session)
     logger.info("lane %s (%s %s %s %s) built; resumed=%s",
                 spec.lane_id, spec.exchange, spec.symbol, spec.strategy_id,
                 spec.mode.value, resumed)
