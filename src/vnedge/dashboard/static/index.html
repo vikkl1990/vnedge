@@ -367,7 +367,7 @@
   .jrow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
   .jrow:last-child{border-bottom:none}
   .jrow:hover{background:var(--bg-3)}
-  .jrow-ct{grid-template-columns:66px 1.3fr 74px 46px 70px 1fr 54px 80px 54px}
+  .jrow-ct{grid-template-columns:66px 1.2fr 74px 46px 94px 66px 1fr 54px 78px 52px}
   .jrow-fl{grid-template-columns:66px 1.4fr 58px 82px 44px 92px 96px 60px}
   .jrow-or{grid-template-columns:66px 1.6fr 92px 50px 84px 96px 1fr}
   .jrow .lane{color:var(--txt-dim);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -569,7 +569,7 @@
     <section class="panel" style="margin-top:14px">
       <div class="phead"><h2>Closed Trades</h2><span class="meta" id="jctMeta">—</span></div>
       <div class="jtbl">
-        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
+        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Lev &middot; Margin</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
         <div id="jClosed"><div class="jempty">Loading…</div></div>
       </div>
     </section>
@@ -1391,6 +1391,7 @@
   function jLane(l){ return String(l||"—").replace(/_paper_observation$/,"·paper").replace(/_shadow$/,"·shadow").replace(/_v1_/g,"·").replace(/_/g," "); }
   function jSym(s){ s=String(s==null?"":s); var i=s.indexOf(":"); return (i>0?s.slice(0,i):s)||"—"; }
   function jExitLabel(r){ r=String(r||""); return r==="take_profit"?"TP":r==="stop"?"SL":r==="timeout"?"TO":"—"; }
+  function jLevMargin(t){ var lev=+t.leverage, m=t.margin_usd; if(!isFinite(lev)||lev<=0)return "—"; var lv=(lev%1?lev.toFixed(1):lev.toFixed(0))+"×"; return (m!=null&&isFinite(+m))?lv+" · $"+(+m).toFixed(0):lv; }
   function jTpLadder(t){ var lv=(t.take_profit_levels||[]),n=+t.tp_reached||0; if(!lv.length)return""; var d=""; for(var i=0;i<lv.length;i++){ d+="<span style='display:inline-block;width:5px;height:5px;border-radius:50%;margin-left:3px;vertical-align:middle;background:"+(i<n?"var(--long)":"var(--line-2)")+"'></span>"; } return d; }
   function jSideCls(s){ s=String(s||"").toLowerCase(); return (s==="long"||s==="buy")?"up":(s==="short"||s==="sell")?"dn":""; }
   function jTile(lbl,v,sub){ return "<div class='kpi'><div class='lbl'>"+lbl+"</div><div class='v'>"+v+"</div><div class='s'>"+sub+"</div></div>"; }
@@ -1411,6 +1412,7 @@
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
         "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
         "<span class='num'>"+jEsc(sym)+"</span><span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||"").toUpperCase())+"</span>"+
+        "<span class='num' style='color:var(--txt-dim);white-space:nowrap' title='"+(t.notional_usd!=null?"notional $"+(+t.notional_usd).toLocaleString():"leverage/margin not journaled")+"'>"+jLevMargin(t)+"</span>"+
         "<span style='color:"+rc+"' title='"+jEsc(String(t.resolution||"").replace(/_/g," "))+((t.take_profit_levels||[]).length?" · reached TP"+(+t.tp_reached||0)+" of "+(t.take_profit_levels||[]).length:"")+"'>"+jExitLabel(t.resolution)+jTpLadder(t)+"</span>"+
         "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" &rarr; "+jPx(t.exit_price)+"</span>"+
         "<span class='num "+(bps==null?"":bps<0?"dn":"up")+"' title='"+(t.captured_bps_basis||"")+" bps captured'>"+(bps==null?"—":(bps>0?"+":"")+bps.toFixed(0))+"</span>"+
