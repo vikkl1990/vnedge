@@ -45,7 +45,11 @@ from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
-from vnedge.runtime.shadow_outcomes import ShadowOutcomeTracker, VirtualOutcome
+from vnedge.runtime.shadow_outcomes import (
+    ShadowOutcomeTracker,
+    VirtualOutcome,
+    _tp_reached,
+)
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
@@ -85,6 +89,11 @@ def _is_numeric(value: object) -> bool:
 class _LivePlan:
     signal: SignalIntent
     entry_bar_ts: pd.Timestamp
+    # Most-favourable excursion since entry (highest high for a long, lowest low
+    # for a short). OBSERVATION ONLY — records how far up the TP ladder price
+    # reached; it never feeds the exit decision, so P&L stays byte-identical to
+    # the single-take-profit engine.
+    mfe_price: float | None = None
 
 
 class LivePaperSession:
@@ -363,6 +372,16 @@ class LivePaperSession:
             return
         sig = self._plan.signal
         high, low = float(bar["high"]), float(bar["low"])
+        # Observation-only: extend the most-favourable excursion before deciding
+        # the exit. This is recorded, never acted on.
+        fav = high if sig.side == "long" else low
+        if self._plan.mfe_price is None:
+            self._plan.mfe_price = fav
+        else:
+            self._plan.mfe_price = (
+                max(self._plan.mfe_price, fav) if sig.side == "long"
+                else min(self._plan.mfe_price, fav)
+            )
         reason = None
         if sig.side == "long":
             if low <= sig.stop_price:
@@ -376,10 +395,22 @@ class LivePaperSession:
                 reason = "take_profit"
         if reason is None:
             return
+        # Capture the ladder progress BEFORE submitting — _submit_exit clears the
+        # plan on acceptance.
+        levels = list(sig.take_profit_levels)
+        mfe = self._plan.mfe_price
+        tp_reached = _tp_reached(sig.side, mfe, sig.take_profit_levels) if levels else 0
         order = await self._submit_exit(reason, int(bar["timestamp"].value), now)
         if order is None:
             return
-        self.journal.append("live_paper_exit", {"reason": reason, "state": order.state.value})
+        self.journal.append("live_paper_exit", {
+            "reason": reason,
+            "state": order.state.value,
+            "client_order_id": order.client_order_id,
+            "take_profit_levels": levels,
+            "tp_reached": tp_reached,
+            "mfe_price": mfe,
+        })
         self._log_trade_event("exit", f"{reason} ({order.state.value})"[:140], now)
 
     async def _submit_exit(self, reason: str, key_ts: int, now: datetime):
