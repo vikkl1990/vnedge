@@ -622,6 +622,11 @@
         <div class="plrow plhead"><span>Strategy · Symbol · TF</span><span>Live</span><span>Shadow P&amp;L</span><span>Research edge</span><span>ML labels</span><span>Gate</span></div>
         <div id="pipeline"><div class="jempty">Loading…</div></div>
       </div>
+      <div style="padding:8px 16px;font-size:10.5px;color:var(--txt-faint)">Click a lane to drill down into its trades, gate blockers and full lifecycle.</div>
+    </section>
+    <section class="panel" id="pipelineDetailWrap" hidden style="margin-top:16px">
+      <div class="phead"><h2 id="pldTitle">Lane detail</h2><span class="meta" id="pldMeta"></span></div>
+      <div id="pipelineDetail"></div>
     </section>
   </div><!-- /pipeline -->
 
@@ -734,10 +739,23 @@
   <!-- ===== RESEARCH VIEW ===== -->
   <div class="view" data-view="promote" hidden>
     <p class="intro"><b>Path to live.</b> Where each lane sits on the promotion ladder — research → replay → untouched judgment → shadow → paper → live-small — and exactly why it is or isn't progressing. Read-only; promotion is human-gated on untouched data.</p>
+    <style>
+      .plgate{display:grid;grid-template-columns:1fr 58px 84px;gap:10px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line)}
+      .plgate .gk{font-size:12.5px;font-weight:600}
+      .plgate .gs{font-size:10.5px;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .plchip{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:3px 6px;border-radius:5px;text-align:center}
+      .plstep{display:grid;grid-template-columns:24px 1fr;gap:11px;align-items:start;padding:9px 15px;border-bottom:1px solid var(--line)}
+      .plnum{width:22px;height:22px;border-radius:50%;background:var(--bg-inset);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:800;color:var(--txt-dim)}
+      .plstep b{display:block;font-size:12.5px}
+      .plstep small{display:block;font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+    </style>
+    <section class="panel" style="border:1px solid var(--accent-soft,rgba(77,178,255,.25))">
+      <div class="phead"><h2>Live Readiness — gates to a first live order</h2><span class="meta" id="preLiveMeta">loading…</span></div>
+      <div id="preLive"></div>
+    </section>
     <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Operator Lifecycle Console</h2><span class="meta" id="lifecycleMeta">joining lane evidence…</span></div>
       <div id="lifecycleConsole"><div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div></div>
-    </section>
     <div class="main">
       <div class="col">
         <section class="panel">
@@ -1628,13 +1646,54 @@
       var ml=mlByStrat[l.strategy_id]; if(ml==null)ml=mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")];
       var gate=tc.state||(String(l.mode||"").indexOf("shadow")>=0?"SHADOW_ONLY":"PAPER_COMPATIBLE");
       var gcls=(gate.indexOf("PAPER_COMPAT")>=0)?"maker":(gate.indexOf("PROBATION")>=0||gate.indexOf("BLOCK")>=0)?"wall":"pass";
-      return "<div class='plrow'>"+
+      return "<div class='plrow' data-lane='"+jEsc(encodeURIComponent(l.lane_id||""))+"' style='cursor:pointer'>"+
         "<div class='plcell'>"+(isVel?"<span class='veltag'>VEL</span>":"")+"<b style='display:inline'>"+jEsc(short)+"</b><small>"+jEsc(symShort(l.symbol))+" · "+jEsc(l.timeframe||"?")+" · "+jEsc(ven(l.exchange).lab)+"</small></div>"+
         "<div class='plcell'><span class='plpill "+st[1]+"'>"+st[0]+"</span><small>"+(l.last_fired_ts?"fired "+agoShort(l.last_fired_ts):"no fire yet")+" · "+num(f.live_evals||f.evals)+" evals</small></div>"+
         "<div class='plcell'><b class='num "+vc+"'>"+(vt?usd(vn):"—")+"</b><small>"+vt+" shadow trades</small></div>"+
         "<div class='plcell'>"+(sc?("<span class='route "+(rb>=0?"pass":"wall")+"'>"+(rb>=0?"+":"")+rb.toFixed(0)+" bps</span><small>"+jEsc(String(sc.verdict||"").toLowerCase().replace(/_/g," "))+" · "+rs.toLocaleString()+" smpl</small>"):"<b style='color:var(--txt-faint)'>—</b><small>not on scorecard</small>")+"</div>"+
         "<div class='plcell'><b class='num'>"+(ml!=null?ml:"—")+"</b><small>meta-label"+((ml!=null&&ml!==1)?"s":"")+"</small></div>"+
         "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span></div>"+
+      "</div>";
+    }).join("");
+  }
+  /* ---- pipeline drill-down: one lane's full lifecycle ---- */
+  var pldLane=null;
+  function openPipelineDetail(laneId){
+    pldLane=laneId;
+    var wrap=$("pipelineDetailWrap"); if(wrap)wrap.hidden=false;
+    var lanes=(lastSnap&&lastSnap.lanes)||[],l=null;
+    for(var i=0;i<lanes.length;i++){ if(String(lanes[i].lane_id)===laneId){ l=lanes[i]; break; } }
+    var short=l?stratShort(l.strategy_id):laneId;
+    text("pldTitle",short+(l?" · "+symShort(l.symbol)+" · "+(l.timeframe||"?"):""));
+    if($("pldMeta"))$("pldMeta").textContent=jLane(laneId);
+    var sc=l?scoreByStrat[stratShort(l.strategy_id)]:null;
+    var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
+    var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
+    var head="<div class='kpis' style='padding:14px 15px 0'>"+
+      "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>ML labels</div><div class='v num'>"+(ml!=null?ml:'—')+"</div><div class='s'>fed to meta-labeler</div></div>"+
+    "</div>";
+    var el=$("pipelineDetail"); if(el)el.innerHTML=head+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";
+    poll("/trade-journal?limit=25&lane="+encodeURIComponent(laneId), function(d){ if(pldLane===laneId) renderPldTrades(d); });
+  }
+  function renderPldTrades(d){
+    var el=$("pldTrades"); if(!el)return;
+    var s=d.summary||{},ct=(d.closed_trades||[]).slice(0,20);
+    var hdr="<div style='font-size:11px;color:var(--txt-dim);margin-bottom:8px'>"+num(s.closed_trades)+" closed · "+jMoney(+s.actual_realized_pnl_usd||0)+" realized · "+jMoney(+s.virtual_net_usd||0)+" shadow net</div>";
+    if(!ct.length){el.innerHTML=hdr+"<div class='jempty'>No closed trades yet — this lane is still warming up.</div>";return;}
+    el.innerHTML=hdr+ct.map(function(t){
+      var net=(t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0);
+      var bps=(t.captured_bps==null?null:+t.captured_bps);
+      var rc=(t.resolution==='take_profit'||t.resolution==='target')?'var(--long)':(t.resolution==='stop'||t.resolution==='tick_stop')?'var(--short)':'var(--txt-dim)';
+      return "<div style='display:grid;grid-template-columns:62px 46px 44px 1fr 52px 68px;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:11.5px;align-items:center'>"+
+        "<span class='num'>"+jTime(t.ts)+"</span>"+
+        "<span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||'').toUpperCase())+"</span>"+
+        "<span style='color:"+rc+"'>"+jExitLabel(t)+"</span>"+
+        "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" → "+jPx(t.exit_price)+"</span>"+
+        "<span class='num "+(bps==null?'':bps<0?'dn':'up')+"'>"+(bps==null?'—':(bps>0?'+':'')+bps.toFixed(0))+"</span>"+
+        "<span class='num "+(net<0?'dn':'up')+"'>"+jMoney(net)+"</span>"+
       "</div>";
     }).join("");
   }
@@ -1703,6 +1762,26 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function renderPreLive(d){
+    var el=$("preLive"),meta=$("preLiveMeta"); if(!el||!d)return;
+    var checks=d.checks||[], path=d.path_to_live||[];
+    var green=checks.filter(function(c){return c.passed;}).length;
+    if(meta)meta.textContent=green+" / "+checks.length+" gates green"+(d.cleared?" · CLEARED ✓":" · "+num(d.red_count)+" red");
+    var gates=checks.map(function(c){
+      var oc=c.owner==="operator"?"var(--warn)":c.owner==="deliberate"?"var(--txt-faint)":"var(--accent)";
+      return "<div class='plgate'><div><div class='gk'>"+jEsc(c.name.replace(/_/g," "))+(c.critical?"":" <span style='color:var(--txt-faint);font-weight:400'>(non-critical)</span>")+"</div><div class='gs'>"+jEsc(String(c.detail||""))+"</div></div>"+
+        "<span class='plchip' style='background:"+(c.passed?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+(c.passed?"green":"red")+"</span>"+
+        "<span class='plchip' style='background:var(--bg-3);color:"+oc+"'>"+jEsc(c.owner)+"</span></div>";
+    }).join("");
+    var steps=path.map(function(p,i){
+      return "<div class='plstep'><span class='plnum'>"+(i+1)+"</span><div><b>"+jEsc(p.step)+"</b><small><b style='color:var(--txt-dim)'>"+jEsc(p.owner)+"</b> · "+jEsc(p.detail)+"</small></div></div>";
+    }).join("");
+    el.innerHTML=gates+
+      "<div style='padding:14px 15px 5px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt-dim);font-weight:700'>Ordered path to a first live order</div>"+
+      steps+
+      "<div class='fblocker'><b>Where we stand:</b> "+jEsc(d.operator_answer||"")+"</div>";
+  }
+  function pollPreLive(){ poll("/pre-live-checklist", renderPreLive); }
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
@@ -1813,17 +1892,31 @@
         "<div class='mlbar'><i style='width:"+Math.min(100,num(ds.progress_pct))+"%'></i></div>"+
         "<div style='font-size:11px;color:var(--txt-faint);margin-top:9px'>"+(keys.length?keys.map(function(k){return jEsc(k.replace(/_v1$/,""))+" · "+by[k];}).join(" &nbsp; "):"no labeled trades yet — the paper trials are still warming up (4h fires ~2/wk)")+"</div>"+
       "</div>";
-    document.getElementById("mlGates").innerHTML=
-      mlGate("Deflated Sharpe","≥ "+g.deflated_sharpe_min)+
-      mlGate("Prob. backtest overfit","≤ "+g.pbo_max)+
-      mlGate("CPCV median PF","≥ "+g.cpcv_median_profit_factor_min)+
-      mlGate("Beat rule-based baseline", g.must_beat_rule_based_baseline?"required":"—")+
-      "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>"+jEsc(d.note||"")+"</div>";
+    var val=d.validation||null;
+    if(val && Array.isArray(val.gates) && val.gates.length){
+      // LIVE gated verdict from the meta-labeling harness — measured value + pass/fail
+      var vpass=!!val.passed, vs=String(val.status||"").replace(/_/g," ").toLowerCase();
+      var head="<div class='gaterow2' style='border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:7px'><span class='gk'>Verdict</span><span class='gv' style='background:"+(vpass?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+jEsc(vs)+"</span></div>";
+      var rows=val.gates.map(function(gg){
+        var v=(gg.value==null)?"—":(gg.name==="beats_baseline"?(gg.value>=1?"yes":"no"):(+gg.value).toFixed(2));
+        return "<div class='gaterow2'><span class='gk'>"+jEsc(gg.name.replace(/_/g," "))+" <span style='color:var(--txt-faint)'>"+jEsc(gg.direction)+" "+gg.threshold+"</span></span><span class='gv' style='background:"+(gg.ok?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+v+" "+(gg.ok?"✓":"✕")+"</span></div>";
+      }).join("");
+      document.getElementById("mlGates").innerHTML=head+rows+
+        "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>"+jEsc(d.note||"")+"</div>";
+    } else {
+      var wait=val?(" · "+jEsc(String(val.status||"").replace(/_/g," ").toLowerCase())):"";
+      document.getElementById("mlGates").innerHTML=
+        mlGate("Deflated Sharpe","≥ "+g.deflated_sharpe_min)+
+        mlGate("Prob. backtest overfit","≤ "+g.pbo_max)+
+        mlGate("CPCV median PF","≥ "+g.cpcv_median_profit_factor_min)+
+        mlGate("Beat rule-based baseline", g.must_beat_rule_based_baseline?"required":"—")+
+        "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>locked gates — evaluated live once labels clear the CPCV floor"+wait+"</div>";
+    }
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
@@ -1907,6 +2000,15 @@
   }
   calcInit(); pollCostModel();
 
+  /* pipeline drill-down: delegated click (attached once; survives re-renders) */
+  var _pipeEl=document.getElementById("pipeline");
+  if(_pipeEl) _pipeEl.addEventListener("click",function(e){
+    var row=e.target.closest(".plrow"); if(!row||row.classList.contains("plhead"))return;
+    var lane=row.getAttribute("data-lane"); if(!lane)return;
+    openPipelineDetail(decodeURIComponent(lane));
+    var w=$("pipelineDetailWrap"); if(w)w.scrollIntoView({behavior:reduce?"auto":"smooth",block:"nearest"});
+  });
+
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav"), curView="desk";
   function onView(v){
@@ -1914,6 +2016,7 @@
     if(v==="journal") pollJournal();
     if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     if(v==="pipeline") renderPipeline(lastSnap);
+    if(v==="promote") pollPreLive();
   }
   nav.addEventListener("click",function(e){
     var a=e.target.closest("a[data-v]"); if(!a)return;
