@@ -292,6 +292,15 @@
     background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
   .perfrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .perfrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .docgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px 14px 0}
+  .dock{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .dock .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .dock .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
+  .docrows{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px}
+  .docrow{display:grid;grid-template-columns:1fr .72fr .72fr 1.25fr;gap:9px;align-items:center;
+    background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .docrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .docrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .profilematrix{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px}
   .profrow{display:grid;grid-template-columns:1fr .45fr .7fr .7fr 1.15fr;gap:9px;align-items:center;
     background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
@@ -690,6 +699,10 @@
         <section class="panel">
           <div class="phead"><h2>Paper Activation Board</h2><span class="meta" id="paperActivationMeta">loading…</span></div>
           <div id="paperActivation"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Paper Route Doctor</h2><span class="meta" id="paperRouteDoctorMeta">loading…</span></div>
+          <div id="paperRouteDoctor"></div>
         </section>
         <section class="panel">
           <div class="phead"><h2>Trade Profile Matrix</h2><span class="meta" id="tradeProfileMeta">loading…</span></div>
@@ -1322,6 +1335,36 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
   }
+  function docCls(st){
+    st=String(st||"");
+    if(st==="JOURNAL_ACTIVE")return"ok";
+    if(st==="JOURNAL_STALE"||st==="ROUTE_READY_JOURNAL_MISSING")return"wait";
+    if(st==="RUNNER_SERVICE_DOWN"||st==="ROUTE_NOT_WIRED"||st==="MANIFEST_UNSAFE"||st==="BLOCKED_NEGATIVE")return"bad";
+    return"fix";
+  }
+  function renderPaperRouteDoctor(d){
+    var el=$("paperRouteDoctor"),meta=$("paperRouteDoctorMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[],runner=(d&&d.runner_service)||{};
+    if(meta)meta.textContent=num(s.journal_active)+" active · "+num(s.journal_missing)+" missing · runner "+esc(runner.state||s.runner_state||"unknown");
+    if(!rows.length){el.innerHTML='<div class="note">paper route doctor loading…</div>';return;}
+    var k='<div class="docgrid">'+
+      '<div class="dock"><div class="l">Active journals</div><div class="v" style="color:var(--long)">'+num(s.journal_active)+'</div></div>'+
+      '<div class="dock"><div class="l">Missing</div><div class="v" style="color:var(--warn)">'+num(s.journal_missing)+'</div></div>'+
+      '<div class="dock"><div class="l">Stale</div><div class="v" style="color:var(--warn)">'+num(s.journal_stale)+'</div></div>'+
+      '<div class="dock"><div class="l">Runner down</div><div class="v" style="color:var(--short)">'+num(s.runner_down)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var counts=r.journal_counts||{},state=String(r.doctor_state||"UNKNOWN"),path=String(((r.expected_paths||{}).journal)||r.journal_path||"");
+      return '<div class="docrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+docCls(state)+'">'+esc(state.toLowerCase().replace(/_/g," "))+'</span><small>'+esc(String(r.activation_state||"--").toLowerCase().replace(/_/g," "))+'</small></div>'+
+        '<div><b class="num">'+num(counts.heartbeats)+' hb · '+num(counts.evals)+' eval</b><small>'+num(counts.order_intents)+' intents · age '+(r.age_hours==null?"--":num(r.age_hours).toFixed(1)+"h")+'</small></div>'+
+        '<div><b>'+esc(r.expected_lane_id||r.trial_id||"--")+'</b><small title="'+esc(path)+'">'+esc((r.next_action||path||"").slice(0,76))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="docrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper route doctor pending")+'</div>';
+  }
   function profileCls(st){
     st=String(st||"");
     if(st==="PAPER_PROFILE_READY")return"ok";
@@ -1416,6 +1459,7 @@
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
+  function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
@@ -1528,8 +1572,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

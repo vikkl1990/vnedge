@@ -433,6 +433,7 @@ def create_app(
     realtime_scanner_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
+    paper_route_doctor_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
@@ -583,6 +584,10 @@ def create_app(
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
+    )
+    paper_route_doctor_file = (
+        paper_route_doctor_path
+        or Path("research/live_research/paper_route_doctor_latest.json")
     )
     paper_lane_performance_file = (
         paper_lane_performance_path
@@ -986,6 +991,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper performance report unavailable",
                     "mode": "read_only_paper_performance",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-route-doctor")
+    async def paper_route_doctor(request: Request) -> JSONResponse:
+        """Latest paper route/journal doctor.
+
+        It explains whether approved paper routes have fresh journal proof and
+        whether the runner service is visible. Read-only; no restarts/trades.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_route_doctor_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "runner_service": {"state": "unknown", "up": None},
+                    "operator_answer": "paper route doctor report unavailable",
+                    "mode": "read_only_paper_route_doctor",
                     "can_trade": False,
                     "can_promote": False,
                 },
