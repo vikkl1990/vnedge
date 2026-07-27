@@ -116,6 +116,21 @@ def test_vnedge_algo_ml_pro_contract_matrix_refreshes_delta_replay():
     assert service["depends_on"] == ["pine-backtest-evidence"]
 
 
+def test_paper_route_doctor_explains_missing_journals():
+    service = compose_services()["paper-route-doctor"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_route_doctor",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--stale-after-hours" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["paper-lane-activation"]
+
+
 def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
     service = compose_services()["scanner-backtest-uplift"]
 
