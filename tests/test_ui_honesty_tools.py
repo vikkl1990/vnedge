@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import json
 
+import math
+
 from vnedge.dashboard.app import _cost_model_payload
 from vnedge.dashboard.trade_journal import build_trade_journal
-from vnedge.runtime.multi_lane import MultiLaneProvider, _fleet_aggregate
+from vnedge.runtime.multi_lane import MultiLaneProvider, _fleet_aggregate, _json_safe
 
 
 def _write(path, rows):
@@ -138,6 +140,33 @@ def test_journal_shows_margin_and_leverage(tmp_path):
     shadow = next(t for t in payload["closed_trades"] if t.get("kind") == "shadow_outcome")
     assert shadow["leverage"] == 3.0
     assert shadow["margin_usd"] == 100.0  # 300 / 3x
+
+
+def test_snapshot_never_serves_non_finite_floats():
+    # A single inf/nan (e.g. a degenerate quote's spread_bps) must never reach
+    # the wire — Starlette serializes with allow_nan=False, so it would 500
+    # /state and drop /ws, silently freezing the whole dashboard on stale data.
+    import json
+
+    provider = MultiLaneProvider("a")
+    provider._publish("a", "binanceusdm", {
+        "equity": 500.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0, "fills": 0,
+        "fees_usd": 0.0, "risk_status": "ok", "feed_health": {"candles": "ok"},
+        "positions": [], "open_orders": [], "session": {"nested": [float("nan")]},
+        "mode": "shadow",
+        "price": {"bid": 0, "ask": 0, "mid": 0, "spread_bps": float("inf")},
+    })
+    snap = provider.latest()
+    json.dumps(snap, allow_nan=False)  # must not raise
+    assert snap["lanes"][0]["price"]["spread_bps"] is None
+
+
+def test_json_safe_scrubs_inf_and_nan_recursively():
+    dirty = {"a": math.inf, "b": math.nan, "c": [-math.inf, 2.0], "d": {"e": 1.5}, "s": "x"}
+    clean = _json_safe(dirty)
+    assert clean["a"] is None and clean["b"] is None
+    assert clean["c"] == [None, 2.0]
+    assert clean["d"]["e"] == 1.5 and clean["s"] == "x"
 
 
 def test_cost_model_exposes_all_venues():

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -255,7 +256,11 @@ class MultiLaneProvider:
             out["lane_health"] = health
         if self._runtime_control:
             out["runtime_control"] = dict(self._runtime_control)
-        return out
+        # A single inf/nan anywhere (e.g. a degenerate quote's spread_bps) makes
+        # the whole snapshot fail JSON serialization — Starlette's JSONResponse
+        # and websocket.send_json both use allow_nan=False — which 500s /state
+        # and drops /ws, freezing the dashboard. Scrub non-finite floats to null.
+        return _json_safe(out)
 
 
 # --- lane construction ------------------------------------------------------------
@@ -292,6 +297,22 @@ def _lane_trade_compatibility(snapshot: dict) -> dict:
         "gateway_required": True,
         "journal_required": True,
     }
+
+def _json_safe(obj):
+    """Recursively replace non-finite floats (inf/-inf/nan) with None.
+
+    Starlette serializes JSON with allow_nan=False, so one inf/nan anywhere in
+    the published snapshot raises ValueError and 500s /state (or drops /ws) —
+    which silently freezes the dashboard on stale data. Null is always safe.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {key: _json_safe(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(value) for value in obj]
+    return obj
+
 
 def _fleet_aggregate(lanes: list[dict]) -> dict:
     """Portfolio-wide truth across the ACTIVELY-RUNNING lanes.
