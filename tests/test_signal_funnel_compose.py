@@ -131,6 +131,22 @@ def test_paper_route_doctor_explains_missing_journals():
     assert service["depends_on"] == ["paper-lane-activation"]
 
 
+def test_paper_lane_cadence_monitors_live_evaluation_cadence():
+    service = compose_services()["paper-lane-cadence"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_lane_cadence",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--grace-multiplier" in service["command"]
+    assert "--min-eval-sla-seconds" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["paper-lane-activation", "paper-route-doctor"]
+
+
 def test_paper_lane_activation_publishes_server_side_profile_ack():
     service = compose_services()["paper-lane-activation"]
 

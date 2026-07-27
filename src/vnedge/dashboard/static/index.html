@@ -705,6 +705,10 @@
           <div id="paperRouteDoctor"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Paper Cadence Monitor</h2><span class="meta" id="paperCadenceMeta">loading…</span></div>
+          <div id="paperCadence"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Trade Profile Matrix</h2><span class="meta" id="tradeProfileMeta">loading…</span></div>
           <div id="tradeProfileMatrix"></div>
         </section>
@@ -1365,6 +1369,38 @@
     el.innerHTML=k+'<div class="docrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper route doctor pending")+'</div>';
   }
+  function cadCls(st){
+    st=String(st||"");
+    if(st==="EVALUATING_SIGNAL_SEEN"||st==="EVALUATING_NO_SIGNAL")return"ok";
+    if(st==="HEARTBEAT_ONLY_NO_EVAL")return"wait";
+    if(st==="EVAL_STALE"||st==="HEARTBEAT_STALE"||st==="JOURNAL_MISSING")return"bad";
+    return"fix";
+  }
+  function renderPaperCadence(d){
+    var el=$("paperCadence"),meta=$("paperCadenceMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.cadence_ok)+" ok · "+num(s.stale)+" stale · "+num(s.journal_missing)+" missing · "+num(s.heartbeat_only)+" heartbeat-only";
+    if(!rows.length){el.innerHTML='<div class="note">paper cadence report loading…</div>';return;}
+    var k='<div class="docgrid">'+
+      '<div class="dock"><div class="l">Cadence ok</div><div class="v" style="color:var(--long)">'+num(s.cadence_ok)+'</div></div>'+
+      '<div class="dock"><div class="l">Signals seen</div><div class="v" style="color:var(--info)">'+num(s.signals_seen)+'</div></div>'+
+      '<div class="dock"><div class="l">Stale</div><div class="v" style="color:var(--short)">'+num(s.stale)+'</div></div>'+
+      '<div class="dock"><div class="l">Missing</div><div class="v" style="color:var(--warn)">'+num(s.journal_missing)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var c=r.counts||{},state=String(r.cadence_state||"UNKNOWN"),age=r.eval_age_seconds,expected=num(r.expected_eval_seconds);
+      var ageText=age==null?"--":(age<3600?Math.round(age/60)+"m":(age/3600).toFixed(1)+"h");
+      var slaText=expected<3600?Math.round(expected/60)+"m":(expected/3600).toFixed(1)+"h";
+      return '<div class="docrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cadCls(state)+'">'+esc(state.toLowerCase().replace(/_/g," "))+'</span><small>eval age '+esc(ageText)+' / SLA '+esc(slaText)+'</small></div>'+
+        '<div><b class="num">'+num(c.live_evals)+' live eval · '+num(c.heartbeats)+' hb</b><small>'+num(c.signals)+' signals · '+num(c.order_intents)+' intents</small></div>'+
+        '<div><b>'+esc(r.expected_lane_id||"--")+'</b><small title="'+esc(r.latest_why||r.next_action||"")+'">'+esc((r.next_action||r.latest_why||"").slice(0,76))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="docrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper cadence pending")+'</div>';
+  }
   function profileCls(st){
     st=String(st||"");
     if(st==="PAPER_PROFILE_READY")return"ok";
@@ -1460,6 +1496,7 @@
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
+  function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
@@ -1572,8 +1609,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
