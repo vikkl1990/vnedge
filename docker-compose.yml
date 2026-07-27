@@ -397,6 +397,23 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper route doctor: explains route-ready/no-journal cases by joining
+  # activation rows, fleet status, and expected paper journal paths. Read-only:
+  # it never restarts containers or changes manifests.
+  paper-route-doctor:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-activation]
+    command: ["python", "-m", "vnedge.research.paper_route_doctor",
+              "--interval-seconds", "${PAPER_ROUTE_DOCTOR_INTERVAL_SECONDS:-60}",
+              "--stale-after-hours", "${PAPER_ROUTE_DOCTOR_STALE_AFTER_HOURS:-3}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper performance ledger: reads paper decision journals + hash-chained fill
   # ledgers and publishes per-lane PnL/PF/sample status for the Promote view.
   # Read-only: no route can trade or promote from this service.

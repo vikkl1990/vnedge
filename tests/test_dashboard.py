@@ -106,6 +106,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "Safety Gates" in html
     assert "Trade Profile Matrix" in html
     assert "/trade-profile-matrix" in html
+    assert "Paper Route Doctor" in html
+    assert "/paper-route-doctor" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -783,6 +785,15 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_route_doctor = tmp_path / "paper_route_doctor.json"
+    paper_route_doctor.write_text(json.dumps({
+        "mode": "read_only_paper_route_doctor",
+        "summary": {"journal_missing": 1},
+        "rows": [{"doctor_state": "ROUTE_READY_JOURNAL_MISSING"}],
+        "runner_service": {"state": "up", "up": True},
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -795,6 +806,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         realtime_scanner_path=scanner,
         lane_firing_causality_path=causality,
         paper_lane_activation_path=paper_activation,
+        paper_route_doctor_path=paper_route_doctor,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -805,6 +817,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/lane-firing-causality").status_code == 401
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
+    assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
@@ -830,6 +843,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False
     assert trade_profile_payload["can_promote"] is False
+    paper_route_payload = client.get("/paper-route-doctor?token=t3st-token").json()
+    assert paper_route_payload["summary"]["journal_missing"] == 1
+    assert paper_route_payload["mode"] == "read_only_paper_route_doctor"
+    assert paper_route_payload["can_trade"] is False
+    assert paper_route_payload["can_promote"] is False
 
 
 def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):
