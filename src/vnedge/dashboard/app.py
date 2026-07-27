@@ -955,6 +955,24 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/pre-live-checklist")
+    async def pre_live_checklist(request: Request) -> JSONResponse:
+        """The gates to a first live order + who must act on each red (deliberate
+        / operator / system) + the ordered path to live. Computed on demand,
+        read-only; booleans only — it never reads a secret value and cannot
+        enable live trading."""
+        user = _authorized(request)
+        from vnedge.research.pre_live_status import build_pre_live_status
+
+        ladder = _REPO_ROOT / "research" / "live_research" / "live_ladder_latest.json"
+        return JSONResponse(
+            build_pre_live_status(
+                journal_dir=lane_dir or Path("logs/paper_trials"),
+                ladder_path=ladder if ladder.exists() else None,
+            ),
+            headers=_identity(user),
+        )
+
     @app.get("/paper-lane-activation")
     async def paper_lane_activation(request: Request) -> JSONResponse:
         """Latest paper activation truth board.
