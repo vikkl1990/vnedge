@@ -1669,12 +1669,26 @@
         "<div class='mlbar'><i style='width:"+Math.min(100,num(ds.progress_pct))+"%'></i></div>"+
         "<div style='font-size:11px;color:var(--txt-faint);margin-top:9px'>"+(keys.length?keys.map(function(k){return jEsc(k.replace(/_v1$/,""))+" · "+by[k];}).join(" &nbsp; "):"no labeled trades yet — the paper trials are still warming up (4h fires ~2/wk)")+"</div>"+
       "</div>";
-    document.getElementById("mlGates").innerHTML=
-      mlGate("Deflated Sharpe","≥ "+g.deflated_sharpe_min)+
-      mlGate("Prob. backtest overfit","≤ "+g.pbo_max)+
-      mlGate("CPCV median PF","≥ "+g.cpcv_median_profit_factor_min)+
-      mlGate("Beat rule-based baseline", g.must_beat_rule_based_baseline?"required":"—")+
-      "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>"+jEsc(d.note||"")+"</div>";
+    var val=d.validation||null;
+    if(val && Array.isArray(val.gates) && val.gates.length){
+      // LIVE gated verdict from the meta-labeling harness — measured value + pass/fail
+      var vpass=!!val.passed, vs=String(val.status||"").replace(/_/g," ").toLowerCase();
+      var head="<div class='gaterow2' style='border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:7px'><span class='gk'>Verdict</span><span class='gv' style='background:"+(vpass?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+jEsc(vs)+"</span></div>";
+      var rows=val.gates.map(function(gg){
+        var v=(gg.value==null)?"—":(gg.name==="beats_baseline"?(gg.value>=1?"yes":"no"):(+gg.value).toFixed(2));
+        return "<div class='gaterow2'><span class='gk'>"+jEsc(gg.name.replace(/_/g," "))+" <span style='color:var(--txt-faint)'>"+jEsc(gg.direction)+" "+gg.threshold+"</span></span><span class='gv' style='background:"+(gg.ok?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+v+" "+(gg.ok?"✓":"✕")+"</span></div>";
+      }).join("");
+      document.getElementById("mlGates").innerHTML=head+rows+
+        "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>"+jEsc(d.note||"")+"</div>";
+    } else {
+      var wait=val?(" · "+jEsc(String(val.status||"").replace(/_/g," ").toLowerCase())):"";
+      document.getElementById("mlGates").innerHTML=
+        mlGate("Deflated Sharpe","≥ "+g.deflated_sharpe_min)+
+        mlGate("Prob. backtest overfit","≤ "+g.pbo_max)+
+        mlGate("CPCV median PF","≥ "+g.cpcv_median_profit_factor_min)+
+        mlGate("Beat rule-based baseline", g.must_beat_rule_based_baseline?"required":"—")+
+        "<div class='fblocker' style='border-top:1px solid var(--line);padding-top:11px'>locked gates — evaluated live once labels clear the CPCV floor"+wait+"</div>";
+    }
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 

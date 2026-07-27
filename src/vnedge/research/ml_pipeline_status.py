@@ -75,12 +75,31 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
     """Assemble the current, honest ML pipeline state."""
     trades = load_lane_journal_trades(lane_dir)
     candles = _load_candles(data_root)
+    frame = None
     if candles:
-        _, summary = build_meta_label_dataset(trades, candles, params=FeatureParams())
+        frame, summary = build_meta_label_dataset(trades, candles, params=FeatureParams())
     else:
         summary = {"samples": 0, "win_rate": 0.0, "by_strategy": {}}
 
     samples = int(summary.get("samples", 0))
+
+    # Run the real gated meta-labeling harness over the built dataset. It
+    # degrades honestly (COLLECTING/TRAINABLE) below the data floor and only
+    # trains + validates through the locked DSR/PBO/CPCV gates once there's
+    # enough. Never fatal — the status job must publish even if training errors.
+    validation = None
+    if frame is not None and samples > 0:
+        try:
+            from vnedge.ml.meta_labeler import evaluate_meta_labeler
+
+            validation = evaluate_meta_labeler(frame).to_dict()
+        except Exception as exc:  # noqa: BLE001 — observability must not crash
+            validation = {"status": "ERROR", "reason": str(exc)[:200], "passed": False}
+
+    v_status = (validation or {}).get("status", "")
+    trainable = bool((validation or {}).get("trainable"))
+    validated = v_status in ("VALIDATED_PASS", "VALIDATED_FAIL")
+    passed = bool((validation or {}).get("passed"))
     stage = "COLLECTING_LABELS" if samples < MIN_LABELS_TO_TRAIN else "READY_TO_TRAIN"
 
     return {
@@ -93,12 +112,13 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
              "detail": "validation · robustness · features · dataset builder"},
             {"key": "COLLECTING_LABELS", "label": "Collecting labels", "done": samples >= MIN_LABELS_TO_TRAIN,
              "detail": f"{samples} / {MIN_LABELS_TO_TRAIN} labeled trades", "active": stage == "COLLECTING_LABELS"},
-            {"key": "TRAIN", "label": "Train + calibrate", "done": False,
-             "detail": "HistGradientBoosting + isotonic", "active": stage == "READY_TO_TRAIN"},
-            {"key": "VALIDATE", "label": "Validate (DSR/PBO)", "done": False,
-             "detail": "must clear the locked gates"},
+            {"key": "TRAIN", "label": "Train + calibrate", "done": validated,
+             "detail": "HistGradientBoosting + isotonic",
+             "active": trainable and not validated},
+            {"key": "VALIDATE", "label": "Validate (DSR/PBO)", "done": passed,
+             "detail": "must clear the locked gates", "active": validated and not passed},
             {"key": "SHADOW", "label": "Shadow vs baseline", "done": False,
-             "detail": "beat the rule-based baseline OOS"},
+             "detail": "beat the rule-based baseline OOS", "active": passed},
             {"key": "PAPER", "label": "Paper → ladder", "done": False,
              "detail": "untouched judgment first"},
         ],
@@ -116,6 +136,10 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
             "dataset_builder": True,
         },
         "gates": PROMOTION_GATES,
+        # The live gated verdict from the meta-labeling harness (null until there
+        # are any labels). Shows the real CPCV PF / DSR / PBO / beats-baseline
+        # checks once the dataset clears the CPCV floor.
+        "validation": validation,
         "model": None,   # role ① not trained yet — honest null until data + validation
         "can_trade": False,
         "can_promote": False,
