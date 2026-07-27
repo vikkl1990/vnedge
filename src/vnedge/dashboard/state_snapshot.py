@@ -149,7 +149,13 @@ def build_snapshot(
                 "bid": quote[0],
                 "ask": quote[1],
                 "mid": (quote[0] + quote[1]) / 2.0,
-                "spread_bps": (quote[1] - quote[0]) / ((quote[0] + quote[1]) / 2.0) * 10_000.0,
+                # guard against a zero/degenerate quote (warmup, missing book):
+                # dividing by a zero mid yields inf, and a single inf makes the
+                # whole /state payload fail JSON serialization (500).
+                "spread_bps": (
+                    (quote[1] - quote[0]) / ((quote[0] + quote[1]) / 2.0) * 10_000.0
+                    if (quote[0] + quote[1]) > 0 else 0.0
+                ),
             }
             if quote is not None else None
         ),
