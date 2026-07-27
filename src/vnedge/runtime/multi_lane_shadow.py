@@ -278,6 +278,11 @@ def paper_observation_lanes(
     for spec in specs:
         if spec.mode is not RunnerMode.SHADOW:
             continue
+        if spec.lane_id.startswith("velocity_"):
+            # velocity lanes are ML-training only and must NEVER be mirrored to a
+            # paper ledger — they are not, and must not look like, paper
+            # candidates (see velocity_delta_lanes).
+            continue
         if spec.exchange == DELTA_EXCHANGE and not allow_delta:
             continue
         identity = _paper_identity(spec)
