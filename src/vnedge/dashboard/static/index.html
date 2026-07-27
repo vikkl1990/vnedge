@@ -711,6 +711,20 @@
   <!-- ===== RESEARCH VIEW ===== -->
   <div class="view" data-view="promote" hidden>
     <p class="intro"><b>Path to live.</b> Where each lane sits on the promotion ladder — research → replay → untouched judgment → shadow → paper → live-small — and exactly why it is or isn't progressing. Read-only; promotion is human-gated on untouched data.</p>
+    <style>
+      .plgate{display:grid;grid-template-columns:1fr 58px 84px;gap:10px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line)}
+      .plgate .gk{font-size:12.5px;font-weight:600}
+      .plgate .gs{font-size:10.5px;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .plchip{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:3px 6px;border-radius:5px;text-align:center}
+      .plstep{display:grid;grid-template-columns:24px 1fr;gap:11px;align-items:start;padding:9px 15px;border-bottom:1px solid var(--line)}
+      .plnum{width:22px;height:22px;border-radius:50%;background:var(--bg-inset);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:800;color:var(--txt-dim)}
+      .plstep b{display:block;font-size:12.5px}
+      .plstep small{display:block;font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+    </style>
+    <section class="panel" style="border:1px solid var(--accent-soft,rgba(77,178,255,.25))">
+      <div class="phead"><h2>Live Readiness — gates to a first live order</h2><span class="meta" id="preLiveMeta">loading…</span></div>
+      <div id="preLive"></div>
+    </section>
     <div class="main">
       <div class="col">
         <section class="panel">
@@ -1559,6 +1573,26 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function renderPreLive(d){
+    var el=$("preLive"),meta=$("preLiveMeta"); if(!el||!d)return;
+    var checks=d.checks||[], path=d.path_to_live||[];
+    var green=checks.filter(function(c){return c.passed;}).length;
+    if(meta)meta.textContent=green+" / "+checks.length+" gates green"+(d.cleared?" · CLEARED ✓":" · "+num(d.red_count)+" red");
+    var gates=checks.map(function(c){
+      var oc=c.owner==="operator"?"var(--warn)":c.owner==="deliberate"?"var(--txt-faint)":"var(--accent)";
+      return "<div class='plgate'><div><div class='gk'>"+jEsc(c.name.replace(/_/g," "))+(c.critical?"":" <span style='color:var(--txt-faint);font-weight:400'>(non-critical)</span>")+"</div><div class='gs'>"+jEsc(String(c.detail||""))+"</div></div>"+
+        "<span class='plchip' style='background:"+(c.passed?"var(--long-soft);color:var(--long)":"var(--short-soft);color:var(--short)")+"'>"+(c.passed?"green":"red")+"</span>"+
+        "<span class='plchip' style='background:var(--bg-3);color:"+oc+"'>"+jEsc(c.owner)+"</span></div>";
+    }).join("");
+    var steps=path.map(function(p,i){
+      return "<div class='plstep'><span class='plnum'>"+(i+1)+"</span><div><b>"+jEsc(p.step)+"</b><small><b style='color:var(--txt-dim)'>"+jEsc(p.owner)+"</b> · "+jEsc(p.detail)+"</small></div></div>";
+    }).join("");
+    el.innerHTML=gates+
+      "<div style='padding:14px 15px 5px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt-dim);font-weight:700'>Ordered path to a first live order</div>"+
+      steps+
+      "<div class='fblocker'><b>Where we stand:</b> "+jEsc(d.operator_answer||"")+"</div>";
+  }
+  function pollPreLive(){ poll("/pre-live-checklist", renderPreLive); }
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
   function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
@@ -1692,8 +1726,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
@@ -1784,6 +1818,7 @@
     if(v==="journal") pollJournal();
     if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     if(v==="pipeline") renderPipeline(lastSnap);
+    if(v==="promote") pollPreLive();
   }
   nav.addEventListener("click",function(e){
     var a=e.target.closest("a[data-v]"); if(!a)return;
