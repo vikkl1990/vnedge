@@ -1050,8 +1050,10 @@
       var p=lpnl(l),pc=p>0?"up":p<0?"dn":"",f=l.funnel||{},w=Math.min(100,Math.abs(p)/12*100);
       var bar=p===0?'<i style="width:0"></i>':'<i style="'+(p>0?'left:50%;background:var(--long)':'right:50%;background:var(--short)')+';width:'+(w/2)+'%"></i>';
       var why=ev.signal_reason||ev.skip_reason||(l.trade_compatibility&&l.trade_compatibility.state)||"evaluating";
+      var isVel=String(l.lane_id||"").indexOf("velocity_")===0;
+      var velTag=isVel?'<span style="font-size:8px;font-weight:800;letter-spacing:.04em;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line);padding:1px 4px;border-radius:4px;margin-right:5px;vertical-align:middle">VEL</span>':'';
       return '<div class="brow"><span class="st '+st+'"></span>'+
-        '<div class="strat" title="'+stratShort(l.strategy_id)+'"><b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
+        '<div class="strat" title="'+(isVel?"velocity — ML training only, never a promotion candidate · ":"")+stratShort(l.strategy_id)+'">'+velTag+'<b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
         '<span class="vchip" style="background:'+v.col+'">'+v.lab+'</span>'+
         '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+(l.timeframe?' <span style="color:var(--txt-faint)">'+l.timeframe+'</span>':'')+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
         '<div class="pnlbar"><span class="v '+pc+'">'+(p===0?"—":(p>0?"+":"")+"$"+p.toFixed(2))+'</span><div class="track">'+bar+'</div></div>'+

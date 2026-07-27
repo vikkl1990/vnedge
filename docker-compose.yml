@@ -74,6 +74,11 @@ services:
       # candidates. These are simulated fills only, isolated ledgers, and NOT
       # live-capital promotion. The artifact must be fresh and still clear the
       # configured floors before any probe lane is launched.
+      # VELOCITY cohort: a small, clearly-labelled set of fast 5m sats lanes
+      # whose ONLY job is ML meta-label velocity + a visibly active tape. NOT
+      # edge candidates (5m is fee-walled); SHADOW-only, never promoted. =0 off.
+      MULTI_LANE_VELOCITY: "${MULTI_LANE_VELOCITY:-1}"
+      MULTI_LANE_VELOCITY_SYMBOLS: "${MULTI_LANE_VELOCITY_SYMBOLS:-ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT}"
       MULTI_LANE_FEE_WALL_PAPER_PROBES: "${MULTI_LANE_FEE_WALL_PAPER_PROBES:-1}"
       MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH: "${MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH:-research/live_research/fee_wall_paper_probes.json}"
       MULTI_LANE_FEE_WALL_FORENSICS_PATH: "${MULTI_LANE_FEE_WALL_FORENSICS_PATH:-research/live_research/fee_wall_forensics_latest.json}"
