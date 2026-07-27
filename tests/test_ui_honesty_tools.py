@@ -35,6 +35,10 @@ def test_fleet_aggregate_splits_paper_shadow_and_excludes_errors():
     assert f["shadow_virtual_net_usd"] == -131.0 and f["shadow_virtual_trades"] == 103
     assert f["profitable_lanes"] == 1 and f["losing_lanes"] == 1
     assert f["return_pct"] < 0  # honest: the fleet is net negative
+    # paper book excludes the static shadow account (500) — undiluted return
+    assert f["paper_equity"] == 993.0
+    assert f["paper_starting_equity"] == 1000.0
+    assert round(f["paper_return_pct"], 2) == -0.70
 
 
 def test_fleet_aggregate_attached_to_multilane_snapshot():
