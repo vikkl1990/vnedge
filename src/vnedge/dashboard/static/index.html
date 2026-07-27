@@ -99,7 +99,7 @@
   .navrow a:hover:not(.on){color:var(--txt)}
 
   /* ---------- watchlist strip ---------- */
-  .watch{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(178px,1fr);gap:10px;overflow-x:auto;padding-bottom:2px}
+  .watch{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding-bottom:2px}
   .wcard{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);padding:12px 13px;min-width:0;position:relative;overflow:hidden}
   .wcard .sym{display:flex;align-items:center;justify-content:space-between}
   .wcard .sym b{font-size:13px;font-weight:700;letter-spacing:.04em}
@@ -153,7 +153,7 @@
   .eqbig{font-size:30px;font-weight:800;letter-spacing:-.01em}
   .eqchg{font-family:var(--mono);font-size:13px;font-weight:700}
   .chart{width:100%;height:120px;display:block}
-  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
   .kpi{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 12px}
   .kpi .lbl{font-size:9px}
   .kpi .v{font-size:17px;font-weight:700;margin-top:5px}
@@ -301,6 +301,14 @@
     background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
   .docrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .docrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .profilematrix{padding:12px 14px 14px;display:flex;flex-direction:column;gap:7px}
+  .profrow{display:grid;grid-template-columns:1fr .45fr .7fr .7fr 1.15fr;gap:9px;align-items:center;
+    background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .profrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .profrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .proftype{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:900;padding:4px 7px;border-radius:6px;width:max-content}
+  .proftype.paper{background:var(--info-soft);color:var(--info)}
+  .proftype.live{background:rgba(255,201,77,.13);color:var(--warn)}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -376,7 +384,7 @@
   .jrow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
   .jrow:last-child{border-bottom:none}
   .jrow:hover{background:var(--bg-3)}
-  .jrow-ct{grid-template-columns:66px 1.3fr 74px 46px 70px 1fr 54px 80px 54px}
+  .jrow-ct{grid-template-columns:66px 1.2fr 74px 46px 94px 66px 1fr 54px 78px 52px}
   .jrow-fl{grid-template-columns:66px 1.4fr 58px 82px 44px 92px 96px 60px}
   .jrow-or{grid-template-columns:66px 1.6fr 92px 50px 84px 96px 1fr}
   .jrow .lane{color:var(--txt-dim);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -451,7 +459,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="journal">Journal</a><a data-v="calc">Calculator</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -502,26 +510,29 @@
 
       <section class="panel">
         <div class="phead">
-          <h2>Equity Curve</h2>
-          <span class="tag">persisted · shadow ledger</span>
+          <h2>Fleet NAV</h2>
+          <span class="tag">portfolio · every tracked lane</span>
         </div>
         <div class="eqwrap">
           <div class="eqtop">
             <div>
-              <div class="lbl">Net asset value</div>
-              <div class="eqbig num" id="eqBig">$495.38</div>
+              <div class="lbl">Paper book NAV · deployed capital</div>
+              <div class="eqbig num" id="eqBig">--</div>
+              <div class="lbl" style="margin-top:2px" id="eqPrimary">primary lane --</div>
             </div>
             <div style="text-align:right">
-              <div class="eqchg up" id="eqPct">+0.29% today</div>
-              <div class="lbl" style="margin-top:4px">from $500.00 start</div>
+              <div class="eqchg" id="eqPct">--</div>
+              <div class="lbl" style="margin-top:4px" id="eqStart">across tracked lanes</div>
             </div>
           </div>
           <svg class="chart" id="eqChart" viewBox="0 0 760 120" preserveAspectRatio="none"></svg>
           <div class="kpis">
+            <div class="kpi"><div class="lbl">Paper realized</div><div class="v num" id="kPaper">--</div><div class="s" id="kPaperSub">paper-capital lanes</div></div>
+            <div class="kpi"><div class="lbl">Shadow virtual net</div><div class="v num" id="kShadow">--</div><div class="s" id="kShadowSub">observation only</div></div>
+            <div class="kpi"><div class="lbl">Signals 24h</div><div class="v num" id="kSig">--</div><div class="s" id="kSigSub">across lanes</div></div>
             <div class="kpi"><div class="lbl">Daily loss</div><div class="v num up" id="kDaily">$0.00</div><div class="s" id="kDailySub">of $10.00 limit</div></div>
             <div class="kpi"><div class="lbl">Drawdown</div><div class="v num" id="kDD" style="color:var(--warn)">--</div><div class="s">vs peak equity</div></div>
-            <div class="kpi"><div class="lbl">Signals 24h</div><div class="v num" id="kSig">1,912</div><div class="s">76 firing live</div></div>
-            <div class="kpi"><div class="lbl">Fee wall</div><div class="v num dn">5.5 bps</div><div class="s">taker · Bybit</div></div>
+            <div class="kpi"><div class="lbl">Fee wall</div><div class="v num dn" id="kFee">--</div><div class="s" id="kFeeSub">taker round-trip</div></div>
           </div>
         </div>
       </section>
@@ -575,7 +586,7 @@
     <section class="panel" style="margin-top:14px">
       <div class="phead"><h2>Closed Trades</h2><span class="meta" id="jctMeta">—</span></div>
       <div class="jtbl">
-        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
+        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Lev &middot; Margin</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
         <div id="jClosed"><div class="jempty">Loading…</div></div>
       </div>
     </section>
@@ -597,6 +608,81 @@
     </section>
   </div><!-- /journal -->
 
+  <!-- ===== CALCULATOR VIEW ===== -->
+  <style>
+    .calcgrid{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1.2fr);gap:16px;align-items:start}
+    @media(max-width:900px){.calcgrid{grid-template-columns:1fr}}
+    .cfield{margin-bottom:13px}
+    .cfield>label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt-dim);margin-bottom:5px}
+    .cfield input[type=number]{width:100%;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--txt);font-family:var(--mono);font-size:15px;padding:9px 11px;outline:none}
+    .cfield input:focus{border-color:var(--accent)}
+    .cseg{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
+    .cseg button{flex:1;background:var(--bg-inset);border:0;color:var(--txt-dim);font:600 13px/1 var(--font);padding:10px;cursor:pointer}
+    .cseg button.on{color:#fff}
+    .cseg button.on.long{background:var(--long)}.cseg button.on.short{background:var(--short)}
+    .cseg button.on.neutral{background:var(--accent);color:#04121f}
+    .crow2{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+    select.csel{width:100%;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);color:var(--txt);font-family:var(--mono);font-size:14px;padding:9px 11px;outline:none}
+    .cout{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+    .cout .kpi .v{font-size:20px}
+    .cnet{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-md);padding:15px;text-align:center;margin-bottom:14px}
+    .cnet .big{font-size:34px;font-weight:800;font-family:var(--mono);letter-spacing:-.01em}
+    .cnet .sub{font-size:12px;color:var(--txt-dim);margin-top:3px}
+    .cbrk{font-size:12.5px;color:var(--txt-dim);line-height:1.9}
+    .cbrk .r{display:flex;justify-content:space-between;border-bottom:1px dashed var(--line);padding:2px 0}
+    .cbrk .r b{font-family:var(--mono);color:var(--txt)}
+    table.cmp{width:100%;border-collapse:collapse;font-size:12.5px}
+    table.cmp th,table.cmp td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-family:var(--mono)}
+    table.cmp th{color:var(--txt-dim);font-weight:600;text-transform:uppercase;font-size:10.5px;letter-spacing:.05em}
+    table.cmp td:first-child,table.cmp th:first-child{text-align:left}
+    .cwarn{font-size:11.5px;color:var(--txt-faint);margin-top:10px;line-height:1.6}
+    .cslider{width:100%}
+  </style>
+  <div class="view" data-view="calc" hidden>
+    <p class="intro"><b>Leverage &amp; PnL calculator.</b> Fee models are read live from <code>/cost-model</code> — the same per-exchange maker/taker/slippage constants the research and paper engines use, never numbers invented in the UI. Binance, Bybit and Delta India differ; the comparison table runs your exact trade through all three. Sizing here is illustrative — the live bot always sizes from risk-per-trade and the gateway, never from leverage.</p>
+    <div class="calcgrid">
+      <section class="panel">
+        <div class="phead"><h2>Trade</h2><span class="tag" id="calcFeeTag">fees --</span></div>
+        <div class="cfield"><label>Exchange fee model</label><select class="csel" id="cEx"></select></div>
+        <div class="crow2">
+          <div class="cfield"><label>Direction</label><div class="cseg" id="cSide"><button data-side="long" class="on long">Long</button><button data-side="short">Short</button></div></div>
+          <div class="cfield"><label>Fill route</label><select class="csel" id="cRoute"><option value="taker">Taker in / Taker out</option><option value="maker_taker">Maker in / Taker out</option><option value="maker">Maker in / Maker out</option></select></div>
+        </div>
+        <div class="crow2">
+          <div class="cfield"><label>Margin (USD)</label><input type="number" id="cMargin" value="100" min="0" step="10"></div>
+          <div class="cfield"><label>Leverage <span id="cLevLbl" style="color:var(--accent)">5×</span></label><input type="range" class="cslider" id="cLev" min="1" max="30" step="1" value="5"></div>
+        </div>
+        <div class="crow2">
+          <div class="cfield"><label>Entry price</label><input type="number" id="cEntry" value="60000" min="0" step="0.01"></div>
+          <div class="cfield"><label>Exit price</label><input type="number" id="cExit" value="61200" min="0" step="0.01"></div>
+        </div>
+        <div class="cfield"><label>Quick exit target</label><div class="cseg" id="cTgt">
+          <button data-pct="0.5">+0.5%</button><button data-pct="1">+1%</button><button data-pct="2">+2%</button><button data-pct="5">+5%</button><button data-pct="-1">−1%</button>
+        </div></div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--txt-dim);cursor:pointer"><input type="checkbox" id="cSlip" checked> include slippage (per venue, both legs)</label>
+      </section>
+
+      <section class="panel">
+        <div class="phead"><h2>Result</h2><span class="tag" id="cVenueTag">--</span></div>
+        <div class="cnet"><div class="big num" id="cNet">--</div><div class="sub" id="cRoe">return on margin --</div></div>
+        <div class="cout">
+          <div class="kpi"><div class="lbl">Position notional</div><div class="v num" id="cNotional">--</div><div class="s" id="cQty">-- units</div></div>
+          <div class="kpi"><div class="lbl">Gross P&amp;L</div><div class="v num" id="cGross">--</div><div class="s" id="cMove">-- move</div></div>
+        </div>
+        <div class="cbrk" id="cBreak"></div>
+        <div class="cwarn" id="cLiq"></div>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:16px">
+      <div class="phead"><h2>Same trade · every venue</h2><span class="tag">fee model differentiated</span></div>
+      <div style="overflow-x:auto"><table class="cmp"><thead><tr>
+        <th>Exchange</th><th>Maker/Taker bps</th><th>Round-trip cost</th><th>Entry+exit fees</th><th>Net P&amp;L</th><th>Return</th><th>Breakeven move</th>
+      </tr></thead><tbody id="cCmp"></tbody></table></div>
+      <div class="cwarn">Round-trip cost = both fee legs + slippage (+ the research safety buffer the gates use). A trade must clear this move just to break even — the fee wall that decides whether a scalp is even worth taking.</div>
+    </section>
+  </div><!-- /calc -->
+
   <!-- ===== RESEARCH VIEW ===== -->
   <div class="view" data-view="promote" hidden>
     <p class="intro"><b>Path to live.</b> Where each lane sits on the promotion ladder — research → replay → untouched judgment → shadow → paper → live-small — and exactly why it is or isn't progressing. Read-only; promotion is human-gated on untouched data.</p>
@@ -617,6 +703,10 @@
         <section class="panel">
           <div class="phead"><h2>Paper Route Doctor</h2><span class="meta" id="paperRouteDoctorMeta">loading…</span></div>
           <div id="paperRouteDoctor"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Trade Profile Matrix</h2><span class="meta" id="tradeProfileMeta">loading…</span></div>
+          <div id="tradeProfileMatrix"></div>
         </section>
       </div>
       <div class="col">
@@ -921,9 +1011,14 @@
   function render(s){
     var lanes=Array.isArray(s.lanes)?s.lanes:[];
     var kill=!!s.kill_switch_active, live=!!s.live_trading_enabled, pnl=num(s.daily_pnl);
+    // Headline = the PAPER book (lanes that actually deploy capital), never one
+    // lane pretending to be the whole book, and never diluted by static shadow
+    // accounts. Falls back to the flat primary equity in demo mode.
+    var fleet=s.fleet||null;
+    var nav=fleet?num(fleet.paper_equity):num(s.equity);
 
     // command bar
-    text("eqTop",moneyAbs(s.equity));
+    text("eqTop",moneyAbs(nav));
     var pe=$("pnlTop"); if(pe){pe.textContent=usd(pnl);pe.className="v num "+(pnl>=0?"up":"dn");}
     text("modeVal",live?"LIVE":"SHADOW");
     text("killVal",kill?"TRIPPED":"ARMED");
@@ -962,16 +1057,27 @@
         '<div class="sigct"><b>'+num(f.live_evals||f.evals||0)+'</b></div></div>';
     }).join('');
 
-    // equity + KPIs
-    pushEq(s.equity); drawEq();
-    text("eqBig",moneyAbs(s.equity));
-    var startEq=500,pct=(num(s.equity)-startEq)/startEq*100,ep=$("eqPct");
-    if(ep){ep.textContent=(pct>=0?"+":"")+pct.toFixed(2)+"% vs $500 start";ep.className="eqchg "+(pct>=0?"up":"dn");}
+    // equity + KPIs — the headline curve + number track the FLEET, not one lane
+    pushEq(nav); drawEq();
+    text("eqBig",moneyAbs(nav));
+    var navPct=fleet?num(fleet.paper_return_pct):((num(s.equity)-500)/500*100),ep=$("eqPct");
+    if(ep){ep.textContent=(navPct>=0?"+":"")+navPct.toFixed(2)+"% net";ep.className="eqchg "+(navPct>=0?"up":"dn");}
+    if(fleet){
+      text("eqStart",num(fleet.paper_lanes)+" paper lanes · $"+num(fleet.paper_starting_equity).toLocaleString(undefined,{maximumFractionDigits:0})+" deployed · "+num(fleet.shadow_lanes)+" shadow observing");
+      text("eqPrimary","total book "+moneyAbs(fleet.equity)+" · primary "+moneyAbs(s.equity));
+      var rp=num(fleet.realized_pnl),kp=$("kPaper"); if(kp)kp.className="v num "+(rp>=0?"up":"dn");
+      text("kPaper",usd(rp)); text("kPaperSub",num(fleet.paper_lanes)+" paper · "+num(fleet.profitable_lanes)+"↑ / "+num(fleet.losing_lanes)+"↓");
+      var sv=num(fleet.shadow_virtual_net_usd),ksh=$("kShadow"); if(ksh)ksh.className="v num "+(sv>=0?"up":"dn");
+      text("kShadow",usd(sv)); text("kShadowSub",num(fleet.shadow_lanes)+" shadow · "+num(fleet.shadow_virtual_trades)+" virtual trades");
+    }
     var dd=num(s.peak_equity)>0?(num(s.peak_equity)-num(s.equity))/num(s.peak_equity)*100:0;
     var stop=(s.trial&&fin(s.trial.daily_stop_usd))?num(s.trial.daily_stop_usd):10, lossUsed=Math.max(0,-pnl);
     text("kDaily",moneyAbs(lossUsed)); text("kDailySub","of "+moneyAbs(stop)+" limit");
     text("kDD",dd.toFixed(1)+"%");
-    text("kSig",num(s.session&&s.session.signals||0).toLocaleString());
+    var firing=lanes.filter(function(l){return l.last_eval&&l.last_eval.fired;}).length;
+    var sig24=lanes.reduce(function(a,l){var f=l.funnel||{};return a+num(f.live_signals||f.signals||0);},0);
+    text("kSig",sig24.toLocaleString()); text("kSigSub",firing+" lane"+(firing===1?"":"s")+" firing now");
+    if(COST&&fin(COST._maxTakerRt)){text("kFee",COST._maxTakerRt.toFixed(1)+" bps");text("kFeeSub","taker RT · "+COST._maxTakerVenue);}
 
     // risk rail
     var md=$("meterDaily"); if(md)md.style.width=Math.min(100,lossUsed/stop*100)+"%";
@@ -1259,6 +1365,32 @@
     el.innerHTML=k+'<div class="docrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper route doctor pending")+'</div>';
   }
+  function profileCls(st){
+    st=String(st||"");
+    if(st==="PAPER_PROFILE_READY")return"ok";
+    if(st==="LIVE_PROFILE_RISK_OK_PRELIVE_REQUIRED"||st==="PAPER_PROFILE_NEEDS_ROUTE")return"wait";
+    if(st==="PAPER_PROFILE_BLOCKED_BY_RISK"||st==="LIVE_PROFILE_BLOCKED_BY_RISK")return"bad";
+    return"fix";
+  }
+  function renderTradeProfileMatrix(d){
+    var el=$("tradeProfileMatrix"),meta=$("tradeProfileMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.paper_profile_ready)+" paper ready · "+num(s.live_profile_risk_ok_prelive_required)+" live risk-ok · "+(num(s.paper_profile_blocked_by_risk)+num(s.live_profile_blocked_by_risk))+" blocked";
+    if(!rows.length){el.innerHTML='<div class="note">trade profile matrix loading…</div>';return;}
+    var body=rows.slice(0,10).map(function(r){
+      var profile=String(r.profile||"unknown"),lev=num(r.requested_leverage),margin=num(r.requested_margin_usd),notional=num(r.requested_notional_usd);
+      var blockers=(r.blockers||[]).join(" · "),source=String(r.venue_spec_source||"");
+      return '<div class="profrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="proftype '+esc(profile)+'">'+esc(profile)+'</span><small>'+esc(String(r.activation_state||"--").toLowerCase().replace(/_/g," "))+'</small></div>'+
+        '<div><b class="num">$'+Math.round(margin)+'</b><small>'+lev.toFixed(lev%1?1:0)+'x leverage</small></div>'+
+        '<div><b class="num">$'+Math.round(notional).toLocaleString()+'</b><small>min $'+Math.round(num(r.venue_min_notional_usd))+'</small></div>'+
+        '<div><span class="actstate '+profileCls(r.profile_state)+'">'+esc(String(r.profile_state||"unknown").replace(/_PROFILE_/," ").toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(blockers||source)+'">'+esc((blockers||r.next_action||source||"plan only").slice(0,70))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML='<div class="profilematrix">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"trade profile matrix pending")+'</div>';
+  }
   function applyScorecard(sc){
     verdictByStrat={}; ((sc&&sc.strategies)||[]).forEach(function(g){verdictByStrat[stratShort(g.strategy)]=g.verdict;});
     renderScorecard(sc); renderPromo(sc); renderFeeWall(sc);
@@ -1329,6 +1461,7 @@
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; renderDeployProv(lastSnap); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
 
@@ -1340,7 +1473,21 @@
   function jQty(x){ x=+x||0; return Math.abs(x)>=1000?x.toLocaleString("en-US"):(""+x); }
   function jLane(l){ return String(l||"—").replace(/_paper_observation$/,"·paper").replace(/_shadow$/,"·shadow").replace(/_v1_/g,"·").replace(/_/g," "); }
   function jSym(s){ s=String(s==null?"":s); var i=s.indexOf(":"); return (i>0?s.slice(0,i):s)||"—"; }
-  function jExitLabel(r){ r=String(r||""); return r==="take_profit"?"TP":r==="stop"?"SL":r==="timeout"?"TO":"—"; }
+  // Exit taxonomy from the resolution the engine actually records: shadow uses
+  // "target", paper "take_profit"; both are a take-profit. TP shows the ladder
+  // level reached (TP1/TP2/TP3) when the strategy emits a TP ladder, else plain
+  // TP. A stop that closes ~flat is BE (breakeven), otherwise SL; timeout = TO.
+  function jExitLabel(t){
+    if(t&&typeof t==="object"){
+      var r=String(t.resolution||""),lv=(t.take_profit_levels||[]).length,n=+((t.tp_reached)||0),bps=t.captured_bps;
+      if(r==="target"||r==="take_profit")return lv?("TP"+Math.max(1,Math.min(n||lv,lv))):"TP";
+      if(r==="stop"||r==="tick_stop")return (bps!=null&&Math.abs(+bps)<=3)?"BE":"SL";
+      if(r==="timeout")return "TO";
+      return "—";
+    }
+    var s=String(t||"");return (s==="target"||s==="take_profit")?"TP":s==="stop"?"SL":s==="timeout"?"TO":"—";
+  }
+  function jLevMargin(t){ var lev=+t.leverage, m=t.margin_usd; if(!isFinite(lev)||lev<=0)return "—"; var lv=(lev%1?lev.toFixed(1):lev.toFixed(0))+"×"; return (m!=null&&isFinite(+m))?lv+" · $"+(+m).toFixed(0):lv; }
   function jTpLadder(t){ var lv=(t.take_profit_levels||[]),n=+t.tp_reached||0; if(!lv.length)return""; var d=""; for(var i=0;i<lv.length;i++){ d+="<span style='display:inline-block;width:5px;height:5px;border-radius:50%;margin-left:3px;vertical-align:middle;background:"+(i<n?"var(--long)":"var(--line-2)")+"'></span>"; } return d; }
   function jSideCls(s){ s=String(s||"").toLowerCase(); return (s==="long"||s==="buy")?"up":(s==="short"||s==="sell")?"dn":""; }
   function jTile(lbl,v,sub){ return "<div class='kpi'><div class='lbl'>"+lbl+"</div><div class='v'>"+v+"</div><div class='s'>"+sub+"</div></div>"; }
@@ -1357,11 +1504,12 @@
       var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]);
       var net=(t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0);
       var bps=(t.captured_bps==null?null:+t.captured_bps);
-      var rc=t.resolution==="take_profit"?"var(--long)":t.resolution==="stop"?"var(--short)":"var(--txt-dim)";
+      var rc=(t.resolution==="take_profit"||t.resolution==="target")?"var(--long)":(t.resolution==="stop"||t.resolution==="tick_stop")?"var(--short)":"var(--txt-dim)";
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
         "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
         "<span class='num'>"+jEsc(sym)+"</span><span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||"").toUpperCase())+"</span>"+
-        "<span style='color:"+rc+"' title='"+jEsc(String(t.resolution||"").replace(/_/g," "))+((t.take_profit_levels||[]).length?" · reached TP"+(+t.tp_reached||0)+" of "+(t.take_profit_levels||[]).length:"")+"'>"+jExitLabel(t.resolution)+jTpLadder(t)+"</span>"+
+        "<span class='num' style='color:var(--txt-dim);white-space:nowrap' title='"+(t.notional_usd!=null?"notional $"+(+t.notional_usd).toLocaleString():"leverage/margin not journaled")+"'>"+jLevMargin(t)+"</span>"+
+        "<span style='color:"+rc+"' title='"+jEsc(String(t.resolution||"").replace(/_/g," "))+((t.take_profit_levels||[]).length?" · reached TP"+(+t.tp_reached||0)+" of "+(t.take_profit_levels||[]).length:"")+"'>"+jExitLabel(t)+jTpLadder(t)+"</span>"+
         "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" &rarr; "+jPx(t.exit_price)+"</span>"+
         "<span class='num "+(bps==null?"":bps<0?"dn":"up")+"' title='"+(t.captured_bps_basis||"")+" bps captured'>"+(bps==null?"—":(bps>0?"+":"")+bps.toFixed(0))+"</span>"+
         "<span class='num "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span>"+
@@ -1424,8 +1572,90 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperPerformance(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperPerformance,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperPerformance(); pollTradeProfileMatrix(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+
+  /* ---- leverage & PnL calculator · per-exchange fee models ---- */
+  var COST=null, calcState={side:"long"};
+  function pollCostModel(){ poll("/cost-model", applyCostModel); }
+  function applyCostModel(d){
+    COST=d||{};
+    var exs=COST.exchanges||[];
+    var mx=-1,mxv="";
+    exs.forEach(function(e){var rt=+e.taker_round_trip_cost_bps; if(rt>mx){mx=rt;mxv=e.label||e.exchange;}});
+    COST._maxTakerRt=mx>=0?mx:null; COST._maxTakerVenue=mxv;
+    var sel=$("cEx");
+    if(sel && !sel.options.length && exs.length)
+      sel.innerHTML=exs.map(function(e){return '<option value="'+jEsc(e.exchange)+'">'+jEsc(e.label||e.exchange)+'</option>';}).join('');
+    calcCompute();
+  }
+  function calcFee(ex){var exs=(COST&&COST.exchanges)||[]; for(var i=0;i<exs.length;i++)if(exs[i].exchange===ex)return exs[i]; return exs[0]||null;}
+  function legBps(fee,route){
+    if(!fee)return{entry:0,exit:0};
+    if(route==="maker")return{entry:fee.maker_bps,exit:fee.maker_bps};
+    if(route==="maker_taker")return{entry:fee.maker_bps,exit:fee.taker_bps};
+    return{entry:fee.taker_bps,exit:fee.taker_bps};
+  }
+  function calcOne(fee,p){
+    var dir=p.side==="short"?-1:1;
+    var notional=p.margin*p.lev, qty=p.entry>0?notional/p.entry:0;
+    var gross=qty*(p.exit-p.entry)*dir;
+    var lb=legBps(fee,p.route), exitNotional=qty*p.exit;
+    var entryFee=notional*lb.entry/1e4, exitFee=exitNotional*lb.exit/1e4;
+    var slip=(p.slip&&fee)?(notional+exitNotional)*fee.slippage_bps/1e4:0;
+    var fees=entryFee+exitFee+slip, net=gross-fees, roe=p.margin>0?net/p.margin*100:0;
+    var rtBuf=fee?(p.route==="taker"?fee.taker_round_trip_cost_bps:fee.maker_first_cost_bps):(lb.entry+lb.exit);
+    var beFrac=notional>0?fees/notional:0, bePrice=p.entry*(1+beFrac*dir);
+    var liq=p.lev>0?p.entry*(1-dir/p.lev):0;
+    return {notional:notional,qty:qty,gross:gross,entryFee:entryFee,exitFee:exitFee,slip:slip,fees:fees,net:net,roe:roe,rtBuf:rtBuf,bePrice:bePrice,liq:liq};
+  }
+  function calcInputs(){return{
+    ex:($("cEx")&&$("cEx").value)||"binanceusdm", side:calcState.side,
+    margin:num($("cMargin")&&$("cMargin").value), lev:num($("cLev")&&$("cLev").value)||1,
+    entry:num($("cEntry")&&$("cEntry").value), exit:num($("cExit")&&$("cExit").value),
+    route:($("cRoute")&&$("cRoute").value)||"taker", slip:!!($("cSlip")&&$("cSlip").checked)};}
+  function cRow(k,v,cls){return '<div class="r"><span>'+k+'</span><b'+(cls?' class="'+cls+'"':'')+'>'+v+'</b></div>';}
+  function calcCompute(){
+    if(!$("cNet"))return;
+    var p=calcInputs(), fee=calcFee(p.ex); if(!fee)return;
+    var r=calcOne(fee,p);
+    var ne=$("cNet"); ne.textContent=(r.net>=0?"+$":"-$")+Math.abs(r.net).toFixed(2); ne.style.color=r.net>=0?"var(--long)":"var(--short)";
+    text("cRoe",(r.roe>=0?"+":"")+r.roe.toFixed(2)+"% on $"+p.margin.toFixed(0)+" margin · "+p.lev+"× "+p.side+(p.lev>10?" · >10× needs live ack":""));
+    text("cVenueTag",fee.label||fee.exchange);
+    text("calcFeeTag","mk "+fee.maker_bps+" / tk "+fee.taker_bps+" bps");
+    text("cNotional","$"+r.notional.toLocaleString(undefined,{maximumFractionDigits:2}));
+    text("cQty",(r.qty>=1?r.qty.toFixed(4):r.qty.toPrecision(4))+" units");
+    var g=$("cGross"); g.textContent=(r.gross>=0?"+$":"-$")+Math.abs(r.gross).toFixed(2); g.className="v num "+(r.gross>=0?"up":"dn");
+    var movePct=p.entry>0?(p.exit/p.entry-1)*100:0;
+    text("cMove",(movePct>=0?"+":"")+movePct.toFixed(2)+"% price move");
+    $("cBreak").innerHTML=
+      cRow("Entry fee ("+legBps(fee,p.route).entry+" bps)","-$"+r.entryFee.toFixed(4),"dn")+
+      cRow("Exit fee ("+legBps(fee,p.route).exit+" bps)","-$"+r.exitFee.toFixed(4),"dn")+
+      (p.slip?cRow("Slippage ("+fee.slippage_bps+" bps ×2)","-$"+r.slip.toFixed(4),"dn"):"")+
+      cRow("Total cost","-$"+r.fees.toFixed(4),"dn")+
+      cRow("Breakeven price","$"+r.bePrice.toLocaleString(undefined,{maximumFractionDigits:2}))+
+      cRow("Round-trip fee wall",r.rtBuf.toFixed(1)+" bps");
+    text("cLiq","Est. liquidation ≈ $"+r.liq.toLocaleString(undefined,{maximumFractionDigits:2})+" (isolated margin, maintenance ignored — real liq sits slightly closer). Sizing is illustrative: the live bot sizes from risk-per-trade and the gateway, never leverage. Hard cap 30×.");
+    var exs=(COST&&COST.exchanges)||[];
+    $("cCmp").innerHTML=exs.map(function(e){
+      var rr=calcOne(e,{side:p.side,margin:p.margin,lev:p.lev,entry:p.entry,exit:p.exit,route:p.route,slip:p.slip});
+      var cur=e.exchange===p.ex;
+      return '<tr'+(cur?' style="background:var(--bg-inset)"':'')+'><td>'+jEsc(e.label||e.exchange)+(cur?' ◂':'')+'</td>'+
+        '<td>'+e.maker_bps+' / '+e.taker_bps+'</td><td>'+rr.rtBuf.toFixed(1)+' bps</td>'+
+        '<td class="dn">-$'+rr.fees.toFixed(2)+'</td>'+
+        '<td class="'+(rr.net>=0?"up":"dn")+'">'+(rr.net>=0?"+$":"-$")+Math.abs(rr.net).toFixed(2)+'</td>'+
+        '<td class="'+(rr.roe>=0?"up":"dn")+'">'+(rr.roe>=0?"+":"")+rr.roe.toFixed(1)+'%</td>'+
+        '<td>'+(rr.rtBuf/100).toFixed(3)+'%</td></tr>';
+    }).join('');
+  }
+  function calcInit(){
+    if(!$("cEx"))return;
+    ["cMargin","cLev","cEntry","cExit"].forEach(function(id){var e=$(id); if(e)e.addEventListener("input",function(){ if(id==="cLev")text("cLevLbl",$("cLev").value+"×"); calcCompute(); });});
+    ["cEx","cRoute","cSlip"].forEach(function(id){var e=$(id); if(e)e.addEventListener("change",calcCompute);});
+    var side=$("cSide"); if(side)side.addEventListener("click",function(e){var b=e.target.closest("button[data-side]"); if(!b)return; calcState.side=b.getAttribute("data-side"); Array.prototype.forEach.call(side.querySelectorAll("button"),function(x){x.className=(x===b)?("on "+(calcState.side==="short"?"short":"long")):"";}); calcCompute();});
+    var tgt=$("cTgt"); if(tgt)tgt.addEventListener("click",function(e){var b=e.target.closest("button[data-pct]"); if(!b)return; var entry=num($("cEntry").value),pct=num(b.getAttribute("data-pct")); if(entry>0){$("cExit").value=(entry*(1+pct/100)).toFixed(2); calcCompute();}});
+  }
+  calcInit(); pollCostModel();
 
   /* ---- view switcher ---- */
   var nav=document.getElementById("nav");
@@ -1435,6 +1665,7 @@
     Array.prototype.forEach.call(nav.querySelectorAll("a"),function(x){x.classList.toggle("on",x===a)});
     Array.prototype.forEach.call(document.querySelectorAll(".view"),function(vw){vw.hidden=vw.getAttribute("data-view")!==v});
     if(v==="journal") pollJournal();
+    if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     window.scrollTo({top:0,behavior:reduce?"auto":"smooth"});
   });
   function gotoView(v){

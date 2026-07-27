@@ -100,6 +100,14 @@ _NON_INCIDENT_ALERTS = frozenset({"new_fill"})
 
 _LANE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
+# Human-facing venue names for the fee/PnL calculator (keys are the registry's
+# canonical exchange ids).
+_EXCHANGE_LABELS: dict[str, str] = {
+    "binanceusdm": "Binance USDⓈ-M",
+    "bybit": "Bybit V5",
+    "delta_india": "Delta India",
+}
+
 
 def _safe_float(value: object) -> float | None:
     try:
@@ -356,6 +364,22 @@ def _cost_model_payload() -> dict:
     maker_first_rt = fee.maker_bps + fee.taker_bps + fee.slippage_bps
     taker_rt = 2 * fee.taker_bps + fee.slippage_bps
     paper_taker_rt = 2 * (paper.taker_fee_bps + paper.slippage_bps)
+
+    # Every venue's real fee schedule, so the leverage/PnL calculator can model
+    # each exchange from the SAME constants the research and paper engines use —
+    # never a number hardcoded in the UI.
+    exchanges = []
+    for name, prof in sorted(_registry.exchange_fees.items()):
+        exchanges.append({
+            "exchange": prof.exchange,
+            "label": _EXCHANGE_LABELS.get(prof.exchange, prof.exchange),
+            "maker_bps": prof.maker_bps,
+            "taker_bps": prof.taker_bps,
+            "slippage_bps": prof.slippage_bps,
+            "safety_buffer_bps": prof.safety_buffer_bps,
+            "maker_first_cost_bps": round(prof.maker_first_cost_bps, 2),
+            "taker_round_trip_cost_bps": round(prof.taker_round_trip_cost_bps, 2),
+        })
     return {
         "exchange": fee.exchange,
         "source": "scalper_replay_diagnostics + paper.fill_model constants",
@@ -369,6 +393,8 @@ def _cost_model_payload() -> dict:
         # With the research safety buffer applied (what the gates actually use).
         "maker_first_cost_bps": round(fee.maker_first_cost_bps, 2),
         "taker_round_trip_cost_bps": round(fee.taker_round_trip_cost_bps, 2),
+        # Per-exchange schedules for the calculator (Binance / Bybit / Delta).
+        "exchanges": exchanges,
         "paper_fill_model": {
             "taker_fee_bps": paper.taker_fee_bps,
             "slippage_bps": paper.slippage_bps,
@@ -993,6 +1019,33 @@ def create_app(
                     "can_promote": False,
                 },
             ),
+            headers=_identity(user),
+        )
+
+    @app.get("/trade-profile-matrix")
+    async def trade_profile_matrix(request: Request) -> JSONResponse:
+        """Read-only paper/live sizing profile matrix.
+
+        It is derived from the paper activation artifact. Dashboard inputs are
+        planner-only; this endpoint cannot apply margin/leverage changes.
+        """
+        user = _authorized(request)
+        from vnedge.research.trade_profile_matrix import build_trade_profile_matrix
+
+        activation = _read_json_payload(
+            paper_lane_activation_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane activation report unavailable",
+                "mode": "read_only_activation_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        return JSONResponse(
+            build_trade_profile_matrix(activation),
             headers=_identity(user),
         )
 

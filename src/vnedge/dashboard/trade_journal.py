@@ -45,8 +45,15 @@ def build_trade_journal(
     limit = max(1, min(int(limit), config.max_rows))
     since_dt = _parse_dt(since)
 
-    fills = _fill_rows(root, lane=lane, since=since_dt, config=config)
-    journal_rows = _journal_rows(root, lane=lane, since=since_dt, config=config)
+    # Fleet view (no lane filter) restricts to the lanes we ACTIVELY run, so
+    # retired lanes' on-disk ledgers never leak into the aggregate. A single
+    # named lane is always honored directly.
+    active = _active_lane_ids(snapshot) if not lane else None
+
+    fills = _fill_rows(root, lane=lane, since=since_dt, config=config, active=active)
+    journal_rows = _journal_rows(
+        root, lane=lane, since=since_dt, config=config, active=active
+    )
 
     positions = _snapshot_positions(snapshot, lane)
     snapshot_orders = _snapshot_orders(snapshot, lane)
@@ -57,9 +64,28 @@ def build_trade_journal(
     order_rows, journal_events, virtual_trades = _project_journals(journal_rows)
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
-    closed_trades = [
-        _with_captured_bps(t) for t in _paired_actual_trades(fills) + virtual_trades
-    ]
+    # Paper trades close on a single TP price, but each carries the intended TP
+    # ladder + how far the most-favourable excursion climbed it (observation
+    # only). Join that to the reconstructed paper trade by exit client_order_id.
+    paper_ladders = _paper_exit_ladders(journal_rows)
+    paired = _paired_actual_trades(fills)
+    for trade in paired:
+        ladder = paper_ladders.get(str(trade.get("client_order_id") or ""))
+        if ladder:
+            trade["take_profit_levels"] = ladder["levels"]
+            trade["tp_reached"] = ladder["tp_reached"]
+            if ladder.get("resolution"):
+                trade["resolution"] = ladder["resolution"]
+
+    # Leverage + margin from the journaled intents: paper trades join to their
+    # ENTRY order_intent by client_order_id; shadow outcomes to their
+    # shadow_intent by intent_key. margin = notional / leverage.
+    econ_by_coid, econ_by_key = _intent_economics(journal_rows)
+    for trade in paired:
+        _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
+    for trade in virtual_trades:
+        _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
+    closed_trades = [_with_captured_bps(t) for t in paired + virtual_trades]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
     fills = _sort_recent(fills)[:limit]
@@ -82,8 +108,9 @@ def build_trade_journal(
             "fills": len(fills),
             "closed_trades": len(closed_trades),
             "events": len(events),
-            "journals_scanned": _count_paths(root, ".journal.jsonl", lane),
-            "fill_ledgers_scanned": _count_paths(root, ".fills.jsonl", lane),
+            "journals_scanned": _count_paths(root, ".journal.jsonl", lane, active),
+            "fill_ledgers_scanned": _count_paths(root, ".fills.jsonl", lane, active),
+            "active_lanes": len(active) if active is not None else None,
             "actual_realized_pnl_usd": round(actual_realized, 6),
             "fees_usd": round(fees, 6),
             "virtual_net_usd": round(virtual_net, 6),
@@ -131,17 +158,42 @@ def _iter_jsonl(path: Path, *, max_bytes: int) -> Iterable[dict[str, Any]]:
             yield row
 
 
-def _paths(root: Path | None, suffix: str, lane: str) -> list[Path]:
+def _paths(
+    root: Path | None, suffix: str, lane: str, active: set[str] | None = None
+) -> list[Path]:
     if root is None or not root.is_dir():
         return []
     if lane:
         candidate = root / f"{lane}{suffix}"
         return [candidate] if candidate.exists() else []
-    return sorted(root.glob(f"*{suffix}"))
+    paths = sorted(root.glob(f"*{suffix}"))
+    if active:
+        # Fleet view: only the lanes we ACTIVELY run (present in the live
+        # snapshot). Retired lanes leave ledgers on disk; they must not
+        # pollute the aggregate P&L or the closed-trade list.
+        paths = [p for p in paths if _lane_from_path(p, suffix) in active]
+    return paths
 
 
-def _count_paths(root: Path | None, suffix: str, lane: str) -> int:
-    return len(_paths(root, suffix, lane))
+def _count_paths(
+    root: Path | None, suffix: str, lane: str, active: set[str] | None = None
+) -> int:
+    return len(_paths(root, suffix, lane, active))
+
+
+def _active_lane_ids(snapshot: dict[str, Any]) -> set[str]:
+    """Lane ids currently RUNNING per the live snapshot — the primary lane plus
+    every lane in the multi-lane array. Empty set means we can't tell (single
+    lane session / demo / no snapshot), and the caller falls back to scanning
+    all ledgers rather than showing nothing."""
+    ids: set[str] = set()
+    primary = snapshot.get("lane_id")
+    if primary:
+        ids.add(str(primary))
+    for lane in snapshot.get("lanes") or []:
+        if isinstance(lane, dict) and lane.get("lane_id"):
+            ids.add(str(lane["lane_id"]))
+    return ids
 
 
 def _lane_from_path(path: Path, suffix: str) -> str:
@@ -209,9 +261,10 @@ def _fill_rows(
     lane: str,
     since: datetime | None,
     config: TradeJournalConfig,
+    active: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for path in _paths(root, ".fills.jsonl", lane):
+    for path in _paths(root, ".fills.jsonl", lane, active):
         lane_id = _lane_from_path(path, ".fills.jsonl")
         for raw in _iter_jsonl(path, max_bytes=config.tail_bytes):
             ts = _record_ts(raw)
@@ -245,9 +298,10 @@ def _journal_rows(
     lane: str,
     since: datetime | None,
     config: TradeJournalConfig,
+    active: set[str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     rows: list[tuple[str, dict[str, Any]]] = []
-    for path in _paths(root, ".journal.jsonl", lane):
+    for path in _paths(root, ".journal.jsonl", lane, active):
         lane_id = _lane_from_path(path, ".journal.jsonl")
         for raw in _iter_jsonl(path, max_bytes=config.tail_bytes):
             ts = _record_ts(raw, raw.get("payload") if isinstance(raw.get("payload"), dict) else {})
@@ -460,6 +514,79 @@ def _with_captured_bps(trade: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _intent_economics(
+    journal_rows: list[tuple[str, dict[str, Any]]]
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Leverage + notional from journaled intents so trades can show margin.
+
+    order_intent is keyed by client_order_id (paper trades join on their entry
+    order); shadow_intent by intent_key (shadow outcomes join on that)."""
+    by_coid: dict[str, dict[str, float]] = {}
+    by_key: dict[str, dict[str, float]] = {}
+    for _lane, record in journal_rows:
+        kind = str(record.get("kind") or "")
+        if kind not in ("order_intent", "shadow_intent"):
+            continue
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
+        intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+        if not intent:
+            continue
+        econ = {
+            "leverage": _float(intent.get("leverage")),
+            "notional_usd": _float(intent.get("notional_usd")),
+        }
+        if econ["leverage"] <= 0 and econ["notional_usd"] <= 0:
+            continue
+        if kind == "order_intent":
+            coid = str(payload.get("client_order_id") or intent.get("client_order_id") or "")
+            if coid:
+                by_coid[coid] = econ
+        else:
+            key = str(payload.get("intent_key") or "")
+            if key:
+                by_key[key] = econ
+    return by_coid, by_key
+
+
+def _attach_economics(trade: dict[str, Any], econ: dict[str, float] | None) -> None:
+    """Attach leverage / notional / margin to a trade in place. Notional falls
+    back to entry_price × quantity when the intent didn't carry it."""
+    if not econ:
+        return
+    lev = _float(econ.get("leverage"))
+    notional = _float(econ.get("notional_usd"))
+    if notional <= 0:
+        notional = _float(trade.get("entry_price")) * abs(_float(trade.get("quantity")))
+    trade["leverage"] = round(lev, 2) if lev > 0 else None
+    trade["notional_usd"] = round(notional, 2) if notional > 0 else None
+    if lev > 0 and notional > 0:
+        trade["margin_usd"] = round(notional / lev, 2)
+
+
+def _paper_exit_ladders(
+    journal_rows: list[tuple[str, dict[str, Any]]]
+) -> dict[str, dict[str, Any]]:
+    """Map exit client_order_id -> its recorded TP ladder, from live_paper_exit
+    decision-journal records. The exit order's client_order_id is the closing
+    fill's, so paired paper trades join to it directly."""
+    out: dict[str, dict[str, Any]] = {}
+    for _lane, record in journal_rows:
+        if str(record.get("kind") or "") != "live_paper_exit":
+            continue
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
+        coid = str(payload.get("client_order_id") or "")
+        if not coid:
+            continue
+        reason = str(payload.get("reason") or "")
+        out[coid] = {
+            "levels": payload.get("take_profit_levels") or [],
+            "tp_reached": int(payload.get("tp_reached") or 0),
+            # normalise the exit reason to the journal's resolution vocabulary
+            "resolution": "stop" if reason in ("stop", "tick_stop") else reason,
+        }
+    return out
+
+
 def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Reconstruct COMPLETE paper trades by pairing each opening fill (realized
     PnL 0) with its closing fill (realized != 0) per lane, FIFO.
@@ -500,6 +627,8 @@ def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "fee_usd": round(fee, 6),
                 "net_after_this_fill_fee_usd": round(realized - fee, 6),
                 "client_order_id": fill.get("client_order_id", ""),
+                # the ENTRY order's id — joins to its order_intent for leverage
+                "entry_client_order_id": entry.get("client_order_id", "") if entry else "",
                 "source": fill.get("source", "fill_ledger"),
             })
     return rows

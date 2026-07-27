@@ -387,7 +387,8 @@ services:
               "--requested-margin-usd", "${PAPER_LANE_ACTIVATION_MARGIN_USD:-100}",
               "--requested-leverage", "${PAPER_LANE_ACTIVATION_LEVERAGE:-25}",
               "--live-margin-usd", "${PAPER_LANE_ACTIVATION_LIVE_MARGIN_USD:-100}",
-              "--live-leverage", "${PAPER_LANE_ACTIVATION_LIVE_LEVERAGE:-5}"]
+              "--live-leverage", "${PAPER_LANE_ACTIVATION_LIVE_LEVERAGE:-5}",
+              "--high-leverage-ack", "${PAPER_LANE_ACTIVATION_HIGH_LEVERAGE_ACK:-0}"]
     volumes:
       - ./logs:/app/logs:ro
       - ./research/live_research:/app/research/live_research

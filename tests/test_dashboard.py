@@ -106,6 +106,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "Safety Gates" in html
     assert "Paper Route Doctor" in html
     assert "/paper-route-doctor" in html
+    assert "Trade Profile Matrix" in html
+    assert "/trade-profile-matrix" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -815,6 +817,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/lane-firing-causality").status_code == 401
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/paper-route-doctor").status_code == 401
+    assert client.get("/trade-profile-matrix").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
@@ -841,6 +844,10 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_route_payload["mode"] == "read_only_paper_route_doctor"
     assert paper_route_payload["can_trade"] is False
     assert paper_route_payload["can_promote"] is False
+    trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
+    assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
+    assert trade_profile_payload["can_trade"] is False
+    assert trade_profile_payload["can_promote"] is False
 
 
 def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):

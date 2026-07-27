@@ -1112,6 +1112,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--live-margin-usd", type=float, default=100.0)
     parser.add_argument("--live-leverage", type=float, default=5.0)
     parser.add_argument("--ack-high-leverage", action="store_true")
+    parser.add_argument(
+        "--high-leverage-ack",
+        type=_bool,
+        default=False,
+        help="Env-friendly equivalent of --ack-high-leverage.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1122,7 +1128,7 @@ def main(argv: list[str] | None = None) -> int:
         requested_leverage=args.requested_leverage,
         live_margin_usd=args.live_margin_usd,
         live_leverage=args.live_leverage,
-        high_leverage_ack=args.ack_high_leverage,
+        high_leverage_ack=bool(args.ack_high_leverage or args.high_leverage_ack),
     )
     while True:
         payload = build_paper_lane_activation(

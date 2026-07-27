@@ -244,6 +244,7 @@ class MultiLaneProvider:
             }
             for lid in self._order if lid in self._lanes
         ]
+        out["fleet"] = _fleet_aggregate(out["lanes"])
         health = self._lane_health()
         if health is not None:
             out["lane_health"] = health
@@ -286,6 +287,75 @@ def _lane_trade_compatibility(snapshot: dict) -> dict:
         "gateway_required": True,
         "journal_required": True,
     }
+
+def _fleet_aggregate(lanes: list[dict]) -> dict:
+    """Portfolio-wide truth across the ACTIVELY-RUNNING lanes.
+
+    The flat snapshot's ``equity`` is the primary lane only — a single lane's
+    NAV must never masquerade as the whole bot (a green primary lane hiding a
+    red fleet is exactly the honesty bug this fixes). This sums every running
+    lane so the headline is the real book, and splits paper (deploys paper
+    capital) from shadow (virtual/observation-only) so neither dilutes the
+    other. Error lanes are excluded — a crashed lane is not a $0 account.
+    """
+    eq = start = realized = unrealized = fees = 0.0
+    # paper_* = only the lanes that actually deploy capital. Shadow lanes hold a
+    # static nominal account that never moves, so folding them into the headline
+    # return dilutes it to ~0 and hides how the traded book is really doing.
+    paper_eq = paper_start = 0.0
+    paper_n = shadow_n = profitable = losing = 0
+    shadow_net = 0.0
+    shadow_trades = 0
+    counted = 0
+    for lane in lanes:
+        if str(lane.get("risk_status") or "") == "lane_error":
+            continue
+        counted += 1
+        e = float(lane.get("equity") or 0.0)
+        r = float(lane.get("realized_pnl") or 0.0)
+        u = float(lane.get("unrealized_pnl") or 0.0)
+        f = float(lane.get("fees_usd") or 0.0)
+        eq += e
+        realized += r
+        unrealized += u
+        fees += f
+        lane_start = e - r - u  # starting = equity - realized - unrealized
+        start += lane_start
+        if "shadow" in str(lane.get("mode") or "").lower():
+            shadow_n += 1
+            sp = lane.get("shadow_perf") or {}
+            shadow_net += float(sp.get("net_usd") or 0.0)
+            shadow_trades += int(sp.get("virtual_trades") or 0)
+        else:
+            paper_n += 1
+            paper_eq += e
+            paper_start += lane_start
+        if r > 1e-9:
+            profitable += 1
+        elif r < -1e-9:
+            losing += 1
+    ret_pct = ((eq - start) / start * 100.0) if start > 1e-9 else 0.0
+    paper_ret_pct = ((paper_eq - paper_start) / paper_start * 100.0) if paper_start > 1e-9 else 0.0
+    return {
+        "lanes": counted,
+        "equity": round(eq, 2),
+        "starting_equity": round(start, 2),
+        "realized_pnl": round(realized, 2),
+        "unrealized_pnl": round(unrealized, 2),
+        "fees_usd": round(fees, 2),
+        "return_pct": round(ret_pct, 3),
+        "paper_lanes": paper_n,
+        "shadow_lanes": shadow_n,
+        # the traded book, undiluted by static shadow accounts
+        "paper_equity": round(paper_eq, 2),
+        "paper_starting_equity": round(paper_start, 2),
+        "paper_return_pct": round(paper_ret_pct, 3),
+        "shadow_virtual_net_usd": round(shadow_net, 2),
+        "shadow_virtual_trades": shadow_trades,
+        "profitable_lanes": profitable,
+        "losing_lanes": losing,
+    }
+
 
 _FUNDING_HISTORY_REQUIRED = {"funding_mean_reversion_v1"}
 
