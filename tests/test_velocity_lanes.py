@@ -54,3 +54,19 @@ def test_velocity_lanes_join_the_desired_roster():
 def test_velocity_symbols_are_configurable():
     specs = velocity_delta_lanes(_env(MULTI_LANE_VELOCITY_SYMBOLS="ETH/USDT:USDT"))
     assert len(specs) == 1
+
+
+def test_velocity_lanes_are_never_mirrored_to_paper():
+    # even with paper-observation mirroring ON (production runs it), velocity
+    # lanes must stay shadow-only — never a paper ledger, never doubled.
+    from vnedge.runtime.multi_lane_shadow import paper_observation_lanes
+
+    specs = desired_lane_specs(_env(MULTI_LANE_PAPER_OBSERVE_ALL="1"))
+    vel = [s for s in specs if s.lane_id.startswith("velocity_")]
+    assert vel, "velocity lanes should exist"
+    assert all(s.mode is RunnerMode.SHADOW for s in vel)
+    assert not any(s.lane_id.startswith("velocity_") for s in specs
+                   if s.lane_id.endswith("_paper_observation"))
+    # and the mirror function itself refuses them
+    mirrors = paper_observation_lanes(vel, _env(MULTI_LANE_PAPER_OBSERVE_ALL="1"))
+    assert mirrors == []
