@@ -114,6 +114,7 @@ class LivePaperSession:
         equity_history_path=None,  # optional JSONL of (ts, equity) per bar
         trial_meta=None,  # optional dict shown on the dashboard governance panel
         fill_ledger=None,  # optional FillLedger — hash-chained execution record
+        funnel_store=None,  # optional LaneFunnelStore — resume counters on restart
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -128,6 +129,10 @@ class LivePaperSession:
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
         self.fill_ledger = fill_ledger
+        self.funnel_store = funnel_store
+        # when this lane last fired a LIVE signal — lets the dashboard show
+        # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
+        self.last_fired_ts: str | None = None
         # baseline against the EXCHANGE's fill list (resets each session), not
         # the ledger's total record count (survives restarts) — else every
         # post-restart fill would be sliced away and never chained/logged
@@ -820,6 +825,8 @@ class LivePaperSession:
             self.live_evals += 1
             if sig is not None:
                 self.live_signals += 1
+                _ts = df["timestamp"].iloc[index]
+                self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
         self.journal.append("lane_eval", record)
         if not backfill:
             self.last_eval = record
@@ -919,6 +926,8 @@ class LivePaperSession:
                 "shadow_rejected": self.shadow_rejected,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
+                "timeframe": self.config.timeframe,
+                "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()
                 if self.shadow_outcomes is not None else None,
@@ -1136,6 +1145,8 @@ class LivePaperSession:
                 self.account_store.save_from(
                     self.exchange, self.tracker, plan=self._serialize_plan()
                 )
+            if self.funnel_store is not None:
+                self.funnel_store.save_from(self)
             if self.equity_history_path is not None:
                 try:
                     import json as _json

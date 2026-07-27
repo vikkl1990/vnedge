@@ -502,7 +502,7 @@
         </div>
         <div class="blotter">
           <div class="brow head">
-            <span></span><span>Strategy</span><span>Venue</span><span>Symbol · side</span><span>Shadow P&amp;L</span><span>Sig 24h</span>
+            <span></span><span>Strategy</span><span>Venue</span><span>Symbol · side</span><span>Shadow P&amp;L</span><span>Evals · fired</span>
           </div>
           <div id="lanes"></div>
         </div>
@@ -529,7 +529,7 @@
           <div class="kpis">
             <div class="kpi"><div class="lbl">Paper realized</div><div class="v num" id="kPaper">--</div><div class="s" id="kPaperSub">paper-capital lanes</div></div>
             <div class="kpi"><div class="lbl">Shadow virtual net</div><div class="v num" id="kShadow">--</div><div class="s" id="kShadowSub">observation only</div></div>
-            <div class="kpi"><div class="lbl">Signals 24h</div><div class="v num" id="kSig">--</div><div class="s" id="kSigSub">across lanes</div></div>
+            <div class="kpi"><div class="lbl">Signals (cumulative)</div><div class="v num" id="kSig">--</div><div class="s" id="kSigSub">across lanes</div></div>
             <div class="kpi"><div class="lbl">Daily loss</div><div class="v num up" id="kDaily">$0.00</div><div class="s" id="kDailySub">of $10.00 limit</div></div>
             <div class="kpi"><div class="lbl">Drawdown</div><div class="v num" id="kDD" style="color:var(--warn)">--</div><div class="s">vs peak equity</div></div>
             <div class="kpi"><div class="lbl">Fee wall</div><div class="v num dn" id="kFee">--</div><div class="s" id="kFeeSub">taker round-trip</div></div>
@@ -951,6 +951,7 @@
   function pad2(x){return x<10?"0"+x:""+x;}
   function nowUTC(){var d=new Date();return pad2(d.getUTCHours())+":"+pad2(d.getUTCMinutes())+":"+pad2(d.getUTCSeconds());}
   function ageMs(ms){ms=num(ms);return ms<1000?Math.round(ms)+" ms":ms<60000?(ms/1000).toFixed(1)+" s":Math.round(ms/60000)+" m";}
+  function agoShort(ts){ if(!ts)return "—"; var t=Date.parse(ts); if(isNaN(t))return "—"; var s=(Date.now()-t)/1000; if(s<0)return "now"; if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m"; if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d"; }
   function symShort(s){return String(s||"").split(":")[0];}
   function stratShort(s){return String(s||"").replace(/_v\d+$/,"");}
   function safe(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
@@ -1052,9 +1053,9 @@
       return '<div class="brow"><span class="st '+st+'"></span>'+
         '<div class="strat" title="'+stratShort(l.strategy_id)+'"><b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
         '<span class="vchip" style="background:'+v.col+'">'+v.lab+'</span>'+
-        '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
+        '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+(l.timeframe?' <span style="color:var(--txt-faint)">'+l.timeframe+'</span>':'')+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
         '<div class="pnlbar"><span class="v '+pc+'">'+(p===0?"—":(p>0?"+":"")+"$"+p.toFixed(2))+'</span><div class="track">'+bar+'</div></div>'+
-        '<div class="sigct"><b>'+num(f.live_evals||f.evals||0)+'</b></div></div>';
+        '<div class="sigct"><b>'+num(f.live_evals||f.evals||0)+'</b><div style="font-size:9.5px;color:var(--txt-faint);font-weight:400" title="last fired signal">'+(l.last_fired_ts?"fired "+agoShort(l.last_fired_ts):"no fire yet")+'</div></div></div>';
     }).join('');
 
     // equity + KPIs — the headline curve + number track the FLEET, not one lane
