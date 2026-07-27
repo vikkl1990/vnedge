@@ -106,6 +106,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "Safety Gates" in html
     assert "Paper Route Doctor" in html
     assert "/paper-route-doctor" in html
+    assert "Paper Cadence Monitor" in html
+    assert "/paper-lane-cadence" in html
     assert "Trade Profile Matrix" in html
     assert "/trade-profile-matrix" in html
     # honest safety posture stays visible
@@ -794,6 +796,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_lane_cadence = tmp_path / "paper_lane_cadence.json"
+    paper_lane_cadence.write_text(json.dumps({
+        "mode": "read_only_paper_lane_cadence",
+        "summary": {"cadence_ok": 1, "stale": 0},
+        "rows": [{"cadence_state": "EVALUATING_NO_SIGNAL"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -807,6 +817,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         lane_firing_causality_path=causality,
         paper_lane_activation_path=paper_activation,
         paper_route_doctor_path=paper_route_doctor,
+        paper_lane_cadence_path=paper_lane_cadence,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -817,6 +828,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/lane-firing-causality").status_code == 401
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/paper-route-doctor").status_code == 401
+    assert client.get("/paper-lane-cadence").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
@@ -844,6 +856,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_route_payload["mode"] == "read_only_paper_route_doctor"
     assert paper_route_payload["can_trade"] is False
     assert paper_route_payload["can_promote"] is False
+    paper_cadence_payload = client.get("/paper-lane-cadence?token=t3st-token").json()
+    assert paper_cadence_payload["summary"]["cadence_ok"] == 1
+    assert paper_cadence_payload["mode"] == "read_only_paper_lane_cadence"
+    assert paper_cadence_payload["can_trade"] is False
+    assert paper_cadence_payload["can_promote"] is False
     trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False

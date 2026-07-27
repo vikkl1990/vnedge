@@ -419,6 +419,24 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper lane cadence: verifies active paper routes emit live lane_eval events
+  # at the expected timeframe cadence. Read-only: it never restarts services or
+  # changes lane state.
+  paper-lane-cadence:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-activation, paper-route-doctor]
+    command: ["python", "-m", "vnedge.research.paper_lane_cadence",
+              "--interval-seconds", "${PAPER_LANE_CADENCE_INTERVAL_SECONDS:-60}",
+              "--grace-multiplier", "${PAPER_LANE_CADENCE_GRACE_MULTIPLIER:-2.5}",
+              "--min-eval-sla-seconds", "${PAPER_LANE_CADENCE_MIN_EVAL_SLA_SECONDS:-180}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper performance ledger: reads paper decision journals + hash-chained fill
   # ledgers and publishes per-lane PnL/PF/sample status for the Promote view.
   # Read-only: no route can trade or promote from this service.

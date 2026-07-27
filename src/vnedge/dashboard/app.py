@@ -434,6 +434,7 @@ def create_app(
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
     paper_route_doctor_path: Path | None = None,
+    paper_lane_cadence_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
@@ -588,6 +589,10 @@ def create_app(
     paper_route_doctor_file = (
         paper_route_doctor_path
         or Path("research/live_research/paper_route_doctor_latest.json")
+    )
+    paper_lane_cadence_file = (
+        paper_lane_cadence_path
+        or Path("research/live_research/paper_lane_cadence_latest.json")
     )
     paper_lane_performance_file = (
         paper_lane_performance_path
@@ -1046,6 +1051,29 @@ def create_app(
         )
         return JSONResponse(
             build_trade_profile_matrix(activation),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-lane-cadence")
+    async def paper_lane_cadence(request: Request) -> JSONResponse:
+        """Latest paper lane evaluation cadence report.
+
+        It tells whether routed paper lanes are emitting live lane_eval events
+        frequently enough for their timeframe. Read-only; no restarts/trades.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_lane_cadence_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "paper lane cadence report unavailable",
+                    "mode": "read_only_paper_lane_cadence",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
             headers=_identity(user),
         )
 
