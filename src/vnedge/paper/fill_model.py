@@ -19,6 +19,10 @@ class FillModel(BaseModel):
 
     slippage_bps: float = Field(default=2.0, ge=0)
     taker_fee_bps: float = Field(default=5.0, ge=0)
+    # Maker (resting-limit) fee. Only charged when a caller explicitly routes a
+    # leg maker AND models the resting-fill realism itself (touch-to-fill); the
+    # default fee path stays taker, so no existing caller is silently cheapened.
+    maker_fee_bps: float = Field(default=2.0, ge=0)
     # None = full fills. 0.5 = market orders fill half, rest cancelled.
     partial_fill_fraction: float | None = Field(default=None, gt=0, le=1.0)
 
@@ -26,8 +30,9 @@ class FillModel(BaseModel):
         adj = self.slippage_bps / 10_000.0
         return ask * (1 + adj) if buy else bid * (1 - adj)
 
-    def fee_usd(self, notional_usd: float) -> float:
-        return abs(notional_usd) * self.taker_fee_bps / 10_000.0
+    def fee_usd(self, notional_usd: float, *, maker: bool = False) -> float:
+        bps = self.maker_fee_bps if maker else self.taker_fee_bps
+        return abs(notional_usd) * bps / 10_000.0
 
     def fill_quantity(self, requested: float) -> float:
         if self.partial_fill_fraction is None:

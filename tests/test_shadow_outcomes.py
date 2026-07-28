@@ -104,6 +104,78 @@ def test_target_resolution_and_fee_math(tmp_path):
     assert outcomes[0].virtual_net_usd == pytest.approx(10.0 - (0.05 + 0.055))
 
 
+# --- maker route: touch-to-fill + maker fee, all-taker figure kept visible --------
+
+
+def test_is_maker_route_strategy_matches_maker_edge_set():
+    from vnedge.runtime.shadow_outcomes import is_maker_route_strategy
+    assert is_maker_route_strategy("stealth_trail_bbp_v1")
+    assert is_maker_route_strategy("vnedge_algo_ml_pro_v1")
+    assert not is_maker_route_strategy("trend_continuation_v1")
+    assert not is_maker_route_strategy("funding_mean_reversion_v1")
+    assert not is_maker_route_strategy("")
+
+
+def test_default_route_is_taker_and_byte_identical(tmp_path):
+    tracker, journal = tracker_for(tmp_path)  # maker_route defaults False
+    tracker.track(intent_key="t", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
+    out = tracker.resolve_bar(bar(1, high=111.0, low=99.0))[0]
+    assert out.route == "taker"
+    # taker entry (5bps) + taker exit (5bps) — unchanged from before the route
+    assert out.virtual_net_usd == pytest.approx(10.0 - (100 * 0.0005 + 110 * 0.0005))
+    assert out.virtual_net_taker_usd == out.virtual_net_usd
+
+
+def test_maker_route_fills_on_touch_and_charges_maker_fee(tmp_path):
+    tracker, journal = tracker_for(tmp_path, maker_route=True)
+    tracker.track(intent_key="m", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
+    # bar dips to 99 (touches the resting buy limit at 100) then runs to target
+    out = tracker.resolve_bar(bar(1, high=111.0, low=99.0))[0]
+    assert out.route == "maker" and out.resolution == "target" and out.exit_price == 110.0
+    # entry MAKER fee (2bps) + exit taker (5bps)
+    assert out.virtual_net_usd == pytest.approx(10.0 - (100 * 0.0002 + 110 * 0.0005))
+    # the conservative all-taker figure is still recorded, and is strictly worse
+    assert out.virtual_net_taker_usd == pytest.approx(10.0 - (100 * 0.0005 + 110 * 0.0005))
+    assert out.virtual_net_usd > out.virtual_net_taker_usd
+    payload = [r for r in journal.read_all() if r["kind"] == "shadow_outcome"][0]["payload"]
+    assert payload["route"] == "maker"
+    assert tracker.stats()["route"] == "maker" and tracker.stats()["maker_unfilled"] == 0
+
+
+def test_maker_route_misses_the_untouched_runner(tmp_path):
+    tracker, journal = tracker_for(tmp_path, maker_route=True)
+    tracker.track(intent_key="m", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
+    # bar gaps up and never trades down to the resting limit (low 101 > 100) —
+    # the maker misses this immediate runner (honest adverse selection)
+    assert tracker.resolve_bar(bar(1, high=112.0, low=101.0)) == []
+    assert tracker.stats()["maker_unfilled"] == 1
+    assert tracker.stats()["virtual_trades"] == 0
+    kinds = {r["kind"] for r in journal.read_all()}
+    assert "shadow_maker_unfilled" in kinds and "shadow_outcome" not in kinds
+
+
+def test_maker_route_fills_within_ttl_on_a_later_touch(tmp_path):
+    tracker, journal = tracker_for(tmp_path, maker_route=True, maker_fill_ttl_bars=2)
+    tracker.track(intent_key="m", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
+    assert tracker.resolve_bar(bar(1, high=112.0, low=101.0)) == []  # bar1: no touch
+    out = tracker.resolve_bar(bar(2, high=111.0, low=99.0))          # bar2: touches
+    assert len(out) == 1 and out[0].route == "maker" and out[0].resolution == "target"
+    assert tracker.stats()["maker_unfilled"] == 0 and tracker.stats()["virtual_trades"] == 1
+
+
+def test_maker_route_short_fills_on_upward_touch(tmp_path):
+    tracker, journal = tracker_for(tmp_path, maker_route=True)
+    # short: resting sell limit at 100 fills if price rises to touch it
+    tracker.track(intent_key="s", side="short", quantity=1.0, notional_usd=100.0,
+                  stop_price=105.0, take_profit_price=90.0, decision_bar_ts=ts(0))
+    out = tracker.resolve_bar(bar(1, high=101.0, low=89.0))[0]
+    assert out.route == "maker" and out.resolution == "target" and out.exit_price == 90.0
+
+
 # --- TP ladder: recorded, never an exit trigger ----------------------------------
 
 
@@ -405,6 +477,7 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
         "profit_factor": None, "open_intents": 2,
         "resolutions": {"stop": 0, "target": 0, "timeout": 0},
         "status": "OBSERVE", "trade_compatible": True,
+        "route": "taker", "net_taker_usd": 0.0, "maker_unfilled": 0,
     }
 
     # restart: seeded history now includes bar 6, which broke the stops while

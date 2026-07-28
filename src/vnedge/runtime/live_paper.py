@@ -49,6 +49,7 @@ from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
     VirtualOutcome,
     _tp_reached,
+    is_maker_route_strategy,
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
@@ -157,6 +158,10 @@ class LivePaperSession:
                 journal,
                 fill_model=exchange.fill_model,
                 max_holding_bars=config.max_holding_bars,
+                # Strategies whose edge is defined after MAKER fees get the
+                # resting-limit route (touch-to-fill + maker entry fee); every
+                # other lane stays all-taker. Observability only either way.
+                maker_route=is_maker_route_strategy(strategy.strategy_id),
             )
             if config.mode is RunnerMode.SHADOW
             else None
