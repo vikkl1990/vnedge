@@ -1427,21 +1427,21 @@
     lifeData.performance=d; renderLifecycleConsole();
     var el=$("paperPerformance"),meta=$("paperPerfMeta"); if(!el)return;
     var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
-    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+usd(s.net_pnl_usd)+" net · $"+num(s.fees_usd).toFixed(2)+" fees";
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+usd(s.net_pnl_usd)+" net · $"+num(s.fees_usd).toFixed(2)+" fees · "+num(s.journal_drift_lanes)+" drift lanes";
     if(!rows.length){el.innerHTML='<div class="note">paper performance report loading…</div>';return;}
     var k='<div class="perfgrid">'+
       '<div class="perfk"><div class="l">Candidates</div><div class="v" style="color:var(--long)">'+num(s.promotion_candidates)+'</div></div>'+
       '<div class="perfk"><div class="l">Profitable</div><div class="v" style="color:var(--long)">'+num(s.profitable_lanes)+'</div></div>'+
       '<div class="perfk"><div class="l">Negative</div><div class="v" style="color:var(--short)">'+num(s.negative_lanes)+'</div></div>'+
-      '<div class="perfk"><div class="l">No closed trades</div><div class="v" style="color:var(--warn)">'+num(s.online_no_trades)+'</div></div>'+
+      '<div class="perfk"><div class="l">Open fills</div><div class="v" style="color:var(--warn)">'+num(s.open_fill_count)+'</div></div>'+
     '</div>';
     var body=rows.slice(0,8).map(function(r){
       var pf=r.profit_factor==null?"--":num(r.profit_factor).toFixed(2);
       var wr=r.win_rate==null?"--":(num(r.win_rate)*100).toFixed(0)+"%";
-      var net=num(r.net_pnl_usd),cls=perfCls(r.state);
+      var net=num(r.net_pnl_usd),cls=perfCls(r.state),dr=(r.journal_drift_flags||[]).join(" · ");
       return '<div class="perfrow">'+
         '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
-        '<div><span class="actstate '+cls+'">'+esc(String(r.state||"unknown").replace(/^PAPER_/,"").toLowerCase().replace(/_/g," "))+'</span><small>'+esc(String(r.latest_why_no_trade||r.next_action||"").slice(0,54))+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(String(r.state||"unknown").replace(/^PAPER_/,"").toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(dr||r.next_action||"")+'">'+esc(String(dr||r.latest_why_no_trade||r.next_action||"").slice(0,54))+'</small></div>'+
         '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>fees $'+num(r.fees_usd).toFixed(2)+'</small></div>'+
         '<div><b class="num">'+pf+'</b><small>PF · WR '+wr+'</small></div>'+
         '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+num(r.live_signals)+' signals · '+num(r.paper_order_intents)+' intents · '+num(r.fills)+' fills</small></div>'+
@@ -1921,11 +1921,11 @@
   // one place for a closed trade's net — shadow virtual, then paper net, then raw realized
   function jTradeNet(t){ return (t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0); }
   function renderJournal(d){
-    var s=d.summary||{}, rp=+s.actual_realized_pnl_usd||0, vn=+s.virtual_net_usd||0;
+    var s=d.summary||{}, rp=(s.actual_closed_net_usd!=null?+s.actual_closed_net_usd:+s.actual_realized_pnl_usd)||0, vn=+s.virtual_net_usd||0;
     document.getElementById("jkpis").innerHTML=
-      jTile("Realized P&amp;L","<span class='num "+(rp<0?"dn":"up")+"'>"+jMoney(rp)+"</span>","actual fills")+
+      jTile("Paper closed net","<span class='num "+(rp<0?"dn":"up")+"'>"+jMoney(rp)+"</span>",(s.actual_closed_trades||0)+" actual closes")+
       jTile("Fees paid","<span class='num' style='color:var(--txt-dim)'>$"+(+s.fees_usd||0).toFixed(2)+"</span>",(s.fills||0)+" fills")+
-      jTile("Closed trades","<span class='num'>"+(s.closed_trades||0)+"</span>",jMoney(vn)+" shadow net")+
+      jTile("Shadow closed","<span class='num'>"+(s.shadow_closed_trades||0)+"</span>",jMoney(vn)+" virtual net")+
       jTile("Open orders","<span class='num'>"+(s.open_orders||0)+"</span>",(s.orders||0)+" total");
     // per-lane P&L rollup, worst/best first
     var lp=s.lane_pnl||{};
@@ -1944,6 +1944,7 @@
       var net=jTradeNet(t);
       var bps=(t.captured_bps==null?null:+t.captured_bps);
       var rc=(t.resolution==="take_profit"||t.resolution==="target")?"var(--long)":(t.resolution==="stop"||t.resolution==="tick_stop")?"var(--short)":"var(--txt-dim)";
+      var fee=(t.fees_usd!=null)?+t.fees_usd:((t.fee_usd!=null)?+t.fee_usd:0);
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
         "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
         "<span>"+(t.exchange?("<span class='vchip' style='background:"+ven(t.exchange).col+"' title='"+jEsc(ven(t.exchange).lab)+"'>"+ven(t.exchange).sh+"</span>"):"<span style='color:var(--txt-faint)'>—</span>")+"</span>"+
@@ -1954,7 +1955,7 @@
         "<span class='num' style='color:var(--txt-dim)' title='hold duration'>"+jHold(t.hold_seconds)+"</span>"+
         "<span class='num "+(bps==null?"":bps<0?"dn":"up")+"' title='"+(t.captured_bps_basis||"")+" bps captured'>"+(bps==null?"—":(bps>0?"+":"")+bps.toFixed(0))+"</span>"+
         "<span class='num "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span>"+
-        "<span class='num' style='color:var(--txt-dim)'>$"+(+t.fees_usd||0).toFixed(2)+"</span></div>";
+        "<span class='num' style='color:var(--txt-dim)'>$"+fee.toFixed(2)+"</span></div>";
     }).join("") : "<div class='jempty'>No closed trades yet — lanes are still warming up.</div>";
     var fl=d.fills||[];
     document.getElementById("jfMeta").textContent=(s.fill_ledgers_scanned||0)+" ledgers · hash-chained";
