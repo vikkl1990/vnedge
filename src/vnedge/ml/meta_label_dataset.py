@@ -57,12 +57,18 @@ def _first_present(record: Mapping[str, Any], keys: Iterable[str]):
     return None
 
 
-def parse_journal_trades(records: Iterable[Mapping[str, Any]]) -> list[TradeOutcome]:
+def parse_journal_trades(
+    records: Iterable[Mapping[str, Any]], *, default_lane: str = ""
+) -> list[TradeOutcome]:
     """Extract closed trades from decision-journal records.
 
     The primary signal's entry time is embedded in ``intent_key``
     (``strategy|symbol|side|entry_ms``), so each closed-trade record is
     self-contained — no fragile pairing of entry/exit rows required.
+
+    ``default_lane`` labels each trade with the lane it came from when the record
+    itself carries no ``lane`` field — callers pass the journal filename's lane id
+    so trades can later be joined to that lane's exact-timeframe candle cache.
     """
     out: list[TradeOutcome] = []
     for record in records:
@@ -92,17 +98,26 @@ def parse_journal_trades(records: Iterable[Mapping[str, Any]]) -> list[TradeOutc
                 side=side,
                 entry_ts=entry_ts,
                 net_usd=float(net),
-                lane=str(record.get("lane") or body.get("lane") or ""),
+                lane=str(record.get("lane") or body.get("lane") or default_lane),
             )
         )
     return out
 
 
 def load_lane_journal_trades(lane_dir: Path | str) -> list[TradeOutcome]:
-    """Read every ``*.journal.jsonl`` under `lane_dir` and parse its trades."""
+    """Read every ``*.journal.jsonl`` under `lane_dir` and parse its trades.
+
+    Each file is parsed on its own so the lane id (the filename stem, e.g.
+    ``alpha_stack_confluence_v1_bybit_btcusdt_shadow``) is stamped onto every
+    trade — the records themselves omit it. That lane id matches the lane's
+    warmup candle cache (``<lane_id>.candles.parquet``), letting the label
+    builder join features at the trade's exact symbol *and* timeframe.
+    """
     root = Path(lane_dir)
-    records: list[dict] = []
+    out: list[TradeOutcome] = []
     for path in sorted(root.glob("*.journal.jsonl")):
+        lane_id = path.name[: -len(".journal.jsonl")]
+        records: list[dict] = []
         try:
             for line in path.read_text().splitlines():
                 try:
@@ -111,13 +126,15 @@ def load_lane_journal_trades(lane_dir: Path | str) -> list[TradeOutcome]:
                     continue
         except OSError:
             continue
-    return parse_journal_trades(records)
+        out.extend(parse_journal_trades(records, default_lane=lane_id))
+    return out
 
 
 def build_meta_label_dataset(
     trades: Iterable[TradeOutcome],
     candles_by_symbol: Mapping[str, pd.DataFrame],
     *,
+    candles_by_lane: Mapping[str, pd.DataFrame] | None = None,
     funding_by_symbol: Mapping[str, pd.DataFrame] | None = None,
     params: FeatureParams = FeatureParams(),
 ) -> tuple[pd.DataFrame, dict]:
@@ -129,20 +146,37 @@ def build_meta_label_dataset(
     bar isn't found, or any feature is still NaN (warmup). The summary reports
     sample count, win rate, drops, and per-strategy counts — read it before
     trusting a small dataset.
+
+    ``candles_by_lane`` maps a lane id to that lane's own candles (the exact
+    symbol *and* timeframe it traded). It is preferred over ``candles_by_symbol``
+    per trade: a 5m lane and a 4h lane on the same symbol need different bars, and
+    only the lane's own candles align a coarse-timeframe entry to its bar. The
+    symbol map remains the fallback for trades from lanes with no candle cache.
     """
     funding_by_symbol = funding_by_symbol or {}
+    candles_by_lane = candles_by_lane or {}
 
     # Build each symbol's causal feature matrix once, indexed by timestamp.
-    feats: dict[str, pd.DataFrame] = {}
-    for symbol, candles in candles_by_symbol.items():
-        fm = build_feature_matrix(candles, funding_by_symbol.get(symbol), params)
-        fm = fm.set_index(pd.DatetimeIndex(pd.to_datetime(fm["timestamp"], utc=True)))
-        feats[symbol] = fm
+    def _matrix(candles: pd.DataFrame, funding: pd.DataFrame | None) -> pd.DataFrame:
+        fm = build_feature_matrix(candles, funding, params)
+        return fm.set_index(pd.DatetimeIndex(pd.to_datetime(fm["timestamp"], utc=True)))
+
+    feats: dict[str, pd.DataFrame] = {
+        symbol: _matrix(candles, funding_by_symbol.get(symbol))
+        for symbol, candles in candles_by_symbol.items()
+    }
+    # Per-lane matrices carry no funding history (caches are OHLCV only); that is
+    # the same footing the symbol lake runs on, which already yields labels.
+    feats_by_lane: dict[str, pd.DataFrame] = {
+        lane: _matrix(candles, None) for lane, candles in candles_by_lane.items()
+    }
 
     rows: list[dict] = []
     no_symbol = no_bar = nan_feature = 0
     for trade in trades:
-        fm = feats.get(trade.symbol)
+        fm = feats_by_lane.get(trade.lane) if trade.lane else None
+        if fm is None:
+            fm = feats.get(trade.symbol)
         if fm is None:
             no_symbol += 1
             continue
