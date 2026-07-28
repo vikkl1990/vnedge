@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -44,6 +44,15 @@ class PaperLanePerformanceConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class _ClosedTradeStats:
+    nets: list[float]
+    notional_usd: float
+    unpaired_closing_fills: int
+    open_fill_count: int
+    open_entry_fees_usd: float
 
 
 def build_paper_lane_performance(
@@ -218,8 +227,6 @@ def _lane_row(
 
     realized = 0.0
     fees = 0.0
-    closing_nets: list[float] = []
-    closing_notional = 0.0
     ledger_ok = True
     for fill in fills:
         ledger_ok = ledger_ok and bool(fill.get("_ledger_ok", True))
@@ -231,11 +238,10 @@ def _lane_row(
         fee = _float(fill.get("fee_usd"))
         fees += fee
         realized += pnl
-        if abs(pnl) > 1e-12:
-            net = pnl - fee
-            closing_nets.append(net)
-            closing_notional += abs(_float(fill.get("price")) * _float(fill.get("quantity")))
 
+    closed_stats = _closed_trade_stats(fills)
+    closing_nets = closed_stats.nets
+    closed_net_pnl = sum(closing_nets)
     net_pnl = realized - fees
     gross_profit = sum(x for x in closing_nets if x > 0)
     gross_loss = abs(sum(x for x in closing_nets if x < 0))
@@ -245,8 +251,8 @@ def _lane_row(
     win_rate = wins / closed if closed else None
     avg_trade = sum(closing_nets) / closed if closed else None
     avg_bps = (
-        (sum(closing_nets) / closing_notional) * 10_000
-        if closing_notional > 0
+        (closed_net_pnl / closed_stats.notional_usd) * 10_000
+        if closed_stats.notional_usd > 0
         else None
     )
     latest_dt = _parse_dt(latest_ts)
@@ -263,6 +269,7 @@ def _lane_row(
     live_evals = int(counters.get("live_evals") or 0)
     live_signals = int(counters.get("live_signals") or 0)
     order_intents = int(counters.get("order_intent") or 0)
+    drift_flags = _journal_drift_flags(closed_stats)
     return {
         "lane_id": lane_id,
         "exchange": exchange or _exchange_hint(lane_id),
@@ -301,8 +308,13 @@ def _lane_row(
         "realized_pnl_usd": round(realized, 6),
         "fees_usd": round(fees, 6),
         "net_pnl_usd": round(net_pnl, 6),
+        "closed_net_pnl_usd": round(closed_net_pnl, 6),
         "avg_closed_trade_net_usd": round(avg_trade, 6) if avg_trade is not None else None,
         "avg_closed_trade_net_bps": round(avg_bps, 4) if avg_bps is not None else None,
+        "open_fill_count": int(closed_stats.open_fill_count),
+        "open_position_entry_fees_usd": round(closed_stats.open_entry_fees_usd, 6),
+        "unpaired_closing_fills": int(closed_stats.unpaired_closing_fills),
+        "journal_drift_flags": drift_flags,
         "ledger_ok": ledger_ok,
         "can_trade": False,
         "can_promote": False,
@@ -403,6 +415,7 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     closed_rows = [r for r in rows if int(r.get("closed_trades") or 0) > 0]
     fees = sum(_float(r.get("fees_usd")) for r in rows)
     net = sum(_float(r.get("net_pnl_usd")) for r in rows)
+    closed_net = sum(_float(r.get("closed_net_pnl_usd")) for r in rows)
     return {
         "total_lanes": len(rows),
         "paper_online": sum(
@@ -424,6 +437,15 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "closed_trades": sum(int(r.get("closed_trades") or 0) for r in rows),
         "fees_usd": round(fees, 6),
         "net_pnl_usd": round(net, 6),
+        "closed_net_pnl_usd": round(closed_net, 6),
+        "open_position_entry_fees_usd": round(
+            sum(_float(r.get("open_position_entry_fees_usd")) for r in rows), 6
+        ),
+        "open_fill_count": sum(int(r.get("open_fill_count") or 0) for r in rows),
+        "unpaired_closing_fills": sum(
+            int(r.get("unpaired_closing_fills") or 0) for r in rows
+        ),
+        "journal_drift_lanes": sum(1 for r in rows if r.get("journal_drift_flags")),
         "state_counts": dict(sorted(counts.items())),
         "can_trade": False,
         "can_promote": False,
@@ -565,6 +587,52 @@ def _profit_factor(gross_profit: float, gross_loss: float) -> float:
     if gross_profit > 0:
         return 999.0
     return 0.0
+
+
+def _closed_trade_stats(fills: list[dict[str, Any]]) -> _ClosedTradeStats:
+    """Pair paper fills into complete trades and charge both entry + exit fees.
+
+    Fill ledgers record realized PnL on the closing fill, while the opening fill
+    carries its own fee. Lane PF/bps must therefore be computed from complete
+    entry->exit pairs; otherwise the per-trade view drifts from fleet net PnL.
+    """
+    open_fifo: deque[dict[str, Any]] = deque()
+    nets: list[float] = []
+    notional = 0.0
+    unpaired = 0
+    for fill in sorted(fills, key=lambda row: str(row.get("ts") or "")):
+        realized = _float(fill.get("realized_pnl_usd"))
+        if abs(realized) <= 1e-12:
+            open_fifo.append(fill)
+            continue
+        entry = open_fifo.popleft() if open_fifo else None
+        if entry is None:
+            unpaired += 1
+        entry_fee = _float(entry.get("fee_usd")) if entry else 0.0
+        exit_fee = _float(fill.get("fee_usd"))
+        nets.append(realized - entry_fee - exit_fee)
+        price = _float(fill.get("price"))
+        qty = abs(_float(fill.get("quantity")))
+        if price > 0 and qty > 0:
+            notional += price * qty
+    return _ClosedTradeStats(
+        nets=nets,
+        notional_usd=notional,
+        unpaired_closing_fills=unpaired,
+        open_fill_count=len(open_fifo),
+        open_entry_fees_usd=sum(_float(fill.get("fee_usd")) for fill in open_fifo),
+    )
+
+
+def _journal_drift_flags(stats: _ClosedTradeStats) -> list[str]:
+    flags: list[str] = []
+    if stats.unpaired_closing_fills:
+        flags.append(f"{stats.unpaired_closing_fills} unpaired closing fill(s)")
+    if stats.open_fill_count:
+        flags.append(f"{stats.open_fill_count} open fill(s) awaiting close")
+    if stats.open_entry_fees_usd > 0:
+        flags.append(f"${stats.open_entry_fees_usd:.2f} open entry-fee drag")
+    return flags
 
 
 def _verify_chain(path: Path) -> bool:

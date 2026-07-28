@@ -65,6 +65,12 @@ def build_trade_journal(
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
     closed_trades = _build_closed_trades(fills, journal_rows, virtual_trades)
+    actual_closed = [
+        row for row in closed_trades if row.get("kind") == "actual_closing_fill"
+    ]
+    shadow_closed = [
+        row for row in closed_trades if row.get("kind") != "actual_closing_fill"
+    ]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
     fills = _sort_recent(fills)[:limit]
@@ -75,6 +81,8 @@ def build_trade_journal(
     actual_realized = sum(_float(row.get("realized_pnl_usd")) for row in fills)
     fees = sum(_float(row.get("fee_usd")) for row in fills)
     virtual_net = sum(_float(row.get("virtual_net_usd")) for row in closed_trades)
+    actual_closed_net = sum(_float(row.get("net_after_this_fill_fee_usd")) for row in actual_closed)
+    actual_closed_fees = sum(_float(row.get("fee_usd")) for row in actual_closed)
     lane_counts = _lane_counts(snapshot)
 
     return {
@@ -86,6 +94,8 @@ def build_trade_journal(
             "open_orders": sum(1 for row in order_rows if _is_open_order(row)),
             "fills": len(fills),
             "closed_trades": len(closed_trades),
+            "actual_closed_trades": len(actual_closed),
+            "shadow_closed_trades": len(shadow_closed),
             "events": len(events),
             "journals_scanned": _count_paths(root, ".journal.jsonl", lane, active),
             "fill_ledgers_scanned": _count_paths(root, ".fills.jsonl", lane, active),
@@ -93,6 +103,8 @@ def build_trade_journal(
             "actual_realized_pnl_usd": round(actual_realized, 6),
             "fees_usd": round(fees, 6),
             "virtual_net_usd": round(virtual_net, 6),
+            "actual_closed_net_usd": round(actual_closed_net, 6),
+            "actual_closed_fees_usd": round(actual_closed_fees, 6),
             "lane_position_counts": lane_counts,
             "lane_pnl": _lane_pnl_rollup(closed_trades),
             "history_lane": _primary_lane(history_path),
