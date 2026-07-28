@@ -43,16 +43,21 @@ def _load_candles(data_root: Path) -> dict:
     """Load normalized candle frames keyed by the ccxt symbol the journals use.
 
     Covers every venue so binance/bybit (USDT-margined) and Delta (USD) trades
-    all resolve. One timeframe per symbol is enough for entry-bar feature lookup;
-    when a symbol exists on multiple venues the first frame wins (the candles
-    track closely and the journal symbol carries no venue).
+    all resolve. This is the *fallback* source, keyed by symbol only — one
+    timeframe per symbol (first frame wins). It cannot align a coarse-timeframe
+    entry (a 4h trade) to a fine-timeframe frame, so per-lane caches (below) are
+    preferred; the lake covers trades from retired lanes that have no cache.
+
+    ``rglob`` finds the parquet wherever the store nests it (``normalized/`` and
+    ``exchange=…`` are both valid roots), so callers can pass either ``data`` or
+    ``data/normalized`` without silently loading nothing.
     """
     try:
         import pandas as pd
     except ImportError:  # pragma: no cover
         return {}
     paths: dict = {}
-    for path in data_root.glob("exchange=*/symbol=*/timeframe=*/candles.parquet"):
+    for path in data_root.rglob("symbol=*/timeframe=*/candles.parquet"):
         parts = {p.split("=", 1)[0]: p.split("=", 1)[1] for p in path.parts if "=" in p}
         raw = parts.get("symbol", "")
         if raw.endswith("USDT"):
@@ -71,13 +76,38 @@ def _load_candles(data_root: Path) -> dict:
     return frames
 
 
+def _load_lane_candles(lane_dir: Path) -> dict:
+    """Load each lane's own warmup candle cache, keyed by lane id.
+
+    ``<lane_id>.candles.parquet`` holds the exact symbol *and* timeframe the lane
+    trades, so a trade tagged with that lane id joins features at the right bar —
+    which one-timeframe-per-symbol candles cannot do. Missing/unreadable caches
+    are skipped (the symbol lake remains the fallback); never fatal.
+    """
+    try:
+        import pandas as pd
+    except ImportError:  # pragma: no cover
+        return {}
+    frames: dict = {}
+    for path in lane_dir.glob("*.candles.parquet"):
+        lane_id = path.name[: -len(".candles.parquet")]
+        try:
+            frames[lane_id] = pd.read_parquet(path)
+        except Exception:  # noqa: BLE001
+            continue
+    return frames
+
+
 def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
     """Assemble the current, honest ML pipeline state."""
     trades = load_lane_journal_trades(lane_dir)
     candles = _load_candles(data_root)
+    lane_candles = _load_lane_candles(lane_dir)
     frame = None
-    if candles:
-        frame, summary = build_meta_label_dataset(trades, candles, params=FeatureParams())
+    if candles or lane_candles:
+        frame, summary = build_meta_label_dataset(
+            trades, candles, candles_by_lane=lane_candles, params=FeatureParams()
+        )
     else:
         summary = {"samples": 0, "win_rate": 0.0, "by_strategy": {}}
 

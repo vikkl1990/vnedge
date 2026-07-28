@@ -1,5 +1,7 @@
 """Meta-label dataset builder: journal parsing + leakage-free feature join."""
 
+import json
+
 import numpy as np
 import pandas as pd
 
@@ -7,15 +9,16 @@ from vnedge.ml.feature_matrix import FEATURE_COLUMNS, FeatureParams, build_featu
 from vnedge.ml.meta_label_dataset import (
     TradeOutcome,
     build_meta_label_dataset,
+    load_lane_journal_trades,
     parse_journal_trades,
 )
 
 SYMBOL = "ETH/USD:USD"
 
 
-def _candles(n=500, seed=0):
+def _candles(n=500, seed=0, freq="1h"):
     rng = np.random.default_rng(seed)
-    ts = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    ts = pd.date_range("2024-01-01", periods=n, freq=freq, tz="UTC")
     close = 100 + np.cumsum(rng.normal(0, 1, n))
     open_ = close + rng.normal(0, 0.3, n)
     high = np.maximum(open_, close) + np.abs(rng.normal(0, 0.5, n))
@@ -118,3 +121,50 @@ def test_empty_input_is_honest_not_an_error():
     df, summary = build_meta_label_dataset([], {SYMBOL: _candles()})
     assert summary["samples"] == 0 and summary["win_rate"] == 0.0
     assert list(df.columns)[: len(FEATURE_COLUMNS)] == FEATURE_COLUMNS
+
+
+def test_load_lane_journal_trades_stamps_lane_from_filename(tmp_path):
+    # Records carry no "lane" field; the filename stem is the lane id.
+    candles = _candles()
+    ts = candles["timestamp"].iloc[300]
+    rec = {
+        "kind": "shadow_outcome",
+        "intent_key": f"stealth_trail_bbp_v1|{SYMBOL}|long|{_ms(ts)}",
+        "virtual_net_usd": 3.0, "symbol": SYMBOL, "side": "long",
+    }
+    lane_id = "stealth_trail_bbp_v1_bybit_ethusdt_shadow"
+    (tmp_path / f"{lane_id}.journal.jsonl").write_text(json.dumps(rec) + "\n")
+    trades = load_lane_journal_trades(tmp_path)
+    assert len(trades) == 1 and trades[0].lane == lane_id
+
+
+def test_lane_candles_align_a_trade_the_symbol_lake_cannot():
+    # Same symbol, two timeframes: the lake has 1h bars, the lane trades 5m.
+    # A 5m entry off the hour has no 1h bar -> the lane cache must rescue it.
+    lake_1h = _candles(freq="1h")
+    lane_5m = _candles(n=800, seed=1, freq="5min")
+    off_hour = lane_5m["timestamp"].iloc[601]   # 601*5min -> :05, never a 1h bar
+    assert off_hour not in set(lake_1h["timestamp"])  # genuinely absent from the lake
+    trade = TradeOutcome("sats_5m_scalper_v1", SYMBOL, "long",
+                         pd.Timestamp(off_hour), +2.0, lane="fastlane")
+
+    # symbol lake alone drops it (no 1h bar at that minute)
+    _, base = build_meta_label_dataset([trade], {SYMBOL: lake_1h})
+    assert base["samples"] == 0 and base["dropped_no_bar"] == 1
+
+    # the lane's own 5m cache aligns it -> labeled
+    _, fixed = build_meta_label_dataset(
+        [trade], {SYMBOL: lake_1h}, candles_by_lane={"fastlane": lane_5m}
+    )
+    assert fixed["samples"] == 1 and fixed["dropped_no_bar"] == 0
+
+
+def test_symbol_lake_is_the_fallback_when_lane_has_no_cache():
+    # A trade whose lane has no cache still resolves via the symbol lake.
+    candles = _candles()
+    ts = candles["timestamp"].iloc[400]
+    trade = TradeOutcome("s", SYMBOL, "long", pd.Timestamp(ts), +1.0, lane="retired_lane")
+    _, summary = build_meta_label_dataset(
+        [trade], {SYMBOL: candles}, candles_by_lane={"other_lane": _candles(seed=9)}
+    )
+    assert summary["samples"] == 1
