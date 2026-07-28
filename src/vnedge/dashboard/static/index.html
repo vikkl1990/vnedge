@@ -330,6 +330,17 @@
   .lifemetric .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
   .lifemetric .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
   .lifefilter{display:flex;gap:8px;align-items:center;padding:0 14px 12px;color:var(--txt-faint);font-size:11px}
+  .healthmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px}
+  .healthmetric{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .healthmetric .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .healthmetric .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
+  .healthrow{display:grid;grid-template-columns:1.2fr .72fr .72fr .72fr 1.2fr;gap:10px;align-items:center;padding:9px 15px;border-top:1px solid var(--line);font-size:11.5px}
+  .healthrow.head{border-top:1px solid var(--line-2)}
+  .healthrow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:900}
+  .healthrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .healthrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .healthdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:var(--txt-faint)}
+  .healthdot.ok{background:var(--long)} .healthdot.wait{background:var(--warn)} .healthdot.bad{background:var(--short)}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -427,6 +438,9 @@
     .fstep:after{display:none}
     .lifemetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
     .lifegrid{grid-template-columns:repeat(7,minmax(150px,1fr));overflow-x:auto}
+    .healthmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .healthrow{grid-template-columns:1fr}
+    .healthrow.head{display:none}
     .pmeta{display:none}
     .conn{grid-template-columns:36px 1fr;gap:11px}
     .conn .cacct{display:none}
@@ -756,6 +770,7 @@
     <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Operator Lifecycle Console</h2><span class="meta" id="lifecycleMeta">joining lane evidence…</span></div>
       <div id="lifecycleConsole"><div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div></div>
+    </section>
     <div class="main">
       <div class="col">
         <section class="panel">
@@ -855,6 +870,11 @@
   <!-- ===== SYSTEM VIEW ===== -->
   <div class="view" data-view="system" hidden>
     <p class="intro"><b>System.</b> The single-process asyncio kernel, its data integrity, and the gates that keep capital safe. Every order — even shadow — passes the pre-trade risk gateway; there is no bypass path.</p>
+
+    <section class="panel" style="margin-bottom:14px">
+      <div class="phead"><h2>Dashboard Self-Health</h2><span class="meta" id="dashboardHealthMeta">waiting for browser telemetry…</span></div>
+      <div id="dashboardHealth"><div class="note">endpoint health starts once the token-gated dashboard begins polling.</div></div>
+    </section>
 
     <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Exchange Connections</h2><span class="tag">trade-only keys · env-provisioned</span></div>
@@ -1738,6 +1758,65 @@
     var b=(m&&m.build_sha)?String(m.build_sha).slice(0,10):"--";
     text("aboutBuild",b); text("footBuild",b);
   }
+  var pollStats={}, wsHealth={state:token?"connecting":"token missing",lastOpen:0,lastMessage:0,failures:0,error:""};
+  function endpointLabel(path){return String(path||"").split("?")[0].replace(/^\/+/,"").replace(/-/g," ")||"state";}
+  function payloadStamp(d){
+    if(!d||typeof d!=="object")return null;
+    var keys=["generated_at","source_generated_at","updated_at","heartbeat_at","latest_ts","started_at","ts"];
+    for(var i=0;i<keys.length;i++){
+      var v=d[keys[i]],t=v?Date.parse(v):NaN;
+      if(isFinite(t))return t;
+    }
+    if(d.summary&&typeof d.summary==="object"){
+      for(var j=0;j<keys.length;j++){
+        var sv=d.summary[keys[j]],st=sv?Date.parse(sv):NaN;
+        if(isFinite(st))return st;
+      }
+    }
+    return null;
+  }
+  function healthTone(st){
+    if(!st)return"wait";
+    if(st.lastStatus==="skipped"||st.lastStatus==="pending")return"wait";
+    if(st.lastStatus==="error"||st.lastStatus==="http_error")return"bad";
+    var now=Date.now(),pollAge=st.lastPoll?now-st.lastPoll:Infinity,srcAge=st.sourceTs?now-st.sourceTs:0;
+    if(pollAge>180000||srcAge>3600000)return"bad";
+    if(pollAge>90000||srcAge>900000)return"wait";
+    return"ok";
+  }
+  function recordPoll(path,status,d,detail){
+    var key=String(path||"").split("?")[0],st=pollStats[key]||{path:key,ok:0,fail:0,lastPoll:0,lastOk:0,lastStatus:"pending",sourceTs:null,error:""};
+    st.lastPoll=Date.now(); st.lastStatus=status;
+    if(status==="ok"){st.ok+=1;st.lastOk=st.lastPoll;st.error="";var ts=payloadStamp(d);if(ts)st.sourceTs=ts;}
+    else{st.fail+=1;st.error=String(detail||status||"poll failed").slice(0,110);}
+    pollStats[key]=st; renderDashboardHealth();
+  }
+  function renderDashboardHealth(){
+    var el=$("dashboardHealth"),meta=$("dashboardHealthMeta"); if(!el)return;
+    var rows=Object.keys(pollStats).sort().map(function(k){return pollStats[k];});
+    var tones=rows.map(healthTone),ok=tones.filter(function(x){return x==="ok";}).length,wait=tones.filter(function(x){return x==="wait";}).length,bad=tones.filter(function(x){return x==="bad";}).length;
+    var wsTone=wsHealth.state==="open"&&wsHealth.lastMessage&&(Date.now()-wsHealth.lastMessage)<30000?"ok":(wsHealth.failures?"bad":"wait");
+    if(meta)meta.textContent=(ok+(wsTone==="ok"?1:0))+" ok · "+(wait+(wsTone==="wait"?1:0))+" waiting · "+(bad+(wsTone==="bad"?1:0))+" bad";
+    var metrics='<div class="healthmetrics">'+
+      '<div class="healthmetric"><div class="l">WebSocket</div><div class="v" style="color:var(--'+(wsTone==="ok"?"long":wsTone==="bad"?"short":"warn")+')">'+safe(wsHealth.state)+'</div></div>'+
+      '<div class="healthmetric"><div class="l">Endpoint ok</div><div class="v" style="color:var(--long)">'+ok+'</div></div>'+
+      '<div class="healthmetric"><div class="l">Waiting</div><div class="v" style="color:var(--warn)">'+wait+'</div></div>'+
+      '<div class="healthmetric"><div class="l">Bad</div><div class="v" style="color:var(--short)">'+bad+'</div></div>'+
+    '</div>';
+    var wsRow='<div class="healthrow"><div><b><span class="healthdot '+wsTone+'"></span>/ws state stream</b><small>last message '+(wsHealth.lastMessage?ageMs(Date.now()-wsHealth.lastMessage)+" ago":"--")+'</small></div>'+
+      '<div>'+lifeChip(wsHealth.state,wsTone)+'</div><div><b>'+(wsHealth.failures||0)+'</b><small>failures</small></div><div><b>live state</b><small>snapshot stream</small></div><div><small>'+safe(wsHealth.error||"read-only state channel")+'</small></div></div>';
+    var head='<div class="healthrow head"><span>Endpoint</span><span>Status</span><span>Failures</span><span>Source age</span><span>Last detail</span></div>';
+    var body=rows.map(function(st){
+      var tone=healthTone(st),pollAge=st.lastPoll?ageMs(Date.now()-st.lastPoll)+" ago":"--",src=st.sourceTs?ageMs(Date.now()-st.sourceTs)+" ago":"no timestamp";
+      return '<div class="healthrow"><div><b><span class="healthdot '+tone+'"></span>'+safe(endpointLabel(st.path))+'</b><small>last poll '+pollAge+' · ok '+num(st.ok)+'</small></div>'+
+        '<div>'+lifeChip(st.lastStatus,tone)+'</div><div><b>'+num(st.fail)+'</b><small>poll failures</small></div><div><b>'+safe(src)+'</b><small>artifact freshness</small></div><div><small>'+safe(st.error||"latest payload accepted")+'</small></div></div>';
+    }).join('');
+    if(!token){
+      el.innerHTML=metrics+'<div class="note"><b>Token missing:</b> append <span class="num">?token=...</span> so the dashboard can poll read-only endpoints.</div>';
+      return;
+    }
+    el.innerHTML=metrics+head+wsRow+body+'<div class="fblocker"><b>Operator answer:</b> this panel turns a frozen or stale cockpit into visible evidence: endpoint status, browser poll failures, and payload freshness.</div>';
+  }
 
   /* ---- WebSocket to the read-only /state stream ---- */
   var backoff=1000;
@@ -1747,18 +1826,26 @@
     var ws;
     try{ ws=new WebSocket(proto+"//"+location.host+"/ws?token="+encodeURIComponent(token)); }
     catch(e){ setTimeout(connect,backoff); return; }
-    ws.onopen=function(){backoff=1000;};
-    ws.onmessage=function(e){ try{ render(JSON.parse(e.data)); }catch(err){} };
-    ws.onclose=function(){ setTimeout(connect,backoff); backoff=Math.min(backoff*2,15000); };
-    ws.onerror=function(){ try{ws.close();}catch(e){} };
+    ws.onopen=function(){backoff=1000;wsHealth.state="open";wsHealth.lastOpen=Date.now();wsHealth.error="";renderDashboardHealth();};
+    ws.onmessage=function(e){ try{ wsHealth.lastMessage=Date.now();render(JSON.parse(e.data));renderDashboardHealth(); }catch(err){wsHealth.error=String(err);renderDashboardHealth();} };
+    ws.onclose=function(){ wsHealth.state="closed";wsHealth.failures+=1;renderDashboardHealth(); setTimeout(connect,backoff); backoff=Math.min(backoff*2,15000); };
+    ws.onerror=function(){ wsHealth.state="error";wsHealth.error="websocket error";renderDashboardHealth(); try{ws.close();}catch(e){} };
   }
   connect();
+  renderDashboardHealth();
 
   /* ---- polled read-only endpoints: scorecard + scanner tape ---- */
   function poll(path,cb){
-    if(!token) return;   // no token → skip (banner already shown)
+    if(!token){recordPoll(path,"skipped",null,"token missing");return;}   // no token → skip (banner already shown)
     fetch(path+(path.indexOf("?")<0?"?":"&")+"token="+encodeURIComponent(token),{cache:"no-store"})
-      .then(function(r){return r.ok?r.json():null;}).then(function(d){if(d)try{cb(d);}catch(e){}}).catch(function(){});
+      .then(function(r){
+        if(!r.ok){recordPoll(path,"http_error",null,"HTTP "+r.status);return null;}
+        return r.json();
+      }).then(function(d){
+        if(!d)return;
+        recordPoll(path,"ok",d,"");
+        try{cb(d);}catch(e){recordPoll(path,"error",d,e);}
+      }).catch(function(e){recordPoll(path,"error",null,e);});
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }

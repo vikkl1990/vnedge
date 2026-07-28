@@ -21,6 +21,22 @@ def test_promote_view_has_joined_operator_lifecycle_console():
     assert "Planner inputs are still read-only" in html
 
 
+def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
+    html = _index()
+    assert "Dashboard Self-Health" in html
+    assert 'id="dashboardHealth"' in html
+    assert "function recordPoll" in html
+    assert "function renderDashboardHealth" in html
+    assert "st.lastStatus" in html
+    assert "wsHealth" in html
+    assert "endpoint status, browser poll failures, and payload freshness" in html
+
+
+def test_dashboard_panel_sections_are_balanced():
+    html = _index()
+    assert html.count("<section") == html.count("</section>")
+
+
 def test_dashboard_build_identity_is_runtime_sourced():
     html = _index()
     assert "541e1af" not in html
