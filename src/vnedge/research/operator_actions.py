@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -577,23 +578,34 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--feed", type=Path, default=DEFAULT_FEED)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--interval-seconds", type=float, default=60.0)
+    parser.add_argument("--max-rows", type=int, default=180)
     parser.add_argument("--print", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    payload = build_operator_actions(
-        activation_path=args.activation,
-        route_path=args.route,
-        cadence_path=args.cadence,
-        performance_path=args.performance,
-        causality_path=args.causality,
-    )
-    publish_operator_actions(payload, args.out, args.feed)
-    if args.print:
-        print(render_report(payload), flush=True)
-    return 0
+    from vnedge.research.trade_profile_matrix import build_trade_profile_matrix
+
+    config = OperatorActionConfig(max_rows=args.max_rows)
+    while True:
+        activation = _read_json(args.activation, {"rows": [], "summary": {}})
+        payload = build_operator_actions(
+            activation=activation,
+            route_path=args.route,
+            cadence_path=args.cadence,
+            performance_path=args.performance,
+            profile=build_trade_profile_matrix(activation),
+            causality_path=args.causality,
+            config=config,
+        )
+        publish_operator_actions(payload, args.out, args.feed)
+        if args.print:
+            print(render_report(payload), flush=True)
+        if args.once:
+            return 0
+        time.sleep(max(1.0, float(args.interval_seconds)))
 
 
 if __name__ == "__main__":

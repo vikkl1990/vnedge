@@ -456,6 +456,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Operator action queue publisher: joins activation, route doctor, cadence,
+  # sizing profile, paper performance, and firing causality into one durable
+  # "what next" artifact/feed. Read-only: no restarts, no promotion, no trades.
+  operator-actions:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - paper-lane-activation
+      - paper-route-doctor
+      - paper-lane-cadence
+      - paper-lane-performance
+      - lane-firing-causality
+    command: ["python", "-m", "vnedge.research.operator_actions",
+              "--interval-seconds", "${OPERATOR_ACTIONS_INTERVAL_SECONDS:-60}",
+              "--out", "research/live_research/operator_actions_latest.json",
+              "--feed", "research/live_research/operator_actions_feed.jsonl",
+              "--print"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ML pipeline status: runs the real meta-label dataset builder over the live
   # journals + candles so the dashboard ML view shows the training set GROWING
   # as trials mature. Read-only; trains/promotes nothing.
