@@ -184,17 +184,21 @@ class PreTradeRiskGateway:
                 f"equity ${account.equity_usd:.2f} < ${cfg.min_account_equity_usd:.2f}",
             )
             # Two-leg limit: the tighter of fixed-USD and %-of-equity wins.
-            daily_limit = min(
-                cfg.max_daily_loss_usd,
-                cfg.max_daily_loss_pct / 100.0 * account.peak_equity_usd,
-            )
-            check(
-                "daily_loss_limit",
-                account.daily_pnl_usd > -daily_limit,
-                f"daily pnl ${account.daily_pnl_usd:.2f} breaches -${daily_limit:.2f} "
-                f"(min of ${cfg.max_daily_loss_usd:.2f} fixed, "
-                f"{cfg.max_daily_loss_pct}% of peak equity)",
-            )
+            # The halt can be disabled (PAPER experiments only — defaults on, so
+            # live and every other lane keep it); when off the check is a no-op
+            # instead of a bypass, so the gateway still evaluates every order.
+            if cfg.daily_loss_halt_enabled:
+                daily_limit = min(
+                    cfg.max_daily_loss_usd,
+                    cfg.max_daily_loss_pct / 100.0 * account.peak_equity_usd,
+                )
+                check(
+                    "daily_loss_limit",
+                    account.daily_pnl_usd > -daily_limit,
+                    f"daily pnl ${account.daily_pnl_usd:.2f} breaches -${daily_limit:.2f} "
+                    f"(min of ${cfg.max_daily_loss_usd:.2f} fixed, "
+                    f"{cfg.max_daily_loss_pct}% of peak equity)",
+                )
             drawdown_pct = (
                 (account.peak_equity_usd - account.equity_usd)
                 / account.peak_equity_usd * 100.0

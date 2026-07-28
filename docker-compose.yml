@@ -79,6 +79,14 @@ services:
       # edge candidates (5m is fee-walled); SHADOW-only, never promoted. =0 off.
       MULTI_LANE_VELOCITY: "${MULTI_LANE_VELOCITY:-1}"
       MULTI_LANE_VELOCITY_SYMBOLS: "${MULTI_LANE_VELOCITY_SYMBOLS:-ETH/USDT:USDT,BTC/USDT:USDT,SOL/USDT:USDT}"
+      # Operator-requested aggressive PAPER sizing: fixed $50 isolated margin per
+      # trade at up to 30x (leverage auto-reduced per-trade so the stop always
+      # fires before liquidation => max loss <= margin), daily-loss halt OFF.
+      # PAPER/shadow only (multi-lane never trades live); the live path keeps
+      # risk-based sizing + the halt. Set MULTI_LANE_FIXED_MARGIN= empty to revert.
+      MULTI_LANE_FIXED_MARGIN: "${MULTI_LANE_FIXED_MARGIN:-50}"
+      MULTI_LANE_FIXED_MARGIN_LEVERAGE: "${MULTI_LANE_FIXED_MARGIN_LEVERAGE:-30}"
+      MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-0}"
       MULTI_LANE_FEE_WALL_PAPER_PROBES: "${MULTI_LANE_FEE_WALL_PAPER_PROBES:-1}"
       MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH: "${MULTI_LANE_FEE_WALL_PAPER_PROBES_PATH:-research/live_research/fee_wall_paper_probes.json}"
       MULTI_LANE_FEE_WALL_FORENSICS_PATH: "${MULTI_LANE_FEE_WALL_FORENSICS_PATH:-research/live_research/fee_wall_forensics_latest.json}"
