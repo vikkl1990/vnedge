@@ -64,28 +64,7 @@ def build_trade_journal(
     order_rows, journal_events, virtual_trades = _project_journals(journal_rows)
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
-    # Paper trades close on a single TP price, but each carries the intended TP
-    # ladder + how far the most-favourable excursion climbed it (observation
-    # only). Join that to the reconstructed paper trade by exit client_order_id.
-    paper_ladders = _paper_exit_ladders(journal_rows)
-    paired = _paired_actual_trades(fills)
-    for trade in paired:
-        ladder = paper_ladders.get(str(trade.get("client_order_id") or ""))
-        if ladder:
-            trade["take_profit_levels"] = ladder["levels"]
-            trade["tp_reached"] = ladder["tp_reached"]
-            if ladder.get("resolution"):
-                trade["resolution"] = ladder["resolution"]
-
-    # Leverage + margin from the journaled intents: paper trades join to their
-    # ENTRY order_intent by client_order_id; shadow outcomes to their
-    # shadow_intent by intent_key. margin = notional / leverage.
-    econ_by_coid, econ_by_key = _intent_economics(journal_rows)
-    for trade in paired:
-        _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
-    for trade in virtual_trades:
-        _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
-    closed_trades = [_with_captured_bps(t) for t in paired + virtual_trades]
+    closed_trades = _build_closed_trades(fills, journal_rows, virtual_trades)
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
     fills = _sort_recent(fills)[:limit]
@@ -115,6 +94,7 @@ def build_trade_journal(
             "fees_usd": round(fees, 6),
             "virtual_net_usd": round(virtual_net, 6),
             "lane_position_counts": lane_counts,
+            "lane_pnl": _lane_pnl_rollup(closed_trades),
             "history_lane": _primary_lane(history_path),
         },
         "positions": positions[:limit],
@@ -563,6 +543,100 @@ def _attach_economics(trade: dict[str, Any], econ: dict[str, float] | None) -> N
         trade["margin_usd"] = round(notional / lev, 2)
 
 
+def _trade_net(trade: dict[str, Any]) -> float:
+    """A closed trade's net P&L — virtual (shadow) first, then the paper fill's
+    net, then raw realized. One place so the view and the rollup agree."""
+    for key in ("virtual_net_usd", "net_after_this_fill_fee_usd", "realized_pnl_usd"):
+        if trade.get(key) is not None:
+            return _float(trade[key])
+    return 0.0
+
+
+_KNOWN_EXCHANGES = ("binanceusdm", "bybit", "delta_india")
+_TIMEFRAME_SECONDS = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+    "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "1d": 86400,
+}
+
+
+def _lane_exchange(lane_id: str) -> str:
+    """The venue a lane runs on, recovered from its id (lanes embed the ccxt
+    exchange, e.g. ``..._bybit_...``)."""
+    lane = str(lane_id or "")
+    for exchange in _KNOWN_EXCHANGES:
+        if exchange in lane:
+            return exchange
+    return ""
+
+
+def _lane_timeframe_seconds(lane_id: str) -> int:
+    lane = str(lane_id or "")
+    # longest tokens first so "15m" isn't shadowed by "5m", "4h" not by "1h"
+    for tf in ("15m", "30m", "5m", "3m", "1m", "6h", "4h", "2h", "1h", "1d"):
+        if f"_{tf}_" in lane or lane.endswith(f"_{tf}"):
+            return _TIMEFRAME_SECONDS.get(tf, 0)
+    return 0
+
+
+def _hold_seconds(trade: dict[str, Any]) -> float | None:
+    """How long a closed trade was held. Paper: entry fill -> exit fill time.
+    Shadow: bars_held x the lane's bar length (no per-fill timestamps there)."""
+    entry_dt = _parse_dt(trade.get("entry_ts"))
+    exit_dt = _parse_dt(trade.get("ts"))
+    if entry_dt is not None and exit_dt is not None and exit_dt >= entry_dt:
+        return (exit_dt - entry_dt).total_seconds()
+    bars = int(trade.get("bars_held") or 0)
+    tf = _lane_timeframe_seconds(str(trade.get("lane", "")))
+    if bars > 0 and tf > 0:
+        return float(bars * tf)
+    return None
+
+
+def _build_closed_trades(
+    fills: list[dict[str, Any]],
+    journal_rows: list[tuple[str, dict[str, Any]]],
+    virtual_trades: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reconstruct the closed-trade list: paper trades paired from fills plus
+    shadow virtual outcomes, each enriched with its TP ladder, leverage/margin
+    and captured bps. Paper trades join the ladder by exit client_order_id and
+    the entry intent's economics by entry client_order_id; shadow outcomes join
+    their intent by intent_key. Pure projection — no order/timing side effects."""
+    ladders = _paper_exit_ladders(journal_rows)
+    econ_by_coid, econ_by_key = _intent_economics(journal_rows)
+    paired = _paired_actual_trades(fills)
+    for trade in paired:
+        ladder = ladders.get(str(trade.get("client_order_id") or ""))
+        if ladder:
+            trade["take_profit_levels"] = ladder["levels"]
+            trade["tp_reached"] = ladder["tp_reached"]
+            if ladder.get("resolution"):
+                trade["resolution"] = ladder["resolution"]
+        _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
+    for trade in virtual_trades:
+        _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
+    out = [_with_captured_bps(t) for t in paired + virtual_trades]
+    for trade in out:
+        trade["exchange"] = trade.get("venue") or _lane_exchange(str(trade.get("lane", "")))
+        hold = _hold_seconds(trade)
+        if hold is not None:
+            trade["hold_seconds"] = round(hold, 1)
+    return out
+
+
+def _lane_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-lane P&L rollup for the journal view: {lane: {closed, net_usd}}."""
+    roll: dict[str, dict[str, Any]] = {}
+    for trade in closed_trades:
+        lane = str(trade.get("lane") or "?")
+        entry = roll.setdefault(lane, {"closed": 0, "net_usd": 0.0})
+        entry["closed"] += 1
+        entry["net_usd"] += _trade_net(trade)
+    for entry in roll.values():
+        entry["net_usd"] = round(entry["net_usd"], 4)
+    return roll
+
+
 def _paper_exit_ladders(
     journal_rows: list[tuple[str, dict[str, Any]]]
 ) -> dict[str, dict[str, Any]]:
@@ -629,34 +703,11 @@ def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "client_order_id": fill.get("client_order_id", ""),
                 # the ENTRY order's id — joins to its order_intent for leverage
                 "entry_client_order_id": entry.get("client_order_id", "") if entry else "",
+                # entry fill time → hold duration (exit ts is `ts`)
+                "entry_ts": entry.get("ts", "") if entry else "",
+                "venue": fill.get("venue", "") or (entry.get("venue", "") if entry else ""),
                 "source": fill.get("source", "fill_ledger"),
             })
-    return rows
-
-
-def _closed_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for fill in fills:
-        realized = _float(fill.get("realized_pnl_usd"))
-        if abs(realized) <= 1e-12:
-            continue
-        fee = _float(fill.get("fee_usd"))
-        rows.append(
-            {
-                "lane": fill.get("lane", ""),
-                "ts": fill.get("ts", ""),
-                "kind": "actual_closing_fill",
-                "symbol": fill.get("symbol", ""),
-                "side": fill.get("side", ""),
-                "quantity": fill.get("quantity", 0.0),
-                "exit_price": fill.get("price", 0.0),
-                "realized_pnl_usd": round(realized, 6),
-                "fee_usd": round(fee, 6),
-                "net_after_this_fill_fee_usd": round(realized - fee, 6),
-                "client_order_id": fill.get("client_order_id", ""),
-                "source": fill.get("source", "fill_ledger"),
-            }
-        )
     return rows
 
 
@@ -676,6 +727,7 @@ def _shadow_outcome_trade(lane: str, ts: str, payload: dict[str, Any]) -> dict[s
         "signal_reason": payload.get("signal_reason", ""),
         "take_profit_levels": payload.get("take_profit_levels") or [],
         "tp_reached": int(payload.get("tp_reached") or 0),
+        "bars_held": int(payload.get("bars_held") or 0),
         "source": "decision_journal",
     }
 
