@@ -168,6 +168,26 @@ class MultiLaneProvider:
             self._order.append(lane_id)
         self._lanes[lane_id] = snap
 
+    def publish_warming(self, lane_id: str, exchange: str, symbol: str) -> None:
+        """(C) A placeholder published for every lane BEFORE it builds, so the
+        dashboard shows the whole fleet immediately (each lane 'warming up')
+        instead of a blank board until all builds finish. Overwritten by the
+        lane's real snapshot as soon as it starts."""
+        self._publish(lane_id, exchange, {
+            "mode": "warming up",
+            "symbol": symbol,
+            "equity": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "fills": 0,
+            "fees_usd": 0.0,
+            "risk_status": "warming",
+            "feed_health": {"candles": "warming", "last_update_ms": 0.0},
+            "positions": [],
+            "open_orders": [],
+            "session": {},
+        })
+
     def publish_error(
         self, lane_id: str, exchange: str, symbol: str, error: str
     ) -> None:
@@ -625,16 +645,101 @@ def _lane_risk_config(spec: LaneSpec, environ: Mapping[str, str] = os.environ) -
     return RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
 
 
+_TF_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000, "1d": 86_400_000,
+}
+_CANDLE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+
+
+def _timeframe_ms(timeframe: str) -> int:
+    return _TF_MS.get(str(timeframe).strip(), 3_600_000)  # default 1h
+
+
+def _warmup_bars(environ: Mapping[str, str] = os.environ) -> int:
+    """Warmup lookback in BARS (covers the longest indicator window with room);
+    right-sizes the fetch per timeframe instead of a fixed 450h."""
+    try:
+        return max(50, int(environ.get("MULTI_LANE_WARMUP_BARS", "500")))
+    except ValueError:
+        return 500
+
+
+def _load_candle_cache(cache_path: Path):
+    """A lane's persisted candle window, or None if missing/unreadable/malformed.
+    A moved or corrupt cache is never trusted — warmup refetches instead."""
+    if not cache_path.exists():
+        return None
+    try:
+        frame = pd.read_parquet(cache_path)
+    except Exception as exc:  # noqa: BLE001 — a bad cache must never crash a lane
+        logger.warning("candle cache unreadable at %s: %s — refetching", cache_path, exc)
+        return None
+    if frame.empty or not set(_CANDLE_COLUMNS).issubset(frame.columns):
+        return None
+    return frame
+
+
+def _save_candle_cache(cache_path: Path, history) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(".parquet.tmp")
+        history.to_parquet(tmp, index=False)
+        tmp.replace(cache_path)
+    except Exception as exc:  # noqa: BLE001 — caching is best-effort, never fatal
+        logger.warning("candle cache save failed for %s: %s", cache_path, exc)
+
+
+async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, until: int):
+    """Normalized warmup candles for [since, until], reusing the persisted window
+    and fetching only the gap since the last run. Any cache miss/shortfall/error
+    falls back to a full REST fetch (so this is strictly a speedup, never a
+    correctness change)."""
+    cached = _load_candle_cache(cache_path)
+    if cached is not None:
+        last_ms = int(pd.Timestamp(cached["timestamp"].iloc[-1]).timestamp() * 1000)
+        if last_ms >= since:  # the cache reaches back far enough to be useful
+            frame = cached
+            if last_ms + 1 < until:
+                gap = normalize_candles(
+                    await rest.fetch_candles(spec.symbol, spec.timeframe, last_ms + 1, until)
+                )
+                if not gap.empty:
+                    frame = (
+                        pd.concat([cached, gap], ignore_index=True)
+                        .drop_duplicates(subset="timestamp", keep="last")
+                        .sort_values("timestamp")
+                        .reset_index(drop=True)
+                    )
+            cutoff = pd.to_datetime(since, unit="ms", utc=True)
+            frame = frame[frame["timestamp"] >= cutoff].reset_index(drop=True)
+            _save_candle_cache(cache_path, frame)
+            logger.info("lane %s warmup: cache + gap-fill (%d bars)", spec.lane_id, len(frame))
+            return frame
+    history = normalize_candles(
+        await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
+    )
+    _save_candle_cache(cache_path, history)
+    return history
+
+
 async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
-    warmup_hours = 450
+    # (A) Bars-based warmup: fetch ~N bars for THIS timeframe, not a fixed 450h.
+    # 5m lanes were pulling ~5,400 candles (many REST pages); ~500 bars is one
+    # page and still covers the longest indicator window. Right-sizes per TF.
+    warmup_bars = _warmup_bars()
+    tf_ms = _timeframe_ms(spec.timeframe)
     until = int(time.time() * 1000)
-    since = until - warmup_hours * 3_600_000
+    since = until - warmup_bars * tf_ms
+    cache_path = journal_dir / f"{spec.lane_id}.candles.parquet"
     funding_history_unsupported = False
     async with CcxtPublicClient(spec.exchange) as rest:
-        raw_c = await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
+        # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
+        # the gap since the last run; degrades to a full fetch on any cache miss.
+        history = await _warmup_candles(rest, spec, cache_path, since, until)
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
         except NotSupported:
@@ -654,7 +759,6 @@ async def build_lane(
                     spec.exchange, spec.symbol, spec.strategy_id,
                 )
             raw_f = []
-    history = normalize_candles(raw_c)
     seed_funding = normalize_funding(raw_f)
     if funding_history_unsupported and _requires_funding_history(spec.strategy_id):
         seed_funding = await _delta_funding_seed(spec, seed_funding)
@@ -729,6 +833,10 @@ class MultiLaneShadowRunner:
         self.provider = provider
 
     async def run(self, *, deadline_seconds: float | None = None) -> None:
+        # (C) Show the whole fleet immediately as "warming up" while it builds,
+        # so the dashboard is never a blank board mid-startup.
+        for spec in self.specs:
+            self.provider.publish_warming(spec.lane_id, spec.exchange, spec.symbol)
         results = await asyncio.gather(
             *[build_lane(s, self.provider, self.journal_dir) for s in self.specs],
             return_exceptions=True,
