@@ -20,6 +20,17 @@ conservative semantics the backtester enforces:
 - taker fees on BOTH virtual fills via the paper ``FillModel`` — if virtual
   results look better than paper fills would have been, the model is wrong.
 
+MAKER ROUTE (opt-in, per lane): strategies whose edge is defined *after maker
+fees* (the fee-wall "MAKER_EDGE" set) are structurally mispriced by the all-taker
+default — they never get to show their edge. For those lanes the tracker models
+the resting-limit route honestly, not optimistically: the entry fills ONLY if a
+subsequent bar's range touches the resting limit within its TTL (so the immediate
+runners a maker order would MISS are missed here too — the adverse selection is
+real), fills at the same reference price (conservative — no imaginary price
+improvement), and pays the maker fee on the entry leg while the exit stays taker
+(stops are market orders). Every maker outcome also carries the all-taker number
+(``virtual_net_taker_usd``) so the conservative figure is never hidden.
+
 Each resolution is journaled as a ``shadow_outcome`` record. The journal
 itself is the durable store: on restart the tracker reloads unresolved
 intents and skips every intent_key that already has an outcome record, so
@@ -41,6 +52,26 @@ from vnedge.paper.fill_model import FillModel
 
 logger = logging.getLogger(__name__)
 
+#: Strategies whose scorecard edge is a MAKER edge (fee-wall "MAKER_EDGE" /
+#: maker-routed set). Only these lanes get the maker-route shadow model; every
+#: other lane stays all-taker. Matched by strategy-id prefix (version suffixes).
+MAKER_ROUTE_STRATEGIES: tuple[str, ...] = (
+    "stealth_trail_bbp",
+    "luxy_ut_bot_forecast",
+    "luxara_live_plan_qtm",
+    "luxara_break_bounce",
+    "fvg_liquidity_breakout",
+    "context_scalper_v2",
+    "vnedge_algo_ml_pro",
+    "momentum_cascade_lyro",
+)
+
+
+def is_maker_route_strategy(strategy_id: str) -> bool:
+    """True when the strategy's edge is defined after maker fees (opt-in route)."""
+    sid = (strategy_id or "").lower()
+    return any(sid.startswith(name) for name in MAKER_ROUTE_STRATEGIES)
+
 
 @dataclass
 class _PendingIntent:
@@ -56,6 +87,8 @@ class _PendingIntent:
     bars_held: int = -1  # -1 = virtual fill not reached yet; fill bar = 0
     take_profit_levels: tuple[float, ...] = ()  # TP ladder (tp1, tp2, …) for the journal
     mfe_price: float = 0.0  # max-favourable price since entry — observation only
+    filled: bool = True  # taker fills immediately; maker waits for a touch
+    bars_waiting: int = 0  # maker-route only: bars the resting limit has waited
 
 
 @dataclass(frozen=True)
@@ -71,6 +104,9 @@ class VirtualOutcome:
     resolved_bar_ts: str
     take_profit_levels: tuple[float, ...] = ()
     tp_reached: int = 0  # how many ladder levels the trade's excursion crossed
+    route: str = "taker"  # "maker" if the entry filled as a resting limit
+    fees_taker_usd: float = 0.0  # the all-taker equivalent fee (transparency)
+    virtual_net_taker_usd: float = 0.0  # net under all-taker fees (transparency)
 
 
 def _tp_reached(side: str, mfe_price: float, levels: tuple[float, ...]) -> int:
@@ -97,17 +133,25 @@ class ShadowOutcomeTracker:
         *,
         fill_model: FillModel | None = None,
         max_holding_bars: int = 48,
+        maker_route: bool = False,
+        maker_fill_ttl_bars: int = 1,
     ) -> None:
         self.journal = journal
         self.fill_model = fill_model or FillModel()
         self.max_holding_bars = max_holding_bars
+        # Maker route: entries fill only on a touch within maker_fill_ttl_bars,
+        # and pay the maker fee. Off => the all-taker default, byte-for-byte.
+        self.maker_route = maker_route
+        self.maker_fill_ttl_bars = max(1, int(maker_fill_ttl_bars))
         self._pending: dict[str, _PendingIntent] = {}
         self._resolved_keys: set[str] = set()
         self._trades = 0
         self._wins = 0
         self._net_usd = 0.0
+        self._net_taker_usd = 0.0  # same trades, priced all-taker (transparency)
         self._gross_win_usd = 0.0
         self._gross_loss_usd = 0.0
+        self._unfilled = 0  # maker limits that never got a touch (missed trades)
         self._resolutions: dict[str, int] = {"stop": 0, "target": 0, "timeout": 0}
         self._load()
 
@@ -128,7 +172,14 @@ class ShadowOutcomeTracker:
                 self._accumulate(
                     str(payload.get("resolution", "")),
                     float(payload.get("virtual_net_usd", 0.0)),
+                    float(payload.get("virtual_net_taker_usd",
+                                      payload.get("virtual_net_usd", 0.0))),
                 )
+            elif kind == "shadow_maker_unfilled":
+                key = payload.get("intent_key")
+                if key is not None and key not in self._resolved_keys:
+                    self._resolved_keys.add(key)
+                    self._unfilled += 1
         for key, payload in intents.items():
             if key in self._resolved_keys:
                 continue
@@ -136,8 +187,7 @@ class ShadowOutcomeTracker:
             if pending is not None:
                 self._pending[key] = pending
 
-    @staticmethod
-    def _parse_intent(key: str, payload: dict) -> _PendingIntent | None:
+    def _parse_intent(self, key: str, payload: dict) -> _PendingIntent | None:
         """Build a pending virtual position from a journaled shadow_intent.
 
         Records predating outcome tracking lack stop/target/bar_ts and are
@@ -164,6 +214,7 @@ class ShadowOutcomeTracker:
             signal_reason=str(payload.get("signal_reason") or ""),
             take_profit_levels=tuple(float(x) for x in levels),
             mfe_price=entry_price,
+            filled=not self.maker_route,  # maker entries wait for a touch
         )
 
     # --- live registration -------------------------------------------------------
@@ -198,6 +249,7 @@ class ShadowOutcomeTracker:
             signal_reason=signal_reason,
             take_profit_levels=tuple(take_profit_levels),
             mfe_price=entry_price,  # starts at entry; updated each active bar
+            filled=not self.maker_route,  # maker entries wait for a touch
         )
 
     @property
@@ -217,6 +269,21 @@ class ShadowOutcomeTracker:
         for pending in list(self._pending.values()):
             if bar_ts <= pending.decision_bar_ts:
                 continue
+            # Maker route: the resting limit only fills if this bar's range
+            # touches it. If the market runs away without a touch, the order is
+            # cancelled after its TTL — the immediate runners a maker miss are
+            # missed here too (honest adverse selection, not a free fill).
+            if self.maker_route and not pending.filled:
+                touched = (
+                    low <= pending.entry_price if pending.side == "long"
+                    else high >= pending.entry_price
+                )
+                if not touched:
+                    pending.bars_waiting += 1
+                    if pending.bars_waiting >= self.maker_fill_ttl_bars:
+                        self._cancel_unfilled(pending, bar_ts)
+                    continue
+                pending.filled = True  # touched -> fills this bar as the fill bar
             pending.bars_held += 1  # fill bar counts as 0, like run_backtest
             # Track max-favourable excursion for the TP-ladder journal. This is
             # pure observation — it never feeds _check_exit, so the exit and P&L
@@ -271,10 +338,18 @@ class ShadowOutcomeTracker:
     ) -> VirtualOutcome:
         direction = 1.0 if pending.side == "long" else -1.0
         gross = direction * pending.quantity * (exit_price - pending.entry_price)
-        fees = self.fill_model.fee_usd(pending.notional_usd) + self.fill_model.fee_usd(
-            pending.quantity * exit_price
-        )
+        exit_notional = pending.quantity * exit_price
+        # Maker route pays the maker fee on the entry leg (the resting limit);
+        # the exit stays taker (stops/targets exit at market) — conservative.
+        entry_fee = self.fill_model.fee_usd(pending.notional_usd, maker=self.maker_route)
+        exit_fee = self.fill_model.fee_usd(exit_notional)
+        fees = entry_fee + exit_fee
         net = gross - fees
+        # The all-taker equivalent on the SAME trade — the conservative figure
+        # stays visible next to the maker number, never replaced by it.
+        fees_taker = self.fill_model.fee_usd(pending.notional_usd) + exit_fee
+        net_taker = gross - fees_taker
+        route = "maker" if self.maker_route else "taker"
         tp_reached = _tp_reached(pending.side, pending.mfe_price, pending.take_profit_levels)
         outcome = VirtualOutcome(
             intent_key=pending.intent_key,
@@ -288,10 +363,13 @@ class ShadowOutcomeTracker:
             resolved_bar_ts=bar_ts.isoformat(),
             take_profit_levels=pending.take_profit_levels,
             tp_reached=tp_reached,
+            route=route,
+            fees_taker_usd=round(fees_taker, 6),
+            virtual_net_taker_usd=round(net_taker, 6),
         )
         del self._pending[pending.intent_key]
         self._resolved_keys.add(pending.intent_key)
-        self._accumulate(resolution, net)
+        self._accumulate(resolution, net, net_taker)
         self.journal.append("shadow_outcome", {
             "intent_key": outcome.intent_key,
             "resolution": outcome.resolution,
@@ -301,6 +379,9 @@ class ShadowOutcomeTracker:
             "entry_price": outcome.entry_price,
             "exit_price": outcome.exit_price,
             "fees_usd": outcome.fees_usd,
+            "route": outcome.route,
+            "fees_taker_usd": outcome.fees_taker_usd,
+            "virtual_net_taker_usd": outcome.virtual_net_taker_usd,
             "bar_ts": outcome.resolved_bar_ts,
             "signal_reason": pending.signal_reason,
             "take_profit_levels": list(pending.take_profit_levels),
@@ -308,15 +389,36 @@ class ShadowOutcomeTracker:
             "mfe_price": round(pending.mfe_price, 8),
         })
         logger.info(
-            "shadow outcome: %s %s -> %s after %d bars, virtual %+0.2f USD",
+            "shadow outcome: %s %s -> %s after %d bars, %s virtual %+0.2f USD",
             pending.side, pending.intent_key, resolution,
-            outcome.bars_held, net,
+            outcome.bars_held, route, net,
         )
         return outcome
 
-    def _accumulate(self, resolution: str, net: float) -> None:
+    def _cancel_unfilled(self, pending: _PendingIntent, bar_ts: pd.Timestamp) -> None:
+        """A maker resting limit that never got a touch within its TTL — the
+        trade simply didn't happen. Journaled as its own kind so it never enters
+        the outcome/label stream (a missed fill is not a losing trade)."""
+        del self._pending[pending.intent_key]
+        self._resolved_keys.add(pending.intent_key)
+        self._unfilled += 1
+        self.journal.append("shadow_maker_unfilled", {
+            "intent_key": pending.intent_key,
+            "side": pending.side,
+            "entry_price": round(pending.entry_price, 8),
+            "bars_waited": pending.bars_waiting,
+            "bar_ts": bar_ts.isoformat(),
+            "signal_reason": pending.signal_reason,
+        })
+        logger.info(
+            "shadow maker unfilled: %s %s no touch in %d bars — trade skipped",
+            pending.side, pending.intent_key, pending.bars_waiting,
+        )
+
+    def _accumulate(self, resolution: str, net: float, net_taker: float | None = None) -> None:
         self._trades += 1
         self._net_usd += net
+        self._net_taker_usd += net if net_taker is None else net_taker
         if net > 0:
             self._wins += 1
             self._gross_win_usd += net
@@ -343,4 +445,9 @@ class ShadowOutcomeTracker:
             "resolutions": dict(self._resolutions),
             "status": status,
             "trade_compatible": status != "SHADOW_PROBATION",
+            # Maker-route transparency: the routing, the same trades priced
+            # all-taker, and the maker limits that never filled (missed trades).
+            "route": "maker" if self.maker_route else "taker",
+            "net_taker_usd": round(self._net_taker_usd, 4),
+            "maker_unfilled": self._unfilled,
         }
