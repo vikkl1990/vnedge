@@ -64,8 +64,22 @@ def size_position(
             reasons=(f"stop {stop_price} is on the wrong side of entry {entry_price} for {side}",),
         )
 
-    risk_usd = equity_usd * config.risk_per_trade_pct / 100.0
-    raw_qty = risk_usd / stop_distance
+    stop_pct = stop_distance / entry_price
+    if config.fixed_margin_usd is not None:
+        # ISOLATED fixed-margin sizing (opt-in, paper-only). notional =
+        # margin x leverage, but the leverage is capped per-trade so the stop
+        # always sits INSIDE the isolated liquidation distance (with the buffer)
+        # — which guarantees the stop fires before liquidation, so the worst
+        # case loss is <= the fixed margin. Wide stops therefore get less
+        # leverage (and a smaller position), never a blow-up.
+        buffer = config.min_liquidation_buffer_pct / 100.0
+        denom = stop_pct * (1.0 + buffer) + limits.maintenance_margin_rate
+        safe_lev = (1.0 / denom) if denom > 0 else 1.0
+        iso_lev = max(1, min(config.max_leverage_per_position, int(math.floor(safe_lev))))
+        raw_qty = (config.fixed_margin_usd * iso_lev) / entry_price
+    else:
+        risk_usd = equity_usd * config.risk_per_trade_pct / 100.0
+        raw_qty = risk_usd / stop_distance
 
     # Round DOWN to the exchange quantity step — rounding up would exceed the
     # risk budget.
@@ -88,9 +102,14 @@ def size_position(
             f"${config.max_exposure_per_symbol_usd:.2f}"
         )
 
-    # Leverage needed so that margin used stays a sane fraction of equity is a
-    # broker-side setting; here we validate the *implied* leverage of the trade.
-    required_leverage = notional / equity_usd if equity_usd > 0 else float("inf")
+    # Implied leverage of the trade. In fixed-margin (isolated) mode the margin
+    # is the fixed isolated margin the operator committed — that is the leverage
+    # they chose and what liquidation is computed against. In the default
+    # risk-based model it is notional / whole-account equity.
+    if config.fixed_margin_usd is not None:
+        required_leverage = notional / config.fixed_margin_usd
+    else:
+        required_leverage = notional / equity_usd if equity_usd > 0 else float("inf")
     if required_leverage > config.max_leverage_per_position:
         reasons.append(
             f"implied leverage {required_leverage:.1f}x exceeds cap "

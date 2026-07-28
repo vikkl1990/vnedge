@@ -20,14 +20,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 from ccxt.base.errors import NotSupported
 
-from vnedge.config.risk_config import RiskConfig
+from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
@@ -578,6 +580,51 @@ def _build_signal_arbiter_strategy(
     )
 
 
+def _lane_risk_config(spec: LaneSpec, environ: Mapping[str, str] = os.environ) -> RiskConfig:
+    """Per-lane risk config.
+
+    Default is the LOCKED risk-based model (size from risk, halt on) — unchanged
+    for every lane and, structurally, for the live path (multi-lane is
+    paper/shadow only; the live trader builds its own config elsewhere).
+
+    Opt-in PAPER-ONLY aggressive profile (env ``MULTI_LANE_FIXED_MARGIN`` > 0):
+    fixed isolated-margin sizing (``$margin`` per trade, up to
+    ``MULTI_LANE_FIXED_MARGIN_LEVERAGE`` — hard-capped at 30x, with leverage
+    auto-reduced per-trade so the stop always fires before liquidation, so max
+    loss per trade <= the margin) and the daily-loss halt off by default (the
+    operator asked to remove it while paper). Reversible: unset the env var to
+    return to risk-based sizing with the halt on.
+    """
+    margin_raw = environ.get("MULTI_LANE_FIXED_MARGIN", "").strip()
+    margin_usd = 0.0
+    if margin_raw:
+        try:
+            margin_usd = float(margin_raw)
+        except ValueError:
+            margin_usd = 0.0
+    if margin_usd > 0:
+        try:
+            target_lev = int(float(environ.get("MULTI_LANE_FIXED_MARGIN_LEVERAGE", "30")))
+        except ValueError:
+            target_lev = 30
+        target_lev = max(1, min(target_lev, ABSOLUTE_MAX_LEVERAGE))  # never above the hard cap
+        halt_on = environ.get("MULTI_LANE_DAILY_LOSS_HALT", "0").lower() in ("1", "true", "yes", "on")
+        cap = max(500.0, margin_usd * target_lev * 1.1)  # headroom for one full position
+        return RiskConfig(
+            max_daily_loss_usd=spec.daily_loss_usd,
+            max_daily_loss_pct=2.0,
+            daily_loss_halt_enabled=halt_on,
+            fixed_margin_usd=margin_usd,
+            max_leverage_per_position=target_lev,
+            acknowledge_high_leverage=True,
+            max_effective_account_leverage=10.0,
+            max_exposure_per_symbol_usd=cap,
+            max_total_exposure_usd=cap,
+            max_open_positions=1,
+        )
+    return RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
+
+
 async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
 ) -> _LaneRuntime:
@@ -626,7 +673,7 @@ async def build_lane(
     # each lane gets a view with its own closed-candle queue (fan-out, not
     # competition), and the last lane to stop tears the real feed down.
     feed = acquire_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
-    risk = RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
+    risk = _lane_risk_config(spec)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk,

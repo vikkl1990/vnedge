@@ -40,6 +40,15 @@ class RiskConfig(BaseModel):
         default=2.0, gt=0, le=10,
         description="Percentage leg of the daily-loss halt, applied to peak equity.",
     )
+    daily_loss_halt_enabled: bool = Field(
+        default=True,
+        description=(
+            "When False, the daily-loss halt check is skipped. PAPER/experiment "
+            "use only — the live path must keep this True. Defaults True so live "
+            "and every other lane keep the halt; only a lane that explicitly opts "
+            "out (an aggressive paper profile) turns it off."
+        ),
+    )
     max_drawdown_pct: float = Field(
         default=15.0, gt=0, le=50,
         description="Peak-to-trough equity drawdown (%) that disables trading until manual reset.",
@@ -53,6 +62,19 @@ class RiskConfig(BaseModel):
     risk_per_trade_pct: float = Field(
         default=1.0, gt=0, le=3.0,
         description="Max % of equity lost if the stop is hit. Drives position size.",
+    )
+    fixed_margin_usd: float | None = Field(
+        default=None, gt=0,
+        description=(
+            "OPT-IN, PAPER-ONLY alternative to risk-based sizing (the default and "
+            "the locked live model stay None = risk-based). When set, each trade "
+            "commits this isolated margin and sizes notional = margin x leverage, "
+            "where leverage is capped per-trade so the stop always sits INSIDE the "
+            "isolated liquidation distance — so max loss <= this margin is "
+            "guaranteed. Still bounded by max_leverage_per_position (<= 30) + the "
+            "high-leverage ack. This deliberately departs from 'size from risk, "
+            "never leverage' and must never be set on a live config."
+        ),
     )
     max_consecutive_losses: int = Field(
         default=4, ge=1, le=20,
