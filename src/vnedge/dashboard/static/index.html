@@ -416,7 +416,7 @@
   .jrow.head span{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:600}
   .jrow:last-child{border-bottom:none}
   .jrow:hover{background:var(--bg-3)}
-  .jrow-ct{grid-template-columns:66px 1.2fr 74px 46px 94px 66px 1fr 54px 78px 52px}
+  .jrow-ct{grid-template-columns:64px 1.05fr 46px 70px 42px 90px 58px 1fr 52px 50px 72px 48px}
   .jrow-fl{grid-template-columns:66px 1.4fr 58px 82px 44px 92px 96px 60px}
   .jrow-or{grid-template-columns:66px 1.6fr 92px 50px 84px 96px 1fr}
   .jrow .lane{color:var(--txt-dim);font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -650,10 +650,22 @@
 
     <div class="kpis" id="jkpis" style="margin-top:0"></div>
 
+    <style>
+      .jlanegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;padding:12px 15px}
+      .jlanecard{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px}
+      .jlanecard .l{font-size:10.5px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+      .jlanecard .v{font-family:var(--mono);font-size:16px;font-weight:800;margin-top:3px}
+      .jlanecard .s{font-size:10px;color:var(--txt-faint);margin-top:1px}
+    </style>
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>P&amp;L by lane</h2><span class="meta" id="jlaneMeta">—</span></div>
+      <div id="jLanePnl" class="jlanegrid"></div>
+    </section>
+
     <section class="panel" style="margin-top:14px">
       <div class="phead"><h2>Closed Trades</h2><span class="meta" id="jctMeta">—</span></div>
       <div class="jtbl">
-        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Symbol</span><span>Side</span><span>Lev &middot; Margin</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Bps</span><span>Net</span><span>Fees</span></div>
+        <div class="jrow head jrow-ct"><span>Time</span><span>Lane</span><span>Exch</span><span>Symbol</span><span>Side</span><span>Lev &middot; Margin</span><span>Exit</span><span>Entry &rarr; Exit</span><span>Hold</span><span>Bps</span><span>Net</span><span>Fees</span></div>
         <div id="jClosed"><div class="jempty">Loading…</div></div>
       </div>
     </section>
@@ -1704,7 +1716,7 @@
     var hdr="<div style='font-size:11px;color:var(--txt-dim);margin-bottom:8px'>"+num(s.closed_trades)+" closed · "+jMoney(+s.actual_realized_pnl_usd||0)+" realized · "+jMoney(+s.virtual_net_usd||0)+" shadow net</div>";
     if(!ct.length){el.innerHTML=hdr+"<div class='jempty'>No closed trades yet — this lane is still warming up.</div>";return;}
     el.innerHTML=hdr+ct.map(function(t){
-      var net=(t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0);
+      var net=jTradeNet(t);
       var bps=(t.captured_bps==null?null:+t.captured_bps);
       var rc=(t.resolution==='take_profit'||t.resolution==='target')?'var(--long)':(t.resolution==='stop'||t.resolution==='tick_stop')?'var(--short)':'var(--txt-dim)';
       return "<div style='display:grid;grid-template-columns:62px 46px 44px 1fr 52px 68px;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:11.5px;align-items:center'>"+
@@ -1902,9 +1914,12 @@
     var s=String(t||"");return (s==="target"||s==="take_profit")?"TP":s==="stop"?"SL":s==="timeout"?"TO":"—";
   }
   function jLevMargin(t){ var lev=+t.leverage, m=t.margin_usd; if(!isFinite(lev)||lev<=0)return "—"; var lv=(lev%1?lev.toFixed(1):lev.toFixed(0))+"×"; return (m!=null&&isFinite(+m))?lv+" · $"+(+m).toFixed(0):lv; }
+  function jHold(s){ s=+s; if(!isFinite(s)||s<=0)return "—"; if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m"; if(s<86400)return (s/3600).toFixed(s<36000?1:0)+"h"; return (s/86400).toFixed(1)+"d"; }
   function jTpLadder(t){ var lv=(t.take_profit_levels||[]),n=+t.tp_reached||0; if(!lv.length)return""; var d=""; for(var i=0;i<lv.length;i++){ d+="<span style='display:inline-block;width:5px;height:5px;border-radius:50%;margin-left:3px;vertical-align:middle;background:"+(i<n?"var(--long)":"var(--line-2)")+"'></span>"; } return d; }
   function jSideCls(s){ s=String(s||"").toLowerCase(); return (s==="long"||s==="buy")?"up":(s==="short"||s==="sell")?"dn":""; }
   function jTile(lbl,v,sub){ return "<div class='kpi'><div class='lbl'>"+lbl+"</div><div class='v'>"+v+"</div><div class='s'>"+sub+"</div></div>"; }
+  // one place for a closed trade's net — shadow virtual, then paper net, then raw realized
+  function jTradeNet(t){ return (t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0); }
   function renderJournal(d){
     var s=d.summary||{}, rp=+s.actual_realized_pnl_usd||0, vn=+s.virtual_net_usd||0;
     document.getElementById("jkpis").innerHTML=
@@ -1912,19 +1927,31 @@
       jTile("Fees paid","<span class='num' style='color:var(--txt-dim)'>$"+(+s.fees_usd||0).toFixed(2)+"</span>",(s.fills||0)+" fills")+
       jTile("Closed trades","<span class='num'>"+(s.closed_trades||0)+"</span>",jMoney(vn)+" shadow net")+
       jTile("Open orders","<span class='num'>"+(s.open_orders||0)+"</span>",(s.orders||0)+" total");
+    // per-lane P&L rollup, worst/best first
+    var lp=s.lane_pnl||{};
+    var laneRows=Object.keys(lp).map(function(k){return {lane:k,closed:lp[k].closed,net:+lp[k].net_usd||0};})
+      .sort(function(a,b){return Math.abs(b.net)-Math.abs(a.net);});
+    if($("jlaneMeta"))$("jlaneMeta").textContent=laneRows.length+" lane"+(laneRows.length===1?"":"s")+" with closed trades";
+    if($("jLanePnl"))$("jLanePnl").innerHTML= laneRows.length? laneRows.map(function(r){
+      return "<div class='jlanecard'><div class='l' title='"+jEsc(r.lane)+"'>"+jEsc(jLane(r.lane))+"</div>"+
+        "<div class='v "+(r.net<0?"dn":"up")+"'>"+jMoney(r.net)+"</div>"+
+        "<div class='s'>"+r.closed+" closed</div></div>";
+    }).join("") : "<div class='jempty'>No closed trades yet.</div>";
     var ct=d.closed_trades||[];
     document.getElementById("jctMeta").textContent=ct.length+" shown · "+(s.journals_scanned||0)+" journals";
     document.getElementById("jClosed").innerHTML= ct.length? ct.map(function(t){
       var sym=jSym(t.symbol||String(t.intent_key||"").split("|")[1]);
-      var net=(t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0);
+      var net=jTradeNet(t);
       var bps=(t.captured_bps==null?null:+t.captured_bps);
       var rc=(t.resolution==="take_profit"||t.resolution==="target")?"var(--long)":(t.resolution==="stop"||t.resolution==="tick_stop")?"var(--short)":"var(--txt-dim)";
       return "<div class='jrow jrow-ct'><span class='num'>"+jTime(t.ts)+"</span>"+
         "<span class='lane' title='"+jEsc(t.lane)+"'>"+jEsc(jLane(t.lane))+"</span>"+
+        "<span>"+(t.exchange?("<span class='vchip' style='background:"+ven(t.exchange).col+"' title='"+jEsc(ven(t.exchange).lab)+"'>"+ven(t.exchange).sh+"</span>"):"<span style='color:var(--txt-faint)'>—</span>")+"</span>"+
         "<span class='num'>"+jEsc(sym)+"</span><span class='"+jSideCls(t.side)+"'>"+jEsc(String(t.side||"").toUpperCase())+"</span>"+
         "<span class='num' style='color:var(--txt-dim);white-space:nowrap' title='"+(t.notional_usd!=null?"notional $"+(+t.notional_usd).toLocaleString():"leverage/margin not journaled")+"'>"+jLevMargin(t)+"</span>"+
         "<span style='color:"+rc+"' title='"+jEsc(String(t.resolution||"").replace(/_/g," "))+((t.take_profit_levels||[]).length?" · reached TP"+(+t.tp_reached||0)+" of "+(t.take_profit_levels||[]).length:"")+"'>"+jExitLabel(t)+jTpLadder(t)+"</span>"+
         "<span class='num' style='white-space:nowrap'>"+jPx(t.entry_price)+" &rarr; "+jPx(t.exit_price)+"</span>"+
+        "<span class='num' style='color:var(--txt-dim)' title='hold duration'>"+jHold(t.hold_seconds)+"</span>"+
         "<span class='num "+(bps==null?"":bps<0?"dn":"up")+"' title='"+(t.captured_bps_basis||"")+" bps captured'>"+(bps==null?"—":(bps>0?"+":"")+bps.toFixed(0))+"</span>"+
         "<span class='num "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span>"+
         "<span class='num' style='color:var(--txt-dim)'>$"+(+t.fees_usd||0).toFixed(2)+"</span></div>";

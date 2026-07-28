@@ -169,6 +169,28 @@ def test_json_safe_scrubs_inf_and_nan_recursively():
     assert clean["d"]["e"] == 1.5 and clean["s"] == "x"
 
 
+def test_journal_enriches_trades_with_exchange_hold_and_lane_rollup(tmp_path):
+    # paper trade with an open+close fill, on a venue-named lane, 2.5h apart
+    _write(tmp_path / "quant_signal_pack_v1_bybit_ethusdt_shadow.fills.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "lane": "quant_signal_pack_v1_bybit_ethusdt_shadow",
+         "side": "buy", "price": 100, "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05,
+         "symbol": "ETH/USDT", "venue": "bybit"},
+        {"ts": "2026-07-27T02:30:00Z", "lane": "quant_signal_pack_v1_bybit_ethusdt_shadow",
+         "side": "sell", "price": 110, "quantity": 1, "realized_pnl_usd": 10, "fee_usd": 0.05,
+         "symbol": "ETH/USDT", "venue": "bybit"},
+    ])
+    snap = {"lane_id": "quant_signal_pack_v1_bybit_ethusdt_shadow",
+            "lanes": [{"lane_id": "quant_signal_pack_v1_bybit_ethusdt_shadow"}]}
+    payload = build_trade_journal(snapshot=snap, journal_dir=tmp_path, lane="", limit=50)
+    trade = next(t for t in payload["closed_trades"] if t.get("kind") == "actual_closing_fill")
+    assert trade["exchange"] == "bybit"
+    assert trade["hold_seconds"] == 9000.0  # 2.5h entry->exit
+    # per-lane rollup present and correct
+    roll = payload["summary"]["lane_pnl"]
+    assert roll["quant_signal_pack_v1_bybit_ethusdt_shadow"]["closed"] == 1
+    assert roll["quant_signal_pack_v1_bybit_ethusdt_shadow"]["net_usd"] > 0
+
+
 def test_cost_model_exposes_all_venues():
     cm = _cost_model_payload()
     by = {e["exchange"]: e for e in cm["exchanges"]}
