@@ -1095,6 +1095,89 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/operator-actions")
+    async def operator_actions(request: Request) -> JSONResponse:
+        """Read-only ranked action queue for paper/scanner operations.
+
+        Joins activation, route doctor, cadence, profile, performance, and
+        causality evidence into one operator answer. It cannot trade, promote,
+        restart runners, or apply profile changes.
+        """
+        user = _authorized(request)
+        from vnedge.research.operator_actions import build_operator_actions
+        from vnedge.research.trade_profile_matrix import build_trade_profile_matrix
+
+        activation = _read_json_payload(
+            paper_lane_activation_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane activation report unavailable",
+                "mode": "read_only_activation_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        route = _read_json_payload(
+            paper_route_doctor_file,
+            {
+                "summary": {},
+                "rows": [],
+                "runner_service": {"state": "unknown", "up": None},
+                "operator_answer": "paper route doctor report unavailable",
+                "mode": "read_only_paper_route_doctor",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        cadence = _read_json_payload(
+            paper_lane_cadence_file,
+            {
+                "summary": {},
+                "rows": [],
+                "operator_answer": "paper lane cadence report unavailable",
+                "mode": "read_only_paper_lane_cadence",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        performance = _read_json_payload(
+            paper_lane_performance_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper performance report unavailable",
+                "mode": "read_only_paper_performance",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        causality = _read_json_payload(
+            lane_firing_causality_file,
+            {
+                "summary": {},
+                "promotion_board": {},
+                "rows": [],
+                "operator_answer": "lane firing causality report unavailable",
+                "mode": "read_only_operator_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        return JSONResponse(
+            build_operator_actions(
+                activation=activation,
+                route=route,
+                cadence=cadence,
+                performance=performance,
+                profile=build_trade_profile_matrix(activation),
+                causality=causality,
+            ),
+            headers=_identity(user),
+        )
+
     fleet_status_file = Path("logs/fleet.json")
 
     @app.get("/meta")
