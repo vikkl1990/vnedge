@@ -147,6 +147,27 @@ def test_paper_lane_cadence_monitors_live_evaluation_cadence():
     assert service["depends_on"] == ["paper-lane-activation", "paper-route-doctor"]
 
 
+def test_lane_survival_reconciles_paper_truth_boards():
+    service = compose_services()["lane-survival"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.lane_survival",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--min-closed-trades" in service["command"]
+    assert "--min-profit-factor" in service["command"]
+    assert "--min-avg-net-bps" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "paper-lane-activation",
+        "paper-route-doctor",
+        "paper-lane-cadence",
+        "paper-lane-performance",
+    }
+
+
 def test_paper_lane_activation_publishes_server_side_profile_ack():
     service = compose_services()["paper-lane-activation"]
 

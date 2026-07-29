@@ -110,6 +110,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "/paper-lane-cadence" in html
     assert "Trade Profile Matrix" in html
     assert "/trade-profile-matrix" in html
+    assert "Lane Survival Engine" in html
+    assert "/lane-survival" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -804,6 +806,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    lane_survival = tmp_path / "lane_survival.json"
+    lane_survival.write_text(json.dumps({
+        "mode": "read_only_lane_survival",
+        "summary": {"survivor_candidates": 0, "demote_to_shadow": 1},
+        "rows": [{"survival_state": "DEMOTE_TO_SHADOW"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -818,6 +828,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_lane_activation_path=paper_activation,
         paper_route_doctor_path=paper_route_doctor,
         paper_lane_cadence_path=paper_lane_cadence,
+        lane_survival_path=lane_survival,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -829,6 +840,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/paper-lane-cadence").status_code == 401
+    assert client.get("/lane-survival").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
@@ -861,6 +873,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_cadence_payload["mode"] == "read_only_paper_lane_cadence"
     assert paper_cadence_payload["can_trade"] is False
     assert paper_cadence_payload["can_promote"] is False
+    lane_survival_payload = client.get("/lane-survival?token=t3st-token").json()
+    assert lane_survival_payload["summary"]["demote_to_shadow"] == 1
+    assert lane_survival_payload["mode"] == "read_only_lane_survival"
+    assert lane_survival_payload["can_trade"] is False
+    assert lane_survival_payload["can_promote"] is False
     trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False
@@ -1503,6 +1520,7 @@ def test_identity_header_on_all_data_routes():
         "/realtime-scanner",
         "/lane-firing-causality",
         "/paper-lane-activation",
+        "/lane-survival",
     ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path
