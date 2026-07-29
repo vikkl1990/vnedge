@@ -97,6 +97,22 @@ class _LivePlan:
     mfe_price: float | None = None
 
 
+@dataclass
+class _PendingMakerEntry:
+    """A maker-routed entry resting as a limit, not yet filled.
+
+    Maker-edge strategies post a passive limit instead of crossing the spread;
+    it becomes a position only when a later quote touches it (a real maker fill),
+    and is cancelled — the trade skipped — if no touch lands within its TTL. The
+    immediate runners a maker would miss are missed here too (adverse selection),
+    mirroring the shadow-lane discipline.
+    """
+
+    plan: _LivePlan
+    client_order_id: str
+    bars_waited: int = 0
+
+
 class LivePaperSession:
     def __init__(
         self,
@@ -172,6 +188,9 @@ class LivePaperSession:
         from collections import deque
         self.trade_log: deque = deque(maxlen=40)
         self._plan: _LivePlan | None = None
+        # A maker-routed entry resting as a limit (touch-to-fill), if any. It is
+        # NOT a position until it fills; a new entry cannot fire while it rests.
+        self._pending_entry: _PendingMakerEntry | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
         self._pending_exit_orders: dict[str, str] = {}
         self._exit_retry_attempts: dict[str, int] = {}
@@ -224,6 +243,8 @@ class LivePaperSession:
         return "paper (live data)"
 
     _RUNNER_HEARTBEAT_SECONDS = 60.0
+    # Bars a maker entry limit rests before it is cancelled (touch-to-fill TTL).
+    _MAKER_ENTRY_TTL_BARS = 2
 
     def _why_no_trade(self, reason: str) -> str:
         if self._plan is not None:
@@ -302,11 +323,21 @@ class LivePaperSession:
             self.sizing_skips += 1
             self._log_trade_event("sizing_skip", f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140], now)
             return
+        # Maker-edge strategies post a passive resting limit at the near touch
+        # (bid for a long, ask for a short) instead of crossing the spread — the
+        # route their scorecard edge is defined on. SHADOW never places real
+        # orders, so it stays market (its virtual pricing is handled separately).
+        maker = (
+            self.config.mode is not RunnerMode.SHADOW
+            and is_maker_route_strategy(self.strategy.strategy_id)
+        )
         intent = OrderIntent(
             symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
             reduce_only=False, strategy_id=self.strategy.strategy_id,
+            order_type="limit" if maker else "market",
+            limit_price=(bid if sig.side == "long" else ask) if maker else None,
         )
         decision_bar_ts = self.candles["timestamp"].iloc[-1]
         key = make_intent_key(
@@ -372,10 +403,47 @@ class LivePaperSession:
                 now,
             )
             plan = _LivePlan(sig, self.candles["timestamp"].iloc[-1])
-            if order.state is OrderState.ACKNOWLEDGED:
+            venue_status = self.exchange.get_order_status(order.client_order_id)
+            filled = venue_status is not None and venue_status.filled_qty > 0
+            if maker and order.state is OrderState.ACKNOWLEDGED and not filled:
+                # A resting maker limit: NOT a position until a later quote
+                # touches it. Park it — a new entry can't fire while it rests.
+                self._pending_entry = _PendingMakerEntry(
+                    plan=plan, client_order_id=order.client_order_id
+                )
+            elif order.state is OrderState.ACKNOWLEDGED:
                 self._plan = plan
             elif order.state is OrderState.TIMEOUT_UNKNOWN:
                 self._parked_entries[order.client_order_id] = plan
+
+    async def _manage_pending_entry(self, now: datetime) -> None:
+        """Resolve a resting maker entry: promote to a position once a quote has
+        touched it (checked after the bar's quote sync), or cancel it — skipping
+        the trade — once its touch-to-fill TTL lapses without a fill."""
+        pending = self._pending_entry
+        if pending is None:
+            return
+        status = self.exchange.get_order_status(pending.client_order_id)
+        if status is not None and status.filled_qty > 0:
+            self._pending_entry = None
+            self._plan = pending.plan
+            self._log_trade_event(
+                "maker_entry_filled",
+                f"{pending.plan.signal.side} filled @ {status.avg_fill_price:g} (maker)"[:140],
+                now,
+            )
+            return
+        pending.bars_waited += 1
+        if pending.bars_waited >= self._MAKER_ENTRY_TTL_BARS:
+            await self.om.cancel_order(
+                pending.client_order_id, reason="maker entry TTL — no touch"
+            )
+            self._pending_entry = None
+            self._log_trade_event(
+                "maker_entry_unfilled",
+                f"{pending.plan.signal.side} no touch in {pending.bars_waited} bars — skipped"[:140],
+                now,
+            )
 
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
@@ -704,7 +772,8 @@ class LivePaperSession:
                             reason=sig.reason + " [stop clamped on rebuild]")
 
     def _guard_orphaned_position(self) -> None:
-        if self._orphan_position_guarded or self._plan is not None or self._parked_entries:
+        if self._orphan_position_guarded or self._plan is not None \
+                or self._pending_entry is not None or self._parked_entries:
             return
         positions = self.exchange.get_positions()
         if not positions:
@@ -1108,9 +1177,11 @@ class LivePaperSession:
 
             bar = self.candles.iloc[-1]
             await self._manage_exit(bar, now)
+            await self._manage_pending_entry(now)
             self._guard_orphaned_position()
 
-            if self._plan is None and len(self.candles) > prepared_warmup:
+            if self._plan is None and self._pending_entry is None \
+                    and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
                 idx = len(df) - 1
                 allowed, block_reason = self.protections.entries_allowed(idx)

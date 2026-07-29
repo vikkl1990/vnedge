@@ -779,3 +779,78 @@ async def test_corrupted_persisted_plan_rejected(tmp_path):
     assert session._plan is None
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert "plan_restore_rejected" in kinds
+
+
+# --- maker-edge entry routing: resting limit + touch-to-fill TTL -----------------
+
+_MAKER_FEE = 2 / 10_000
+_TAKER_FEE = 5 / 10_000
+
+
+class MakerLongOnce(BaseStrategy):
+    """Signals long exactly once; its id is in the maker-route set."""
+
+    strategy_id = "stealth_trail_bbp_v1"
+    warmup_bars = 2
+
+    def __init__(self):
+        self._fired = False
+
+    def prepare(self, candles):
+        return candles.copy()
+
+    def signal(self, df, index):
+        if self._fired:
+            return None
+        self._fired = True
+        close = float(df["close"].iloc[index])
+        return SignalIntent("long", stop_price=close * 0.95, take_profit_price=close * 1.10)
+
+
+def _mrow(i, close=100.0):
+    return [BASE + i * MIN, 100.0, 100.5, 99.5, close, 5.0]
+
+
+async def test_maker_edge_entry_rests_as_limit_then_fills_maker_on_touch(tmp_path):
+    feed = FakeFeed([_mrow(5)], quote=(99.99, 100.01))
+    session, exchange = build_session(tmp_path, feed, strategy=MakerLongOnce())
+    await session.run(max_bars=1)
+    # posted a passive buy limit at the bid (99.99); ask 100.01 > 99.99 -> rests
+    assert session._pending_entry is not None
+    assert session._plan is None
+    assert exchange.get_positions() == []           # NOT a position yet
+    # next bar: price drops so the ask touches the resting limit -> maker fill
+    feed.quote = (99.90, 99.98)                      # ask 99.98 <= 99.99
+    feed.closed_candles.put_nowait(_mrow(6))
+    await session.run(max_bars=1)
+    assert session._pending_entry is None and session._plan is not None
+    assert len(exchange.get_positions()) == 1
+    fill = exchange.get_fills()[-1]
+    assert fill.price == pytest.approx(99.99)        # filled at the limit, no cross
+    assert fill.fee_usd == pytest.approx(fill.quantity * 99.99 * _MAKER_FEE)  # MAKER fee
+
+
+async def test_maker_edge_entry_unfilled_is_cancelled_and_skipped(tmp_path):
+    feed = FakeFeed([_mrow(5)], quote=(99.99, 100.01))
+    session, exchange = build_session(tmp_path, feed, strategy=MakerLongOnce())
+    await session.run(max_bars=1)
+    assert session._pending_entry is not None
+    # price never comes down to the limit; TTL (2 bars) lapses -> cancel & skip
+    for i in (6, 7):
+        feed.quote = (100.20, 100.30)                # stays above the buy limit
+        feed.closed_candles.put_nowait(_mrow(i, close=101.0))
+        await session.run(max_bars=1)
+    assert session._pending_entry is None            # signalled once, not re-fired
+    assert session._plan is None
+    assert exchange.get_positions() == []            # the trade was skipped
+    assert "maker_entry_unfilled" in [e["event"] for e in session.trade_log]
+
+
+async def test_non_maker_strategy_still_uses_immediate_market_entry(tmp_path):
+    feed = FakeFeed([_mrow(5)], quote=(99.99, 100.01))
+    session, exchange = build_session(tmp_path, feed, strategy=AlwaysLong())  # not maker-route
+    await session.run(max_bars=1)
+    assert session._pending_entry is None
+    assert len(exchange.get_positions()) == 1        # market fill, immediate
+    fill = exchange.get_fills()[-1]
+    assert fill.fee_usd == pytest.approx(fill.quantity * fill.price * _TAKER_FEE)  # taker
