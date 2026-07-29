@@ -168,6 +168,24 @@ def test_lane_survival_reconciles_paper_truth_boards():
     }
 
 
+def test_paper_lane_governor_publishes_roster_recommendations():
+    service = compose_services()["paper-lane-governor"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_lane_governor",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--min-closed-trades" in service["command"]
+    assert "--min-profit-factor" in service["command"]
+    assert "--min-avg-net-bps" in service["command"]
+    assert "--max-paper-roster" in service["command"]
+    assert "--max-tournament-lanes" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["lane-survival"]
+
+
 def test_paper_lane_activation_publishes_server_side_profile_ack():
     service = compose_services()["paper-lane-activation"]
 
