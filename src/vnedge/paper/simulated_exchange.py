@@ -134,7 +134,9 @@ class SimulatedExchange:
                 req.client_order_id, req.symbol, req.buy, qty,
                 req.reduce_only, "limit", req.limit_price,
             )
-            self._try_fill_resting(req.symbol)
+            # Crossing on arrival = marketable limit = taker; only a later quote
+            # crossing a still-resting limit earns the maker fee.
+            self._try_fill_resting(req.symbol, at_submission=True)
         else:
             status.state, status.reason = "rejected", f"unsupported order type {req.order_type}"
         return status
@@ -162,9 +164,14 @@ class SimulatedExchange:
         else:
             status.state = "filled"
 
-    def _fill_limit(self, req: PaperOrderRequest) -> None:
+    def _fill_limit(self, req: PaperOrderRequest, *, maker: bool) -> None:
         # req.quantity is the REMAINING quantity (partial fills shrink it).
-        self._apply_fill(req.client_order_id, req.symbol, req.buy, req.quantity, req.limit_price)
+        # `maker` is True only when a resting limit is crossed by a LATER quote
+        # (it provided liquidity); an immediately-marketable limit is taker.
+        self._apply_fill(
+            req.client_order_id, req.symbol, req.buy, req.quantity, req.limit_price,
+            maker=maker,
+        )
         status = self._record_limit_fill(req, req.quantity)
         status.state = "filled"
 
@@ -188,13 +195,18 @@ class SimulatedExchange:
             raise ValueError(
                 f"partial fill must be within (0, {req.quantity}), got {quantity}"
             )
-        self._apply_fill(client_order_id, req.symbol, req.buy, quantity, req.limit_price)
+        # A resting limit that fills after placement provided liquidity: maker.
+        self._apply_fill(
+            client_order_id, req.symbol, req.buy, quantity, req.limit_price, maker=True,
+        )
         status = self._record_limit_fill(req, quantity)
         status.state = "partially_filled"
         self._resting[client_order_id] = replace(req, quantity=req.quantity - quantity)
         return status
 
-    def _try_fill_resting(self, symbol: str) -> None:
+    def _try_fill_resting(self, symbol: str, *, at_submission: bool = False) -> None:
+        # at_submission=True means the limit was just placed and is crossing on
+        # arrival (marketable -> taker); a later quote crossing it is a maker fill.
         bid, ask = self.quotes[symbol]
         for coid, req in list(self._resting.items()):
             if req.symbol != symbol:
@@ -204,13 +216,14 @@ class SimulatedExchange:
             )
             if crossed:
                 del self._resting[coid]
-                self._fill_limit(req)
+                self._fill_limit(req, maker=not at_submission)
 
     def _apply_fill(
-        self, client_order_id: str, symbol: str, buy: bool, qty: float, price: float
+        self, client_order_id: str, symbol: str, buy: bool, qty: float, price: float,
+        *, maker: bool = False,
     ) -> None:
         signed = qty if buy else -qty
-        fee = self.fill_model.fee_usd(qty * price)
+        fee = self.fill_model.fee_usd(qty * price, maker=maker)
         self.balance_usd -= fee
         order_status = self.orders.get(client_order_id)
         if order_status is not None:

@@ -162,7 +162,8 @@ async def test_partial_fill_updates_order_position_and_fees(world):
     assert report.clean
     assert order.state is S.PARTIALLY_FILLED
     assert order.filled_quantity == pytest.approx(0.2)
-    assert order.fees_paid == pytest.approx(0.2 * 95.0 * 5.0 / 10_000.0)
+    # a resting-limit fill is a MAKER fill -> maker fee (2 bps), not taker (5 bps)
+    assert order.fees_paid == pytest.approx(0.2 * 95.0 * 2.0 / 10_000.0)
     assert exchange.get_open_orders() != []  # remainder still working
 
 
