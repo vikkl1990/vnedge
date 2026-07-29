@@ -142,8 +142,12 @@ def test_trade_journal_projects_fills_orders_and_virtual_trades(tmp_path):
     assert payload["summary"]["positions"] == 1
     assert payload["summary"]["fills"] == 2
     assert payload["summary"]["closed_trades"] == 3
+    assert payload["summary"]["actual_closed_trades"] == 1
+    assert payload["summary"]["shadow_closed_trades"] == 2
     assert payload["summary"]["actual_realized_pnl_usd"] == 1.6
     assert payload["summary"]["fees_usd"] == 0.19
+    assert payload["summary"]["actual_closed_net_usd"] == 1.41
+    assert payload["summary"]["actual_closed_fees_usd"] == 0.19
     assert payload["summary"]["virtual_net_usd"] == 1.85
     assert payload["orders"][0]["state"] == "acknowledged"
     assert {row["kind"] for row in payload["closed_trades"]} == {

@@ -136,6 +136,63 @@ def test_paper_performance_scores_hash_chained_positive_lane(tmp_path):
     assert row["realized_pnl_usd"] == 3.0
     assert row["fees_usd"] == 0.2
     assert row["net_pnl_usd"] == 2.8
-    assert row["avg_closed_trade_net_bps"] == 281.5534
+    assert row["closed_net_pnl_usd"] == 2.8
+    assert row["avg_closed_trade_net_bps"] == 271.8447
+    assert row["open_fill_count"] == 0
+    assert row["unpaired_closing_fills"] == 0
+    assert row["journal_drift_flags"] == []
     assert payload["summary"]["promotion_candidates"] == 1
     assert payload["summary"]["net_pnl_usd"] == 2.8
+    assert payload["summary"]["closed_net_pnl_usd"] == 2.8
+
+
+def test_paper_performance_flags_open_fill_fee_drift(tmp_path):
+    journal = tmp_path / "open_lane.journal.jsonl"
+    journal.write_text(
+        _journal_record(
+            "paper_lane_heartbeat",
+            {
+                "strategy_id": "quant_signal_pack_v1",
+                "exchange": "binanceusdm",
+                "symbol": "ETH/USDT:USDT",
+                "timeframe": "1h",
+                "mode": "paper",
+                "why_no_trade": "position_open: managing exit plan",
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ledger = FillLedger(tmp_path / "open_lane.fills.jsonl")
+    ledger.append(
+        {
+            "ts": "2026-07-26T00:00:01+00:00",
+            "mode": "paper",
+            "venue": "binanceusdm",
+            "strategy_id": "quant_signal_pack_v1",
+            "symbol": "ETH/USDT:USDT",
+            "side": "buy",
+            "quantity": 0.1,
+            "price": 1800.0,
+            "fee_usd": 0.09,
+            "realized_pnl_usd": 0.0,
+            "client_order_id": "entry-open",
+        }
+    )
+
+    payload = build_paper_lane_performance(
+        journal_dir=tmp_path,
+        now=datetime(2026, 7, 26, 0, 1, tzinfo=UTC),
+    )
+
+    row = payload["rows"][0]
+    assert row["closed_trades"] == 0
+    assert row["net_pnl_usd"] == -0.09
+    assert row["closed_net_pnl_usd"] == 0.0
+    assert row["open_fill_count"] == 1
+    assert row["open_position_entry_fees_usd"] == 0.09
+    assert row["journal_drift_flags"] == [
+        "1 open fill(s) awaiting close",
+        "$0.09 open entry-fee drag",
+    ]
+    assert payload["summary"]["journal_drift_lanes"] == 1
