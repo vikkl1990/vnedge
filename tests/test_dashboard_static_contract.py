@@ -17,7 +17,7 @@ def test_promote_view_has_joined_operator_lifecycle_console():
     html = _index()
     assert "Operator Lifecycle Console" in html
     assert 'id="lifecycleConsole"' in html
-    assert "activation, route doctor, cadence, trade profile, performance, and causality" in html
+    assert "activation, route doctor, cadence, trade profile, performance, survival, and causality" in html
     assert "Planner inputs are still read-only" in html
 
 
