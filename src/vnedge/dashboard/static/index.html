@@ -341,6 +341,15 @@
   .healthrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .healthdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:var(--txt-faint)}
   .healthdot.ok{background:var(--long)} .healthdot.wait{background:var(--warn)} .healthdot.bad{background:var(--short)}
+  .actionmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px}
+  .actionmetric{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .actionmetric .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .actionmetric .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
+  .actionrow{display:grid;grid-template-columns:1fr .55fr .72fr 1.25fr 1.25fr;gap:10px;align-items:center;padding:10px 15px;border-top:1px solid var(--line);font-size:11.5px}
+  .actionrow.head{border-top:1px solid var(--line-2)}
+  .actionrow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:900}
+  .actionrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .actionrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .svcgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;padding:14px 15px}
   .svc{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--txt-dim);font-family:var(--mono)}
   .svc .dot{width:7px;height:7px}
@@ -441,6 +450,9 @@
     .healthmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
     .healthrow{grid-template-columns:1fr}
     .healthrow.head{display:none}
+    .actionmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .actionrow{grid-template-columns:1fr}
+    .actionrow.head{display:none}
     .pmeta{display:none}
     .conn{grid-template-columns:36px 1fr;gap:11px}
     .conn .cacct{display:none}
@@ -778,6 +790,10 @@
     <section class="panel" style="border:1px solid var(--accent-soft,rgba(77,178,255,.25))">
       <div class="phead"><h2>Live Readiness — gates to a first live order</h2><span class="meta" id="preLiveMeta">loading…</span></div>
       <div id="preLive"></div>
+    </section>
+    <section class="panel" style="margin-bottom:14px">
+      <div class="phead"><h2>Operator Action Queue</h2><span class="meta" id="actionQueueMeta">ranking lane actions…</span></div>
+      <div id="operatorActionQueue"><div class="note">waiting for joined lane evidence before ranking actions…</div></div>
     </section>
     <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Operator Lifecycle Console</h2><span class="meta" id="lifecycleMeta">joining lane evidence…</span></div>
@@ -1591,8 +1607,7 @@
     var lev=num(profileRow.requested_leverage),margin=num(profileRow.requested_margin_usd);
     return label+": $"+Math.round(margin)+" · "+lev.toFixed(lev%1?1:0)+"x · "+lifeLabel(profileRow.profile_state);
   }
-  function renderLifecycleConsole(){
-    var el=$("lifecycleConsole"),meta=$("lifecycleMeta"); if(!el)return;
+  function collectLifecycleRows(){
     var map={};
     lifeAdd(map,"activation",(lifeData.activation&&lifeData.activation.rows)||[]);
     lifeAdd(map,"route",(lifeData.route&&lifeData.route.rows)||[]);
@@ -1600,7 +1615,72 @@
     lifeAdd(map,"performance",(lifeData.performance&&lifeData.performance.rows)||[]);
     lifeAdd(map,"profile",(lifeData.profile&&lifeData.profile.rows)||[]);
     lifeAdd(map,"causality",(lifeData.causality&&lifeData.causality.rows)||[]);
-    var rows=Object.keys(map).map(function(k){return map[k];});
+    return Object.keys(map).map(function(k){return map[k];});
+  }
+  function actionRank(a){
+    var p={REPAIR_ROUTE:0,RESTORE_CADENCE:1,FIX_SIZE_PROFILE:2,REVIEW_PAPER_CANDIDATE:3,COLLECT_OUTCOMES:4,WAIT_FOR_SIGNAL:5,OBSERVE:6};
+    return p[a.bucket]!=null?p[a.bucket]:9;
+  }
+  function actionFromLifecycle(x){
+    var profiles=x.profiles||{};
+    var seed=x.seed||{},a=x.activation||{},r=x.route||{},c=x.cadence||{},p=x.performance||{},ca=x.causality||{},paper=profiles.paper||x.profile_paper,live=profiles.live||x.profile_live;
+    var strat=x.strategy_id||seed.strategy_id||"--",ex=x.exchange||seed.exchange||"--",sym=x.symbol||seed.symbol||"--",tf=x.timeframe||seed.timeframe||"--";
+    var routeState=String(r.doctor_state||a.activation_state||""),cad=String(c.cadence_state||""),pstate=String(p.state||""),scanner=String((a.runtime&&a.runtime.scanner_state)||(ca.scanner_state)||"");
+    var paperState=String((paper&&paper.profile_state)||""),liveState=String((live&&live.profile_state)||""),net=num(p.net_pnl_usd),closed=num(p.closed_trades);
+    var action=a.next_action||r.next_action||c.next_action||p.next_action||ca.why_no_trade_minute||"observe lane";
+    var bucket="OBSERVE",tone="none",owner="system",why=action;
+    if(stateTone(routeState)==="bad"){
+      bucket="REPAIR_ROUTE"; tone="bad"; owner="system"; why=r.next_action||a.next_action||"repair paper route or manifest before evaluating this lane";
+    }else if(stateTone(cad)==="bad"){
+      bucket="RESTORE_CADENCE"; tone="bad"; owner="system"; why=c.next_action||"restore fresh lane evaluations before trusting signal frequency";
+    }else if(stateTone(paperState)==="bad"||stateTone(liveState)==="bad"){
+      bucket="FIX_SIZE_PROFILE"; tone="fix"; owner="operator"; why=(paper&&paper.next_action)||(live&&live.next_action)||"adjust margin/leverage profile before route review";
+    }else if(pstate==="PAPER_PROMOTION_CANDIDATE"){
+      bucket="REVIEW_PAPER_CANDIDATE"; tone="ok"; owner="human"; why=p.next_action||"review paper evidence for the next promotion step";
+    }else if(pstate==="PAPER_ACTIVE_PROFITABLE"||pstate==="PAPER_ACTIVE_FLAT"||closed>0){
+      bucket="COLLECT_OUTCOMES"; tone=net<0?"fix":"wait"; owner="system"; why=p.next_action||"keep collecting outcomes until the paper sample clears promotion gates";
+    }else if(scanner==="FIRING"||scanner==="NEAR_TRIGGER"||a.activation_state==="PAPER_ONLINE_WAITING"){
+      bucket="WAIT_FOR_SIGNAL"; tone="wait"; owner="market"; why=a.next_action||ca.why_no_trade_minute||"paper lane is online; wait for a qualified signal and journal proof";
+    }
+    return {bucket:bucket,tone:tone,owner:owner,why:String(why||action),strategy_id:strat,exchange:ex,symbol:sym,timeframe:tf,scanner:scanner,route:routeState,cadence:cad,performance:pstate,net:net,closed:closed};
+  }
+  function renderOperatorActionQueue(rows){
+    var el=$("operatorActionQueue"),meta=$("actionQueueMeta"); if(!el)return;
+    rows=rows||collectLifecycleRows();
+    if(!rows.length){
+      if(meta)meta.textContent="waiting for joined evidence";
+      el.innerHTML='<div class="note">waiting for joined lane evidence before ranking actions…</div>';
+      return;
+    }
+    var actions=rows.map(actionFromLifecycle).sort(function(a,b){return actionRank(a)-actionRank(b)||a.tone.localeCompare(b.tone)||a.strategy_id.localeCompare(b.strategy_id);});
+    var repairs=actions.filter(function(a){return a.tone==="bad"||a.bucket==="FIX_SIZE_PROFILE";}).length;
+    var reviews=actions.filter(function(a){return a.bucket==="REVIEW_PAPER_CANDIDATE";}).length;
+    var collect=actions.filter(function(a){return a.bucket==="COLLECT_OUTCOMES";}).length;
+    var waiting=actions.filter(function(a){return a.bucket==="WAIT_FOR_SIGNAL"||a.bucket==="OBSERVE";}).length;
+    if(meta)meta.textContent=repairs+" repair · "+reviews+" review · "+collect+" collect · "+waiting+" wait/observe";
+    var metrics='<div class="actionmetrics">'+
+      '<div class="actionmetric"><div class="l">Repair first</div><div class="v" style="color:var(--short)">'+repairs+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Paper review</div><div class="v" style="color:var(--long)">'+reviews+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Collect outcomes</div><div class="v" style="color:var(--info)">'+collect+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Wait / observe</div><div class="v" style="color:var(--warn)">'+waiting+'</div></div>'+
+    '</div>';
+    var head='<div class="actionrow head"><span>Lane</span><span>Bucket</span><span>Owner</span><span>Action</span><span>Evidence</span></div>';
+    var body=actions.slice(0,12).map(function(a){
+      var ev=[lifeLabel(a.scanner),lifeLabel(a.route),lifeLabel(a.cadence),lifeLabel(a.performance)].filter(function(x){return x&&x!=="--";}).slice(0,4).join(" · ")||"evidence pending";
+      return '<div class="actionrow">'+
+        '<div><b>'+safe(stratShort(a.strategy_id))+'</b><small>'+safe(symShort(a.symbol))+' · '+safe(ven(a.exchange).lab)+' · '+safe(a.timeframe)+'</small></div>'+
+        '<div>'+lifeChip(lifeLabel(a.bucket),a.tone)+'</div>'+
+        '<div><b>'+safe(a.owner)+'</b><small>read-only queue</small></div>'+
+        '<div><b title="'+safe(a.why)+'">'+safe(a.why.slice(0,82))+'</b><small>'+safe(a.bucket.toLowerCase().replace(/_/g," "))+'</small></div>'+
+        '<div><small title="'+safe(ev)+'">'+safe(ev.slice(0,92))+'</small><small><span class="num '+(a.net<0?"dn":"up")+'">'+usd(a.net)+'</span> · '+a.closed+' closed</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=metrics+head+body+'<div class="fblocker"><b>Operator answer:</b> work this queue top-down. It is evidence-ranked only; it cannot approve, promote, or trade.</div>';
+  }
+  function renderLifecycleConsole(){
+    var el=$("lifecycleConsole"),meta=$("lifecycleMeta"); if(!el)return;
+    var rows=collectLifecycleRows();
+    renderOperatorActionQueue(rows);
     if(!rows.length){
       if(meta)meta.textContent="waiting for joined evidence";
       el.innerHTML='<div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div>';
