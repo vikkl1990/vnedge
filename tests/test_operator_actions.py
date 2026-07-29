@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 from vnedge.research.operator_actions import (
@@ -8,6 +9,7 @@ from vnedge.research.operator_actions import (
     ACTION_RESTORE_CADENCE,
     ACTION_WAIT_FOR_SIGNAL,
     build_operator_actions,
+    main as operator_actions_main,
 )
 
 
@@ -219,3 +221,72 @@ def test_operator_actions_wait_for_live_signal_when_lane_online():
     assert row["bucket"] == ACTION_WAIT_FOR_SIGNAL
     assert row["owner"] == "market"
     assert "near trigger" in row["action"]
+
+
+def test_operator_actions_cli_publishes_latest_and_feed_with_profile_derivation(tmp_path):
+    activation = tmp_path / "activation.json"
+    route = tmp_path / "route.json"
+    cadence = tmp_path / "cadence.json"
+    performance = tmp_path / "performance.json"
+    causality = tmp_path / "causality.json"
+    out = tmp_path / "operator_actions_latest.json"
+    feed = tmp_path / "operator_actions_feed.jsonl"
+
+    activation.write_text(
+        json.dumps(
+            {
+                "report_id": "paper_lane_activation_v1",
+                "rows": [
+                    _lane(
+                        activation_state="PAPER_ONLINE_WAITING",
+                        sizing_profiles={
+                            "paper": {
+                                "profile": "paper",
+                                "risk_compatible": False,
+                                "blockers": ["paper leverage exceeds manifest max"],
+                                "requested_margin_usd": 100,
+                                "requested_leverage": 25,
+                                "requested_notional_usd": 2500,
+                            }
+                        },
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    route.write_text(json.dumps({"rows": [_lane(doctor_state="JOURNAL_ACTIVE")]}))
+    cadence.write_text(json.dumps({"rows": [_lane(cadence_state="EVALUATING_NO_SIGNAL")]}))
+    performance.write_text(json.dumps({"rows": []}))
+    causality.write_text(json.dumps({"rows": []}))
+
+    assert operator_actions_main(
+        [
+            "--once",
+            "--activation",
+            str(activation),
+            "--route",
+            str(route),
+            "--cadence",
+            str(cadence),
+            "--performance",
+            str(performance),
+            "--causality",
+            str(causality),
+            "--out",
+            str(out),
+            "--feed",
+            str(feed),
+            "--max-rows",
+            "10",
+        ]
+    ) == 0
+
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["mode"] == "read_only_operator_action_queue"
+    assert payload["source_report_ids"]["profile"] == "trade_profile_matrix_v1"
+    assert payload["rows"][0]["bucket"] == ACTION_FIX_SIZE_PROFILE
+    assert payload["rows"][0]["action"] == "paper leverage exceeds manifest max"
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert feed.read_text(encoding="utf-8").strip()
