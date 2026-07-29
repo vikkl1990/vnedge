@@ -126,3 +126,39 @@ def test_position_flip_through_zero():
     assert pos.side == "short"
     assert pos.quantity == pytest.approx(-2.0)
     assert pos.entry_price == pytest.approx(99.9 * (1 - SLIP))  # fresh entry
+
+
+# --- maker vs taker fee routing (fill-type aware) --------------------------------
+
+MAKER_FEE = 2 / 10_000
+
+
+def test_resting_limit_filled_by_later_quote_pays_maker_fee():
+    # A buy limit BELOW the ask rests (provides liquidity); when a later quote
+    # drops to cross it, that is a MAKER fill -> maker fee, not taker.
+    ex = make_exchange()
+    status = ex.submit_order(req("m1", buy=True, order_type="limit", limit_price=99.5))
+    assert status.state == "open"  # rested, not marketable on arrival
+    ex.set_quote(SYM, bid=99.3, ask=99.4)  # ask 99.4 <= 99.5 -> crosses, maker fill
+    filled = ex.get_order_status("m1")
+    assert filled.state == "filled" and filled.avg_fill_price == pytest.approx(99.5)
+    fill = ex.get_fills()[0]
+    assert fill.fee_usd == pytest.approx(99.5 * MAKER_FEE)  # maker, not 99.5 * FEE
+
+
+def test_marketable_limit_on_arrival_pays_taker_fee():
+    # A buy limit AT/ABOVE the ask crosses on arrival (removes liquidity): taker.
+    # It fills at its own limit price (no imaginary improvement).
+    ex = make_exchange()
+    status = ex.submit_order(req("t1", buy=True, order_type="limit", limit_price=100.5))
+    assert status.state == "filled"
+    fill = ex.get_fills()[0]
+    assert fill.price == pytest.approx(100.5)
+    assert fill.fee_usd == pytest.approx(100.5 * FEE)  # taker (marketable on arrival)
+
+
+def test_market_order_is_taker():
+    ex = make_exchange()
+    ex.submit_order(req("k1", buy=True))
+    fill = ex.get_fills()[0]
+    assert fill.fee_usd == pytest.approx(fill.price * FEE)  # taker
