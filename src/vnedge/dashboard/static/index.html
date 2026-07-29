@@ -836,6 +836,10 @@
           <div id="paperPerformance"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Lane Survival Engine</h2><span class="meta" id="laneSurvivalMeta">loading…</span></div>
+          <div id="laneSurvival"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
           <div id="promoQueue"></div>
         </section>
@@ -1270,7 +1274,7 @@
         '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+net.toFixed(1)+'</span></div>';}).join('')+
       '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · best net edge (bps) after fees</div>';
   }
-  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,profile:null,meta:null};
+  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,profile:null,meta:null};
   function renderLaneFunnel(d){
     lifeData.readiness=d; renderLifecycleConsole();
     var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
@@ -1466,6 +1470,40 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
   }
+  function survCls(st){
+    st=String(st||"");
+    if(st==="PAPER_SURVIVOR_CANDIDATE")return"ok";
+    if(st==="PAPER_OBSERVE_MORE"||st==="NO_TRADE_EVIDENCE")return"wait";
+    if(st==="DEMOTE_TO_SHADOW"||st==="RESEARCH_ONLY"||st==="LEDGER_REPAIR_REQUIRED")return"bad";
+    return"fix";
+  }
+  function renderLaneSurvival(d){
+    lifeData.survival=d; renderLifecycleConsole();
+    var el=$("laneSurvival"),meta=$("laneSurvivalMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.survivor_candidates)+" survivors · "+num(s.observe_more)+" observe · "+num(s.demote_to_shadow)+" demote · score "+num(s.avg_survival_score).toFixed(1);
+    if(!rows.length){el.innerHTML='<div class="note">lane survival report loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Survivors</div><div class="v" style="color:var(--long)">'+num(s.survivor_candidates)+'</div></div>'+
+      '<div class="perfk"><div class="l">Observe</div><div class="v" style="color:var(--info)">'+num(s.observe_more)+'</div></div>'+
+      '<div class="perfk"><div class="l">Probation</div><div class="v" style="color:var(--warn)">'+num(s.probation)+'</div></div>'+
+      '<div class="perfk"><div class="l">Demote</div><div class="v" style="color:var(--short)">'+num(s.demote_to_shadow)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var state=String(r.survival_state||"UNKNOWN"),cls=survCls(state),score=num(r.survival_score),pf=r.profit_factor==null?"--":num(r.profit_factor).toFixed(2);
+      var bps=r.avg_closed_trade_net_bps==null?"--":num(r.avg_closed_trade_net_bps).toFixed(1)+"bps";
+      var blockers=(r.blockers||[]).join(" · "),xq=(r.exit_quality||{}),net=num(r.closed_net_pnl_usd);
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(state.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(blockers)+'">'+esc(String(r.next_action||blockers||"").slice(0,54))+'</small></div>'+
+        '<div><b class="num">'+score.toFixed(1)+'</b><small>survival score</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>'+bps+' · PF '+pf+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+esc(String(xq.label||"--").toLowerCase().replace(/_/g," "))+' · '+esc(r.decision||"--")+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"lane survival pending")+'</div>';
+  }
   function docCls(st){
     st=String(st||"");
     if(st==="JOURNAL_ACTIVE")return"ok";
@@ -1590,8 +1628,8 @@
   function stateTone(s){
     s=String(s||"");
     if(/CANDIDATE|READY|RUNNING|ACTIVE|OK|SEEN|PROFITABLE|COMPATIBLE/.test(s)&&!/NO_|BLOCK|NEGATIVE/.test(s))return"ok";
-    if(/WAIT|STALE|MISSING|NO_|HEARTBEAT|PRELIVE|REVIEW/.test(s))return"wait";
-    if(/BLOCK|NEGATIVE|CORRUPT|DOWN|UNSAFE|REJECT/.test(s))return"bad";
+    if(/WAIT|STALE|MISSING|NO_|HEARTBEAT|PRELIVE|REVIEW|OBSERVE/.test(s))return"wait";
+    if(/BLOCK|NEGATIVE|CORRUPT|DOWN|UNSAFE|REJECT|DEMOTE|RESEARCH_ONLY|LEDGER/.test(s))return"bad";
     return s?"fix":"none";
   }
   function lifeLabel(s){
@@ -1613,6 +1651,7 @@
     lifeAdd(map,"route",(lifeData.route&&lifeData.route.rows)||[]);
     lifeAdd(map,"cadence",(lifeData.cadence&&lifeData.cadence.rows)||[]);
     lifeAdd(map,"performance",(lifeData.performance&&lifeData.performance.rows)||[]);
+    lifeAdd(map,"survival",(lifeData.survival&&lifeData.survival.rows)||[]);
     lifeAdd(map,"profile",(lifeData.profile&&lifeData.profile.rows)||[]);
     lifeAdd(map,"causality",(lifeData.causality&&lifeData.causality.rows)||[]);
     return Object.keys(map).map(function(k){return map[k];});
@@ -1686,11 +1725,11 @@
       el.innerHTML='<div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div>';
       return;
     }
-    var ps=(lifeData.performance&&lifeData.performance.summary)||{},as=(lifeData.activation&&lifeData.activation.summary)||{},cs=(lifeData.cadence&&lifeData.cadence.summary)||{},rs=(lifeData.route&&lifeData.route.summary)||{};
-    if(meta)meta.textContent=rows.length+" lanes · "+num(as.paper_online)+" online · "+num(cs.signals_seen)+" signal-seen · "+num(ps.promotion_candidates)+" candidates";
+    var ps=(lifeData.performance&&lifeData.performance.summary)||{},as=(lifeData.activation&&lifeData.activation.summary)||{},cs=(lifeData.cadence&&lifeData.cadence.summary)||{},rs=(lifeData.route&&lifeData.route.summary)||{},ss=(lifeData.survival&&lifeData.survival.summary)||{};
+    if(meta)meta.textContent=rows.length+" lanes · "+num(as.paper_online)+" online · "+num(cs.signals_seen)+" signal-seen · "+num(ss.survivor_candidates)+" survivors · "+num(ss.demote_to_shadow)+" demote";
     function score(row){
-      var p=row.performance||{},a=row.activation||{},c=row.cadence||{},r=row.route||{};
-      return (stateTone(p.state)==="bad"?400:0)+(stateTone(a.activation_state)==="bad"?300:0)+(stateTone(r.doctor_state)==="bad"?220:0)+(stateTone(c.cadence_state)==="bad"?160:0)-num(p.net_pnl_usd);
+      var p=row.performance||{},sv=row.survival||{},a=row.activation||{},c=row.cadence||{},r=row.route||{};
+      return (stateTone(sv.survival_state||p.state)==="bad"?400:0)+(stateTone(a.activation_state)==="bad"?300:0)+(stateTone(r.doctor_state)==="bad"?220:0)+(stateTone(c.cadence_state)==="bad"?160:0)-num(p.net_pnl_usd);
     }
     rows.sort(function(a,b){return score(b)-score(a);});
     var metrics='<div class="lifemetrics">'+
@@ -1699,11 +1738,12 @@
       '<div class="lifemetric"><div class="l">Route active</div><div class="v" style="color:var(--long)">'+num(rs.journal_active)+'</div></div>'+
       '<div class="lifemetric"><div class="l">Closed trades</div><div class="v">'+num(ps.closed_trades)+'</div></div>'+
       '<div class="lifemetric"><div class="l">Net P&amp;L</div><div class="v '+(num(ps.net_pnl_usd)<0?"dn":"up")+'">'+usd(num(ps.net_pnl_usd))+'</div></div>'+
-      '<div class="lifemetric"><div class="l">Promotion candidates</div><div class="v" style="color:var(--brand)">'+num(ps.promotion_candidates)+'</div></div>'+
-    '</div><div class="lifefilter">Joined from activation, route doctor, cadence, trade profile, performance, and causality. Planner inputs are still read-only and do not modify runtime.</div>';
+      '<div class="lifemetric"><div class="l">Survivors</div><div class="v" style="color:var(--brand)">'+num(ss.survivor_candidates)+'</div></div>'+
+      '<div class="lifemetric"><div class="l">Demote</div><div class="v" style="color:var(--short)">'+num(ss.demote_to_shadow)+'</div></div>'+
+    '</div><div class="lifefilter">Joined from activation, route doctor, cadence, trade profile, performance, survival, and causality. Planner inputs are still read-only and do not modify runtime.</div>';
     var head='<div class="liferow head">'+["Lane","Signal","Route","Cadence","Paper / live plan","Performance","Next action"].map(function(x){return '<div class="lifecell">'+x+'</div>';}).join('')+'</div>';
     var body=rows.slice(0,16).map(function(x){
-      var seed=x.seed||{},a=x.activation||{},r=x.route||{},c=x.cadence||{},p=x.performance||{},ca=x.causality||{};
+      var seed=x.seed||{},a=x.activation||{},r=x.route||{},c=x.cadence||{},p=x.performance||{},sv=x.survival||{},ca=x.causality||{};
       var strat=x.strategy_id||seed.strategy_id||"--",ex=x.exchange||seed.exchange||"--",sym=x.symbol||seed.symbol||"--",tf=x.timeframe||seed.timeframe||"--";
       var scanner=String((a.runtime&&a.runtime.scanner_state)||(ca.scanner_state)||"--");
       var why=String((a.evidence&&a.evidence.paper_journal&&a.evidence.paper_journal.latest_why)||a.next_action||ca.why_no_trade_minute||"waiting for live evidence");
@@ -1711,7 +1751,7 @@
       var counts=r.journal_counts||{},cad=String(c.cadence_state||"--"),age=c.eval_age_seconds==null?"--":(num(c.eval_age_seconds)<3600?Math.round(num(c.eval_age_seconds)/60)+"m":(num(c.eval_age_seconds)/3600).toFixed(1)+"h");
       var paper=x.profiles.paper||x.profile_paper,live=x.profiles.live||x.profile_live;
       var net=num(p.net_pnl_usd),pf=p.profit_factor==null?"--":num(p.profit_factor).toFixed(2),closed=num(p.closed_trades);
-      var pstate=String(p.state||"--"),action=String(p.next_action||a.next_action||c.next_action||r.next_action||why||"--");
+      var pstate=String(sv.survival_state||p.state||"--"),action=String(sv.next_action||p.next_action||a.next_action||c.next_action||r.next_action||why||"--");
       var primary=stateTone(pstate)==="bad"||stateTone(routeState)==="bad"||stateTone(cad)==="bad"?"":" lifeprimary";
       return '<div class="liferow'+primary+'">'+
         '<div class="lifecell"><b>'+safe(stratShort(strat))+'</b><small>'+safe(symShort(sym))+' · '+safe(ven(ex).lab)+' · '+safe(tf)+'</small></div>'+
@@ -1720,7 +1760,7 @@
         '<div class="lifecell">'+lifeChip(lifeLabel(cad),stateTone(cad))+'<small>eval age '+safe(age)+'</small></div>'+
         '<div class="lifecell">'+lifePlan(paper)+'<small title="'+safe(lifePlanCompact(live,"live"))+'">'+safe(lifePlanCompact(live,"live").slice(0,80))+'</small></div>'+
         '<div class="lifecell">'+lifeChip(lifeLabel(pstate),stateTone(pstate))+'<small><span class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</span> · PF '+safe(pf)+' · '+closed+' closed</small></div>'+
-        '<div class="lifecell"><b>'+safe(action.slice(0,72))+'</b><small>source-joined · read-only</small></div>'+
+        '<div class="lifecell"><b>'+safe(action.slice(0,72))+'</b><small>survival '+num(sv.survival_score).toFixed(1)+' · source-joined</small></div>'+
       '</div>';
     }).join('');
     el.innerHTML=metrics+'<div class="lifegrid">'+head+body+'</div>'+
@@ -1967,6 +2007,7 @@
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; lifeData.meta=d; renderBuildMeta(d); renderDeployProv(lastSnap); renderLifecycleConsole(); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
@@ -2110,8 +2151,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollLaneSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollLaneSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

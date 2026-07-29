@@ -487,6 +487,27 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Lane survival engine: reconciles activation + route + cadence + corrected
+  # performance into keep/observe/demote/repair recommendations. Read-only.
+  lane-survival:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - paper-lane-activation
+      - paper-route-doctor
+      - paper-lane-cadence
+      - paper-lane-performance
+    command: ["python", "-m", "vnedge.research.lane_survival",
+              "--interval-seconds", "${LANE_SURVIVAL_INTERVAL_SECONDS:-60}",
+              "--min-closed-trades", "${LANE_SURVIVAL_MIN_CLOSED_TRADES:-20}",
+              "--min-profit-factor", "${LANE_SURVIVAL_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${LANE_SURVIVAL_MIN_AVG_NET_BPS:-25}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ML pipeline status: runs the real meta-label dataset builder over the live
   # journals + candles so the dashboard ML view shows the training set GROWING
   # as trials mature. Read-only; trains/promotes nothing.
