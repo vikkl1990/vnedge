@@ -112,6 +112,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "/trade-profile-matrix" in html
     assert "Lane Survival Engine" in html
     assert "/lane-survival" in html
+    assert "Paper Lane Governor" in html
+    assert "/paper-lane-governor" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -861,6 +863,15 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_lane_governor = tmp_path / "paper_lane_governor.json"
+    paper_lane_governor.write_text(json.dumps({
+        "mode": "read_only_paper_lane_governor",
+        "summary": {"paper_roster": 1, "demotion_queue": 1},
+        "rows": [{"governor_bucket": "DEMOTION_QUEUE"}],
+        "proposed_roster": {"paper_lanes": [{"lane_id": "alpha"}]},
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -877,6 +888,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_lane_cadence_path=paper_lane_cadence,
         paper_lane_performance_path=paper_lane_performance,
         lane_survival_path=lane_survival,
+        paper_lane_governor_path=paper_lane_governor,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -889,6 +901,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/paper-lane-cadence").status_code == 401
     assert client.get("/lane-survival").status_code == 401
+    assert client.get("/paper-lane-governor").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
     assert client.get("/operator-actions").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
@@ -927,6 +940,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert lane_survival_payload["mode"] == "read_only_lane_survival"
     assert lane_survival_payload["can_trade"] is False
     assert lane_survival_payload["can_promote"] is False
+    paper_governor_payload = client.get("/paper-lane-governor?token=t3st-token").json()
+    assert paper_governor_payload["summary"]["demotion_queue"] == 1
+    assert paper_governor_payload["mode"] == "read_only_paper_lane_governor"
+    assert paper_governor_payload["can_trade"] is False
+    assert paper_governor_payload["can_promote"] is False
     trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False
@@ -1577,6 +1595,7 @@ def test_identity_header_on_all_data_routes():
         "/lane-firing-causality",
         "/paper-lane-activation",
         "/lane-survival",
+        "/paper-lane-governor",
     ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path

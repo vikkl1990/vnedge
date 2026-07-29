@@ -437,6 +437,7 @@ def create_app(
     paper_lane_cadence_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
     lane_survival_path: Path | None = None,
+    paper_lane_governor_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
@@ -602,6 +603,10 @@ def create_app(
     lane_survival_file = (
         lane_survival_path
         or Path("research/live_research/lane_survival_latest.json")
+    )
+    paper_lane_governor_file = (
+        paper_lane_governor_path
+        or Path("research/live_research/paper_lane_governor_latest.json")
     )
     ml_pipeline_status_file = (
         ml_pipeline_status_path
@@ -1044,6 +1049,32 @@ def create_app(
                     "rows": [],
                     "operator_answer": "lane survival report unavailable",
                     "mode": "read_only_lane_survival",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-lane-governor")
+    async def paper_lane_governor(request: Request) -> JSONResponse:
+        """Latest paper lane governor report.
+
+        This turns lane-survival evidence into a proposed paper roster,
+        survivor tournament, demotion queue, and repair queue. It is read-only
+        and cannot mutate runtime lanes.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_lane_governor_file,
+                {
+                    "summary": {},
+                    "proposed_roster": {},
+                    "boards": {},
+                    "rows": [],
+                    "operator_answer": "paper lane governor report unavailable",
+                    "mode": "read_only_paper_lane_governor",
                     "can_trade": False,
                     "can_promote": False,
                 },

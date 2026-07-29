@@ -508,6 +508,25 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper lane governor: converts lane-survival evidence into a proposed paper
+  # roster, survivor tournament, demotion queue, and repair queue. Read-only.
+  paper-lane-governor:
+    build: .
+    restart: unless-stopped
+    depends_on: [lane-survival]
+    command: ["python", "-m", "vnedge.research.paper_lane_governor",
+              "--interval-seconds", "${PAPER_LANE_GOVERNOR_INTERVAL_SECONDS:-60}",
+              "--min-closed-trades", "${PAPER_LANE_GOVERNOR_MIN_CLOSED_TRADES:-20}",
+              "--min-profit-factor", "${PAPER_LANE_GOVERNOR_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${PAPER_LANE_GOVERNOR_MIN_AVG_NET_BPS:-25}",
+              "--max-paper-roster", "${PAPER_LANE_GOVERNOR_MAX_PAPER_ROSTER:-18}",
+              "--max-tournament-lanes", "${PAPER_LANE_GOVERNOR_MAX_TOURNAMENT_LANES:-12}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ML pipeline status: runs the real meta-label dataset builder over the live
   # journals + candles so the dashboard ML view shows the training set GROWING
   # as trials mature. Read-only; trains/promotes nothing.
