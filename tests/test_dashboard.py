@@ -783,7 +783,23 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     paper_activation.write_text(json.dumps({
         "mode": "read_only_activation_truth",
         "summary": {"paper_online": 2},
-        "rows": [{"activation_state": "PAPER_ONLINE_WAITING"}],
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "activation_state": "PAPER_ONLINE_WAITING",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "sizing_profiles": {
+                "paper": {
+                    "profile": "paper",
+                    "risk_compatible": True,
+                    "requested_margin_usd": 100,
+                    "requested_leverage": 25,
+                    "requested_notional_usd": 2500,
+                }
+            },
+        }],
         "can_trade": False,
         "can_promote": False,
     }))
@@ -791,7 +807,15 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     paper_route_doctor.write_text(json.dumps({
         "mode": "read_only_paper_route_doctor",
         "summary": {"journal_missing": 1},
-        "rows": [{"doctor_state": "ROUTE_READY_JOURNAL_MISSING"}],
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "doctor_state": "ROUTE_READY_JOURNAL_MISSING",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "next_action": "inspect runner write path",
+        }],
         "runner_service": {"state": "up", "up": True},
         "can_trade": False,
         "can_promote": False,
@@ -800,7 +824,30 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     paper_lane_cadence.write_text(json.dumps({
         "mode": "read_only_paper_lane_cadence",
         "summary": {"cadence_ok": 1, "stale": 0},
-        "rows": [{"cadence_state": "EVALUATING_NO_SIGNAL"}],
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "cadence_state": "EVALUATING_NO_SIGNAL",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+        }],
+        "can_trade": False,
+        "can_promote": False,
+    }))
+    paper_lane_performance = tmp_path / "paper_lane_performance.json"
+    paper_lane_performance.write_text(json.dumps({
+        "mode": "read_only_paper_performance",
+        "summary": {"online_no_trades": 1},
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "state": "PAPER_ONLINE_NO_TRADES",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "closed_trades": 0,
+        }],
         "can_trade": False,
         "can_promote": False,
     }))
@@ -818,6 +865,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_lane_activation_path=paper_activation,
         paper_route_doctor_path=paper_route_doctor,
         paper_lane_cadence_path=paper_lane_cadence,
+        paper_lane_performance_path=paper_lane_performance,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -830,6 +878,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/paper-lane-cadence").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
+    assert client.get("/operator-actions").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
     assert client.get("/alpha-workbench?token=t3st-token").json()["summary"]["open_tasks"] == 1
     vibe_payload = client.get("/vibe-intelligence?token=t3st-token").json()
@@ -865,6 +914,13 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False
     assert trade_profile_payload["can_promote"] is False
+    operator_actions_payload = client.get("/operator-actions?token=t3st-token").json()
+    assert operator_actions_payload["mode"] == "read_only_operator_action_queue"
+    assert operator_actions_payload["summary"]["route_repairs"] == 1
+    assert operator_actions_payload["rows"][0]["bucket"] == "REPAIR_ROUTE"
+    assert operator_actions_payload["rows"][0]["action"] == "inspect runner write path"
+    assert operator_actions_payload["can_trade"] is False
+    assert operator_actions_payload["can_promote"] is False
 
 
 def test_agent_jobs_endpoint_is_dashboard_gated_and_summarized(tmp_path):
