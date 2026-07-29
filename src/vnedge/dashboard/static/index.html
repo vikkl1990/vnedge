@@ -1121,15 +1121,18 @@
     var top=rows.slice(0,14);
     if(!top.length){el.innerHTML='<div class="sig"><span class="t">--</span><div class="body"><div class="why">scanner report loading…</div></div></div>';return;}
     el.innerHTML=top.map(function(r){
-      var v=ven(r.exchange),fired=r.state==="FIRING",ev=r.latest_eval||r.latest_shadow_intent||{};
-      var side=String(ev.side||"").toLowerCase(),sc=side==="short"?"s":"l",sl=side==="short"?"SHORT":side==="long"?"LONG":"";
+      var v=ven(r.exchange),fired=r.state==="FIRING",ev=r.latest_eval||r.latest_shadow_intent||{},lc=r.trade_lifecycle||{};
+      var sigPlan=ev.signal||{},side=String(ev.side||sigPlan.side||lc.side||"").toLowerCase(),sc=side==="short"?"s":"l",sl=side==="short"?"SHORT":side==="long"?"LONG":"";
       var rt=routeTag(r.strategy_id);
       var tag=fired?'<span class="route pass">FIRING</span>':rt?'<span class="route '+rt[0]+'">'+rt[1]+'</span>':'<span class="route" style="background:var(--bg-3);color:var(--txt-faint)">'+String(r.state||"").toLowerCase()+'</span>';
+      var stage=String(lc.stage||r.state||"waiting").toLowerCase().replace(/_/g," ");
+      var levels=lc.take_profit_levels||[],ladder=levels.length?" · TP ladder journal-only":"";
+      var why=String(lc.final_why_no_trade||r.final_why_no_trade||r.why||"").slice(0,76);
       return '<div class="sig"><span class="t">'+fmtTs(r.latest_eval_ts||r.latest_bar_ts)+'</span>'+
         '<div class="body"><div class="line1">'+
         '<span class="vchip" style="background:'+v.col+'">'+v.sh+'</span><b>'+stratShort(r.strategy_id)+'</b>'+
         (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
-        '</div><div class="why">'+String(r.why||"").slice(0,72)+'</div></div>'+tag+'</div>';
+        '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+'</div></div>'+tag+'</div>';
     }).join('');
   }
 

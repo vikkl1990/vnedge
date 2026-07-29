@@ -86,6 +86,18 @@ def _is_numeric(value: object) -> bool:
     )
 
 
+def _signal_payload(sig: SignalIntent | None) -> dict | None:
+    if sig is None:
+        return None
+    return {
+        "side": sig.side,
+        "stop_price": sig.stop_price,
+        "take_profit_price": sig.take_profit_price,
+        "take_profit_levels": list(sig.take_profit_levels),
+        "reason": sig.reason,
+    }
+
+
 @dataclass
 class _LivePlan:
     signal: SignalIntent
@@ -556,6 +568,7 @@ class LivePaperSession:
             "side": sig.side,
             "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
+            "take_profit_levels": list(sig.take_profit_levels),
             "bid": bid,
             "ask": ask,
             "entry_bar_ts": entry_bar_ts.isoformat(),
@@ -618,6 +631,7 @@ class LivePaperSession:
             "side": sig.side,
             "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
+            "take_profit_levels": list(sig.take_profit_levels),
             "reason": sig.reason,
             "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
         }
@@ -649,6 +663,7 @@ class LivePaperSession:
                 stored["side"], stop_price=float(stored["stop_price"]),
                 take_profit_price=(float(stored["take_profit_price"])
                                    if stored.get("take_profit_price") is not None else None),
+                take_profit_levels=tuple(float(x) for x in stored.get("take_profit_levels") or ()),
                 reason=stored.get("reason", "restored plan"),
             )
             self._plan = _LivePlan(sig, pd.Timestamp(stored["entry_bar_ts"]))
@@ -667,7 +682,9 @@ class LivePaperSession:
         self._plan = _LivePlan(sig, df["timestamp"].iloc[-1])
         self.journal.append("plan_rebuilt_on_resume", {
             "side": sig.side, "stop_price": sig.stop_price,
-            "take_profit_price": sig.take_profit_price, "reason": sig.reason,
+            "take_profit_price": sig.take_profit_price,
+            "take_profit_levels": list(sig.take_profit_levels),
+            "reason": sig.reason,
         })
         logger.info("trade plan REBUILT on resume: %s", sig.reason)
 
@@ -701,6 +718,7 @@ class LivePaperSession:
                        sig.stop_price, self._MAX_REBUILT_STOP_PCT * 100, clamped)
         return SignalIntent(sig.side, stop_price=clamped,
                             take_profit_price=sig.take_profit_price,
+                            take_profit_levels=sig.take_profit_levels,
                             reason=sig.reason + " [stop clamped on rebuild]")
 
     def _guard_orphaned_position(self) -> None:
@@ -817,6 +835,7 @@ class LivePaperSession:
             "fired": sig is not None,
             "signal_reason": sig.reason if sig is not None else None,
             "skip_reason": skip_reason,
+            "signal": _signal_payload(sig),
             "features": features,
             "thresholds": thresholds,
             "backfill": backfill,

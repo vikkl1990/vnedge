@@ -44,6 +44,13 @@ def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     assert "endpoint status, browser poll failures, and payload freshness" in html
 
 
+def test_dashboard_scanner_tape_renders_trade_lifecycle_truth():
+    html = _index()
+    assert "trade_lifecycle" in html
+    assert "final_why_no_trade" in html
+    assert "TP ladder journal-only" in html
+
+
 def test_dashboard_panel_sections_are_balanced():
     html = _index()
     assert html.count("<section") == html.count("</section>")

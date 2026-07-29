@@ -219,6 +219,11 @@ def _runtime_row_from_journal(
     latest_paper_order: dict[str, Any] | None = None
     latest_paper_exit: dict[str, Any] | None = None
     latest_paper_report: dict[str, Any] | None = None
+    latest_heartbeat: dict[str, Any] | None = None
+    latest_intent_ts: datetime | None = None
+    latest_outcome_ts: datetime | None = None
+    latest_paper_order_ts: datetime | None = None
+    latest_paper_exit_ts: datetime | None = None
 
     for record in _iter_jsonl(path, max_bytes=config.tail_bytes):
         record_ts = _parse_dt(record.get("ts"))
@@ -253,22 +258,29 @@ def _runtime_row_from_journal(
             else:
                 funnel["rejected_shadow_intents"] += 1
             latest_intent = dict(payload)
+            latest_intent_ts = record_ts
         elif kind == "shadow_outcome":
             funnel["shadow_outcomes"] += 1
             latest_outcome = dict(payload)
+            latest_outcome_ts = record_ts
         elif kind == "risk_decision":
             funnel["risk_decisions"] += 1
         elif kind == "order_intent":
             funnel["paper_order_intents"] += 1
             latest_paper_order = dict(payload)
+            latest_paper_order_ts = record_ts
         elif kind == "order_acknowledged":
             funnel["paper_order_acknowledged"] += 1
-        elif kind == "live_paper_exit":
+        elif kind in ("live_paper_exit", "tick_stop_exit"):
             funnel["paper_exits"] += 1
             latest_paper_exit = dict(payload)
+            latest_paper_exit_ts = record_ts
         elif kind == "live_paper_report":
             funnel["paper_reports"] += 1
             latest_paper_report = dict(payload.get("report") or payload)
+        elif kind == "paper_lane_heartbeat":
+            funnel["heartbeats"] = int(funnel.get("heartbeats") or 0) + 1
+            latest_heartbeat = dict(payload)
 
     if latest_eval is None:
         return None
@@ -305,6 +317,28 @@ def _runtime_row_from_journal(
         else None
     )
     gate_diagnostics = _gate_diagnostics(state, proximity)
+    final_why = _final_why_no_trade(
+        state=state,
+        why=why,
+        latest_eval=latest_eval,
+        latest_heartbeat=latest_heartbeat,
+        diagnostics=gate_diagnostics,
+    )
+    trade_lifecycle = _trade_lifecycle(
+        state=state,
+        why=final_why,
+        latest_eval=latest_eval,
+        latest_heartbeat=latest_heartbeat,
+        latest_intent=latest_intent,
+        latest_intent_ts=latest_intent_ts,
+        latest_outcome=latest_outcome,
+        latest_outcome_ts=latest_outcome_ts,
+        latest_paper_order=latest_paper_order,
+        latest_paper_order_ts=latest_paper_order_ts,
+        latest_paper_exit=latest_paper_exit,
+        latest_paper_exit_ts=latest_paper_exit_ts,
+        diagnostics=gate_diagnostics,
+    )
     return {
         "row_type": "runtime_lane",
         "lane_id": lane_id,
@@ -328,6 +362,7 @@ def _runtime_row_from_journal(
             "fired": bool(latest_eval.get("fired")),
             "signal_reason": latest_eval.get("signal_reason"),
             "skip_reason": latest_eval.get("skip_reason"),
+            "signal": latest_eval.get("signal") or None,
             "features": latest_eval.get("features") or {},
             "thresholds": latest_eval.get("thresholds") or {},
         },
@@ -336,6 +371,9 @@ def _runtime_row_from_journal(
         "latest_paper_order": _compact_paper_order(latest_paper_order),
         "latest_paper_exit": latest_paper_exit,
         "latest_paper_report": latest_paper_report,
+        "latest_heartbeat": _compact_heartbeat(latest_heartbeat),
+        "final_why_no_trade": final_why,
+        "trade_lifecycle": trade_lifecycle,
         "proximity": proximity,
         "gate_diagnostics": gate_diagnostics,
         "uplift": _uplift_for_runtime_state(
@@ -407,6 +445,175 @@ def _runtime_state(
         ),
         pairs,
     )
+
+
+def _final_why_no_trade(
+    *,
+    state: str,
+    why: str,
+    latest_eval: Mapping[str, Any],
+    latest_heartbeat: Mapping[str, Any] | None,
+    diagnostics: Mapping[str, Any],
+) -> str:
+    if isinstance(latest_heartbeat, Mapping):
+        heartbeat_why = str(latest_heartbeat.get("why_no_trade") or "").strip()
+        runner_state = str(latest_heartbeat.get("runner_state") or "")
+        if heartbeat_why and (runner_state == "in_position" or state != STATE_FIRING):
+            return heartbeat_why
+    if state == STATE_FIRING:
+        return str(latest_eval.get("signal_reason") or why or "signal fired")
+    skip = str(latest_eval.get("skip_reason") or "").strip()
+    if skip:
+        return f"entry blocked: {skip}"
+    if _all_gates_passed(diagnostics):
+        return (
+            "all published scanner gates passed, but final runtime decision "
+            "did not emit an order; expose cooldown/sizing/risk/route blocker"
+        )
+    return why or "waiting for scanner threshold"
+
+
+def _trade_lifecycle(
+    *,
+    state: str,
+    why: str,
+    latest_eval: Mapping[str, Any],
+    latest_heartbeat: Mapping[str, Any] | None,
+    latest_intent: Mapping[str, Any] | None,
+    latest_intent_ts: datetime | None,
+    latest_outcome: Mapping[str, Any] | None,
+    latest_outcome_ts: datetime | None,
+    latest_paper_order: Mapping[str, Any] | None,
+    latest_paper_order_ts: datetime | None,
+    latest_paper_exit: Mapping[str, Any] | None,
+    latest_paper_exit_ts: datetime | None,
+    diagnostics: Mapping[str, Any],
+) -> dict[str, Any]:
+    signal = _signal_plan(latest_eval, latest_heartbeat, latest_intent)
+    runner_state = ""
+    if isinstance(latest_heartbeat, Mapping):
+        runner_state = str(latest_heartbeat.get("runner_state") or "")
+    in_position = runner_state == "in_position"
+    stage = "SCANNING"
+    if state == STATE_STALE:
+        stage = "STALE"
+    elif in_position:
+        stage = "IN_POSITION"
+    elif (
+        latest_paper_order_ts is not None
+        and (latest_paper_exit_ts is None or latest_paper_order_ts > latest_paper_exit_ts)
+    ):
+        stage = "ENTRY_SUBMITTED"
+    elif (
+        latest_paper_exit_ts is not None
+        and (latest_paper_order_ts is None or latest_paper_exit_ts >= latest_paper_order_ts)
+    ):
+        stage = "EXIT_RECORDED"
+    elif (
+        latest_outcome_ts is not None
+        and (latest_intent_ts is None or latest_outcome_ts >= latest_intent_ts)
+    ):
+        stage = "VIRTUAL_OUTCOME_RECORDED"
+    elif latest_intent_ts is not None:
+        stage = "SHADOW_INTENT_RECORDED"
+    elif state == STATE_FIRING:
+        stage = "SIGNAL_TO_ROUTE"
+    elif _all_gates_passed(diagnostics):
+        stage = "HIDDEN_VETO"
+    elif state == STATE_NEAR_TRIGGER:
+        stage = "NEAR_TRIGGER"
+    elif state == STATE_WARMING:
+        stage = "WARMING"
+
+    tp_levels = _float_list(signal.get("take_profit_levels")) if signal else []
+    tp_reached = 0
+    mfe_price = None
+    exit_reason = None
+    if isinstance(latest_paper_exit, Mapping):
+        tp_reached = int(_num(latest_paper_exit.get("tp_reached")) or 0)
+        mfe_price = latest_paper_exit.get("mfe_price")
+        exit_reason = latest_paper_exit.get("reason")
+    if not tp_levels and isinstance(latest_paper_exit, Mapping):
+        tp_levels = _float_list(latest_paper_exit.get("take_profit_levels"))
+
+    return {
+        "stage": stage,
+        "runner_state": runner_state or None,
+        "final_why_no_trade": why,
+        "in_position": in_position,
+        "has_signal_plan": bool(signal),
+        "side": signal.get("side") if signal else None,
+        "stop_price": signal.get("stop_price") if signal else None,
+        "take_profit_price": signal.get("take_profit_price") if signal else None,
+        "take_profit_levels": tp_levels,
+        "tp_reached": tp_reached,
+        "mfe_price": mfe_price,
+        "exit_reason": exit_reason,
+        "latest_shadow_intent_ts": latest_intent_ts.isoformat() if latest_intent_ts else None,
+        "latest_shadow_outcome_ts": latest_outcome_ts.isoformat() if latest_outcome_ts else None,
+        "latest_paper_order_ts": (
+            latest_paper_order_ts.isoformat() if latest_paper_order_ts else None
+        ),
+        "latest_paper_exit_ts": latest_paper_exit_ts.isoformat() if latest_paper_exit_ts else None,
+        "paper_order_open_after_latest_exit": (
+            latest_paper_order_ts is not None
+            and (latest_paper_exit_ts is None or latest_paper_order_ts > latest_paper_exit_ts)
+        ),
+        "exit_engine": {
+            "stop": "tick_stop_when_enabled_else_bar_stop",
+            "take_profit": "single_take_profit_price",
+            "tp_ladder": "journaled_progress_only_not_partial_exit",
+            "breakeven_after_tp1": "not_active",
+            "partial_exits": "not_active",
+            "trailing_stop": "strategy_stop_or_tick_stop_only",
+        },
+    }
+
+
+def _signal_plan(
+    latest_eval: Mapping[str, Any],
+    latest_heartbeat: Mapping[str, Any] | None,
+    latest_intent: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    candidates: list[Any] = [latest_eval.get("signal")]
+    if isinstance(latest_heartbeat, Mapping):
+        hb_eval = latest_heartbeat.get("last_eval")
+        if isinstance(hb_eval, Mapping):
+            candidates.append(hb_eval.get("signal"))
+    if isinstance(latest_intent, Mapping):
+        candidates.append({
+            "side": (latest_intent.get("intent") or {}).get("side")
+            if isinstance(latest_intent.get("intent"), Mapping)
+            else None,
+            "stop_price": latest_intent.get("stop_price"),
+            "take_profit_price": latest_intent.get("take_profit_price"),
+            "take_profit_levels": latest_intent.get("take_profit_levels"),
+            "reason": latest_intent.get("signal_reason"),
+        })
+    for item in candidates:
+        if isinstance(item, Mapping) and any(
+            item.get(key) is not None
+            for key in ("side", "stop_price", "take_profit_price", "take_profit_levels")
+        ):
+            return {
+                "side": item.get("side"),
+                "stop_price": item.get("stop_price"),
+                "take_profit_price": item.get("take_profit_price"),
+                "take_profit_levels": item.get("take_profit_levels") or [],
+                "reason": item.get("reason"),
+            }
+    return {}
+
+
+def _float_list(value: Any) -> list[float]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    out = []
+    for item in value:
+        num = _num(item)
+        if num is not None:
+            out.append(num)
+    return out
 
 
 def _threshold_pairs(eval_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -742,6 +949,16 @@ def _summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "waiting": counts.get(STATE_WAITING, 0),
         "warming": counts.get(STATE_WARMING, 0),
         "stale": counts.get(STATE_STALE, 0),
+        "trade_lifecycle_stages": _trade_lifecycle_stages(rows),
+        "hidden_veto_lanes": _trade_lifecycle_count(rows, "HIDDEN_VETO"),
+        "in_position_lanes": _trade_lifecycle_count(rows, "IN_POSITION"),
+        "tp_ladder_observed_lanes": _tp_ladder_observed_lanes(rows),
+        "tp_ladder_journal_only_lanes": _tp_ladder_journal_only_lanes(rows),
+        "lanes_without_heartbeat": sum(
+            1
+            for row in rows
+            if row.get("row_type") == "runtime_lane" and not row.get("latest_heartbeat")
+        ),
         "top_blocker_categories": _top_blocker_categories(rows),
         "uplift_action_counts": _uplift_action_counts(rows),
         "scanner_not_replay": True,
@@ -762,6 +979,8 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
     paper_exits = int(summary.get("paper_exits") or 0)
     paper_orders_1h = int(summary.get("paper_order_intents_1h") or 0)
     paper_orders_24h = int(summary.get("paper_order_intents_24h") or 0)
+    hidden = int(summary.get("hidden_veto_lanes") or 0)
+    in_position = int(summary.get("in_position_lanes") or 0)
     if total == 0:
         return (
             "No live scanner rows yet. This report only reads runtime journals; "
@@ -772,9 +991,16 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
             f"{firing} lane(s) are firing now, including {paper_firing} paper lane(s). "
             f"Paper activity: {paper_fresh}/{paper_lanes} fresh, "
             f"{paper_orders_1h} orders in 1h, {paper_orders_24h} in 24h "
-            f"({paper_orders} tail orders / {paper_exits} exits). "
+            f"({paper_orders} tail orders / {paper_exits} exits), "
+            f"{in_position} lane(s) in trade-state. "
             "This is shadow/paper observation, "
             "not permission to promote or trade."
+        )
+    if hidden:
+        return (
+            f"No current fire; {hidden} lane(s) passed published scanner gates "
+            "but were held by an unexposed runtime decision. Inspect "
+            "final_why_no_trade/trade_lifecycle before tuning indicators."
         )
     if near:
         blockers = summary.get("top_blocker_categories") or {}
@@ -1034,6 +1260,48 @@ def _top_blocker_categories(rows: list[Mapping[str, Any]]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def _trade_lifecycle_stages(rows: list[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        lifecycle = row.get("trade_lifecycle")
+        if not isinstance(lifecycle, Mapping):
+            continue
+        stage = str(lifecycle.get("stage") or "UNKNOWN")
+        counts[stage] = counts.get(stage, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _trade_lifecycle_count(rows: list[Mapping[str, Any]], stage: str) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row.get("trade_lifecycle"), Mapping)
+        and row["trade_lifecycle"].get("stage") == stage
+    )
+
+
+def _tp_ladder_observed_lanes(rows: list[Mapping[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row.get("trade_lifecycle"), Mapping)
+        and bool(row["trade_lifecycle"].get("take_profit_levels"))
+    )
+
+
+def _tp_ladder_journal_only_lanes(rows: list[Mapping[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row.get("trade_lifecycle"), Mapping)
+        and bool(row["trade_lifecycle"].get("take_profit_levels"))
+        and (
+            row["trade_lifecycle"].get("exit_engine", {}).get("tp_ladder")
+            == "journaled_progress_only_not_partial_exit"
+        )
+    )
+
+
 def _uplift_action_counts(rows: list[Mapping[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
@@ -1162,6 +1430,24 @@ def _compact_outcome(payload: Mapping[str, Any] | None) -> dict[str, Any] | None
         "net_usd": payload.get("net_usd", payload.get("virtual_net_usd")),
         "exit_reason": payload.get("exit_reason", payload.get("resolution")),
         "bars_held": payload.get("bars_held"),
+    }
+
+
+def _compact_heartbeat(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    return {
+        "runner_state": payload.get("runner_state"),
+        "why_no_trade": payload.get("why_no_trade"),
+        "quote_seen": payload.get("quote_seen"),
+        "feed_staleness_seconds": payload.get("feed_staleness_seconds"),
+        "last_bar_ts": payload.get("last_bar_ts"),
+        "signals": payload.get("signals"),
+        "live_signals": payload.get("live_signals"),
+        "orders_submitted": payload.get("orders_submitted"),
+        "risk_rejects": payload.get("risk_rejects"),
+        "sizing_skips": payload.get("sizing_skips"),
+        "trial_id": payload.get("trial_id"),
     }
 
 
