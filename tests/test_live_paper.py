@@ -68,6 +68,20 @@ class AlwaysLong(BaseStrategy):
                             take_profit_price=close * 1.10)
 
 
+class LadderLong(AlwaysLong):
+    strategy_id = "ladder_long"
+
+    def signal(self, df, index):
+        close = float(df["close"].iloc[index])
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.10,
+            take_profit_levels=(close * 1.03, close * 1.06, close * 1.10),
+            reason="ladder plan",
+        )
+
+
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
     strategy = QuantSignalPack(
         None,
@@ -354,6 +368,8 @@ async def test_lane_eval_journaled_for_every_evaluated_bar(tmp_path):
         assert r["payload"]["strategy_id"] == "always_long"
         assert r["payload"]["exchange"] == "fake"
         assert r["payload"]["timeframe"] == "1h"
+        assert r["payload"]["signal"]["side"] == "long"
+        assert r["payload"]["signal"]["take_profit_levels"] == []
         assert "features" in r["payload"] and "thresholds" in r["payload"]
     # the newest evaluation is surfaced for the dashboard snapshot
     assert session.last_eval is not None
@@ -425,13 +441,14 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
 
     # session 1: trade opens, plan saved with the account
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)
+    session, exchange = build_session(tmp_path, feed, strategy=LadderLong())
     session.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
     await session.run(max_bars=1)
     assert session._plan is not None
     stored = session.account_store.load()
     assert stored["plan"]["side"] == "long"
     assert stored["plan"]["stop_price"] == session._plan.signal.stop_price
+    assert stored["plan"]["take_profit_levels"] == list(session._plan.signal.take_profit_levels)
 
     # session 2 (restart): restore -> plan re-armed, orphan guard NOT tripped
     feed2 = FakeFeed([])
@@ -441,6 +458,7 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
     assert resumed and exchange2.get_positions()
     session2.restore_plan(session2.account_store.load().get("plan"))
     assert session2._plan is not None
+    assert session2._plan.signal.take_profit_levels == tuple(stored["plan"]["take_profit_levels"])
     await session2.run(max_bars=0)
     assert not session2.gateway.kill_switch.is_active  # no orphan trip
     records = [r["kind"] for r in session2.journal.read_all()]
