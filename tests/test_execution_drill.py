@@ -20,16 +20,19 @@ LIVE_ENV = {
 class FakeAdapter:
     """Happy-path venue: accepts, shows open, cancels clean, stays flat."""
 
-    def __init__(self, *, positions=(), open_orders=(), mid=0.08):
+    def __init__(self, *, positions=(), open_orders=(), mid=0.08, equity=250.0):
         self._positions = list(positions)
         self._open_orders = list(open_orders)
         self._mid = mid
+        self._equity = equity
         self.submitted = []
         self.cancelled = []
         self.closed = False
 
     async def fetch_balance(self):
-        return {"total_usd": 42.0, "USDT": 42.0}
+        # A realistic small LIVE account: the drill now routes through the real
+        # gateway, whose min_equity gate ($100) correctly rejects sub-$100.
+        return {"total_usd": self._equity, "USDT": self._equity}
 
     async def fetch_positions(self, symbol):
         return self._positions
@@ -153,3 +156,35 @@ async def test_delta_drill_requires_native_read_surfaces(tmp_path, monkeypatch):
     check = next(s for s in report.steps if s.name == "delta_native_drill")
     assert not check.ok
     assert "balance" in check.detail and "position" in check.detail
+
+
+async def test_drill_order_routes_through_the_gateway(tmp_path, monkeypatch):
+    # A sub-min-equity account must be REJECTED by the gateway inside the drill —
+    # proof the order is evaluated, not bypassed (the invariant Gap 1 restores).
+    _env(monkeypatch, tmp_path)
+    settings = Settings(**LIVE_ENV)
+    fake = FakeAdapter(equity=42.0)  # below the $100 min_equity gate
+    report = await run_execution_drill(
+        settings, DrillConfig(exchange_id="binanceusdm"),
+        adapter_factory=lambda: fake, journal=DecisionJournal(tmp_path / "d.jsonl"),
+    )
+    assert not report.cleared
+    ga = [s for s in report.steps if s.name == "gateway_approved"]
+    assert ga and ga[0].ok is False
+    assert fake.submitted == []  # rejected before ever reaching the venue
+
+
+async def test_drill_client_order_id_is_uuid_not_timestamp(tmp_path, monkeypatch):
+    # OrderManager mints a uuid client id; the old drill derived it from
+    # time.time() (an idempotency-rule violation). Verify it's not numeric.
+    _env(monkeypatch, tmp_path)
+    settings = Settings(**LIVE_ENV)
+    fake = FakeAdapter(equity=250.0)
+    await run_execution_drill(
+        settings, DrillConfig(exchange_id="binanceusdm"),
+        adapter_factory=lambda: fake, journal=DecisionJournal(tmp_path / "d.jsonl"),
+    )
+    assert len(fake.submitted) == 1
+    coid = fake.submitted[0].client_order_id
+    assert not coid.replace("drill", "").isdigit()  # not a bare timestamp
+    assert "-" in coid or len(coid) >= 16  # uuid-shaped
