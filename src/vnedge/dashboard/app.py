@@ -54,6 +54,7 @@ from vnedge.agent_gateway.task_registry import (
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.pine_script_research import load_pine_research_payload
+from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
 
 logger = logging.getLogger(__name__)
 
@@ -440,6 +441,7 @@ def create_app(
     paper_lane_governor_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
+    quantified_strategy_lab_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
     pine_edge_uplift_path: Path | None = None,
@@ -542,6 +544,10 @@ def create_app(
         pine_alpha_distiller_path
         or Path("research/live_research/pine_alpha_distiller_latest.json")
     )
+    quantified_strategy_lab_file = (
+        quantified_strategy_lab_path
+        or Path("research/live_research/quantified_strategy_lab_latest.json")
+    )
     pine_backtest_progress_file = (
         backtest_progress_path
         or Path("research/live_research/scanner_tournament_progress.json")
@@ -628,6 +634,13 @@ def create_app(
         # Separate static research page. Data remains token-gated below.
         return FileResponse(
             _STATIC_DIR / "pine_research.html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/quantified-strategy-lab")
+    async def quantified_strategy_lab_page() -> FileResponse:
+        return FileResponse(
+            _STATIC_DIR / "quantified_strategy_lab.html",
             headers={"Cache-Control": "no-store"},
         )
 
@@ -1365,6 +1378,20 @@ def create_app(
         user = _authorized(request)
         return JSONResponse(
             load_pine_research_payload(pine_research_path),
+            headers=_identity(user),
+        )
+
+    @app.get("/quantified-strategy-lab/kb")
+    async def quantified_strategy_lab_kb(request: Request) -> JSONResponse:
+        """Title-only 95-strategy inventory triage.
+
+        This endpoint deliberately carries no executable strategy rules. It
+        groups the 95 titles into VNEDGE-owned research hypotheses and replay
+        queues while preserving the no-copy/no-promotion boundary.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            load_quantified_strategy_lab_payload(quantified_strategy_lab_file),
             headers=_identity(user),
         )
 

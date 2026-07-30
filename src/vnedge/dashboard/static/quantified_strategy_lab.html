@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VNEDGE Quantified Strategy Lab</title>
+  <style>
+    :root{
+      --bg:#080b10;
+      --panel:#0d131b;
+      --panel-2:#111925;
+      --line:#1f2b3b;
+      --line-2:#31445f;
+      --text:#e8eef7;
+      --muted:#91a0b3;
+      --faint:#667589;
+      --accent:#39d6c8;
+      --blue:#4ca7ff;
+      --green:#39d98a;
+      --amber:#f6b44b;
+      --red:#ff6070;
+      --mono:ui-monospace,"SF Mono","Roboto Mono",Menlo,monospace;
+      --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+      color-scheme:dark;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%}
+    body{
+      background:
+        linear-gradient(rgba(76,167,255,.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(76,167,255,.045) 1px, transparent 1px),
+        var(--bg);
+      background-size:52px 52px;
+      color:var(--text);
+      font-family:var(--sans);
+      font-size:14px;
+      line-height:1.45;
+      letter-spacing:0;
+    }
+    .wrap{max-width:1740px;margin:0 auto;padding:22px 28px 40px}
+    header{
+      display:grid;
+      grid-template-columns:1fr auto;
+      gap:18px;
+      align-items:end;
+      border-bottom:1px solid var(--line);
+      padding-bottom:18px;
+      margin-bottom:18px;
+    }
+    h1{margin:4px 0 8px;font-size:30px;line-height:1.1;font-weight:800;letter-spacing:0}
+    h2{margin:0;font-family:var(--mono);font-size:16px;letter-spacing:0;text-transform:uppercase}
+    p{margin:0;color:var(--muted)}
+    a{color:inherit;text-decoration:none}
+    button,.link{
+      border:1px solid var(--line-2);
+      background:#0c121a;
+      color:var(--text);
+      min-height:34px;
+      padding:0 13px;
+      border-radius:6px;
+      font-family:var(--mono);
+      font-weight:700;
+      cursor:pointer;
+    }
+    button:hover,.link:hover{border-color:var(--blue);color:white}
+    .eyebrow{font-family:var(--mono);font-size:12px;font-weight:800;color:var(--accent);text-transform:uppercase}
+    .actions{display:flex;gap:10px;align-items:center}
+    .status{
+      display:inline-flex;
+      align-items:center;
+      border:1px solid rgba(57,217,138,.42);
+      color:var(--green);
+      padding:8px 12px;
+      border-radius:6px;
+      font-family:var(--mono);
+      font-size:12px;
+      font-weight:800;
+    }
+    .grid{display:grid;gap:14px}
+    .summary{grid-template-columns:repeat(6,minmax(0,1fr));margin-bottom:14px}
+    .card{
+      background:linear-gradient(180deg,rgba(17,25,37,.92),rgba(10,15,22,.96));
+      border:1px solid var(--line);
+      border-radius:8px;
+      min-width:0;
+    }
+    .metric{padding:16px}
+    .label{
+      font-family:var(--mono);
+      color:var(--faint);
+      font-size:11px;
+      font-weight:800;
+      text-transform:uppercase;
+      letter-spacing:0;
+    }
+    .value{font-family:var(--mono);font-size:28px;font-weight:900;margin-top:5px}
+    .sub{font-size:12px;color:var(--muted);margin-top:4px}
+    .split{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-bottom:14px}
+    .panel-title{
+      padding:13px 15px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      align-items:center;
+    }
+    .panel-body{padding:14px}
+    .fast-track{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+    .chunk{background:rgba(76,167,255,.05);border:1px solid var(--line);border-radius:8px;padding:12px;min-height:132px}
+    .chunk strong{display:block;font-family:var(--mono);font-size:20px;color:var(--accent);margin-bottom:8px}
+    .chunk b{display:block;font-size:13px;margin-bottom:8px}
+    .chipbar{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+    .chip{
+      border:1px solid var(--line-2);
+      background:#0b121b;
+      border-radius:5px;
+      padding:3px 6px;
+      font-family:var(--mono);
+      color:var(--muted);
+      font-size:11px;
+      font-weight:700;
+    }
+    .tasks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .task{background:#0b1119;border:1px solid var(--line);border-radius:8px;padding:12px}
+    .task .top{display:flex;justify-content:space-between;gap:12px}
+    .task h3{margin:0;font-family:var(--mono);font-size:14px;color:var(--text)}
+    .task .score{font-family:var(--mono);font-weight:900;color:var(--accent)}
+    .task p{font-size:12px;margin-top:8px}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:13px 15px;border-bottom:1px solid var(--line)}
+    input,select{
+      background:#0a1018;
+      border:1px solid var(--line);
+      color:var(--text);
+      border-radius:6px;
+      min-height:34px;
+      padding:0 10px;
+      font-family:var(--mono);
+    }
+    input{min-width:260px}
+    .table-wrap{overflow:auto;max-height:620px}
+    table{width:100%;border-collapse:collapse;min-width:1320px}
+    th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+    th{
+      position:sticky;
+      top:0;
+      z-index:1;
+      background:#0b1119;
+      color:var(--muted);
+      font-family:var(--mono);
+      font-size:11px;
+      text-transform:uppercase;
+      letter-spacing:0;
+    }
+    td{font-size:13px}
+    .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+    .title{font-weight:800}
+    .tiny{font-size:12px;color:var(--muted);margin-top:3px}
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      border:1px solid var(--line-2);
+      border-radius:5px;
+      padding:3px 7px;
+      font-family:var(--mono);
+      font-size:11px;
+      font-weight:900;
+      text-transform:uppercase;
+      color:var(--muted);
+    }
+    .portable{color:var(--green);border-color:rgba(57,217,138,.42);background:rgba(57,217,138,.08)}
+    .study{color:var(--amber);border-color:rgba(246,180,75,.45);background:rgba(246,180,75,.08)}
+    .blocked{color:var(--red);border-color:rgba(255,96,112,.42);background:rgba(255,96,112,.08)}
+    .note{border-left:3px solid var(--blue);background:rgba(76,167,255,.08);padding:12px 14px;color:var(--muted);font-size:13px}
+    .loading{padding:22px;color:var(--muted);font-family:var(--mono)}
+    @media(max-width:1100px){
+      header{grid-template-columns:1fr}
+      .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .split{grid-template-columns:1fr}
+      .fast-track{grid-template-columns:1fr}
+      .tasks{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="eyebrow">VNEDGE AI Quant OS</div>
+        <h1>Quantified Strategy Lab</h1>
+        <p>Finite 95-strategy title inventory, crypto portability triage, and replay work queue. Research only: no title can trade until a VNEDGE-owned causal port clears cost-aware proof.</p>
+      </div>
+      <div class="actions">
+        <a class="link" id="cockpit" href="/">OPERATOR COCKPIT</a>
+        <button id="refresh" type="button">REFRESH</button>
+        <span class="status" id="status">LOADING</span>
+      </div>
+    </header>
+
+    <section class="grid summary" id="summary"></section>
+
+    <section class="split">
+      <article class="card">
+        <div class="panel-title">
+          <h2>Fast Track</h2>
+          <span class="badge portable">chunked</span>
+        </div>
+        <div class="panel-body">
+          <div class="fast-track" id="fastTrack"></div>
+        </div>
+      </article>
+      <article class="card">
+        <div class="panel-title">
+          <h2>Replay Contract</h2>
+          <span class="badge blocked">no promotion</span>
+        </div>
+        <div class="panel-body">
+          <div class="note" id="contract">Loading replay contract...</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="card" style="margin-bottom:14px">
+      <div class="panel-title">
+        <h2>Port Families</h2>
+        <span class="badge study">research queue</span>
+      </div>
+      <div class="panel-body">
+        <div class="tasks" id="tasks"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="panel-title">
+        <h2>Strategy Inventory</h2>
+        <span class="badge" id="sourcePolicy">source policy</span>
+      </div>
+      <div class="toolbar">
+        <input id="filter" placeholder="filter title, port, mechanism" autocomplete="off" />
+        <select id="portFilter"><option value="">All port families</option></select>
+        <select id="fitFilter">
+          <option value="">All fit scores</option>
+          <option value="80">Fit >= 80</option>
+          <option value="70">Fit >= 70</option>
+          <option value="50">Fit >= 50</option>
+          <option value="blocked">Blocked / placeholder</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Strategy</th>
+              <th>Mechanism</th>
+              <th>Asset Scope</th>
+              <th>Fit</th>
+              <th>Portability</th>
+              <th>VNEDGE Port</th>
+              <th>Next Action</th>
+              <th>Replay</th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr><td colspan="9" class="loading">Loading 95-strategy research inventory...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const tokenFromUrl = new URLSearchParams(location.search).get("token");
+    if (tokenFromUrl) localStorage.setItem("vnedge_dashboard_token", tokenFromUrl);
+    const token = tokenFromUrl || localStorage.getItem("vnedge_dashboard_token") || "";
+    if (token) {
+      const cockpit = document.getElementById("cockpit");
+      cockpit.href = "/?token=" + encodeURIComponent(token);
+    }
+
+    let payload = null;
+    const fmt = new Intl.NumberFormat("en-US");
+
+    function badgeClass(value){
+      if ((value || "").includes("PLACEHOLDER") || (value || "").includes("RESEARCH_ONLY")) return "blocked";
+      if ((value || "").includes("SESSION") || (value || "").includes("RELATIVE")) return "study";
+      return "portable";
+    }
+
+    function metric(label, value, sub){
+      return `<div class="card metric"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub || ""}</div></div>`;
+    }
+
+    function renderSummary(){
+      const s = payload.summary || {};
+      document.getElementById("summary").innerHTML = [
+        metric("Total Strategies", fmt.format(s.total_strategies || 0), "from operator supplied image"),
+        metric("Portable / Adaptable", fmt.format(s.portable_or_adaptable || 0), "can become VNEDGE hypotheses"),
+        metric("Blocked / Placeholder", fmt.format(s.blocked_or_placeholder || 0), "asset-specific or unreleased"),
+        metric("Source-Backed Rules", fmt.format(s.source_backed_rules || 0), "title-only pack"),
+        metric("Can Trade", payload.can_trade ? "YES" : "NO", "research boundary enforced"),
+        metric("Can Promote", payload.can_promote ? "YES" : "NO", "untouched proof required")
+      ].join("");
+      document.getElementById("sourcePolicy").textContent = (payload.source && payload.source.source_policy) || "policy";
+      document.getElementById("status").textContent = "LOADED";
+    }
+
+    function renderFastTrack(){
+      const chunks = payload.fast_track || [];
+      document.getElementById("fastTrack").innerHTML = chunks.map(chunk => `
+        <div class="chunk">
+          <strong>${chunk.chunk}</strong>
+          <b>${chunk.name}</b>
+          <p>${chunk.why}</p>
+          <div class="chipbar">${(chunk.strategy_numbers || []).slice(0,24).map(n => `<span class="chip">${n}</span>`).join("")}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderContract(){
+      const c = payload.replay_contract || {};
+      const gates = (c.promotion_gate || []).map(x => `<span class="chip">${x}</span>`).join("");
+      document.getElementById("contract").innerHTML = `
+        Timeframes: ${(c.timeframes || []).join(", ")}<br>
+        Venues: ${(c.venues || []).join(", ")}<br>
+        Fees: ${c.fees || "--"}<br>
+        Exit: ${c.exit_policy || "--"}
+        <div class="chipbar">${gates}</div>
+      `;
+    }
+
+    function renderTasks(){
+      const tasks = payload.port_tasks || [];
+      document.getElementById("tasks").innerHTML = tasks.map(task => `
+        <div class="task">
+          <div class="top"><h3>${task.recommended_port}</h3><span class="score">${task.source_count}</span></div>
+          <p>${task.first_backtest}</p>
+          <div class="chipbar">${(task.strategy_numbers || []).slice(0,18).map(n => `<span class="chip">${n}</span>`).join("")}</div>
+        </div>
+      `).join("");
+    }
+
+    function populateFilters(){
+      const ports = [...new Set((payload.strategy_reviews || []).map(r => r.recommended_port))].sort();
+      document.getElementById("portFilter").innerHTML = '<option value="">All port families</option>' +
+        ports.map(p => `<option value="${p}">${p}</option>`).join("");
+    }
+
+    function replayText(row){
+      const tfs = row.replay_timeframes || [];
+      const venues = row.replay_venues || [];
+      if (!tfs.length || !venues.length) return "blocked";
+      return `${tfs.join("/")} x ${venues.length} venues`;
+    }
+
+    function renderRows(){
+      const query = document.getElementById("filter").value.toLowerCase().trim();
+      const port = document.getElementById("portFilter").value;
+      const fit = document.getElementById("fitFilter").value;
+      const rows = (payload.strategy_reviews || []).filter(row => {
+        const hay = `${row.title} ${row.recommended_port} ${row.mechanism} ${row.asset_scope}`.toLowerCase();
+        if (query && !hay.includes(query)) return false;
+        if (port && row.recommended_port !== port) return false;
+        if (fit === "blocked") return row.crypto_portability.includes("PLACEHOLDER") || row.crypto_portability.includes("RESEARCH_ONLY");
+        if (fit && row.crypto_fit_score < Number(fit)) return false;
+        return true;
+      });
+      document.getElementById("rows").innerHTML = rows.map(row => `
+        <tr>
+          <td class="num">${row.strategy_number}</td>
+          <td><div class="title">${row.title}</div><div class="tiny">${row.source_state}</div></td>
+          <td><span class="badge">${row.mechanism}</span></td>
+          <td>${row.asset_scope}</td>
+          <td class="num">${row.crypto_fit_score}/100</td>
+          <td><span class="badge ${badgeClass(row.crypto_portability)}">${row.crypto_portability}</span></td>
+          <td class="num">${row.recommended_port}</td>
+          <td>${row.next_action}</td>
+          <td>${replayText(row)}</td>
+        </tr>
+      `).join("") || '<tr><td colspan="9" class="loading">No rows match the filters.</td></tr>';
+    }
+
+    async function load(){
+      document.getElementById("status").textContent = "LOADING";
+      const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const res = await fetch(url, {cache:"no-store"});
+      if (!res.ok) throw new Error("request failed " + res.status);
+      payload = await res.json();
+      renderSummary();
+      renderFastTrack();
+      renderContract();
+      renderTasks();
+      populateFilters();
+      renderRows();
+    }
+
+    document.getElementById("refresh").addEventListener("click", () => load().catch(showError));
+    document.getElementById("filter").addEventListener("input", renderRows);
+    document.getElementById("portFilter").addEventListener("change", renderRows);
+    document.getElementById("fitFilter").addEventListener("change", renderRows);
+    function showError(err){
+      document.getElementById("status").textContent = "ERROR";
+      document.getElementById("rows").innerHTML = `<tr><td colspan="9" class="loading">${err.message}</td></tr>`;
+    }
+    load().catch(showError);
+  </script>
+</body>
+</html>
