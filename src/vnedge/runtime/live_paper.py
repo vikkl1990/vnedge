@@ -43,12 +43,12 @@ from vnedge.risk.position_sizer import size_position
 from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
+from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
     VirtualOutcome,
-    _tp_reached,
     is_maker_route_strategy,
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
@@ -102,11 +102,11 @@ def _signal_payload(sig: SignalIntent | None) -> dict | None:
 class _LivePlan:
     signal: SignalIntent
     entry_bar_ts: pd.Timestamp
-    # Most-favourable excursion since entry (highest high for a long, lowest low
-    # for a short). OBSERVATION ONLY — records how far up the TP ladder price
-    # reached; it never feeds the exit decision, so P&L stays byte-identical to
-    # the single-take-profit engine.
-    mfe_price: float | None = None
+    exit_state: ActiveExitState | None = None
+
+    def __post_init__(self) -> None:
+        if self.exit_state is None:
+            self.exit_state = ActiveExitState.from_signal(self.signal)
 
 
 @dataclass
@@ -205,6 +205,8 @@ class LivePaperSession:
         self._pending_entry: _PendingMakerEntry | None = None
         self._parked_entries: dict[str, _LivePlan] = {}
         self._pending_exit_orders: dict[str, str] = {}
+        self._pending_exit_finals: dict[str, bool] = {}
+        self._pending_exit_decisions: dict[str, ActiveExitDecision] = {}
         self._exit_retry_attempts: dict[str, int] = {}
         self._orphan_position_guarded = False
         self._reconciliation_fail_closed = False
@@ -323,6 +325,35 @@ class LivePaperSession:
             "journal_path": str(self.journal.path),
         })
 
+    def _new_plan(self, sig: SignalIntent, entry_bar_ts) -> _LivePlan:
+        return _LivePlan(
+            signal=sig,
+            entry_bar_ts=pd.Timestamp(entry_bar_ts),
+            exit_state=ActiveExitState.from_signal(sig),
+        )
+
+    def _seed_plan_from_venue(self, plan: _LivePlan, client_order_id: str | None = None) -> None:
+        if client_order_id is not None:
+            status = self.exchange.get_order_status(client_order_id)
+            if status is not None and status.filled_qty > 0:
+                plan.exit_state.seed_entry(
+                    entry_price=status.avg_fill_price,
+                    quantity=status.filled_qty,
+                )
+                return
+        positions = {p.symbol: p for p in self.exchange.get_positions()}
+        pos = positions.get(self.config.symbol)
+        if pos is not None:
+            plan.exit_state.seed_entry(
+                entry_price=pos.entry_price,
+                quantity=abs(pos.quantity),
+            )
+
+    def _current_position_quantity(self) -> float:
+        positions = {p.symbol: p for p in self.exchange.get_positions()}
+        pos = positions.get(self.config.symbol)
+        return abs(pos.quantity) if pos is not None else 0.0
+
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
         bid, ask = self.feed.quote
         ref_price = ask if sig.side == "long" else bid
@@ -414,7 +445,8 @@ class LivePaperSession:
                 f"{sig.side} {intent.quantity:g} ({order.state.value}) — {sig.reason}"[:140],
                 now,
             )
-            plan = _LivePlan(sig, self.candles["timestamp"].iloc[-1])
+            plan = self._new_plan(sig, self.candles["timestamp"].iloc[-1])
+            self._seed_plan_from_venue(plan, order.client_order_id)
             venue_status = self.exchange.get_order_status(order.client_order_id)
             filled = venue_status is not None and venue_status.filled_qty > 0
             if maker and order.state is OrderState.ACKNOWLEDGED and not filled:
@@ -438,6 +470,10 @@ class LivePaperSession:
         status = self.exchange.get_order_status(pending.client_order_id)
         if status is not None and status.filled_qty > 0:
             self._pending_entry = None
+            pending.plan.exit_state.seed_entry(
+                entry_price=status.avg_fill_price,
+                quantity=status.filled_qty,
+            )
             self._plan = pending.plan
             self._log_trade_event(
                 "maker_entry_filled",
@@ -461,49 +497,55 @@ class LivePaperSession:
         if self._plan is None:
             return
         sig = self._plan.signal
-        high, low = float(bar["high"]), float(bar["low"])
-        # Observation-only: extend the most-favourable excursion before deciding
-        # the exit. This is recorded, never acted on.
-        fav = high if sig.side == "long" else low
-        if self._plan.mfe_price is None:
-            self._plan.mfe_price = fav
-        else:
-            self._plan.mfe_price = (
-                max(self._plan.mfe_price, fav) if sig.side == "long"
-                else min(self._plan.mfe_price, fav)
-            )
-        reason = None
-        if sig.side == "long":
-            if low <= sig.stop_price:
-                reason = "stop"
-            elif sig.take_profit_price and high >= sig.take_profit_price:
-                reason = "take_profit"
-        else:
-            if high >= sig.stop_price:
-                reason = "stop"
-            elif sig.take_profit_price and low <= sig.take_profit_price:
-                reason = "take_profit"
-        if reason is None:
+        decision = self._plan.exit_state.resolve_bar(
+            high=float(bar["high"]),
+            low=float(bar["low"]),
+            close=float(bar["close"]),
+            position_quantity=self._current_position_quantity(),
+            min_qty=self.config.limits.min_qty,
+            qty_step=self.config.limits.qty_step,
+        )
+        if decision is None:
             return
-        # Capture the ladder progress BEFORE submitting — _submit_exit clears the
-        # plan on acceptance.
         levels = list(sig.take_profit_levels)
-        mfe = self._plan.mfe_price
-        tp_reached = _tp_reached(sig.side, mfe, sig.take_profit_levels) if levels else 0
-        order = await self._submit_exit(reason, int(bar["timestamp"].value), now)
+        order = await self._submit_exit(
+            decision.reason,
+            int(bar["timestamp"].value),
+            now,
+            quantity=decision.quantity,
+            final=decision.final,
+            decision=decision,
+        )
         if order is None:
             return
+        if order.state in _EXIT_ACCEPTED_STATES and self._plan is not None:
+            self._plan.exit_state.mark_accepted(decision)
         self.journal.append("live_paper_exit", {
-            "reason": reason,
+            "reason": decision.reason,
             "state": order.state.value,
             "client_order_id": order.client_order_id,
             "take_profit_levels": levels,
-            "tp_reached": tp_reached,
-            "mfe_price": mfe,
+            "tp_number": decision.tp_number,
+            "tp_reached": decision.tp_reached,
+            "mfe_price": decision.mfe_price,
+            "exit_price": decision.exit_price,
+            "quantity": decision.quantity,
+            "final": decision.final,
+            "active_stop_price": decision.active_stop_price,
+            "breakeven_armed": decision.breakeven_armed,
         })
-        self._log_trade_event("exit", f"{reason} ({order.state.value})"[:140], now)
+        self._log_trade_event("exit", f"{decision.reason} ({order.state.value})"[:140], now)
 
-    async def _submit_exit(self, reason: str, key_ts: int, now: datetime):
+    async def _submit_exit(
+        self,
+        reason: str,
+        key_ts: int,
+        now: datetime,
+        *,
+        quantity: float | None = None,
+        final: bool = True,
+        decision: ActiveExitDecision | None = None,
+    ):
         """Shared reduce-only exit submission — the ONLY way a plan closes.
 
         Both the bar-close path (_manage_exit) and the tick-stop path
@@ -516,6 +558,9 @@ class LivePaperSession:
         pos = positions.get(self.config.symbol)
         if pos is None:
             self._clear_exit_plan()
+            return None
+        close_qty = abs(pos.quantity) if quantity is None else min(abs(pos.quantity), quantity)
+        if close_qty <= 0:
             return None
         base_key = f"exit|{self.config.symbol}|{reason}|{key_ts}"
         pending = self._pending_exit_orders.get(base_key)
@@ -533,10 +578,12 @@ class LivePaperSession:
                 })
                 return None
             self._pending_exit_orders.pop(base_key, None)
+            self._pending_exit_finals.pop(base_key, None)
+            self._pending_exit_decisions.pop(base_key, None)
         intent = OrderIntent(
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
-            quantity=abs(pos.quantity), notional_usd=0.0, leverage=1.0,
+            quantity=close_qty, notional_usd=0.0, leverage=1.0,
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
         intent_key = self._exit_intent_key(base_key)
@@ -547,16 +594,20 @@ class LivePaperSession:
         )
         self.orders_submitted += 1
         if order.state in _EXIT_ACCEPTED_STATES:
-            self._mark_exit_accepted(reason)
+            self._mark_exit_accepted(reason, final=final)
         else:
-            self._preserve_exit_plan(base_key, order, reason)
+            self._preserve_exit_plan(
+                base_key, order, reason, final=final, decision=decision
+            )
         return order
 
     def _exit_intent_key(self, base_key: str) -> str:
         attempt = self._exit_retry_attempts.get(base_key, 0)
         return base_key if attempt == 0 else f"{base_key}|retry={attempt}"
 
-    def _mark_exit_accepted(self, reason: str) -> None:
+    def _mark_exit_accepted(self, reason: str, *, final: bool = True) -> None:
+        if not final:
+            return
         self._clear_exit_plan()
         # A tick stop fires BETWEEN closes, so the exit belongs to the bar
         # currently forming (index len(candles)): a 1-bar cooldown then blocks
@@ -568,11 +619,24 @@ class LivePaperSession:
     def _clear_exit_plan(self) -> None:
         self._plan = None
         self._pending_exit_orders.clear()
+        self._pending_exit_finals.clear()
+        self._pending_exit_decisions.clear()
         self._exit_retry_attempts.clear()
 
-    def _preserve_exit_plan(self, base_key: str, order, reason: str) -> None:
+    def _preserve_exit_plan(
+        self,
+        base_key: str,
+        order,
+        reason: str,
+        *,
+        final: bool = True,
+        decision: ActiveExitDecision | None = None,
+    ) -> None:
         if order.state in (OrderState.TIMEOUT_UNKNOWN, OrderState.RECONCILING):
             self._pending_exit_orders[base_key] = order.client_order_id
+            self._pending_exit_finals[base_key] = final
+            if decision is not None:
+                self._pending_exit_decisions[base_key] = decision
         elif order.state in _EXIT_RETRYABLE_STATES:
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
         if order.state is OrderState.RISK_REJECTED:
@@ -618,7 +682,8 @@ class LivePaperSession:
         sig = self._plan.signal
         entry_bar_ts = self._plan.entry_bar_ts
         bid, ask = self.feed.quote
-        breached = bid <= sig.stop_price if sig.side == "long" else ask >= sig.stop_price
+        stop_price = self._plan.exit_state.current_stop
+        breached = bid <= stop_price if sig.side == "long" else ask >= stop_price
         if not breached:
             return
         self._sync_quote()  # exit must fill at the breach quote, not the last bar's
@@ -634,9 +699,12 @@ class LivePaperSession:
             "reason": "tick_stop",
             "state": order.state.value,
             "side": sig.side,
-            "stop_price": sig.stop_price,
+            "stop_price": stop_price,
+            "initial_stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
             "take_profit_levels": list(sig.take_profit_levels),
+            "active_stop_price": stop_price,
+            "breakeven_armed": self._plan.exit_state.breakeven_armed if self._plan else True,
             "bid": bid,
             "ask": ask,
             "entry_bar_ts": entry_bar_ts.isoformat(),
@@ -645,7 +713,7 @@ class LivePaperSession:
         self._log_trade_event(
             "exit",
             f"tick_stop {sig.side} — {'bid' if sig.side == 'long' else 'ask'} "
-            f"{trigger_px:g} breached stop {sig.stop_price:g} ({order.state.value})"[:140],
+            f"{trigger_px:g} breached stop {stop_price:g} ({order.state.value})"[:140],
             now,
         )
         # persist immediately — a crash before the next bar must not restore
@@ -702,6 +770,7 @@ class LivePaperSession:
             "take_profit_levels": list(sig.take_profit_levels),
             "reason": sig.reason,
             "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
+            "active_exit": self._plan.exit_state.to_dict(),
         }
 
     def restore_plan(self, stored: dict | None) -> None:
@@ -734,7 +803,9 @@ class LivePaperSession:
                 take_profit_levels=tuple(float(x) for x in stored.get("take_profit_levels") or ()),
                 reason=stored.get("reason", "restored plan"),
             )
-            self._plan = _LivePlan(sig, pd.Timestamp(stored["entry_bar_ts"]))
+            self._plan = self._new_plan(sig, pd.Timestamp(stored["entry_bar_ts"]))
+            self._plan.exit_state.restore(stored.get("active_exit"))
+            self._seed_plan_from_venue(self._plan)
             self.journal.append("plan_restored", dict(stored))
             logger.info("trade plan restored from account store: %s", sig.reason)
             return
@@ -747,7 +818,8 @@ class LivePaperSession:
         if sig is None:
             return  # orphan guard will handle it (entries halted, manual flatten)
         sig = self._clamp_synthesized_stop(pos, sig)
-        self._plan = _LivePlan(sig, df["timestamp"].iloc[-1])
+        self._plan = self._new_plan(sig, df["timestamp"].iloc[-1])
+        self._seed_plan_from_venue(self._plan)
         self.journal.append("plan_rebuilt_on_resume", {
             "side": sig.side, "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
@@ -1287,6 +1359,7 @@ class LivePaperSession:
                 continue
             order = self.om.orders[coid]
             if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
+                self._seed_plan_from_venue(plan, coid)
                 self._plan = plan
         return report
 
@@ -1304,16 +1377,24 @@ class LivePaperSession:
         order = self.om.orders[client_order_id]
         reason = _exit_reason_from_key(base_key)
         if order.state in _EXIT_ACCEPTED_STATES:
+            final = self._pending_exit_finals.pop(base_key, True)
+            decision = self._pending_exit_decisions.pop(base_key, None)
+            if decision is not None and not decision.final and self._plan is not None:
+                self._plan.exit_state.mark_accepted(decision)
             self.journal.append("exit_plan_cleared_after_reconciliation", {
                 "intent_key": base_key,
                 "client_order_id": client_order_id,
                 "reason": reason,
                 "state": order.state.value,
+                "final": final,
             })
-            self._mark_exit_accepted(reason)
+            self._pending_exit_orders.pop(base_key, None)
+            self._mark_exit_accepted(reason, final=final)
             return
         if order.state in _EXIT_RETRYABLE_STATES:
             self._pending_exit_orders.pop(base_key, None)
+            self._pending_exit_finals.pop(base_key, None)
+            self._pending_exit_decisions.pop(base_key, None)
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
             self.journal.append("exit_plan_preserved_after_reconciliation", {
                 "intent_key": base_key,
