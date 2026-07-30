@@ -274,6 +274,30 @@ def test_fee_wall_forensics_sweeps_runtime_sniper_roster_by_default():
     assert "quantified_fee_wall_sniper_v1" in strategy_arg
 
 
+def test_fee_wall_probe_actuals_joins_probe_manifest_to_paper_outcomes():
+    service = compose_services()["fee-wall-probe-actuals"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.fee_wall_probe_actuals",
+    ]
+    assert "--manifest" in service["command"]
+    assert "research/live_research/fee_wall_paper_probes.json" in service["command"]
+    assert "--performance" in service["command"]
+    assert "research/live_research/paper_lane_performance_latest.json" in service["command"]
+    assert "--route-doctor" in service["command"]
+    assert "research/live_research/paper_route_doctor_latest.json" in service["command"]
+    assert "research/live_research/fee_wall_probe_actuals_latest.json" in service["command"]
+    assert "research/live_research/fee_wall_probe_actuals_feed.jsonl" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "fee-wall-paper-probe-bridge",
+        "paper-lane-performance",
+        "paper-route-doctor",
+    }
+
+
 def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
     service = compose_services()["alpha-arena-lite"]
 

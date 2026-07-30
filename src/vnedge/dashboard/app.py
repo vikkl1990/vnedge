@@ -588,6 +588,9 @@ def create_app(
     fee_wall_probes_file = Path(
         "research/live_research/fee_wall_paper_probes.json"
     )
+    fee_wall_probe_actuals_file = Path(
+        "research/live_research/fee_wall_probe_actuals_latest.json"
+    )
     evidence_index_file = (
         evidence_index_path
         or Path("research/live_research/evidence_index_latest.json")
@@ -1291,6 +1294,9 @@ def create_app(
         _authorized(request)
         forensics = _read_json_payload(fee_wall_forensics_file, {"reports": []})
         probes = _read_json_payload(fee_wall_probes_file, {"paper_probes": []})
+        probe_actuals = _read_json_payload(
+            fee_wall_probe_actuals_file, {"rows": [], "summary": {}}
+        )
         by: dict = {}
         for r in forensics.get("reports", []):
             strat = r.get("strategy")
@@ -1325,6 +1331,8 @@ def create_app(
                 "generated_at": forensics.get("generated_at"),
                 "strategies": rows,
                 "probes": probes.get("paper_probes", []),
+                "probe_actuals": probe_actuals.get("rows", []),
+                "probe_actuals_summary": probe_actuals.get("summary", {}),
                 "can_trade": False,
                 "can_promote": False,
             }
