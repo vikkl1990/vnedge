@@ -244,6 +244,25 @@ def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
     }
 
 
+def test_fee_wall_paper_probe_bridge_publishes_durable_probe_manifest():
+    service = compose_services()["fee-wall-paper-probe-bridge"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.fee_wall_paper_probe_bridge",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "research/live_research/fee_wall_forensics_latest.json" in service["command"]
+    assert "research/live_research/fee_wall_paper_probes.json" in service["command"]
+    assert "research/live_research/fee_wall_paper_probes_feed.jsonl" in service["command"]
+    assert "--min-routed" in service["command"]
+    assert "--min-avg-net-bps" in service["command"]
+    assert "--min-profit-factor" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["fee-wall-forensics"]
+
+
 def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
     service = compose_services()["alpha-arena-lite"]
 
