@@ -1285,10 +1285,20 @@
   function renderPromo(sc){
     var el=$("promoQueue"); if(!el)return; var pp=(sc&&sc.probes)||[];
     if(!pp.length){el.innerHTML='<div class="qrow"><div><div class="qt">No candidates in queue</div><div class="qs">no approved fee-wall paper probes right now</div></div></div>';return;}
+    var actualByProbe={},actualByLane={};
+    ((sc&&sc.probe_actuals)||[]).forEach(function(a){
+      if(a.probe_id)actualByProbe[String(a.probe_id)]=a;
+      if(a.lane_id)actualByLane[String(a.lane_id)]=a;
+    });
     el.innerHTML=pp.slice(0,8).map(function(p){var net=num(p.avg_selected_net_bps);
+      var a=actualByProbe[String(p.probe_id||"")]||actualByLane[String(p.lane_id||"")]||null;
+      var state=String((a&&a.actual_state)||"PUBLISHED_PROBE");
+      var cls=state.indexOf("NEGATIVE")>=0?"wall":state.indexOf("PROFIT")>=0?"active":state.indexOf("NO_TRADES")>=0?"prob":state.indexOf("NOT_LAUNCHED")>=0?"supp":"review";
+      var label=state==="PAPER_ACTIVE_NEGATIVE"?"Negative":state==="PAPER_ACTIVE_PROFITABLE"?"Profitable":state==="ONLINE_NO_TRADES"?"Online":state==="NOT_LAUNCHED"?"Not launched":"Probe";
+      var actual=a?(" · paper "+num(a.closed_trades).toLocaleString()+" trades · net "+(num(a.net_pnl_usd)>=0?"+":"")+"$"+num(a.net_pnl_usd).toFixed(2)):"";
       return '<div class="qrow"><div><div class="qt">'+stratShort(p.strategy||p.strategy_id||"candidate")+(p.symbol?" — "+symShort(p.symbol):"")+'</div>'+
-        '<div class="qs">'+ven(p.exchange).lab+' · '+String(p.primary_blocker||"maker-first probe")+' · net '+(net>=0?"+":"")+net.toFixed(1)+' bps</div></div>'+
-        '<span class="pill review">Probe</span></div>';}).join('');
+        '<div class="qs">'+ven(p.exchange).lab+' · expected '+(net>=0?"+":"")+net.toFixed(1)+' bps'+actual+'</div></div>'+
+        '<span class="pill '+cls+'">'+label+'</span></div>';}).join('');
   }
   function renderFeeWall(sc){
     var el=$("feebar"); if(!el)return; var rows=(sc&&sc.strategies)||[];
