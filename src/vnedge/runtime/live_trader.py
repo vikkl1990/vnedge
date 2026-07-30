@@ -118,11 +118,20 @@ class LiveTraderSession:
         self._pending_exit_orders: dict[str, str] = {}
         self._exit_retry_attempts: dict[str, int] = {}
         self._bars = 0
+        # Runtime fail-closed latch: set when position reconciliation finds the
+        # venue diverging from internal state; blocks new entries (exits still
+        # flow) until a clean settled pass clears it. The static
+        # EMERGENCY_REDUCE_ONLY mode can't be flipped at runtime, so a live
+        # divergence needs this latch to actually halt entries.
+        self._reconciliation_halt = False
 
     @property
     def entries_allowed(self) -> bool:
-        """emergency_reduce_only mode allows exits only."""
-        return self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
+        """emergency_reduce_only mode — or a reconciliation halt — allows exits only."""
+        return (
+            self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
+            and not self._reconciliation_halt
+        )
 
     def private_stream_ready(self, now: datetime | None = None) -> bool:
         if not self.require_private_stream:
@@ -308,6 +317,37 @@ class LiveTraderSession:
             order = self.om.orders[coid]
             if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
                 self._plan, self._entry_bar_ts = parked
+        await self._reconcile_positions()
+
+    async def _reconcile_positions(self) -> None:
+        """Position-level reconciliation: the venue is truth. Only runs in a
+        SETTLED state (no orders in flight), so transient order-flight gaps never
+        false-trigger. A persistent divergence — a venue position we don't track,
+        or a position we believe we hold that's vanished (external liquidation) —
+        counts a mismatch and FAILS CLOSED (reduce-only) until a clean pass
+        clears it. This is the halt the mismatch counter was reported for but
+        nothing ever triggered."""
+        if (self.om.has_unresolved_orders or self._parked_entries
+                or self._pending_exit_orders):
+            return  # in flight — not a settled state to judge the venue against
+        try:
+            account = await self.accounts.account_state()
+        except Exception as exc:  # noqa: BLE001 — a failed read must not crash the loop
+            logger.error("position reconciliation read failed: %s", exc)
+            return
+        expected = self._plan is not None          # we believe we hold a position
+        actual = account.open_positions > 0        # the venue's truth
+        if expected != actual:
+            self.recon_mismatches += 1
+            self._reconciliation_halt = True
+            logger.error(
+                "position mismatch: internal plan=%s vs venue positions=%d — "
+                "FAIL CLOSED (reduce-only) until a clean pass",
+                expected, account.open_positions,
+            )
+        elif self._reconciliation_halt:
+            self._reconciliation_halt = False       # settled + agreeing → re-open
+            logger.info("position reconciliation clean — entries re-enabled")
 
     def _resolve_pending_exit(self, client_order_id: str) -> None:
         base_key = next(
