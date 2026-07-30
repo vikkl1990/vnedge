@@ -194,3 +194,44 @@ def test_trade_journal_days_filter_and_lane_filter(tmp_path):
     assert payload["lane"] == "beta"
     assert payload["summary"]["fill_ledgers_scanned"] == 1
     assert [row["lane"] for row in payload["fills"]] == ["beta"]
+
+
+# --- cohort P&L split (honest headline) ------------------------------------------
+
+from vnedge.dashboard.trade_journal import _cohort_pnl_rollup, _lane_cohort
+
+
+def test_lane_cohort_classification():
+    assert _lane_cohort("velocity_sats_5m_scalper_delta_india_eth_usd_usd_shadow") == "control"
+    assert _lane_cohort("papertrial_stealth_trail_bbp_v1_delta_india_eth_usd_usd_4h") == "tracked"
+    assert _lane_cohort("evidence_vnedge_algo_ml_pro_v1_delta_india_eth_usd_usd_4h_shadow") == "tracked"
+    assert _lane_cohort("fee_wall_luxy_ut_bot_forecast_bybit_btc_usdt_usdt_15m_paper_probe") == "tracked"
+    assert _lane_cohort("funding_mr_btc_v1_20260703") == "tracked"
+    assert _lane_cohort("quant_signal_pack_v1_binanceusdm_ethusdt_shadow") == "research"
+    assert _lane_cohort("") == "research"
+
+
+def test_cohort_rollup_separates_controls_from_tracked():
+    trades = [
+        {"lane": "velocity_sats_5m_scalper_delta_india_eth_usd_usd_shadow", "virtual_net_usd": -10.0},
+        {"lane": "velocity_sats_5m_scalper_delta_india_btc_usd_usd_shadow", "virtual_net_usd": -5.0},
+        {"lane": "funding_mr_btc_v1_20260703", "virtual_net_usd": 4.0},
+        {"lane": "papertrial_stealth_trail_bbp_v1_delta_india_eth_usd_usd_4h", "virtual_net_usd": -1.0},
+        {"lane": "quant_signal_pack_v1_binanceusdm_ethusdt_shadow", "virtual_net_usd": -3.0},
+    ]
+    roll = _cohort_pnl_rollup(trades)
+    assert set(roll) == {"tracked", "research", "control"}
+    assert roll["control"]["closed"] == 2 and roll["control"]["net_usd"] == -15.0
+    assert roll["control"]["wins"] == 0 and roll["control"]["win_rate_pct"] == 0.0
+    assert roll["tracked"]["closed"] == 2 and roll["tracked"]["net_usd"] == 3.0
+    assert roll["tracked"]["wins"] == 1 and roll["tracked"]["win_rate_pct"] == 50.0
+    assert roll["research"]["closed"] == 1 and roll["research"]["net_usd"] == -3.0
+    # every cohort carries its human label + honesty note
+    assert roll["control"]["label"] == "Deliberate controls"
+    assert "EXPECTED to lose" in roll["control"]["note"]
+
+
+def test_cohort_rollup_present_in_journal_summary(tmp_path):
+    out = build_trade_journal(snapshot=None, journal_dir=tmp_path, history_path=tmp_path / "none")
+    assert "cohort_pnl" in out["summary"]
+    assert set(out["summary"]["cohort_pnl"]) == {"tracked", "research", "control"}
