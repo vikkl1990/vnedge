@@ -79,3 +79,12 @@ def test_dashboard_polled_endpoints_have_app_routes():
     routes = set(re.findall(r'@app\.(?:get|post|websocket)\("([^"]+)"', app))
     missing = sorted(path for path in polled if path.split("?")[0] not in routes)
     assert not missing
+
+
+def test_journal_has_pnl_by_cohort_panel():
+    html = _index()
+    assert "P&amp;L by cohort" in html
+    assert 'id="jCohort"' in html
+    assert "cohort_pnl" in html            # render reads the summary field
+    assert "Deliberate controls" not in html or "jcohcard" in html  # class present
+    assert "jcohcard" in html and ".control" in html  # controls visually de-emphasised

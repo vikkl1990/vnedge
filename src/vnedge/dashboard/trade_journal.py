@@ -107,6 +107,7 @@ def build_trade_journal(
             "actual_closed_fees_usd": round(actual_closed_fees, 6),
             "lane_position_counts": lane_counts,
             "lane_pnl": _lane_pnl_rollup(closed_trades),
+            "cohort_pnl": _cohort_pnl_rollup(closed_trades),
             "history_lane": _primary_lane(history_path),
         },
         "positions": positions[:limit],
@@ -646,6 +647,66 @@ def _lane_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[str,
         entry["net_usd"] += _trade_net(trade)
     for entry in roll.values():
         entry["net_usd"] = round(entry["net_usd"], 4)
+    return roll
+
+
+#: Cohort split so the aggregate P&L is read honestly. The headline losses live
+#: almost entirely in the DELIBERATE 5m velocity controls, which exist to lose —
+#: they feed the meta-labeler mostly-losing fee-walled examples so it learns to
+#: reject them. Separating them keeps a scary-looking total from masking the fact
+#: that the lanes actually under evaluation are not the bleeders.
+_COHORT_ORDER = ("tracked", "research", "control")
+_COHORT_LABELS = {
+    "tracked": "Tracked candidates",
+    "research": "Research net",
+    "control": "Deliberate controls",
+}
+_COHORT_NOTES = {
+    "tracked": "human-approved paper + 2nd-eye survivors + fee-wall probes — the promotion pipeline",
+    "research": "unvetted exploratory lanes — expected mixed, gated out of promotion",
+    "control": "velocity 5m lanes — EXPECTED to lose; ML training fodder, unpromotable",
+}
+
+
+def _lane_cohort(lane_id: str) -> str:
+    """Classify a lane into tracked / research / control (see _COHORT_NOTES)."""
+    lane = (lane_id or "").lower()
+    if lane.startswith("velocity_"):
+        return "control"
+    if (
+        lane.startswith("papertrial_")
+        or lane.startswith("evidence_")
+        or "_paper_probe" in lane
+        or lane.startswith("funding_mr")
+    ):
+        return "tracked"
+    return "research"
+
+
+def _cohort_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """P&L split by cohort so the headline is honest: the deliberate 5m controls
+    (which exist to lose) don't get mistaken for the tracked candidates."""
+    roll: dict[str, dict[str, Any]] = {
+        cohort: {
+            "label": _COHORT_LABELS[cohort],
+            "note": _COHORT_NOTES[cohort],
+            "closed": 0,
+            "wins": 0,
+            "net_usd": 0.0,
+        }
+        for cohort in _COHORT_ORDER
+    }
+    for trade in closed_trades:
+        entry = roll[_lane_cohort(str(trade.get("lane") or ""))]
+        net = _trade_net(trade)
+        entry["closed"] += 1
+        entry["wins"] += 1 if net > 0 else 0
+        entry["net_usd"] += net
+    for entry in roll.values():
+        entry["net_usd"] = round(entry["net_usd"], 4)
+        entry["win_rate_pct"] = (
+            round(entry["wins"] / entry["closed"] * 100, 1) if entry["closed"] else 0.0
+        )
     return roll
 
 

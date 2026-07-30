@@ -668,7 +668,20 @@
       .jlanecard .l{font-size:10.5px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
       .jlanecard .v{font-family:var(--mono);font-size:16px;font-weight:800;margin-top:3px}
       .jlanecard .s{font-size:10px;color:var(--txt-faint);margin-top:1px}
+      .jcohgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:12px 15px}
+      .jcohcard{border:1px solid var(--line);border-radius:9px;padding:12px 14px;background:var(--panel-2,rgba(127,127,127,.04))}
+      .jcohcard.control{opacity:.62;border-style:dashed}
+      .jcohcard .ch{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+      .jcohcard .cl{font-size:12px;font-weight:700;letter-spacing:.02em}
+      .jcohcard .cv{font-family:var(--mono);font-size:20px;font-weight:800}
+      .jcohcard .cs{font-size:10.5px;color:var(--txt-dim);margin-top:2px;font-family:var(--mono)}
+      .jcohcard .cn{font-size:10px;color:var(--txt-faint);margin-top:6px;line-height:1.35}
     </style>
+    <section class="panel" style="margin-top:14px">
+      <div class="phead"><h2>P&amp;L by cohort</h2><span class="meta" id="jcohMeta">tracked candidates vs deliberate controls</span></div>
+      <div id="jCohort" class="jcohgrid"></div>
+    </section>
+
     <section class="panel" style="margin-top:14px">
       <div class="phead"><h2>P&amp;L by lane</h2><span class="meta" id="jlaneMeta">—</span></div>
       <div id="jLanePnl" class="jlanegrid"></div>
@@ -2091,6 +2104,18 @@
       jTile("Fees paid","<span class='num' style='color:var(--txt-dim)'>$"+(+s.fees_usd||0).toFixed(2)+"</span>",(s.fills||0)+" fills")+
       jTile("Shadow closed","<span class='num'>"+(s.shadow_closed_trades||0)+"</span>",jMoney(vn)+" virtual net")+
       jTile("Open orders","<span class='num'>"+(s.open_orders||0)+"</span>",(s.orders||0)+" total");
+    // cohort split: keep the deliberate controls (which exist to lose) from
+    // making the tracked candidates' book look worse than it is.
+    var cp=s.cohort_pnl||{};
+    var order=["tracked","research","control"];
+    if($("jCohort"))$("jCohort").innerHTML=order.filter(function(k){return cp[k];}).map(function(k){
+      var c=cp[k], net=+c.net_usd||0;
+      return "<div class='jcohcard "+k+"'>"+
+        "<div class='ch'><span class='cl'>"+jEsc(c.label||k)+"</span>"+
+        "<span class='cv "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span></div>"+
+        "<div class='cs'>"+(c.closed||0)+" closed · "+(c.win_rate_pct||0)+"% win</div>"+
+        "<div class='cn'>"+jEsc(c.note||"")+"</div></div>";
+    }).join("")||"<div class='jempty'>No closed trades yet.</div>";
     // per-lane P&L rollup, worst/best first
     var lp=s.lane_pnl||{};
     var laneRows=Object.keys(lp).map(function(k){return {lane:k,closed:lp[k].closed,net:+lp[k].net_usd||0};})
