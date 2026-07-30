@@ -368,6 +368,17 @@ def test_fee_wall_strict_candidates_become_isolated_paper_probes(tmp_path):
                 "profit_factor": 1.22,
             },
             {
+                "exchange": "delta_india",
+                "symbol": "ETH/USD:USD",
+                "timeframe": "5m",
+                "strategy": "quantified_fee_wall_sniper_v1",
+                "verdict": "TAKER_EDGE",
+                "recommended_action": "PRE_REGISTER_UNTOUCHED_JUDGMENT_WINDOW",
+                "routed": 22,
+                "avg_selected_net_bps": 18.6,
+                "profit_factor": 1.64,
+            },
+            {
                 "exchange": "binanceusdm",
                 "symbol": "ETH/USDT:USDT",
                 "timeframe": "15m",
@@ -393,6 +404,7 @@ def test_fee_wall_strict_candidates_become_isolated_paper_probes(tmp_path):
         "fee_wall_luxy_ut_bot_forecast_binanceusdm_btc_usdt_usdt_15m_paper_probe",
         "fee_wall_luxy_ut_bot_forecast_delta_india_sol_usd_usd_15m_paper_probe",
         "fee_wall_stealth_trail_bbp_bybit_sol_usdt_usdt_15m_paper_probe",
+        "fee_wall_quantified_fee_wall_sniper_delta_india_eth_usd_usd_5m_paper_probe",
     }
     assert all(probe.mode is RunnerMode.PAPER for probe in probes)
     assert all(not probe.is_primary for probe in probes)

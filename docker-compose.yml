@@ -963,6 +963,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Fee-wall paper-probe bridge: copies only strict, threshold-clearing
+  # forensics candidates into the durable manifest consumed by multi-lane
+  # PAPER probe lanes. Simulated fills only; no live orders or promotion.
+  fee-wall-paper-probe-bridge:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - fee-wall-forensics
+    command: ["python", "-m", "vnedge.research.fee_wall_paper_probe_bridge",
+              "--interval-seconds", "${FEE_WALL_PAPER_PROBE_BRIDGE_INTERVAL_SECONDS:-1800}",
+              "--input", "research/live_research/fee_wall_forensics_latest.json",
+              "--out", "research/live_research/fee_wall_paper_probes.json",
+              "--feed", "research/live_research/fee_wall_paper_probes_feed.jsonl",
+              "--min-routed", "${FEE_WALL_PAPER_PROBE_MIN_ROUTED:-10}",
+              "--min-avg-net-bps", "${FEE_WALL_PAPER_PROBE_MIN_AVG_NET_BPS:-8}",
+              "--min-profit-factor", "${FEE_WALL_PAPER_PROBE_MIN_PROFIT_FACTOR:-1.15}",
+              "--max-probes", "${FEE_WALL_PAPER_PROBE_MAX_PROBES:-12}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Bitcoin-native regime sensor: read-only node/mempool/fee telemetry that
   # tags research windows as calm/building/stressed/panic. It is context only:
   # no wallet RPCs, no exchange credentials, no data/execution mounts.
