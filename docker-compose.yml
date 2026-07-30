@@ -944,6 +944,7 @@ services:
     command: ["python", "-m", "vnedge.research.fee_wall_forensics",
               "--interval-seconds", "${FEE_WALL_FORENSICS_INTERVAL_SECONDS:-21600}",
               "--timeframes", "${FEE_WALL_FORENSICS_TIMEFRAMES:-5m,15m,1h,4h}",
+              "--strategies", "${FEE_WALL_FORENSICS_STRATEGIES:-vnedge_algo_ml_pro_v1,luxara_live_plan_qtm_v1,luxara_break_bounce_v27_v1,sats_5m_scalper_v1,stealth_trail_bbp_v1,fvg_liquidity_breakout_v1,luxy_ut_bot_forecast_v1,momentum_cascade_lyro_v1,context_scalper_v2,quantified_fee_wall_sniper_v1}",
               "--lookback-days", "${FEE_WALL_FORENSICS_LOOKBACK_DAYS:-30}",
               "--max-targets", "${FEE_WALL_FORENSICS_MAX_TARGETS:-18}",
               "--min-samples", "${FEE_WALL_FORENSICS_MIN_SAMPLES:-10}",
