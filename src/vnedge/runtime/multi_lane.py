@@ -59,6 +59,7 @@ from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
 from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
+from vnedge.strategy.quantified_fee_wall_sniper import QuantifiedFeeWallSniper
 from vnedge.strategy.sats_5m_scalper import Sats5mScalper
 from vnedge.strategy.scalper_1m import Scalper1m
 from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
@@ -524,6 +525,8 @@ def _build_single_strategy(
         return VNEDGEAlgoMLProScanner(seed_funding, **params)
     if strategy_id == "context_scalper_v2":
         return ContextScalperV2(seed_funding, **params)
+    if strategy_id == "quantified_fee_wall_sniper_v1":
+        return QuantifiedFeeWallSniper(seed_funding, **params)
     if strategy_id == "fvg_liquidity_breakout_v1":
         return FvgLiquidityBreakoutScanner(seed_funding, **params)
     if strategy_id == "luxy_ut_bot_forecast_v1":

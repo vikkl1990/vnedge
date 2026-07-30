@@ -84,6 +84,11 @@ FVG_LIQUIDITY_BREAKOUT_PARAMS: dict = {
     "min_body_atr": 0.55,
     "min_body_percentile": 0.60,
 }
+QUANTIFIED_FEE_WALL_SNIPER_PARAMS: dict = {
+    "min_expected_net_edge_bps": 25.0,
+    "min_room_to_liquidity_bps": 35.0,
+    "min_quality_score": 0.58,
+}
 CONTEXT_SCALPER_V2_ALGO_PARAMS: dict = {
     "engine": "algo_ml",
     "min_expected_net_edge_bps": 25.0,
@@ -105,6 +110,7 @@ FEE_WALL_PAPER_PROBE_STRATEGIES = {
     "fvg_liquidity_breakout_v1",
     "luxara_live_plan_qtm_v1",
     "luxy_ut_bot_forecast_v1",
+    "quantified_fee_wall_sniper_v1",
     "stealth_trail_bbp_v1",
 }
 FEE_WALL_PAPER_PROBE_VERDICTS = {"MAKER_EDGE", "MIXED_ROUTE_EDGE"}
@@ -779,6 +785,8 @@ def _default_params_for_strategy(strategy_id: str) -> dict:
         return FUNDING_MR_PARAMS
     if strategy_id == "trend_continuation_v1":
         return TREND_PARAMS
+    if strategy_id == "quantified_fee_wall_sniper_v1":
+        return QUANTIFIED_FEE_WALL_SNIPER_PARAMS
     return {}
 
 
