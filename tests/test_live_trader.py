@@ -333,3 +333,35 @@ async def test_live_timeout_lost_exit_plan_waits_for_reconcile_before_retry(tmp_
     assert session._plan is None
     keys = [o.intent_key for o in om.orders.values() if o.intent.reduce_only]
     assert keys[-1] == keys[-2] + "|retry=1"
+
+
+# --- Gap 2: position-level reconciliation fails closed -----------------------------
+
+async def test_position_mismatch_fails_closed(tmp_path):
+    # Flat internally, but the venue reports a position we don't track -> mismatch.
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(positions=[{"contracts": 1.0}]), tmp_path, OneShotLong())
+    assert session.entries_allowed and session._plan is None  # clean + flat to start
+    await session._reconcile_positions()
+    assert session.recon_mismatches == 1
+    assert session.entries_allowed is False  # failed closed: entries blocked, exits flow
+
+
+async def test_position_reconciliation_clears_on_clean_pass(tmp_path):
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(positions=[{"contracts": 1.0}]), tmp_path, OneShotLong())
+    await session._reconcile_positions()               # trip the halt
+    assert session.entries_allowed is False
+    session.accounts._positions = []                   # venue now flat — agrees with internal
+    await session._reconcile_positions()               # clean settled pass
+    assert session.entries_allowed is True
+    assert session.recon_mismatches == 1               # the one real mismatch, not re-counted
+
+
+async def test_position_recon_skips_while_orders_in_flight(tmp_path):
+    # Unsettled state (an exit in flight) must NOT be judged against the venue.
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(positions=[{"contracts": 1.0}]), tmp_path, OneShotLong())
+    session._pending_exit_orders["k"] = "coid"
+    await session._reconcile_positions()
+    assert session.recon_mismatches == 0 and session.entries_allowed is True
