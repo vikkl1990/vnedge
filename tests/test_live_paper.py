@@ -263,6 +263,23 @@ class LongOnce(AlwaysLong):
         return super().signal(df, index)
 
 
+class LadderLongOnce(LongOnce):
+    strategy_id = "ladder_long_once"
+
+    def signal(self, df, index):
+        if self.fired:
+            return None
+        self.fired = True
+        close = float(df["close"].iloc[index])
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.06,
+            take_profit_levels=(close * 1.02, close * 1.04, close * 1.06),
+            reason="test ladder",
+        )
+
+
 async def test_stop_exit_on_live_bar(tmp_path):
     # bar 1 opens position; bar 2's low pierces the 95 stop
     rows = live_rows(n=1) + [[BASE + 6 * MIN, 100.0, 100.2, 94.0, 96.0, 5.0]]
@@ -272,6 +289,31 @@ async def test_stop_exit_on_live_bar(tmp_path):
     assert exchange.get_positions() == []  # stopped out, flat
     assert report.fills == 2
     assert report.realized_pnl_usd < 0
+
+
+async def test_live_paper_ladder_partial_arms_breakeven(tmp_path):
+    rows = [
+        [BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0],
+        [BASE + 6 * MIN, 100.0, 103.0, 99.5, 102.5, 5.0],
+        [BASE + 7 * MIN, 102.5, 103.0, 100.0, 100.5, 5.0],
+    ]
+    feed = FakeFeed(rows)
+    session, exchange = build_session(tmp_path, feed, strategy=LadderLongOnce())
+
+    report = await session.run(max_bars=3)
+
+    assert report.orders_submitted == 3
+    assert report.fills == 3
+    assert exchange.get_positions() == []
+    exits = [
+        r["payload"]
+        for r in session.journal.read_all()
+        if r["kind"] == "live_paper_exit"
+    ]
+    assert [e["reason"] for e in exits] == ["tp1_partial", "breakeven_stop"]
+    assert exits[0]["final"] is False
+    assert exits[1]["final"] is True
+    assert exits[1]["active_stop_price"] > 100.0
     assert report.reconciliation_mismatches == 0
 
 

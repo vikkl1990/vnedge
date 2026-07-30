@@ -52,6 +52,13 @@ class OneShotStrategy(BaseStrategy):
 
 
 LONG = SignalIntent(side="long", stop_price=95.0, take_profit_price=106.0)
+LADDER_LONG = SignalIntent(
+    side="long",
+    stop_price=95.0,
+    take_profit_price=106.0,
+    take_profit_levels=(102.0, 104.0, 106.0),
+    reason="test ladder exit",
+)
 
 
 def build_world(tmp_path, candles, strategy, mode=RunnerMode.PAPER,
@@ -92,6 +99,28 @@ async def test_paper_round_trip_take_profit(tmp_path):
     )
     kinds = [r["kind"] for r in journal.read_all()]
     assert "risk_decision" in kinds and "paper_exit" in kinds and "run_report" in kinds
+
+
+async def test_paper_ladder_captures_tp1_then_breakeven_stop(tmp_path):
+    bars = (
+        [FLAT] * 6
+        + [(100.0, 102.5, 99.5, 102.0)]  # TP1 partial, original stop untouched
+        + [(102.0, 102.2, 100.0, 100.5)]  # fee-aware BE stop on remainder
+        + [FLAT] * 2
+    )
+    runner, exchange, _, journal = build_world(
+        tmp_path, make_candles(bars), OneShotStrategy(4, LADDER_LONG)
+    )
+    report = await runner.run()
+
+    assert report.orders_submitted == 3  # entry + TP1 partial + BE stop
+    assert report.fills == 3
+    assert exchange.get_positions() == []
+    exits = [r["payload"] for r in journal.read_all() if r["kind"] == "paper_exit"]
+    assert [e["reason"] for e in exits] == ["tp1_partial", "breakeven_stop"]
+    assert exits[0]["final"] is False
+    assert exits[1]["final"] is True
+    assert exits[0]["quantity"] < exits[1]["quantity"]
 
 
 async def test_stop_exit_is_loss_bounded_by_risk_budget(tmp_path):
