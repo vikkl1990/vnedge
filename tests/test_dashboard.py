@@ -559,6 +559,27 @@ def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):
     assert any(r["script_id"] == "tradingview_catalog" for r in payload["records"])
 
 
+def test_quantified_strategy_lab_serves_title_inventory(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            quantified_strategy_lab_path=tmp_path / "missing.json",
+        )
+    )
+
+    page = client.get("/quantified-strategy-lab")
+    payload = client.get("/quantified-strategy-lab/kb?token=t3st-token").json()
+
+    assert page.status_code == 200
+    assert payload["summary"]["total_strategies"] == 95
+    assert payload["summary"]["source_backed_rules"] == 0
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+
+
 def test_cost_model_route_has_no_control_verbs(client):
     """The new route is read-only like every other data route."""
     for method in ("post", "put", "delete"):
