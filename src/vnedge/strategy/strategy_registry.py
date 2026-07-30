@@ -21,6 +21,7 @@ from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.momentum_cascade_lyro import MomentumCascadeLyroScanner
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
+from vnedge.strategy.quantified_fee_wall_sniper import QuantifiedFeeWallSniper
 from vnedge.strategy.sats_5m_scalper import Sats5mScalper
 from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
 from vnedge.strategy.stealth_trail_bbp import (
@@ -54,6 +55,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     LuxaraBreakBounceV27Scanner.strategy_id: LuxaraBreakBounceV27Scanner,
     VNEDGEAlgoMLProScanner.strategy_id: VNEDGEAlgoMLProScanner,
     ContextScalperV2.strategy_id: ContextScalperV2,
+    QuantifiedFeeWallSniper.strategy_id: QuantifiedFeeWallSniper,
 }
 
 
