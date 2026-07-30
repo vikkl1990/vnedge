@@ -88,3 +88,11 @@ def test_journal_has_pnl_by_cohort_panel():
     assert "cohort_pnl" in html            # render reads the summary field
     assert "Deliberate controls" not in html or "jcohcard" in html  # class present
     assert "jcohcard" in html and ".control" in html  # controls visually de-emphasised
+
+
+def test_nav_links_to_the_quantified_strategy_lab_page():
+    html = _index()
+    # a real href (separate FileResponse page), not an SPA data-v view-switch
+    assert 'id="navLab"' in html
+    assert 'href="/quantified-strategy-lab"' in html
+    assert "navLab" in html and "quantified-strategy-lab?token=" in html  # token carried
