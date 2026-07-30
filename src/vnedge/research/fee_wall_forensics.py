@@ -54,6 +54,8 @@ DEFAULT_SELECTED_STRATEGIES = (
     "fvg_liquidity_breakout_v1",
     "luxy_ut_bot_forecast_v1",
     "momentum_cascade_lyro_v1",
+    "context_scalper_v2",
+    "quantified_fee_wall_sniper_v1",
 )
 
 

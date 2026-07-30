@@ -263,6 +263,17 @@ def test_fee_wall_paper_probe_bridge_publishes_durable_probe_manifest():
     assert service["depends_on"] == ["fee-wall-forensics"]
 
 
+def test_fee_wall_forensics_sweeps_runtime_sniper_roster_by_default():
+    service = compose_services()["fee-wall-forensics"]
+    command = service["command"]
+
+    assert "--strategies" in command
+    strategy_arg = command[command.index("--strategies") + 1]
+    assert "FEE_WALL_FORENSICS_STRATEGIES" in strategy_arg
+    assert "context_scalper_v2" in strategy_arg
+    assert "quantified_fee_wall_sniper_v1" in strategy_arg
+
+
 def test_alpha_arena_lite_publishes_durable_scanner_scorecards():
     service = compose_services()["alpha-arena-lite"]
 

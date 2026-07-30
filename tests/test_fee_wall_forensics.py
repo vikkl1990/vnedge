@@ -7,6 +7,7 @@ import pandas as pd
 
 from vnedge.research.execution_edge_router import OpportunityRoute
 from vnedge.research.fee_wall_forensics import (
+    DEFAULT_SELECTED_STRATEGIES,
     build_fee_wall_forensics_progress,
     build_fee_wall_forensics_report,
     publish_json,
@@ -98,6 +99,11 @@ def router_report(
     report["opportunities_omitted"] = len(routes)
     report["opportunities"] = []
     return report
+
+
+def test_fee_wall_forensics_defaults_include_runtime_sniper_families():
+    assert "context_scalper_v2" in DEFAULT_SELECTED_STRATEGIES
+    assert "quantified_fee_wall_sniper_v1" in DEFAULT_SELECTED_STRATEGIES
 
 
 def test_fee_wall_forensics_marks_sparse_positive_without_trade_permission():
