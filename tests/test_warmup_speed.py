@@ -85,3 +85,62 @@ def test_warming_placeholder_shows_the_fleet_immediately():
     lane = snap["lanes"][0]
     assert lane["risk_status"] == "warming"
     assert snap["mode"] == "warming up"
+
+
+# --- warmup-burst resilience: bounded concurrency + transient retry --------------
+
+import pytest
+from ccxt.base.errors import ExchangeError, NetworkError
+
+from vnedge.runtime.multi_lane import _lane_build_concurrency, _retry_transient
+
+
+def test_lane_build_concurrency_reads_env_with_safe_default():
+    assert _lane_build_concurrency({}) == 6
+    assert _lane_build_concurrency({"MULTI_LANE_BUILD_CONCURRENCY": "10"}) == 10
+    assert _lane_build_concurrency({"MULTI_LANE_BUILD_CONCURRENCY": "x"}) == 6
+    assert _lane_build_concurrency({"MULTI_LANE_BUILD_CONCURRENCY": "0"}) == 1  # floor
+
+
+def test_retry_transient_returns_on_first_success():
+    calls = {"n": 0}
+
+    async def factory():
+        calls["n"] += 1
+        return "ok"
+
+    out = asyncio.run(_retry_transient(factory, retries=3, backoff_s=0, label="lane"))
+    assert out == "ok" and calls["n"] == 1
+
+
+def test_retry_transient_recovers_after_transient_network_errors():
+    calls = {"n": 0}
+
+    async def factory():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise NetworkError("rate limited")
+        return "recovered"
+
+    out = asyncio.run(_retry_transient(factory, retries=3, backoff_s=0, label="lane"))
+    assert out == "recovered" and calls["n"] == 3
+
+
+def test_retry_transient_raises_after_exhausting_retries():
+    async def factory():
+        raise NetworkError("still down")
+
+    with pytest.raises(NetworkError):
+        asyncio.run(_retry_transient(factory, retries=3, backoff_s=0, label="lane"))
+
+
+def test_retry_transient_does_not_retry_non_network_errors():
+    calls = {"n": 0}
+
+    async def factory():
+        calls["n"] += 1
+        raise ExchangeError("bad symbol")  # a real error, not transient
+
+    with pytest.raises(ExchangeError):
+        asyncio.run(_retry_transient(factory, retries=3, backoff_s=0, label="lane"))
+    assert calls["n"] == 1  # raised immediately, no retry
