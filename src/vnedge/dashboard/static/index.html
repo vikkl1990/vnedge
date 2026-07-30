@@ -508,7 +508,7 @@
     <div class="vpill"><span class="dot" id="killDot" style="background:var(--long)"></span><span class="k">Kill</span><span class="s" id="killVal" style="color:var(--long)">ARMED</span></div>
     <span class="clock" id="clock">18:24:07 UTC</span>
     <nav class="navrow" id="nav">
-      <a class="on" data-v="desk">Desk</a><a data-v="pipeline">Pipeline</a><a data-v="journal">Journal</a><a data-v="calc">Calculator</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a>
+      <a class="on" data-v="desk">Desk</a><a data-v="pipeline">Pipeline</a><a data-v="journal">Journal</a><a data-v="calc">Calculator</a><a data-v="promote">Promote</a><a data-v="ml">ML</a><a data-v="research">Research</a><a data-v="system">System</a><a data-v="about">About</a><a id="navLab" href="/quantified-strategy-lab" title="95-strategy quant lab — separate page">Strat Lab ↗</a>
     </nav>
     <div class="profile" id="profile" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="account menu">
       <div class="avatar">VK</div>
@@ -1069,6 +1069,12 @@
     var urlTok = new URLSearchParams(location.search).get("token") || "";
     if(urlTok){ token = urlTok; try{ localStorage.setItem("vnedge_token", urlTok); }catch(e){} }
     else { try{ token = localStorage.getItem("vnedge_token") || ""; }catch(e){} }
+  }catch(e){}
+  // Carry the token onto the separate-page nav links (Strategy Lab is its own
+  // FileResponse page, not an SPA view, so it needs the token in its own URL).
+  try{
+    var _nl=document.getElementById("navLab");
+    if(_nl && token){ _nl.href="/quantified-strategy-lab?token="+encodeURIComponent(token); }
   }catch(e){}
   // favicon (suppresses the /favicon.ico 404; the VN mark in amber)
   try{
