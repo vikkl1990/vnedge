@@ -17,7 +17,7 @@ def test_promote_view_has_joined_operator_lifecycle_console():
     html = _index()
     assert "Operator Lifecycle Console" in html
     assert 'id="lifecycleConsole"' in html
-    assert "activation, route doctor, cadence, trade profile, performance, survival, and causality" in html
+    assert "activation, route doctor, cadence, trade profile, performance, survival, governor, and causality" in html
     assert "Planner inputs are still read-only" in html
 
 
@@ -42,6 +42,13 @@ def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     assert "st.lastStatus" in html
     assert "wsHealth" in html
     assert "endpoint status, browser poll failures, and payload freshness" in html
+
+
+def test_dashboard_scanner_tape_renders_trade_lifecycle_truth():
+    html = _index()
+    assert "trade_lifecycle" in html
+    assert "final_why_no_trade" in html
+    assert "TP ladder journal-only" in html
 
 
 def test_dashboard_panel_sections_are_balanced():

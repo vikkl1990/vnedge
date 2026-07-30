@@ -213,6 +213,9 @@ def test_runtime_lane_with_passed_gates_and_no_signal_reports_hidden_veto(tmp_pa
     assert row["gate_diagnostics"]["all_gates_passed"] is True
     assert row["gate_diagnostics"]["primary_blocker"] is None
     assert "hidden veto" in row["why"]
+    assert row["final_why_no_trade"].startswith("all published scanner gates passed")
+    assert row["trade_lifecycle"]["stage"] == "HIDDEN_VETO"
+    assert payload["summary"]["hidden_veto_lanes"] == 1
     assert row["uplift"]["action"] == "EXPOSE_DECISION_BLOCKER_TELEMETRY"
     assert row["uplift"]["priority"] == "instrument"
 
@@ -427,10 +430,104 @@ def test_runtime_paper_lane_reports_order_and_exit_activity(tmp_path):
     assert row["funnel"]["paper_order_intents"] == 1
     assert row["funnel"]["paper_exits"] == 1
     assert row["latest_paper_order"]["client_order_id"] == "vne_123"
+    assert row["trade_lifecycle"]["stage"] == "EXIT_RECORDED"
     assert payload["summary"]["paper_lanes"] == 1
     assert payload["summary"]["paper_firing"] == 1
     assert payload["summary"]["paper_order_intents"] == 1
     assert "Paper activity: 1/1 fresh, 1 orders in 1h, 1 in 24h" in payload["operator_answer"]
+
+
+def test_runtime_paper_lane_reports_in_position_lifecycle_and_tp_ladder(tmp_path):
+    journal = tmp_path / "logs" / "luxy_ut_bot_delta_xrp_paper.journal.jsonl"
+    write_jsonl(
+        journal,
+        [
+            record(
+                "lane_eval",
+                {
+                    "bar_ts": (NOW - timedelta(minutes=2)).isoformat(),
+                    "strategy_id": "luxy_ut_bot_forecast_v1",
+                    "exchange": "delta_india",
+                    "symbol": "XRP/USD:USD",
+                    "timeframe": "1h",
+                    "mode": "paper",
+                    "fired": True,
+                    "signal_reason": "long trigger flip",
+                    "skip_reason": None,
+                    "signal": {
+                        "side": "long",
+                        "stop_price": 1.02,
+                        "take_profit_price": 1.09,
+                        "take_profit_levels": [1.05, 1.07, 1.09],
+                        "reason": "long trigger flip",
+                    },
+                    "features": {"expected_net_edge_bps_long": 135.0},
+                    "thresholds": {"min_expected_net_edge_bps": 25.0},
+                    "backfill": False,
+                },
+                minutes_ago=2,
+            ),
+            record(
+                "order_intent",
+                {
+                    "intent_key": "k-paper",
+                    "client_order_id": "vne_456",
+                    "intent": {
+                        "symbol": "XRP/USD:USD",
+                        "side": "long",
+                        "quantity": 10,
+                        "strategy_id": "luxy_ut_bot_forecast_v1",
+                        "reduce_only": False,
+                    },
+                },
+                minutes_ago=1,
+            ),
+            record(
+                "paper_lane_heartbeat",
+                {
+                    "runner_state": "in_position",
+                    "why_no_trade": "position_open: managing exit plan",
+                    "quote_seen": True,
+                    "feed_staleness_seconds": 1.2,
+                    "last_bar_ts": (NOW - timedelta(minutes=1)).isoformat(),
+                    "last_eval": {
+                        "fired": True,
+                        "signal": {
+                            "side": "long",
+                            "stop_price": 1.02,
+                            "take_profit_price": 1.09,
+                            "take_profit_levels": [1.05, 1.07, 1.09],
+                        },
+                    },
+                    "signals": 3,
+                    "live_signals": 1,
+                    "orders_submitted": 1,
+                    "risk_rejects": 0,
+                    "sizing_skips": 0,
+                },
+                minutes_ago=1,
+            ),
+        ],
+    )
+
+    payload = build_realtime_scanner(
+        research_dir=tmp_path / "research",
+        journal_dir=tmp_path / "logs",
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    lifecycle = row["trade_lifecycle"]
+    assert lifecycle["stage"] == "IN_POSITION"
+    assert lifecycle["in_position"] is True
+    assert lifecycle["side"] == "long"
+    assert lifecycle["take_profit_levels"] == [1.05, 1.07, 1.09]
+    assert lifecycle["exit_engine"]["tp_ladder"] == "journaled_progress_only_not_partial_exit"
+    assert row["final_why_no_trade"] == "position_open: managing exit plan"
+    assert row["latest_heartbeat"]["runner_state"] == "in_position"
+    assert payload["summary"]["in_position_lanes"] == 1
+    assert payload["summary"]["tp_ladder_observed_lanes"] == 1
+    assert payload["summary"]["tp_ladder_journal_only_lanes"] == 1
 
 
 def test_event_leadlag_shadow_artifact_is_live_scanner_row(tmp_path):
