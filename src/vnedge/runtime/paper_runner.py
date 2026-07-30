@@ -36,6 +36,7 @@ from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.market_replay import MarketReplay, quote_from_price
+from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -43,12 +44,17 @@ from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 logger = logging.getLogger(__name__)
 
+_EXIT_ACCEPTED_STATES = frozenset(
+    {OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED, OrderState.FILLED}
+)
+
 
 @dataclass
 class _TradePlan:
     signal: SignalIntent
     order: ManagedOrder
     entry_bar: int
+    exit_state: ActiveExitState
 
 
 class PaperRunner:
@@ -107,15 +113,42 @@ class PaperRunner:
             reduce_only=False, strategy_id=self.strategy.strategy_id,
         )
 
-    async def _submit_exit(self, plan: _TradePlan, bar_ts, reason: str) -> None:
+    def _seed_plan_from_venue(self, plan: _TradePlan) -> None:
+        status = self.exchange.get_order_status(plan.order.client_order_id)
+        if status is not None and status.filled_qty > 0:
+            plan.exit_state.seed_entry(
+                entry_price=status.avg_fill_price,
+                quantity=status.filled_qty,
+            )
+            return
+        positions = {p.symbol: p for p in self.exchange.get_positions()}
+        pos = positions.get(self.config.symbol)
+        if pos is not None:
+            plan.exit_state.seed_entry(
+                entry_price=pos.entry_price,
+                quantity=abs(pos.quantity),
+            )
+
+    async def _submit_exit(
+        self,
+        plan: _TradePlan,
+        bar_ts,
+        reason: str,
+        *,
+        quantity: float | None = None,
+        final: bool = True,
+    ) -> ManagedOrder | None:
         positions = {p.symbol: p for p in self.exchange.get_positions()}
         pos = positions.get(self.config.symbol)
         if pos is None:
-            return
+            return None
+        close_qty = abs(pos.quantity) if quantity is None else min(abs(pos.quantity), quantity)
+        if close_qty <= 0:
+            return None
         intent = OrderIntent(
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
-            quantity=abs(pos.quantity), notional_usd=0.0, leverage=1.0,
+            quantity=close_qty, notional_usd=0.0, leverage=1.0,
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
         order = await self.om.submit(
@@ -125,8 +158,43 @@ class PaperRunner:
         )
         self.orders_submitted += 1
         self.journal.append("paper_exit", {
-            "reason": reason, "state": order.state.value, "ts": str(bar_ts),
+            "reason": reason,
+            "state": order.state.value,
+            "ts": str(bar_ts),
+            "quantity": close_qty,
+            "final": final,
+            "active_stop_price": plan.exit_state.current_stop,
+            "breakeven_armed": plan.exit_state.breakeven_armed,
         })
+        return order
+
+    def _active_exit_decision(
+        self,
+        plan: _TradePlan,
+        *,
+        bar: pd.Series,
+        max_holding_hit: bool,
+    ) -> ActiveExitDecision | None:
+        positions = {p.symbol: p for p in self.exchange.get_positions()}
+        pos = positions.get(self.config.symbol)
+        if pos is None:
+            return ActiveExitDecision(
+                reason="flat_position",
+                exit_price=float(bar["close"]),
+                quantity=None,
+                final=True,
+                active_stop_price=plan.exit_state.current_stop,
+                breakeven_armed=plan.exit_state.breakeven_armed,
+            )
+        return plan.exit_state.resolve_bar(
+            high=float(bar["high"]),
+            low=float(bar["low"]),
+            close=float(bar["close"]),
+            position_quantity=abs(pos.quantity),
+            min_qty=self.config.limits.min_qty,
+            qty_step=self.config.limits.qty_step,
+            max_holding_hit=max_holding_hit,
+        )
 
     def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
         if not mismatches or self._reconciliation_fail_closed:
@@ -210,7 +278,9 @@ class PaperRunner:
                             self.risk_rejects += 1
                         else:
                             self.orders_submitted += 1
-                            new_plan = _TradePlan(pending_signal, order, j)
+                            exit_state = ActiveExitState.from_signal(pending_signal)
+                            new_plan = _TradePlan(pending_signal, order, j, exit_state)
+                            self._seed_plan_from_venue(new_plan)
                             if order.state is OrderState.TIMEOUT_UNKNOWN:
                                 parked[order.client_order_id] = new_plan
                             elif order.state is OrderState.ACKNOWLEDGED:
@@ -219,26 +289,27 @@ class PaperRunner:
 
             # 3) exit management (paper mode) — stop first, always
             if plan is not None:
-                sig = plan.signal
-                high, low = float(bar["high"]), float(bar["low"])
-                exit_reason = None
-                exit_price = None
-                if sig.side == "long":
-                    if low <= sig.stop_price:
-                        exit_reason, exit_price = "stop", sig.stop_price
-                    elif sig.take_profit_price and high >= sig.take_profit_price:
-                        exit_reason, exit_price = "take_profit", sig.take_profit_price
-                else:
-                    if high >= sig.stop_price:
-                        exit_reason, exit_price = "stop", sig.stop_price
-                    elif sig.take_profit_price and low <= sig.take_profit_price:
-                        exit_reason, exit_price = "take_profit", sig.take_profit_price
-                if exit_reason is None and j - plan.entry_bar >= cfg.max_holding_bars:
-                    exit_reason, exit_price = "max_holding", float(bar["close"])
-                if exit_reason is not None:
-                    self._set_quote(exit_price)  # fill at the trigger level
-                    await self._submit_exit(plan, ts, exit_reason)
-                    plan = None
+                decision = self._active_exit_decision(
+                    plan,
+                    bar=bar,
+                    max_holding_hit=j - plan.entry_bar >= cfg.max_holding_bars,
+                )
+                if decision is not None:
+                    if decision.reason == "flat_position":
+                        plan = None
+                    else:
+                        self._set_quote(decision.exit_price)  # fill at trigger level
+                        order = await self._submit_exit(
+                            plan,
+                            ts,
+                            decision.reason,
+                            quantity=decision.quantity,
+                            final=decision.final,
+                        )
+                        if order is not None and order.state in _EXIT_ACCEPTED_STATES:
+                            plan.exit_state.mark_accepted(decision)
+                            if decision.final:
+                                plan = None
 
             # 4) mark to close; new signal only when flat and nothing parked
             self._set_quote(float(bar["close"]))
@@ -255,6 +326,7 @@ class PaperRunner:
             if (j - start) % cfg.reconcile_every_bars == 0 or parked:
                 activated = self._reconcile(parked)
                 if activated is not None and plan is None:
+                    self._seed_plan_from_venue(activated)
                     plan = activated
 
             equities.append(self.tracker.equity_usd())
