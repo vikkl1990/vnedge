@@ -36,12 +36,32 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 
+import pandas as pd
+
+from vnedge.config.risk_config import RiskConfig
 from vnedge.config.settings import Settings
+from vnedge.execution.idempotency import make_intent_key
 from vnedge.execution.journal import DecisionJournal
-from vnedge.execution.order_state import ManagedOrder
-from vnedge.risk.risk_manager import OrderIntent
+from vnedge.execution.order_manager import OrderManager
+from vnedge.execution.order_state import ManagedOrder, OrderState  # noqa: F401
+from vnedge.risk.kill_switch import KillSwitch
+from vnedge.risk.risk_manager import (
+    AccountState,
+    MarketState,
+    OrderIntent,
+    PreTradeRiskGateway,
+)
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
+
+#: Minimal synthetic market state for the drill: it validates the GATEWAY PATH
+#: (that a first live order is evaluated, not bypassed), not real market-quality
+#: rejection — that is live_trader's job with the real feed. Values sit inside
+#: the default gateway thresholds (spread<=5bps, slippage<=10bps).
+_DRILL_SPREAD_BPS = 2.0
+_DRILL_SLIPPAGE_BPS = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -177,19 +197,36 @@ async def run_execution_drill(
             reduce_only=False, strategy_id="execution_drill",
             order_type="limit", limit_price=limit_price,
         )
-        order = ManagedOrder(
-            intent_key=f"drill|{config.exchange_id}|{config.symbol}|{int(time.time())}",
-            client_order_id=f"drill{int(time.time() * 1000) % 10_000_000_000}",
-            intent=intent,
+        # Route the drill's order through the SAME path production uses:
+        # OrderManager.submit runs PreTradeRiskGateway.evaluate, mints a uuid
+        # client_order_id (never timestamp-derived), and journals before submit.
+        # The invariant "every order passes the gateway" now holds on the one
+        # path that actually places a first live order — no bypass.
+        now = datetime.now(UTC)
+        gateway = PreTradeRiskGateway(RiskConfig(), KillSwitch(kill_file=Path("KILL")))
+        om = OrderManager(gateway, journal, adapter)
+        account = AccountState(
+            equity_usd=equity, daily_pnl_usd=0.0, peak_equity_usd=equity,
+            open_positions=0,
         )
-        journal.append("execution_drill_order", {
-            "client_order_id": order.client_order_id, "intent": vars(intent).copy()
-            if not hasattr(intent, "__dataclass_fields__") else {
-                k: getattr(intent, k) for k in intent.__dataclass_fields__},
-        })
-        exchange_id_str = await adapter.submit_order(order)
-        order.exchange_order_id = exchange_id_str
-        report.add("submit", True, f"venue accepted, id={exchange_id_str}")
+        market = MarketState(
+            symbol=config.symbol, last_update=now, spread_bps=_DRILL_SPREAD_BPS,
+            estimated_slippage_bps=_DRILL_SLIPPAGE_BPS, funding_rate=0.0,
+            exchange_healthy=True,
+        )
+        key = make_intent_key("execution_drill", config.symbol, "long", pd.Timestamp(now))
+        order = await om.submit(intent, account, market, key, now=now)
+        if order.state is OrderState.RISK_REJECTED:
+            report.add(
+                "gateway_approved", False,
+                "PreTradeRiskGateway rejected the drill order — see journal",
+            )
+            journal.append("execution_drill", {"report": _to_dict(report)})
+            return report
+        report.add("gateway_approved", True,
+                   "order passed PreTradeRiskGateway.evaluate (no bypass)")
+        report.add("submit", order.exchange_order_id is not None,
+                   f"venue accepted, id={order.exchange_order_id}")
 
         # --- Step 3: poll until visible/open ---
         deadline = time.monotonic() + _POLL_TIMEOUT
