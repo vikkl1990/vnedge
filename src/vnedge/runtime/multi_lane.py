@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from ccxt.base.errors import NotSupported
+from ccxt.base.errors import NetworkError, NotSupported
 
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.data.ccxt_client import CcxtPublicClient
@@ -665,6 +665,47 @@ def _warmup_bars(environ: Mapping[str, str] = os.environ) -> int:
         return 500
 
 
+#: Retry policy for a lane's warmup build — transient venue network/rate-limit
+#: errors are common when the whole fleet warms up at once; a couple of backed-off
+#: retries recover them instead of dropping the lane for the whole session.
+_LANE_BUILD_RETRIES = 3
+_LANE_BUILD_BACKOFF_S = 1.5
+
+
+def _lane_build_concurrency(environ: Mapping[str, str] = os.environ) -> int:
+    """How many lanes may warm up (hit the venue REST APIs) at once.
+
+    Building all ~50 lanes simultaneously bursts each venue's instrument/candle
+    endpoints and rate-limits a chunk of them into build failures. A small cap
+    spreads the load so the fleet reliably comes up whole; env-tunable."""
+    try:
+        return max(1, int(environ.get("MULTI_LANE_BUILD_CONCURRENCY", "6")))
+    except ValueError:
+        return 6
+
+
+async def _retry_transient(factory, *, retries: int, backoff_s: float, label: str):
+    """Await ``factory()`` with bounded retries on transient venue errors.
+
+    ccxt ``NetworkError`` (timeouts, rate limits, exchange-not-available) during
+    warmup is transient — back off and retry rather than losing the lane for the
+    session. Non-network errors (bad symbol, etc.) raise immediately."""
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return await factory()
+        except NetworkError as exc:
+            last = exc
+            if attempt + 1 < retries:
+                logger.warning(
+                    "transient venue error building %s (attempt %d/%d): %s; retrying",
+                    label, attempt + 1, retries, exc,
+                )
+                await asyncio.sleep(backoff_s * (attempt + 1))
+    assert last is not None
+    raise last
+
+
 def _load_candle_cache(cache_path: Path):
     """A lane's persisted candle window, or None if missing/unreadable/malformed.
     A moved or corrupt cache is never trusted — warmup refetches instead."""
@@ -837,8 +878,22 @@ class MultiLaneShadowRunner:
         # so the dashboard is never a blank board mid-startup.
         for spec in self.specs:
             self.provider.publish_warming(spec.lane_id, spec.exchange, spec.symbol)
+        # Bounded concurrency + transient-retry so the whole fleet comes up: a
+        # naked gather over every lane bursts the venue APIs and rate-limits a
+        # chunk of them into permanent build failures for the session.
+        build_sem = asyncio.Semaphore(_lane_build_concurrency())
+
+        async def _build(spec: LaneSpec) -> _LaneRuntime:
+            async with build_sem:
+                return await _retry_transient(
+                    lambda: build_lane(spec, self.provider, self.journal_dir),
+                    retries=_LANE_BUILD_RETRIES,
+                    backoff_s=_LANE_BUILD_BACKOFF_S,
+                    label=spec.lane_id,
+                )
+
         results = await asyncio.gather(
-            *[build_lane(s, self.provider, self.journal_dir) for s in self.specs],
+            *[_build(s) for s in self.specs],
             return_exceptions=True,
         )
         runtimes: list[_LaneRuntime] = []
