@@ -264,6 +264,7 @@
   .actstate{font-size:9px;letter-spacing:.08em;text-transform:uppercase;font-weight:900;padding:4px 7px;border-radius:6px;width:max-content;max-width:100%}
   .actstate.ok{background:var(--long-soft);color:var(--long)}
   .actstate.wait{background:var(--info-soft);color:var(--info)}
+  .actstate.warn{background:rgba(255,201,77,.13);color:var(--warn)}
   .actstate.fix{background:rgba(255,201,77,.13);color:var(--warn)}
   .actstate.bad{background:var(--short-soft);color:var(--short)}
   .actnote{font-size:10.5px;color:var(--txt-dim);line-height:1.35}
@@ -283,7 +284,7 @@
   .plan .pv{font-family:var(--mono);font-size:11px;margin-top:4px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .plan.ok{border-color:rgba(42,217,132,.45)} .plan.ok .pt{color:var(--long)}
   .plan.bad{border-color:rgba(255,91,106,.45)} .plan.bad .pt{color:var(--short)}
-  .perfgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px 14px 0}
+  .perfgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;padding:14px 14px 0}
   .perfk{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
   .perfk .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
   .perfk .v{font-family:var(--mono);font-size:20px;font-weight:900;margin-top:3px}
@@ -1544,6 +1545,7 @@
     st=String(st||"");
     if(st==="SURVIVOR_TOURNAMENT"||st==="PAPER_ROSTER")return"ok";
     if(st==="NO_EVIDENCE")return"wait";
+    if(st==="PROBATION_QUEUE")return"warn";
     if(st==="DEMOTION_QUEUE"||st==="RESEARCH_ONLY")return"bad";
     return"fix";
   }
@@ -1551,11 +1553,12 @@
     lifeData.governor=d; renderLifecycleConsole();
     var el=$("paperLaneGovernor"),meta=$("paperGovMeta"); if(!el)return;
     var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
-    if(meta)meta.textContent=num(s.paper_roster)+" roster · "+num(s.survivor_tournament)+" tournament · "+num(s.demotion_queue)+" demote · "+num(s.repair_queue)+" repair";
+    if(meta)meta.textContent=num(s.paper_roster)+" roster · "+num(s.probation_queue)+" probation · "+num(s.demotion_queue)+" demote · "+num(s.repair_queue)+" repair";
     if(!rows.length){el.innerHTML='<div class="note">paper lane governor report loading…</div>';return;}
     var k='<div class="perfgrid">'+
       '<div class="perfk"><div class="l">Roster</div><div class="v" style="color:var(--long)">'+num(s.paper_roster)+'</div></div>'+
       '<div class="perfk"><div class="l">Tournament</div><div class="v" style="color:var(--brand)">'+num(s.survivor_tournament)+'</div></div>'+
+      '<div class="perfk"><div class="l">Probation</div><div class="v" style="color:var(--warn)">'+num(s.probation_queue)+'</div></div>'+
       '<div class="perfk"><div class="l">Demote</div><div class="v" style="color:var(--short)">'+num(s.demotion_queue)+'</div></div>'+
       '<div class="perfk"><div class="l">Repair</div><div class="v" style="color:var(--warn)">'+num(s.repair_queue)+'</div></div>'+
     '</div>';

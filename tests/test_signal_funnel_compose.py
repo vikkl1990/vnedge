@@ -203,6 +203,7 @@ def test_paper_lane_governor_publishes_roster_recommendations():
     assert "--min-closed-trades" in service["command"]
     assert "--min-profit-factor" in service["command"]
     assert "--min-avg-net-bps" in service["command"]
+    assert "--demote-after-negative-closed" in service["command"]
     assert "--max-paper-roster" in service["command"]
     assert "--max-tournament-lanes" in service["command"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
