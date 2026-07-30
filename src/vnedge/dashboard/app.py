@@ -54,6 +54,7 @@ from vnedge.agent_gateway.task_registry import (
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.pine_script_research import load_pine_research_payload
+from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
 
 logger = logging.getLogger(__name__)
@@ -442,6 +443,7 @@ def create_app(
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     quantified_strategy_lab_path: Path | None = None,
+    quantified_port_factory_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
     pine_edge_uplift_path: Path | None = None,
@@ -547,6 +549,10 @@ def create_app(
     quantified_strategy_lab_file = (
         quantified_strategy_lab_path
         or Path("research/live_research/quantified_strategy_lab_latest.json")
+    )
+    quantified_port_factory_file = (
+        quantified_port_factory_path
+        or Path("research/live_research/quantified_port_factory_latest.json")
     )
     pine_backtest_progress_file = (
         backtest_progress_path
@@ -1392,6 +1398,15 @@ def create_app(
         user = _authorized(request)
         return JSONResponse(
             load_quantified_strategy_lab_payload(quantified_strategy_lab_file),
+            headers=_identity(user),
+        )
+
+    @app.get("/quantified-strategy-lab/port-factory")
+    async def quantified_strategy_lab_port_factory(request: Request) -> JSONResponse:
+        """Agent-ready VNEDGE port tasks derived from the title inventory."""
+        user = _authorized(request)
+        return JSONResponse(
+            load_quantified_port_factory_payload(quantified_port_factory_file),
             headers=_identity(user),
         )
 

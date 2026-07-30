@@ -126,6 +126,10 @@
     .task h3{margin:0;font-family:var(--mono);font-size:14px;color:var(--text)}
     .task .score{font-family:var(--mono);font-weight:900;color:var(--accent)}
     .task p{font-size:12px;margin-top:8px}
+    .factory-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .factory-card{background:#0b1119;border:1px solid var(--line);border-radius:8px;padding:12px}
+    .factory-card h3{margin:0 0 8px;font-family:var(--mono);font-size:14px;color:var(--text)}
+    .factory-card .big{font-family:var(--mono);font-size:24px;font-weight:900;color:var(--accent)}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:13px 15px;border-bottom:1px solid var(--line)}
     input,select{
       background:#0a1018;
@@ -178,6 +182,7 @@
       .split{grid-template-columns:1fr}
       .fast-track{grid-template-columns:1fr}
       .tasks{grid-template-columns:1fr}
+      .factory-grid{grid-template-columns:1fr}
     }
   </style>
 </head>
@@ -226,6 +231,16 @@
       </div>
       <div class="panel-body">
         <div class="tasks" id="tasks"></div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom:14px">
+      <div class="panel-title">
+        <h2>Agentic Port Factory</h2>
+        <span class="badge portable" id="factoryBadge">queued</span>
+      </div>
+      <div class="panel-body">
+        <div class="factory-grid" id="factory"></div>
       </div>
     </section>
 
@@ -278,6 +293,7 @@
     }
 
     let payload = null;
+    let factory = null;
     const fmt = new Intl.NumberFormat("en-US");
 
     function badgeClass(value){
@@ -339,6 +355,30 @@
       `).join("");
     }
 
+    function renderFactory(){
+      const el = document.getElementById("factory");
+      if (!factory || !factory.summary) {
+        document.getElementById("factoryBadge").textContent = "unavailable";
+        el.innerHTML = '<div class="note">Port factory artifact unavailable. The lab inventory is loaded, but agent-ready build tasks have not been published yet.</div>';
+        return;
+      }
+      const s = factory.summary || {};
+      document.getElementById("factoryBadge").textContent = "agent tasks";
+      const cards = [
+        `<div class="factory-card"><div class="label">Blueprints</div><div class="big">${fmt.format(s.blueprints || 0)}</div><p>VNEDGE-owned port families</p></div>`,
+        `<div class="factory-card"><div class="label">Strategy Coverage</div><div class="big">${fmt.format(s.strategy_coverage || 0)}</div><p>titles covered by queued port work</p></div>`,
+        `<div class="factory-card"><div class="label">Gateway Tasks</div><div class="big">${fmt.format((s.gateway_tasks_created || 0) + (s.gateway_tasks_reused || 0))}</div><p>created or reused in Quant OS</p></div>`
+      ];
+      const blueprints = (factory.blueprints || []).slice(0,6).map(row => `
+        <div class="task">
+          <div class="top"><h3>${row.chunk} · ${row.recommended_port}</h3><span class="score">${row.source_count}</span></div>
+          <p>${row.next_action}</p>
+          <div class="chipbar">${(row.strategy_numbers || []).slice(0,16).map(n => `<span class="chip">${n}</span>`).join("")}</div>
+        </div>
+      `).join("");
+      el.innerHTML = cards.join("") + blueprints;
+    }
+
     function populateFilters(){
       const ports = [...new Set((payload.strategy_reviews || []).map(r => r.recommended_port))].sort();
       document.getElementById("portFilter").innerHTML = '<option value="">All port families</option>' +
@@ -382,13 +422,21 @@
     async function load(){
       document.getElementById("status").textContent = "LOADING";
       const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
       const res = await fetch(url, {cache:"no-store"});
       if (!res.ok) throw new Error("request failed " + res.status);
       payload = await res.json();
+      try {
+        const factoryRes = await fetch(factoryUrl, {cache:"no-store"});
+        factory = factoryRes.ok ? await factoryRes.json() : null;
+      } catch {
+        factory = null;
+      }
       renderSummary();
       renderFastTrack();
       renderContract();
       renderTasks();
+      renderFactory();
       populateFilters();
       renderRows();
     }

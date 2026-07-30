@@ -580,6 +580,25 @@ def test_quantified_strategy_lab_serves_title_inventory(tmp_path):
     assert payload["can_promote"] is False
 
 
+def test_quantified_strategy_lab_serves_port_factory(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            quantified_port_factory_path=tmp_path / "missing.json",
+        )
+    )
+
+    payload = client.get("/quantified-strategy-lab/port-factory?token=t3st-token").json()
+
+    assert payload["factory_id"] == "quantified_port_factory_v1"
+    assert payload["summary"]["chunks"]["A"] == 3
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+
+
 def test_cost_model_route_has_no_control_verbs(client):
     """The new route is read-only like every other data route."""
     for method in ("post", "put", "delete"):
