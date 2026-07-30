@@ -27,8 +27,27 @@ Dashboard:
 
 - `/quantified-strategy-lab`
 - `/quantified-strategy-lab/kb`
+- `/quantified-strategy-lab/port-factory`
 
 Both dashboard surfaces are read-only and dashboard-token gated.
+
+## Port Factory
+
+The port factory turns the title lab into durable Quant OS research tasks:
+
+```bash
+python -m vnedge.research.quantified_port_factory
+```
+
+Default artifacts:
+
+- `research/live_research/quantified_port_factory_latest.json`
+- `research/live_research/quantified_port_factory_feed.jsonl`
+
+By default it queues Chunks A-D into the Quant OS agent gateway. Chunk Q remains
+quarantine-only. Re-running the publisher reuses existing tasks by stable
+blueprint id and writes a new content artifact only when the blueprint hash
+changes.
 
 ## Port Families
 
