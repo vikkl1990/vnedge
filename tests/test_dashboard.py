@@ -58,6 +58,8 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     payload = r.json()
     assert isinstance(payload["strategies"], list)
     assert isinstance(payload["probes"], list)
+    assert isinstance(payload["probe_actuals"], list)
+    assert isinstance(payload["probe_actuals_summary"], dict)
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 

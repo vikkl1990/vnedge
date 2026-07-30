@@ -987,6 +987,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Fee-wall probe actuals: joins the published paper-probe manifest to actual
+  # paper journals/fill-ledger performance so operators can see whether probes
+  # launched, fired, closed trades, and survived fees. Read-only.
+  fee-wall-probe-actuals:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - fee-wall-paper-probe-bridge
+      - paper-lane-performance
+      - paper-route-doctor
+    command: ["python", "-m", "vnedge.research.fee_wall_probe_actuals",
+              "--interval-seconds", "${FEE_WALL_PROBE_ACTUALS_INTERVAL_SECONDS:-60}",
+              "--manifest", "research/live_research/fee_wall_paper_probes.json",
+              "--performance", "research/live_research/paper_lane_performance_latest.json",
+              "--route-doctor", "research/live_research/paper_route_doctor_latest.json",
+              "--out", "research/live_research/fee_wall_probe_actuals_latest.json",
+              "--feed", "research/live_research/fee_wall_probe_actuals_feed.jsonl"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Bitcoin-native regime sensor: read-only node/mempool/fee telemetry that
   # tags research windows as calm/building/stressed/panic. It is context only:
   # no wallet RPCs, no exchange credentials, no data/execution mounts.
