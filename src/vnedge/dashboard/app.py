@@ -445,6 +445,7 @@ def create_app(
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     paper_roster_drift_path: Path | None = None,
+    darwinian_agent_survival_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     quantified_strategy_lab_path: Path | None = None,
@@ -640,6 +641,10 @@ def create_app(
     paper_roster_drift_file = (
         paper_roster_drift_path
         or Path("research/live_research/paper_roster_drift_latest.json")
+    )
+    darwinian_agent_survival_file = (
+        darwinian_agent_survival_path
+        or Path("research/live_research/darwinian_agent_survival_latest.json")
     )
     ml_pipeline_status_file = (
         ml_pipeline_status_path
@@ -1138,6 +1143,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper lane governor report unavailable",
                     "mode": "read_only_paper_lane_governor",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/darwinian-agent-survival")
+    async def darwinian_agent_survival(request: Request) -> JSONResponse:
+        """Latest Atlas-inspired agent/cohort survival report.
+
+        This computes advisory Darwinian weights and JANUS cohort weights from
+        existing evidence. It is read-only and cannot mutate runtime lanes.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                darwinian_agent_survival_file,
+                {
+                    "summary": {},
+                    "cohorts": [],
+                    "agents": [],
+                    "operator_answer": "darwinian agent survival report unavailable",
+                    "mode": "atlas_inspired_read_only_agent_survival",
                     "can_trade": False,
                     "can_promote": False,
                 },

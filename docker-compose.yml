@@ -572,6 +572,31 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Atlas-inspired Darwinian survival layer: advisory scanner/agent weights
+  # plus JANUS-style cohort weights. Read-only; no runtime mutation.
+  darwinian-agent-survival:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - lane-survival
+      - paper-lane-governor
+      - realtime-scanner
+      - alpha-arena-lite
+    command: ["python", "-m", "vnedge.research.darwinian_agent_survival",
+              "--interval-seconds", "${DARWINIAN_AGENT_SURVIVAL_INTERVAL_SECONDS:-60}",
+              "--survival", "research/live_research/lane_survival_latest.json",
+              "--governor", "research/live_research/paper_lane_governor_latest.json",
+              "--scanner", "research/live_research/realtime_scanner_latest.json",
+              "--alpha-arena", "research/live_research/alpha_arena_lite_latest.json",
+              "--out", "research/live_research/darwinian_agent_survival_latest.json",
+              "--feed", "research/live_research/darwinian_agent_survival_feed.jsonl",
+              "--print"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper roster drift: compares the governor's proposed paper roster to the
   # actual runtime/scanner paper lanes. Read-only: names extra/missing lanes,
   # but cannot start, stop, demote, promote, or trade anything.

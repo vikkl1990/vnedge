@@ -63,6 +63,39 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_darwinian_agent_survival_endpoint_auth_gated_and_shaped(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    report = tmp_path / "darwinian.json"
+    report.write_text(
+        json.dumps(
+            {
+                "report_id": "darwinian_agent_survival_v1",
+                "summary": {"agent_count": 1, "upweighted_agents": 1},
+                "cohorts": [{"cohort": "scalper_5m", "janus_weight": 1.0}],
+                "agents": [{"agent_id": "stealth_trail_bbp_v1", "darwinian_weight": 1.05}],
+                "operator_answer": "top agent survives",
+                "can_trade": False,
+                "can_promote": False,
+            }
+        )
+    )
+    app = create_app(
+        provider,
+        token="t3st-token",
+        darwinian_agent_survival_path=report,
+    )
+    c = TestClient(app)
+
+    assert c.get("/darwinian-agent-survival").status_code == 401
+    r = c.get("/darwinian-agent-survival?token=t3st-token")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["summary"]["agent_count"] == 1
+    assert payload["agents"][0]["agent_id"] == "stealth_trail_bbp_v1"
+    assert payload["can_trade"] is False and payload["can_promote"] is False
+
+
 def test_meta_and_fleet_endpoints_auth_gated(client):
     """Read-only /meta (build/host/uptime) and /fleet (container status, empty
     until the host reporter runs) are token-gated and JSON-shaped."""
