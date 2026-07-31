@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from vnedge.research.paper_lane_governor import (
     ACTION_DEMOTE_TO_SHADOW_RECOMMENDED,
     ACTION_EXTEND_PAPER_SAMPLE,
+    ACTION_HOLD_PAPER_PROBATION,
     ACTION_KEEP_PAPER_SURVIVOR,
     ACTION_REPAIR_LEDGER,
     ACTION_REPAIR_ROUTE_OR_CADENCE,
@@ -10,6 +11,7 @@ from vnedge.research.paper_lane_governor import (
     BUCKET_DEMOTION_QUEUE,
     BUCKET_NO_EVIDENCE,
     BUCKET_PAPER_ROSTER,
+    BUCKET_PROBATION_QUEUE,
     BUCKET_REPAIR_QUEUE,
     BUCKET_SURVIVOR_TOURNAMENT,
     build_paper_lane_governor,
@@ -138,6 +140,48 @@ def test_governor_recommends_shadow_demote_for_negative_lane():
     assert row["autopsy"]["primary_failure"] == "negative_after_fee_wall"
     assert row["autopsy"]["fee_wall_gap_bps"] == 60.0
     assert payload["summary"]["demotion_queue"] == 1
+
+
+def test_governor_holds_negative_under_sampled_lane_out_of_active_roster():
+    payload = build_paper_lane_governor(
+        survival=_survival(
+            [
+                _row(
+                    "probation",
+                    state="PAPER_PROBATION",
+                    decision="OBSERVE_MORE",
+                    closed=2,
+                    net=-4.0,
+                    pf=0.9,
+                    bps=-8.0,
+                ),
+                _row(
+                    "healthy_sample",
+                    state="PAPER_OBSERVE_MORE",
+                    decision="OBSERVE_MORE",
+                    closed=4,
+                    net=8.0,
+                    pf=1.6,
+                    bps=28.0,
+                ),
+            ]
+        ),
+        now=datetime(2026, 7, 29, tzinfo=UTC),
+    )
+
+    rows = {r["lane_id"]: r for r in payload["rows"]}
+    assert rows["probation"]["action"] == ACTION_HOLD_PAPER_PROBATION
+    assert rows["probation"]["governor_bucket"] == BUCKET_PROBATION_QUEUE
+    assert rows["probation"]["autopsy"]["primary_failure"] == "negative_paper_probation"
+    assert rows["healthy_sample"]["governor_bucket"] == BUCKET_PAPER_ROSTER
+    assert payload["summary"]["paper_roster"] == 1
+    assert payload["summary"]["probation_queue"] == 1
+    assert [r["lane_id"] for r in payload["proposed_roster"]["paper_lanes"]] == [
+        "healthy_sample"
+    ]
+    assert [r["lane_id"] for r in payload["proposed_roster"]["probation_shadow_watch"]] == [
+        "probation"
+    ]
 
 
 def test_governor_routes_stale_and_ledger_lanes_to_repair_queue():

@@ -32,6 +32,7 @@ DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "paper_lane_governor_feed.jsonl"
 ACTION_KEEP_PAPER_SURVIVOR = "KEEP_PAPER_SURVIVOR"
 ACTION_EXTEND_PAPER_SAMPLE = "EXTEND_PAPER_SAMPLE"
 ACTION_DEMOTE_TO_SHADOW_RECOMMENDED = "DEMOTE_TO_SHADOW_RECOMMENDED"
+ACTION_HOLD_PAPER_PROBATION = "HOLD_PAPER_PROBATION"
 ACTION_REPAIR_ROUTE_OR_CADENCE = "REPAIR_ROUTE_OR_CADENCE"
 ACTION_REPAIR_LEDGER = "REPAIR_LEDGER"
 ACTION_KEEP_RESEARCH_ONLY = "KEEP_RESEARCH_ONLY"
@@ -40,6 +41,7 @@ ACTION_WAIT_FOR_TRADE_EVIDENCE = "WAIT_FOR_TRADE_EVIDENCE"
 BUCKET_PAPER_ROSTER = "PAPER_ROSTER"
 BUCKET_SURVIVOR_TOURNAMENT = "SURVIVOR_TOURNAMENT"
 BUCKET_DEMOTION_QUEUE = "DEMOTION_QUEUE"
+BUCKET_PROBATION_QUEUE = "PROBATION_QUEUE"
 BUCKET_REPAIR_QUEUE = "REPAIR_QUEUE"
 BUCKET_RESEARCH_ONLY = "RESEARCH_ONLY"
 BUCKET_NO_EVIDENCE = "NO_EVIDENCE"
@@ -131,6 +133,7 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 40) -> str:
             f"{summary.get('total_lanes', 0)} lanes, "
             f"{summary.get('paper_roster', 0)} paper roster, "
             f"{summary.get('survivor_tournament', 0)} tournament, "
+            f"{summary.get('probation_queue', 0)} probation, "
             f"{summary.get('demotion_queue', 0)} demote, "
             f"{summary.get('repair_queue', 0)} repair"
         ),
@@ -236,6 +239,12 @@ def _action_bucket(
             BUCKET_RESEARCH_ONLY,
             "lane is blocked by prior negative evidence and needs fresh research proof",
         )
+    if survival_state == "PAPER_PROBATION":
+        return (
+            ACTION_HOLD_PAPER_PROBATION,
+            BUCKET_PROBATION_QUEUE,
+            "negative under-sampled lane is held out of the active paper roster",
+        )
     if survival_state == "NO_TRADE_EVIDENCE" or closed == 0:
         return (
             ACTION_WAIT_FOR_TRADE_EVIDENCE,
@@ -266,9 +275,9 @@ def _action_bucket(
             "negative lane crossed the governor demotion sample threshold",
         )
     return (
-        ACTION_EXTEND_PAPER_SAMPLE,
-        BUCKET_PAPER_ROSTER,
-        "negative but under-sampled; keep one-cycle probation only",
+        ACTION_HOLD_PAPER_PROBATION,
+        BUCKET_PROBATION_QUEUE,
+        "negative but under-sampled; keep in shadow-observe until exit autopsy improves",
     )
 
 
@@ -358,6 +367,8 @@ def _governor_score(source: Mapping[str, Any], *, action: str) -> float:
         return min(90.0, base)
     if action == ACTION_WAIT_FOR_TRADE_EVIDENCE:
         return min(55.0, base)
+    if action == ACTION_HOLD_PAPER_PROBATION:
+        return min(38.0, base)
     if action in {ACTION_REPAIR_LEDGER, ACTION_REPAIR_ROUTE_OR_CADENCE}:
         return min(45.0, base)
     if action == ACTION_DEMOTE_TO_SHADOW_RECOMMENDED:
@@ -378,10 +389,14 @@ def _summary(rows: list[dict[str, Any]], *, config: PaperLaneGovernorConfig) -> 
         "paper_roster": len(paper_roster),
         "survivor_tournament": buckets[BUCKET_SURVIVOR_TOURNAMENT],
         "demotion_queue": buckets[BUCKET_DEMOTION_QUEUE],
+        "probation_queue": buckets[BUCKET_PROBATION_QUEUE],
         "repair_queue": buckets[BUCKET_REPAIR_QUEUE],
         "research_only": buckets[BUCKET_RESEARCH_ONLY],
         "no_evidence": buckets[BUCKET_NO_EVIDENCE],
         "proposed_paper_lanes": min(len(paper_roster), config.max_paper_roster),
+        "excluded_from_active_roster": max(
+            0, len(rows) - min(len(paper_roster), config.max_paper_roster)
+        ),
         "closed_trades": sum(_int(r.get("closed_trades")) for r in rows),
         "closed_net_pnl_usd": round(
             sum(_float(r.get("closed_net_pnl_usd")) for r in rows), 6
@@ -413,6 +428,9 @@ def _proposed_roster(
         "demote_to_shadow": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
         ],
+        "probation_shadow_watch": [
+            _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_PROBATION_QUEUE
+        ],
         "repair_first": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_REPAIR_QUEUE
         ],
@@ -432,6 +450,9 @@ def _boards(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         ],
         "demotion_queue": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
+        ],
+        "probation_queue": [
+            _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_PROBATION_QUEUE
         ],
         "repair_queue": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_REPAIR_QUEUE
@@ -463,12 +484,15 @@ def _slim(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _operator_answer(summary: Mapping[str, Any]) -> str:
     demote = _int(summary.get("demotion_queue"))
+    probation = _int(summary.get("probation_queue"))
     repair = _int(summary.get("repair_queue"))
     tournament = _int(summary.get("survivor_tournament"))
     paper = _int(summary.get("paper_roster"))
     no_evidence = _int(summary.get("no_evidence"))
     if demote:
         return f"{demote} lane(s) are recommended for shadow demotion; stop expanding paper exposure there."
+    if probation:
+        return f"{probation} negative under-sampled lane(s) are held out of the active paper roster."
     if repair:
         return f"{repair} lane(s) need route/cadence/ledger repair before the paper roster can be trusted."
     if tournament:
@@ -483,6 +507,8 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
 def _primary_failure(action: str, exit_label: str, blockers: list[str]) -> str:
     if action == ACTION_DEMOTE_TO_SHADOW_RECOMMENDED:
         return "negative_after_fee_wall"
+    if action == ACTION_HOLD_PAPER_PROBATION:
+        return "negative_paper_probation"
     if action == ACTION_REPAIR_LEDGER:
         return "ledger_drift"
     if action == ACTION_REPAIR_ROUTE_OR_CADENCE:
@@ -505,11 +531,12 @@ def _first_matching(items: list[str], needles: tuple[str, ...]) -> str:
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[int, float, float, str]:
     priority = {
         BUCKET_DEMOTION_QUEUE: 0,
-        BUCKET_REPAIR_QUEUE: 1,
-        BUCKET_SURVIVOR_TOURNAMENT: 2,
-        BUCKET_PAPER_ROSTER: 3,
-        BUCKET_NO_EVIDENCE: 4,
-        BUCKET_RESEARCH_ONLY: 5,
+        BUCKET_PROBATION_QUEUE: 1,
+        BUCKET_REPAIR_QUEUE: 2,
+        BUCKET_SURVIVOR_TOURNAMENT: 3,
+        BUCKET_PAPER_ROSTER: 4,
+        BUCKET_NO_EVIDENCE: 5,
+        BUCKET_RESEARCH_ONLY: 6,
     }.get(str(row.get("governor_bucket") or ""), 9)
     return (
         priority,
@@ -558,6 +585,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-closed-trades", type=int, default=20)
     parser.add_argument("--min-profit-factor", type=float, default=1.5)
     parser.add_argument("--min-avg-net-bps", type=float, default=25.0)
+    parser.add_argument("--demote-after-negative-closed", type=int, default=5)
     parser.add_argument("--max-paper-roster", type=int, default=18)
     parser.add_argument("--max-tournament-lanes", type=int, default=12)
     parser.add_argument("--max-rows", type=int, default=180)
@@ -570,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         min_closed_trades=args.min_closed_trades,
         min_profit_factor=args.min_profit_factor,
         min_avg_net_bps=args.min_avg_net_bps,
+        demote_after_negative_closed=args.demote_after_negative_closed,
         max_paper_roster=args.max_paper_roster,
         max_tournament_lanes=args.max_tournament_lanes,
         max_rows=args.max_rows,

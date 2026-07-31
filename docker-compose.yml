@@ -519,6 +519,7 @@ services:
               "--min-closed-trades", "${PAPER_LANE_GOVERNOR_MIN_CLOSED_TRADES:-20}",
               "--min-profit-factor", "${PAPER_LANE_GOVERNOR_MIN_PROFIT_FACTOR:-1.5}",
               "--min-avg-net-bps", "${PAPER_LANE_GOVERNOR_MIN_AVG_NET_BPS:-25}",
+              "--demote-after-negative-closed", "${PAPER_LANE_GOVERNOR_DEMOTE_AFTER_NEGATIVE_CLOSED:-5}",
               "--max-paper-roster", "${PAPER_LANE_GOVERNOR_MAX_PAPER_ROSTER:-18}",
               "--max-tournament-lanes", "${PAPER_LANE_GOVERNOR_MAX_TOURNAMENT_LANES:-12}"]
     volumes:
