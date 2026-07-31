@@ -897,6 +897,22 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_exit_autopsy = tmp_path / "paper_trade_exit_autopsy.json"
+    paper_exit_autopsy.write_text(json.dumps({
+        "mode": "read_only_paper_trade_exit_autopsy",
+        "summary": {"stop_dominated": 1, "closed_trades": 3},
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "loss_driver": "STOP_DOMINATED",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "closed_trades": 3,
+        }],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     lane_survival = tmp_path / "lane_survival.json"
     lane_survival.write_text(json.dumps({
         "mode": "read_only_lane_survival",
@@ -929,6 +945,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_route_doctor_path=paper_route_doctor,
         paper_lane_cadence_path=paper_lane_cadence,
         paper_lane_performance_path=paper_lane_performance,
+        paper_trade_exit_autopsy_path=paper_exit_autopsy,
         lane_survival_path=lane_survival,
         paper_lane_governor_path=paper_lane_governor,
     ))
@@ -942,6 +959,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/paper-lane-cadence").status_code == 401
+    assert client.get("/paper-trade-exit-autopsy").status_code == 401
     assert client.get("/lane-survival").status_code == 401
     assert client.get("/paper-lane-governor").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
@@ -977,6 +995,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_cadence_payload["mode"] == "read_only_paper_lane_cadence"
     assert paper_cadence_payload["can_trade"] is False
     assert paper_cadence_payload["can_promote"] is False
+    paper_exit_payload = client.get("/paper-trade-exit-autopsy?token=t3st-token").json()
+    assert paper_exit_payload["summary"]["stop_dominated"] == 1
+    assert paper_exit_payload["mode"] == "read_only_paper_trade_exit_autopsy"
+    assert paper_exit_payload["can_trade"] is False
+    assert paper_exit_payload["can_promote"] is False
     lane_survival_payload = client.get("/lane-survival?token=t3st-token").json()
     assert lane_survival_payload["summary"]["demote_to_shadow"] == 1
     assert lane_survival_payload["mode"] == "read_only_lane_survival"
