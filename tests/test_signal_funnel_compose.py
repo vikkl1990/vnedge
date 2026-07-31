@@ -242,6 +242,25 @@ def test_paper_trade_contract_reconciler_classifies_runtime_drift_vs_alpha():
     }
 
 
+def test_paper_trade_entry_autopsy_publishes_entry_quality_evidence():
+    service = compose_services()["paper-trade-entry-autopsy"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_trade_entry_autopsy",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--min-closed-trades" in service["command"]
+    assert "--min-profit-factor" in service["command"]
+    assert "--min-expected-edge-bps" in service["command"]
+    assert "--max-signal-age-seconds" in service["command"]
+    assert "--max-signal-age-bars" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["paper-lane-performance"]
+
+
 def test_lane_survival_reconciles_paper_truth_boards():
     service = compose_services()["lane-survival"]
 

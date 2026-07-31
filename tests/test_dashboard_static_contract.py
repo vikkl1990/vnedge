@@ -46,6 +46,16 @@ def test_promote_view_has_paper_lane_root_cause_matrix():
     assert "route, cadence, sizing, entry, exit, and performance evidence" in html
 
 
+def test_promote_view_has_paper_trade_entry_autopsy_panel():
+    html = _index()
+    assert "Paper Trade Entry Autopsy" in html
+    assert 'id="paperTradeEntryAutopsy"' in html
+    assert "/paper-trade-entry-autopsy" in html
+    assert "function renderPaperTradeEntryAutopsy" in html
+    assert "Stale entries" in html
+    assert "missing ctx" in html
+
+
 def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     html = _index()
     assert "Dashboard Self-Health" in html

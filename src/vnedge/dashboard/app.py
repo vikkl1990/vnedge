@@ -443,6 +443,7 @@ def create_app(
     paper_route_doctor_path: Path | None = None,
     paper_lane_cadence_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
+    paper_trade_entry_autopsy_path: Path | None = None,
     paper_trade_exit_autopsy_path: Path | None = None,
     paper_lane_root_cause_path: Path | None = None,
     lane_survival_path: Path | None = None,
@@ -641,6 +642,10 @@ def create_app(
     paper_lane_performance_file = (
         paper_lane_performance_path
         or Path("research/live_research/paper_lane_performance_latest.json")
+    )
+    paper_trade_entry_autopsy_file = (
+        paper_trade_entry_autopsy_path
+        or Path("research/live_research/paper_trade_entry_autopsy_latest.json")
     )
     paper_trade_exit_autopsy_file = (
         paper_trade_exit_autopsy_path
@@ -1149,6 +1154,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper trade exit autopsy unavailable",
                     "mode": "read_only_paper_trade_exit_autopsy",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-trade-entry-autopsy")
+    async def paper_trade_entry_autopsy(request: Request) -> JSONResponse:
+        """Latest paper trade entry autopsy.
+
+        This joins closed paper entries to prior fired lane_eval context so
+        operators can see stale entries, missing signal linkage, direction
+        drift, and fee-wall-short expected edge. It is read-only.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_trade_entry_autopsy_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "paper trade entry autopsy unavailable",
+                    "mode": "read_only_paper_trade_entry_autopsy",
                     "can_trade": False,
                     "can_promote": False,
                 },

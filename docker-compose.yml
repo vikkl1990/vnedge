@@ -496,6 +496,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper trade entry autopsy: joins closed paper entries to prior lane_eval
+  # signal context to explain stale entries, missing signal linkage, side drift,
+  # and fee-wall-short expected edge. Read-only.
+  paper-trade-entry-autopsy:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-performance]
+    command: ["python", "-m", "vnedge.research.paper_trade_entry_autopsy",
+              "--interval-seconds", "${PAPER_TRADE_ENTRY_AUTOPSY_INTERVAL_SECONDS:-60}",
+              "--min-closed-trades", "${PAPER_TRADE_ENTRY_AUTOPSY_MIN_CLOSED_TRADES:-5}",
+              "--min-profit-factor", "${PAPER_TRADE_ENTRY_AUTOPSY_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${PAPER_TRADE_ENTRY_AUTOPSY_MIN_AVG_NET_BPS:-25}",
+              "--min-expected-edge-bps", "${PAPER_TRADE_ENTRY_AUTOPSY_MIN_EXPECTED_EDGE_BPS:-25}",
+              "--fee-wall-bps", "${PAPER_TRADE_ENTRY_AUTOPSY_FEE_WALL_BPS:-8}",
+              "--max-signal-age-seconds", "${PAPER_TRADE_ENTRY_AUTOPSY_MAX_SIGNAL_AGE_SECONDS:-600}",
+              "--max-signal-age-bars", "${PAPER_TRADE_ENTRY_AUTOPSY_MAX_SIGNAL_AGE_BARS:-2.25}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper trade exit autopsy: reads closed paper fills and exit journal metadata
   # to explain whether losses are stop-, fee-, timeout-, or TP-capture driven.
   # Read-only: no route can trade or promote from this service.
