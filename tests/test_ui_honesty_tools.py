@@ -110,6 +110,77 @@ def test_paper_tp_ladder_joins_by_client_order_id(tmp_path):
     assert trade["captured_bps_basis"] == "gross"
 
 
+def test_paper_tick_stop_exit_joins_by_client_order_id(tmp_path):
+    _write(tmp_path / "pt.fills.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "lane": "pt", "side": "buy", "price": 100,
+         "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "entry-abc"},
+        {"ts": "2026-07-27T00:06:00Z", "lane": "pt", "side": "sell", "price": 98,
+         "quantity": 1, "realized_pnl_usd": -2, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "exit-stop"},
+    ])
+    _write(tmp_path / "pt.journal.jsonl", [
+        {"ts": "2026-07-27T00:06:00Z", "kind": "tick_stop_exit", "payload": {
+            "reason": "tick_stop", "state": "filled", "client_order_id": "exit-stop",
+            "take_profit_levels": [102, 104, 108], "active_stop_price": 98,
+            "breakeven_armed": False}},
+    ])
+    snap = {"lane_id": "pt", "lanes": [{"lane_id": "pt"}]}
+    payload = build_trade_journal(snapshot=snap, journal_dir=tmp_path, lane="", limit=200)
+    trade = next(t for t in payload["closed_trades"] if t.get("kind") == "actual_closing_fill")
+    assert trade["resolution"] == "stop"
+    assert trade["exit_reason"] == "tick_stop"
+    assert trade["exit_metadata_source"] == "client_order_id"
+    assert trade["exit_metadata_kind"] == "tick_stop_exit"
+    assert trade["active_stop_price"] == 98
+
+
+def test_legacy_tick_stop_exit_joins_by_lane_time_window(tmp_path):
+    _write(tmp_path / "pt.fills.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "lane": "pt", "side": "buy", "price": 100,
+         "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "entry-abc"},
+        {"ts": "2026-07-27T00:06:30Z", "lane": "pt", "side": "sell", "price": 98,
+         "quantity": 1, "realized_pnl_usd": -2, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "exit-stop"},
+    ])
+    # Older tick-stop records did not carry the exit client_order_id. The
+    # journal view must still recover the reason by lane + timestamp proximity.
+    _write(tmp_path / "pt.journal.jsonl", [
+        {"ts": "2026-07-27T00:06:00Z", "kind": "tick_stop_exit", "payload": {
+            "reason": "tick_stop", "state": "filled", "active_stop_price": 98}},
+    ])
+    snap = {"lane_id": "pt", "lanes": [{"lane_id": "pt"}]}
+    payload = build_trade_journal(snapshot=snap, journal_dir=tmp_path, lane="", limit=200)
+    trade = next(t for t in payload["closed_trades"] if t.get("kind") == "actual_closing_fill")
+    assert trade["resolution"] == "stop"
+    assert trade["exit_reason"] == "tick_stop"
+    assert trade["exit_metadata_source"] == "lane_time_window"
+
+
+def test_reconciled_exit_plan_backfills_resolution_by_client_order_id(tmp_path):
+    _write(tmp_path / "pt.fills.jsonl", [
+        {"ts": "2026-07-27T00:00:00Z", "lane": "pt", "side": "buy", "price": 100,
+         "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "entry-abc"},
+        {"ts": "2026-07-27T00:06:00Z", "lane": "pt", "side": "sell", "price": 103,
+         "quantity": 1, "realized_pnl_usd": 3, "fee_usd": 0.05, "symbol": "ETH/USD",
+         "client_order_id": "exit-recon"},
+    ])
+    _write(tmp_path / "pt.journal.jsonl", [
+        {"ts": "2026-07-27T00:06:00Z",
+         "kind": "exit_plan_cleared_after_reconciliation",
+         "payload": {
+             "reason": "take_profit", "state": "filled", "client_order_id": "exit-recon"}},
+    ])
+    snap = {"lane_id": "pt", "lanes": [{"lane_id": "pt"}]}
+    payload = build_trade_journal(snapshot=snap, journal_dir=tmp_path, lane="", limit=200)
+    trade = next(t for t in payload["closed_trades"] if t.get("kind") == "actual_closing_fill")
+    assert trade["resolution"] == "take_profit"
+    assert trade["exit_metadata_source"] == "client_order_id"
+    assert trade["exit_metadata_kind"] == "exit_plan_cleared_after_reconciliation"
+
+
 def test_journal_shows_margin_and_leverage(tmp_path):
     # paper trade: entry order_intent carries leverage 5 + notional 500
     _write(tmp_path / "pt.fills.jsonl", [

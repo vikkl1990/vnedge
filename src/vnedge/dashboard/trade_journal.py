@@ -353,6 +353,8 @@ _EVENT_KINDS = _ORDER_KINDS | {
     "live_paper_exit",
     "paper_exit",
     "tick_stop_exit",
+    "exit_plan_cleared_after_reconciliation",
+    "exit_plan_preserved_after_reconciliation",
     "daily_report",
     "lane_eval",
     "executor_finished",
@@ -615,16 +617,13 @@ def _build_closed_trades(
     and captured bps. Paper trades join the ladder by exit client_order_id and
     the entry intent's economics by entry client_order_id; shadow outcomes join
     their intent by intent_key. Pure projection — no order/timing side effects."""
-    ladders = _paper_exit_ladders(journal_rows)
+    exits = _paper_exit_metadata(journal_rows)
     econ_by_coid, econ_by_key = _intent_economics(journal_rows)
     paired = _paired_actual_trades(fills)
     for trade in paired:
-        ladder = ladders.get(str(trade.get("client_order_id") or ""))
-        if ladder:
-            trade["take_profit_levels"] = ladder["levels"]
-            trade["tp_reached"] = ladder["tp_reached"]
-            if ladder.get("resolution"):
-                trade["resolution"] = ladder["resolution"]
+        exit_meta, source = _match_paper_exit_metadata(trade, exits)
+        if exit_meta:
+            _attach_paper_exit_metadata(trade, exit_meta, source)
         _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
     for trade in virtual_trades:
         _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
@@ -710,28 +709,163 @@ def _cohort_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[st
     return roll
 
 
-def _paper_exit_ladders(
+@dataclass(frozen=True)
+class _PaperExitMetadataIndex:
+    by_client_order_id: dict[str, dict[str, Any]]
+    by_lane: dict[str, list[dict[str, Any]]]
+
+
+_PAPER_EXIT_METADATA_KINDS = {
+    "live_paper_exit",
+    "paper_exit",
+    "tick_stop_exit",
+    "exit_plan_cleared_after_reconciliation",
+}
+
+
+def _paper_exit_metadata(
     journal_rows: list[tuple[str, dict[str, Any]]]
-) -> dict[str, dict[str, Any]]:
-    """Map exit client_order_id -> its recorded TP ladder, from live_paper_exit
-    decision-journal records. The exit order's client_order_id is the closing
-    fill's, so paired paper trades join to it directly."""
-    out: dict[str, dict[str, Any]] = {}
-    for _lane, record in journal_rows:
-        if str(record.get("kind") or "") != "live_paper_exit":
+) -> _PaperExitMetadataIndex:
+    """Index paper exit metadata by client_order_id and lane/time.
+
+    Modern paper exits write the exit order's client_order_id and join to the
+    closing fill exactly. Older tick-stop records predate that field, so we
+    also keep a lane-local time index and reconcile them to the nearest close.
+    This is still read-only projection: no order state is changed here.
+    """
+    by_coid: dict[str, dict[str, Any]] = {}
+    by_lane: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for lane, record in journal_rows:
+        kind = str(record.get("kind") or "")
+        if kind not in _PAPER_EXIT_METADATA_KINDS:
             continue
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
-        coid = str(payload.get("client_order_id") or "")
+        meta = _paper_exit_metadata_row(lane, kind, record, payload)
+        if meta is None:
+            continue
+        by_lane[str(lane)].append(meta)
+        coid = str(meta.get("client_order_id") or "")
         if not coid:
             continue
-        reason = str(payload.get("reason") or "")
-        out[coid] = {
-            "levels": payload.get("take_profit_levels") or [],
-            "tp_reached": int(payload.get("tp_reached") or 0),
-            # normalise the exit reason to the journal's resolution vocabulary
-            "resolution": "stop" if reason in ("stop", "tick_stop") else reason,
-        }
-    return out
+        existing = by_coid.get(coid)
+        # Prefer the richer live_paper/tick records over reconciliation-only
+        # records when both reference the same exit order.
+        if existing is None or _metadata_rank(meta) >= _metadata_rank(existing):
+            by_coid[coid] = meta
+    for rows in by_lane.values():
+        rows.sort(key=lambda row: str(row.get("ts") or ""))
+    return _PaperExitMetadataIndex(by_client_order_id=by_coid, by_lane=dict(by_lane))
+
+
+def _paper_exit_metadata_row(
+    lane: str,
+    kind: str,
+    record: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    reason = str(payload.get("reason") or "")
+    if not reason and kind == "tick_stop_exit":
+        reason = "tick_stop"
+    if not reason and kind == "paper_exit":
+        reason = "paper_exit"
+    ts = _record_ts(record, payload)
+    meta = {
+        "lane": lane,
+        "ts": ts,
+        "source_kind": kind,
+        "client_order_id": str(payload.get("client_order_id") or ""),
+        "reason": reason,
+        "resolution": _exit_resolution(reason),
+        "state": str(payload.get("state") or ""),
+        "levels": payload.get("take_profit_levels") or [],
+        "tp_reached": int(_float(payload.get("tp_reached"))),
+        "mfe_price": payload.get("mfe_price"),
+        "active_stop_price": payload.get("active_stop_price"),
+        "breakeven_armed": payload.get("breakeven_armed"),
+        "final": payload.get("final"),
+    }
+    if not meta["client_order_id"] and not meta["ts"]:
+        return None
+    return meta
+
+
+def _metadata_rank(meta: Mapping[str, Any]) -> int:
+    kind = str(meta.get("source_kind") or "")
+    if kind in {"live_paper_exit", "tick_stop_exit"}:
+        return 3
+    if kind == "paper_exit":
+        return 2
+    if kind == "exit_plan_cleared_after_reconciliation":
+        return 1
+    return 0
+
+
+def _exit_resolution(reason: str) -> str:
+    reason = str(reason or "").strip()
+    if reason in {"stop", "tick_stop", "breakeven_stop"}:
+        return "stop"
+    if reason in {"take_profit", "target", "tp"}:
+        return "take_profit"
+    if reason in {"max_holding", "timeout"}:
+        return "timeout"
+    return reason
+
+
+def _match_paper_exit_metadata(
+    trade: Mapping[str, Any],
+    exits: _PaperExitMetadataIndex,
+) -> tuple[dict[str, Any] | None, str]:
+    coid = str(trade.get("client_order_id") or "")
+    if coid and coid in exits.by_client_order_id:
+        return exits.by_client_order_id[coid], "client_order_id"
+    lane = str(trade.get("lane") or "")
+    candidates = exits.by_lane.get(lane, [])
+    if not candidates:
+        return None, ""
+    entry_dt = _parse_dt(trade.get("entry_ts"))
+    exit_dt = _parse_dt(trade.get("ts"))
+    tolerance = max(600.0, float(_lane_timeframe_seconds(lane) or 0) * 2.0)
+    best: tuple[float, dict[str, Any]] | None = None
+    for candidate in candidates:
+        event_dt = _parse_dt(candidate.get("ts"))
+        if event_dt is None:
+            continue
+        if exit_dt is None:
+            continue
+        if entry_dt is not None and event_dt < entry_dt:
+            continue
+        drift = abs((event_dt - exit_dt).total_seconds())
+        if drift > tolerance:
+            continue
+        if best is None or drift < best[0]:
+            best = (drift, candidate)
+    if best is None:
+        return None, ""
+    return best[1], "lane_time_window"
+
+
+def _attach_paper_exit_metadata(
+    trade: dict[str, Any],
+    meta: Mapping[str, Any],
+    source: str,
+) -> None:
+    levels = meta.get("levels")
+    if isinstance(levels, list):
+        trade["take_profit_levels"] = levels
+    trade["tp_reached"] = int(_float(meta.get("tp_reached")))
+    resolution = str(meta.get("resolution") or "")
+    if resolution:
+        trade["resolution"] = resolution
+    reason = str(meta.get("reason") or "")
+    if reason:
+        trade["exit_reason"] = reason
+    trade["exit_metadata_source"] = source
+    trade["exit_metadata_kind"] = meta.get("source_kind")
+    if meta.get("state"):
+        trade["exit_state"] = meta.get("state")
+    for key in ("mfe_price", "active_stop_price", "breakeven_armed"):
+        if meta.get(key) is not None:
+            trade[key] = meta.get(key)
 
 
 def _paired_actual_trades(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:

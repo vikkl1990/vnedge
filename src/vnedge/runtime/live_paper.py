@@ -698,6 +698,7 @@ class LivePaperSession:
         self.journal.append("tick_stop_exit", {
             "reason": "tick_stop",
             "state": order.state.value,
+            "client_order_id": order.client_order_id,
             "side": sig.side,
             "stop_price": stop_price,
             "initial_stop_price": sig.stop_price,

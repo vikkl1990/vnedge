@@ -862,6 +862,10 @@
           <div id="paperLaneGovernor"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Paper Roster Drift</h2><span class="meta" id="paperRosterDriftMeta">loading…</span></div>
+          <div id="paperRosterDrift"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Promotion Queue</h2><span class="tag">human-gated · untouched-window</span></div>
           <div id="promoQueue"></div>
         </section>
@@ -1315,7 +1319,7 @@
         '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+net.toFixed(1)+'</span></div>';}).join('')+
       '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · best net edge (bps) after fees</div>';
   }
-  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,governor:null,profile:null,meta:null};
+  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,governor:null,rosterDrift:null,profile:null,meta:null};
   function renderLaneFunnel(d){
     lifeData.readiness=d; renderLifecycleConsole();
     var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
@@ -1614,6 +1618,39 @@
     }).join('');
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper lane governor pending")+'</div>';
+  }
+  function driftCls(st){
+    st=String(st||"");
+    if(st==="EXPECTED_RUNNING")return"ok";
+    if(st==="EXPECTED_MISSING")return"warn";
+    if(st==="EXTRA_RUNNING_PAPER"||st==="DEMOTION_STILL_RUNNING"||st==="PROBATION_STILL_RUNNING"||st==="REPAIR_STILL_RUNNING")return"bad";
+    return"fix";
+  }
+  function renderPaperRosterDrift(d){
+    lifeData.rosterDrift=d; renderLifecycleConsole();
+    var el=$("paperRosterDrift"),meta=$("paperRosterDriftMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.expected_paper_lanes)+" expected · "+num(s.actual_paper_lanes)+" actual · "+num(s.extra_paper_lanes)+" extra · "+num(s.missing_paper_lanes)+" missing";
+    if(!rows.length){el.innerHTML='<div class="note">paper roster drift report loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Expected</div><div class="v" style="color:var(--long)">'+num(s.expected_paper_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Actual paper</div><div class="v" style="color:var(--info)">'+num(s.actual_paper_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Extra</div><div class="v" style="color:var(--short)">'+num(s.extra_paper_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Missing</div><div class="v" style="color:var(--warn)">'+num(s.missing_paper_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Demotion still paper</div><div class="v" style="color:var(--short)">'+num(s.demotion_queue_running)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,10).map(function(r){
+      var st=String(r.drift_state||"UNKNOWN"),cls=driftCls(st);
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(st.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(r.lane_id||r.signature||"")+'">'+esc(String(r.next_action||"").slice(0,58))+'</small></div>'+
+        '<div><b class="num">'+esc(String(r.actual_source||"--").replace(/_/g," "))+'</b><small>actual source</small></div>'+
+        '<div><b class="num">'+esc(String(r.expected_source||"--").replace(/_/g," "))+'</b><small>expected source</small></div>'+
+        '<div><b class="num">'+esc(String(r.runtime_state||"--").replace(/_/g," ").slice(0,22))+'</b><small>runtime state</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper roster drift pending")+'</div>';
   }
   function docCls(st){
     st=String(st||"");
@@ -2123,6 +2160,7 @@
   function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
+  function pollPaperRosterDrift(){ poll("/paper-roster-drift", renderPaperRosterDrift); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; lifeData.meta=d; renderBuildMeta(d); renderDeployProv(lastSnap); renderLifecycleConsole(); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
@@ -2278,8 +2316,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
