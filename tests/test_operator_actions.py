@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from vnedge.research.operator_actions import (
     ACTION_COLLECT_OUTCOMES,
+    ACTION_FIX_EXIT_QUALITY,
     ACTION_FIX_SIZE_PROFILE,
     ACTION_REPAIR_ROUTE,
     ACTION_REVIEW_PAPER_CANDIDATE,
@@ -197,6 +198,44 @@ def test_operator_actions_negative_paper_lane_is_collected_not_promoted():
     assert row["metrics"]["closed_trades"] == 6
     assert row["metrics"]["net_pnl_usd"] == -4.2
     assert payload["summary"]["negative_paper_lanes"] == 1
+
+
+def test_operator_actions_uses_exit_autopsy_for_negative_lane_next_action():
+    payload = build_operator_actions(
+        activation={"rows": [_lane(activation_state="PAPER_RUNNING")]},
+        route={"rows": [_lane(doctor_state="JOURNAL_ACTIVE")]},
+        cadence={"rows": [_lane(cadence_state="EVALUATING_SIGNAL_SEEN")]},
+        performance={
+            "rows": [
+                _lane(
+                    state="PAPER_ACTIVE_NEGATIVE",
+                    closed_trades=6,
+                    net_pnl_usd=-4.2,
+                    next_action="generic negative outcome",
+                )
+            ]
+        },
+        exit_autopsy={
+            "rows": [
+                _lane(
+                    loss_driver="STOP_DOMINATED",
+                    next_action="tighten entry permission before promotion",
+                    avg_net_bps=-18.5,
+                    stop_rate=0.83,
+                )
+            ]
+        },
+        profile={"rows": [_lane(profile="paper", profile_state="PAPER_PROFILE_READY")]},
+        causality={"rows": []},
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["bucket"] == ACTION_FIX_EXIT_QUALITY
+    assert row["action"] == "tighten entry permission before promotion"
+    assert row["evidence"]["exit_driver"] == "STOP_DOMINATED"
+    assert row["metrics"]["avg_net_bps"] == -18.5
+    assert payload["summary"]["exit_quality_fixes"] == 1
 
 
 def test_operator_actions_wait_for_live_signal_when_lane_online():

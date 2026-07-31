@@ -438,6 +438,7 @@ def create_app(
     paper_route_doctor_path: Path | None = None,
     paper_lane_cadence_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
+    paper_trade_exit_autopsy_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
@@ -614,6 +615,10 @@ def create_app(
     paper_lane_performance_file = (
         paper_lane_performance_path
         or Path("research/live_research/paper_lane_performance_latest.json")
+    )
+    paper_trade_exit_autopsy_file = (
+        paper_trade_exit_autopsy_path
+        or Path("research/live_research/paper_trade_exit_autopsy_latest.json")
     )
     lane_survival_file = (
         lane_survival_path
@@ -1053,6 +1058,29 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/paper-trade-exit-autopsy")
+    async def paper_trade_exit_autopsy(request: Request) -> JSONResponse:
+        """Latest paper trade exit autopsy.
+
+        This explains closed paper-trade loss drivers from fills + exit journal
+        metadata. It is read-only and cannot promote, demote, or trade.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_trade_exit_autopsy_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "paper trade exit autopsy unavailable",
+                    "mode": "read_only_paper_trade_exit_autopsy",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
     @app.get("/lane-survival")
     async def lane_survival(request: Request) -> JSONResponse:
         """Latest lane survival engine report.
@@ -1237,6 +1265,17 @@ def create_app(
                 "can_promote": False,
             },
         )
+        exit_autopsy = _read_json_payload(
+            paper_trade_exit_autopsy_file,
+            {
+                "summary": {},
+                "rows": [],
+                "operator_answer": "paper trade exit autopsy unavailable",
+                "mode": "read_only_paper_trade_exit_autopsy",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
         causality = _read_json_payload(
             lane_firing_causality_file,
             {
@@ -1255,6 +1294,7 @@ def create_app(
                 route=route,
                 cadence=cadence,
                 performance=performance,
+                exit_autopsy=exit_autopsy,
                 profile=build_trade_profile_matrix(activation),
                 causality=causality,
             ),

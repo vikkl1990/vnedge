@@ -157,6 +157,8 @@ def test_operator_actions_publishes_joined_action_feed():
     ]
     assert "--interval-seconds" in service["command"]
     assert "${OPERATOR_ACTIONS_INTERVAL_SECONDS:-60}" in service["command"]
+    assert "--exit-autopsy" in service["command"]
+    assert "research/live_research/paper_trade_exit_autopsy_latest.json" in service["command"]
     assert "research/live_research/operator_actions_latest.json" in service["command"]
     assert "research/live_research/operator_actions_feed.jsonl" in service["command"]
     assert "--print" in service["command"]
@@ -166,8 +168,27 @@ def test_operator_actions_publishes_joined_action_feed():
         "paper-route-doctor",
         "paper-lane-cadence",
         "paper-lane-performance",
+        "paper-trade-exit-autopsy",
         "lane-firing-causality",
     }
+
+
+def test_paper_trade_exit_autopsy_publishes_exit_quality_evidence():
+    service = compose_services()["paper-trade-exit-autopsy"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_trade_exit_autopsy",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--min-closed-trades" in service["command"]
+    assert "--min-profit-factor" in service["command"]
+    assert "--min-avg-net-bps" in service["command"]
+    assert "--fee-wall-bps" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == ["paper-lane-performance"]
 
 
 def test_lane_survival_reconciles_paper_truth_boards():

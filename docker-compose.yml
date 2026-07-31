@@ -464,9 +464,29 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper trade exit autopsy: reads closed paper fills and exit journal metadata
+  # to explain whether losses are stop-, fee-, timeout-, or TP-capture driven.
+  # Read-only: no route can trade or promote from this service.
+  paper-trade-exit-autopsy:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-performance]
+    command: ["python", "-m", "vnedge.research.paper_trade_exit_autopsy",
+              "--interval-seconds", "${PAPER_TRADE_EXIT_AUTOPSY_INTERVAL_SECONDS:-60}",
+              "--min-closed-trades", "${PAPER_TRADE_EXIT_AUTOPSY_MIN_CLOSED_TRADES:-5}",
+              "--min-profit-factor", "${PAPER_TRADE_EXIT_AUTOPSY_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${PAPER_TRADE_EXIT_AUTOPSY_MIN_AVG_NET_BPS:-25}",
+              "--fee-wall-bps", "${PAPER_TRADE_EXIT_AUTOPSY_FEE_WALL_BPS:-8}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Operator action queue publisher: joins activation, route doctor, cadence,
-  # sizing profile, paper performance, and firing causality into one durable
-  # "what next" artifact/feed. Read-only: no restarts, no promotion, no trades.
+  # sizing profile, paper performance, exit autopsy, and firing causality into
+  # one durable "what next" artifact/feed. Read-only.
   operator-actions:
     build: .
     restart: unless-stopped
@@ -475,9 +495,11 @@ services:
       - paper-route-doctor
       - paper-lane-cadence
       - paper-lane-performance
+      - paper-trade-exit-autopsy
       - lane-firing-causality
     command: ["python", "-m", "vnedge.research.operator_actions",
               "--interval-seconds", "${OPERATOR_ACTIONS_INTERVAL_SECONDS:-60}",
+              "--exit-autopsy", "research/live_research/paper_trade_exit_autopsy_latest.json",
               "--out", "research/live_research/operator_actions_latest.json",
               "--feed", "research/live_research/operator_actions_feed.jsonl",
               "--print"]

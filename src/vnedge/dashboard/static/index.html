@@ -850,6 +850,10 @@
           <div id="paperPerformance"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Paper Trade Exit Autopsy</h2><span class="meta" id="paperExitAutopsyMeta">loading…</span></div>
+          <div id="paperTradeExitAutopsy"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Lane Survival Engine</h2><span class="meta" id="laneSurvivalMeta">loading…</span></div>
           <div id="laneSurvival"></div>
         </section>
@@ -1507,6 +1511,41 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
   }
+  function autopsyCls(st){
+    st=String(st||"");
+    if(st==="CAPTURE_HEALTHY")return"ok";
+    if(st==="NO_CLOSED_TRADES"||st==="UNDER_SAMPLED"||st==="OBSERVE_MORE")return"wait";
+    if(st==="LEDGER_OR_EXIT_METADATA_GAP")return"fix";
+    if(st==="STOP_DOMINATED"||st==="FEE_WALL_DOMINATED"||st==="TIMEOUT_DOMINATED"||st==="TP_CAPTURE_WEAK"||st==="NEGATIVE_EDGE")return"bad";
+    return"fix";
+  }
+  function renderPaperTradeExitAutopsy(d){
+    var el=$("paperTradeExitAutopsy"),meta=$("paperExitAutopsyMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+num(s.stop_dominated)+" stop · "+num(s.fee_wall_dominated)+" fee wall · "+num(s.tp_capture_weak)+" weak TP";
+    if(!rows.length){el.innerHTML='<div class="note">paper exit autopsy loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Stop dominated</div><div class="v" style="color:var(--short)">'+num(s.stop_dominated)+'</div></div>'+
+      '<div class="perfk"><div class="l">Fee wall</div><div class="v" style="color:var(--warn)">'+num(s.fee_wall_dominated)+'</div></div>'+
+      '<div class="perfk"><div class="l">Weak TP</div><div class="v" style="color:var(--warn)">'+num(s.tp_capture_weak)+'</div></div>'+
+      '<div class="perfk"><div class="l">Healthy capture</div><div class="v" style="color:var(--long)">'+num(s.healthy_capture)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var driver=String(r.loss_driver||"UNKNOWN"),cls=autopsyCls(driver),net=num(r.net_pnl_usd),fees=num(r.fees_usd);
+      var bps=r.avg_net_bps==null?"--":num(r.avg_net_bps).toFixed(1)+"bps";
+      var feeBps=r.avg_fee_bps==null?"--":num(r.avg_fee_bps).toFixed(1)+"bps fee";
+      var mix=(r.resolution_counts||{}),mixText=["stop","take_profit","max_holding","timeout"].map(function(k){return mix[k]?k.replace("_"," ")+" "+mix[k]:"";}).filter(Boolean).join(" · ")||"exit mix pending";
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(driver.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc((r.blockers||[]).join(" · "))+'">'+esc(String(r.next_action||"").slice(0,58))+'</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>fees $'+fees.toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+bps+'</b><small>'+feeBps+' · PF '+num(r.profit_factor).toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+esc(mixText)+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper exit autopsy pending")+'</div>';
+  }
   function survCls(st){
     st=String(st||"");
     if(st==="PAPER_SURVIVOR_CANDIDATE")return"ok";
@@ -2081,6 +2120,7 @@
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
@@ -2238,8 +2278,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollLaneSurvival(); pollPaperLaneGovernor(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
