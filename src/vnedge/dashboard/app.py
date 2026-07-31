@@ -53,6 +53,7 @@ from vnedge.agent_gateway.task_registry import (
 )
 from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
 from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_pullback_reversion_proof import (
@@ -914,6 +915,16 @@ def create_app(
             ),
             headers=_identity(user),
         )
+
+    @app.get("/external-repo-synthesis")
+    async def external_repo_synthesis(request: Request) -> JSONResponse:
+        """Research-only synthesis of public repo review patterns.
+
+        This is a source-attributed build queue, not a code import surface and
+        not a trading/promotion route.
+        """
+        user = _authorized(request)
+        return JSONResponse(build_external_repo_synthesis(), headers=_identity(user))
 
     @app.get("/agent-jobs")
     async def agent_jobs(request: Request, limit: int = 100) -> JSONResponse:

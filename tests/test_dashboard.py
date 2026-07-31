@@ -111,6 +111,22 @@ def test_meta_and_fleet_endpoints_auth_gated(client):
     assert isinstance(fleet.json().get("services"), list)
 
 
+def test_external_repo_synthesis_endpoint_auth_gated_and_research_only(client):
+    assert client.get("/external-repo-synthesis").status_code == 401
+    assert client.get("/external-repo-synthesis?token=wrong").status_code == 401
+
+    r = client.get("/external-repo-synthesis?token=t3st-token")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["synthesis_id"] == "external_repo_synthesis_20260731"
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert any(
+        track["track_id"] == "terminal_operator_shell_v1"
+        for track in payload["build_tracks"]
+    )
+
+
 def test_dashboard_shell_is_not_cached(client):
     """The SPA ships on every deploy — the shell must not be browser-cached, or
     a stale cached page shows empty panels against a live backend."""

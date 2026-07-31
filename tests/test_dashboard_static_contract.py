@@ -62,7 +62,18 @@ def test_dashboard_build_identity_is_runtime_sourced():
     assert "(mock)" not in html
     assert 'id="aboutBuild"' in html
     assert 'id="footBuild"' in html
+    assert 'id="topBuild"' in html
     assert "function renderBuildMeta" in html
+
+
+def test_dashboard_has_external_repo_synthesis_panel():
+    html = _index()
+    assert "External Repo Synthesis" in html
+    assert 'id="externalRepoSynthesis"' in html
+    assert 'id="externalRepoMeta"' in html
+    assert "function renderExternalRepoSynthesis" in html
+    assert "/external-repo-synthesis" in html
+    assert "Trade authority" in html
 
 
 def test_dashboard_polled_endpoints_have_app_routes():
