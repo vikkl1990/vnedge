@@ -144,6 +144,33 @@ def test_quantified_fee_wall_sniper_pullback_emits_active_exit_ladder():
     assert intent.take_profit_levels[-1] == intent.take_profit_price
 
 
+def test_quantified_fee_wall_sniper_can_run_pullback_only_for_quantified_proof():
+    breakout = QuantifiedFeeWallSniper(params=params(enabled_setups=("pullback",)))
+    breakout_df = breakout.prepare(make_candles(breakout_rows()))
+
+    assert breakout_df["breakout_long"].iloc[-1]
+    assert breakout.signal(breakout_df, len(breakout_df) - 1) is None
+
+    pullback = QuantifiedFeeWallSniper(
+        params=params(compression_ratio=0.1, enabled_setups=("pullback",))
+    )
+    pullback_df = pullback.prepare(make_candles(pullback_rows()))
+
+    intent = pullback.signal(pullback_df, len(pullback_df) - 1)
+
+    assert intent is not None
+    assert "setup=pullback_continuation" in intent.reason
+
+
+def test_quantified_fee_wall_sniper_rejects_unknown_setup_mode():
+    try:
+        QuantifiedFeeWallSniper(params=params(enabled_setups=("future_leak",)))
+    except ValueError as exc:
+        assert "unsupported setup" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("unknown setup mode should be rejected")
+
+
 def test_quantified_fee_wall_sniper_columns_are_causal_when_future_changes():
     candles = make_candles(breakout_rows(70))
     mutated = candles.copy()

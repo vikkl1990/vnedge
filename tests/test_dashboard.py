@@ -603,6 +603,39 @@ def test_quantified_strategy_lab_serves_port_factory(tmp_path):
     assert payload["can_promote"] is False
 
 
+def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    proof = tmp_path / "quantified_pullback_reversion_proof_latest.json"
+    proof.write_text(json.dumps({
+        "proof_id": "quantified_pullback_reversion_proof_v1",
+        "generated_at": "2026-07-31T00:00:00+00:00",
+        "summary": {"total_cells": 1, "completed_cells": 0},
+        "rows": [{"status": "PENDING_RESEARCH_ONLY"}],
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
+    client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            quantified_pullback_proof_path=proof,
+        )
+    )
+
+    page = client.get("/quantified-strategy-lab")
+    payload = client.get(
+        "/quantified-strategy-lab/pullback-proof?token=t3st-token"
+    ).json()
+
+    assert page.status_code == 200
+    assert "Pullback Proof Lane" in page.text
+    assert payload["proof_id"] == "quantified_pullback_reversion_proof_v1"
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+
+
 def test_cost_model_route_has_no_control_verbs(client):
     """The new route is read-only like every other data route."""
     for method in ("post", "put", "delete"):
