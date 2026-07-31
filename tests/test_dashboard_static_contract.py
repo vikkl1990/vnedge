@@ -81,6 +81,15 @@ def test_dashboard_polled_endpoints_have_app_routes():
     assert not missing
 
 
+def test_dashboard_has_darwinian_agent_survival_panel():
+    html = _index()
+    assert "Darwinian Agent Survival" in html
+    assert 'id="darwinianAgentSurvival"' in html
+    assert "/darwinian-agent-survival" in html
+    assert "function renderDarwinianAgentSurvival" in html
+    assert "JANUS cohorts" in html
+
+
 def test_journal_has_pnl_by_cohort_panel():
     html = _index()
     assert "P&amp;L by cohort" in html

@@ -916,6 +916,10 @@
       </div>
       <div class="col">
         <section class="panel">
+          <div class="phead"><h2>Darwinian Agent Survival</h2><span class="meta" id="darwinianMeta">loading…</span></div>
+          <div id="darwinianAgentSurvival"><div class="note">agent survival report loading…</div></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Standing Findings</h2></div>
           <div class="note"><b>The one surviving edge</b> is the maker liquidation-exhaustion fade on BTC/ETH — <span class="k">+6 bps net</span> at true base fees, survives even worst-case 7 bps. Thin (n≈53) but robust.</div>
           <div class="note"><b>Mechanical candle edge:</b> none, at any timeframe or hold. Proven exhaustively — the scalp patterns don't clear Delta/Bybit fees taker-side.</div>
@@ -1318,6 +1322,43 @@
       return '<div class="feerow"><span class="fn">'+stratShort(g.strategy)+'</span><div class="feetrack">'+bar+'</div>'+
         '<span class="feeval '+(pos?"up":"dn")+'">'+(pos?"+":"")+net.toFixed(1)+'</span></div>';}).join('')+
       '<div style="font-size:10px;color:var(--txt-faint);margin-top:2px">center = break-even · best net edge (bps) after fees</div>';
+  }
+  function darwinCls(st){
+    st=String(st||"");
+    if(st==="LEADING_AGENT"||st==="SURVIVING_AGENT")return"ok";
+    if(st==="OBSERVE_MORE"||st==="NO_EVIDENCE")return"wait";
+    if(st==="MUTED_AGENT"||st==="EXTINCTION_REVIEW")return"bad";
+    return"fix";
+  }
+  function renderDarwinianAgentSurvival(d){
+    var el=$("darwinianAgentSurvival"),meta=$("darwinianMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.agents)||[],cohorts=(d&&d.cohorts)||[];
+    if(meta)meta.textContent=num(s.upweighted_agents)+" up · "+num(s.downweighted_agents)+" down · "+esc(String(s.janus_regime||"").toLowerCase().replace(/_/g," "));
+    if(!rows.length){el.innerHTML='<div class="note">darwinian agent survival report loading…</div>';return;}
+    var topC=cohorts[0]||{};
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Top cohort</div><div class="v" style="font-size:15px;color:var(--brand)">'+esc(String(topC.cohort||"--").replace(/_/g," "))+'</div></div>'+
+      '<div class="perfk"><div class="l">JANUS weight</div><div class="v">'+(topC.janus_weight==null?"--":num(topC.janus_weight).toFixed(2))+'</div></div>'+
+      '<div class="perfk"><div class="l">Upweighted</div><div class="v" style="color:var(--long)">'+num(s.upweighted_agents)+'</div></div>'+
+      '<div class="perfk"><div class="l">Extinction review</div><div class="v" style="color:var(--short)">'+num(s.extinction_review)+'</div></div>'+
+    '</div>';
+    var cohortLine='<div class="fblocker"><b>JANUS cohorts:</b> '+cohorts.slice(0,5).map(function(c){
+      return esc(String(c.cohort||"--").replace(/_/g," "))+' '+num(c.janus_weight).toFixed(2);
+    }).join(' · ')+'</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var st=String(r.survival_state||"UNKNOWN"),cls=darwinCls(st),w=num(r.darwinian_weight),dw=num(r.weight_delta),bps=r.avg_net_bps==null?"--":num(r.avg_net_bps).toFixed(1)+"bps";
+      var pf=r.profit_factor==null?"--":num(r.profit_factor).toFixed(2);
+      var inf=String(r.influence_state||"NEUTRAL"),infCls=inf==="UPWEIGHT"?"ok":inf==="DOWNWEIGHT"?"bad":"wait";
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.agent_id))+'</b><small>'+esc(String(r.cohort||"--").replace(/_/g," "))+' · '+num(r.lane_count)+' lane'+(num(r.lane_count)===1?"":"s")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(st.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(r.next_action||"")+'">'+esc(String(r.next_action||"").slice(0,54))+'</small></div>'+
+        '<div><b class="num">'+w.toFixed(2)+'</b><small><span class="actstate '+infCls+'" style="padding:1px 5px">'+esc(inf.toLowerCase())+'</span> '+(dw>=0?"+":"")+dw.toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+num(r.agent_score).toFixed(1)+'</b><small>'+bps+' · PF '+pf+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+num(r.live_signals)+' signals · '+esc(String(r.top_uplift||"--").toLowerCase().replace(/_/g," ").slice(0,32))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+cohortLine+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"darwinian agent survival pending")+'</div>';
   }
   var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,governor:null,rosterDrift:null,profile:null,meta:null};
   function renderLaneFunnel(d){
@@ -2161,6 +2202,7 @@
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
   function pollPaperRosterDrift(){ poll("/paper-roster-drift", renderPaperRosterDrift); }
+  function pollDarwinianAgentSurvival(){ poll("/darwinian-agent-survival", renderDarwinianAgentSurvival); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; lifeData.meta=d; renderBuildMeta(d); renderDeployProv(lastSnap); renderLifecycleConsole(); }); }
   function pollFleet(){ poll("/fleet", function(d){ fleetData=d; renderFleet(); }); }
@@ -2316,8 +2358,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
