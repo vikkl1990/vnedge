@@ -242,6 +242,31 @@ def test_paper_trade_contract_reconciler_classifies_runtime_drift_vs_alpha():
     }
 
 
+def test_maker_quote_lifecycle_publishes_execution_path_truth():
+    service = compose_services()["maker-quote-lifecycle"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.maker_quote_lifecycle",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--performance" in service["command"]
+    assert "research/live_research/paper_lane_performance_latest.json" in service["command"]
+    assert "--exit-autopsy" in service["command"]
+    assert "research/live_research/paper_trade_exit_autopsy_latest.json" in service["command"]
+    assert "--min-maker-attempts" in service["command"]
+    assert "--min-maker-fill-rate-pct" in service["command"]
+    assert "--min-taker-net-edge-bps" in service["command"]
+    assert "--min-taker-cost-coverage" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "paper-lane-performance",
+        "paper-trade-exit-autopsy",
+    }
+
+
 def test_paper_trade_entry_autopsy_publishes_entry_quality_evidence():
     service = compose_services()["paper-trade-entry-autopsy"]
 
