@@ -441,6 +441,7 @@ def create_app(
     paper_trade_exit_autopsy_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
+    paper_roster_drift_path: Path | None = None,
     ml_pipeline_status_path: Path | None = None,
     pine_research_path: Path | None = None,
     quantified_strategy_lab_path: Path | None = None,
@@ -627,6 +628,10 @@ def create_app(
     paper_lane_governor_file = (
         paper_lane_governor_path
         or Path("research/live_research/paper_lane_governor_latest.json")
+    )
+    paper_roster_drift_file = (
+        paper_roster_drift_path
+        or Path("research/live_research/paper_roster_drift_latest.json")
     )
     ml_pipeline_status_file = (
         ml_pipeline_status_path
@@ -1125,6 +1130,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper lane governor report unavailable",
                     "mode": "read_only_paper_lane_governor",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-roster-drift")
+    async def paper_roster_drift(request: Request) -> JSONResponse:
+        """Latest paper roster drift report.
+
+        This compares the governor's proposed paper roster to runtime scanner
+        and activation evidence, naming extra/missing paper lanes. It is
+        read-only and cannot mutate runtime lanes.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_roster_drift_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "paper roster drift report unavailable",
+                    "mode": "read_only_paper_roster_drift",
                     "can_trade": False,
                     "can_promote": False,
                 },

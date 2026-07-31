@@ -109,6 +109,44 @@ def test_exit_autopsy_marks_stop_dominated_paper_lane(tmp_path):
     assert payload["can_promote"] is False
 
 
+def test_exit_autopsy_uses_legacy_tick_stop_reason_from_journal(tmp_path):
+    base = datetime(2026, 7, 30, 0, 0, tzinfo=UTC)
+    lane = "legacy_tick_lane"
+    _write_jsonl(tmp_path / f"{lane}.fills.jsonl", [
+        _fill(base.isoformat(), "entry-1", "buy", 100.0, 0.0),
+        _fill((base + timedelta(minutes=5)).isoformat(), "exit-1", "sell", 99.0, -1.0),
+    ])
+    _write_jsonl(tmp_path / f"{lane}.journal.jsonl", [
+        _journal_record(
+            "paper_lane_heartbeat",
+            {
+                "exchange": "delta_india",
+                "symbol": "ETH/USD:USD",
+                "timeframe": "5m",
+                "strategy_id": "stealth_trail_bbp_v1",
+                "mode": "paper",
+            },
+            base.isoformat(),
+        ),
+        _journal_record(
+            "tick_stop_exit",
+            {"reason": "tick_stop", "state": "filled", "active_stop_price": 99.0},
+            (base + timedelta(minutes=5)).isoformat(),
+        ),
+    ])
+
+    payload = build_paper_trade_exit_autopsy(
+        journal_dir=tmp_path,
+        config=PaperTradeExitAutopsyConfig(min_closed_trades=1),
+        now=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+    row = payload["rows"][0]
+    assert row["missing_resolution_rate"] == 0.0
+    assert row["resolution_counts"]["stop"] == 1
+    assert payload["summary"]["metadata_gaps"] == 0
+
+
 def test_exit_autopsy_marks_fee_wall_dominated_small_winners(tmp_path):
     _closed_trades(
         tmp_path,

@@ -116,6 +116,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "/lane-survival" in html
     assert "Paper Lane Governor" in html
     assert "/paper-lane-governor" in html
+    assert "Paper Roster Drift" in html
+    assert "/paper-roster-drift" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -930,6 +932,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_roster_drift = tmp_path / "paper_roster_drift.json"
+    paper_roster_drift.write_text(json.dumps({
+        "mode": "read_only_paper_roster_drift",
+        "summary": {"extra_paper_lanes": 2, "missing_paper_lanes": 0},
+        "rows": [{"drift_state": "EXTRA_RUNNING_PAPER", "lane_id": "extra"}],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -948,6 +958,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_trade_exit_autopsy_path=paper_exit_autopsy,
         lane_survival_path=lane_survival,
         paper_lane_governor_path=paper_lane_governor,
+        paper_roster_drift_path=paper_roster_drift,
     ))
 
     assert client.get("/alpha-council").status_code == 401
@@ -962,6 +973,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-trade-exit-autopsy").status_code == 401
     assert client.get("/lane-survival").status_code == 401
     assert client.get("/paper-lane-governor").status_code == 401
+    assert client.get("/paper-roster-drift").status_code == 401
     assert client.get("/trade-profile-matrix").status_code == 401
     assert client.get("/operator-actions").status_code == 401
     assert client.get("/alpha-council?token=t3st-token").json()["summary"]["debated"] == 2
@@ -1010,6 +1022,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_governor_payload["mode"] == "read_only_paper_lane_governor"
     assert paper_governor_payload["can_trade"] is False
     assert paper_governor_payload["can_promote"] is False
+    paper_roster_payload = client.get("/paper-roster-drift?token=t3st-token").json()
+    assert paper_roster_payload["summary"]["extra_paper_lanes"] == 2
+    assert paper_roster_payload["mode"] == "read_only_paper_roster_drift"
+    assert paper_roster_payload["can_trade"] is False
+    assert paper_roster_payload["can_promote"] is False
     trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
     assert trade_profile_payload["mode"] == "read_only_trade_profile_planner"
     assert trade_profile_payload["can_trade"] is False
@@ -1661,6 +1678,7 @@ def test_identity_header_on_all_data_routes():
         "/paper-lane-activation",
         "/lane-survival",
         "/paper-lane-governor",
+        "/paper-roster-drift",
     ):
         r = client.get(f"{path}?token=tok-alice")
         assert r.status_code in (200, 503), path

@@ -550,6 +550,30 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper roster drift: compares the governor's proposed paper roster to the
+  # actual runtime/scanner paper lanes. Read-only: names extra/missing lanes,
+  # but cannot start, stop, demote, promote, or trade anything.
+  paper-roster-drift:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - paper-lane-governor
+      - realtime-scanner
+      - paper-lane-activation
+    command: ["python", "-m", "vnedge.research.paper_roster_drift",
+              "--interval-seconds", "${PAPER_ROSTER_DRIFT_INTERVAL_SECONDS:-60}",
+              "--governor", "research/live_research/paper_lane_governor_latest.json",
+              "--scanner", "research/live_research/realtime_scanner_latest.json",
+              "--activation", "research/live_research/paper_lane_activation_latest.json",
+              "--out", "research/live_research/paper_roster_drift_latest.json",
+              "--feed", "research/live_research/paper_roster_drift_feed.jsonl",
+              "--print"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # ML pipeline status: runs the real meta-label dataset builder over the live
   # journals + candles so the dashboard ML view shows the training set GROWING
   # as trials mature. Read-only; trains/promotes nothing.

@@ -231,6 +231,33 @@ def test_paper_lane_governor_publishes_roster_recommendations():
     assert service["depends_on"] == ["lane-survival"]
 
 
+def test_paper_roster_drift_reconciles_governor_with_runtime_reality():
+    service = compose_services()["paper-roster-drift"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_roster_drift",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "--governor" in service["command"]
+    assert "research/live_research/paper_lane_governor_latest.json" in service["command"]
+    assert "--scanner" in service["command"]
+    assert "research/live_research/realtime_scanner_latest.json" in service["command"]
+    assert "--activation" in service["command"]
+    assert "research/live_research/paper_lane_activation_latest.json" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/paper_roster_drift_latest.json" in service["command"]
+    assert "--feed" in service["command"]
+    assert "research/live_research/paper_roster_drift_feed.jsonl" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "paper-lane-governor",
+        "realtime-scanner",
+        "paper-lane-activation",
+    }
+
+
 def test_paper_lane_activation_publishes_server_side_profile_ack():
     service = compose_services()["paper-lane-activation"]
 
