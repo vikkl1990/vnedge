@@ -70,6 +70,19 @@ python -m vnedge.research.quant_loop_governance \
 
 Docker Compose refreshes this continuously as `quant-loop-governance`.
 
+## Agentic Supervisor
+
+`agentic_research_os_v2` reads the Quant Loop Governance artifact together with
+Vibe Intelligence, Alpha Arena, the Quant OS Agent Gateway snapshot, and Paper
+Lane Performance. It publishes the operator queue for agent work:
+
+- verify untouched-window candidates
+- repair stale or failed tasks
+- decay negative paper lanes
+- retire repeatedly decayed hypotheses
+
+It does not change this governance verdict and it cannot trade or promote.
+
 ## Dashboard
 
 The Pine Research Lab reads:

@@ -1174,6 +1174,40 @@ def test_agent_jobs_missing_dir_is_safe(tmp_path):
     assert payload["live_orders_enabled"] is False
 
 
+def test_agentic_research_os_endpoint_is_dashboard_gated(tmp_path):
+    agentic = tmp_path / "agentic_research_os_latest.json"
+    agentic.write_text(
+        json.dumps(
+            {
+                "os_id": "agentic_research_os_v2",
+                "summary": {"operator_actions": 2, "critical_actions": 1},
+                "agent_scorecards": [{"agent_id": "task_ledger", "can_promote": False}],
+                "operator_queue": [{"action": "RECLAIM_OR_FAIL_STALE_TASK", "can_trade": False}],
+                "source_status": [{"source": "quant_os_agent_gateway", "state": "OK"}],
+                "operator_answer": "repair stale task",
+                "can_trade": False,
+                "can_promote": False,
+                "live_orders_enabled": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(
+        create_app(provider, token="t3st-token", agentic_research_os_path=agentic)
+    )
+
+    assert client.get("/agentic-research-os").status_code == 401
+    payload = client.get("/agentic-research-os?token=t3st-token").json()
+    assert payload["os_id"] == "agentic_research_os_v2"
+    assert payload["summary"]["critical_actions"] == 1
+    assert payload["operator_queue"][0]["can_trade"] is False
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert payload["live_orders_enabled"] is False
+
+
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})

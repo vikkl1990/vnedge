@@ -296,6 +296,15 @@
   .refsrc{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--info);background:var(--info-soft);border:1px solid rgba(79,176,255,.24);border-radius:5px;padding:2px 5px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .refaccept{margin:0;padding-left:16px;color:var(--txt-faint);font-size:10.5px;line-height:1.45}
   .refaccept li{margin:2px 0}
+  .osmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:14px 14px 0}
+  .osmetric{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .osmetric .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .osmetric .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:3px;color:var(--txt)}
+  .osrow{display:grid;grid-template-columns:1.05fr .7fr .8fr 1.6fr;gap:10px;align-items:center;padding:10px 15px;border-top:1px solid var(--line);font-size:11.5px}
+  .osrow.head{margin-top:12px;padding-top:9px}
+  .osrow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .osrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .osrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .funnelgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:14px}
   .fstep{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 10px;min-width:0;position:relative}
   .fstep:after{content:"";position:absolute;right:-8px;top:50%;width:8px;height:1px;background:var(--line-2)}
@@ -537,6 +546,9 @@
     .actionmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
     .actionrow{grid-template-columns:1fr}
     .actionrow.head{display:none}
+    .osmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .osrow{grid-template-columns:1fr}
+    .osrow.head{display:none}
     .pmeta{display:none}
     .conn{grid-template-columns:36px 1fr;gap:11px}
     .conn .cacct{display:none}
@@ -1046,6 +1058,10 @@
           <div class="note"><b>The one surviving edge</b> is the maker liquidation-exhaustion fade on BTC/ETH — <span class="k">+6 bps net</span> at true base fees, survives even worst-case 7 bps. Thin (n≈53) but robust.</div>
           <div class="note"><b>Mechanical candle edge:</b> none, at any timeframe or hold. Proven exhaustively — the scalp patterns don't clear Delta/Bybit fees taker-side.</div>
           <div class="note"><b>Maker execution</b> is the only thing that turns these patterns fee-positive. stealth_trail is the cleanest maker-first candidate in the fleet.</div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Agentic Research OS</h2><span class="meta" id="agenticOsMeta">supervisor loading…</span></div>
+          <div id="agenticOs"><div class="note">waiting for agent scorecards and the keep/decay/retire queue…</div></div>
         </section>
       </div>
     </div>
@@ -2316,6 +2332,43 @@
     var answer='<div class="fblocker"><b>Operator answer:</b> '+safe(d.operator_answer||"")+' Next build lane: <span class="num">'+safe(next.next_pr||"--")+'</span>.</div>';
     el.innerHTML=summary+cards+answer;
   }
+  function renderAgenticResearchOS(d){
+    var el=$("agenticOs"),meta=$("agenticOsMeta"); if(!el)return;
+    var sum=(d&&d.summary)||{},actions=(d&&d.operator_queue)||[],cards=(d&&d.agent_scorecards)||[];
+    if(meta)meta.textContent=num(sum.operator_actions)+" actions · "+num(sum.critical_actions)+" critical · min health "+num(sum.agent_health_min).toFixed(0);
+    var metrics='<div class="osmetrics">'+
+      '<div class="osmetric"><div class="l">Actions</div><div class="v">'+num(sum.operator_actions)+'</div></div>'+
+      '<div class="osmetric"><div class="l">Critical</div><div class="v" style="color:var(--short)">'+num(sum.critical_actions)+'</div></div>'+
+      '<div class="osmetric"><div class="l">Verify</div><div class="v" style="color:var(--info)">'+num((sum.buckets||{}).VERIFY)+'</div></div>'+
+      '<div class="osmetric"><div class="l">Retire</div><div class="v" style="color:var(--warn)">'+num((sum.buckets||{}).RETIRE)+'</div></div>'+
+    '</div>';
+    var cardRows=cards.slice(0,5).map(function(c){
+      var hs=num(c.health_score),tone=hs>=75?"ok":hs>=45?"wait":"bad";
+      return '<div class="osrow">'+
+        '<div><b>'+safe(c.agent_id||"--")+'</b><small>'+safe(c.role||"")+'</small></div>'+
+        '<div>'+lifeChip(safe(c.status||"--").toLowerCase(),tone)+'</div>'+
+        '<div><b class="num">'+hs.toFixed(0)+'/100</b><small>'+num(c.action_count)+' actions · '+num(c.freshness_minutes).toFixed(0)+'m old</small></div>'+
+        '<div><small>'+safe(c.source||"")+'</small></div>'+
+      '</div>';
+    }).join('');
+    var actionRows=actions.slice(0,6).map(function(a){
+      var tone=a.severity==="critical"?"bad":a.severity==="warning"?"wait":"ok";
+      return '<div class="osrow">'+
+        '<div><b>'+safe((a.strategy_id||a.entity_id||"--").slice(0,36))+'</b><small>'+safe([a.exchange,a.symbol,a.timeframe].filter(Boolean).join(" · "))+'</small></div>'+
+        '<div>'+lifeChip(safe(String(a.bucket||"").toLowerCase()),tone)+'</div>'+
+        '<div><b>'+safe(a.action||"--")+'</b><small>'+safe(a.source||"")+'</small></div>'+
+        '<div><small title="'+safe(a.reason||"")+'">'+safe(String(a.reason||"").slice(0,96))+'</small></div>'+
+      '</div>';
+    }).join('');
+    if(!cards.length&&!actions.length){
+      el.innerHTML=metrics+'<div class="note">agentic research os artifact not populated yet.</div>';
+      return;
+    }
+    el.innerHTML=metrics+
+      '<div class="osrow head"><span>Agent</span><span>Status</span><span>Health</span><span>Source</span></div>'+cardRows+
+      '<div class="osrow head"><span>Target</span><span>Bucket</span><span>Action</span><span>Reason</span></div>'+actionRows+
+      '<div class="fblocker"><b>Operator answer:</b> '+safe((d&&d.operator_answer)||"research-only supervisor; no trade authority")+'</div>';
+  }
 
   /* ---- WebSocket to the read-only /state stream ---- */
   var backoff=1000;
@@ -2349,6 +2402,7 @@
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
+  function pollAgenticResearchOS(){ poll("/agentic-research-os", renderAgenticResearchOS); }
   function renderPreLive(d){
     var el=$("preLive"),meta=$("preLiveMeta"); if(!el||!d)return;
     var checks=d.checks||[], path=d.path_to_live||[];
@@ -2535,8 +2589,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

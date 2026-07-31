@@ -432,6 +432,7 @@ def create_app(
     alpha_council_path: Path | None = None,
     alpha_workbench_path: Path | None = None,
     vibe_intelligence_path: Path | None = None,
+    agentic_research_os_path: Path | None = None,
     alerts_path: Path | None = None,
     journal_dir: Path | None = None,
     runbooks_path: Path | None = None,
@@ -593,6 +594,10 @@ def create_app(
     quant_loop_governance_file = (
         quant_loop_governance_path
         or Path("research/live_research/quant_loop_governance_latest.json")
+    )
+    agentic_research_os_file = (
+        agentic_research_os_path
+        or Path("research/live_research/agentic_research_os_latest.json")
     )
     fee_wall_forensics_file = Path(
         "research/live_research/fee_wall_forensics_latest.json"
@@ -925,6 +930,33 @@ def create_app(
         """
         user = _authorized(request)
         return JSONResponse(build_external_repo_synthesis(), headers=_identity(user))
+
+    @app.get("/agentic-research-os")
+    async def agentic_research_os(request: Request) -> JSONResponse:
+        """Latest Agentic Research OS supervisor report.
+
+        This is dashboard-token gated and research-only. It ranks agent work,
+        verifier gaps, stale tasks, and keep/decay/retire actions without
+        granting trade or promotion authority.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                agentic_research_os_file,
+                {
+                    "os_id": "agentic_research_os_v2",
+                    "summary": {},
+                    "agent_scorecards": [],
+                    "operator_queue": [],
+                    "source_status": [],
+                    "operator_answer": "agentic research os artifact unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                    "live_orders_enabled": False,
+                },
+            ),
+            headers=_identity(user),
+        )
 
     @app.get("/agent-jobs")
     async def agent_jobs(request: Request, limit: int = 100) -> JSONResponse:
