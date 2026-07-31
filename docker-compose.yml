@@ -133,6 +133,28 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Quantified Strategy Lab proof lane: seeds/reuses registered-strategy
+  # backtest jobs for pullback_reversion_pack_v1 and publishes their status
+  # back into the lab UI. Research-only; no paper/shadow/live lane mutation.
+  quantified-pullback-reversion-proof:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - agent-job-runner
+    command: ["python", "-m", "vnedge.research.quantified_pullback_reversion_proof",
+              "--interval-seconds", "${QUANTIFIED_PULLBACK_PROOF_INTERVAL_SECONDS:-300}",
+              "--seed-jobs",
+              "--jobs-dir", "${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}",
+              "--artifact-dir", "research/live_research/agent_jobs",
+              "--out", "research/live_research/quantified_pullback_reversion_proof_latest.json",
+              "--feed", "research/live_research/quantified_pullback_reversion_proof_feed.jsonl"]
+    volumes:
+      - ./logs:/app/logs
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Continuous research: hourly data refresh + rolling walk-forward +
   # promotion-gate verdicts. No execution access — it shares only market
   # data (rw) and the research output dir the dashboard reads (ro there).

@@ -27,6 +27,7 @@ from vnedge.strategy.indicators import atr, efficiency_ratio, ema, prior_high, p
 
 QUANTIFIED_FEE_WALL_SNIPER_ID = "quantified_fee_wall_sniper_v1"
 QUANTIFIED_FEE_WALL_SNIPER_SIDES: tuple[str, ...] = ("long", "short")
+QUANTIFIED_FEE_WALL_SNIPER_SETUPS: tuple[str, ...] = ("pullback", "breakout")
 Side = Literal["long", "short"]
 
 
@@ -79,6 +80,7 @@ class QuantifiedFeeWallSniperParams:
     taker_extra_buffer_bps: float = 8.0
     min_quality_score: float = 0.58
     allowed_sides: tuple[str, ...] = ()
+    enabled_setups: tuple[str, ...] = QUANTIFIED_FEE_WALL_SNIPER_SETUPS
 
     @property
     def taker_round_trip_cost_bps(self) -> float:
@@ -359,7 +361,16 @@ def add_quantified_fee_wall_sniper_columns(
     for side in QUANTIFIED_FEE_WALL_SNIPER_SIDES:
         _add_side_geometry(df, side, params)
         df[f"setup_{side}"] = (
-            df[f"breakout_{side}"] | df[f"pullback_{side}"]
+            (
+                df[f"breakout_{side}"]
+                if "breakout" in params.enabled_setups
+                else False
+            )
+            | (
+                df[f"pullback_{side}"]
+                if "pullback" in params.enabled_setups
+                else False
+            )
         ).fillna(False)
         df[f"quality_score_{side}"] = _quality_score(df, side, params)
         df[f"expected_gross_bps_{side}"] = _expected_gross_bps(df, side, params)
@@ -497,6 +508,7 @@ def _coerce_params(
     if min_expected_net_edge_bps is not None:
         base_values["min_expected_net_edge_bps"] = float(min_expected_net_edge_bps)
     base_values["allowed_sides"] = _validate_sides(tuple(base_values["allowed_sides"]))
+    base_values["enabled_setups"] = _validate_setups(tuple(base_values["enabled_setups"]))
     out = QuantifiedFeeWallSniperParams(**base_values)
     _validate_positive(out)
     return out
@@ -531,6 +543,15 @@ def _validate_sides(sides: tuple[str, ...]) -> tuple[str, ...]:
     if invalid:
         raise ValueError(f"unsupported side(s): {invalid}")
     return sides
+
+
+def _validate_setups(setups: tuple[str, ...]) -> tuple[str, ...]:
+    invalid = sorted(set(setups) - set(QUANTIFIED_FEE_WALL_SNIPER_SETUPS))
+    if invalid:
+        raise ValueError(f"unsupported setup(s): {invalid}")
+    if not setups:
+        raise ValueError("enabled_setups must include at least one setup")
+    return setups
 
 
 def _flag(row: pd.Series, name: str) -> bool:

@@ -130,6 +130,9 @@
     .factory-card{background:#0b1119;border:1px solid var(--line);border-radius:8px;padding:12px}
     .factory-card h3{margin:0 0 8px;font-family:var(--mono);font-size:14px;color:var(--text)}
     .factory-card .big{font-family:var(--mono);font-size:24px;font-weight:900;color:var(--accent)}
+    .proof-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+    .proof-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+    .proof-table table{min-width:980px}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:13px 15px;border-bottom:1px solid var(--line)}
     input,select{
       background:#0a1018;
@@ -244,6 +247,35 @@
       </div>
     </section>
 
+    <section class="card" style="margin-bottom:14px">
+      <div class="panel-title">
+        <h2>Pullback Proof Lane</h2>
+        <span class="badge study" id="proofBadge">research only</span>
+      </div>
+      <div class="panel-body">
+        <div class="proof-grid" id="proofSummary"></div>
+        <div class="note" id="proofAnswer">Waiting for proof artifact...</div>
+        <div class="proof-table" style="margin-top:12px">
+          <table>
+            <thead>
+              <tr>
+                <th>Lane</th>
+                <th>Status</th>
+                <th>Verdict</th>
+                <th>Trades</th>
+                <th>Avg Net</th>
+                <th>PF</th>
+                <th>Next</th>
+              </tr>
+            </thead>
+            <tbody id="proofRows">
+              <tr><td colspan="7" class="loading">Loading pullback proof queue...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="panel-title">
         <h2>Strategy Inventory</h2>
@@ -294,6 +326,7 @@
 
     let payload = null;
     let factory = null;
+    let pullbackProof = null;
     const fmt = new Intl.NumberFormat("en-US");
 
     function badgeClass(value){
@@ -379,6 +412,49 @@
       el.innerHTML = cards.join("") + blueprints;
     }
 
+    function renderProof(){
+      const summaryEl = document.getElementById("proofSummary");
+      const rowsEl = document.getElementById("proofRows");
+      if (!pullbackProof || !pullbackProof.summary) {
+        document.getElementById("proofBadge").textContent = "unavailable";
+        summaryEl.innerHTML = "";
+        document.getElementById("proofAnswer").textContent = "Pullback proof artifact unavailable. Seed the Quantified proof queue to start replay jobs.";
+        rowsEl.innerHTML = '<tr><td colspan="7" class="loading">No proof artifact published.</td></tr>';
+        return;
+      }
+      const s = pullbackProof.summary || {};
+      const gate = s.gate || {};
+      const profile = s.paper_profile || {};
+      document.getElementById("proofBadge").textContent = `${fmt.format(s.completed_cells || 0)}/${fmt.format(s.total_cells || 0)} complete`;
+      summaryEl.innerHTML = [
+        `<div class="factory-card"><div class="label">Cells</div><div class="big">${fmt.format(s.total_cells || 0)}</div><p>venue x pair x timeframe</p></div>`,
+        `<div class="factory-card"><div class="label">Completed</div><div class="big">${fmt.format(s.completed_cells || 0)}</div><p>${fmt.format(s.pending_cells || 0)} pending / ${fmt.format(s.running_cells || 0)} running</p></div>`,
+        `<div class="factory-card"><div class="label">Proof Candidates</div><div class="big">${fmt.format(s.promotable_proof_candidates || 0)}</div><p>needs untouched judgment</p></div>`,
+        `<div class="factory-card"><div class="label">Profile</div><div class="big">$${fmt.format(profile.margin_usd || 0)}</div><p>${profile.leverage || "--"}x / gate ${gate.min_net_bps || "--"} bps</p></div>`
+      ].join("");
+      document.getElementById("proofAnswer").textContent = pullbackProof.operator_answer || "Pullback proof loaded.";
+      const rows = (pullbackProof.rows || []).slice().sort((a,b) => {
+        const av = a.avg_net_bps == null ? -999999 : Number(a.avg_net_bps);
+        const bv = b.avg_net_bps == null ? -999999 : Number(b.avg_net_bps);
+        return bv - av;
+      }).slice(0,36);
+      rowsEl.innerHTML = rows.map(row => {
+        const avg = row.avg_net_bps == null ? "--" : `${Number(row.avg_net_bps).toFixed(2)} bps`;
+        const pf = row.profit_factor == null ? "--" : Number(row.profit_factor).toFixed(2);
+        const cls = (row.verdict || "").includes("PROMOTABLE") || (row.verdict || "").includes("SPARSE") ? "portable" :
+          (row.verdict || "").includes("NEGATIVE") || (row.verdict || "").includes("FAILED") || (row.verdict || "").includes("BLOCKED") ? "blocked" : "study";
+        return `<tr>
+          <td><div class="title">${row.exchange} · ${row.symbol}</div><div class="tiny">${row.timeframe} · pullback-only</div></td>
+          <td><span class="badge">${row.status || "--"}</span></td>
+          <td><span class="badge ${cls}">${row.verdict || "--"}</span></td>
+          <td class="num">${fmt.format(row.samples || 0)}</td>
+          <td class="num">${avg}</td>
+          <td class="num">${pf}</td>
+          <td>${row.next_action || "--"}</td>
+        </tr>`;
+      }).join("") || '<tr><td colspan="7" class="loading">No proof rows yet.</td></tr>';
+    }
+
     function populateFilters(){
       const ports = [...new Set((payload.strategy_reviews || []).map(r => r.recommended_port))].sort();
       document.getElementById("portFilter").innerHTML = '<option value="">All port families</option>' +
@@ -423,6 +499,7 @@
       document.getElementById("status").textContent = "LOADING";
       const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
       const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const proofUrl = "/quantified-strategy-lab/pullback-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const res = await fetch(url, {cache:"no-store"});
       if (!res.ok) throw new Error("request failed " + res.status);
       payload = await res.json();
@@ -432,11 +509,18 @@
       } catch {
         factory = null;
       }
+      try {
+        const proofRes = await fetch(proofUrl, {cache:"no-store"});
+        pullbackProof = proofRes.ok ? await proofRes.json() : null;
+      } catch {
+        pullbackProof = null;
+      }
       renderSummary();
       renderFastTrack();
       renderContract();
       renderTasks();
       renderFactory();
+      renderProof();
       populateFilters();
       renderRows();
     }
