@@ -319,7 +319,9 @@ def test_paper_observation_flag_off_is_a_no_op_on_desired_set():
 
 
 def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    # PRUNE_DEAD off: this exercises the MIRRORING logic against the full roster,
+    # independent of which strategies the evidence-prune removes.
+    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1", "MULTI_LANE_PRUNE_DEAD": "0"})
     ids = {spec.lane_id for spec in specs}
 
     # Governed BTC/Bybit paper-trial ledgers stay canonical and are not mirrored.
@@ -347,6 +349,8 @@ def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors(
     specs = desired_lane_specs({
         "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
         "MULTI_LANE_DELTA_PAPER_OBSERVE": "0",
+        # mirroring logic under test — independent of the evidence-prune:
+        "MULTI_LANE_PRUNE_DEAD": "0",
         # Isolate the observation-mirror behavior under test from the deliberate
         # native Delta PAPER trial lane (its own MULTI_LANE_EVIDENCE_PAPER_TRIAL
         # flag), which is not a mirror.
@@ -822,3 +826,40 @@ def test_build_strategy_backfilled_seed_keeps_persistent_accumulator(tmp_path):
     )
     assert isinstance(strat, LivePersistentFundingMR)
     assert len(strat.funding) == 2  # seeded, not the synthetic 1970 anchor
+
+
+def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
+    """Evidence-based prune removes proven-dead families; keeps the edge set.
+    Reversible via MULTI_LANE_PRUNE_DEAD=0."""
+    from vnedge.runtime.multi_lane_shadow import _pruned_lane
+
+    def spec(strategy, symbol):
+        return LaneSpec(lane_id=f"{strategy}_{symbol}", exchange="bybit",
+                        symbol=symbol, strategy_id=strategy, strategy_params={},
+                        mode=RunnerMode.SHADOW)
+
+    # pruned
+    assert _pruned_lane(spec("alpha_stack_confluence_v1", "BTC/USDT:USDT"))
+    assert _pruned_lane(spec("luxy_ut_bot_forecast_v1", "BTC/USDT:USDT"))
+    assert _pruned_lane(spec("trend_continuation_v1", "XRP/USDT:USDT"))
+    assert _pruned_lane(spec("quant_signal_pack_v1", "DOGE/USDT:USDT"))
+    assert _pruned_lane(spec("funding_mean_reversion_v1", "XRP/USDT:USDT"))
+    assert _pruned_lane(spec("funding_mean_reversion_v1", "ETH/USDT:USDT"))
+    # kept — the real edge / candidates
+    assert not _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT"))
+    assert not _pruned_lane(spec("quant_signal_pack_v1", "ETH/USDT:USDT"))
+    assert not _pruned_lane(spec("quant_signal_pack_v1", "SOL/USDT:USDT"))
+    assert not _pruned_lane(spec("crypto_trend_atr_margin_v1", "DOGE/USDT:USDT"))
+    assert not _pruned_lane(spec("volatility_expansion_breakout_v1", "DOGE/USDT:USDT"))
+
+
+def test_prune_toggle_and_roster_effect():
+    env = {"MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india"}
+    on = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "1"})
+    off = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "0"})
+    assert len(on) <= len(off)  # prune never adds lanes
+    # no pruned strategy survives when the filter is on
+    assert not any(s.strategy_id in {"alpha_stack_confluence_v1", "luxy_ut_bot_forecast_v1",
+                                     "trend_continuation_v1"} for s in on)
+    # ...but they can be brought back with the toggle (if present in the base set)
+    assert any(s.strategy_id == "trend_continuation_v1" for s in off)
