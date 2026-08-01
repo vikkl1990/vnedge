@@ -58,6 +58,7 @@ from vnedge.dashboard.auth import (
     has_permission,
     permissions_for,
 )
+from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
@@ -477,6 +478,7 @@ def create_app(
     agent_audit_path: Path | None = None,
     agent_jobs_dir: Path | None = None,
     v2_dist_path: Path | None = None,
+    session_issuer: SessionIssuer | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
@@ -494,6 +496,9 @@ def create_app(
             "— no token, no dashboard"
         )
     store = TokenStore(users)
+    # Short-lived session tokens: present the root token once to POST /auth/session
+    # to mint a JWT, then the root secret stops travelling on every request.
+    issuer = session_issuer if session_issuer is not None else SessionIssuer.from_env()
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
     ws_connections: dict[str, int] = {}  # user name -> live socket count (never tokens)
@@ -564,6 +569,14 @@ def create_app(
         candidate = header.removeprefix("Bearer ").strip()
         if not candidate:
             candidate = request.query_params.get("token", "")
+        # A short-lived session JWT is honored first; anything that isn't one of
+        # ours (verify -> None) falls through to the long-lived token store, so
+        # existing tokens keep working unchanged.
+        session = issuer.verify(candidate)
+        if session is not None:
+            if not session.authorized:
+                raise HTTPException(status_code=401, detail=session.reason or "invalid session")
+            return session
         result = store.authenticate(candidate)
         if not result.authorized:
             raise HTTPException(
@@ -775,6 +788,26 @@ def create_app(
                 "role": user.role,
                 "permissions": permissions_for(user.role),
                 "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+            },
+            headers=_identity(user),
+        )
+
+    @app.post("/auth/session")
+    async def auth_session(request: Request) -> JSONResponse:
+        """Exchange the (long-lived) root token for a short-lived session JWT.
+
+        Authenticates the presented token exactly like any data route, then mints
+        a JWT carrying the same identity/role. The browser uses the JWT after
+        this, so the root secret stops travelling on every request. Read-only:
+        this grants no new capability — the session's role equals the token's."""
+        user = _authorized(request)
+        session = issuer.issue(user.name or "", user.role or "viewer")
+        return JSONResponse(
+            {
+                "token": session.token,
+                "expires_at": session.expires_at.isoformat(),
+                "name": user.name,
+                "role": user.role,
             },
             headers=_identity(user),
         )
