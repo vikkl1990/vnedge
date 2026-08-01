@@ -1110,6 +1110,21 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    promotion_runbook = tmp_path / "promotion_review_runbook.json"
+    promotion_runbook.write_text(json.dumps({
+        "runbook_id": "promotion_review_runbook_v1",
+        "summary": {"blocked_by_red_team": 1, "human_review_ready": 0},
+        "rows": [{
+            "review_state": "BLOCKED_BY_RED_TEAM",
+            "strategy_id": "funding_mr",
+            "primary_charge": "fee_drag",
+            "can_trade": False,
+            "can_promote": False,
+        }],
+        "operator_answer": "blocked by red-team charges",
+        "can_trade": False,
+        "can_promote": False,
+    }))
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
     client = TestClient(create_app(
@@ -1119,6 +1134,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         alpha_workbench_path=workbench,
         vibe_intelligence_path=vibe,
         lane_readiness_path=readiness,
+        promotion_review_runbook_path=promotion_runbook,
         realtime_scanner_path=scanner,
         lane_firing_causality_path=causality,
         paper_lane_activation_path=paper_activation,
@@ -1138,6 +1154,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/alpha-workbench").status_code == 401
     assert client.get("/vibe-intelligence").status_code == 401
     assert client.get("/lane-readiness").status_code == 401
+    assert client.get("/promotion-review-runbook").status_code == 401
     assert client.get("/realtime-scanner").status_code == 401
     assert client.get("/lane-firing-causality").status_code == 401
     assert client.get("/paper-lane-activation").status_code == 401
@@ -1161,6 +1178,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     lane_payload = client.get("/lane-readiness?token=t3st-token").json()
     assert lane_payload["summary"]["paper_review_ready"] == 1
     assert lane_payload["can_promote"] is False
+    promotion_payload = client.get("/promotion-review-runbook?token=t3st-token").json()
+    assert promotion_payload["summary"]["blocked_by_red_team"] == 1
+    assert promotion_payload["rows"][0]["primary_charge"] == "fee_drag"
+    assert promotion_payload["can_trade"] is False
+    assert promotion_payload["can_promote"] is False
     scanner_payload = client.get("/realtime-scanner?token=t3st-token").json()
     assert scanner_payload["summary"]["near_trigger"] == 1
     assert scanner_payload["mode"] == "live_observation_not_replay"

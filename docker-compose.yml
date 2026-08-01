@@ -427,6 +427,28 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Promotion review runbook: refreshes the red-team prosecution of PASSED
+  # walk-forward candidates, then publishes operator steps for "blocked",
+  # "needs answers", or "human paper-review ready". Read-only:
+  # can_trade=false/can_promote=false and no manifest mutation.
+  promotion-review-runbook:
+    build: .
+    restart: unless-stopped
+    depends_on: [research-loop]
+    command: ["python", "-m", "vnedge.research.promotion_review_runbook",
+              "--interval-seconds", "${PROMOTION_REVIEW_RUNBOOK_INTERVAL_SECONDS:-300}",
+              "--out", "research/live_research/promotion_review_runbook_latest.json",
+              "--runbook-feed", "research/live_research/promotion_review_runbook_feed.jsonl",
+              "--red-team-out", "research/live_research/promotion_red_team_latest.json",
+              "--print"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+      - ./research/paper_trials:/app/research/paper_trials:ro
+      - ./research/judgments:/app/research/judgments:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Live scanner: answers "what is firing now / near trigger / waiting why?"
   # from current runtime journals only. It deliberately does NOT read replay
   # artifacts, and it cannot trade or promote.

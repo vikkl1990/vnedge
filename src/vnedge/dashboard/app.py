@@ -447,6 +447,7 @@ def create_app(
     journal_dir: Path | None = None,
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
+    promotion_review_runbook_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
@@ -692,6 +693,10 @@ def create_app(
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
+    )
+    promotion_review_runbook_file = (
+        promotion_review_runbook_path
+        or Path("research/live_research/promotion_review_runbook_latest.json")
     )
     paper_route_doctor_file = (
         paper_route_doctor_path
@@ -1150,6 +1155,29 @@ def create_app(
                     "summary": {},
                     "rows": [],
                     "operator_answer": "lane readiness report unavailable",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/promotion-review-runbook")
+    async def promotion_review_runbook(request: Request) -> JSONResponse:
+        """Latest promotion review runbook.
+
+        This is the operator packet derived from red-team prosecution of PASSED
+        walk-forward candidates. It never promotes or trades.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                promotion_review_runbook_file,
+                {
+                    "runbook_id": "promotion_review_runbook_v1",
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "promotion review runbook unavailable",
                     "can_trade": False,
                     "can_promote": False,
                 },
