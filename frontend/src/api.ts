@@ -37,9 +37,27 @@ export interface Position {
   [k: string]: unknown;
 }
 
+export interface PriceBook {
+  bid?: number;
+  ask?: number;
+  mid?: number;
+  spread_bps?: number;
+}
+
+export interface FeedHealth {
+  exchange?: string;
+  candles?: string;
+  funding?: string;
+  open_interest?: string;
+  last_update_ms?: number;
+}
+
 export interface Snapshot {
   mode?: string;
   symbol?: string;
+  price?: PriceBook | null;
+  funding_rate?: number | null;
+  feed_health?: FeedHealth;
   equity?: number;
   peak_equity?: number;
   realized_pnl?: number;
