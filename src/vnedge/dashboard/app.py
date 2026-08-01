@@ -487,6 +487,15 @@ def create_app(
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
     ws_connections: dict[str, int] = {}  # user name -> live socket count (never tokens)
 
+    @app.get("/health")
+    async def health() -> JSONResponse:
+        """Unauthenticated liveness probe for container healthchecks + the TLS
+        proxy. Returns 200 as soon as the app is serving; deliberately requires
+        NO token and reveals no state — its only job is "is the process up".
+        This is what lets compose gate dependents on `service_healthy` and stop
+        the --force-recreate race that took the fleet down twice."""
+        return JSONResponse({"status": "ok"})
+
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.
     lane_dir = journal_dir or (history_path.parent if history_path is not None else None)

@@ -5,6 +5,16 @@ services:
       args:
         VNEDGE_BUILD_SHA: "${VNEDGE_BUILD_SHA:-dev}"
     restart: unless-stopped
+    # Liveness probe on the in-container dashboard (:8080). The container has no
+    # curl, so we use python urllib. start_period covers lane warmup. This is
+    # what lets the TLS proxy + any dependent gate on `service_healthy` and is
+    # half of the fix for the --force-recreate race that took the fleet down.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 180s
     mem_limit: 2500m
     mem_reservation: 256m
     # Multi-exchange lanes: Binance + Bybit, each in BOTH fill modes —

@@ -112,7 +112,15 @@ fi
 
 # Recreate from the already-built image. --no-build guarantees no build spike
 # here; Compose still only recreates services whose config/image changed.
-docker compose up -d --no-build
+# Resilient recreate: a busy daemon occasionally RACES `up` (container removal /
+# "name already in use" mid-recreate) and half-recreates the stack — that took
+# the fleet down on 2026-07-31. On failure, tear down orphans cleanly and retry
+# once so a transient daemon race self-heals instead of stranding the fleet.
+if ! docker compose up -d --no-build; then
+    echo "compose up raced — self-healing: down --remove-orphans + retry" >&2
+    docker compose down --remove-orphans || true
+    docker compose up -d --no-build
+fi
 
 echo "waiting for lanes..."
 LANES_OK=0
