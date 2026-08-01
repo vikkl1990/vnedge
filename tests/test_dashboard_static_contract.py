@@ -203,11 +203,14 @@ def test_quantified_lab_page_renders_complete_blueprint_proof_matrix():
     html = _quantified()
     app = APP.read_text()
     assert "Blueprint Proof Matrix" in html
+    assert "Proof Result Arbiter" in html
     assert "/quantified-strategy-lab/blueprint-proof" in html
+    assert "/quantified-strategy-lab/proof-arbiter" in html
     assert "/quantified-strategy-lab/pullback-proof" in html
     assert "proxy cells" in html
     assert "Paper Profile" in html
     assert '@app.get("/quantified-strategy-lab/blueprint-proof")' in app
+    assert '@app.get("/quantified-strategy-lab/proof-arbiter")' in app
 
 
 def test_dashboard_has_ctrl_k_command_palette():
