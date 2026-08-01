@@ -130,7 +130,7 @@
     .factory-card{background:#0b1119;border:1px solid var(--line);border-radius:8px;padding:12px}
     .factory-card h3{margin:0 0 8px;font-family:var(--mono);font-size:14px;color:var(--text)}
     .factory-card .big{font-family:var(--mono);font-size:24px;font-weight:900;color:var(--accent)}
-    .proof-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+    .proof-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
     .proof-table{max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:8px}
     .proof-table table{min-width:980px}
     .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:13px 15px;border-bottom:1px solid var(--line)}
@@ -249,7 +249,7 @@
 
     <section class="card" style="margin-bottom:14px">
       <div class="panel-title">
-        <h2>Pullback Proof Lane</h2>
+        <h2>Blueprint Proof Matrix</h2>
         <span class="badge study" id="proofBadge">research only</span>
       </div>
       <div class="panel-body">
@@ -269,7 +269,7 @@
               </tr>
             </thead>
             <tbody id="proofRows">
-              <tr><td colspan="7" class="loading">Loading pullback proof queue...</td></tr>
+              <tr><td colspan="7" class="loading">Loading blueprint proof queue...</td></tr>
             </tbody>
           </table>
         </div>
@@ -326,6 +326,7 @@
 
     let payload = null;
     let factory = null;
+    let blueprintProof = null;
     let pullbackProof = null;
     const fmt = new Intl.NumberFormat("en-US");
 
@@ -413,27 +414,29 @@
     }
 
     function renderProof(){
+      const proof = blueprintProof || pullbackProof;
       const summaryEl = document.getElementById("proofSummary");
       const rowsEl = document.getElementById("proofRows");
-      if (!pullbackProof || !pullbackProof.summary) {
+      if (!proof || !proof.summary) {
         document.getElementById("proofBadge").textContent = "unavailable";
         summaryEl.innerHTML = "";
-        document.getElementById("proofAnswer").textContent = "Pullback proof artifact unavailable. Seed the Quantified proof queue to start replay jobs.";
+        document.getElementById("proofAnswer").textContent = "Blueprint proof artifact unavailable. Seed the Quantified proof queue to start replay jobs.";
         rowsEl.innerHTML = '<tr><td colspan="7" class="loading">No proof artifact published.</td></tr>';
         return;
       }
-      const s = pullbackProof.summary || {};
+      const s = proof.summary || {};
       const gate = s.gate || {};
       const profile = s.paper_profile || {};
       document.getElementById("proofBadge").textContent = `${fmt.format(s.completed_cells || 0)}/${fmt.format(s.total_cells || 0)} complete`;
       summaryEl.innerHTML = [
         `<div class="factory-card"><div class="label">Cells</div><div class="big">${fmt.format(s.total_cells || 0)}</div><p>venue x pair x timeframe</p></div>`,
-        `<div class="factory-card"><div class="label">Completed</div><div class="big">${fmt.format(s.completed_cells || 0)}</div><p>${fmt.format(s.pending_cells || 0)} pending / ${fmt.format(s.running_cells || 0)} running</p></div>`,
+        `<div class="factory-card"><div class="label">Completed</div><div class="big">${fmt.format(s.completed_cells || 0)}</div><p>${fmt.format(s.pending_cells || 0)} pending / ${fmt.format(s.running_cells || 0)} running / ${fmt.format(s.queued_cells || 0)} queued</p></div>`,
         `<div class="factory-card"><div class="label">Proof Candidates</div><div class="big">${fmt.format(s.promotable_proof_candidates || 0)}</div><p>needs untouched judgment</p></div>`,
-        `<div class="factory-card"><div class="label">Profile</div><div class="big">$${fmt.format(profile.margin_usd || 0)}</div><p>${profile.leverage || "--"}x / gate ${gate.min_net_bps || "--"} bps</p></div>`
+        `<div class="factory-card"><div class="label">Ports</div><div class="big">${fmt.format(s.ports || 1)}</div><p>${fmt.format(s.proxy_adapter_cells || 0)} proxy cells / gate ${gate.min_net_bps || "--"} bps</p></div>`,
+        `<div class="factory-card"><div class="label">Paper Profile</div><div class="big">$${fmt.format(profile.margin_usd || 0)}</div><p>${profile.leverage || "--"}x / $${fmt.format(profile.notional_usd || 0)} notional</p></div>`
       ].join("");
-      document.getElementById("proofAnswer").textContent = pullbackProof.operator_answer || "Pullback proof loaded.";
-      const rows = (pullbackProof.rows || []).slice().sort((a,b) => {
+      document.getElementById("proofAnswer").textContent = proof.operator_answer || "Blueprint proof loaded.";
+      const rows = (proof.rows || []).slice().sort((a,b) => {
         const av = a.avg_net_bps == null ? -999999 : Number(a.avg_net_bps);
         const bv = b.avg_net_bps == null ? -999999 : Number(b.avg_net_bps);
         return bv - av;
@@ -444,7 +447,7 @@
         const cls = (row.verdict || "").includes("PROMOTABLE") || (row.verdict || "").includes("SPARSE") ? "portable" :
           (row.verdict || "").includes("NEGATIVE") || (row.verdict || "").includes("FAILED") || (row.verdict || "").includes("BLOCKED") ? "blocked" : "study";
         return `<tr>
-          <td><div class="title">${row.exchange} · ${row.symbol}</div><div class="tiny">${row.timeframe} · pullback-only</div></td>
+          <td><div class="title">${row.exchange} · ${row.symbol}</div><div class="tiny">${row.timeframe} · ${row.port_id || "pullback_reversion_pack_v1"} · ${row.setup_mode || "pullback-only"}${row.canonical_adapter === false ? " · proxy" : ""}</div></td>
           <td><span class="badge">${row.status || "--"}</span></td>
           <td><span class="badge ${cls}">${row.verdict || "--"}</span></td>
           <td class="num">${fmt.format(row.samples || 0)}</td>
@@ -499,6 +502,7 @@
       document.getElementById("status").textContent = "LOADING";
       const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
       const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const proofUrl = "/quantified-strategy-lab/pullback-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const res = await fetch(url, {cache:"no-store"});
       if (!res.ok) throw new Error("request failed " + res.status);
@@ -508,6 +512,12 @@
         factory = factoryRes.ok ? await factoryRes.json() : null;
       } catch {
         factory = null;
+      }
+      try {
+        const blueprintProofRes = await fetch(blueprintProofUrl, {cache:"no-store"});
+        blueprintProof = blueprintProofRes.ok ? await blueprintProofRes.json() : null;
+      } catch {
+        blueprintProof = null;
       }
       try {
         const proofRes = await fetch(proofUrl, {cache:"no-store"});

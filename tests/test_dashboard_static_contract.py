@@ -6,11 +6,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "src/vnedge/dashboard/static/index.html"
+QUANTIFIED = ROOT / "src/vnedge/dashboard/static/quantified_strategy_lab.html"
 APP = ROOT / "src/vnedge/dashboard/app.py"
 
 
 def _index() -> str:
     return INDEX.read_text()
+
+
+def _quantified() -> str:
+    return QUANTIFIED.read_text()
 
 
 def test_promote_view_has_joined_operator_lifecycle_console():
@@ -177,6 +182,17 @@ def test_nav_links_to_the_quantified_strategy_lab_page():
     assert 'id="navLab"' in html
     assert 'href="/quantified-strategy-lab"' in html
     assert "navLab" in html and "quantified-strategy-lab?token=" in html  # token carried
+
+
+def test_quantified_lab_page_renders_complete_blueprint_proof_matrix():
+    html = _quantified()
+    app = APP.read_text()
+    assert "Blueprint Proof Matrix" in html
+    assert "/quantified-strategy-lab/blueprint-proof" in html
+    assert "/quantified-strategy-lab/pullback-proof" in html
+    assert "proxy cells" in html
+    assert "Paper Profile" in html
+    assert '@app.get("/quantified-strategy-lab/blueprint-proof")' in app
 
 
 def test_dashboard_has_ctrl_k_command_palette():
