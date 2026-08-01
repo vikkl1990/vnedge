@@ -447,6 +447,7 @@ def create_app(
     paper_trade_exit_autopsy_path: Path | None = None,
     paper_lane_root_cause_path: Path | None = None,
     maker_quote_lifecycle_path: Path | None = None,
+    paper_trade_contract_reconciler_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     paper_roster_drift_path: Path | None = None,
@@ -659,6 +660,10 @@ def create_app(
     maker_quote_lifecycle_file = (
         maker_quote_lifecycle_path
         or Path("research/live_research/maker_quote_lifecycle_latest.json")
+    )
+    paper_trade_contract_reconciler_file = (
+        paper_trade_contract_reconciler_path
+        or Path("research/live_research/paper_trade_contract_reconciler_latest.json")
     )
     lane_survival_file = (
         lane_survival_path
@@ -1215,6 +1220,31 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/paper-trade-contract-reconciler")
+    async def paper_trade_contract_reconciler(request: Request) -> JSONResponse:
+        """Latest paper trade contract reconciliation.
+
+        This distinguishes execution/journal contract drift from contract-clean
+        alpha/exit failure. It is read-only and cannot promote, demote, or trade.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_trade_contract_reconciler_file,
+                {
+                    "summary": {},
+                    "boards": {},
+                    "rows": [],
+                    "trade_samples": [],
+                    "operator_answer": "paper trade contract reconciler unavailable",
+                    "mode": "read_only_paper_contract_reconciliation",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
     @app.get("/lane-survival")
     async def lane_survival(request: Request) -> JSONResponse:
         """Latest lane survival engine report.
@@ -1458,6 +1488,19 @@ def create_app(
                 "can_promote": False,
             },
         )
+        contract_reconciler = _read_json_payload(
+            paper_trade_contract_reconciler_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "trade_samples": [],
+                "operator_answer": "paper trade contract reconciler unavailable",
+                "mode": "read_only_paper_contract_reconciliation",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
         causality = _read_json_payload(
             lane_firing_causality_file,
             {
@@ -1477,6 +1520,7 @@ def create_app(
                 cadence=cadence,
                 performance=performance,
                 exit_autopsy=exit_autopsy,
+                contract_reconciler=contract_reconciler,
                 profile=build_trade_profile_matrix(activation),
                 causality=causality,
             ),

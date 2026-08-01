@@ -25,6 +25,9 @@ DEFAULT_ROUTE = DEFAULT_RESEARCH_DIR / "paper_route_doctor_latest.json"
 DEFAULT_CADENCE = DEFAULT_RESEARCH_DIR / "paper_lane_cadence_latest.json"
 DEFAULT_PERFORMANCE = DEFAULT_RESEARCH_DIR / "paper_lane_performance_latest.json"
 DEFAULT_EXIT_AUTOPSY = DEFAULT_RESEARCH_DIR / "paper_trade_exit_autopsy_latest.json"
+DEFAULT_CONTRACT_RECONCILER = (
+    DEFAULT_RESEARCH_DIR / "paper_trade_contract_reconciler_latest.json"
+)
 DEFAULT_CAUSALITY = DEFAULT_RESEARCH_DIR / "lane_firing_causality_latest.json"
 DEFAULT_OUT = DEFAULT_RESEARCH_DIR / "operator_actions_latest.json"
 DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "operator_actions_feed.jsonl"
@@ -32,8 +35,10 @@ DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "operator_actions_feed.jsonl"
 ACTION_REPAIR_ROUTE = "REPAIR_ROUTE"
 ACTION_RESTORE_CADENCE = "RESTORE_CADENCE"
 ACTION_FIX_SIZE_PROFILE = "FIX_SIZE_PROFILE"
+ACTION_REPAIR_CONTRACT = "REPAIR_PAPER_CONTRACT"
 ACTION_FIX_EXIT_QUALITY = "FIX_EXIT_QUALITY"
 ACTION_REVIEW_PAPER_CANDIDATE = "REVIEW_PAPER_CANDIDATE"
+ACTION_MINE_CLEAN_ALPHA = "MINE_CLEAN_ALPHA"
 ACTION_COLLECT_OUTCOMES = "COLLECT_OUTCOMES"
 ACTION_WAIT_FOR_SIGNAL = "WAIT_FOR_SIGNAL"
 ACTION_OBSERVE = "OBSERVE"
@@ -42,11 +47,13 @@ _ACTION_PRIORITY = {
     ACTION_REPAIR_ROUTE: 0,
     ACTION_RESTORE_CADENCE: 1,
     ACTION_FIX_SIZE_PROFILE: 2,
-    ACTION_FIX_EXIT_QUALITY: 3,
-    ACTION_REVIEW_PAPER_CANDIDATE: 4,
-    ACTION_COLLECT_OUTCOMES: 5,
-    ACTION_WAIT_FOR_SIGNAL: 6,
-    ACTION_OBSERVE: 7,
+    ACTION_REPAIR_CONTRACT: 3,
+    ACTION_FIX_EXIT_QUALITY: 4,
+    ACTION_REVIEW_PAPER_CANDIDATE: 5,
+    ACTION_MINE_CLEAN_ALPHA: 6,
+    ACTION_COLLECT_OUTCOMES: 7,
+    ACTION_WAIT_FOR_SIGNAL: 8,
+    ACTION_OBSERVE: 9,
 }
 
 _ROUTE_REPAIR_STATES = {
@@ -88,6 +95,14 @@ _EXIT_QUALITY_STATES = {
     "NEGATIVE_EDGE",
     "LEDGER_OR_EXIT_METADATA_GAP",
 }
+_CONTRACT_REPAIR_STATES = {
+    "CONTRACT_BROKEN",
+    "FEE_WALL_BREACH",
+}
+_CLEAN_ALPHA_STATES = {
+    "CONTRACT_OK_NEGATIVE_ALPHA",
+    "CONTRACT_OK_EDGE_DEFICIT",
+}
 
 
 @dataclass(frozen=True)
@@ -105,6 +120,7 @@ def build_operator_actions(
     cadence: Mapping[str, Any] | None = None,
     performance: Mapping[str, Any] | None = None,
     exit_autopsy: Mapping[str, Any] | None = None,
+    contract_reconciler: Mapping[str, Any] | None = None,
     profile: Mapping[str, Any] | None = None,
     causality: Mapping[str, Any] | None = None,
     activation_path: Path | str = DEFAULT_ACTIVATION,
@@ -112,6 +128,7 @@ def build_operator_actions(
     cadence_path: Path | str = DEFAULT_CADENCE,
     performance_path: Path | str = DEFAULT_PERFORMANCE,
     exit_autopsy_path: Path | str = DEFAULT_EXIT_AUTOPSY,
+    contract_reconciler_path: Path | str = DEFAULT_CONTRACT_RECONCILER,
     causality_path: Path | str = DEFAULT_CAUSALITY,
     config: OperatorActionConfig = OperatorActionConfig(),
     now: datetime | None = None,
@@ -123,6 +140,7 @@ def build_operator_actions(
     cadence_payload = _payload(cadence, cadence_path)
     performance_payload = _payload(performance, performance_path)
     exit_autopsy_payload = _payload(exit_autopsy, exit_autopsy_path)
+    contract_payload = _payload(contract_reconciler, contract_reconciler_path)
     profile_payload = profile if isinstance(profile, Mapping) else {"rows": []}
     causality_payload = _payload(causality, causality_path)
 
@@ -132,6 +150,7 @@ def build_operator_actions(
     _add_rows(slots, "cadence", cadence_payload.get("rows", []))
     _add_rows(slots, "performance", performance_payload.get("rows", []))
     _add_rows(slots, "exit_autopsy", exit_autopsy_payload.get("rows", []))
+    _add_rows(slots, "contract_reconciler", contract_payload.get("rows", []))
     _add_rows(slots, "profile", profile_payload.get("rows", []))
     _add_rows(slots, "causality", causality_payload.get("rows", []))
 
@@ -149,6 +168,7 @@ def build_operator_actions(
             "cadence": cadence_payload.get("report_id"),
             "performance": performance_payload.get("report_id"),
             "exit_autopsy": exit_autopsy_payload.get("report_id"),
+            "contract_reconciler": contract_payload.get("report_id"),
             "profile": profile_payload.get("report_id"),
             "causality": causality_payload.get("report_id"),
         },
@@ -158,6 +178,7 @@ def build_operator_actions(
             "cadence_path": str(cadence_path),
             "performance_path": str(performance_path),
             "exit_autopsy_path": str(exit_autopsy_path),
+            "contract_reconciler_path": str(contract_reconciler_path),
             "causality_path": str(causality_path),
         },
         "config": config.to_dict(),
@@ -276,6 +297,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
     cadence = _map(slot.get("cadence"))
     performance = _map(slot.get("performance"))
     exit_autopsy = _map(slot.get("exit_autopsy"))
+    contract = _map(slot.get("contract_reconciler"))
     causality = _map(slot.get("causality"))
     profiles = _map(slot.get("profiles"))
     paper_profile = _map(profiles.get("paper"))
@@ -288,6 +310,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
         cadence.get("strategy_id"),
         performance.get("strategy_id"),
         exit_autopsy.get("strategy_id"),
+        contract.get("strategy_id"),
         causality.get("strategy_id"),
     )
     exchange = _first(
@@ -297,6 +320,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
         cadence.get("exchange"),
         performance.get("exchange"),
         exit_autopsy.get("exchange"),
+        contract.get("exchange"),
         causality.get("exchange"),
     )
     symbol = _first(
@@ -306,6 +330,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
         cadence.get("symbol"),
         performance.get("symbol"),
         exit_autopsy.get("symbol"),
+        contract.get("symbol"),
         causality.get("symbol"),
     )
     timeframe = _first(
@@ -315,6 +340,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
         cadence.get("timeframe"),
         performance.get("timeframe"),
         exit_autopsy.get("timeframe"),
+        contract.get("timeframe"),
         causality.get("timeframe"),
     )
 
@@ -323,6 +349,7 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
     cadence_state = _text(cadence.get("cadence_state"))
     performance_state = _text(performance.get("state"))
     exit_driver = _text(exit_autopsy.get("loss_driver"))
+    contract_verdict = _text(contract.get("verdict"))
     scanner_state = _text(causality.get("scanner_state"))
     paper_state = _text(paper_profile.get("profile_state"))
     live_state = _text(live_profile.get("profile_state"))
@@ -372,6 +399,15 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
             "adjust margin/leverage profile before route review",
         )
         reason = _first(paper_state, live_state, action)
+    elif contract_verdict in _CONTRACT_REPAIR_STATES:
+        bucket = ACTION_REPAIR_CONTRACT
+        owner = "system"
+        severity = "P1" if contract_verdict == "CONTRACT_BROKEN" else "P2"
+        action = _first(
+            contract.get("next_action"),
+            "repair paper trade contract before alpha review",
+        )
+        reason = _first(contract_verdict, action)
     elif exit_driver in _EXIT_QUALITY_STATES:
         bucket = ACTION_FIX_EXIT_QUALITY
         owner = "system"
@@ -381,6 +417,15 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
             "repair paper exit quality before promotion review",
         )
         reason = _first(exit_driver, action)
+    elif contract_verdict in _CLEAN_ALPHA_STATES:
+        bucket = ACTION_MINE_CLEAN_ALPHA
+        owner = "research"
+        severity = "P2"
+        action = _first(
+            contract.get("next_action"),
+            "contract is clean; mine entry/exit alpha instead of repairing runtime",
+        )
+        reason = _first(contract_verdict, action)
     elif (
         performance_state == "PAPER_PROMOTION_CANDIDATE"
         or paper_decision_state == "READY_FOR_PAPER_REVIEW"
@@ -452,6 +497,9 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
             "live_profile_state": live_state or None,
             "performance_state": performance_state or None,
             "exit_driver": exit_driver or None,
+            "contract_verdict": contract_verdict or None,
+            "contract_violations": _map(contract.get("top_violations")),
+            "contract_warnings": _map(contract.get("top_warnings")),
             "scanner_state": scanner_state or None,
             "paper_decision": paper_decision_state or None,
             "primary_blocker": _map(causality.get("primary_blocker")),
@@ -477,6 +525,10 @@ def _action_row(slot: Mapping[str, Any]) -> dict[str, Any]:
             "avg_net_bps": _num(exit_autopsy.get("avg_net_bps")),
             "stop_rate": _num(exit_autopsy.get("stop_rate")),
             "take_profit_rate": _num(exit_autopsy.get("take_profit_rate")),
+            "contract_avg_net_bps": _num(contract.get("avg_net_bps")),
+            "contract_avg_fee_bps": _num(contract.get("avg_fee_bps")),
+            "critical_contract_violations": int(_num(contract.get("critical_violations"))),
+            "contract_fee_wall_breaches": int(_num(contract.get("fee_wall_breaches"))),
         },
         "can_trade": False,
         "can_promote": False,
@@ -504,7 +556,12 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     repair_first = sum(
         buckets[b]
-        for b in (ACTION_REPAIR_ROUTE, ACTION_RESTORE_CADENCE, ACTION_FIX_SIZE_PROFILE)
+        for b in (
+            ACTION_REPAIR_ROUTE,
+            ACTION_RESTORE_CADENCE,
+            ACTION_FIX_SIZE_PROFILE,
+            ACTION_REPAIR_CONTRACT,
+        )
     )
     return {
         "total_rows": len(rows),
@@ -512,8 +569,10 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "route_repairs": buckets[ACTION_REPAIR_ROUTE],
         "cadence_repairs": buckets[ACTION_RESTORE_CADENCE],
         "profile_fixes": buckets[ACTION_FIX_SIZE_PROFILE],
+        "contract_repairs": buckets[ACTION_REPAIR_CONTRACT],
         "exit_quality_fixes": buckets[ACTION_FIX_EXIT_QUALITY],
         "paper_review": buckets[ACTION_REVIEW_PAPER_CANDIDATE],
+        "clean_alpha_mining": buckets[ACTION_MINE_CLEAN_ALPHA],
         "collect_outcomes": buckets[ACTION_COLLECT_OUTCOMES],
         "wait_or_observe": buckets[ACTION_WAIT_FOR_SIGNAL] + buckets[ACTION_OBSERVE],
         "wait_for_signal": buckets[ACTION_WAIT_FOR_SIGNAL],
@@ -548,7 +607,18 @@ def _boards(rows: list[dict[str, Any]]) -> dict[str, Any]:
             slim(r)
             for r in rows
             if r.get("bucket")
-            in {ACTION_REPAIR_ROUTE, ACTION_RESTORE_CADENCE, ACTION_FIX_SIZE_PROFILE}
+            in {
+                ACTION_REPAIR_ROUTE,
+                ACTION_RESTORE_CADENCE,
+                ACTION_FIX_SIZE_PROFILE,
+                ACTION_REPAIR_CONTRACT,
+            }
+        ][:12],
+        "contract_repairs": [
+            slim(r) for r in rows if r.get("bucket") == ACTION_REPAIR_CONTRACT
+        ][:12],
+        "clean_alpha_mining": [
+            slim(r) for r in rows if r.get("bucket") == ACTION_MINE_CLEAN_ALPHA
         ][:12],
         "paper_review": [
             slim(r) for r in rows if r.get("bucket") == ACTION_REVIEW_PAPER_CANDIDATE
@@ -566,6 +636,11 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         return (
             f"{summary.get('repair_first')} lane action(s) must be repaired before "
             "paper/live judgment is trustworthy."
+        )
+    if int(summary.get("clean_alpha_mining") or 0) > 0:
+        return (
+            f"{summary.get('clean_alpha_mining')} paper lane(s) have clean contracts but "
+            "negative/weak edge; mine entry and exit alpha before promotion."
         )
     if int(summary.get("exit_quality_fixes") or 0) > 0:
         return (
@@ -617,6 +692,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cadence", type=Path, default=DEFAULT_CADENCE)
     parser.add_argument("--performance", type=Path, default=DEFAULT_PERFORMANCE)
     parser.add_argument("--exit-autopsy", type=Path, default=DEFAULT_EXIT_AUTOPSY)
+    parser.add_argument("--contract-reconciler", type=Path, default=DEFAULT_CONTRACT_RECONCILER)
     parser.add_argument("--causality", type=Path, default=DEFAULT_CAUSALITY)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--feed", type=Path, default=DEFAULT_FEED)
@@ -640,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             cadence_path=args.cadence,
             performance_path=args.performance,
             exit_autopsy_path=args.exit_autopsy,
+            contract_reconciler_path=args.contract_reconciler,
             profile=build_trade_profile_matrix(activation),
             causality_path=args.causality,
             config=config,

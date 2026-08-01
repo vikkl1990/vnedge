@@ -586,8 +586,8 @@ services:
       options: { max-size: "10m", max-file: "3" }
 
   # Operator action queue publisher: joins activation, route doctor, cadence,
-  # sizing profile, paper performance, exit autopsy, and firing causality into
-  # one durable "what next" artifact/feed. Read-only.
+  # sizing profile, paper performance, exit autopsy, contract truth, and firing
+  # causality into one durable "what next" artifact/feed. Read-only.
   operator-actions:
     build: .
     restart: unless-stopped
@@ -601,6 +601,7 @@ services:
     command: ["python", "-m", "vnedge.research.operator_actions",
               "--interval-seconds", "${OPERATOR_ACTIONS_INTERVAL_SECONDS:-60}",
               "--exit-autopsy", "research/live_research/paper_trade_exit_autopsy_latest.json",
+              "--contract-reconciler", "research/live_research/paper_trade_contract_reconciler_latest.json",
               "--out", "research/live_research/operator_actions_latest.json",
               "--feed", "research/live_research/operator_actions_feed.jsonl",
               "--print"]
