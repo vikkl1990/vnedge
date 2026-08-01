@@ -476,6 +476,7 @@ def create_app(
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
     agent_jobs_dir: Path | None = None,
+    v2_dist_path: Path | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
@@ -2141,5 +2142,18 @@ def create_app(
             else:
                 ws_connections[name] = remaining
             logger.info("dashboard ws disconnected: user=%s", name)
+
+    # v2 React frontend (frontend/dist), served at /app as a static SPA. Mounted
+    # ONLY when a build exists — so a production image without the build simply
+    # has no /app route (never a 500), and the classic dashboard at / is
+    # unaffected. The SPA shell is public like the classic shell; its data calls
+    # (/state, /journal, /whoami) stay token-gated. Build: `npm --prefix
+    # frontend install && npm --prefix frontend run build`.
+    v2_dist = v2_dist_path if v2_dist_path is not None else _REPO_ROOT / "frontend" / "dist"
+    if Path(v2_dist).is_dir():
+        from starlette.staticfiles import StaticFiles
+
+        app.mount("/app", StaticFiles(directory=str(v2_dist), html=True), name="v2")
+        logger.info("v2 frontend mounted at /app from %s", v2_dist)
 
     return app
