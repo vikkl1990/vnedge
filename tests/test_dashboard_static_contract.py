@@ -36,6 +36,16 @@ def test_promote_view_has_read_only_operator_action_queue():
     assert "evidence-ranked only; it cannot approve, promote, or trade" in html
 
 
+def test_promote_view_has_paper_lane_root_cause_matrix():
+    html = _index()
+    assert "Paper Lane Root-Cause Matrix" in html
+    assert 'id="paperLaneRootCause"' in html
+    assert 'id="paperRootCauseMeta"' in html
+    assert "function renderPaperLaneRootCause" in html
+    assert "/paper-lane-root-cause" in html
+    assert "route, cadence, sizing, entry, exit, and performance evidence" in html
+
+
 def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     html = _index()
     assert "Dashboard Self-Health" in html
