@@ -560,6 +560,20 @@
   @media (prefers-reduced-motion:reduce){
     *{animation:none!important;transition:none!important}
   }
+  /* ---- Ctrl/Cmd-K command palette ---- */
+  .cmdk[hidden]{display:none}
+  .cmdk{position:fixed;inset:0;z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding-top:12vh;background:rgba(4,7,11,.62)}
+  .cmdk-box{width:min(620px,92vw);background:var(--bg-2);border:1px solid var(--brand-line);border-radius:var(--r);box-shadow:0 24px 70px rgba(0,0,0,.6);overflow:hidden}
+  .cmdk-in{width:100%;border:0;outline:0;background:transparent;color:var(--txt);font:15px/1.4 var(--mono);padding:16px 18px;border-bottom:1px solid var(--line)}
+  .cmdk-in::placeholder{color:var(--txt-faint)}
+  .cmdk-list{max-height:46vh;overflow:auto;margin:0;padding:6px;list-style:none}
+  .cmdk-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 12px;border-radius:var(--r-sm);cursor:pointer;color:var(--txt)}
+  .cmdk-item .l{font:13px/1.2 var(--sans)}
+  .cmdk-item .h{font:11px/1.2 var(--mono);color:var(--txt-dim)}
+  .cmdk-item.on,.cmdk-item:hover{background:var(--brand-soft)}
+  .cmdk-item.on .h{color:var(--brand)}
+  .cmdk-empty{padding:14px 16px;color:var(--txt-dim);font:12px var(--mono)}
+  .cmdk-foot{display:flex;flex-wrap:wrap;gap:14px;padding:8px 14px;border-top:1px solid var(--line);color:var(--txt-faint);font:11px var(--mono)}
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -667,6 +681,15 @@
       </div>
     </div>
   </header>
+
+  <!-- ===== Ctrl/Cmd-K COMMAND PALETTE ===== -->
+  <div class="cmdk" id="cmdk" hidden role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="cmdk-box" role="document">
+      <input id="cmdkInput" class="cmdk-in" autocomplete="off" spellcheck="false" aria-label="Command palette search" placeholder="Jump to a view or command…  (Esc to close)">
+      <ul class="cmdk-list" id="cmdkList" role="listbox" aria-label="Commands"></ul>
+      <div class="cmdk-foot"><span>↑↓ navigate</span><span>⏎ run</span><span>⌘/Ctrl-K palette</span><span>⌘/Ctrl-G go</span></div>
+    </div>
+  </div>
 
   <!-- ===== DESK VIEW ===== -->
   <div class="view" data-view="desk">
@@ -2944,6 +2967,62 @@
       e.preventDefault();goInput.focus();goInput.select();
     }
   });
+
+  /* ---- Ctrl/Cmd-K command palette: keyboard-first jump across views/commands ---- */
+  var CMDK=[
+    {label:"Desk",hint:"lanes · signals · equity",kw:"desk home lanes signals",run:function(){gotoView("desk");}},
+    {label:"Pipeline",hint:"signal funnel",kw:"pipeline pipe funnel signal",run:function(){gotoView("pipeline");}},
+    {label:"Journal",hint:"fills · closed trades",kw:"journal fills trades ledger",run:function(){gotoView("journal");}},
+    {label:"Calculator",hint:"leverage · fees · PnL",kw:"calc calculator fees leverage pnl",run:function(){gotoView("calc");}},
+    {label:"Promote",hint:"mode ladder · candidates",kw:"promote promotion ladder live candidates",run:function(){gotoView("promote");}},
+    {label:"ML",hint:"model pipeline status",kw:"ml model models pipeline",run:function(){gotoView("ml");}},
+    {label:"Research",hint:"scorecard · edge",kw:"research scorecard edge scanner",run:function(){gotoView("research");}},
+    {label:"System",hint:"ops · health",kw:"system sys ops health",run:function(){gotoView("system");}},
+    {label:"About",hint:"what VN Edge is",kw:"about info",run:function(){gotoView("about");}},
+    {label:"Strategy Lab ↗",hint:"95-strategy quant lab",kw:"strat lab strategy quantified",run:function(){location.href=token?"/quantified-strategy-lab?token="+encodeURIComponent(token):"/quantified-strategy-lab";}},
+    {label:"Focus GO bar",hint:"type symbol / lane / view",kw:"go search jump symbol lane bar",run:function(){if(goInput){goInput.focus();goInput.select();}}}
+  ];
+  var cmdk=$("cmdk"),cmdkInput=$("cmdkInput"),cmdkList=$("cmdkList"),cmdkActive=0,cmdkFiltered=[];
+  function cmdkScore(item,q){
+    var hay=(item.label+" "+item.kw).toLowerCase(),qi=0,score=0,last=-1;
+    for(var i=0;i<hay.length&&qi<q.length;i++){
+      if(hay[i]===q[qi]){score+=(last>=0&&i===last+1)?2:1;last=i;qi++;}
+    }
+    return qi===q.length?score:-1;   // subsequence must match fully, else reject
+  }
+  function cmdkRender(){
+    var q=(cmdkInput.value||"").toLowerCase().replace(/\s+/g,"");
+    cmdkFiltered=q
+      ? CMDK.map(function(it){return {it:it,s:cmdkScore(it,q)};})
+            .filter(function(x){return x.s>=0;})
+            .sort(function(a,b){return b.s-a.s;})
+            .map(function(x){return x.it;})
+      : CMDK.slice();
+    if(cmdkActive>=cmdkFiltered.length)cmdkActive=Math.max(0,cmdkFiltered.length-1);
+    if(!cmdkFiltered.length){cmdkList.innerHTML='<li class="cmdk-empty">no matching command</li>';return;}
+    cmdkList.innerHTML=cmdkFiltered.map(function(it,i){
+      return '<li class="cmdk-item'+(i===cmdkActive?" on":"")+'" data-i="'+i+'" role="option" aria-selected="'+(i===cmdkActive)+'">'+
+        '<span class="l">'+esc(it.label)+'</span><span class="h">'+esc(it.hint)+'</span></li>';
+    }).join('');
+    var on=cmdkList.querySelector(".cmdk-item.on"); if(on)on.scrollIntoView({block:"nearest"});
+  }
+  function cmdkOpen(){cmdk.hidden=false;cmdkInput.value="";cmdkActive=0;cmdkRender();cmdkInput.focus();}
+  function cmdkClose(){cmdk.hidden=true;}
+  function cmdkRun(i){var it=cmdkFiltered[i];if(!it)return;cmdkClose();it.run();}
+  if(cmdkInput){
+    cmdkInput.addEventListener("input",function(){cmdkActive=0;cmdkRender();});
+    cmdkInput.addEventListener("keydown",function(e){
+      if(e.key==="ArrowDown"){e.preventDefault();cmdkActive=Math.min(cmdkActive+1,cmdkFiltered.length-1);cmdkRender();}
+      else if(e.key==="ArrowUp"){e.preventDefault();cmdkActive=Math.max(cmdkActive-1,0);cmdkRender();}
+      else if(e.key==="Enter"){e.preventDefault();cmdkRun(cmdkActive);}
+      else if(e.key==="Escape"){e.preventDefault();cmdkClose();}
+    });
+    cmdkList.addEventListener("click",function(e){var li=e.target.closest(".cmdk-item[data-i]");if(li)cmdkRun(+li.getAttribute("data-i"));});
+    cmdk.addEventListener("click",function(e){if(e.target===cmdk)cmdkClose();});
+    document.addEventListener("keydown",function(e){
+      if((e.ctrlKey||e.metaKey)&&String(e.key).toLowerCase()==="k"){e.preventDefault();cmdk.hidden?cmdkOpen():cmdkClose();}
+    });
+  }
 
   /* ---- account dropdown ---- */
   var profile=document.getElementById("profile");
