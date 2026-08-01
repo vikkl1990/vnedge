@@ -19,6 +19,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from vnedge.execution.operator_audit import OperatorAuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +40,12 @@ class KillSwitch:
     kill_file: Path = Path("KILL")
     _active: bool = False
     _reason: str = ""
-    # Append-only in-memory audit trail; also mirrored to the log. The
-    # persistent audit ledger subscribes to these events in a later milestone.
+    # Append-only in-memory audit trail; also mirrored to the log.
     history: list[KillSwitchEvent] = field(default_factory=list)
+    # Durable, hash-chained operator-action ledger (optional). When wired, every
+    # trip/reset is persisted immutably — the "later milestone" the comment here
+    # used to promise. Duck-typed so risk/ never imports execution/ at runtime.
+    audit_log: "OperatorAuditLog | None" = None
 
     def activate(self, reason: str, source: str = "programmatic") -> None:
         if self._active:
@@ -47,6 +54,11 @@ class KillSwitch:
         self._reason = reason
         event = KillSwitchEvent(datetime.now(UTC), "activate", reason, source)
         self.history.append(event)
+        if self.audit_log is not None:
+            self.audit_log.record(
+                actor="kill_switch", action="kill_switch_activate",
+                detail=reason, source=source, before="active=False", after="active=True",
+            )
         logger.critical("KILL SWITCH ACTIVATED (%s): %s", source, reason)
 
     def reset(self, operator_note: str) -> None:
@@ -62,6 +74,12 @@ class KillSwitch:
         self.history.append(
             KillSwitchEvent(datetime.now(UTC), "reset", operator_note, "programmatic")
         )
+        if self.audit_log is not None:
+            self.audit_log.record(
+                actor="operator", action="kill_switch_reset",
+                detail=operator_note, source="programmatic",
+                before="active=True", after="active=False",
+            )
         logger.warning("Kill switch reset by operator: %s", operator_note)
 
     @property
