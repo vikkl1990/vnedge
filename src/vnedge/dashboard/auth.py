@@ -9,9 +9,13 @@ Replaces the single shared ``DASHBOARD_TOKEN`` with a token *store*:
   ``operator`` user with no expiry, so existing deploys keep working
   without any env change.
 
-Roles are ``viewer`` and ``operator``. Both are read-only today — the
-dashboard has zero control routes — the role exists so any future
-privileged surface can distinguish them without another auth migration.
+Roles are ``viewer``, ``operator``, and ``auditor``, mapped to permissions by
+``PERMISSIONS`` / :func:`has_permission`. Every current route is read-only
+(``view``), so the map gates nothing yet — it exists so a future control
+surface (live-gate flip, promotion, kill-switch) enforces without another auth
+migration. Stored tokens may be plaintext (legacy) or a salted hash
+(``vnedge-sha256$…``, see :func:`hash_token`) so the deployed config need not
+hold a usable secret.
 
 Security invariants:
 - token comparison is constant-time per stored token, and every stored
@@ -27,6 +31,7 @@ Security invariants:
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
@@ -36,9 +41,82 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-ROLES: tuple[str, ...] = ("viewer", "operator")
+ROLES: tuple[str, ...] = ("viewer", "operator", "auditor")
 #: Identity assigned to the legacy shared DASHBOARD_TOKEN.
 LEGACY_USER_NAME = "operator"
+
+# --------------------------------------------------------------------------- #
+# RBAC — a role→permission map. The dashboard is read-only TODAY (zero control
+# routes), so `has_permission` gates nothing yet; the point is that when a
+# control surface lands (live-gate flip, promotion, kill-switch reset) the
+# enforcement primitive already exists and is tested, with no second auth
+# migration. Roles: viewer (read-only), operator (read + every control),
+# auditor (read + the audit trail, but NO control).
+# --------------------------------------------------------------------------- #
+PERM_VIEW = "view"  # read dashboards, lanes, journals, research
+PERM_VIEW_AUDIT = "view_audit"  # read the operator-action audit trail
+PERM_PROMOTE = "promote"  # promote a strategy up the mode ladder
+PERM_FLIP_LIVE_GATE = "flip_live_gate"  # toggle a live_* mode / live gate
+PERM_KILL_SWITCH = "kill_switch"  # trip / reset the kill switch
+
+PERMISSIONS: dict[str, frozenset[str]] = {
+    "viewer": frozenset({PERM_VIEW}),
+    "auditor": frozenset({PERM_VIEW, PERM_VIEW_AUDIT}),
+    "operator": frozenset(
+        {PERM_VIEW, PERM_VIEW_AUDIT, PERM_PROMOTE, PERM_FLIP_LIVE_GATE, PERM_KILL_SWITCH}
+    ),
+}
+
+
+def has_permission(role: str | None, permission: str) -> bool:
+    """True iff ``role`` grants ``permission``. Unknown role → no permission."""
+    return permission in PERMISSIONS.get(role or "", frozenset())
+
+
+def permissions_for(role: str | None) -> list[str]:
+    """Sorted permission list for a role — for /whoami and identity headers."""
+    return sorted(PERMISSIONS.get(role or "", frozenset()))
+
+
+# --------------------------------------------------------------------------- #
+# Token hashing — so the deployed config (docker-compose env, .env on the VPS)
+# can hold a NON-reversible hash instead of a usable bearer secret. The operator
+# keeps the raw token in their password manager and pastes only the hash into
+# the env; a leaked config no longer leaks a working token. A stored token that
+# starts with TOKEN_HASH_PREFIX is treated as a hash; anything else stays a
+# plaintext token (back-compat), so existing deploys are byte-for-byte
+# unaffected. Tokens are high-entropy secrets, so a salted SHA-256 is
+# sufficient (a slow password KDF would buy nothing against a 32-byte random
+# token and only slow every request).
+# --------------------------------------------------------------------------- #
+TOKEN_HASH_PREFIX = "vnedge-sha256$"
+_SALT_BYTES = 16
+
+
+def hash_token(raw: str, *, salt: bytes | None = None) -> str:
+    """Encode ``raw`` as ``vnedge-sha256$<salt_hex>$<digest_hex>`` for the env."""
+    if salt is None:
+        salt = os.urandom(_SALT_BYTES)
+    digest = hashlib.sha256(salt + raw.encode("utf-8")).hexdigest()
+    return f"{TOKEN_HASH_PREFIX}{salt.hex()}${digest}"
+
+
+def is_hashed(stored: str) -> bool:
+    return stored.startswith(TOKEN_HASH_PREFIX)
+
+
+def verify_token(candidate: str, stored: str) -> bool:
+    """Constant-time check of a candidate against a stored hash OR plaintext."""
+    if not is_hashed(stored):
+        return hmac.compare_digest((candidate or "").encode("utf-8"), stored.encode("utf-8"))
+    try:
+        salt_hex, digest_hex = stored[len(TOKEN_HASH_PREFIX):].split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+    except ValueError:
+        logger.warning("stored token hash is malformed — refusing to authenticate it")
+        return False
+    computed = hashlib.sha256(salt + (candidate or "").encode("utf-8")).hexdigest()
+    return hmac.compare_digest(computed, digest_hex)
 
 
 @dataclass(frozen=True)
@@ -47,8 +125,8 @@ class DashboardUser:
     it must never be logged or serialized into any response."""
 
     name: str
-    token: str
-    role: str  # "viewer" | "operator"
+    token: str  # plaintext OR a salted "vnedge-sha256$..." hash (see hash_token)
+    role: str  # "viewer" | "operator" | "auditor"
     expires_at: datetime | None = None  # None = no expiry (tz-aware otherwise)
 
 
@@ -157,12 +235,14 @@ class TokenStore:
 
     def authenticate(self, candidate: str, now: datetime | None = None) -> AuthResult:
         moment = now if now is not None else _utcnow()
-        candidate_bytes = (candidate or "").encode("utf-8")
         matched: DashboardUser | None = None
         for user in self._users:
             # Compare every token; keep the first match without breaking out
-            # so the loop's timing is independent of match position.
-            if hmac.compare_digest(candidate_bytes, user.token.encode("utf-8")):
+            # so the loop's timing is independent of match position. verify_token
+            # handles both hashed (vnedge-sha256$...) and plaintext stored tokens
+            # constant-time, so a hashed store and a legacy plaintext one behave
+            # identically here.
+            if verify_token(candidate, user.token):
                 if matched is None:
                     matched = user
         if matched is None:
@@ -186,3 +266,36 @@ class TokenStore:
             role=matched.role,
             expires_at=matched.expires_at,
         )
+
+
+def _main(argv: list[str] | None = None) -> int:
+    """`python -m vnedge.dashboard.auth hash` — turn a raw token into an env hash.
+
+    The token is read from a prompt / stdin, NEVER from argv, so it never lands
+    in shell history or `ps` output. Paste the printed value into DASHBOARD_USERS
+    (as the token field) or DASHBOARD_TOKEN; keep the raw token in your password
+    manager. The raw token then never lives in the deployed config.
+    """
+    import argparse
+    import getpass
+    import sys
+
+    parser = argparse.ArgumentParser(prog="vnedge.dashboard.auth")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("hash", help="hash a bearer token read from stdin/prompt")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "hash":
+        raw = (
+            getpass.getpass("token: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
+        )
+        if not raw:
+            print("no token provided", file=sys.stderr)
+            return 2
+        print(hash_token(raw))
+        return 0
+    return 2  # pragma: no cover
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_main())
