@@ -380,7 +380,11 @@ services:
   lane-promotion-readiness:
     build: .
     restart: unless-stopped
-    depends_on: [multi-lane-shadow, filtered-replay-executor]
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+      filtered-replay-executor:
+        condition: service_started
     command: ["python", "-m", "vnedge.research.lane_promotion_readiness",
               "--interval-seconds", "${LANE_PROMOTION_READINESS_INTERVAL_SECONDS:-300}",
               "--min-shadow-trades", "${LANE_PROMOTION_MIN_SHADOW_TRADES:-10}",
@@ -399,7 +403,11 @@ services:
   realtime-scanner:
     build: .
     restart: unless-stopped
-    depends_on: [multi-lane-shadow, event-leadlag-shadow]
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+      event-leadlag-shadow:
+        condition: service_started
     command: ["python", "-m", "vnedge.research.realtime_scanner",
               "--interval-seconds", "${REALTIME_SCANNER_INTERVAL_SECONDS:-60}"]
     volumes:
@@ -1467,7 +1475,13 @@ services:
   dashboard-tls:
     image: caddy:2-alpine
     restart: unless-stopped
-    depends_on: [multi-lane-shadow]
+    # Gate the public TLS proxy on the dashboard being HEALTHY (not merely
+    # started), so 8765 never routes to a warming/unhealthy dashboard — the
+    # service_healthy half of the outage fix (the deploy.sh self-heal is the
+    # other half).
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
     environment:
       # Comma-separated client CIDRs/IPs allowed through the TLS front,
       # e.g. "203.0.113.7/32,198.51.100.0/24". EMPTY = every source IP is

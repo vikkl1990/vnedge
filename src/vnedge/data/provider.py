@@ -21,8 +21,9 @@ where candles / funding / open-interest come from.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Generic, Protocol, TypeVar, runtime_checkable
 
 CAP_CANDLES = "candles"
 CAP_FUNDING = "funding"
@@ -142,3 +143,47 @@ class ProviderRegistry:
         if entry is None:
             raise ProviderError(f"unknown provider {name!r} — register it first (deny-by-default)")
         return entry.factory()
+
+
+# --------------------------------------------------------------------------- #
+# Fetcher — OpenBB's three-stage data-normalization shape, for a non-CCXT
+# source whose params/rows need mapping to VNEDGE's standard forms. OPTIONAL: a
+# source that already looks like CcxtPublicClient implements MarketDataProvider
+# directly; a messier source implements the three stages and gets a uniform
+# fetch(). transform_query normalizes inputs, extract pulls raw, transform_data
+# maps raw → the standard model. Pure shape — it fetches data, nothing else.
+# --------------------------------------------------------------------------- #
+_Q = TypeVar("_Q")
+_R = TypeVar("_R")
+_T = TypeVar("_T")
+
+
+def apply_aliases(row: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+    """Rename source field names to standard names via an alias map. Keys absent
+    from the map pass through unchanged."""
+    return {aliases.get(k, k): v for k, v in row.items()}
+
+
+class Fetcher(ABC, Generic[_Q, _R, _T]):
+    """Three-stage normalizer: transform_query → extract → transform_data."""
+
+    @staticmethod
+    @abstractmethod
+    def transform_query(params: dict[str, Any]) -> _Q:
+        """Validate / normalize raw request params into a typed query."""
+
+    @staticmethod
+    @abstractmethod
+    async def extract(query: _Q) -> _R:
+        """Fetch the raw payload from the source for ``query``."""
+
+    @staticmethod
+    @abstractmethod
+    def transform_data(query: _Q, raw: _R) -> _T:
+        """Map the raw payload into VNEDGE's standard model."""
+
+    @classmethod
+    async def fetch(cls, params: dict[str, Any]) -> _T:
+        query = cls.transform_query(params)
+        raw = await cls.extract(query)
+        return cls.transform_data(query, raw)
