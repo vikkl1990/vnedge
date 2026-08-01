@@ -108,6 +108,58 @@ export function PositionsPanel() {
   );
 }
 
+const num = (n: unknown, d = 2) => (typeof n === "number" ? n.toFixed(d) : "—");
+
+export function MarketPanel() {
+  const { data } = useSnapshot();
+  const p = data?.price ?? null;
+  const fr = data?.funding_rate;
+  return (
+    <TerminalPanel title="Market" meta={(data?.symbol as string) ?? "—"}>
+      {p ? (
+        <div className="flex items-end gap-10 flex-wrap">
+          <Kpi label="Mid" value={typeof p.mid === "number" ? p.mid.toLocaleString() : "—"} />
+          <Kpi label="Bid" value={typeof p.bid === "number" ? p.bid.toLocaleString() : "—"} />
+          <Kpi label="Ask" value={typeof p.ask === "number" ? p.ask.toLocaleString() : "—"} />
+          <Kpi label="Spread" value={`${num(p.spread_bps, 1)} bps`} />
+          <Kpi
+            label="Funding"
+            value={typeof fr === "number" ? `${(fr * 100).toFixed(4)}%` : "—"}
+            tone={typeof fr === "number" ? signed(fr) : ""}
+          />
+        </div>
+      ) : (
+        <div className="text-[12px] font-mono text-dim">no live quote (warming / no book)</div>
+      )}
+    </TerminalPanel>
+  );
+}
+
+export function FeedPanel() {
+  const { data } = useSnapshot();
+  const f = data?.feed_health ?? {};
+  // Freshness is computed SERVER-side into these status strings (OK / stale) —
+  // trust them rather than recomputing against a client clock and a field whose
+  // epoch semantics vary by context.
+  const tone = (v?: string) =>
+    !v ? "neutral" : v.toLowerCase().includes("ok") ? "good" : "warn";
+  const chip = (label: string, v?: string) => (
+    <div className="flex items-center gap-2">
+      <span className="text-[11px] uppercase text-dim font-mono">{label}</span>
+      <TerminalBadge tone={tone(v) as never}>{v ?? "—"}</TerminalBadge>
+    </div>
+  );
+  return (
+    <TerminalPanel title="Feed health" meta={f.exchange ?? "—"}>
+      <div className="flex items-center gap-6 flex-wrap">
+        {chip("candles", f.candles)}
+        {chip("funding", f.funding)}
+        {chip("OI", f.open_interest)}
+      </div>
+    </TerminalPanel>
+  );
+}
+
 export function JournalPanel() {
   const { data, isLoading } = useJournal(50);
   const rows = data ?? [];

@@ -1,11 +1,20 @@
 import { useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { TerminalTabs } from "./components/Terminal";
-import { BookPanel, Header, JournalPanel, PositionsPanel, RiskPanel } from "./panels/Panels";
+import {
+  BookPanel,
+  FeedPanel,
+  Header,
+  JournalPanel,
+  MarketPanel,
+  PositionsPanel,
+  RiskPanel,
+} from "./panels/Panels";
 import { useUi } from "./store";
 
 const TABS = [
   { id: "desk", label: "Desk" },
+  { id: "markets", label: "Markets" },
   { id: "journal", label: "Journal" },
 ];
 
@@ -16,6 +25,7 @@ export default function App() {
   const commands: Command[] = useMemo(
     () => [
       { id: "desk", label: "Desk", hint: "book · risk · positions", run: () => setTab("desk") },
+      { id: "markets", label: "Markets", hint: "price · spread · feed", run: () => setTab("markets") },
       { id: "journal", label: "Journal", hint: "closed trades", run: () => setTab("journal") },
       {
         id: "classic",
@@ -43,15 +53,20 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "desk" ? (
+      {tab === "desk" && (
         <div className="flex flex-col gap-5">
           <BookPanel />
           <RiskPanel />
           <PositionsPanel />
         </div>
-      ) : (
-        <JournalPanel />
       )}
+      {tab === "markets" && (
+        <div className="flex flex-col gap-5">
+          <MarketPanel />
+          <FeedPanel />
+        </div>
+      )}
+      {tab === "journal" && <JournalPanel />}
 
       <footer className="text-[11px] font-mono text-faint pt-2">
         v2 · read-only · classic dashboard remains at <code>/</code>
