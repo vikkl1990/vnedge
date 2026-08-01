@@ -444,6 +444,7 @@ def create_app(
     paper_lane_cadence_path: Path | None = None,
     paper_lane_performance_path: Path | None = None,
     paper_trade_exit_autopsy_path: Path | None = None,
+    paper_lane_root_cause_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     paper_roster_drift_path: Path | None = None,
@@ -635,6 +636,10 @@ def create_app(
     paper_trade_exit_autopsy_file = (
         paper_trade_exit_autopsy_path
         or Path("research/live_research/paper_trade_exit_autopsy_latest.json")
+    )
+    paper_lane_root_cause_file = (
+        paper_lane_root_cause_path
+        or Path("research/live_research/paper_lane_root_cause_latest.json")
     )
     lane_survival_file = (
         lane_survival_path
@@ -1404,6 +1409,143 @@ def create_app(
                 cadence=cadence,
                 performance=performance,
                 exit_autopsy=exit_autopsy,
+                profile=build_trade_profile_matrix(activation),
+                causality=causality,
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-lane-root-cause")
+    async def paper_lane_root_cause(request: Request) -> JSONResponse:
+        """Read-only root-cause matrix for paper lanes.
+
+        Joins activation, route, cadence, sizing profile, entry/exit autopsy,
+        performance, survival, governor, and causality into one primary
+        blocker per lane. It cannot trade, promote, demote, or apply fixes.
+        """
+        user = _authorized(request)
+        cached = _read_json_payload(
+            paper_lane_root_cause_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane root-cause report unavailable",
+                "mode": "read_only_paper_lane_root_cause",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        if cached.get("rows") or cached.get("summary"):
+            return JSONResponse(cached, headers=_identity(user))
+
+        from vnedge.research.paper_lane_root_cause import build_paper_lane_root_cause
+        from vnedge.research.trade_profile_matrix import build_trade_profile_matrix
+
+        activation = _read_json_payload(
+            paper_lane_activation_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane activation report unavailable",
+                "mode": "read_only_activation_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        route = _read_json_payload(
+            paper_route_doctor_file,
+            {
+                "summary": {},
+                "rows": [],
+                "runner_service": {"state": "unknown", "up": None},
+                "operator_answer": "paper route doctor report unavailable",
+                "mode": "read_only_paper_route_doctor",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        cadence = _read_json_payload(
+            paper_lane_cadence_file,
+            {
+                "summary": {},
+                "rows": [],
+                "operator_answer": "paper lane cadence report unavailable",
+                "mode": "read_only_paper_lane_cadence",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        performance = _read_json_payload(
+            paper_lane_performance_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper performance report unavailable",
+                "mode": "read_only_paper_performance",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        exit_autopsy = _read_json_payload(
+            paper_trade_exit_autopsy_file,
+            {
+                "summary": {},
+                "rows": [],
+                "operator_answer": "paper trade exit autopsy unavailable",
+                "mode": "read_only_paper_trade_exit_autopsy",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        survival = _read_json_payload(
+            lane_survival_file,
+            {
+                "summary": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "lane survival report unavailable",
+                "mode": "read_only_lane_survival",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        governor = _read_json_payload(
+            paper_lane_governor_file,
+            {
+                "summary": {},
+                "proposed_roster": {},
+                "boards": {},
+                "rows": [],
+                "operator_answer": "paper lane governor report unavailable",
+                "mode": "read_only_paper_lane_governor",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        causality = _read_json_payload(
+            lane_firing_causality_file,
+            {
+                "summary": {},
+                "promotion_board": {},
+                "rows": [],
+                "operator_answer": "lane firing causality report unavailable",
+                "mode": "read_only_operator_truth",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
+        return JSONResponse(
+            build_paper_lane_root_cause(
+                activation=activation,
+                route=route,
+                cadence=cadence,
+                performance=performance,
+                exit_autopsy=exit_autopsy,
+                survival=survival,
+                governor=governor,
                 profile=build_trade_profile_matrix(activation),
                 causality=causality,
             ),

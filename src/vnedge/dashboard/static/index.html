@@ -944,6 +944,10 @@
       <div id="operatorActionQueue"><div class="note">waiting for joined lane evidence before ranking actions…</div></div>
     </section>
     <section class="panel" style="margin-bottom:14px">
+      <div class="phead"><h2>Paper Lane Root-Cause Matrix</h2><span class="meta" id="paperRootCauseMeta">classifying lane blockers…</span></div>
+      <div id="paperLaneRootCause"><div class="note">waiting for route, cadence, sizing, entry, exit, and performance evidence…</div></div>
+    </section>
+    <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Operator Lifecycle Console</h2><span class="meta" id="lifecycleMeta">joining lane evidence…</span></div>
       <div id="lifecycleConsole"><div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div></div>
     </section>
@@ -1522,7 +1526,7 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+cohortLine+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"darwinian agent survival pending")+'</div>';
   }
-  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,governor:null,rosterDrift:null,profile:null,meta:null};
+  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,survival:null,governor:null,rosterDrift:null,rootCause:null,profile:null,meta:null};
   function renderLaneFunnel(d){
     lifeData.readiness=d; renderLifecycleConsole();
     var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
@@ -1586,6 +1590,44 @@
     }).join('');
   }
   function applyCausality(d){renderCausality(d);renderPaperBoard(d);}
+  function rootCauseCls(r){
+    var stage=String((r&&r.stage)||""),root=String((r&&r.root_cause)||"");
+    if(stage==="route"||stage==="cadence")return"bad";
+    if(stage==="sizing"||stage==="entry"||stage==="exit"||root==="NEGATIVE_AFTER_COST")return"fix";
+    if(root==="READY_FOR_HUMAN_REVIEW")return"ok";
+    if(stage==="market")return"wait";
+    return"fix";
+  }
+  function renderPaperLaneRootCause(d){
+    lifeData.rootCause=d;
+    var el=$("paperLaneRootCause"),meta=$("paperRootCauseMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.total_lanes)+" lanes · "+num(s.p1)+" P1 · "+num(s.entry_blocked)+" entry · "+num(s.exit_blocked)+" exit · "+num(s.negative_after_cost)+" negative";
+    if(!rows.length){el.innerHTML='<div class="note">paper lane root-cause matrix loading…</div>';return;}
+    var k='<div class="actionmetrics">'+
+      '<div class="actionmetric"><div class="l">Route / journal</div><div class="v" style="color:var(--short)">'+num(s.route_blocked)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Cadence stale</div><div class="v" style="color:var(--short)">'+num(s.cadence_blocked)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Entry quality</div><div class="v" style="color:var(--warn)">'+num(s.entry_blocked)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Exit capture</div><div class="v" style="color:var(--warn)">'+num(s.exit_blocked)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Negative cost</div><div class="v" style="color:var(--short)">'+num(s.negative_after_cost)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Review ready</div><div class="v" style="color:var(--long)">'+num(s.review_candidates)+'</div></div>'+
+    '</div>';
+    var head='<div class="actionrow head"><span>Lane</span><span>Root cause</span><span>Stage</span><span>Evidence</span><span>Next repair</span></div>';
+    var body=rows.slice(0,14).map(function(r){
+      var m=r.metrics||{},ev=r.evidence||{},cls=rootCauseCls(r),blockers=(r.blockers||[]).join(" · "),src=(r.evidence_sources||[]).join(" · ");
+      var root=String(r.root_cause||"UNKNOWN").toLowerCase().replace(/_/g," ");
+      var stage=String(r.stage||"--").toLowerCase();
+      var evLine=[ev.route_state,ev.cadence_state,ev.entry_state,ev.exit_driver,ev.performance_state].filter(Boolean).join(" · ")||src||"evidence pending";
+      return '<div class="actionrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div>'+lifeChip(root,cls)+'<small>P'+esc(String(r.severity||"").replace("P",""))+' · '+Math.round(num(r.confidence)*100)+'% confidence</small></div>'+
+        '<div><b>'+esc(stage)+'</b><small>'+esc(String(r.owner||"--"))+' owned</small></div>'+
+        '<div><small title="'+esc(evLine)+'">'+esc(evLine.slice(0,92))+'</small><small><span class="num '+(num(m.net_pnl_usd)<0?"dn":"up")+'">'+usd(num(m.net_pnl_usd))+'</span> · '+num(m.closed_trades)+' closed · '+num(m.live_signals)+' sig</small></div>'+
+        '<div><b title="'+esc(blockers||r.action||"")+'">'+esc(String(r.action||"").slice(0,86))+'</b><small>'+esc((blockers||src||"read-only").slice(0,86))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+head+body+'<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper root-cause matrix pending")+'</div>';
+  }
   function actCls(st){
     st=String(st||"");
     if(st==="PAPER_RUNNING")return"ok";
@@ -2433,6 +2475,7 @@
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
   function pollPaperRosterDrift(){ poll("/paper-roster-drift", renderPaperRosterDrift); }
+  function pollPaperLaneRootCause(){ poll("/paper-lane-root-cause", renderPaperLaneRootCause); }
   function pollDarwinianAgentSurvival(){ poll("/darwinian-agent-survival", renderDarwinianAgentSurvival); }
   function pollTradeProfileMatrix(){ poll("/trade-profile-matrix", renderTradeProfileMatrix); }
   function pollMeta(){ poll("/meta", function(d){ metaData=d; lifeData.meta=d; renderBuildMeta(d); renderDeployProv(lastSnap); renderLifecycleConsole(); }); }
@@ -2589,8 +2632,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
