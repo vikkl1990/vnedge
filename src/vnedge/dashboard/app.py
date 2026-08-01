@@ -51,7 +51,13 @@ from vnedge.agent_gateway.task_registry import (
     env_quant_os_agent_gateway_dir,
     quant_os_event_stream,
 )
-from vnedge.dashboard.auth import AuthResult, DashboardUser, TokenStore
+from vnedge.dashboard.auth import (
+    AuthResult,
+    DashboardUser,
+    TokenStore,
+    has_permission,
+    permissions_for,
+)
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
@@ -500,6 +506,18 @@ def create_app(
         the --force-recreate race that took the fleet down twice."""
         return JSONResponse({"status": "ok"})
 
+    @app.get("/ready")
+    async def ready() -> JSONResponse:
+        """Unauthenticated READINESS probe — liveness says "process up", this
+        says "up AND has data to serve". 200 once a snapshot has been published,
+        503 while still warming. Reveals only that boolean, never any state, so
+        it needs no token. Distinct from /health so an orchestrator can wait for
+        data readiness before routing traffic without treating a warming
+        process as dead."""
+        if provider.latest() is None:
+            return JSONResponse({"status": "starting"}, status_code=503)
+        return JSONResponse({"status": "ready"})
+
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.
     lane_dir = journal_dir or (history_path.parent if history_path is not None else None)
@@ -553,7 +571,27 @@ def create_app(
         return result
 
     def _identity(user: AuthResult) -> dict[str, str]:
-        return {"X-Dashboard-User": user.name or ""}
+        # Role travels back with every authenticated response so a future
+        # frontend can hide controls the caller can't use (defense in depth —
+        # the server still enforces via _require_permission on control routes).
+        return {"X-Dashboard-User": user.name or "", "X-Dashboard-Role": user.role or ""}
+
+    def _require_permission(permission: str):
+        """Dependency factory: authenticate, then 403 unless the caller's role
+        grants ``permission``. Read routes need no gate today (every role has
+        ``view``); this is the primitive that control routes (live-gate flip,
+        promotion, kill-switch) attach to when they land — no second auth
+        migration. Enforcement is server-side and cannot be spoofed by a header.
+        """
+        def _dep(request: Request) -> AuthResult:
+            user = _authorized(request)
+            if not has_permission(user.role, permission):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"role {user.role!r} lacks permission {permission!r}",
+                )
+            return user
+        return _dep
 
     def _read_json_payload(path: Path | None, fallback: dict) -> dict:
         if path is None or not path.exists():
@@ -720,6 +758,25 @@ def create_app(
                 {"status": "no snapshot yet"}, status_code=503, headers=_identity(user)
             )
         return JSONResponse(snapshot, headers=_identity(user))
+
+    @app.get("/whoami")
+    async def whoami(request: Request) -> JSONResponse:
+        """The authenticated caller's identity, role, and permission set.
+
+        Read-only and reveals only the caller's OWN identity (never the token,
+        never other users). A frontend uses `permissions` to show/hide controls;
+        the server still enforces every control server-side via
+        `_require_permission`."""
+        user = _authorized(request)
+        return JSONResponse(
+            {
+                "name": user.name,
+                "role": user.role,
+                "permissions": permissions_for(user.role),
+                "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+            },
+            headers=_identity(user),
+        )
 
     def _query_lane(request: Request) -> str:
         lane = request.query_params.get("lane", "").strip()
