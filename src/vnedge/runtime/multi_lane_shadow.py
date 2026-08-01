@@ -1060,6 +1060,40 @@ def velocity_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSp
     ]
 
 
+# --------------------------------------------------------------------------- #
+# Evidence-based lane prune (2026-08-01). The live survival board (112 tracked
+# lanes: 0 survivor-candidates, 7 profitable / 31 losing, ~55 that never fire)
+# plus per-lane paper PnL showed these families have no edge and no path to one.
+# Running them only pins the VM and buries the few real signals in noise. Pruned
+# here (before paper-observation mirroring, so mirrors go too). REVERSIBLE:
+# remove a rule to bring a family back, or set MULTI_LANE_PRUNE_DEAD=0 to disable
+# the whole filter without a code change. KEEP: funding-MR BTC (proven 3× OOS+),
+# quant_signal_pack ETH/SOL (paper-positive), the vol-breakout / evidence /
+# crypto-trend-DOGE candidates. Rare-event lanes are not in this set.
+_PRUNED_STRATEGIES = frozenset(
+    {
+        "alpha_stack_confluence_v1",  # NO_TRADE_EVIDENCE every symbol; 0 edge
+        "luxy_ut_bot_forecast_v1",    # worst fee-wall losers (BTC 15m -$30/-$29)
+        "trend_continuation_v1",      # documented REJECT; XRP lane -$22, never fires
+    }
+)
+
+
+def _pruned_lane(spec: LaneSpec) -> bool:
+    """True for a lane the evidence says never helps — excluded from the roster."""
+    strat = str(spec.strategy_id or "")
+    base_symbol = str(spec.symbol or "").split("/")[0].upper()
+    if strat in _PRUNED_STRATEGIES:
+        return True
+    # quant_signal_pack: paper-positive on ETH/SOL, worst single loser on DOGE (-$44).
+    if strat == "quant_signal_pack_v1" and base_symbol == "DOGE":
+        return True
+    # funding mean-reversion: only BTC has a proven edge; ETH is DEAD, others lose.
+    if strat == "funding_mean_reversion_v1" and base_symbol != "BTC":
+        return True
+    return False
+
+
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """The full deduped spec list the runner is SUPPOSED to run.
 
@@ -1088,6 +1122,10 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + fee_wall_paper_probe_lanes(environ)
         + velocity_delta_lanes(environ)
     )
+    # Prune proven-dead lane families (before mirroring, so their paper-observation
+    # mirrors are dropped too). Toggle off with MULTI_LANE_PRUNE_DEAD=0.
+    if _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1"):
+        base = [spec for spec in base if not _pruned_lane(spec)]
     return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
 
 
