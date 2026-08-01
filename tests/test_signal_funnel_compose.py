@@ -159,6 +159,8 @@ def test_operator_actions_publishes_joined_action_feed():
     assert "${OPERATOR_ACTIONS_INTERVAL_SECONDS:-60}" in service["command"]
     assert "--exit-autopsy" in service["command"]
     assert "research/live_research/paper_trade_exit_autopsy_latest.json" in service["command"]
+    assert "--contract-reconciler" in service["command"]
+    assert "research/live_research/paper_trade_contract_reconciler_latest.json" in service["command"]
     assert "research/live_research/operator_actions_latest.json" in service["command"]
     assert "research/live_research/operator_actions_feed.jsonl" in service["command"]
     assert "--print" in service["command"]

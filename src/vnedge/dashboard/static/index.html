@@ -1000,6 +1000,10 @@
           <div id="makerQuoteLifecycle"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Paper Contract Truth</h2><span class="meta" id="paperContractMeta">loading…</span></div>
+          <div id="paperContractTruth"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Lane Survival Engine</h2><span class="meta" id="laneSurvivalMeta">loading…</span></div>
           <div id="laneSurvival"></div>
         </section>
@@ -1534,7 +1538,7 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+cohortLine+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"darwinian agent survival pending")+'</div>';
   }
-  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,quote:null,survival:null,governor:null,rosterDrift:null,rootCause:null,profile:null,meta:null};
+  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,quote:null,contract:null,survival:null,governor:null,rosterDrift:null,rootCause:null,profile:null,operatorActions:null,meta:null};
   function renderLaneFunnel(d){
     lifeData.readiness=d; renderLifecycleConsole();
     var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
@@ -1875,6 +1879,43 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"maker quote lifecycle pending")+'</div>';
   }
+  function contractCls(st){
+    st=String(st||"");
+    if(st==="CONTRACT_OK_PROFITABLE")return"ok";
+    if(st==="NO_CLOSED_TRADES"||st==="CONTRACT_OK_EDGE_DEFICIT")return"wait";
+    if(st==="CONTRACT_BROKEN")return"bad";
+    if(st==="FEE_WALL_BREACH"||st==="CONTRACT_OK_NEGATIVE_ALPHA")return"fix";
+    return"fix";
+  }
+  function renderPaperContractTruth(d){
+    lifeData.contract=d; renderLifecycleConsole();
+    var el=$("paperContractTruth"),meta=$("paperContractMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+num(s.contract_broken_lanes)+" contract · "+num(s.fee_wall_breach_lanes)+" fee · "+num(s.contract_ok_negative_lanes)+" clean-negative";
+    if(!rows.length){el.innerHTML='<div class="note">paper contract reconciler waiting for published evidence…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Contract broken</div><div class="v" style="color:var(--short)">'+num(s.contract_broken_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Fee wall</div><div class="v" style="color:var(--warn)">'+num(s.fee_wall_breach_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Clean negative</div><div class="v" style="color:var(--warn)">'+num(s.contract_ok_negative_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Clean profitable</div><div class="v" style="color:var(--long)">'+num(s.contract_ok_profitable_lanes)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var verdict=String(r.verdict||"UNKNOWN"),cls=contractCls(verdict),net=num(r.net_pnl_usd);
+      var viol=r.top_violations||{},warn=r.top_warnings||{};
+      var vtxt=Object.keys(viol).slice(0,3).map(function(k){return k+" "+viol[k];}).join(" · ");
+      var wtxt=Object.keys(warn).slice(0,3).map(function(k){return k+" "+warn[k];}).join(" · ");
+      var evidence=vtxt||wtxt||String(r.next_action||"contract evidence clean");
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(verdict.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(evidence)+'">'+esc(String(r.next_action||evidence).slice(0,58))+'</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>fees $'+num(r.fees_usd).toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+num(r.avg_net_bps).toFixed(1)+'bps</b><small>'+num(r.avg_fee_bps).toFixed(1)+'bps fee · '+num(r.critical_violations)+' critical</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+esc(evidence.slice(0,64))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper contract truth pending")+'</div>';
+  }
   function survCls(st){
     st=String(st||"");
     if(st==="PAPER_SURVIVOR_CANDIDATE")return"ok";
@@ -2125,6 +2166,7 @@
     lifeAdd(map,"cadence",(lifeData.cadence&&lifeData.cadence.rows)||[]);
     lifeAdd(map,"performance",(lifeData.performance&&lifeData.performance.rows)||[]);
     lifeAdd(map,"quote",(lifeData.quote&&lifeData.quote.rows)||[]);
+    lifeAdd(map,"contract",(lifeData.contract&&lifeData.contract.rows)||[]);
     lifeAdd(map,"survival",(lifeData.survival&&lifeData.survival.rows)||[]);
     lifeAdd(map,"governor",(lifeData.governor&&lifeData.governor.rows)||[]);
     lifeAdd(map,"profile",(lifeData.profile&&lifeData.profile.rows)||[]);
@@ -2132,15 +2174,15 @@
     return Object.keys(map).map(function(k){return map[k];});
   }
   function actionRank(a){
-    var p={REPAIR_ROUTE:0,RESTORE_CADENCE:1,FIX_SIZE_PROFILE:2,REVIEW_PAPER_CANDIDATE:3,COLLECT_OUTCOMES:4,WAIT_FOR_SIGNAL:5,OBSERVE:6};
+    var p={REPAIR_ROUTE:0,RESTORE_CADENCE:1,FIX_SIZE_PROFILE:2,REPAIR_PAPER_CONTRACT:3,FIX_EXIT_QUALITY:4,REVIEW_PAPER_CANDIDATE:5,MINE_CLEAN_ALPHA:6,COLLECT_OUTCOMES:7,WAIT_FOR_SIGNAL:8,OBSERVE:9};
     return p[a.bucket]!=null?p[a.bucket]:9;
   }
   function actionFromLifecycle(x){
     var profiles=x.profiles||{};
-    var seed=x.seed||{},a=x.activation||{},r=x.route||{},c=x.cadence||{},p=x.performance||{},q=x.quote||{},ca=x.causality||{},paper=profiles.paper||x.profile_paper,live=profiles.live||x.profile_live;
+    var seed=x.seed||{},a=x.activation||{},r=x.route||{},c=x.cadence||{},p=x.performance||{},q=x.quote||{},ct=x.contract||{},ca=x.causality||{},paper=profiles.paper||x.profile_paper,live=profiles.live||x.profile_live;
     var strat=x.strategy_id||seed.strategy_id||"--",ex=x.exchange||seed.exchange||"--",sym=x.symbol||seed.symbol||"--",tf=x.timeframe||seed.timeframe||"--";
     var routeState=String(r.doctor_state||a.activation_state||""),cad=String(c.cadence_state||""),pstate=String(p.state||""),scanner=String((a.runtime&&a.runtime.scanner_state)||(ca.scanner_state)||"");
-    var paperState=String((paper&&paper.profile_state)||""),liveState=String((live&&live.profile_state)||""),net=num(p.net_pnl_usd),closed=num(p.closed_trades);
+    var contract=String(ct.verdict||""),paperState=String((paper&&paper.profile_state)||""),liveState=String((live&&live.profile_state)||""),net=num(p.net_pnl_usd||ct.net_pnl_usd),closed=num(p.closed_trades||ct.closed_trades);
     var action=a.next_action||r.next_action||c.next_action||q.next_action||p.next_action||ca.why_no_trade_minute||"observe lane";
     var bucket="OBSERVE",tone="none",owner="system",why=action;
     if(stateTone(routeState)==="bad"){
@@ -2153,6 +2195,10 @@
       bucket="REPAIR_ROUTE"; tone="bad"; owner="system"; why=q.next_action||"repair quote lifecycle before more paper/live attempts";
     }else if(q.lifecycle_state==="TAKER_FALLBACK_FORBIDDEN"||q.lifecycle_state==="MAKER_FILL_UNPROVEN"||q.lifecycle_state==="NO_QUOTE_LIFECYCLE_WIRING"){
       bucket="REPAIR_ROUTE"; tone="fix"; owner="system"; why=q.next_action||"repair quote lifecycle before promotion";
+    }else if(contract==="CONTRACT_BROKEN"||contract==="FEE_WALL_BREACH"){
+      bucket="REPAIR_PAPER_CONTRACT"; tone=contract==="CONTRACT_BROKEN"?"bad":"fix"; owner="system"; why=ct.next_action||"repair paper trade contract before alpha review";
+    }else if(contract==="CONTRACT_OK_NEGATIVE_ALPHA"||contract==="CONTRACT_OK_EDGE_DEFICIT"){
+      bucket="MINE_CLEAN_ALPHA"; tone="fix"; owner="research"; why=ct.next_action||"contract is clean; mine entry and exit alpha instead of repairing runtime";
     }else if(pstate==="PAPER_PROMOTION_CANDIDATE"){
       bucket="REVIEW_PAPER_CANDIDATE"; tone="ok"; owner="human"; why=p.next_action||"review paper evidence for the next promotion step";
     }else if(pstate==="PAPER_ACTIVE_PROFITABLE"||pstate==="PAPER_ACTIVE_FLAT"||closed>0){
@@ -2160,18 +2206,34 @@
     }else if(scanner==="FIRING"||scanner==="NEAR_TRIGGER"||a.activation_state==="PAPER_ONLINE_WAITING"){
       bucket="WAIT_FOR_SIGNAL"; tone="wait"; owner="market"; why=a.next_action||ca.why_no_trade_minute||"paper lane is online; wait for a qualified signal and journal proof";
     }
-    return {bucket:bucket,tone:tone,owner:owner,why:String(why||action),strategy_id:strat,exchange:ex,symbol:sym,timeframe:tf,scanner:scanner,route:routeState,cadence:cad,performance:pstate,net:net,closed:closed};
+    return {bucket:bucket,tone:tone,owner:owner,why:String(why||action),strategy_id:strat,exchange:ex,symbol:sym,timeframe:tf,scanner:scanner,route:routeState,cadence:cad,performance:pstate,contract:contract,net:net,closed:closed};
+  }
+  function actionFromServerRow(r){
+    r=r||{};
+    var ev=r.evidence||{},m=r.metrics||{};
+    var bucket=String(r.bucket||"OBSERVE"),tone=stateTone(bucket);
+    if(bucket==="REVIEW_PAPER_CANDIDATE")tone="ok";
+    if(bucket==="REPAIR_ROUTE"||bucket==="RESTORE_CADENCE"||bucket==="REPAIR_PAPER_CONTRACT")tone="bad";
+    if(bucket==="FIX_SIZE_PROFILE"||bucket==="FIX_EXIT_QUALITY"||bucket==="MINE_CLEAN_ALPHA")tone="fix";
+    if(bucket==="WAIT_FOR_SIGNAL"||bucket==="COLLECT_OUTCOMES")tone="wait";
+    return {
+      bucket:bucket,tone:tone,owner:String(r.owner||"system"),why:String(r.action||r.reason||"observe lane"),
+      strategy_id:String(r.strategy_id||"--"),exchange:String(r.exchange||"--"),symbol:String(r.symbol||"--"),timeframe:String(r.timeframe||"--"),
+      scanner:String(ev.scanner_state||""),route:String(ev.route_state||ev.activation_state||""),cadence:String(ev.cadence_state||""),performance:String(ev.performance_state||""),contract:String(ev.contract_verdict||""),
+      net:num(m.net_pnl_usd),closed:num(m.closed_trades)
+    };
   }
   function renderOperatorActionQueue(rows){
     var el=$("operatorActionQueue"),meta=$("actionQueueMeta"); if(!el)return;
+    var serverRows=(lifeData.operatorActions&&lifeData.operatorActions.rows)||[];
     rows=rows||collectLifecycleRows();
-    if(!rows.length){
+    if(!rows.length&&!serverRows.length){
       if(meta)meta.textContent="waiting for joined evidence";
       el.innerHTML='<div class="note">waiting for joined lane evidence before ranking actions…</div>';
       return;
     }
-    var actions=rows.map(actionFromLifecycle).sort(function(a,b){return actionRank(a)-actionRank(b)||a.tone.localeCompare(b.tone)||a.strategy_id.localeCompare(b.strategy_id);});
-    var repairs=actions.filter(function(a){return a.tone==="bad"||a.bucket==="FIX_SIZE_PROFILE";}).length;
+    var actions=(serverRows.length?serverRows.map(actionFromServerRow):rows.map(actionFromLifecycle)).sort(function(a,b){return actionRank(a)-actionRank(b)||a.tone.localeCompare(b.tone)||a.strategy_id.localeCompare(b.strategy_id);});
+    var repairs=actions.filter(function(a){return a.tone==="bad"||a.bucket==="FIX_SIZE_PROFILE"||a.bucket==="REPAIR_PAPER_CONTRACT"||a.bucket==="FIX_EXIT_QUALITY";}).length;
     var reviews=actions.filter(function(a){return a.bucket==="REVIEW_PAPER_CANDIDATE";}).length;
     var collect=actions.filter(function(a){return a.bucket==="COLLECT_OUTCOMES";}).length;
     var waiting=actions.filter(function(a){return a.bucket==="WAIT_FOR_SIGNAL"||a.bucket==="OBSERVE";}).length;
@@ -2184,7 +2246,7 @@
     '</div>';
     var head='<div class="actionrow head"><span>Lane</span><span>Bucket</span><span>Owner</span><span>Action</span><span>Evidence</span></div>';
     var body=actions.slice(0,12).map(function(a){
-      var ev=[lifeLabel(a.scanner),lifeLabel(a.route),lifeLabel(a.cadence),lifeLabel(a.performance)].filter(function(x){return x&&x!=="--";}).slice(0,4).join(" · ")||"evidence pending";
+      var ev=[lifeLabel(a.scanner),lifeLabel(a.route),lifeLabel(a.cadence),lifeLabel(a.performance),lifeLabel(a.contract)].filter(function(x){return x&&x!=="--";}).slice(0,5).join(" · ")||"evidence pending";
       return '<div class="actionrow">'+
         '<div><b>'+safe(stratShort(a.strategy_id))+'</b><small>'+safe(symShort(a.symbol))+' · '+safe(ven(a.exchange).lab)+' · '+safe(a.timeframe)+'</small></div>'+
         '<div>'+lifeChip(lifeLabel(a.bucket),a.tone)+'</div>'+
@@ -2198,7 +2260,7 @@
   function renderLifecycleConsole(){
     var el=$("lifecycleConsole"),meta=$("lifecycleMeta"); if(!el)return;
     var rows=collectLifecycleRows();
-    renderOperatorActionQueue(rows);
+    renderOperatorActionQueue();
     if(!rows.length){
       if(meta)meta.textContent="waiting for joined evidence";
       el.innerHTML='<div class="note">waiting for activation, route, cadence, profile, and performance evidence…</div>';
@@ -2560,6 +2622,8 @@
   function pollPaperTradeEntryAutopsy(){ poll("/paper-trade-entry-autopsy", renderPaperTradeEntryAutopsy); }
   function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollMakerQuoteLifecycle(){ poll("/maker-quote-lifecycle", renderMakerQuoteLifecycle); }
+  function pollPaperContractTruth(){ poll("/paper-trade-contract-reconciler", renderPaperContractTruth); }
+  function pollOperatorActions(){ poll("/operator-actions", function(d){ lifeData.operatorActions=d; renderOperatorActionQueue(); }); }
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
   function pollPaperRosterDrift(){ poll("/paper-roster-drift", renderPaperRosterDrift); }
@@ -2720,8 +2784,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

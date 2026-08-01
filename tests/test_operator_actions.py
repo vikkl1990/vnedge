@@ -5,6 +5,8 @@ from vnedge.research.operator_actions import (
     ACTION_COLLECT_OUTCOMES,
     ACTION_FIX_EXIT_QUALITY,
     ACTION_FIX_SIZE_PROFILE,
+    ACTION_MINE_CLEAN_ALPHA,
+    ACTION_REPAIR_CONTRACT,
     ACTION_REPAIR_ROUTE,
     ACTION_REVIEW_PAPER_CANDIDATE,
     ACTION_RESTORE_CADENCE,
@@ -238,6 +240,90 @@ def test_operator_actions_uses_exit_autopsy_for_negative_lane_next_action():
     assert payload["summary"]["exit_quality_fixes"] == 1
 
 
+def test_operator_actions_repairs_contract_before_exit_quality():
+    payload = build_operator_actions(
+        activation={"rows": [_lane(activation_state="PAPER_RUNNING")]},
+        route={"rows": [_lane(doctor_state="JOURNAL_ACTIVE")]},
+        cadence={"rows": [_lane(cadence_state="EVALUATING_SIGNAL_SEEN")]},
+        performance={
+            "rows": [
+                _lane(
+                    state="PAPER_ACTIVE_NEGATIVE",
+                    closed_trades=6,
+                    net_pnl_usd=-4.2,
+                )
+            ]
+        },
+        contract_reconciler={
+            "report_id": "paper_trade_contract_reconciler_v1",
+            "rows": [
+                _lane(
+                    verdict="CONTRACT_BROKEN",
+                    critical_violations=2,
+                    top_violations={"exit_reduce_only_false": 1},
+                    next_action="repair reduce-only exit contract",
+                )
+            ],
+        },
+        exit_autopsy={
+            "rows": [
+                _lane(
+                    loss_driver="STOP_DOMINATED",
+                    next_action="tighten entry permission",
+                )
+            ]
+        },
+        profile={"rows": [_lane(profile="paper", profile_state="PAPER_PROFILE_READY")]},
+        causality={"rows": []},
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["bucket"] == ACTION_REPAIR_CONTRACT
+    assert row["severity"] == "P1"
+    assert row["action"] == "repair reduce-only exit contract"
+    assert row["evidence"]["contract_verdict"] == "CONTRACT_BROKEN"
+    assert row["metrics"]["critical_contract_violations"] == 2
+    assert payload["summary"]["contract_repairs"] == 1
+
+
+def test_operator_actions_mines_alpha_when_contract_is_clean_but_negative():
+    payload = build_operator_actions(
+        activation={"rows": [_lane(activation_state="PAPER_RUNNING")]},
+        route={"rows": [_lane(doctor_state="JOURNAL_ACTIVE")]},
+        cadence={"rows": [_lane(cadence_state="EVALUATING_SIGNAL_SEEN")]},
+        performance={
+            "rows": [
+                _lane(
+                    state="PAPER_ACTIVE_NEGATIVE",
+                    closed_trades=8,
+                    net_pnl_usd=-3.1,
+                )
+            ]
+        },
+        contract_reconciler={
+            "rows": [
+                _lane(
+                    verdict="CONTRACT_OK_NEGATIVE_ALPHA",
+                    avg_net_bps=-12.5,
+                    avg_fee_bps=7.2,
+                    next_action="contract clean; mine entry and exit alpha",
+                )
+            ]
+        },
+        profile={"rows": [_lane(profile="paper", profile_state="PAPER_PROFILE_READY")]},
+        causality={"rows": []},
+        now=NOW,
+    )
+
+    row = payload["rows"][0]
+    assert row["bucket"] == ACTION_MINE_CLEAN_ALPHA
+    assert row["owner"] == "research"
+    assert row["action"] == "contract clean; mine entry and exit alpha"
+    assert row["metrics"]["contract_avg_net_bps"] == -12.5
+    assert payload["summary"]["clean_alpha_mining"] == 1
+
+
 def test_operator_actions_wait_for_live_signal_when_lane_online():
     payload = build_operator_actions(
         activation={"rows": [_lane(activation_state="PAPER_ONLINE_WAITING")]},
@@ -268,6 +354,7 @@ def test_operator_actions_cli_publishes_latest_and_feed_with_profile_derivation(
     cadence = tmp_path / "cadence.json"
     performance = tmp_path / "performance.json"
     causality = tmp_path / "causality.json"
+    contract = tmp_path / "contract.json"
     out = tmp_path / "operator_actions_latest.json"
     feed = tmp_path / "operator_actions_feed.jsonl"
 
@@ -297,6 +384,7 @@ def test_operator_actions_cli_publishes_latest_and_feed_with_profile_derivation(
     route.write_text(json.dumps({"rows": [_lane(doctor_state="JOURNAL_ACTIVE")]}))
     cadence.write_text(json.dumps({"rows": [_lane(cadence_state="EVALUATING_NO_SIGNAL")]}))
     performance.write_text(json.dumps({"rows": []}))
+    contract.write_text(json.dumps({"rows": []}))
     causality.write_text(json.dumps({"rows": []}))
 
     assert operator_actions_main(
@@ -310,6 +398,8 @@ def test_operator_actions_cli_publishes_latest_and_feed_with_profile_derivation(
             str(cadence),
             "--performance",
             str(performance),
+            "--contract-reconciler",
+            str(contract),
             "--causality",
             str(causality),
             "--out",

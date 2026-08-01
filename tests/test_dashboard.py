@@ -1037,6 +1037,25 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_contract = tmp_path / "paper_trade_contract.json"
+    paper_contract.write_text(json.dumps({
+        "report_id": "paper_trade_contract_reconciler_v1",
+        "mode": "read_only_paper_contract_reconciliation",
+        "summary": {"contract_broken_lanes": 1, "closed_trades": 3},
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "verdict": "CONTRACT_BROKEN",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "closed_trades": 3,
+            "critical_violations": 1,
+            "next_action": "repair reduce-only exit contract",
+        }],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     lane_survival = tmp_path / "lane_survival.json"
     lane_survival.write_text(json.dumps({
         "mode": "read_only_lane_survival",
@@ -1080,6 +1099,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_trade_entry_autopsy_path=paper_entry_autopsy,
         paper_trade_exit_autopsy_path=paper_exit_autopsy,
         maker_quote_lifecycle_path=maker_quote_lifecycle,
+        paper_trade_contract_reconciler_path=paper_contract,
         lane_survival_path=lane_survival,
         paper_lane_governor_path=paper_lane_governor,
         paper_roster_drift_path=paper_roster_drift,
@@ -1097,6 +1117,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-trade-entry-autopsy").status_code == 401
     assert client.get("/paper-trade-exit-autopsy").status_code == 401
     assert client.get("/maker-quote-lifecycle").status_code == 401
+    assert client.get("/paper-trade-contract-reconciler").status_code == 401
     assert client.get("/lane-survival").status_code == 401
     assert client.get("/paper-lane-governor").status_code == 401
     assert client.get("/paper-roster-drift").status_code == 401
@@ -1148,6 +1169,13 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert maker_quote_payload["mode"] == "read_only_maker_quote_lifecycle"
     assert maker_quote_payload["can_trade"] is False
     assert maker_quote_payload["can_promote"] is False
+    paper_contract_payload = client.get(
+        "/paper-trade-contract-reconciler?token=t3st-token"
+    ).json()
+    assert paper_contract_payload["summary"]["contract_broken_lanes"] == 1
+    assert paper_contract_payload["mode"] == "read_only_paper_contract_reconciliation"
+    assert paper_contract_payload["can_trade"] is False
+    assert paper_contract_payload["can_promote"] is False
     lane_survival_payload = client.get("/lane-survival?token=t3st-token").json()
     assert lane_survival_payload["summary"]["demote_to_shadow"] == 1
     assert lane_survival_payload["mode"] == "read_only_lane_survival"
@@ -1172,6 +1200,10 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert operator_actions_payload["summary"]["route_repairs"] == 1
     assert operator_actions_payload["rows"][0]["bucket"] == "REPAIR_ROUTE"
     assert operator_actions_payload["rows"][0]["action"] == "inspect runner write path"
+    assert (
+        operator_actions_payload["source_report_ids"]["contract_reconciler"]
+        == "paper_trade_contract_reconciler_v1"
+    )
     assert operator_actions_payload["can_trade"] is False
     assert operator_actions_payload["can_promote"] is False
 

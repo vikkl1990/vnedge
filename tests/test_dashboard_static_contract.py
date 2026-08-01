@@ -30,11 +30,13 @@ def test_promote_view_has_read_only_operator_action_queue():
     assert 'id="operatorActionQueue"' in html
     assert "function collectLifecycleRows" in html
     assert "function renderOperatorActionQueue" in html
+    assert "function pollOperatorActions" in html
+    assert 'poll("/operator-actions"' in html
     assert "REPAIR_ROUTE" in html
+    assert "REPAIR_PAPER_CONTRACT" in html
     assert "REVIEW_PAPER_CANDIDATE" in html
     assert "COLLECT_OUTCOMES" in html
     assert "evidence-ranked only; it cannot approve, promote, or trade" in html
-
 
 def test_promote_view_has_paper_lane_root_cause_matrix():
     html = _index()
@@ -54,6 +56,20 @@ def test_promote_view_has_paper_trade_entry_autopsy_panel():
     assert "function renderPaperTradeEntryAutopsy" in html
     assert "Stale entries" in html
     assert "missing ctx" in html
+
+
+def test_promote_view_has_paper_contract_truth_surface():
+    html = _index()
+    app = APP.read_text()
+    assert "Paper Contract Truth" in html
+    assert 'id="paperContractTruth"' in html
+    assert 'id="paperContractMeta"' in html
+    assert "function renderPaperContractTruth" in html
+    assert "function pollPaperContractTruth" in html
+    assert 'poll("/paper-trade-contract-reconciler"' in html
+    assert "REPAIR_PAPER_CONTRACT" in html
+    assert "MINE_CLEAN_ALPHA" in html
+    assert '@app.get("/paper-trade-contract-reconciler")' in app
 
 
 def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
