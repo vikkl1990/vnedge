@@ -131,6 +131,29 @@ def test_paper_route_doctor_explains_missing_journals():
     assert service["depends_on"] == ["paper-lane-activation"]
 
 
+def test_promotion_review_runbook_publishes_red_team_operator_packet():
+    service = compose_services()["promotion-review-runbook"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.promotion_review_runbook",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${PROMOTION_REVIEW_RUNBOOK_INTERVAL_SECONDS:-300}" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/promotion_review_runbook_latest.json" in service["command"]
+    assert "--runbook-feed" in service["command"]
+    assert "research/live_research/promotion_review_runbook_feed.jsonl" in service["command"]
+    assert "--red-team-out" in service["command"]
+    assert "research/live_research/promotion_red_team_latest.json" in service["command"]
+    assert "--print" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert "./research/paper_trials:/app/research/paper_trials:ro" in service["volumes"]
+    assert "./research/judgments:/app/research/judgments:ro" in service["volumes"]
+    assert service["depends_on"] == ["research-loop"]
+
+
 def test_paper_lane_cadence_monitors_live_evaluation_cadence():
     service = compose_services()["paper-lane-cadence"]
 
