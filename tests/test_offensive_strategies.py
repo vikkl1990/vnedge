@@ -185,6 +185,7 @@ def test_squeeze_requires_funding_series():
 
 def test_registry_has_research_lanes():
     assert set(STRATEGIES) == {
+        "crypto_trend_atr_margin_v1",
         "trend_continuation_v1", "funding_mean_reversion_v1",
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
         "funding_squeeze_continuation_v1", "datrend_nomada_scalper_v1",

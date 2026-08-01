@@ -11,6 +11,7 @@ from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
+from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.datrend_nomada_scalper import DATrendNomadaScalper
 from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
@@ -34,6 +35,7 @@ from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
+    CryptoTrendAtrMargin.strategy_id: CryptoTrendAtrMargin,
     TrendContinuation.strategy_id: TrendContinuation,
     FundingMeanReversion.strategy_id: FundingMeanReversion,
     VolatilityExpansionBreakout.strategy_id: VolatilityExpansionBreakout,
