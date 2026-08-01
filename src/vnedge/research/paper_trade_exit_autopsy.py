@@ -2,7 +2,8 @@
 
 Paper performance already answers whether a lane is positive or negative. This
 module answers why the closed paper trades are behaving that way: stops, fee
-drag, weak take-profit capture, timeout exits, or missing exit metadata.
+drag, weak take-profit capture, timeout exits, strategy-managed exits, or
+missing exit metadata.
 
 Read-only by design: it cannot start, stop, promote, demote, or trade a lane.
 """
@@ -40,9 +41,13 @@ DRIVER_STOP_DOMINATED = "STOP_DOMINATED"
 DRIVER_FEE_WALL_DOMINATED = "FEE_WALL_DOMINATED"
 DRIVER_TIMEOUT_DOMINATED = "TIMEOUT_DOMINATED"
 DRIVER_TP_CAPTURE_WEAK = "TP_CAPTURE_WEAK"
+DRIVER_STRATEGY_EXIT_HEALTHY = "STRATEGY_EXIT_CAPTURE_HEALTHY"
+DRIVER_STRATEGY_EXIT_DOMINATED = "STRATEGY_EXIT_DOMINATED"
 DRIVER_NEGATIVE_EDGE = "NEGATIVE_EDGE"
 DRIVER_LEDGER_OR_EXIT_METADATA_GAP = "LEDGER_OR_EXIT_METADATA_GAP"
 DRIVER_OBSERVE_MORE = "OBSERVE_MORE"
+
+STRATEGY_EXIT_PREFIX = "strategy_"
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,7 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 30) -> str:
             f"{summary.get('closed_trades', 0)} closed, "
             f"{summary.get('negative_lanes', 0)} negative, "
             f"{summary.get('stop_dominated', 0)} stop-dominated, "
+            f"{summary.get('strategy_exit_healthy', 0)} smart-exit healthy, "
             f"{summary.get('fee_wall_dominated', 0)} fee-wall dominated"
         ),
     ]
@@ -243,8 +249,20 @@ def _lane_autopsy(
         if row.get("hold_seconds") is not None
     ]
     resolutions = Counter(_resolution(row) for row in trades)
+    exit_families = Counter(_exit_family(_resolution(row)) for row in trades)
     tp_counts = Counter(str(int(_float(row.get("tp_reached")))) for row in trades)
     missing_resolution = sum(1 for row in trades if not _resolution(row))
+    strategy_exit_trades = [
+        trade for trade in trades if _is_strategy_exit(_resolution(trade))
+    ]
+    strategy_exit_nets = [_trade_net(row) for row in strategy_exit_trades]
+    strategy_exit_bps = [
+        value
+        for value in (_net_bps(row) for row in strategy_exit_trades)
+        if value is not None
+    ]
+    strategy_exit_net = sum(strategy_exit_nets)
+    strategy_exit_wins = sum(1 for value in strategy_exit_nets if value > 0)
     profit_factor = _profit_factor(gross_profit, gross_loss, wins, closed)
     row = {
         "lane_id": lane_id,
@@ -265,10 +283,22 @@ def _lane_autopsy(
         "avg_gross_captured_bps": round(_avg(captured_bps), 4) if captured_bps else None,
         "avg_hold_seconds": round(_avg(holds), 2) if holds else None,
         "resolution_counts": dict(sorted(resolutions.items())),
+        "exit_family_counts": dict(sorted(exit_families.items())),
         "tp_reached_counts": dict(sorted(tp_counts.items())),
         "take_profit_rate": _rate(resolutions, {"take_profit", "target"}, closed),
         "stop_rate": _rate(resolutions, {"stop", "tick_stop"}, closed),
         "timeout_rate": _rate(resolutions, {"max_holding", "timeout"}, closed),
+        "strategy_exit_count": len(strategy_exit_trades),
+        "strategy_exit_rate": round(len(strategy_exit_trades) / closed, 4) if closed else 0.0,
+        "strategy_exit_net_pnl_usd": round(strategy_exit_net, 6),
+        "strategy_exit_avg_net_bps": (
+            round(_avg(strategy_exit_bps), 4) if strategy_exit_bps else None
+        ),
+        "strategy_exit_win_rate": (
+            round(strategy_exit_wins / len(strategy_exit_trades), 4)
+            if strategy_exit_trades
+            else None
+        ),
         "missing_resolution_rate": round(missing_resolution / closed, 4) if closed else 0.0,
         "recent_trades": [_slim_trade(row) for row in trades[-5:]],
     }
@@ -291,6 +321,13 @@ def _diagnose(
     stop_rate = _float(row.get("stop_rate"))
     timeout_rate = _float(row.get("timeout_rate"))
     tp_rate = _float(row.get("take_profit_rate"))
+    strategy_exit_rate = _float(row.get("strategy_exit_rate"))
+    strategy_exit_net = _float(row.get("strategy_exit_net_pnl_usd"))
+    strategy_exit_avg = (
+        _float(row.get("strategy_exit_avg_net_bps"))
+        if row.get("strategy_exit_avg_net_bps") is not None
+        else None
+    )
     missing = _float(row.get("missing_resolution_rate"))
     blockers: list[str] = []
 
@@ -309,6 +346,27 @@ def _diagnose(
     under_sampled = closed < config.min_closed_trades
     if under_sampled:
         blockers.append(f"sample {closed} < {config.min_closed_trades}")
+    if (
+        not under_sampled
+        and strategy_exit_rate >= 0.25
+        and strategy_exit_net > 0
+        and strategy_exit_avg is not None
+        and strategy_exit_avg >= config.fee_wall_bps
+    ):
+        return (
+            DRIVER_STRATEGY_EXIT_HEALTHY,
+            "keep strategy-managed exits; compare earlier TP/BE capture before promotion",
+            blockers,
+        )
+    if not under_sampled and net < 0 and strategy_exit_rate >= 0.35 and strategy_exit_net <= 0:
+        blockers.append(
+            f"strategy exits {strategy_exit_rate:.0%}, net ${strategy_exit_net:.2f}"
+        )
+        return (
+            DRIVER_STRATEGY_EXIT_DOMINATED,
+            "review neutral/reversal exit timing; smart exits are closing negative trades",
+            blockers,
+        )
     if (
         not under_sampled
         and net >= 0
@@ -388,6 +446,13 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "fee_wall_dominated": drivers[DRIVER_FEE_WALL_DOMINATED],
         "timeout_dominated": drivers[DRIVER_TIMEOUT_DOMINATED],
         "tp_capture_weak": drivers[DRIVER_TP_CAPTURE_WEAK],
+        "strategy_exit_healthy": drivers[DRIVER_STRATEGY_EXIT_HEALTHY],
+        "strategy_exit_dominated": drivers[DRIVER_STRATEGY_EXIT_DOMINATED],
+        "strategy_exit_trades": sum(int(row.get("strategy_exit_count") or 0) for row in rows),
+        "strategy_exit_net_pnl_usd": round(
+            sum(_float(row.get("strategy_exit_net_pnl_usd")) for row in rows),
+            6,
+        ),
         "metadata_gaps": drivers[DRIVER_LEDGER_OR_EXIT_METADATA_GAP],
         "healthy_capture": drivers[DRIVER_CAPTURE_HEALTHY],
         "net_pnl_usd": round(net, 6),
@@ -408,8 +473,12 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         return "Stop exits are the primary paper-trade loss driver; entry quality and invalidation need work before promotion."
     if int(summary.get("fee_wall_dominated") or 0):
         return "Fee drag is dominating paper outcomes; lanes need larger expected move or maker-first routing."
+    if int(summary.get("strategy_exit_dominated") or 0):
+        return "Strategy-managed exits are closing negative paper trades; tune exit timing before promotion."
     if int(summary.get("tp_capture_weak") or 0):
         return "Take-profit exits are firing but capture is too small; improve trail/scale-out rules."
+    if int(summary.get("strategy_exit_healthy") or 0):
+        return "Strategy-managed exits are preserving edge on at least one lane; keep observing before promotion."
     if int(summary.get("healthy_capture") or 0):
         return "At least one lane has healthy paper exit capture, but normal sample and promotion proof still apply."
     return "Paper trades are closing, but no lane has enough healthy exit evidence for promotion."
@@ -448,6 +517,29 @@ def _resolution(trade: Mapping[str, Any]) -> str:
     return str(trade.get("resolution") or "").strip()
 
 
+def _is_strategy_exit(trade_or_resolution: Mapping[str, Any] | str) -> bool:
+    if isinstance(trade_or_resolution, Mapping):
+        resolution = _resolution(trade_or_resolution)
+    else:
+        resolution = str(trade_or_resolution or "").strip()
+    return resolution.startswith(STRATEGY_EXIT_PREFIX)
+
+
+def _exit_family(resolution: str) -> str:
+    resolution = str(resolution or "").strip()
+    if not resolution:
+        return "missing"
+    if resolution in {"stop", "tick_stop"}:
+        return "stop"
+    if resolution in {"take_profit", "target"}:
+        return "take_profit"
+    if resolution in {"max_holding", "timeout"}:
+        return "timeout"
+    if resolution.startswith(STRATEGY_EXIT_PREFIX):
+        return "strategy_exit"
+    return "other"
+
+
 def _profit_factor(gross_profit: float, gross_loss: float, wins: int, closed: int) -> float:
     if closed <= 0:
         return 0.0
@@ -472,6 +564,7 @@ def _slim_trade(trade: Mapping[str, Any]) -> dict[str, Any]:
         "symbol": trade.get("symbol", ""),
         "side": trade.get("side", ""),
         "resolution": trade.get("resolution", ""),
+        "exit_family": _exit_family(_resolution(trade)),
         "entry_price": trade.get("entry_price"),
         "exit_price": trade.get("exit_price"),
         "net_pnl_usd": round(_trade_net(dict(trade)), 6),
@@ -488,11 +581,13 @@ _DRIVER_ORDER = {
     DRIVER_FEE_WALL_DOMINATED: 2,
     DRIVER_TIMEOUT_DOMINATED: 3,
     DRIVER_TP_CAPTURE_WEAK: 4,
-    DRIVER_NEGATIVE_EDGE: 5,
-    DRIVER_UNDER_SAMPLED: 6,
-    DRIVER_NO_CLOSED_TRADES: 7,
-    DRIVER_OBSERVE_MORE: 8,
-    DRIVER_CAPTURE_HEALTHY: 9,
+    DRIVER_STRATEGY_EXIT_DOMINATED: 5,
+    DRIVER_NEGATIVE_EDGE: 6,
+    DRIVER_UNDER_SAMPLED: 7,
+    DRIVER_NO_CLOSED_TRADES: 8,
+    DRIVER_OBSERVE_MORE: 9,
+    DRIVER_STRATEGY_EXIT_HEALTHY: 10,
+    DRIVER_CAPTURE_HEALTHY: 11,
 }
 
 
