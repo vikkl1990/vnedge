@@ -66,6 +66,9 @@ from vnedge.research.quantified_blueprint_proof import (
     load_quantified_blueprint_proof_payload,
 )
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
+from vnedge.research.quantified_proof_result_arbiter import (
+    load_quantified_proof_result_arbiter_payload,
+)
 from vnedge.research.quantified_pullback_reversion_proof import (
     load_quantified_pullback_reversion_proof_payload,
 )
@@ -469,6 +472,7 @@ def create_app(
     quantified_strategy_lab_path: Path | None = None,
     quantified_port_factory_path: Path | None = None,
     quantified_blueprint_proof_path: Path | None = None,
+    quantified_proof_arbiter_path: Path | None = None,
     quantified_pullback_proof_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
@@ -637,6 +641,10 @@ def create_app(
     quantified_blueprint_proof_file = (
         quantified_blueprint_proof_path
         or Path("research/live_research/quantified_blueprint_proof_latest.json")
+    )
+    quantified_proof_arbiter_file = (
+        quantified_proof_arbiter_path
+        or Path("research/live_research/quantified_proof_result_arbiter_latest.json")
     )
     quantified_pullback_proof_file = (
         quantified_pullback_proof_path
@@ -1984,6 +1992,15 @@ def create_app(
         user = _authorized(request)
         return JSONResponse(
             load_quantified_blueprint_proof_payload(quantified_blueprint_proof_file),
+            headers=_identity(user),
+        )
+
+    @app.get("/quantified-strategy-lab/proof-arbiter")
+    async def quantified_strategy_lab_proof_arbiter(request: Request) -> JSONResponse:
+        """Research-only next-action arbiter for Quantified proof cells."""
+        user = _authorized(request)
+        return JSONResponse(
+            load_quantified_proof_result_arbiter_payload(quantified_proof_arbiter_file),
             headers=_identity(user),
         )
 

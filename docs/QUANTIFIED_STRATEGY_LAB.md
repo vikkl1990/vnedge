@@ -29,6 +29,7 @@ Dashboard:
 - `/quantified-strategy-lab/kb`
 - `/quantified-strategy-lab/port-factory`
 - `/quantified-strategy-lab/blueprint-proof`
+- `/quantified-strategy-lab/proof-arbiter`
 - `/quantified-strategy-lab/pullback-proof` (legacy first-lane view)
 
 All dashboard surfaces are read-only and dashboard-token gated.
@@ -81,6 +82,34 @@ relative-strength ports are explicitly marked as proxy adapters until VNEDGE
 has dedicated session-settlement and portfolio-rotation strategy classes.
 Positive proxy results require a canonical VNEDGE port before any promotion
 review.
+
+## Result Arbiter
+
+The proof matrix is intentionally raw evidence. The result arbiter converts
+those cells into operator next actions:
+
+```bash
+python -m vnedge.research.quantified_proof_result_arbiter
+```
+
+Default artifacts:
+
+- `research/live_research/quantified_proof_result_arbiter_latest.json`
+- `research/live_research/quantified_proof_result_arbiter_feed.jsonl`
+
+Action buckets:
+
+- `READY_FOR_UNTOUCHED_JUDGMENT`: canonical row clears the proof gate.
+- `PROXY_EDGE_NEEDS_CANONICAL_PORT`: proxy row clears math but needs a real
+  session/rotation scanner before judgment.
+- `EXTEND_SPARSE_POSITIVE`: edge is positive but sample is too small.
+- `EXIT_ROUTE_UPLIFT` / `FEE_WALL_NEAR_MISS`: mine TP1/BE/trailing and
+  maker/taker routing improvements.
+- `DATA_REPAIR`, `REPLAY_REPAIR`, `METRICS_REPAIR`: fix evidence plumbing.
+- `NO_TRADE_RESEARCH` / `NEGATIVE_REJECT`: keep as context or reject.
+
+The arbiter does not relax gates. It cannot trade, cannot promote, and cannot
+turn proxy or sparse evidence into a paper lane.
 
 ## Port Families
 
