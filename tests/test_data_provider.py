@@ -129,3 +129,39 @@ class _RecordingClient:
 
     async def close(self):
         return None
+
+
+# ------------------------------------------------------- Fetcher (three-stage)
+def test_apply_aliases_renames_and_passes_through():
+    from vnedge.data.provider import apply_aliases
+
+    out = apply_aliases({"t": 1, "o": 2, "keep": 3}, {"t": "timestamp", "o": "open"})
+    assert out == {"timestamp": 1, "open": 2, "keep": 3}
+
+
+def test_fetcher_runs_the_three_stages_in_order():
+    import asyncio
+
+    from vnedge.data.provider import Fetcher, apply_aliases
+
+    calls = []
+
+    class DemoFetcher(Fetcher):
+        @staticmethod
+        def transform_query(params):
+            calls.append("q")
+            return {"symbol": params["symbol"].upper()}
+
+        @staticmethod
+        async def extract(query):
+            calls.append("e")
+            return [{"t": 1, "px": 100}]  # raw source shape
+
+        @staticmethod
+        def transform_data(query, raw):
+            calls.append("d")
+            return [apply_aliases(r, {"px": "price"}) | {"symbol": query["symbol"]} for r in raw]
+
+    out = asyncio.run(DemoFetcher.fetch({"symbol": "btc"}))
+    assert calls == ["q", "e", "d"]
+    assert out == [{"t": 1, "price": 100, "symbol": "BTC"}]

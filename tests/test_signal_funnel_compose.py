@@ -639,3 +639,11 @@ def test_multi_lane_shadow_has_a_health_gated_liveness_probe():
     test = " ".join(hc.get("test") or [])
     assert "/health" in test and "8080" in test
     assert "start_period" in hc  # covers lane warmup so it isn't marked unhealthy early
+
+
+def test_dashboard_tls_is_gated_on_dashboard_health():
+    svc = compose_services()["dashboard-tls"]
+    dep = svc["depends_on"]
+    # long-form dependency gating the public proxy on the dashboard being HEALTHY
+    assert isinstance(dep, dict)
+    assert dep["multi-lane-shadow"]["condition"] == "service_healthy"
