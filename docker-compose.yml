@@ -9,12 +9,19 @@ services:
     # curl, so we use python urllib. start_period covers lane warmup. This is
     # what lets the TLS proxy + any dependent gate on `service_healthy` and is
     # half of the fix for the --force-recreate race that took the fleet down.
+    # Timeouts sized for the REAL warmup: on recreate all 61 lanes fetch candles
+    # at once, saturating the single asyncio loop for minutes, so /health can be
+    # slow-but-alive. A 5s probe timeout falsely flipped the container to
+    # `unhealthy` mid-warmup (observed 2026-08-01) — which, now that dependents
+    # gate on `service_healthy`, would needlessly stall the public proxy. These
+    # values make `unhealthy` mean "genuinely not serving", not "still warming":
+    # a 15s probe (alive-but-slow passes), a 5-min grace, and 5 retries.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=5).status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=15).status==200 else 1)"]
       interval: 30s
-      timeout: 6s
-      retries: 3
-      start_period: 180s
+      timeout: 20s
+      retries: 5
+      start_period: 300s
     mem_limit: 2500m
     mem_reservation: 256m
     # Multi-exchange lanes: Binance + Bybit, each in BOTH fill modes —
