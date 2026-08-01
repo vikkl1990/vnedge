@@ -1085,6 +1085,25 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    paper_promotion_bridge = tmp_path / "paper_promotion_bridge.json"
+    paper_promotion_bridge.write_text(json.dumps({
+        "report_id": "paper_promotion_bridge_v1",
+        "mode": "read_only_paper_promotion_bridge",
+        "summary": {"repair_first": 1, "paper_review_ready": 0},
+        "rows": [{
+            "lane_key": "alpha|delta_india|eth/usd:usd|5m",
+            "decision": "REPAIR_FIRST",
+            "stage": "REPAIR",
+            "owner": "system",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "next_action": "repair contract first",
+        }],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     lane_survival = tmp_path / "lane_survival.json"
     lane_survival.write_text(json.dumps({
         "mode": "read_only_lane_survival",
@@ -1145,6 +1164,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_trade_exit_autopsy_path=paper_exit_autopsy,
         maker_quote_lifecycle_path=maker_quote_lifecycle,
         paper_trade_contract_reconciler_path=paper_contract,
+        paper_promotion_bridge_path=paper_promotion_bridge,
         lane_survival_path=lane_survival,
         paper_lane_governor_path=paper_lane_governor,
         paper_roster_drift_path=paper_roster_drift,
@@ -1164,6 +1184,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-trade-exit-autopsy").status_code == 401
     assert client.get("/maker-quote-lifecycle").status_code == 401
     assert client.get("/paper-trade-contract-reconciler").status_code == 401
+    assert client.get("/paper-promotion-bridge").status_code == 401
     assert client.get("/lane-survival").status_code == 401
     assert client.get("/paper-lane-governor").status_code == 401
     assert client.get("/paper-roster-drift").status_code == 401
@@ -1227,6 +1248,12 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_contract_payload["mode"] == "read_only_paper_contract_reconciliation"
     assert paper_contract_payload["can_trade"] is False
     assert paper_contract_payload["can_promote"] is False
+    bridge_payload = client.get("/paper-promotion-bridge?token=t3st-token").json()
+    assert bridge_payload["summary"]["repair_first"] == 1
+    assert bridge_payload["mode"] == "read_only_paper_promotion_bridge"
+    assert bridge_payload["rows"][0]["decision"] == "REPAIR_FIRST"
+    assert bridge_payload["can_trade"] is False
+    assert bridge_payload["can_promote"] is False
     lane_survival_payload = client.get("/lane-survival?token=t3st-token").json()
     assert lane_survival_payload["summary"]["demote_to_shadow"] == 1
     assert lane_survival_payload["mode"] == "read_only_lane_survival"

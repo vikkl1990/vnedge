@@ -77,6 +77,21 @@ def test_promote_view_has_paper_contract_truth_surface():
     assert '@app.get("/paper-trade-contract-reconciler")' in app
 
 
+def test_promote_view_has_paper_promotion_bridge_surface():
+    html = _index()
+    app = APP.read_text()
+    assert "Paper Promotion Bridge" in html
+    assert 'id="paperPromotionBridge"' in html
+    assert 'id="paperPromotionBridgeMeta"' in html
+    assert "function renderPaperPromotionBridge" in html
+    assert "function pollPaperPromotionBridge" in html
+    assert 'poll("/paper-promotion-bridge"' in html
+    assert "PAPER_REVIEW_READY" in html
+    assert "MINE_CLEAN_ALPHA" in html
+    assert "read-only · no auto-promotion" in html
+    assert '@app.get("/paper-promotion-bridge")' in app
+
+
 def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     html = _index()
     assert "Dashboard Self-Health" in html

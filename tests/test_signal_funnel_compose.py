@@ -198,6 +198,39 @@ def test_operator_actions_publishes_joined_action_feed():
     }
 
 
+def test_paper_promotion_bridge_publishes_joined_review_feed():
+    service = compose_services()["paper-promotion-bridge"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.paper_promotion_bridge",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${PAPER_PROMOTION_BRIDGE_INTERVAL_SECONDS:-60}" in service["command"]
+    assert "--readiness" in service["command"]
+    assert "research/live_research/lane_promotion_readiness_latest.json" in service["command"]
+    assert "--performance" in service["command"]
+    assert "research/live_research/paper_lane_performance_latest.json" in service["command"]
+    assert "--contract" in service["command"]
+    assert "research/live_research/paper_trade_contract_reconciler_latest.json" in service["command"]
+    assert "--maker-quote" in service["command"]
+    assert "research/live_research/maker_quote_lifecycle_latest.json" in service["command"]
+    assert "--actions" in service["command"]
+    assert "research/live_research/operator_actions_latest.json" in service["command"]
+    assert "research/live_research/paper_promotion_bridge_latest.json" in service["command"]
+    assert "research/live_research/paper_promotion_bridge_feed.jsonl" in service["command"]
+    assert "--print" in service["command"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "lane-promotion-readiness",
+        "paper-lane-performance",
+        "paper-trade-contract-reconciler",
+        "maker-quote-lifecycle",
+        "operator-actions",
+    }
+
+
 def test_paper_lane_root_cause_publishes_primary_blocker_feed():
     service = compose_services()["paper-lane-root-cause"]
 

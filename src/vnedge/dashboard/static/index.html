@@ -962,6 +962,10 @@
       <div class="phead"><h2>Live Readiness — gates to a first live order</h2><span class="meta" id="preLiveMeta">loading…</span></div>
       <div id="preLive"></div>
     </section>
+    <section class="panel" style="margin-bottom:14px;border:1px solid var(--accent-soft,rgba(77,178,255,.25))">
+      <div class="phead"><h2>Paper Promotion Bridge</h2><span class="meta" id="paperPromotionBridgeMeta">joining paper proof…</span></div>
+      <div id="paperPromotionBridge"><div class="note">waiting for joined paper performance, contract, quote, and operator-action evidence…</div></div>
+    </section>
     <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Operator Action Queue</h2><span class="meta" id="actionQueueMeta">ranking lane actions…</span></div>
       <div id="operatorActionQueue"><div class="note">waiting for joined lane evidence before ranking actions…</div></div>
@@ -1561,7 +1565,7 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+cohortLine+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"darwinian agent survival pending")+'</div>';
   }
-  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,quote:null,contract:null,survival:null,governor:null,rosterDrift:null,rootCause:null,profile:null,operatorActions:null,meta:null};
+  var lifeData={readiness:null,causality:null,activation:null,route:null,cadence:null,performance:null,quote:null,contract:null,promotionBridge:null,survival:null,governor:null,rosterDrift:null,rootCause:null,profile:null,operatorActions:null,meta:null};
   function renderLaneFunnel(d){
     lifeData.readiness=d; renderLifecycleConsole();
     var el=$("laneFunnel"),meta=$("laneFunnelMeta"); if(!el)return;
@@ -1938,6 +1942,42 @@
     }).join('');
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper contract truth pending")+'</div>';
+  }
+  function bridgeCls(st){
+    st=String(st||"");
+    if(st==="PAPER_REVIEW_READY")return"ok";
+    if(st==="COLLECT_PAPER_SAMPLE"||st==="WAIT_FOR_SIGNAL"||st==="SHADOW_READY_NEEDS_PAPER_APPROVAL")return"wait";
+    if(st==="REPAIR_FIRST"||st==="EXECUTION_PROOF_MISSING"||st==="CONTRACT_PROOF_MISSING")return"bad";
+    if(st==="MINE_CLEAN_ALPHA")return"fix";
+    return"fix";
+  }
+  function renderPaperPromotionBridge(d){
+    lifeData.promotionBridge=d;
+    var el=$("paperPromotionBridge"),meta=$("paperPromotionBridgeMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.paper_review_ready)+" review · "+num(s.repair_first)+" repair · "+num(s.mine_alpha)+" mine · "+num(s.collect_sample)+" collect";
+    if(!rows.length){el.innerHTML='<div class="note">paper promotion bridge waiting for joined evidence…</div>';return;}
+    var k='<div class="actionmetrics">'+
+      '<div class="actionmetric"><div class="l">Human review</div><div class="v" style="color:var(--long)">'+num(s.paper_review_ready)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Repair first</div><div class="v" style="color:var(--short)">'+num(s.repair_first)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Mine alpha</div><div class="v" style="color:var(--warn)">'+num(s.mine_alpha)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Collect sample</div><div class="v" style="color:var(--info)">'+num(s.collect_sample)+'</div></div>'+
+      '<div class="actionmetric"><div class="l">Wait signal</div><div class="v">'+num(s.wait_for_signal)+'</div></div>'+
+    '</div>';
+    var head='<div class="actionrow head"><span>Lane</span><span>Decision</span><span>Owner</span><span>Proof</span><span>Next</span></div>';
+    var body=rows.slice(0,12).map(function(r){
+      var m=r.metrics||{},ev=r.evidence||{},decision=String(r.decision||"UNKNOWN"),cls=bridgeCls(decision);
+      var proof=[ev.paper_status,ev.contract_verdict,ev.quote_lifecycle_state,ev.operator_action_bucket].filter(Boolean).join(" · ")||"proof pending";
+      var blockers=(r.blockers||[]).join(" · ")||"no blockers published";
+      return '<div class="actionrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div>'+lifeChip(decision.toLowerCase().replace(/_/g," "),cls)+'<small>'+esc(String(r.stage||"--").toLowerCase().replace(/_/g," "))+'</small></div>'+
+        '<div><b>'+esc(r.owner||"--")+'</b><small>read-only · no auto-promotion</small></div>'+
+        '<div><small title="'+esc(proof)+'">'+esc(proof.slice(0,92))+'</small><small><span class="num '+(num(m.net_pnl_usd)<0?"dn":"up")+'">'+usd(num(m.net_pnl_usd))+'</span> · PF '+(m.profit_factor==null?"--":num(m.profit_factor).toFixed(2))+' · '+num(m.closed_trades)+' closed</small></div>'+
+        '<div><b title="'+esc(blockers)+'">'+esc(String(r.next_action||"").slice(0,82))+'</b><small>'+esc(blockers.slice(0,82))+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+head+body+'<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper promotion bridge pending")+'</div>';
   }
   function survCls(st){
     st=String(st||"");
@@ -2646,6 +2686,7 @@
   function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollMakerQuoteLifecycle(){ poll("/maker-quote-lifecycle", renderMakerQuoteLifecycle); }
   function pollPaperContractTruth(){ poll("/paper-trade-contract-reconciler", renderPaperContractTruth); }
+  function pollPaperPromotionBridge(){ poll("/paper-promotion-bridge", renderPaperPromotionBridge); }
   function pollOperatorActions(){ poll("/operator-actions", function(d){ lifeData.operatorActions=d; renderOperatorActionQueue(); }); }
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
@@ -2807,8 +2848,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
@@ -2922,7 +2963,7 @@
     if(v==="journal") pollJournal();
     if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     if(v==="pipeline") renderPipeline(lastSnap);
-    if(v==="promote") pollPreLive();
+    if(v==="promote"){ pollPreLive(); pollPaperPromotionBridge(); pollOperatorActions(); }
   }
   function setActiveNav(v){
     Array.prototype.forEach.call(nav.querySelectorAll("a[data-v]"),function(x){x.classList.toggle("on",x.getAttribute("data-v")===v)});
