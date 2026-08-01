@@ -49,7 +49,7 @@ echo "compose artifact writer uid/gid: ${VNEDGE_CONTAINER_UID}:${VNEDGE_CONTAINE
 # Skip the build only when NOTHING that lands in the image changed. The path
 # list must include EVERY input to the image: a docs/ or .dockerignore change
 # once shipped nothing because it was omitted here (2026-07-11).
-IMAGE_INPUTS="src/ research/ docs/ pyproject.toml README.md Dockerfile .dockerignore docker-compose.yml"
+IMAGE_INPUTS="src/ research/ docs/ frontend/ pyproject.toml README.md Dockerfile .dockerignore docker-compose.yml"
 APP_BUILD_SERVICE=multi-lane-shadow
 COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
 APP_BUILD_IMAGE="${COMPOSE_PROJECT}-${APP_BUILD_SERVICE}:latest"

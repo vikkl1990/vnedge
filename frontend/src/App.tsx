@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { TerminalTabs } from "./components/Terminal";
-import { Header, JournalPanel, SnapshotPanel } from "./panels/Panels";
+import { BookPanel, Header, JournalPanel, PositionsPanel, RiskPanel } from "./panels/Panels";
 import { useUi } from "./store";
 
 const TABS = [
@@ -15,7 +15,7 @@ export default function App() {
 
   const commands: Command[] = useMemo(
     () => [
-      { id: "desk", label: "Desk", hint: "book · snapshot", run: () => setTab("desk") },
+      { id: "desk", label: "Desk", hint: "book · risk · positions", run: () => setTab("desk") },
       { id: "journal", label: "Journal", hint: "closed trades", run: () => setTab("journal") },
       {
         id: "classic",
@@ -27,7 +27,7 @@ export default function App() {
         },
       },
     ],
-    [],
+    [setTab],
   );
 
   return (
@@ -43,10 +43,18 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "desk" ? <SnapshotPanel /> : <JournalPanel />}
+      {tab === "desk" ? (
+        <div className="flex flex-col gap-5">
+          <BookPanel />
+          <RiskPanel />
+          <PositionsPanel />
+        </div>
+      ) : (
+        <JournalPanel />
+      )}
 
       <footer className="text-[11px] font-mono text-faint pt-2">
-        v2 foundation · read-only · classic dashboard remains at <code>/</code>
+        v2 · read-only · classic dashboard remains at <code>/</code>
       </footer>
 
       <CommandPalette commands={commands} />

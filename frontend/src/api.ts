@@ -28,9 +28,30 @@ export interface WhoAmI {
   permissions: string[];
 }
 
+export interface Position {
+  symbol?: string;
+  side?: string;
+  quantity?: number;
+  entry_price?: number;
+  unrealized_pnl_usd?: number;
+  [k: string]: unknown;
+}
+
 export interface Snapshot {
   mode?: string;
+  symbol?: string;
   equity?: number;
+  peak_equity?: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
+  daily_pnl?: number;
+  consecutive_losses?: number;
+  kill_switch_active?: boolean;
+  live_trading_enabled?: boolean;
+  risk_status?: string;
+  positions?: Position[];
+  fills?: number;
+  fees_usd?: number;
   [k: string]: unknown;
 }
 
