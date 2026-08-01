@@ -506,6 +506,27 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper trade contract reconciler: joins closed paper fills back to their
+  # order intents, exit intents, leverage/margin economics, fee drag, and exit
+  # metadata so losses are classified as contract drift vs alpha failure.
+  # Read-only: no route can trade or promote from this service.
+  paper-trade-contract-reconciler:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-performance, paper-trade-exit-autopsy]
+    command: ["python", "-m", "vnedge.research.paper_trade_contract_reconciler",
+              "--interval-seconds", "${PAPER_TRADE_CONTRACT_RECONCILER_INTERVAL_SECONDS:-60}",
+              "--min-expected-net-bps", "${PAPER_TRADE_CONTRACT_MIN_EXPECTED_NET_BPS:-25}",
+              "--max-fee-bps", "${PAPER_TRADE_CONTRACT_MAX_FEE_BPS:-12}",
+              "--max-quantity-drift-pct", "${PAPER_TRADE_CONTRACT_MAX_QUANTITY_DRIFT_PCT:-1}",
+              "--max-notional-drift-pct", "${PAPER_TRADE_CONTRACT_MAX_NOTIONAL_DRIFT_PCT:-10}"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Operator action queue publisher: joins activation, route doctor, cadence,
   # sizing profile, paper performance, exit autopsy, and firing causality into
   # one durable "what next" artifact/feed. Read-only.
