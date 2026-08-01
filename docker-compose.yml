@@ -1173,6 +1173,35 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Agentic Research OS v2: durable supervisor over Vibe, Alpha Arena, Quant OS
+  # tasks, Quant Loop Governance, and paper performance. Research-only: no
+  # credentials, no orders, no promotions.
+  agentic-research-os:
+    build: .
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
+    depends_on:
+      - vibe-intelligence
+      - alpha-arena-lite
+      - quant-loop-governance
+      - paper-lane-performance
+    command: ["python", "-m", "vnedge.research.agentic_research_os",
+              "--interval-seconds", "${AGENTIC_RESEARCH_OS_INTERVAL_SECONDS:-900}",
+              "--vibe", "research/live_research/vibe_intelligence_latest.json",
+              "--alpha-arena", "research/live_research/alpha_arena_lite_latest.json",
+              "--gateway-snapshot", "logs/agent_gateway/quant_os/snapshot.json",
+              "--quant-loop", "research/live_research/quant_loop_governance_latest.json",
+              "--paper-performance", "research/live_research/paper_lane_performance_latest.json",
+              "--out", "research/live_research/agentic_research_os_latest.json",
+              "--feed", "research/live_research/agentic_research_os_feed.jsonl"]
+    volumes:
+      - ./logs/agent_gateway:/app/logs/agent_gateway:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Zero-risk Binance tick + top-of-book recorder. No credentials, no execution —
   # collects the raw order-flow data the TRUE microstructure scalper backtest
   # needs (candle proxies proved too weak to conclude). Replay after ~2 weeks.

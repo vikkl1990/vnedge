@@ -17,7 +17,10 @@ def test_promote_view_has_joined_operator_lifecycle_console():
     html = _index()
     assert "Operator Lifecycle Console" in html
     assert 'id="lifecycleConsole"' in html
-    assert "activation, route doctor, cadence, trade profile, performance, survival, governor, and causality" in html
+    assert (
+        "activation, route doctor, cadence, trade profile, performance, survival, "
+        "governor, and causality"
+    ) in html
     assert "Planner inputs are still read-only" in html
 
 
@@ -42,6 +45,19 @@ def test_dashboard_has_self_health_console_for_poll_and_ws_truth():
     assert "st.lastStatus" in html
     assert "wsHealth" in html
     assert "endpoint status, browser poll failures, and payload freshness" in html
+
+
+def test_dashboard_has_agentic_research_os_supervisor_panel():
+    html = _index()
+    app = APP.read_text()
+    assert "Agentic Research OS" in html
+    assert 'id="agenticOs"' in html
+    assert 'id="agenticOsMeta"' in html
+    assert "function renderAgenticResearchOS" in html
+    assert "function pollAgenticResearchOS" in html
+    assert 'poll("/agentic-research-os"' in html
+    assert '@app.get("/agentic-research-os")' in app
+    assert "research-only supervisor; no trade authority" in html
 
 
 def test_dashboard_scanner_tape_renders_trade_lifecycle_truth():
