@@ -657,6 +657,27 @@ def test_quantified_strategy_lab_serves_port_factory(tmp_path):
 def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})
+    blueprint = tmp_path / "quantified_blueprint_proof_latest.json"
+    blueprint.write_text(json.dumps({
+        "proof_id": "quantified_blueprint_proof_v1",
+        "generated_at": "2026-08-01T00:00:00+00:00",
+        "summary": {
+            "total_cells": 360,
+            "completed_cells": 1,
+            "ports": 6,
+            "proxy_adapter_cells": 120,
+        },
+        "rows": [{
+            "port_id": "range_volatility_breakout_reversion_v1",
+            "setup_mode": "breakout_only",
+            "canonical_adapter": True,
+            "status": "DONE_RESEARCH_ONLY",
+            "verdict": "FEE_WALL_NEAR_MISS",
+        }],
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     proof = tmp_path / "quantified_pullback_reversion_proof_latest.json"
     proof.write_text(json.dumps({
         "proof_id": "quantified_pullback_reversion_proof_v1",
@@ -671,17 +692,25 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
         create_app(
             provider,
             token="t3st-token",
+            quantified_blueprint_proof_path=blueprint,
             quantified_pullback_proof_path=proof,
         )
     )
 
     page = client.get("/quantified-strategy-lab")
+    blueprint_payload = client.get(
+        "/quantified-strategy-lab/blueprint-proof?token=t3st-token"
+    ).json()
     payload = client.get(
         "/quantified-strategy-lab/pullback-proof?token=t3st-token"
     ).json()
 
     assert page.status_code == 200
-    assert "Pullback Proof Lane" in page.text
+    assert "Blueprint Proof Matrix" in page.text
+    assert blueprint_payload["proof_id"] == "quantified_blueprint_proof_v1"
+    assert blueprint_payload["summary"]["ports"] == 6
+    assert blueprint_payload["can_trade"] is False
+    assert blueprint_payload["can_promote"] is False
     assert payload["proof_id"] == "quantified_pullback_reversion_proof_v1"
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False

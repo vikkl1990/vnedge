@@ -244,6 +244,31 @@ def test_paper_trade_contract_reconciler_classifies_runtime_drift_vs_alpha():
     }
 
 
+def test_quantified_blueprint_proof_publishes_complete_port_matrix():
+    service = compose_services()["quantified-blueprint-proof"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.quantified_blueprint_proof",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${QUANTIFIED_BLUEPRINT_PROOF_INTERVAL_SECONDS:-300}" in service["command"]
+    assert "--seed-jobs" in service["command"]
+    assert "--jobs-dir" in service["command"]
+    assert "${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/quantified_blueprint_proof_latest.json" in service["command"]
+    assert "--feed" in service["command"]
+    assert "research/live_research/quantified_blueprint_proof_feed.jsonl" in service["command"]
+    assert "./logs:/app/logs" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "agent-job-runner",
+        "quantified-pullback-reversion-proof",
+    }
+
+
 def test_maker_quote_lifecycle_publishes_execution_path_truth():
     service = compose_services()["maker-quote-lifecycle"]
 

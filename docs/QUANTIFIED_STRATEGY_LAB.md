@@ -28,8 +28,10 @@ Dashboard:
 - `/quantified-strategy-lab`
 - `/quantified-strategy-lab/kb`
 - `/quantified-strategy-lab/port-factory`
+- `/quantified-strategy-lab/blueprint-proof`
+- `/quantified-strategy-lab/pullback-proof` (legacy first-lane view)
 
-Both dashboard surfaces are read-only and dashboard-token gated.
+All dashboard surfaces are read-only and dashboard-token gated.
 
 ## Port Factory
 
@@ -48,6 +50,37 @@ By default it queues Chunks A-D into the Quant OS agent gateway. Chunk Q remains
 quarantine-only. Re-running the publisher reuses existing tasks by stable
 blueprint id and writes a new content artifact only when the blueprint hash
 changes.
+
+## Blueprint Proof Matrix
+
+The complete proof publisher turns the syncable build families into durable
+Agent Gateway backtest cells:
+
+```bash
+python -m vnedge.research.quantified_blueprint_proof --seed-jobs
+```
+
+Default artifacts:
+
+- `research/live_research/quantified_blueprint_proof_latest.json`
+- `research/live_research/quantified_blueprint_proof_feed.jsonl`
+
+The default matrix covers six blueprint families:
+
+- `bitcoin_crypto_strategy_pack_v1`
+- `range_volatility_breakout_reversion_v1`
+- `pullback_reversion_pack_v1`
+- `indicator_pack_mtf_v1`
+- `crypto_session_calendar_miner_v1`
+- `crypto_relative_strength_rotation_v1`
+
+It evaluates 1m, 5m, 15m, 1h, and 4h where data exists. The paper profile is
+fixed at 100 USD margin and 25x notional for evidence normalization only; the
+publisher cannot create paper, shadow, or live orders. Session and
+relative-strength ports are explicitly marked as proxy adapters until VNEDGE
+has dedicated session-settlement and portfolio-rotation strategy classes.
+Positive proxy results require a canonical VNEDGE port before any promotion
+review.
 
 ## Port Families
 

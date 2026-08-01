@@ -61,6 +61,9 @@ from vnedge.dashboard.auth import (
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
+from vnedge.research.quantified_blueprint_proof import (
+    load_quantified_blueprint_proof_payload,
+)
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_pullback_reversion_proof import (
     load_quantified_pullback_reversion_proof_payload,
@@ -462,6 +465,7 @@ def create_app(
     pine_research_path: Path | None = None,
     quantified_strategy_lab_path: Path | None = None,
     quantified_port_factory_path: Path | None = None,
+    quantified_blueprint_proof_path: Path | None = None,
     quantified_pullback_proof_path: Path | None = None,
     pine_alpha_distiller_path: Path | None = None,
     backtest_progress_path: Path | None = None,
@@ -614,6 +618,10 @@ def create_app(
     quantified_port_factory_file = (
         quantified_port_factory_path
         or Path("research/live_research/quantified_port_factory_latest.json")
+    )
+    quantified_blueprint_proof_file = (
+        quantified_blueprint_proof_path
+        or Path("research/live_research/quantified_blueprint_proof_latest.json")
     )
     quantified_pullback_proof_file = (
         quantified_pullback_proof_path
@@ -1876,6 +1884,15 @@ def create_app(
         user = _authorized(request)
         return JSONResponse(
             load_quantified_port_factory_payload(quantified_port_factory_file),
+            headers=_identity(user),
+        )
+
+    @app.get("/quantified-strategy-lab/blueprint-proof")
+    async def quantified_strategy_lab_blueprint_proof(request: Request) -> JSONResponse:
+        """Research-only proof matrix for every Quantified blueprint."""
+        user = _authorized(request)
+        return JSONResponse(
+            load_quantified_blueprint_proof_payload(quantified_blueprint_proof_file),
             headers=_identity(user),
         )
 
