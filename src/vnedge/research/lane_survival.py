@@ -291,7 +291,14 @@ def _survival_row(
         "fresh_route": activation_state in _FRESH_ACTIVATION_STATES
         and cadence_state not in _STALE_CADENCE_STATES
         and doctor_state not in _STALE_DOCTOR_STATES,
-        "ledger_drift": (not ledger_ok) or bool(drift_flags) or unpaired_closing_fills > 0,
+        # Ledger drift = ACTUAL corruption only: an orphan closing fill, or the
+        # performance layer's own integrity flag. A benign open position (an
+        # entry fill awaiting its close, and its entry-fee drag) is NOT
+        # corruption — yet those show up in journal_drift_flags too, so keying
+        # off `bool(drift_flags)` false-flagged every lane holding a position as
+        # LEDGER_REPAIR_REQUIRED (overriding even PAPER_ACTIVE_PROFITABLE, and
+        # docking the darwinian score −10). Real corruption is unpaired closes.
+        "ledger_drift": (not ledger_ok) or unpaired_closing_fills > 0,
     }
     blockers = _blockers(
         closed=closed,

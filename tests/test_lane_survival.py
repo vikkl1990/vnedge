@@ -73,6 +73,9 @@ def _perf(
     avg_bps: float,
     state: str = "PAPER_ACTIVE_PROFITABLE",
     drift: list[str] | None = None,
+    open_fills: int = 0,
+    unpaired: int = 0,
+    ledger_ok: bool = True,
 ) -> dict:
     return {
         "report_id": "paper_lane_performance_v1",
@@ -98,11 +101,11 @@ def _perf(
                 "live_signals": 10,
                 "paper_order_intents": closed,
                 "fills": closed * 2,
-                "open_fill_count": 0,
-                "open_position_entry_fees_usd": 0.0,
-                "unpaired_closing_fills": 0,
+                "open_fill_count": open_fills,
+                "open_position_entry_fees_usd": 0.75 if open_fills else 0.0,
+                "unpaired_closing_fills": unpaired,
                 "journal_drift_flags": drift or [],
-                "ledger_ok": not drift,
+                "ledger_ok": ledger_ok,
             }
         ],
     }
@@ -187,6 +190,7 @@ def test_lane_survival_refuses_judgment_on_stale_route():
 
 
 def test_lane_survival_blocks_ledger_drift_before_scoring():
+    # Real corruption = an unpaired closing fill (a close with no matching entry).
     payload = build_lane_survival(
         activation=_activation(),
         cadence=_cadence(),
@@ -196,7 +200,9 @@ def test_lane_survival_blocks_ledger_drift_before_scoring():
             net=60.0,
             pf=2.0,
             avg_bps=50.0,
-            drift=["1 unpaired closing fill"],
+            unpaired=1,
+            ledger_ok=False,
+            drift=["1 unpaired closing fill(s)"],
         ),
         now=datetime(2026, 7, 28, tzinfo=UTC),
     )
@@ -205,6 +211,33 @@ def test_lane_survival_blocks_ledger_drift_before_scoring():
     assert row["survival_state"] == STATE_LEDGER_REPAIR_REQUIRED
     assert row["decision"] == DECISION_REPAIR_LEDGER
     assert row["survival_score"] < 90
+
+
+def test_open_position_is_not_ledger_repair():
+    """A lane holding a normal open position (entry fill awaiting its close, with
+    the benign 'awaiting close' / 'entry-fee drag' drift flags) must NOT be
+    mislabelled LEDGER_REPAIR_REQUIRED. Real corruption is an unpaired *closing*
+    fill; an open entry is not. Regression for the false-positive that flagged 9
+    live, mostly-profitable lanes as broken and docked their agent score."""
+    payload = build_lane_survival(
+        activation=_activation(),
+        cadence=_cadence(),
+        route_doctor=_route(),
+        performance=_perf(
+            closed=4,
+            net=9.5,
+            pf=1.9,
+            avg_bps=74.0,
+            open_fills=1,
+            unpaired=0,
+            ledger_ok=True,
+            drift=["1 open fill(s) awaiting close", "$0.75 open entry-fee drag"],
+        ),
+        now=datetime(2026, 7, 28, tzinfo=UTC),
+    )
+    row = payload["rows"][0]
+    assert row["survival_state"] != STATE_LEDGER_REPAIR_REQUIRED
+    assert row["decision"] != DECISION_REPAIR_LEDGER
 
 
 def test_lane_survival_prefers_runtime_lane_id_over_manifest_trial_id():
