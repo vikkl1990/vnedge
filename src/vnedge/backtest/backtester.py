@@ -249,6 +249,22 @@ def run_backtest(
             hit = _check_intrabar_exit(position, float(bar["high"]), float(bar["low"]))
             if hit is not None:
                 close_position(position, ts, hit[1], hit[0], j)
+            elif (
+                exit_sig := strategy.exit_signal(
+                    df, j, position.intent.side, position.entry_price
+                )
+            ) is not None:
+                close_position(
+                    position,
+                    ts,
+                    (
+                        float(exit_sig.exit_price)
+                        if exit_sig.exit_price is not None
+                        else float(bar["close"])
+                    ),
+                    exit_sig.reason,
+                    j,
+                )
             elif j - position.entry_bar >= config.max_holding_bars:
                 close_position(position, ts, float(bar["close"]), "max_holding", j)
 

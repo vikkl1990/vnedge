@@ -205,6 +205,44 @@ def test_crypto_trend_atr_margin_warmup_blocks_early_rows():
         assert strategy.signal(df, i) is None
 
 
+def test_crypto_trend_atr_margin_exits_long_when_margin_goes_neutral():
+    strategy = CryptoTrendAtrMargin()
+    df = pd.DataFrame({
+        "close": [100.0] * 251,
+        "ema_fast": [101.0] * 251,
+        "ema_slow": [100.0] * 251,
+        "atr_margin": [2.0] * 251,
+        "trend_spread": [0.1] * 251,
+        "trend_bull": [False] * 251,
+        "trend_bear": [False] * 251,
+    })
+
+    exit_sig = strategy.exit_signal(df, 250, "long", 100.0)
+
+    assert exit_sig is not None
+    assert exit_sig.reason == "strategy_neutral_long"
+    assert exit_sig.exit_price == 100.0
+
+
+def test_crypto_trend_atr_margin_exits_short_on_opposite_bull_regime():
+    strategy = CryptoTrendAtrMargin()
+    df = pd.DataFrame({
+        "close": [100.0] * 251,
+        "ema_fast": [101.0] * 251,
+        "ema_slow": [100.0] * 251,
+        "atr_margin": [2.0] * 251,
+        "trend_spread": [2.0] * 251,
+        "trend_bull": [True] * 251,
+        "trend_bear": [False] * 251,
+    })
+
+    exit_sig = strategy.exit_signal(df, 250, "short", 100.0)
+
+    assert exit_sig is not None
+    assert exit_sig.reason == "strategy_reversal_short"
+    assert exit_sig.exit_price == 100.0
+
+
 # --- Registry -------------------------------------------------------------------
 
 def test_registry_contains_core_candidates():

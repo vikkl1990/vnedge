@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from vnedge.backtest.backtester import BacktestConfig, run_backtest
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.data.schemas import normalize_candles, normalize_funding
 
 BASE = 1_750_000_000_000
@@ -40,6 +40,31 @@ class StubStrategy(BaseStrategy):
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         self.signal_calls.append(index)
         return self.intent if index == self.at_index else None
+
+
+class StrategyExitAfterEntry(StubStrategy):
+    def __init__(
+        self,
+        at_index: int,
+        intent: SignalIntent,
+        *,
+        exit_at: int,
+        reason: str = "strategy_neutral",
+    ) -> None:
+        super().__init__(at_index, intent)
+        self.exit_at = exit_at
+        self.reason = reason
+
+    def exit_signal(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        side: str,
+        entry_price: float,
+    ) -> StrategyExitIntent | None:
+        if index == self.exit_at:
+            return StrategyExitIntent(self.reason, exit_price=float(df["close"].iloc[index]))
+        return None
 
 
 LONG_INTENT = SignalIntent(side="long", stop_price=97.0, take_profit_price=106.0)
@@ -102,6 +127,25 @@ def test_max_holding_exit():
     trade = result.trades[0]
     assert trade.exit_reason == "max_holding"
     assert trade.exit_ts == candles["timestamp"].iloc[8]  # entry bar 5 + 3
+
+
+def test_strategy_managed_exit_closes_before_max_holding():
+    bars = [FLAT] * 6 + [(100.0, 101.0, 99.0, 101.0)] + [FLAT] * 4
+    candles = make_candles(bars)
+    strategy = StrategyExitAfterEntry(4, LONG_INTENT, exit_at=6)
+    result = run_backtest(candles, None, strategy, BacktestConfig(max_holding_bars=20))
+    trade = result.trades[0]
+    assert trade.exit_reason == "strategy_neutral"
+    assert trade.exit_ts == candles["timestamp"].iloc[6]
+    assert trade.exit_price == pytest.approx(101.0 * (1 - SLIP))
+
+
+def test_stop_still_wins_before_strategy_managed_exit():
+    bars = [FLAT] * 6 + [(100.0, 101.0, 96.0, 101.0)] + [FLAT] * 4
+    candles = make_candles(bars)
+    strategy = StrategyExitAfterEntry(4, LONG_INTENT, exit_at=6)
+    result = run_backtest(candles, None, strategy, BacktestConfig(max_holding_bars=20))
+    assert result.trades[0].exit_reason == "stop"
 
 
 def test_long_pays_positive_funding():

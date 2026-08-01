@@ -29,7 +29,7 @@ from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.multi_lane import MultiLaneProvider
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_outcomes import ShadowOutcomeTracker
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 
 BASE = 1_750_000_000_000
 MIN = 60_000
@@ -248,6 +248,36 @@ def test_timeout_resolution_at_bar_close(tmp_path):
     assert outcomes[0].virtual_net_usd == pytest.approx(
         1.0 - (0.05 + 101.0 * 0.0005)
     )
+
+
+def test_strategy_exit_hook_resolves_shadow_outcome_at_close(tmp_path):
+    def strategy_exit(side, entry_price, bar):
+        return StrategyExitIntent("strategy_neutral", exit_price=float(bar["close"]))
+
+    tracker, _ = tracker_for(tmp_path, strategy_exit=strategy_exit)
+    tracker.track(intent_key="k", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=None, decision_bar_ts=ts(0))
+
+    outcomes = tracker.resolve_bar(bar(1, high=101.0, low=99.0, close=101.0))
+
+    assert len(outcomes) == 1
+    assert outcomes[0].resolution == "strategy_neutral"
+    assert outcomes[0].exit_price == 101.0
+    assert outcomes[0].virtual_net_usd == pytest.approx(1.0 - (0.05 + 101.0 * 0.0005))
+
+
+def test_shadow_stop_still_wins_before_strategy_exit_hook(tmp_path):
+    def strategy_exit(side, entry_price, bar):
+        return StrategyExitIntent("strategy_neutral", exit_price=float(bar["close"]))
+
+    tracker, _ = tracker_for(tmp_path, strategy_exit=strategy_exit)
+    tracker.track(intent_key="k", side="long", quantity=1.0, notional_usd=100.0,
+                  stop_price=95.0, take_profit_price=None, decision_bar_ts=ts(0))
+
+    outcomes = tracker.resolve_bar(bar(1, high=101.0, low=94.0, close=101.0))
+
+    assert outcomes[0].resolution == "stop"
+    assert outcomes[0].exit_price == 95.0
 
 
 def test_short_side_stop_on_high(tmp_path):

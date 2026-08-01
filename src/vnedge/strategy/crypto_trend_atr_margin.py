@@ -17,7 +17,7 @@ import math
 
 import pandas as pd
 
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.strategy.indicators import ema, true_range
 
 _REQUIRED = ("ema_fast", "ema_slow", "atr_margin", "trend_spread")
@@ -46,6 +46,8 @@ class CryptoTrendAtrMargin(BaseStrategy):
         stop_atr_mult: float = 1.60,
         min_stop_bps: float = 15.0,
         take_profit_r: float | None = None,
+        exit_on_neutral: bool = True,
+        exit_on_opposite: bool = True,
     ) -> None:
         if fast_ema <= 0 or slow_ema <= 0 or atr_window <= 0:
             raise ValueError("EMA and ATR windows must be positive")
@@ -63,6 +65,8 @@ class CryptoTrendAtrMargin(BaseStrategy):
         self.stop_atr_mult = stop_atr_mult
         self.min_stop_bps = min_stop_bps
         self.take_profit_r = take_profit_r
+        self.exit_on_neutral = exit_on_neutral
+        self.exit_on_opposite = exit_on_opposite
         self.warmup_bars = max(250, slow_ema + atr_window + 1)
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
@@ -120,4 +124,41 @@ class CryptoTrendAtrMargin(BaseStrategy):
                     f"spread={spread_bps:+.1f}bps < -margin={margin_bps:.1f}bps"
                 ),
             )
+        return None
+
+    def exit_signal(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        side: str,
+        entry_price: float,
+    ) -> StrategyExitIntent | None:
+        if index <= 0 or index < self.warmup_bars:
+            return None
+        row = df.iloc[index]
+        if any(math.isnan(float(row[c])) for c in _REQUIRED):
+            return None
+        close = float(row["close"])
+        if side == "long":
+            if self.exit_on_opposite and bool(row["trend_bear"]):
+                return StrategyExitIntent(
+                    reason="strategy_reversal_long",
+                    exit_price=close,
+                )
+            if self.exit_on_neutral and not bool(row["trend_bull"]):
+                return StrategyExitIntent(
+                    reason="strategy_neutral_long",
+                    exit_price=close,
+                )
+        elif side == "short":
+            if self.exit_on_opposite and bool(row["trend_bull"]):
+                return StrategyExitIntent(
+                    reason="strategy_reversal_short",
+                    exit_price=close,
+                )
+            if self.exit_on_neutral and not bool(row["trend_bear"]):
+                return StrategyExitIntent(
+                    reason="strategy_neutral_short",
+                    exit_price=close,
+                )
         return None

@@ -51,7 +51,7 @@ from vnedge.runtime.shadow_outcomes import (
     VirtualOutcome,
     is_maker_route_strategy,
 )
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,7 @@ class LivePaperSession:
         self.live_signals = self.backfill_signals = 0
         self.tick_stop_exits = 0
         self._last_heartbeat_at: datetime | None = None
+        self._shadow_exit_df: pd.DataFrame | None = None
         # SHADOW lanes never fill, so per-lane edge is invisible without
         # virtual resolution: approved intents are resolved forward on
         # closed bars with backtester semantics (journal = durable store).
@@ -190,6 +191,7 @@ class LivePaperSession:
                 # resting-limit route (touch-to-fill + maker entry fee); every
                 # other lane stays all-taker. Observability only either way.
                 maker_route=is_maker_route_strategy(strategy.strategy_id),
+                strategy_exit=self._shadow_strategy_exit,
             )
             if config.mode is RunnerMode.SHADOW
             else None
@@ -331,6 +333,23 @@ class LivePaperSession:
             entry_bar_ts=pd.Timestamp(entry_bar_ts),
             exit_state=ActiveExitState.from_signal(sig),
         )
+
+    def _shadow_strategy_exit(
+        self,
+        side: str,
+        entry_price: float,
+        bar: pd.Series,
+    ) -> StrategyExitIntent | None:
+        df = self._shadow_exit_df
+        if df is None or df.empty:
+            return None
+        try:
+            index = int(bar.name)
+        except (TypeError, ValueError):
+            index = len(df) - 1
+        if index < 0 or index >= len(df):
+            index = len(df) - 1
+        return self.strategy.exit_signal(df, index, side, entry_price)
 
     def _seed_plan_from_venue(self, plan: _LivePlan, client_order_id: str | None = None) -> None:
         if client_order_id is not None:
@@ -506,6 +525,8 @@ class LivePaperSession:
             qty_step=self.config.limits.qty_step,
         )
         if decision is None:
+            decision = self._strategy_exit_decision(bar)
+        if decision is None:
             return
         levels = list(sig.take_profit_levels)
         order = await self._submit_exit(
@@ -535,6 +556,33 @@ class LivePaperSession:
             "breakeven_armed": decision.breakeven_armed,
         })
         self._log_trade_event("exit", f"{decision.reason} ({order.state.value})"[:140], now)
+
+    def _strategy_exit_decision(self, bar: pd.Series) -> ActiveExitDecision | None:
+        if self._plan is None:
+            return None
+        df = self.strategy.prepare(self.candles).reset_index(drop=True)
+        if df.empty:
+            return None
+        index = len(df) - 1
+        sig = self._plan.signal
+        entry = self._plan.exit_state.entry_price or float(bar["close"])
+        exit_sig = self.strategy.exit_signal(df, index, sig.side, entry)
+        if exit_sig is None:
+            return None
+        return ActiveExitDecision(
+            reason=exit_sig.reason,
+            exit_price=(
+                float(exit_sig.exit_price)
+                if exit_sig.exit_price is not None
+                else float(bar["close"])
+            ),
+            quantity=None,
+            final=True,
+            active_stop_price=self._plan.exit_state.current_stop,
+            breakeven_armed=self._plan.exit_state.breakeven_armed,
+            tp_reached=self._plan.exit_state.tp_reached(),
+            mfe_price=self._plan.exit_state.mfe_price,
+        )
 
     async def _submit_exit(
         self,
@@ -1231,8 +1279,9 @@ class LivePaperSession:
             # restart: intents journaled before the shutdown resolve against
             # the seeded history first, so an already-hit stop or target is
             # never mis-resolved later at live prices
+            self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
             self._log_shadow_outcomes(
-                self.shadow_outcomes.replay(self.candles), started
+                self.shadow_outcomes.replay(self._shadow_exit_df), started
             )
 
         await self._shadow_prime()
@@ -1297,7 +1346,11 @@ class LivePaperSession:
                 # resolve earlier shadow intents against this closed bar; the
                 # intent journaled above (bar_ts == this bar) is untouched —
                 # its virtual fill is the NEXT bar, like the backtester
-                self._log_shadow_outcomes(self.shadow_outcomes.resolve_bar(bar), now)
+                self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
+                self._log_shadow_outcomes(
+                    self.shadow_outcomes.resolve_bar(self._shadow_exit_df.iloc[-1]),
+                    now,
+                )
 
             self._bars_since_reconcile += 1
             if self._bars_since_reconcile >= self.config.reconcile_every_bars \
