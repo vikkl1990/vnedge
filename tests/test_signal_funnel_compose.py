@@ -531,3 +531,14 @@ def test_bitcoin_regime_sensor_is_context_only():
     assert all("/app/data" not in volume for volume in service["volumes"])
     assert all("/app/logs" not in volume for volume in service["volumes"])
     assert "MEMPOOL_API_BASE" in service["environment"]
+
+
+def test_multi_lane_shadow_has_a_health_gated_liveness_probe():
+    # P0: the service that serves the dashboard must expose a healthcheck so
+    # dependents can gate on service_healthy and the --force-recreate race can't
+    # strand the fleet.
+    service = compose_services()["multi-lane-shadow"]
+    hc = service.get("healthcheck") or {}
+    test = " ".join(hc.get("test") or [])
+    assert "/health" in test and "8080" in test
+    assert "start_period" in hc  # covers lane warmup so it isn't marked unhealthy early

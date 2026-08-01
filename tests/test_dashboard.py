@@ -1844,3 +1844,13 @@ def test_snapshot_marks_restored_position_at_entry_without_quote(tmp_path):
     pos = snap["positions"][0]
     assert pos["mark_price"] == pos["entry_price"]
     assert pos["unrealized_usd"] == 0.0
+
+
+def test_health_is_unauthenticated_liveness(client):
+    # /health must answer 200 WITHOUT a token — container healthchecks + the TLS
+    # proxy hit it with no credentials. It reveals no state.
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+    # and it is a pure liveness probe, not an auth bypass into real data
+    assert client.get("/state").status_code == 401
