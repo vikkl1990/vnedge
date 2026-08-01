@@ -611,6 +611,34 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Paper promotion bridge: joins lane readiness, paper PnL/PF, contract truth,
+  # maker quote lifecycle, and operator actions into one conservative
+  # paper/live-review answer. Read-only: can_trade=false/can_promote=false.
+  paper-promotion-bridge:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - lane-promotion-readiness
+      - paper-lane-performance
+      - paper-trade-contract-reconciler
+      - maker-quote-lifecycle
+      - operator-actions
+    command: ["python", "-m", "vnedge.research.paper_promotion_bridge",
+              "--interval-seconds", "${PAPER_PROMOTION_BRIDGE_INTERVAL_SECONDS:-60}",
+              "--readiness", "research/live_research/lane_promotion_readiness_latest.json",
+              "--performance", "research/live_research/paper_lane_performance_latest.json",
+              "--contract", "research/live_research/paper_trade_contract_reconciler_latest.json",
+              "--maker-quote", "research/live_research/maker_quote_lifecycle_latest.json",
+              "--actions", "research/live_research/operator_actions_latest.json",
+              "--out", "research/live_research/paper_promotion_bridge_latest.json",
+              "--feed", "research/live_research/paper_promotion_bridge_feed.jsonl",
+              "--print"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper lane root-cause matrix: joins route, cadence, sizing, entry/exit,
   # performance, survival, governor, and causality evidence into one primary
   # blocker per lane. Read-only.

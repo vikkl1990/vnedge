@@ -454,6 +454,7 @@ def create_app(
     paper_lane_root_cause_path: Path | None = None,
     maker_quote_lifecycle_path: Path | None = None,
     paper_trade_contract_reconciler_path: Path | None = None,
+    paper_promotion_bridge_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     paper_roster_drift_path: Path | None = None,
@@ -702,6 +703,10 @@ def create_app(
     paper_trade_contract_reconciler_file = (
         paper_trade_contract_reconciler_path
         or Path("research/live_research/paper_trade_contract_reconciler_latest.json")
+    )
+    paper_promotion_bridge_file = (
+        paper_promotion_bridge_path
+        or Path("research/live_research/paper_promotion_bridge_latest.json")
     )
     lane_survival_file = (
         lane_survival_path
@@ -1295,6 +1300,31 @@ def create_app(
                     "trade_samples": [],
                     "operator_answer": "paper trade contract reconciler unavailable",
                     "mode": "read_only_paper_contract_reconciliation",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/paper-promotion-bridge")
+    async def paper_promotion_bridge(request: Request) -> JSONResponse:
+        """Latest joined paper/live-review bridge.
+
+        This joins lane readiness, paper performance, contract truth,
+        maker/taker lifecycle, and operator actions into a single conservative
+        review answer. It is read-only and cannot promote or trade.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                paper_promotion_bridge_file,
+                {
+                    "summary": {},
+                    "boards": {},
+                    "rows": [],
+                    "operator_answer": "paper promotion bridge unavailable",
+                    "mode": "read_only_paper_promotion_bridge",
                     "can_trade": False,
                     "can_promote": False,
                 },
