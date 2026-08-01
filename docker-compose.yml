@@ -188,6 +188,25 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Quantified Strategy Lab result arbiter: turns completed/blocked/pending
+  # blueprint proof cells into operator next actions. Research-only; no
+  # promotion or execution authority.
+  quantified-proof-result-arbiter:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - quantified-blueprint-proof
+    command: ["python", "-m", "vnedge.research.quantified_proof_result_arbiter",
+              "--interval-seconds", "${QUANTIFIED_PROOF_ARBITER_INTERVAL_SECONDS:-300}",
+              "--proof", "research/live_research/quantified_blueprint_proof_latest.json",
+              "--out", "research/live_research/quantified_proof_result_arbiter_latest.json",
+              "--feed", "research/live_research/quantified_proof_result_arbiter_feed.jsonl"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Continuous research: hourly data refresh + rolling walk-forward +
   # promotion-gate verdicts. No execution access — it shares only market
   # data (rw) and the research output dir the dashboard reads (ro there).

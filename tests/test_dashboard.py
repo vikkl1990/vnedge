@@ -678,6 +678,26 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
         "can_promote": False,
         "live_orders_enabled": False,
     }))
+    arbiter = tmp_path / "quantified_proof_result_arbiter_latest.json"
+    arbiter.write_text(json.dumps({
+        "arbiter_id": "quantified_proof_result_arbiter_v1",
+        "generated_at": "2026-08-01T00:00:00+00:00",
+        "summary": {
+            "total_cells": 360,
+            "actionable_cells": 3,
+            "ready_for_judgment": 1,
+            "proxy_edges": 1,
+        },
+        "action_queue": [{
+            "bucket": "READY_FOR_UNTOUCHED_JUDGMENT",
+            "next_action": "QUEUE_UNTOUCHED_WINDOW_JUDGMENT",
+            "can_trade": False,
+            "can_promote": False,
+        }],
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     proof = tmp_path / "quantified_pullback_reversion_proof_latest.json"
     proof.write_text(json.dumps({
         "proof_id": "quantified_pullback_reversion_proof_v1",
@@ -693,6 +713,7 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
             provider,
             token="t3st-token",
             quantified_blueprint_proof_path=blueprint,
+            quantified_proof_arbiter_path=arbiter,
             quantified_pullback_proof_path=proof,
         )
     )
@@ -701,16 +722,24 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
     blueprint_payload = client.get(
         "/quantified-strategy-lab/blueprint-proof?token=t3st-token"
     ).json()
+    arbiter_payload = client.get(
+        "/quantified-strategy-lab/proof-arbiter?token=t3st-token"
+    ).json()
     payload = client.get(
         "/quantified-strategy-lab/pullback-proof?token=t3st-token"
     ).json()
 
     assert page.status_code == 200
     assert "Blueprint Proof Matrix" in page.text
+    assert "Proof Result Arbiter" in page.text
     assert blueprint_payload["proof_id"] == "quantified_blueprint_proof_v1"
     assert blueprint_payload["summary"]["ports"] == 6
     assert blueprint_payload["can_trade"] is False
     assert blueprint_payload["can_promote"] is False
+    assert arbiter_payload["arbiter_id"] == "quantified_proof_result_arbiter_v1"
+    assert arbiter_payload["summary"]["ready_for_judgment"] == 1
+    assert arbiter_payload["can_trade"] is False
+    assert arbiter_payload["can_promote"] is False
     assert payload["proof_id"] == "quantified_pullback_reversion_proof_v1"
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False

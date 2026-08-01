@@ -276,6 +276,35 @@
       </div>
     </section>
 
+    <section class="card" style="margin-bottom:14px">
+      <div class="panel-title">
+        <h2>Proof Result Arbiter</h2>
+        <span class="badge study" id="arbiterBadge">research only</span>
+      </div>
+      <div class="panel-body">
+        <div class="proof-grid" id="arbiterSummary"></div>
+        <div class="note" id="arbiterAnswer">Waiting for proof arbiter artifact...</div>
+        <div class="proof-table" style="margin-top:12px">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Lane</th>
+                <th>Bucket</th>
+                <th>Trades</th>
+                <th>Avg Net</th>
+                <th>PF</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody id="arbiterRows">
+              <tr><td colspan="7" class="loading">Loading proof arbiter...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="panel-title">
         <h2>Strategy Inventory</h2>
@@ -327,6 +356,7 @@
     let payload = null;
     let factory = null;
     let blueprintProof = null;
+    let proofArbiter = null;
     let pullbackProof = null;
     const fmt = new Intl.NumberFormat("en-US");
 
@@ -458,6 +488,44 @@
       }).join("") || '<tr><td colspan="7" class="loading">No proof rows yet.</td></tr>';
     }
 
+    function renderArbiter(){
+      const summaryEl = document.getElementById("arbiterSummary");
+      const rowsEl = document.getElementById("arbiterRows");
+      if (!proofArbiter || !proofArbiter.summary) {
+        document.getElementById("arbiterBadge").textContent = "unavailable";
+        summaryEl.innerHTML = "";
+        document.getElementById("arbiterAnswer").textContent = "Proof arbiter artifact unavailable. It will appear after the blueprint proof publisher writes its matrix.";
+        rowsEl.innerHTML = '<tr><td colspan="7" class="loading">No arbiter artifact published.</td></tr>';
+        return;
+      }
+      const s = proofArbiter.summary || {};
+      document.getElementById("arbiterBadge").textContent = `${fmt.format(s.actionable_cells || 0)} actions`;
+      summaryEl.innerHTML = [
+        `<div class="factory-card"><div class="label">Actionable</div><div class="big">${fmt.format(s.actionable_cells || 0)}</div><p>repair, uplift, or judgment cells</p></div>`,
+        `<div class="factory-card"><div class="label">Judgment Ready</div><div class="big">${fmt.format(s.ready_for_judgment || 0)}</div><p>canonical only</p></div>`,
+        `<div class="factory-card"><div class="label">Proxy Edges</div><div class="big">${fmt.format(s.proxy_edges || 0)}</div><p>needs real scanner port</p></div>`,
+        `<div class="factory-card"><div class="label">Near Fee Wall</div><div class="big">${fmt.format((s.fee_wall_near_misses || 0) + (s.exit_route_uplifts || 0))}</div><p>exit and routing salvage</p></div>`,
+        `<div class="factory-card"><div class="label">Repair / Wait</div><div class="big">${fmt.format((s.data_repairs || 0) + (s.replay_repairs || 0) + (s.metric_repairs || 0))}</div><p>${fmt.format(s.awaiting_backtest || 0)} waiting</p></div>`
+      ].join("");
+      document.getElementById("arbiterAnswer").textContent = proofArbiter.operator_answer || "Proof arbiter loaded.";
+      const rows = (proofArbiter.action_queue || []).slice(0,36);
+      rowsEl.innerHTML = rows.map(row => {
+        const avg = row.avg_net_bps == null ? "--" : `${Number(row.avg_net_bps).toFixed(2)} bps`;
+        const pf = row.profit_factor == null ? "--" : Number(row.profit_factor).toFixed(2);
+        const cls = (row.bucket || "").includes("READY") || (row.bucket || "").includes("PROXY") ? "portable" :
+          (row.bucket || "").includes("REPAIR") || (row.bucket || "").includes("NEGATIVE") ? "blocked" : "study";
+        return `<tr>
+          <td><div class="title">${row.next_action || "--"}</div><div class="tiny">${row.use_as || "--"}</div></td>
+          <td><div class="title">${row.exchange} · ${row.symbol}</div><div class="tiny">${row.timeframe} · ${row.port_id}${row.canonical_adapter === false ? " · proxy" : ""}</div></td>
+          <td><span class="badge ${cls}">${row.bucket || "--"}</span></td>
+          <td class="num">${fmt.format(row.samples || 0)}</td>
+          <td class="num">${avg}</td>
+          <td class="num">${pf}</td>
+          <td>${row.rationale || "--"}</td>
+        </tr>`;
+      }).join("") || '<tr><td colspan="7" class="loading">No arbiter actions yet.</td></tr>';
+    }
+
     function populateFilters(){
       const ports = [...new Set((payload.strategy_reviews || []).map(r => r.recommended_port))].sort();
       document.getElementById("portFilter").innerHTML = '<option value="">All port families</option>' +
@@ -503,6 +571,7 @@
       const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
       const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
       const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const arbiterUrl = "/quantified-strategy-lab/proof-arbiter" + (token ? "?token=" + encodeURIComponent(token) : "");
       const proofUrl = "/quantified-strategy-lab/pullback-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const res = await fetch(url, {cache:"no-store"});
       if (!res.ok) throw new Error("request failed " + res.status);
@@ -520,6 +589,12 @@
         blueprintProof = null;
       }
       try {
+        const arbiterRes = await fetch(arbiterUrl, {cache:"no-store"});
+        proofArbiter = arbiterRes.ok ? await arbiterRes.json() : null;
+      } catch {
+        proofArbiter = null;
+      }
+      try {
         const proofRes = await fetch(proofUrl, {cache:"no-store"});
         pullbackProof = proofRes.ok ? await proofRes.json() : null;
       } catch {
@@ -531,6 +606,7 @@
       renderTasks();
       renderFactory();
       renderProof();
+      renderArbiter();
       populateFilters();
       renderRows();
     }
