@@ -988,6 +988,10 @@
           <div id="paperPerformance"></div>
         </section>
         <section class="panel">
+          <div class="phead"><h2>Paper Trade Entry Autopsy</h2><span class="meta" id="paperEntryAutopsyMeta">loading…</span></div>
+          <div id="paperTradeEntryAutopsy"></div>
+        </section>
+        <section class="panel">
           <div class="phead"><h2>Paper Trade Exit Autopsy</h2><span class="meta" id="paperExitAutopsyMeta">loading…</span></div>
           <div id="paperTradeExitAutopsy"></div>
         </section>
@@ -1760,6 +1764,43 @@
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
   }
+  function entryAutopsyCls(st){
+    st=String(st||"");
+    if(st==="ENTRY_CAPTURE_HEALTHY")return"ok";
+    if(st==="ENTRY_NO_CLOSED_TRADES"||st==="ENTRY_UNDER_SAMPLED"||st==="ENTRY_OBSERVE_MORE")return"wait";
+    if(st==="ENTRY_CONTEXT_MISSING")return"fix";
+    if(st==="ENTRY_SIGNAL_STALE"||st==="ENTRY_DIRECTION_DRIFT"||st==="ENTRY_FEE_WALL_TOO_SMALL"||st==="ENTRY_NEGATIVE_AFTER_COST")return"bad";
+    return"fix";
+  }
+  function renderPaperTradeEntryAutopsy(d){
+    var el=$("paperTradeEntryAutopsy"),meta=$("paperEntryAutopsyMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+num(s.stale_signal_lanes)+" stale · "+num(s.missing_context_lanes)+" missing ctx · "+num(s.direction_drift_lanes)+" drift";
+    if(!rows.length){el.innerHTML='<div class="note">paper entry autopsy loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Stale entries</div><div class="v" style="color:var(--short)">'+num(s.stale_signal_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Missing context</div><div class="v" style="color:var(--warn)">'+num(s.missing_context_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Side drift</div><div class="v" style="color:var(--short)">'+num(s.direction_drift_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Healthy entries</div><div class="v" style="color:var(--long)">'+num(s.healthy_entries)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var state=String(r.entry_state||"UNKNOWN"),cls=entryAutopsyCls(state),net=num(r.net_pnl_usd);
+      var bps=r.avg_net_bps==null?"--":num(r.avg_net_bps).toFixed(1)+"bps";
+      var edge=r.avg_expected_edge_bps==null?"edge --":num(r.avg_expected_edge_bps).toFixed(1)+"bps edge";
+      var delay=r.avg_entry_delay_bars==null?"delay --":num(r.avg_entry_delay_bars).toFixed(2)+" bars delay";
+      var stale=num(r.stale_entry_rate)*100,miss=num(r.missing_context_rate)*100,drift=num(r.direction_drift_rate)*100;
+      var facts=stale.toFixed(0)+"% stale · "+miss.toFixed(0)+"% missing · "+drift.toFixed(0)+"% drift";
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(state.toLowerCase().replace(/^entry_/,"").replace(/_/g," "))+'</span><small title="'+esc((r.blockers||[]).join(" · "))+'">'+esc(String(r.next_action||"").slice(0,58))+'</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>'+bps+' · PF '+num(r.profit_factor).toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+esc(delay)+'</b><small>'+esc(edge)+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+esc(facts)+'</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper entry autopsy pending")+'</div>';
+  }
   function autopsyCls(st){
     st=String(st||"");
     if(st==="CAPTURE_HEALTHY")return"ok";
@@ -2471,6 +2512,7 @@
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollPaperTradeEntryAutopsy(){ poll("/paper-trade-entry-autopsy", renderPaperTradeEntryAutopsy); }
   function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollLaneSurvival(){ poll("/lane-survival", renderLaneSurvival); }
   function pollPaperLaneGovernor(){ poll("/paper-lane-governor", renderPaperLaneGovernor); }
@@ -2632,8 +2674,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
