@@ -2149,8 +2149,16 @@ def create_app(
     # unaffected. The SPA shell is public like the classic shell; its data calls
     # (/state, /journal, /whoami) stay token-gated. Build: `npm --prefix
     # frontend install && npm --prefix frontend run build`.
-    v2_dist = v2_dist_path if v2_dist_path is not None else _REPO_ROOT / "frontend" / "dist"
-    if Path(v2_dist).is_dir():
+    # Resolve the built SPA across both layouts, like the runbooks doc above:
+    # dev (repo checkout → _REPO_ROOT/frontend/dist) and the container (vnedge is
+    # pip-installed into site-packages, so _REPO_ROOT points there; the build is
+    # COPYed to /app/frontend/dist == cwd/frontend/dist).
+    if v2_dist_path is not None:
+        v2_candidates = [Path(v2_dist_path)]
+    else:
+        v2_candidates = [Path.cwd() / "frontend" / "dist", _REPO_ROOT / "frontend" / "dist"]
+    v2_dist = next((c for c in v2_candidates if c.is_dir()), None)
+    if v2_dist is not None:
         from starlette.staticfiles import StaticFiles
 
         app.mount("/app", StaticFiles(directory=str(v2_dist), html=True), name="v2")

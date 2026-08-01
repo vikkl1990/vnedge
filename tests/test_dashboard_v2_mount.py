@@ -23,3 +23,14 @@ def test_v2_spa_served_when_dist_present(tmp_path):
     client = TestClient(create_app(SnapshotProvider(), token="t", v2_dist_path=dist))
     r = client.get("/app/")
     assert r.status_code == 200 and "v2" in r.text
+
+
+def test_v2_resolves_from_cwd_frontend_dist(tmp_path, monkeypatch):
+    # In the container, vnedge is pip-installed (so _REPO_ROOT is site-packages);
+    # the build lives at cwd/frontend/dist. This pins that resolution path.
+    (tmp_path / "frontend" / "dist").mkdir(parents=True)
+    (tmp_path / "frontend" / "dist" / "index.html").write_text("<title>cwd-v2</title>")
+    monkeypatch.chdir(tmp_path)
+    client = TestClient(create_app(SnapshotProvider(), token="t"))
+    r = client.get("/app/")
+    assert r.status_code == 200 and "cwd-v2" in r.text

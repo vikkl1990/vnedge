@@ -1,13 +1,14 @@
 // Core cockpit panels, wired to the live endpoints via TanStack Query. This is
-// the proof-of-parity subset (header, snapshot, journal); the remaining classic
-// panels port onto these same primitives incrementally.
+// the growing parity subset (header, book, risk, positions, journal); the
+// remaining classic panels port onto these same primitives incrementally.
 
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useJournal, useSnapshot, useWhoAmI } from "../queries";
-import type { JournalRow } from "../api";
+import type { JournalRow, Position } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
+const signed = (n: unknown) => (typeof n === "number" && n < 0 ? "text-short" : "text-long");
 
 export function Header() {
   const who = useWhoAmI();
@@ -27,27 +28,82 @@ export function Header() {
       </div>
       <div className="flex items-center gap-2">
         <TerminalBadge tone="info">mode {mode}</TerminalBadge>
-        <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+        <TerminalBadge tone={snap.data?.kill_switch_active ? "bad" : "good"}>
+          kill {snap.data?.kill_switch_active ? "ARMED" : "clear"}
+        </TerminalBadge>
+        <TerminalBadge tone="neutral">
+          {who.data?.name ?? "…"} · {role}
+        </TerminalBadge>
       </div>
     </header>
   );
 }
 
-export function SnapshotPanel() {
+function Kpi({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase text-dim font-mono">{label}</div>
+      <div className={`text-2xl font-mono tabular-nums ${tone ?? ""}`}>{value}</div>
+    </div>
+  );
+}
+
+export function BookPanel() {
   const { data, isLoading, isError } = useSnapshot();
-  const equity = data?.equity;
   return (
     <TerminalPanel title="Book" meta={isLoading ? "loading…" : isError ? "error" : "live · 5s"}>
-      <div className="flex items-end gap-8">
-        <div>
-          <div className="text-[11px] uppercase text-dim font-mono">Equity</div>
-          <div className="text-3xl font-mono tabular-nums">{usd(equity)}</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase text-dim font-mono">Mode</div>
-          <div className="text-xl font-mono">{(data?.mode as string) ?? "—"}</div>
-        </div>
+      <div className="flex items-end gap-10 flex-wrap">
+        <Kpi label="Equity" value={usd(data?.equity)} />
+        <Kpi label="Realized" value={usd(data?.realized_pnl)} tone={signed(data?.realized_pnl)} />
+        <Kpi label="Unrealized" value={usd(data?.unrealized_pnl)} tone={signed(data?.unrealized_pnl)} />
+        <Kpi label="Peak" value={usd(data?.peak_equity)} />
       </div>
+    </TerminalPanel>
+  );
+}
+
+export function RiskPanel() {
+  const { data } = useSnapshot();
+  const status = (data?.risk_status as string) ?? "—";
+  const statusTone = status.toLowerCase().includes("ok") ? "good" : status === "—" ? "neutral" : "warn";
+  return (
+    <TerminalPanel title="Risk" meta="gateway · breaker · kill">
+      <div className="flex items-center gap-3 flex-wrap">
+        <TerminalBadge tone={statusTone as never}>{status}</TerminalBadge>
+        <TerminalBadge tone={data?.live_trading_enabled ? "bad" : "good"}>
+          live {data?.live_trading_enabled ? "ENABLED" : "locked"}
+        </TerminalBadge>
+      </div>
+      <div className="flex items-end gap-10 flex-wrap mt-4">
+        <Kpi label="Daily PnL" value={usd(data?.daily_pnl)} tone={signed(data?.daily_pnl)} />
+        <Kpi
+          label="Loss streak"
+          value={typeof data?.consecutive_losses === "number" ? String(data.consecutive_losses) : "—"}
+        />
+        <Kpi label="Fills" value={typeof data?.fills === "number" ? String(data.fills) : "—"} />
+        <Kpi label="Fees" value={usd(data?.fees_usd)} />
+      </div>
+    </TerminalPanel>
+  );
+}
+
+export function PositionsPanel() {
+  const { data } = useSnapshot();
+  const rows = (data?.positions as Position[] | undefined) ?? [];
+  const cols: Column<Position>[] = [
+    { key: "sym", header: "Symbol", render: (r) => <span className="font-mono">{r.symbol ?? "—"}</span> },
+    { key: "side", header: "Side", render: (r) => r.side ?? "—" },
+    { key: "qty", header: "Qty", align: "right", render: (r) => (typeof r.quantity === "number" ? r.quantity : "—") },
+    {
+      key: "upnl",
+      header: "uPnL",
+      align: "right",
+      render: (r) => <span className={signed(r.unrealized_pnl_usd)}>{usd(r.unrealized_pnl_usd)}</span>,
+    },
+  ];
+  return (
+    <TerminalPanel title="Positions" meta={`${rows.length} open`}>
+      <DenseTable columns={cols} rows={rows} empty="flat — no open positions" />
     </TerminalPanel>
   );
 }
@@ -62,11 +118,7 @@ export function JournalPanel() {
       key: "pnl",
       header: "Net PnL",
       align: "right",
-      render: (r) => (
-        <span className={typeof r.net_pnl_usd === "number" && r.net_pnl_usd < 0 ? "text-short" : "text-long"}>
-          {usd(r.net_pnl_usd)}
-        </span>
-      ),
+      render: (r) => <span className={signed(r.net_pnl_usd)}>{usd(r.net_pnl_usd)}</span>,
     },
     { key: "exit", header: "Exit", render: (r) => <span className="text-dim">{r.exit_reason ?? "—"}</span> },
   ];
