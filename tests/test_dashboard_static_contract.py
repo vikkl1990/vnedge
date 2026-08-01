@@ -177,3 +177,19 @@ def test_nav_links_to_the_quantified_strategy_lab_page():
     assert 'id="navLab"' in html
     assert 'href="/quantified-strategy-lab"' in html
     assert "navLab" in html and "quantified-strategy-lab?token=" in html  # token carried
+
+
+def test_dashboard_has_ctrl_k_command_palette():
+    html = _index()
+    # markup
+    assert 'id="cmdk"' in html
+    assert 'id="cmdkInput"' in html
+    assert 'id="cmdkList"' in html
+    assert 'role="dialog"' in html and 'aria-modal="true"' in html
+    # a real command registry + open/close/run + fuzzy score
+    assert "var CMDK=" in html
+    assert "function cmdkOpen" in html and "function cmdkRender" in html
+    assert "function cmdkScore" in html
+    # Ctrl/Cmd-K opens it; reuses existing gotoView navigation
+    assert 'toLowerCase()==="k"' in html
+    assert "gotoView(" in html
