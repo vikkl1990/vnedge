@@ -7,6 +7,9 @@ inside the existing gateway, journal, idempotency, and reconciliation contracts.
 The first executor is implemented in
 `src/vnedge/execution/maker_taker_executor.py`.
 
+The read-only lifecycle auditor that turns its journal events into operator
+evidence is documented in `docs/MAKER_QUOTE_LIFECYCLE.md`.
+
 ## Flow
 
 ```mermaid

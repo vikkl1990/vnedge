@@ -560,6 +560,31 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Maker quote lifecycle: proves whether fired/scanner lanes actually move
+  # through post-only maker placement, fill/cancel, and fee-aware taker fallback.
+  # Read-only; it cannot trade, promote, restart, or mutate runtime routes.
+  maker-quote-lifecycle:
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-lane-performance, paper-trade-exit-autopsy]
+    command: ["python", "-m", "vnedge.research.maker_quote_lifecycle",
+              "--interval-seconds", "${MAKER_QUOTE_LIFECYCLE_INTERVAL_SECONDS:-60}",
+              "--performance", "research/live_research/paper_lane_performance_latest.json",
+              "--exit-autopsy", "research/live_research/paper_trade_exit_autopsy_latest.json",
+              "--out", "research/live_research/maker_quote_lifecycle_latest.json",
+              "--feed", "research/live_research/maker_quote_lifecycle_feed.jsonl",
+              "--min-maker-attempts", "${MAKER_QUOTE_LIFECYCLE_MIN_MAKER_ATTEMPTS:-5}",
+              "--min-maker-fill-rate-pct", "${MAKER_QUOTE_LIFECYCLE_MIN_FILL_RATE_PCT:-5}",
+              "--min-taker-net-edge-bps", "${MAKER_QUOTE_LIFECYCLE_MIN_TAKER_NET_EDGE_BPS:-25}",
+              "--min-taker-cost-coverage", "${MAKER_QUOTE_LIFECYCLE_MIN_TAKER_COVERAGE:-1.5}",
+              "--print"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Operator action queue publisher: joins activation, route doctor, cadence,
   # sizing profile, paper performance, exit autopsy, and firing causality into
   # one durable "what next" artifact/feed. Read-only.

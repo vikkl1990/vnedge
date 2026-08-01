@@ -446,6 +446,7 @@ def create_app(
     paper_trade_entry_autopsy_path: Path | None = None,
     paper_trade_exit_autopsy_path: Path | None = None,
     paper_lane_root_cause_path: Path | None = None,
+    maker_quote_lifecycle_path: Path | None = None,
     lane_survival_path: Path | None = None,
     paper_lane_governor_path: Path | None = None,
     paper_roster_drift_path: Path | None = None,
@@ -654,6 +655,10 @@ def create_app(
     paper_lane_root_cause_file = (
         paper_lane_root_cause_path
         or Path("research/live_research/paper_lane_root_cause_latest.json")
+    )
+    maker_quote_lifecycle_file = (
+        maker_quote_lifecycle_path
+        or Path("research/live_research/maker_quote_lifecycle_latest.json")
     )
     lane_survival_file = (
         lane_survival_path
@@ -1178,6 +1183,31 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper trade entry autopsy unavailable",
                     "mode": "read_only_paper_trade_entry_autopsy",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/maker-quote-lifecycle")
+    async def maker_quote_lifecycle(request: Request) -> JSONResponse:
+        """Latest maker quote lifecycle report.
+
+        This explains whether a lane has actual post-only maker quote, fill,
+        cancel, and fee-aware taker fallback proof. It is read-only and cannot
+        trade, promote, demote, or restart routes.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                maker_quote_lifecycle_file,
+                {
+                    "summary": {},
+                    "boards": {},
+                    "rows": [],
+                    "operator_answer": "maker quote lifecycle report unavailable",
+                    "mode": "read_only_maker_quote_lifecycle",
                     "can_trade": False,
                     "can_promote": False,
                 },

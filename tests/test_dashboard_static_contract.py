@@ -137,6 +137,15 @@ def test_dashboard_has_darwinian_agent_survival_panel():
     assert "JANUS cohorts" in html
 
 
+def test_dashboard_has_maker_quote_lifecycle_panel():
+    html = _index()
+    assert "Maker Quote Lifecycle" in html
+    assert 'id="makerQuoteLifecycle"' in html
+    assert "/maker-quote-lifecycle" in html
+    assert "function renderMakerQuoteLifecycle" in html
+    assert "taker fallback" in html
+
+
 def test_journal_has_pnl_by_cohort_panel():
     html = _index()
     assert "P&amp;L by cohort" in html

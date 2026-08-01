@@ -167,6 +167,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "/paper-lane-governor" in html
     assert "Paper Roster Drift" in html
     assert "/paper-roster-drift" in html
+    assert "Maker Quote Lifecycle" in html
+    assert "/maker-quote-lifecycle" in html
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
@@ -1013,6 +1015,28 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    maker_quote_lifecycle = tmp_path / "maker_quote_lifecycle.json"
+    maker_quote_lifecycle.write_text(json.dumps({
+        "mode": "read_only_maker_quote_lifecycle",
+        "summary": {
+            "maker_attempts": 3,
+            "maker_fill_unproven": 1,
+            "taker_fallback_forbidden": 1,
+        },
+        "rows": [{
+            "lane_id": "alpha|delta_india|eth/usd:usd|5m",
+            "lifecycle_state": "MAKER_FILL_UNPROVEN",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "maker_attempts": 3,
+            "maker_fill_rate_pct": 0.0,
+            "next_action": "COLLECT_OR_REPAIR_MAKER_FILL_TELEMETRY",
+        }],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     lane_survival = tmp_path / "lane_survival.json"
     lane_survival.write_text(json.dumps({
         "mode": "read_only_lane_survival",
@@ -1055,6 +1079,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_lane_performance_path=paper_lane_performance,
         paper_trade_entry_autopsy_path=paper_entry_autopsy,
         paper_trade_exit_autopsy_path=paper_exit_autopsy,
+        maker_quote_lifecycle_path=maker_quote_lifecycle,
         lane_survival_path=lane_survival,
         paper_lane_governor_path=paper_lane_governor,
         paper_roster_drift_path=paper_roster_drift,
@@ -1071,6 +1096,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-lane-cadence").status_code == 401
     assert client.get("/paper-trade-entry-autopsy").status_code == 401
     assert client.get("/paper-trade-exit-autopsy").status_code == 401
+    assert client.get("/maker-quote-lifecycle").status_code == 401
     assert client.get("/lane-survival").status_code == 401
     assert client.get("/paper-lane-governor").status_code == 401
     assert client.get("/paper-roster-drift").status_code == 401
@@ -1117,6 +1143,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_exit_payload["mode"] == "read_only_paper_trade_exit_autopsy"
     assert paper_exit_payload["can_trade"] is False
     assert paper_exit_payload["can_promote"] is False
+    maker_quote_payload = client.get("/maker-quote-lifecycle?token=t3st-token").json()
+    assert maker_quote_payload["summary"]["maker_attempts"] == 3
+    assert maker_quote_payload["mode"] == "read_only_maker_quote_lifecycle"
+    assert maker_quote_payload["can_trade"] is False
+    assert maker_quote_payload["can_promote"] is False
     lane_survival_payload = client.get("/lane-survival?token=t3st-token").json()
     assert lane_survival_payload["summary"]["demote_to_shadow"] == 1
     assert lane_survival_payload["mode"] == "read_only_lane_survival"
@@ -1815,6 +1846,7 @@ def test_identity_header_on_all_data_routes():
         "/realtime-scanner",
         "/lane-firing-causality",
         "/paper-lane-activation",
+        "/maker-quote-lifecycle",
         "/lane-survival",
         "/paper-lane-governor",
         "/paper-roster-drift",
