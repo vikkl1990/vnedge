@@ -52,6 +52,7 @@ from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
+from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
@@ -505,6 +506,8 @@ def _build_single_strategy(
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
+    if strategy_id == "crypto_trend_atr_margin_v1":
+        return CryptoTrendAtrMargin(seed_funding, **params)
     if strategy_id == "volatility_expansion_breakout_v1":
         return VolatilityExpansionBreakout(seed_funding, **params)
     if strategy_id == "panic_reversal_v1":

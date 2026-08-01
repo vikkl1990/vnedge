@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from vnedge.data.schemas import normalize_candles
+from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.regime import RegimeParams
 from vnedge.strategy.strategy_registry import STRATEGIES, get_strategy_class
@@ -168,10 +169,51 @@ def test_funding_series_is_mandatory():
         FundingMeanReversion(pd.DataFrame())
 
 
+# --- Crypto trend ATR-margin ----------------------------------------------------
+
+def test_crypto_trend_atr_margin_emits_bull_flip():
+    closes = [100.0 + (0.05 if i % 2 else -0.05) for i in range(270)]
+    for _ in range(70):
+        closes.append(closes[-1] * 1.006)
+    candles = candles_from_closes(closes)
+    strategy = CryptoTrendAtrMargin(fast_ema=6, slow_ema=18, atr_window=12)
+    idx, intent = first_signal(strategy, candles)
+    assert intent is not None
+    assert intent.side == "long"
+    assert intent.stop_price < float(candles["close"].iloc[idx])
+    assert intent.take_profit_price is None
+    assert "ATR-margin bull flip" in intent.reason
+
+
+def test_crypto_trend_atr_margin_emits_bear_flip():
+    closes = [100.0 + (0.05 if i % 2 else -0.05) for i in range(270)]
+    for _ in range(70):
+        closes.append(closes[-1] * 0.994)
+    candles = candles_from_closes(closes)
+    strategy = CryptoTrendAtrMargin(fast_ema=6, slow_ema=18, atr_window=12)
+    idx, intent = first_signal(strategy, candles)
+    assert intent is not None
+    assert intent.side == "short"
+    assert intent.stop_price > float(candles["close"].iloc[idx])
+    assert "ATR-margin bear flip" in intent.reason
+
+
+def test_crypto_trend_atr_margin_warmup_blocks_early_rows():
+    strategy = CryptoTrendAtrMargin(fast_ema=6, slow_ema=18, atr_window=12)
+    df = strategy.prepare(candles_from_closes([100.0 + i * 0.1 for i in range(280)]))
+    for i in range(1, strategy.warmup_bars):
+        assert strategy.signal(df, i) is None
+
+
 # --- Registry -------------------------------------------------------------------
 
 def test_registry_contains_core_candidates():
-    assert {"trend_continuation_v1", "funding_mean_reversion_v1"} <= set(STRATEGIES)
+    assert {
+        "crypto_trend_atr_margin_v1",
+        "trend_continuation_v1",
+        "funding_mean_reversion_v1",
+    } <= set(STRATEGIES)
+    assert get_strategy_class("crypto_trend_atr_margin_v1") is CryptoTrendAtrMargin
     assert get_strategy_class("trend_continuation_v1") is TrendContinuation
 
 

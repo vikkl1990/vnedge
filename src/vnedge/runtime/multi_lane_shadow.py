@@ -84,6 +84,17 @@ FVG_LIQUIDITY_BREAKOUT_PARAMS: dict = {
     "min_body_atr": 0.55,
     "min_body_percentile": 0.60,
 }
+CRYPTO_TREND_ATR_MARGIN_PARAMS: dict = {
+    "fast_ema": 30,
+    "slow_ema": 60,
+    "atr_window": 60,
+    "atr_margin_mult": 0.30,
+    "stop_atr_mult": 1.60,
+    "min_stop_bps": 15.0,
+    # Entry-only in shadow: the research replay exited on neutral/reversal plus
+    # max-hold. Paper promotion needs that exit parity before this lane owns PnL.
+    "take_profit_r": None,
+}
 QUANTIFIED_FEE_WALL_SNIPER_PARAMS: dict = {
     "min_expected_net_edge_bps": 25.0,
     "min_room_to_liquidity_bps": 35.0,
@@ -155,6 +166,34 @@ CANDIDATE_SHADOW_LANES = [
         mode=RunnerMode.SHADOW,
     ),
 ]
+
+
+def crypto_trend_doge_shadow_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Source-backed DOGE 1h trend/ATR-margin lane from the Pine top-100 batch.
+
+    The corresponding research proxy was the only accessible top-100
+    TradingView source experiment that survived chronological OOS sanity on the
+    2026-08-01 local replay: DOGEUSDT 1h, +66.55bps/trade full sample, OOS
+    +125.96bps/trade with PF 2.23 over 33 trades. Still SHADOW only: this is
+    live firing evidence, not paper/live promotion.
+    """
+    if not _truthy(environ, "MULTI_LANE_CRYPTO_TREND_DOGE", "1"):
+        return []
+    if "binanceusdm" not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    return [
+        LaneSpec(
+            lane_id="crypto_trend_doge_binanceusdm_shadow",
+            exchange="binanceusdm",
+            symbol="DOGE/USDT:USDT",
+            timeframe="1h",
+            strategy_id="crypto_trend_atr_margin_v1",
+            strategy_params=CRYPTO_TREND_ATR_MARGIN_PARAMS,
+            mode=RunnerMode.SHADOW,
+        )
+    ]
 
 
 def _truthy(environ: Mapping[str, str], name: str, default: str) -> bool:
@@ -1036,6 +1075,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     base = dedupe_lane_specs(
         build_lane_specs_from_env(environ)
         + candidate_shadow_lanes(environ)
+        + crypto_trend_doge_shadow_lanes(environ)
         + delta_funding_mr_lanes(environ)
         + evidence_aligned_shadow_lanes(environ)
         + evidence_paper_trial_lanes(environ)

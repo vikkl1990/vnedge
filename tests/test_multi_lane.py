@@ -6,6 +6,7 @@ from vnedge.runtime import multi_lane
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
 from vnedge.runtime.multi_lane_shadow import (
     build_lane_specs_from_env,
+    crypto_trend_doge_shadow_lanes,
     desired_lane_specs,
     fee_wall_paper_probe_lanes,
     lane_specs_fingerprint,
@@ -153,6 +154,19 @@ def test_multi_lane_builds_lux_scanner_strategies():
     assert isinstance(luxara, LuxaraLivePlanQTMScanner)
 
 
+def test_multi_lane_builds_crypto_trend_atr_margin_strategy():
+    from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
+
+    strategy = multi_lane._build_single_strategy(
+        "crypto_trend_atr_margin_v1",
+        {"take_profit_r": None},
+        None,
+        None,
+    )
+
+    assert isinstance(strategy, CryptoTrendAtrMargin)
+
+
 def test_publish_error_adds_faulted_lane():
     p = MultiLaneProvider("binance")
     p.publish_error("bybit", "bybit", "BTC/USDT:USDT", "build failed")
@@ -268,6 +282,23 @@ def test_delta_paper_opt_in_still_uses_candle_only_strategy():
     assert specs[0].symbol == "BTC/USD:USD"
     assert specs[0].mode is RunnerMode.PAPER
     assert specs[0].strategy_id == "trend_continuation_v1"
+
+
+def test_crypto_trend_doge_shadow_lane_enabled_by_default():
+    lanes = crypto_trend_doge_shadow_lanes({})
+    assert len(lanes) == 1
+    lane = lanes[0]
+    assert lane.lane_id == "crypto_trend_doge_binanceusdm_shadow"
+    assert lane.exchange == "binanceusdm"
+    assert lane.symbol == "DOGE/USDT:USDT"
+    assert lane.timeframe == "1h"
+    assert lane.strategy_id == "crypto_trend_atr_margin_v1"
+    assert lane.mode is RunnerMode.SHADOW
+    assert lane.strategy_params["take_profit_r"] is None
+
+
+def test_crypto_trend_doge_shadow_lane_can_be_disabled():
+    assert crypto_trend_doge_shadow_lanes({"MULTI_LANE_CRYPTO_TREND_DOGE": "0"}) == []
 
 
 def test_paper_observation_lanes_disabled_by_default():
