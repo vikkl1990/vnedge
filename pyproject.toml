@@ -39,6 +39,10 @@ quant-research = [
     "arch>=7.0",
     "skfolio>=0.8",
 ]
+foundation-forecast = [
+    "torch>=2.0",
+    "huggingface_hub>=0.33",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
