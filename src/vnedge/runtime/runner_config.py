@@ -27,6 +27,12 @@ class RunnerConfig(BaseModel):
     slippage_est_bps: float = Field(default=2.0, ge=0)
     max_holding_bars: int = Field(default=48, ge=1)
     reconcile_every_bars: int = Field(default=24, ge=1)
+    # Dynamic ATR-chandelier trailing on the active-exit remainder (DEFAULT OFF).
+    # Same engine + canonical ATR the backtester uses, so research and runtime
+    # trail identically. 0.0 = legacy arm-and-lock. Only enable in BOTH backtest
+    # and runtime together, or the two diverge.
+    trail_atr_mult: float = Field(default=0.0, ge=0.0)
+    trail_atr_window: int = Field(default=14, ge=1)
     # LEGACY ALIAS (PR #92) — maps into protections.cooldown_bars_after_stop
     # via effective_protections(). Semantics were refined when the protections
     # state machine landed: the cooldown now arms on STOP exits only (a winner

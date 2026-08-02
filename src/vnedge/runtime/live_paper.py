@@ -52,6 +52,7 @@ from vnedge.runtime.shadow_outcomes import (
     is_maker_route_strategy,
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
+from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -331,8 +332,22 @@ class LivePaperSession:
         return _LivePlan(
             signal=sig,
             entry_bar_ts=pd.Timestamp(entry_bar_ts),
-            exit_state=ActiveExitState.from_signal(sig),
+            exit_state=ActiveExitState.from_signal(
+                sig, trail_atr_mult=self.config.trail_atr_mult
+            ),
         )
+
+    def _trail_atr(self) -> float:
+        """Canonical ATR for the trail — the SAME indicator+window the backtester
+        uses, so research and runtime trail identically. 0.0 if not warmed."""
+        if self.config.trail_atr_mult <= 0.0 or len(self.candles) < 2:
+            return 0.0
+        try:
+            series = _atr_indicator(self.candles, self.config.trail_atr_window)
+        except Exception:  # noqa: BLE001 - trailing must never break the exit loop
+            return 0.0
+        value = float(series.iloc[-1])
+        return value if value == value else 0.0  # value==value drops NaN warmup
 
     def _shadow_strategy_exit(
         self,
@@ -527,6 +542,10 @@ class LivePaperSession:
         if decision is None:
             decision = self._strategy_exit_decision(bar)
         if decision is None:
+            # No exit this bar — trail the stop for LATER bars off the canonical
+            # ATR (this bar's favorable extreme is already in the exit state; the
+            # tightened stop applies next bar, so no intrabar lookahead).
+            self._plan.exit_state.trail_stop(self._trail_atr())
             return
         levels = list(sig.take_profit_levels)
         order = await self._submit_exit(
