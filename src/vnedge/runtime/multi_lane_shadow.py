@@ -146,6 +146,7 @@ _MODES: dict[str, RunnerMode] = {
 }
 
 MANIFEST_RELOAD_EXIT_CODE = 75
+DEFAULT_PAPER_GOVERNOR_PATH = "research/live_research/paper_lane_governor_latest.json"
 
 # Exploratory candidate lanes surfaced by the edge-research agent — run in
 # SHADOW only (gateway-evaluated intents journaled, NEVER a fill) so their live
@@ -764,6 +765,192 @@ def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _governor_paper_roster_filter(
+    specs: list[LaneSpec],
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Optionally keep PAPER mode aligned to the governor's bounded roster."""
+
+    if not _truthy(environ, "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY", "0"):
+        return specs
+    path = Path(environ.get("MULTI_LANE_PAPER_GOVERNOR_PATH", DEFAULT_PAPER_GOVERNOR_PATH))
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        logger.warning(
+            "paper governor roster filter enabled but %s is missing; keeping paper specs",
+            path,
+        )
+        return specs
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "paper governor roster filter enabled but %s is invalid: %s; keeping paper specs",
+            path,
+            exc,
+        )
+        return specs
+    proposed = payload.get("proposed_roster")
+    if not isinstance(proposed, Mapping):
+        logger.warning(
+            "paper governor roster filter enabled but %s has no proposed_roster; "
+            "keeping paper specs",
+            path,
+        )
+        return specs
+    proposed_paper = proposed.get("paper_lanes")
+    allowed = _governor_paper_allowed_keys(proposed_paper)
+    if not allowed:
+        logger.warning(
+            "paper governor roster filter enabled but %s proposes no paper_lanes; "
+            "keeping paper specs",
+            path,
+        )
+        return specs
+
+    filtered: list[LaneSpec] = []
+    removed = 0
+    for spec in specs:
+        if spec.mode is not RunnerMode.PAPER or _paper_spec_allowed(spec, allowed):
+            filtered.append(spec)
+        else:
+            removed += 1
+    filtered_paper = [spec for spec in filtered if spec.mode is RunnerMode.PAPER]
+    existing_keys = {
+        spec.lane_id for spec in filtered_paper
+    } | {
+        _paper_signature(spec.strategy_id, spec.exchange, spec.symbol, spec.timeframe)
+        for spec in filtered_paper
+    }
+    added = 0
+    for spec in _governor_paper_specs(proposed_paper, environ):
+        keys = {
+            spec.lane_id,
+            _paper_signature(spec.strategy_id, spec.exchange, spec.symbol, spec.timeframe),
+        }
+        if existing_keys & keys:
+            continue
+        filtered.append(spec)
+        existing_keys.update(keys)
+        added += 1
+    if removed:
+        logger.info(
+            "paper governor roster filter removed %d non-roster PAPER lane(s)",
+            removed,
+        )
+    if added:
+        logger.info(
+            "paper governor roster filter added %d governor PAPER lane(s)",
+            added,
+        )
+    return _ensure_primary(filtered)
+
+
+def _governor_paper_allowed_keys(rows: object) -> set[str]:
+    if not isinstance(rows, list):
+        return set()
+    allowed: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        lane_id = str(row.get("lane_id") or row.get("trial_id") or "").strip()
+        if lane_id:
+            allowed.add(lane_id)
+        signature = _paper_signature(
+            str(row.get("strategy_id") or row.get("family") or ""),
+            str(row.get("exchange") or row.get("venue") or ""),
+            str(row.get("symbol") or ""),
+            str(row.get("timeframe") or ""),
+        )
+        if signature.strip("|"):
+            allowed.add(signature)
+    return allowed
+
+
+def _governor_paper_specs(
+    rows: object,
+    environ: Mapping[str, str],
+) -> list[LaneSpec]:
+    if not isinstance(rows, list):
+        return []
+    starting_equity = float(environ.get("MULTI_LANE_STARTING_EQUITY", "500"))
+    daily_loss_usd = float(environ.get("MULTI_LANE_DAILY_LOSS_USD", "10"))
+    out: list[LaneSpec] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        strategy_id = str(row.get("strategy_id") or row.get("family") or "").strip()
+        exchange = str(row.get("exchange") or row.get("venue") or "").strip()
+        symbol = str(row.get("symbol") or "").strip()
+        timeframe = str(row.get("timeframe") or environ.get("MULTI_LANE_TIMEFRAME", "1h"))
+        if not strategy_id or not exchange or not symbol:
+            continue
+        if exchange == DELTA_EXCHANGE:
+            symbol = _delta_india_symbol(symbol)
+        lane_id = str(row.get("lane_id") or row.get("trial_id") or "").strip()
+        if not lane_id:
+            lane_id = _lane_id(exchange, symbol, RunnerMode.PAPER, strategy_id)
+        params = (
+            dict(row.get("strategy_params"))
+            if isinstance(row.get("strategy_params"), Mapping)
+            else _default_params_for_strategy(strategy_id)
+        )
+        out.append(
+            LaneSpec(
+                lane_id=lane_id,
+                exchange=exchange,
+                symbol=symbol,
+                timeframe=timeframe,
+                starting_equity=starting_equity,
+                daily_loss_usd=daily_loss_usd,
+                is_primary=False,
+                strategy_id=strategy_id,
+                strategy_params=params,
+                mode=RunnerMode.PAPER,
+            )
+        )
+    return out
+
+
+def _paper_spec_allowed(spec: LaneSpec, allowed: set[str]) -> bool:
+    return spec.lane_id in allowed or _paper_signature(
+        spec.strategy_id,
+        spec.exchange,
+        spec.symbol,
+        spec.timeframe,
+    ) in allowed
+
+
+def _paper_signature(
+    strategy_id: str,
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+) -> str:
+    return "|".join(
+        [
+            str(strategy_id or "").strip().lower(),
+            str(exchange or "").strip().lower(),
+            str(symbol or "").split(":", 1)[0].strip().lower(),
+            str(timeframe or "").strip().lower(),
+        ]
+    )
+
+
+def _ensure_primary(specs: list[LaneSpec]) -> list[LaneSpec]:
+    if not specs:
+        return specs
+    if any(spec.is_primary for spec in specs):
+        return specs
+    primary_idx = next(
+        (idx for idx, spec in enumerate(specs) if spec.mode is RunnerMode.PAPER),
+        0,
+    )
+    return [
+        replace(spec, is_primary=True) if idx == primary_idx else spec
+        for idx, spec in enumerate(specs)
+    ]
+
+
 def _slug_symbol(symbol: str) -> str:
     return (
         symbol.lower()
@@ -1126,7 +1313,10 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     # mirrors are dropped too). Toggle off with MULTI_LANE_PRUNE_DEAD=0.
     if _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1"):
         base = [spec for spec in base if not _pruned_lane(spec)]
-    return dedupe_lane_specs(base + paper_observation_lanes(base, environ))
+    return _governor_paper_roster_filter(
+        dedupe_lane_specs(base + paper_observation_lanes(base, environ)),
+        environ,
+    )
 
 
 def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:

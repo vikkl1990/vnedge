@@ -1501,7 +1501,7 @@ def create_app(
                     "summary": {},
                     "rows": [],
                     "operator_answer": "paper roster drift report unavailable",
-                    "mode": "read_only_paper_roster_drift",
+                    "mode": "read_only_unified_lane_roster",
                     "can_trade": False,
                     "can_promote": False,
                 },

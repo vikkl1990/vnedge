@@ -1039,7 +1039,7 @@
           <div id="paperLaneGovernor"></div>
         </section>
         <section class="panel">
-          <div class="phead"><h2>Paper Roster Drift</h2><span class="meta" id="paperRosterDriftMeta">loading…</span></div>
+          <div class="phead"><h2>Unified Lane Roster</h2><span class="meta" id="paperRosterDriftMeta">loading…</span></div>
           <div id="paperRosterDrift"></div>
         </section>
         <section class="panel">
@@ -2055,31 +2055,58 @@
     if(st==="EXTRA_RUNNING_PAPER"||st==="DEMOTION_STILL_RUNNING"||st==="PROBATION_STILL_RUNNING"||st==="REPAIR_STILL_RUNNING")return"bad";
     return"fix";
   }
+  function shadowRosterCls(st){
+    st=String(st||"");
+    if(st==="SHADOW_OBSERVING")return"wait";
+    if(st==="SHADOW_TRIAL_WAITING_ADAPTER")return"fix";
+    if(st==="SHADOW_BLOCKED")return"bad";
+    return"fix";
+  }
+  function rosterCls(st){
+    return String(st||"").indexOf("SHADOW_")===0?shadowRosterCls(st):driftCls(st);
+  }
   function renderPaperRosterDrift(d){
     lifeData.rosterDrift=d; renderLifecycleConsole();
     var el=$("paperRosterDrift"),meta=$("paperRosterDriftMeta"); if(!el)return;
-    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[];
-    if(meta)meta.textContent=num(s.expected_paper_lanes)+" expected · "+num(s.actual_paper_lanes)+" actual · "+num(s.extra_paper_lanes)+" extra · "+num(s.missing_paper_lanes)+" missing";
-    if(!rows.length){el.innerHTML='<div class="note">paper roster drift report loading…</div>';return;}
+    var s=(d&&d.summary)||{},rows=(d&&d.lane_rows)||[];
+    if(!rows.length){
+      rows=[].concat((d&&d.rows)||[],((d&&d.shadow_rows)||[]).map(function(r){
+        r.roster_mode="shadow"; r.roster_state=r.shadow_state; return r;
+      }));
+    }
+    if(meta)meta.textContent=num(s.expected_paper_lanes)+" paper expected · "+num(s.actual_paper_lanes)+" recent · "+num(s.shadow_observation_lanes)+" shadow · "+num(s.shadow_blocked_lanes)+" blocked";
     var k='<div class="perfgrid">'+
       '<div class="perfk"><div class="l">Expected</div><div class="v" style="color:var(--long)">'+num(s.expected_paper_lanes)+'</div></div>'+
-      '<div class="perfk"><div class="l">Actual paper</div><div class="v" style="color:var(--info)">'+num(s.actual_paper_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Recent paper</div><div class="v" style="color:var(--info)">'+num(s.actual_paper_lanes)+'</div></div>'+
       '<div class="perfk"><div class="l">Extra</div><div class="v" style="color:var(--short)">'+num(s.extra_paper_lanes)+'</div></div>'+
       '<div class="perfk"><div class="l">Missing</div><div class="v" style="color:var(--warn)">'+num(s.missing_paper_lanes)+'</div></div>'+
       '<div class="perfk"><div class="l">Demotion still paper</div><div class="v" style="color:var(--short)">'+num(s.demotion_queue_running)+'</div></div>'+
+      '<div class="perfk"><div class="l">Historical ignored</div><div class="v">'+num(s.stale_paper_evidence_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Shadow observing</div><div class="v" style="color:var(--brand)">'+num(s.shadow_observation_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Shadow blocked</div><div class="v" style="color:var(--short)">'+num(s.shadow_blocked_lanes)+'</div></div>'+
+      '<div class="perfk"><div class="l">Shadow trials</div><div class="v" style="color:var(--warn)">'+num(s.shadow_trials_waiting_adapter)+'</div></div>'+
     '</div>';
-    var body=rows.slice(0,10).map(function(r){
-      var st=String(r.drift_state||"UNKNOWN"),cls=driftCls(st);
+    var body=rows.slice(0,14).map(function(r){
+      var mode=String(r.roster_mode||(r.shadow_state?"shadow":"paper")).toLowerCase();
+      var st=String(r.roster_state||r.drift_state||r.shadow_state||"UNKNOWN"),cls=rosterCls(st);
+      var modeTone=mode==="paper"?"ok":"wait";
+      var source=r.source||r.actual_source||r.expected_source||"";
+      var verdict=r.latest_judgment_verdict||r.source_verdict||r.runtime_state||"--";
       return '<div class="perfrow">'+
         '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
-        '<div><span class="actstate '+cls+'">'+esc(st.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(r.lane_id||r.signature||"")+'">'+esc(String(r.next_action||"").slice(0,58))+'</small></div>'+
-        '<div><b class="num">'+esc(String(r.actual_source||"--").replace(/_/g," "))+'</b><small>actual source</small></div>'+
-        '<div><b class="num">'+esc(String(r.expected_source||"--").replace(/_/g," "))+'</b><small>expected source</small></div>'+
-        '<div><b class="num">'+esc(String(r.runtime_state||"--").replace(/_/g," ").slice(0,22))+'</b><small>runtime state</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(st.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc(r.lane_id||r.signature||r.reason||"")+'">'+esc(String(r.next_action||"").slice(0,58))+'</small></div>'+
+        '<div><span class="actstate '+modeTone+'">'+esc(mode)+'</span><small>'+esc(mode==="paper"?"simulated fills":"observation only")+'</small></div>'+
+        '<div><b class="num">'+esc(String(verdict).replace(/_/g," ").slice(0,22))+'</b><small>evidence</small></div>'+
+        '<div><b class="num">'+esc(String(source||"--").replace(/_/g," ").slice(0,22))+'</b><small>source</small></div>'+
       '</div>';
     }).join('');
+    if(!rows.length){
+      el.innerHTML=k+'<div class="note">No active roster drift rows. Stale paper evidence is preserved as history, not counted as running paper.</div>'+
+        '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.roster_operator_answer)||"unified lane roster pending")+'</div>';
+      return;
+    }
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
-      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper roster drift pending")+'</div>';
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.roster_operator_answer)||"unified lane roster pending")+'</div>';
   }
   function docCls(st){
     st=String(st||"");

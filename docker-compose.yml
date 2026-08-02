@@ -111,6 +111,11 @@ services:
       MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED: "${MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED:-10}"
       MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS: "${MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS:-8}"
       MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR: "${MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR:-1.15}"
+      # Paper exposure is bounded by the paper-lane governor. Research/shadow
+      # lanes can keep exploring, but PAPER mode should only run the current
+      # proposed roster; stale probes remain as historical evidence.
+      MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY: "${MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY:-1}"
+      MULTI_LANE_PAPER_GOVERNOR_PATH: "${MULTI_LANE_PAPER_GOVERNOR_PATH:-research/live_research/paper_lane_governor_latest.json}"
       # Runtime control-plane guard: if research/live_research/shadow_lanes.json
       # changes after startup, exit deliberately so Docker reloads the exact
       # desired lane set. This prevents MISSING/STALE/ORPHAN drift.
@@ -829,8 +834,10 @@ services:
               "--governor", "research/live_research/paper_lane_governor_latest.json",
               "--scanner", "research/live_research/realtime_scanner_latest.json",
               "--activation", "research/live_research/paper_lane_activation_latest.json",
+              "--shadow-manifest", "research/live_research/shadow_lanes.json",
               "--out", "research/live_research/paper_roster_drift_latest.json",
               "--feed", "research/live_research/paper_roster_drift_feed.jsonl",
+              "--max-runtime-age-seconds", "${PAPER_ROSTER_DRIFT_MAX_RUNTIME_AGE_SECONDS:-10800}",
               "--print"]
     volumes:
       - ./research/live_research:/app/research/live_research

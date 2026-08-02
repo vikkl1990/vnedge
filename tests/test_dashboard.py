@@ -1152,9 +1152,14 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     }))
     paper_roster_drift = tmp_path / "paper_roster_drift.json"
     paper_roster_drift.write_text(json.dumps({
-        "mode": "read_only_paper_roster_drift",
+        "mode": "read_only_unified_lane_roster",
         "summary": {"extra_paper_lanes": 2, "missing_paper_lanes": 0},
         "rows": [{"drift_state": "EXTRA_RUNNING_PAPER", "lane_id": "extra"}],
+        "lane_rows": [{
+            "roster_mode": "paper",
+            "roster_state": "EXTRA_RUNNING_PAPER",
+            "lane_id": "extra",
+        }],
         "can_trade": False,
         "can_promote": False,
     }))
@@ -1295,7 +1300,8 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_governor_payload["can_promote"] is False
     paper_roster_payload = client.get("/paper-roster-drift?token=t3st-token").json()
     assert paper_roster_payload["summary"]["extra_paper_lanes"] == 2
-    assert paper_roster_payload["mode"] == "read_only_paper_roster_drift"
+    assert paper_roster_payload["mode"] == "read_only_unified_lane_roster"
+    assert paper_roster_payload["lane_rows"][0]["roster_mode"] == "paper"
     assert paper_roster_payload["can_trade"] is False
     assert paper_roster_payload["can_promote"] is False
     trade_profile_payload = client.get("/trade-profile-matrix?token=t3st-token").json()
