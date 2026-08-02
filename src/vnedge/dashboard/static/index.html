@@ -196,6 +196,11 @@
   .strat{display:flex;flex-direction:column;gap:1px;min-width:0}
   .strat b{font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .strat span{font-size:10.5px;color:var(--txt-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dfchip{display:inline-block;font-size:8.5px;line-height:1;letter-spacing:.08em;text-transform:uppercase;font-weight:900;padding:3px 5px;border-radius:5px;margin-right:5px;vertical-align:middle;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line)}
+  .dfchip.open{background:var(--long-soft);color:var(--long);border-color:rgba(53,214,160,.28)}
+  .dfchip.wait{background:var(--info-soft);color:var(--info);border-color:rgba(79,176,255,.28)}
+  .dfchip.block{background:rgba(255,201,77,.13);color:var(--warn);border-color:rgba(255,201,77,.26)}
+  .dfchip.flat{background:var(--short-soft);color:var(--short);border-color:rgba(255,92,122,.3)}
   .vchip{font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#0A0D12;width:max-content;font-family:var(--sans)}
   .side{font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 8px;border-radius:6px;width:max-content}
   .side.l{background:var(--long-soft);color:var(--long)} .side.s{background:var(--short-soft);color:var(--short)}
@@ -221,6 +226,18 @@
   /* signal tape */
   .tape{max-height:428px;overflow:hidden;position:relative}
   .tape:after{content:"";position:absolute;left:0;right:0;bottom:0;height:44px;background:linear-gradient(transparent,var(--bg-2));pointer-events:none}
+  .eventclock{padding:12px 14px 14px;display:flex;flex-direction:column;gap:8px}
+  .eventhero{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:linear-gradient(135deg,rgba(45,212,191,.10),rgba(7,11,17,.78));border:1px solid rgba(45,212,191,.24);border-radius:var(--r-sm);padding:11px 12px}
+  .eventhero .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-faint);font-weight:900}
+  .eventhero .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:2px;color:var(--txt)}
+  .eventhero .s{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+  .eventhero .timer{font-family:var(--mono);font-size:25px;font-weight:900;color:var(--brand)}
+  .eventrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .eventrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eventrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eventroute{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+  .eventroute .p{font-family:var(--mono);font-size:13px;font-weight:900}
+  .eventfine{font-size:10.5px;color:var(--txt-faint);line-height:1.45;border-top:1px solid var(--line);padding-top:9px}
   .sig{display:grid;grid-template-columns:46px 1fr auto;gap:9px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line);animation:slidein .5s ease}
   @keyframes slidein{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:none}}
   .sig .t{font-family:var(--mono);font-size:10.5px;color:var(--txt-faint)}
@@ -756,6 +773,16 @@
       </section>
 
       <section class="panel">
+        <div class="phead">
+          <h2>Delta 5m Event Clock</h2>
+          <span class="meta" id="deltaEventMeta">loading…</span>
+        </div>
+        <div id="deltaEventClock" class="eventclock">
+          <div class="note">Delta 5m timer loading…</div>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="phead"><h2>Risk &amp; Health</h2><span class="tag">gateway</span></div>
         <div class="risk">
           <div class="meter">
@@ -1013,6 +1040,10 @@
         <section class="panel">
           <div class="phead"><h2>Paper Performance Ledger</h2><span class="meta" id="paperPerfMeta">loading…</span></div>
           <div id="paperPerformance"></div>
+        </section>
+        <section class="panel">
+          <div class="phead"><h2>Trade Analyzer OS</h2><span class="meta" id="tradeAnalyzerMeta">loading…</span></div>
+          <div id="tradeAnalyzerOS"></div>
         </section>
         <section class="panel">
           <div class="phead"><h2>Paper Trade Entry Autopsy</h2><span class="meta" id="paperEntryAutopsyMeta">loading…</span></div>
@@ -1336,6 +1367,30 @@
     if(v==="NEGATIVE_AFTER_COST")return["wall","fee-walled"];
     return null;
   }
+  function factoryMinute(m){
+    m=num(m);
+    if(!fin(m)||m<0)return"--";
+    m=Math.max(0,Math.min(1439,Math.round(m)));
+    return pad2(Math.floor(m/60))+":"+pad2(m%60);
+  }
+  function dailyFactoryView(df){
+    if(!df||typeof df!=="object")return null;
+    if(!df.enabled)return{label:"day off",cls:"wait",detail:"daily factory disabled"};
+    var reason=String(df.entry_block_reason||"");
+    var entries=num(df.entries_today),max=num(df.max_entries_per_day);
+    var used=max>0?(entries+"/"+max+" entries"):(entries+" entries");
+    if(df.force_flatten_due)return{label:"force flat",cls:"flat",detail:"forced flat from "+factoryMinute(df.force_flatten_minute)};
+    if(reason.indexOf("target_hit")>=0)return{label:"target hit",cls:"block",detail:reason.replace(/^daily_factory_target_hit:\s*/,"")};
+    if(reason.indexOf("max_entries")>=0)return{label:"capped",cls:"block",detail:used+" used"};
+    if(reason.indexOf("entry_cutoff")>=0)return{label:"closed",cls:"flat",detail:"entry cutoff "+factoryMinute(df.entry_cutoff_minute)};
+    if(reason.indexOf("flatten_window")>=0)return{label:"flat window",cls:"flat",detail:"forced flat from "+factoryMinute(df.force_flatten_minute)};
+    return{label:"day open",cls:"open",detail:used+" · cutoff "+factoryMinute(df.entry_cutoff_minute)};
+  }
+  function dailyFactoryChip(df){
+    var d=dailyFactoryView(df);
+    if(!d)return"";
+    return '<span class="dfchip '+d.cls+'" title="'+safe(d.detail)+'">'+safe(d.label)+'</span>';
+  }
   function renderTickerTape(groups){
     var el=$("tickerTape"); if(!el)return;
     var rows=(groups||[]).slice(0,12);
@@ -1370,6 +1425,45 @@
         (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
         '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+'</div></div>'+tag+'</div>';
     }).join('');
+  }
+  function eventRouteCls(route,state){
+    route=String(route||""); state=String(state||"");
+    if(route==="TAKER_NOW"||route==="MAKER_THEN_TAKER"||route==="MAKER_ONLY")return"ok";
+    if(state==="DATA_STALE"||state==="DATA_MISSING")return"bad";
+    if(state==="EDGE_TOO_SMALL"||state==="WAITING_FEE_WALL")return"warn";
+    return"wait";
+  }
+  function pct(x){ return x==null?"--":(num(x)*100).toFixed(1)+"%"; }
+  function bps(x){ return x==null?"--":num(x).toFixed(1)+" bps"; }
+  function renderDeltaEventClock(d){
+    var el=$("deltaEventClock"),meta=$("deltaEventMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},w=(d&&d.event_window)||{},rows=(d&&d.rows)||[];
+    var ready=num(s.ready_now), secs=num(s.seconds_to_next_decision), close=num(s.seconds_to_close);
+    if(meta)meta.textContent=ready+" ready · next "+(secs?secs+"s":"now");
+    if(!rows.length){
+      el.innerHTML='<div class="note">Delta 5m timer unavailable. Waiting for the publisher artifact.</div>';
+      return;
+    }
+    var best=rows[0]||{}, route=String(best.route||"WAIT"), state=String(best.execution_window_state||"WAITING");
+    var cls=eventRouteCls(route,state), timer=String(w.decision_window_state||"").toUpperCase()==="OPEN" ? close+"s" : secs+"s";
+    var hero='<div class="eventhero"><div>'+
+      '<div class="k">best Delta 5m prep</div>'+
+      '<div class="v">'+safe(symShort(best.symbol))+' '+safe(best.direction||"--")+'</div>'+
+      '<div class="s">'+safe(route.replace(/_/g," ").toLowerCase())+' · p '+pct(best.selected_probability)+' · exp '+bps(best.expected_move_bps)+'</div>'+
+      '</div><div style="text-align:right"><div class="timer">'+safe(timer)+'</div>'+
+      '<span class="actstate '+cls+'">'+safe(state.toLowerCase().replace(/_/g," "))+'</span></div></div>';
+    var body=rows.slice(0,4).map(function(r){
+      var rcls=eventRouteCls(r.route,r.execution_window_state);
+      var net=r.route==="TAKER_NOW"?r.expected_net_taker_bps:r.expected_net_maker_bps;
+      return '<div class="eventrow">'+
+        '<div><b>'+safe(symShort(r.symbol))+' · '+safe(r.direction||"--")+'</b>'+
+        '<small>'+safe(String(r.why||"").slice(0,92))+'</small></div>'+
+        '<div class="eventroute"><span class="actstate '+rcls+'">'+safe(String(r.route||"WAIT").toLowerCase().replace(/_/g," "))+'</span>'+
+        '<span class="p '+(num(net)>=0?"up":"dn")+'">'+bps(net)+'</span></div></div>';
+    }).join('');
+    var fine='maker '+bps((d.fee_profile||{}).maker_first_cost_bps)+' · taker '+bps((d.fee_profile||{}).taker_round_trip_cost_bps)+
+      ' · paper '+moneyAbs((best.paper_margin_usd||((d.config||{}).paper_margin_usd)))+' margin at '+num(best.paper_leverage||((d.config||{}).paper_leverage)).toFixed(0)+'x · live locked';
+    el.innerHTML=hero+body+'<div class="eventfine">'+safe(fine)+'</div>';
   }
 
   /* ---- main render from /state snapshot ---- */
@@ -1423,7 +1517,7 @@
       var isVel=String(l.lane_id||"").indexOf("velocity_")===0;
       var velTag=isVel?'<span style="font-size:8px;font-weight:800;letter-spacing:.04em;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line);padding:1px 4px;border-radius:4px;margin-right:5px;vertical-align:middle">VEL</span>':'';
       return '<div class="brow"><span class="st '+st+'"></span>'+
-        '<div class="strat" title="'+(isVel?"velocity — ML training only, never a promotion candidate · ":"")+stratShort(l.strategy_id)+'">'+velTag+'<b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
+        '<div class="strat" title="'+(isVel?"velocity — ML training only, never a promotion candidate · ":"")+stratShort(l.strategy_id)+'">'+velTag+'<b>'+stratShort(l.strategy_id)+'</b><span>'+dailyFactoryChip(l.daily_factory)+safe(String(why).slice(0,44))+'</span></div>'+
         '<span class="vchip" style="background:'+v.col+'">'+v.lab+'</span>'+
         '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+(l.timeframe?' <span style="color:var(--txt-faint)">'+l.timeframe+'</span>':'')+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
         '<div class="pnlbar"><span class="v '+pc+'">'+(p===0?"—":(p>0?"+":"")+"$"+p.toFixed(2))+'</span><div class="track">'+bar+'</div></div>'+
@@ -1798,6 +1892,49 @@
     }).join('');
     el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
       '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"paper performance pending")+'</div>';
+  }
+  function tradeAnalyzerCls(st){
+    st=String(st||"");
+    if(st==="HEALTHY_CAPTURE")return"ok";
+    if(st==="NO_CLOSED_TRADES"||st==="OBSERVE_MORE")return"wait";
+    if(st==="ENTRY_CONTEXT_GAP"||st==="EXIT_METADATA_GAP"||st==="OVERNIGHT_HOLD_DRIFT")return"fix";
+    if(st==="STALE_OR_DRIFT_ENTRY"||st==="GIVEBACK_DOMINATED"||st==="STOP_DOMINATED"||st==="FEE_WALL_DOMINATED"||st==="WEAK_FOLLOW_THROUGH")return"bad";
+    return"fix";
+  }
+  function renderTradeAnalyzerOS(d){
+    lifeData.tradeAnalyzer=d;
+    var el=$("tradeAnalyzerOS"),meta=$("tradeAnalyzerMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},rows=(d&&d.rows)||[],recent=(d&&d.recent_trades)||[];
+    if(meta)meta.textContent=num(s.closed_trades)+" closed · "+usd(s.net_pnl_usd)+" net · "+num(s.giveback_dominated)+" giveback · "+num(s.healthy_capture)+" healthy";
+    if(!rows.length&&!recent.length){el.innerHTML='<div class="note">trade analyzer OS loading…</div>';return;}
+    var k='<div class="perfgrid">'+
+      '<div class="perfk"><div class="l">Giveback lanes</div><div class="v" style="color:var(--short)">'+num(s.giveback_dominated)+'</div></div>'+
+      '<div class="perfk"><div class="l">Entry gaps</div><div class="v" style="color:var(--warn)">'+num(s.entry_context_gap)+'</div></div>'+
+      '<div class="perfk"><div class="l">Daily hold drift</div><div class="v" style="color:var(--warn)">'+num(s.overnight_hold_drift)+'</div></div>'+
+      '<div class="perfk"><div class="l">Fee wall</div><div class="v" style="color:var(--warn)">'+num(s.fee_wall_dominated)+'</div></div>'+
+      '<div class="perfk"><div class="l">Healthy capture</div><div class="v" style="color:var(--long)">'+num(s.healthy_capture)+'</div></div>'+
+    '</div>';
+    var body=rows.slice(0,8).map(function(r){
+      var diag=String(r.primary_diagnosis||"UNKNOWN"),cls=tradeAnalyzerCls(diag),net=num(r.net_pnl_usd);
+      var avg=r.avg_net_bps==null?"--":num(r.avg_net_bps).toFixed(1)+"bps";
+      var mfe=r.avg_mfe_bps==null?"MFE --":num(r.avg_mfe_bps).toFixed(1)+"bps MFE";
+      var gb=r.avg_giveback_bps==null?"giveback --":num(r.avg_giveback_bps).toFixed(1)+"bps giveback";
+      var counts=num(r.giveback_trades)+" giveback · "+num(r.fee_wall_trades)+" fee · "+num(r.stop_trades)+" stop";
+      return '<div class="perfrow">'+
+        '<div><b>'+esc(stratShort(r.strategy_id||r.lane_id))+'</b><small>'+esc(symShort(r.symbol))+' · '+esc(ven(r.exchange).lab)+' · '+esc(r.timeframe||"--")+'</small></div>'+
+        '<div><span class="actstate '+cls+'">'+esc(diag.toLowerCase().replace(/_/g," "))+'</span><small title="'+esc((r.blockers||[]).join(" · "))+'">'+esc(String(r.next_action||"").slice(0,64))+'</small></div>'+
+        '<div><b class="num '+(net<0?"dn":"up")+'">'+usd(net)+'</b><small>fees $'+num(r.fees_usd).toFixed(2)+'</small></div>'+
+        '<div><b class="num">'+avg+'</b><small>'+esc(mfe)+' · '+esc(gb)+'</small></div>'+
+        '<div><b class="num">'+num(r.closed_trades)+' closed</b><small>'+esc(counts)+'</small></div>'+
+      '</div>';
+    }).join('');
+    var cards=recent.slice(0,5).map(function(t){
+      var diag=String(t.trade_diagnosis||"UNKNOWN"),net=num(t.net_usd),cap=t.captured_bps==null?"--":num(t.captured_bps).toFixed(1)+"bps";
+      return '<div class="gaterow2"><span class="gk">'+esc(symShort(t.symbol))+' · '+esc(t.side||"--")+' · '+esc(diag.toLowerCase().replace(/_/g," "))+'</span><span class="gv '+(net<0?"bad":"ok")+'">'+usd(net)+' · '+cap+'</span></div>';
+    }).join("");
+    el.innerHTML=k+'<div class="perfrows">'+body+'</div>'+
+      (cards?'<div class="fblocker" style="border-top:1px solid var(--line);padding-top:10px"><b>Recent closed trades</b>'+cards+'</div>':'')+
+      '<div class="fblocker"><b>Answer:</b> '+esc((d&&d.operator_answer)||"trade analyzer pending")+'</div>';
   }
   function entryAutopsyCls(st){
     st=String(st||"");
@@ -2434,13 +2571,14 @@
       var ml=mlByStrat[l.strategy_id]; if(ml==null)ml=mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")];
       var gate=tc.state||(String(l.mode||"").indexOf("shadow")>=0?"SHADOW_ONLY":"PAPER_COMPATIBLE");
       var gcls=(gate.indexOf("PAPER_COMPAT")>=0)?"maker":(gate.indexOf("PROBATION")>=0||gate.indexOf("BLOCK")>=0)?"wall":"pass";
+      var factory=dailyFactoryView(l.daily_factory);
       return "<div class='plrow' data-lane='"+jEsc(encodeURIComponent(l.lane_id||""))+"' style='cursor:pointer'>"+
         "<div class='plcell'>"+(isVel?"<span class='veltag'>VEL</span>":"")+"<b style='display:inline'>"+jEsc(short)+"</b><small>"+jEsc(symShort(l.symbol))+" · "+jEsc(l.timeframe||"?")+" · "+jEsc(ven(l.exchange).lab)+"</small></div>"+
         "<div class='plcell'><span class='plpill "+st[1]+"'>"+st[0]+"</span><small>"+(l.last_fired_ts?"fired "+agoShort(l.last_fired_ts):"no fire yet")+" · "+num(f.live_evals||f.evals)+" evals</small></div>"+
         "<div class='plcell'><b class='num "+vc+"'>"+(vt?usd(vn):"—")+"</b><small>"+vt+" shadow trades</small></div>"+
         "<div class='plcell'>"+(sc?("<span class='route "+(rb>=0?"pass":"wall")+"'>"+(rb>=0?"+":"")+rb.toFixed(0)+" bps</span><small>"+jEsc(String(sc.verdict||"").toLowerCase().replace(/_/g," "))+" · "+rs.toLocaleString()+" smpl</small>"):"<b style='color:var(--txt-faint)'>—</b><small>not on scorecard</small>")+"</div>"+
         "<div class='plcell'><b class='num'>"+(ml!=null?ml:"—")+"</b><small>meta-label"+((ml!=null&&ml!==1)?"s":"")+"</small></div>"+
-        "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span></div>"+
+        "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span><small>"+(factory?jEsc(factory.label+" · "+factory.detail):"daily factory not published")+"</small></div>"+
       "</div>";
     }).join("");
   }
@@ -2457,10 +2595,12 @@
     var sc=l?scoreByStrat[stratShort(l.strategy_id)]:null;
     var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
     var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
+    var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
       "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Daily factory</div><div class='v' style='font-size:14px'>"+jEsc(factory?factory.label:'not published')+"</div><div class='s'>"+jEsc(factory?factory.detail:'waiting for lane payload')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>ML labels</div><div class='v num'>"+(ml!=null?ml:'—')+"</div><div class='s'>fed to meta-labeler</div></div>"+
     "</div>";
     var el=$("pipelineDetail"); if(el)el.innerHTML=head+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";
@@ -2684,6 +2824,7 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function pollDeltaEventClock(){ poll("/delta-5m-event-clock", renderDeltaEventClock); }
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
   function pollAgenticResearchOS(){ poll("/agentic-research-os", renderAgenticResearchOS); }
   function renderPreLive(d){
@@ -2712,6 +2853,7 @@
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }
   function pollPaperPerformance(){ poll("/paper-lane-performance", renderPaperPerformance); }
+  function pollTradeAnalyzerOS(){ poll("/trade-analyzer-os", renderTradeAnalyzerOS); }
   function pollPaperTradeEntryAutopsy(){ poll("/paper-trade-entry-autopsy", renderPaperTradeEntryAutopsy); }
   function pollPaperTradeExitAutopsy(){ poll("/paper-trade-exit-autopsy", renderPaperTradeExitAutopsy); }
   function pollMakerQuoteLifecycle(){ poll("/maker-quote-lifecycle", renderMakerQuoteLifecycle); }
@@ -2878,8 +3020,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

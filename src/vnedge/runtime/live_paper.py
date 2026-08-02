@@ -44,6 +44,11 @@ from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
+from vnedge.runtime.daily_factory import (
+    entry_block_reason,
+    session_day,
+    should_force_flatten,
+)
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_outcomes import (
@@ -222,6 +227,9 @@ class LivePaperSession:
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
+        self._factory_day = session_day(self._started_at, self.config.daily_factory)
+        self._factory_entries_today = 0
+        self._factory_flatten_sent = False
 
     # --- Internals ---------------------------------------------------------------
     def _sync_quote(self) -> bool:
@@ -326,7 +334,51 @@ class LivePaperSession:
             "last_eval": self.last_eval,
             "trial_id": (self.trial_meta or {}).get("trial_id"),
             "journal_path": str(self.journal.path),
+            "daily_factory": self._daily_factory_payload(now),
         })
+
+    def _roll_daily_factory(self, clock: datetime) -> None:
+        if not self.config.daily_factory.enabled:
+            return
+        day = session_day(clock, self.config.daily_factory)
+        if day == self._factory_day:
+            return
+        self._factory_day = day
+        self._factory_entries_today = 0
+        self._factory_flatten_sent = False
+        self.journal.append("daily_factory_day_started", {
+            "day": str(day),
+            "timezone": self.config.daily_factory.session_timezone,
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "mode": self.config.mode.value,
+        })
+
+    def _daily_factory_payload(self, clock: datetime) -> dict:
+        cfg = self.config.daily_factory
+        payload = {
+            "enabled": cfg.enabled,
+            "timezone": cfg.session_timezone,
+            "entries_today": self._factory_entries_today,
+            "max_entries_per_day": cfg.max_entries_per_day,
+            "entry_cutoff_minute": cfg.entry_cutoff_minute,
+            "force_flatten_minute": cfg.force_flatten_minute,
+            "daily_profit_target_usd": cfg.daily_profit_target_usd,
+            "day": str(session_day(clock, cfg)),
+            "flatten_sent": self._factory_flatten_sent,
+        }
+        payload["entry_block_reason"] = self._daily_factory_entry_block_reason(clock)
+        payload["force_flatten_due"] = should_force_flatten(clock, cfg)
+        return payload
+
+    def _daily_factory_entry_block_reason(self, clock: datetime) -> str | None:
+        self._roll_daily_factory(clock)
+        return entry_block_reason(
+            now=clock,
+            config=self.config.daily_factory,
+            entries_today=self._factory_entries_today,
+            daily_pnl_usd=self.tracker.account_state().daily_pnl_usd,
+        )
 
     def _new_plan(self, sig: SignalIntent, entry_bar_ts) -> _LivePlan:
         return _LivePlan(
@@ -442,6 +494,7 @@ class LivePaperSession:
             })
             if decision.approved:
                 self.shadow_approved += 1
+                self._factory_entries_today += 1
                 if self.shadow_outcomes is not None:
                     self.shadow_outcomes.track(
                         intent_key=key, side=sig.side,
@@ -474,6 +527,7 @@ class LivePaperSession:
             self._log_trade_event("risk_rejected", f"{sig.side} — gateway rejected entry"[:140], now)
         else:
             self.orders_submitted += 1
+            self._factory_entries_today += 1
             self._log_trade_event(
                 "order_submitted",
                 f"{sig.side} {intent.quantity:g} ({order.state.value}) — {sig.reason}"[:140],
@@ -526,6 +580,88 @@ class LivePaperSession:
                 f"{pending.plan.signal.side} no touch in {pending.bars_waited} bars — skipped"[:140],
                 now,
             )
+
+    async def _cancel_pending_entry_for_daily_factory(
+        self, clock: datetime, now: datetime
+    ) -> None:
+        if self._pending_entry is None:
+            return
+        cfg = self.config.daily_factory
+        if not cfg.enabled or not cfg.cancel_resting_entries_at_cutoff:
+            return
+        if self._daily_factory_entry_block_reason(clock) is None:
+            return
+        pending = self._pending_entry
+        await self.om.cancel_order(
+            pending.client_order_id,
+            reason="daily factory cutoff — resting entry cancelled",
+        )
+        self._pending_entry = None
+        self.journal.append("daily_factory_pending_entry_cancelled", {
+            "client_order_id": pending.client_order_id,
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "clock": clock.isoformat(),
+        })
+        self._log_trade_event(
+            "daily_factory_cancel",
+            f"{pending.plan.signal.side} maker entry cancelled at daily cutoff"[:140],
+            now,
+        )
+
+    async def _enforce_daily_factory_flatten(
+        self, clock: datetime, now: datetime
+    ) -> None:
+        cfg = self.config.daily_factory
+        if not should_force_flatten(clock, cfg) or self._factory_flatten_sent:
+            return
+        await self._cancel_pending_entry_for_daily_factory(clock, now)
+        if not self.exchange.get_positions():
+            self._factory_flatten_sent = True
+            return
+        # One deterministic exit key per session day. If a prior submission is
+        # unresolved, _submit_exit preserves the plan and avoids double-submit.
+        key_ts = int(pd.Timestamp(clock.date()).value)
+        pre_plan = self._plan
+        pre_state = pre_plan.exit_state if pre_plan is not None else None
+        pre_sig = pre_plan.signal if pre_plan is not None else None
+        order = await self._submit_exit(
+            "daily_factory_close",
+            key_ts,
+            now,
+            quantity=None,
+            final=True,
+        )
+        if order is None:
+            return
+        if order.state in _EXIT_ACCEPTED_STATES:
+            self._factory_flatten_sent = True
+        self.journal.append("live_paper_exit", {
+            "reason": "daily_factory_close",
+            "state": order.state.value,
+            "client_order_id": order.client_order_id,
+            "take_profit_levels": list(pre_sig.take_profit_levels) if pre_sig else [],
+            "tp_number": 0,
+            "tp_reached": pre_state.tp_reached() if pre_state is not None else 0,
+            "mfe_price": pre_state.mfe_price if pre_state is not None else None,
+            "exit_price": None,
+            "quantity": None,
+            "final": True,
+            "active_stop_price": pre_state.current_stop if pre_state is not None else None,
+            "breakeven_armed": pre_state.breakeven_armed if pre_state is not None else False,
+        })
+        self.journal.append("daily_factory_flatten", {
+            "state": order.state.value,
+            "client_order_id": order.client_order_id,
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "clock": clock.isoformat(),
+        })
+        self._log_trade_event(
+            "daily_factory_close",
+            f"force-flat before session close ({order.state.value})"[:140],
+            now,
+        )
 
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
@@ -1323,6 +1459,9 @@ class LivePaperSession:
                 # evaluated against the current quote on every idle tick
                 idle_now = datetime.now(UTC)
                 await self._check_tick_stop(idle_now)
+                if self.feed.quote is not None:
+                    self._sync_quote()
+                    await self._enforce_daily_factory_flatten(idle_now, idle_now)
                 self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
                 self._publish_snapshot()  # keep the dashboard honest while idle
                 continue
@@ -1336,16 +1475,26 @@ class LivePaperSession:
             self._maybe_daily_report(now)
 
             bar = self.candles.iloc[-1]
+            bar_clock = pd.Timestamp(bar["timestamp"]).to_pydatetime()
             await self._manage_exit(bar, now)
+            await self._enforce_daily_factory_flatten(bar_clock, now)
             await self._manage_pending_entry(now)
+            await self._cancel_pending_entry_for_daily_factory(bar_clock, now)
             self._guard_orphaned_position()
 
             if self._plan is None and self._pending_entry is None \
                     and len(self.candles) > prepared_warmup:
                 df = self.strategy.prepare(self.candles)
                 idx = len(df) - 1
+                factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
-                if not allowed:
+                if factory_block is not None:
+                    sig = None
+                    self._record_eval(df, idx, sig, skip_reason=factory_block)
+                    self._log_trade_event(
+                        "daily_factory_blocked", factory_block[:140], now
+                    )
+                elif not allowed:
                     sig = None
                     self._record_eval(df, idx, sig, skip_reason=block_reason)
                     if not self._protection_block_logged:

@@ -70,6 +70,7 @@ from vnedge.strategy.trend_retest import TrendRetest
 from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +270,7 @@ class MultiLaneProvider:
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
+                "daily_factory": self._lanes[lid].get("session", {}).get("daily_factory"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),
             }
@@ -651,6 +653,68 @@ def _lane_risk_config(spec: LaneSpec, environ: Mapping[str, str] = os.environ) -
     return RiskConfig(max_daily_loss_usd=spec.daily_loss_usd, max_daily_loss_pct=2.0)
 
 
+def _env_bool(environ: Mapping[str, str], key: str, default: bool = False) -> bool:
+    raw = environ.get(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _lane_daily_factory_config(
+    spec: LaneSpec, environ: Mapping[str, str] = os.environ
+) -> DailySignalFactoryConfig:
+    """Daily signal-factory policy for multi-lane paper/shadow.
+
+    Global env keys apply to every lane; strategy-specific keys use the
+    normalized strategy id, e.g.
+    ``MULTI_LANE_DAILY_FACTORY_DAILY_SCALPER_PACK_V1_ENABLED=1``.
+    """
+    suffix = "".join(ch if ch.isalnum() else "_" for ch in spec.strategy_id.upper())
+
+    def pick(name: str, default: str | None = None) -> str | None:
+        specific = environ.get(f"MULTI_LANE_DAILY_FACTORY_{suffix}_{name}")
+        if specific is not None:
+            return specific
+        return environ.get(f"MULTI_LANE_DAILY_FACTORY_{name}", default)
+
+    def pick_bool(name: str, default: bool) -> bool:
+        raw = pick(name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+    def pick_int(name: str, default: int) -> int:
+        raw = pick(name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        try:
+            return int(float(str(raw).strip()))
+        except ValueError:
+            return default
+
+    def pick_float(name: str, default: float) -> float:
+        raw = pick(name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        try:
+            return float(str(raw).strip())
+        except ValueError:
+            return default
+
+    enabled_default = _env_bool(environ, "MULTI_LANE_DAILY_FACTORY_ENABLED", False)
+    timezone = str(pick("TIMEZONE", "UTC") or "UTC")
+    return DailySignalFactoryConfig(
+        enabled=pick_bool("ENABLED", enabled_default),
+        session_timezone=timezone,
+        entry_cutoff_minute=pick_int("ENTRY_CUTOFF_MINUTE", 22 * 60 + 30),
+        force_flatten_minute=pick_int("FORCE_FLATTEN_MINUTE", 23 * 60 + 55),
+        max_entries_per_day=pick_int("MAX_ENTRIES_PER_DAY", 3),
+        daily_profit_target_usd=pick_float("DAILY_PROFIT_TARGET_USD", 0.0),
+        cancel_resting_entries_at_cutoff=pick_bool("CANCEL_RESTING_ENTRIES", True),
+        flatten_open_positions=pick_bool("FLATTEN_OPEN_POSITIONS", True),
+    )
+
+
 _TF_MS = {
     "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
     "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000, "1d": 86_400_000,
@@ -825,10 +889,12 @@ async def build_lane(
     # competition), and the last lane to stop tears the real feed down.
     feed = acquire_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = _lane_risk_config(spec)
+    daily_factory = _lane_daily_factory_config(spec)
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk,
-                          limits=venue_symbol_limits(spec.exchange, spec.symbol))
+                          limits=venue_symbol_limits(spec.exchange, spec.symbol),
+                          daily_factory=daily_factory)
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path
     )
@@ -851,7 +917,8 @@ async def build_lane(
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
-                    "promotion_source": spec.exchange},
+                    "promotion_source": spec.exchange,
+                    "daily_factory": daily_factory.model_dump()},
     )
     # Expectations make a moved/edited store fail closed instead of injecting
     # a wrong-symbol position or absurd balance into the lane.

@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from vnedge.backtest.backtester import BacktestConfig, run_backtest
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.data.schemas import normalize_candles, normalize_funding
 
@@ -17,6 +18,24 @@ def make_candles(bars: list[tuple[float, float, float, float]]) -> pd.DataFrame:
     """bars: list of (open, high, low, close); hourly, volume 10."""
     raw = [
         [BASE + i * HOUR, o, h, low, c, 10.0] for i, (o, h, low, c) in enumerate(bars)
+    ]
+    return normalize_candles(raw)
+
+
+def make_minute_candles(
+    start: str, bars: list[tuple[float, float, float, float]], *, step_minutes: int = 5
+) -> pd.DataFrame:
+    base = pd.Timestamp(start, tz="UTC")
+    raw = [
+        [
+            int((base + pd.Timedelta(minutes=i * step_minutes)).timestamp() * 1000),
+            o,
+            h,
+            low,
+            c,
+            10.0,
+        ]
+        for i, (o, h, low, c) in enumerate(bars)
     ]
     return normalize_candles(raw)
 
@@ -227,3 +246,44 @@ def test_unvalidated_candles_rejected():
 def test_stopless_intent_is_unrepresentable():
     with pytest.raises(ValueError, match="stop-less"):
         SignalIntent(side="long", stop_price=0.0)
+
+
+def test_daily_factory_blocks_entries_after_cutoff():
+    candles = make_candles([FLAT] * 10)
+    strategy = StubStrategy(at_index=4, intent=LONG_INTENT)
+    config = BacktestConfig(
+        daily_factory=DailySignalFactoryConfig(
+            enabled=True,
+            entry_cutoff_minute=0,
+            force_flatten_minute=1439,
+        )
+    )
+
+    result = run_backtest(candles, None, strategy, config)
+
+    assert result.trades == ()
+    assert result.factory_blocked
+    assert result.factory_blocked[0][1].startswith("daily_factory_entry_cutoff")
+
+
+def test_daily_factory_force_closes_open_position_before_session_end():
+    candles = make_minute_candles(
+        "2026-08-02T20:00:00Z",
+        [FLAT] * 8,
+        step_minutes=5,
+    )
+    strategy = StubStrategy(at_index=4, intent=LONG_INTENT)
+    config = BacktestConfig(
+        max_holding_bars=100,
+        daily_factory=DailySignalFactoryConfig(
+            enabled=True,
+            entry_cutoff_minute=20 * 60 + 29,
+            force_flatten_minute=20 * 60 + 30,
+        ),
+    )
+
+    result = run_backtest(candles, None, strategy, config)
+
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_reason == "daily_factory_close"
+    assert result.trades[0].entry_ts.date() == result.trades[0].exit_ts.date()

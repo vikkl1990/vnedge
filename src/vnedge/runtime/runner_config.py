@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.position_sizer import SymbolLimits
 from vnedge.risk.protections import ProtectionConfig
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 
 
 class RunnerMode(str, Enum):
@@ -45,6 +46,13 @@ class RunnerConfig(BaseModel):
     # requires pre-registration (docs/PROTECTIONS.md). Exits are never
     # affected — the state machine has no exit-blocking path at all.
     protections: ProtectionConfig = Field(default_factory=ProtectionConfig)
+    # Daily signal-factory discipline. Default OFF so existing judged trials
+    # keep their exact behavior; enable per lane/profile when the operating
+    # contract is intraday-only: no late entries, force-flat before session
+    # close, and stop after the daily target is banked.
+    daily_factory: DailySignalFactoryConfig = Field(
+        default_factory=DailySignalFactoryConfig
+    )
     # Tick-granular STOP monitoring: between bar closes, the idle loop checks
     # the live top-of-book against the open plan's stop and exits reduce-only
     # on breach. STOPS ONLY — a stop is capital protection, so it gets the

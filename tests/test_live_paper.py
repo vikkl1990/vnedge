@@ -15,6 +15,7 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
@@ -111,12 +112,28 @@ def live_rows(start=5, n=3, low=99.5, high=100.5):
     return [[BASE + (start + i) * MIN, 100.0, high, low, 100.0, 5.0] for i in range(n)]
 
 
+def timed_rows(start: str, offsets: tuple[int, ...], low=99.5, high=100.5):
+    base = pd.Timestamp(start, tz="UTC")
+    return [
+        [
+            int((base + pd.Timedelta(minutes=offset)).timestamp() * 1000),
+            100.0,
+            high,
+            low,
+            100.0,
+            5.0,
+        ]
+        for offset in offsets
+    ]
+
+
 def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
                   tick_stops_enabled=True, post_exit_cooldown_bars=1,
-                  trial_meta=None):
+                  trial_meta=None, daily_factory=None):
     config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
                           tick_stops_enabled=tick_stops_enabled,
-                          post_exit_cooldown_bars=post_exit_cooldown_bars)
+                          post_exit_cooldown_bars=post_exit_cooldown_bars,
+                          daily_factory=daily_factory or DailySignalFactoryConfig())
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
@@ -248,6 +265,53 @@ async def test_non_forward_candles_dropped(tmp_path):
     report = await session.run(max_bars=1)
     assert session.dropped_candles == 1
     assert report.bars_processed == 1  # only the valid candle counted
+
+
+async def test_daily_factory_entry_cutoff_blocks_live_paper_entries(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        daily_factory=DailySignalFactoryConfig(
+            enabled=True,
+            entry_cutoff_minute=0,
+            force_flatten_minute=1439,
+        ),
+    )
+
+    report = await session.run(max_bars=1)
+
+    assert report.signals_generated == 0
+    assert report.orders_submitted == 0
+    assert exchange.get_positions() == []
+    evals = [r["payload"] for r in session.journal.read_all() if r["kind"] == "lane_eval"]
+    assert evals[-1]["skip_reason"].startswith("daily_factory_entry_cutoff")
+
+
+async def test_daily_factory_force_closes_live_paper_position(tmp_path):
+    feed = FakeFeed(timed_rows("2026-08-02T20:00:00Z", (0, 30)))
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        strategy=LongOnce(),
+        daily_factory=DailySignalFactoryConfig(
+            enabled=True,
+            entry_cutoff_minute=20 * 60 + 15,
+            force_flatten_minute=20 * 60 + 30,
+        ),
+    )
+
+    report = await session.run(max_bars=2)
+
+    assert report.orders_submitted == 2
+    assert report.fills == 2
+    assert exchange.get_positions() == []
+    exits = [
+        r["payload"]
+        for r in session.journal.read_all()
+        if r["kind"] == "live_paper_exit"
+    ]
+    assert exits[-1]["reason"] == "daily_factory_close"
 
 
 class LongOnce(AlwaysLong):

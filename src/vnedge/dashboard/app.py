@@ -459,6 +459,7 @@ def create_app(
     paper_lane_performance_path: Path | None = None,
     paper_trade_entry_autopsy_path: Path | None = None,
     paper_trade_exit_autopsy_path: Path | None = None,
+    trade_analyzer_os_path: Path | None = None,
     paper_lane_root_cause_path: Path | None = None,
     maker_quote_lifecycle_path: Path | None = None,
     paper_trade_contract_reconciler_path: Path | None = None,
@@ -479,6 +480,7 @@ def create_app(
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
     scanner_backtest_uplift_path: Path | None = None,
+    delta_5m_event_clock_path: Path | None = None,
     alpha_arena_lite_path: Path | None = None,
     quant_loop_governance_path: Path | None = None,
     evidence_index_path: Path | None = None,
@@ -666,6 +668,10 @@ def create_app(
         scanner_backtest_uplift_path
         or Path("research/live_research/scanner_backtest_uplift_latest.json")
     )
+    delta_5m_event_clock_file = (
+        delta_5m_event_clock_path
+        or Path("research/live_research/delta_5m_event_clock_latest.json")
+    )
     lane_firing_causality_file = (
         lane_firing_causality_path
         or Path("research/live_research/lane_firing_causality_latest.json")
@@ -726,6 +732,10 @@ def create_app(
     paper_trade_exit_autopsy_file = (
         paper_trade_exit_autopsy_path
         or Path("research/live_research/paper_trade_exit_autopsy_latest.json")
+    )
+    trade_analyzer_os_file = (
+        trade_analyzer_os_path
+        or Path("research/live_research/trade_analyzer_os_latest.json")
     )
     paper_lane_root_cause_file = (
         paper_lane_root_cause_path
@@ -1335,6 +1345,30 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/trade-analyzer-os")
+    async def trade_analyzer_os(request: Request) -> JSONResponse:
+        """Latest joined trade analyzer verdict.
+
+        This joins paper trade journal, entry autopsy, and exit autopsy into one
+        read-only operator answer. It cannot promote, demote, or trade.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                trade_analyzer_os_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "recent_trades": [],
+                    "operator_answer": "trade analyzer OS unavailable",
+                    "mode": "read_only_trade_analyzer_os",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
     @app.get("/maker-quote-lifecycle")
     async def maker_quote_lifecycle(request: Request) -> JSONResponse:
         """Latest maker quote lifecycle report.
@@ -1922,6 +1956,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "real-time scanner report unavailable",
                     "mode": "live_observation_not_replay",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/delta-5m-event-clock")
+    async def delta_5m_event_clock(request: Request) -> JSONResponse:
+        """Delta India 5-minute UP/DOWN prep clock.
+
+        Research-only and closed-candle-only: it tells the operator when the
+        next Delta 5m decision window opens and whether a paper perp route
+        clears the fee wall. It has no live-order authority.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                delta_5m_event_clock_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "Delta 5m event clock unavailable",
+                    "mode": "read_only_delta_5m_up_down_perp_proxy",
                     "can_trade": False,
                     "can_promote": False,
                 },
