@@ -677,6 +677,32 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # Trade Analyzer OS: joins paper trade journal, entry autopsy, and exit
+  # autopsy into one operator answer: entry gap, giveback, fee wall, stop
+  # domination, daily-hold drift, or healthy capture. Read-only.
+  trade-analyzer-os:
+    profiles: ["research"]
+    build: .
+    restart: unless-stopped
+    depends_on: [paper-trade-entry-autopsy, paper-trade-exit-autopsy]
+    command: ["python", "-m", "vnedge.research.trade_analyzer_os",
+              "--interval-seconds", "${TRADE_ANALYZER_OS_INTERVAL_SECONDS:-60}",
+              "--out", "research/live_research/trade_analyzer_os_latest.json",
+              "--feed", "research/live_research/trade_analyzer_os_feed.jsonl",
+              "--min-closed-trades", "${TRADE_ANALYZER_OS_MIN_CLOSED_TRADES:-5}",
+              "--min-profit-factor", "${TRADE_ANALYZER_OS_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${TRADE_ANALYZER_OS_MIN_AVG_NET_BPS:-25}",
+              "--fee-wall-bps", "${TRADE_ANALYZER_OS_FEE_WALL_BPS:-8}",
+              "--giveback-arm-bps", "${TRADE_ANALYZER_OS_GIVEBACK_ARM_BPS:-15}",
+              "--giveback-min-bps", "${TRADE_ANALYZER_OS_GIVEBACK_MIN_BPS:-10}",
+              "--print"]
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Paper trade contract reconciler: joins closed paper fills back to their
   # order intents, exit intents, leverage/margin economics, fee drag, and exit
   # metadata so losses are classified as contract drift vs alpha failure.

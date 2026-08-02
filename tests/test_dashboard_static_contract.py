@@ -63,6 +63,20 @@ def test_promote_view_has_paper_trade_entry_autopsy_panel():
     assert "missing ctx" in html
 
 
+def test_promote_view_has_trade_analyzer_os_panel():
+    html = _index()
+    app = APP.read_text()
+    assert "Trade Analyzer OS" in html
+    assert 'id="tradeAnalyzerOS"' in html
+    assert 'id="tradeAnalyzerMeta"' in html
+    assert "function renderTradeAnalyzerOS" in html
+    assert "function pollTradeAnalyzerOS" in html
+    assert 'poll("/trade-analyzer-os"' in html
+    assert "Giveback lanes" in html
+    assert "Daily hold drift" in html
+    assert '@app.get("/trade-analyzer-os")' in app
+
+
 def test_promote_view_has_paper_contract_truth_surface():
     html = _index()
     app = APP.read_text()

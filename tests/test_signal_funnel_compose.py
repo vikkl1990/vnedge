@@ -279,6 +279,30 @@ def test_paper_trade_exit_autopsy_publishes_exit_quality_evidence():
     assert service["depends_on"] == ["paper-lane-performance"]
 
 
+def test_trade_analyzer_os_publishes_joined_trade_verdict():
+    service = compose_services()["trade-analyzer-os"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.trade_analyzer_os",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${TRADE_ANALYZER_OS_INTERVAL_SECONDS:-60}" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/trade_analyzer_os_latest.json" in service["command"]
+    assert "--feed" in service["command"]
+    assert "research/live_research/trade_analyzer_os_feed.jsonl" in service["command"]
+    assert "--giveback-arm-bps" in service["command"]
+    assert "--giveback-min-bps" in service["command"]
+    assert "./logs:/app/logs:ro" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert service["depends_on"] == [
+        "paper-trade-entry-autopsy",
+        "paper-trade-exit-autopsy",
+    ]
+
+
 def test_paper_trade_contract_reconciler_classifies_runtime_drift_vs_alpha():
     service = compose_services()["paper-trade-contract-reconciler"]
 
@@ -753,8 +777,8 @@ def test_dashboard_tls_is_gated_on_dashboard_health():
 
 
 def test_lean_core_is_the_default_profile_and_research_is_opt_in():
-    """Lean-by-default (2026-08-02): exactly the 12 core services run by default;
-    the other 54 carry the `research` profile (opt-in). No core service may
+    """Lean-by-default (2026-08-02): exactly the 13 core services run by default;
+    the other services carry the `research` profile (opt-in). No core service may
     depend on a profiled service, or `docker compose up` would drag the whole
     research cluster back in and re-wedge the box."""
     services = compose_services()
@@ -765,7 +789,7 @@ def test_lean_core_is_the_default_profile_and_research_is_opt_in():
         "multi-lane-shadow", "dashboard-tls", "realtime-scanner", "lane-survival",
         "paper-lane-governor", "paper-lane-performance", "paper-roster-drift",
         "evidence-index-publisher", "ml-pipeline-status", "paper-lane-activation",
-        "lane-firing-causality", "bitcoin-regime-sensor",
+        "lane-firing-causality", "bitcoin-regime-sensor", "delta-5m-event-clock",
     }
     for name in core:
         dep = services[name].get("depends_on") or []

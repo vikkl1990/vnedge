@@ -459,6 +459,7 @@ def create_app(
     paper_lane_performance_path: Path | None = None,
     paper_trade_entry_autopsy_path: Path | None = None,
     paper_trade_exit_autopsy_path: Path | None = None,
+    trade_analyzer_os_path: Path | None = None,
     paper_lane_root_cause_path: Path | None = None,
     maker_quote_lifecycle_path: Path | None = None,
     paper_trade_contract_reconciler_path: Path | None = None,
@@ -731,6 +732,10 @@ def create_app(
     paper_trade_exit_autopsy_file = (
         paper_trade_exit_autopsy_path
         or Path("research/live_research/paper_trade_exit_autopsy_latest.json")
+    )
+    trade_analyzer_os_file = (
+        trade_analyzer_os_path
+        or Path("research/live_research/trade_analyzer_os_latest.json")
     )
     paper_lane_root_cause_file = (
         paper_lane_root_cause_path
@@ -1333,6 +1338,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "paper trade entry autopsy unavailable",
                     "mode": "read_only_paper_trade_entry_autopsy",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/trade-analyzer-os")
+    async def trade_analyzer_os(request: Request) -> JSONResponse:
+        """Latest joined trade analyzer verdict.
+
+        This joins paper trade journal, entry autopsy, and exit autopsy into one
+        read-only operator answer. It cannot promote, demote, or trade.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                trade_analyzer_os_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "recent_trades": [],
+                    "operator_answer": "trade analyzer OS unavailable",
+                    "mode": "read_only_trade_analyzer_os",
                     "can_trade": False,
                     "can_promote": False,
                 },

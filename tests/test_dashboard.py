@@ -1117,6 +1117,27 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }))
+    trade_analyzer_os = tmp_path / "trade_analyzer_os.json"
+    trade_analyzer_os.write_text(json.dumps({
+        "mode": "read_only_trade_analyzer_os",
+        "summary": {
+            "giveback_dominated": 1,
+            "closed_trades": 3,
+            "overnight_hold_drift": 0,
+        },
+        "rows": [{
+            "lane_id": "alpha|delta_india|eth/usd:usd|5m",
+            "primary_diagnosis": "GIVEBACK_DOMINATED",
+            "exchange": "delta_india",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "strategy_id": "stealth_trail_bbp_v1",
+            "closed_trades": 3,
+        }],
+        "recent_trades": [],
+        "can_trade": False,
+        "can_promote": False,
+    }))
     maker_quote_lifecycle = tmp_path / "maker_quote_lifecycle.json"
     maker_quote_lifecycle.write_text(json.dumps({
         "mode": "read_only_maker_quote_lifecycle",
@@ -1240,6 +1261,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         paper_lane_performance_path=paper_lane_performance,
         paper_trade_entry_autopsy_path=paper_entry_autopsy,
         paper_trade_exit_autopsy_path=paper_exit_autopsy,
+        trade_analyzer_os_path=trade_analyzer_os,
         maker_quote_lifecycle_path=maker_quote_lifecycle,
         paper_trade_contract_reconciler_path=paper_contract,
         paper_promotion_bridge_path=paper_promotion_bridge,
@@ -1260,6 +1282,7 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/paper-lane-cadence").status_code == 401
     assert client.get("/paper-trade-entry-autopsy").status_code == 401
     assert client.get("/paper-trade-exit-autopsy").status_code == 401
+    assert client.get("/trade-analyzer-os").status_code == 401
     assert client.get("/maker-quote-lifecycle").status_code == 401
     assert client.get("/paper-trade-contract-reconciler").status_code == 401
     assert client.get("/paper-promotion-bridge").status_code == 401
@@ -1314,6 +1337,11 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert paper_exit_payload["mode"] == "read_only_paper_trade_exit_autopsy"
     assert paper_exit_payload["can_trade"] is False
     assert paper_exit_payload["can_promote"] is False
+    trade_analyzer_payload = client.get("/trade-analyzer-os?token=t3st-token").json()
+    assert trade_analyzer_payload["summary"]["giveback_dominated"] == 1
+    assert trade_analyzer_payload["mode"] == "read_only_trade_analyzer_os"
+    assert trade_analyzer_payload["can_trade"] is False
+    assert trade_analyzer_payload["can_promote"] is False
     maker_quote_payload = client.get("/maker-quote-lifecycle?token=t3st-token").json()
     assert maker_quote_payload["summary"]["maker_attempts"] == 3
     assert maker_quote_payload["mode"] == "read_only_maker_quote_lifecycle"
