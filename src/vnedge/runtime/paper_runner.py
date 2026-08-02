@@ -196,6 +196,35 @@ class PaperRunner:
             max_holding_hit=max_holding_hit,
         )
 
+    def _strategy_exit_decision(
+        self,
+        plan: _TradePlan,
+        *,
+        df: pd.DataFrame,
+        index: int,
+        bar: pd.Series,
+    ) -> ActiveExitDecision | None:
+        entry = plan.exit_state.entry_price or plan.order.intent.notional_usd / max(
+            plan.order.intent.quantity, 1e-12
+        )
+        exit_sig = self.strategy.exit_signal(df, index, plan.signal.side, entry)
+        if exit_sig is None:
+            return None
+        return ActiveExitDecision(
+            reason=exit_sig.reason,
+            exit_price=(
+                float(exit_sig.exit_price)
+                if exit_sig.exit_price is not None
+                else float(bar["close"])
+            ),
+            quantity=None,
+            final=True,
+            active_stop_price=plan.exit_state.current_stop,
+            breakeven_armed=plan.exit_state.breakeven_armed,
+            tp_reached=plan.exit_state.tp_reached(),
+            mfe_price=plan.exit_state.mfe_price,
+        )
+
     def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
         if not mismatches or self._reconciliation_fail_closed:
             return
@@ -292,8 +321,18 @@ class PaperRunner:
                 decision = self._active_exit_decision(
                     plan,
                     bar=bar,
-                    max_holding_hit=j - plan.entry_bar >= cfg.max_holding_bars,
+                    max_holding_hit=False,
                 )
+                if decision is None:
+                    decision = self._strategy_exit_decision(
+                        plan, df=df, index=j, bar=bar
+                    )
+                if decision is None:
+                    decision = self._active_exit_decision(
+                        plan,
+                        bar=bar,
+                        max_holding_hit=j - plan.entry_bar >= cfg.max_holding_bars,
+                    )
                 if decision is not None:
                     if decision.reason == "flat_position":
                         plan = None

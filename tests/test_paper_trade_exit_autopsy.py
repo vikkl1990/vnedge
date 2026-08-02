@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from vnedge.research.paper_trade_exit_autopsy import (
     DRIVER_FEE_WALL_DOMINATED,
     DRIVER_STOP_DOMINATED,
+    DRIVER_STRATEGY_EXIT_DOMINATED,
+    DRIVER_STRATEGY_EXIT_HEALTHY,
     DRIVER_TP_CAPTURE_WEAK,
     PaperTradeExitAutopsyConfig,
     build_paper_trade_exit_autopsy,
@@ -214,3 +216,56 @@ def test_exit_autopsy_marks_weak_take_profit_capture(tmp_path):
     assert row["avg_net_bps"] < 25.0
     assert row["tp_reached_counts"]["1"] == 3
     assert "scale-out" in row["next_action"]
+
+
+def test_exit_autopsy_scores_healthy_strategy_managed_exits(tmp_path):
+    _closed_trades(
+        tmp_path,
+        "smart_exit_lane",
+        [
+            {"reason": "strategy_neutral_long", "exit_price": 101.0, "realized": 1.0},
+            {"reason": "strategy_neutral_short", "exit_price": 99.0, "realized": 1.0},
+            {"reason": "strategy_reversal_long", "exit_price": 101.2, "realized": 1.2},
+        ],
+    )
+
+    payload = build_paper_trade_exit_autopsy(
+        journal_dir=tmp_path,
+        config=PaperTradeExitAutopsyConfig(min_closed_trades=3, fee_wall_bps=8.0),
+        now=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+    row = payload["rows"][0]
+    assert row["loss_driver"] == DRIVER_STRATEGY_EXIT_HEALTHY
+    assert row["strategy_exit_count"] == 3
+    assert row["strategy_exit_rate"] == 1.0
+    assert row["strategy_exit_avg_net_bps"] > 8.0
+    assert row["exit_family_counts"]["strategy_exit"] == 3
+    assert payload["summary"]["strategy_exit_healthy"] == 1
+    assert payload["summary"]["strategy_exit_trades"] == 3
+    assert "Strategy-managed exits" in payload["operator_answer"]
+
+
+def test_exit_autopsy_flags_strategy_managed_exits_that_bleed(tmp_path):
+    _closed_trades(
+        tmp_path,
+        "bad_smart_exit_lane",
+        [
+            {"reason": "strategy_neutral_long", "exit_price": 99.7, "realized": -0.3},
+            {"reason": "strategy_neutral_long", "exit_price": 99.8, "realized": -0.2},
+            {"reason": "strategy_reversal_short", "exit_price": 100.4, "realized": -0.4},
+        ],
+    )
+
+    payload = build_paper_trade_exit_autopsy(
+        journal_dir=tmp_path,
+        config=PaperTradeExitAutopsyConfig(min_closed_trades=3),
+        now=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+    row = payload["rows"][0]
+    assert row["loss_driver"] == DRIVER_STRATEGY_EXIT_DOMINATED
+    assert row["strategy_exit_count"] == 3
+    assert row["strategy_exit_net_pnl_usd"] < 0
+    assert "smart exits are closing negative trades" in row["next_action"]
+    assert payload["summary"]["strategy_exit_dominated"] == 1

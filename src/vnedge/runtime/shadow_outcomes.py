@@ -44,11 +44,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 import pandas as pd
 
 from vnedge.execution.journal import DecisionJournal
 from vnedge.paper.fill_model import FillModel
+from vnedge.strategy.base_strategy import StrategyExitIntent
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +96,7 @@ class _PendingIntent:
 @dataclass(frozen=True)
 class VirtualOutcome:
     intent_key: str
-    resolution: str  # "stop" | "target" | "timeout"
+    resolution: str  # "stop" | "target" | "timeout" | strategy-managed reason
     bars_held: int
     virtual_net_usd: float
     side: str
@@ -135,6 +137,7 @@ class ShadowOutcomeTracker:
         max_holding_bars: int = 48,
         maker_route: bool = False,
         maker_fill_ttl_bars: int = 1,
+        strategy_exit: Callable[[str, float, pd.Series], StrategyExitIntent | None] | None = None,
     ) -> None:
         self.journal = journal
         self.fill_model = fill_model or FillModel()
@@ -143,6 +146,9 @@ class ShadowOutcomeTracker:
         # and pay the maker fee. Off => the all-taker default, byte-for-byte.
         self.maker_route = maker_route
         self.maker_fill_ttl_bars = max(1, int(maker_fill_ttl_bars))
+        # Optional strategy-managed close hook. Stop/target are still checked
+        # first; this only decides bar-close exits for open virtual positions.
+        self.strategy_exit = strategy_exit
         self._pending: dict[str, _PendingIntent] = {}
         self._resolved_keys: set[str] = set()
         self._trades = 0
@@ -292,7 +298,7 @@ class ShadowOutcomeTracker:
                 pending.mfe_price = max(pending.mfe_price, high)
             else:
                 pending.mfe_price = min(pending.mfe_price, low)
-            resolution, exit_price = self._check_exit(pending, high, low, close)
+            resolution, exit_price = self._check_exit(pending, high, low, close, bar)
             if resolution is None:
                 continue
             outcomes.append(self._close(pending, resolution, exit_price, bar_ts))
@@ -312,7 +318,12 @@ class ShadowOutcomeTracker:
         return outcomes
 
     def _check_exit(
-        self, pending: _PendingIntent, high: float, low: float, close: float
+        self,
+        pending: _PendingIntent,
+        high: float,
+        low: float,
+        close: float,
+        bar: pd.Series,
     ) -> tuple[str | None, float]:
         tp = pending.take_profit_price
         if pending.side == "long":
@@ -325,6 +336,17 @@ class ShadowOutcomeTracker:
                 return "stop", pending.stop_price
             if tp is not None and low <= tp:
                 return "target", tp
+        if self.strategy_exit is not None:
+            exit_sig = self.strategy_exit(pending.side, pending.entry_price, bar)
+            if exit_sig is not None:
+                return (
+                    exit_sig.reason,
+                    (
+                        float(exit_sig.exit_price)
+                        if exit_sig.exit_price is not None
+                        else close
+                    ),
+                )
         if pending.bars_held >= self.max_holding_bars:
             return "timeout", close
         return None, 0.0
@@ -424,8 +446,7 @@ class ShadowOutcomeTracker:
             self._gross_win_usd += net
         else:
             self._gross_loss_usd += -net
-        if resolution in self._resolutions:
-            self._resolutions[resolution] += 1
+        self._resolutions[resolution] = self._resolutions.get(resolution, 0) + 1
 
     # --- reporting ----------------------------------------------------------------
     def stats(self) -> dict:

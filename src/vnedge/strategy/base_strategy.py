@@ -39,6 +39,25 @@ class SignalIntent:
             raise ValueError("stop_price must be positive — stop-less intents are forbidden")
 
 
+@dataclass(frozen=True)
+class StrategyExitIntent:
+    """Strategy-managed close request for an already-open position.
+
+    This is intentionally narrower than ``SignalIntent``: it can only close an
+    existing position, never open or resize one. Runners still submit the actual
+    reduce-only order through their normal gateway/journal/order-manager path.
+    """
+
+    reason: str
+    exit_price: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.reason:
+            raise ValueError("exit reason must be non-empty")
+        if self.exit_price is not None and self.exit_price <= 0:
+            raise ValueError("exit_price must be positive when supplied")
+
+
 class BaseStrategy(ABC):
     """Subclass and implement prepare() + signal()."""
 
@@ -54,6 +73,21 @@ class BaseStrategy(ABC):
     @abstractmethod
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         """Entry decision at the close of bar ``index``. Read rows <= index only."""
+
+    def exit_signal(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        side: str,
+        entry_price: float,
+    ) -> StrategyExitIntent | None:
+        """Optional strategy-managed exit at the close of bar ``index``.
+
+        Implementations may read only rows <= ``index``. Stop/TP capital
+        protection remains runner-owned and is evaluated before this hook.
+        Returning an intent asks the runner to close reduce-only at bar close.
+        """
+        return None
 
     def synthesize_exit_plan(
         self, df: pd.DataFrame, index: int, side: str, entry_price: float
