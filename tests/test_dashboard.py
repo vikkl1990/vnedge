@@ -96,6 +96,46 @@ def test_darwinian_agent_survival_endpoint_auth_gated_and_shaped(tmp_path):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_delta_5m_event_clock_endpoint_auth_gated_and_research_only(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    report = tmp_path / "delta_5m.json"
+    report.write_text(
+        json.dumps(
+            {
+                "report_id": "delta_5m_event_clock_v1",
+                "summary": {"ready_now": 1, "seconds_to_next_decision": 0},
+                "rows": [
+                    {
+                        "symbol": "ETH/USD:USD",
+                        "route": "MAKER_ONLY",
+                        "direction": "UP",
+                        "paper_execution_ready": True,
+                    }
+                ],
+                "operator_answer": "Delta 5m paper route ready",
+                "can_trade": False,
+                "can_promote": False,
+            }
+        )
+    )
+    app = create_app(
+        provider,
+        token="t3st-token",
+        delta_5m_event_clock_path=report,
+    )
+    c = TestClient(app)
+
+    assert c.get("/delta-5m-event-clock").status_code == 401
+    r = c.get("/delta-5m-event-clock?token=t3st-token")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["summary"]["ready_now"] == 1
+    assert payload["rows"][0]["paper_execution_ready"] is True
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+
+
 def test_meta_and_fleet_endpoints_auth_gated(client):
     """Read-only /meta (build/host/uptime) and /fleet (container status, empty
     until the host reporter runs) are token-gated and JSON-shaped."""
@@ -153,6 +193,8 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert 'id="eqChart"' in html                      # equity curve
     assert "Active Lanes" in html
     assert "Live Signal Tape" in html
+    assert "Delta 5m Event Clock" in html
+    assert "/delta-5m-event-clock" in html
     assert "Exchange Connections" in html
     assert "Safety Gates" in html
     assert "Paper Route Doctor" in html
