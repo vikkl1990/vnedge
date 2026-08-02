@@ -112,14 +112,41 @@ fi
 
 # Recreate from the already-built image. --no-build guarantees no build spike
 # here; Compose still only recreates services whose config/image changed.
-# Resilient recreate: a busy daemon occasionally RACES `up` (container removal /
-# "name already in use" mid-recreate) and half-recreates the stack — that took
-# the fleet down on 2026-07-31. On failure, tear down orphans cleanly and retry
-# once so a transient daemon race self-heals instead of stranding the fleet.
-if ! docker compose up -d --no-build; then
-    echo "compose up raced — self-healing: down --remove-orphans + retry" >&2
+#
+# WAVED recreate (2026-08-02): a src change rebuilds the ONE shared image and
+# re-tags it for every service, so `docker compose up -d` recreates all ~60
+# containers AT ONCE. On this VM that spiked load to 300+ and starved both sshd
+# and the dashboard — wedging the box three times in a day (twice needing a
+# console reboot). So bring services up in small WAVES: the serving container
+# first (so /health is back fast), then the rest in batches of DEPLOY_WAVE_SIZE
+# with a pause between, bounding how many recreate concurrently. Compose still
+# only recreates what actually changed; the waving just caps the load spike.
+# On a daemon race (name-in-use mid-recreate — took the fleet down 2026-07-31),
+# self-heal once with down --remove-orphans, then fall back to a plain up.
+recreate_in_waves() {
+    local wave="${DEPLOY_WAVE_SIZE:-6}" pause="${DEPLOY_WAVE_PAUSE:-25}"
+    docker compose up -d --no-build multi-lane-shadow || return 1
+    sleep "$pause"
+    local rest svc
+    local -a batch=()
+    rest=$(docker compose config --services 2>/dev/null | grep -vx "multi-lane-shadow")
+    for svc in $rest; do
+        batch+=("$svc")
+        if [ "${#batch[@]}" -ge "$wave" ]; then
+            docker compose up -d --no-build "${batch[@]}" || return 1
+            batch=()
+            sleep "$pause"
+        fi
+    done
+    if [ "${#batch[@]}" -gt 0 ]; then
+        docker compose up -d --no-build "${batch[@]}" || return 1
+    fi
+    return 0
+}
+if ! recreate_in_waves; then
+    echo "waved recreate raced — self-healing: down --remove-orphans + retry" >&2
     docker compose down --remove-orphans || true
-    docker compose up -d --no-build
+    recreate_in_waves || docker compose up -d --no-build
 fi
 
 echo "waiting for lanes..."
