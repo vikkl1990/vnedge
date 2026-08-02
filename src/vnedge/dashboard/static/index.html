@@ -221,6 +221,18 @@
   /* signal tape */
   .tape{max-height:428px;overflow:hidden;position:relative}
   .tape:after{content:"";position:absolute;left:0;right:0;bottom:0;height:44px;background:linear-gradient(transparent,var(--bg-2));pointer-events:none}
+  .eventclock{padding:12px 14px 14px;display:flex;flex-direction:column;gap:8px}
+  .eventhero{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:linear-gradient(135deg,rgba(45,212,191,.10),rgba(7,11,17,.78));border:1px solid rgba(45,212,191,.24);border-radius:var(--r-sm);padding:11px 12px}
+  .eventhero .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-faint);font-weight:900}
+  .eventhero .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:2px;color:var(--txt)}
+  .eventhero .s{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+  .eventhero .timer{font-family:var(--mono);font-size:25px;font-weight:900;color:var(--brand)}
+  .eventrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
+  .eventrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eventrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eventroute{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+  .eventroute .p{font-family:var(--mono);font-size:13px;font-weight:900}
+  .eventfine{font-size:10.5px;color:var(--txt-faint);line-height:1.45;border-top:1px solid var(--line);padding-top:9px}
   .sig{display:grid;grid-template-columns:46px 1fr auto;gap:9px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line);animation:slidein .5s ease}
   @keyframes slidein{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:none}}
   .sig .t{font-family:var(--mono);font-size:10.5px;color:var(--txt-faint)}
@@ -753,6 +765,16 @@
           <span class="live"><i></i>streaming</span>
         </div>
         <div class="tape" id="tape"></div>
+      </section>
+
+      <section class="panel">
+        <div class="phead">
+          <h2>Delta 5m Event Clock</h2>
+          <span class="meta" id="deltaEventMeta">loading…</span>
+        </div>
+        <div id="deltaEventClock" class="eventclock">
+          <div class="note">Delta 5m timer loading…</div>
+        </div>
       </section>
 
       <section class="panel">
@@ -1370,6 +1392,45 @@
         (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
         '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+'</div></div>'+tag+'</div>';
     }).join('');
+  }
+  function eventRouteCls(route,state){
+    route=String(route||""); state=String(state||"");
+    if(route==="TAKER_NOW"||route==="MAKER_THEN_TAKER"||route==="MAKER_ONLY")return"ok";
+    if(state==="DATA_STALE"||state==="DATA_MISSING")return"bad";
+    if(state==="EDGE_TOO_SMALL"||state==="WAITING_FEE_WALL")return"warn";
+    return"wait";
+  }
+  function pct(x){ return x==null?"--":(num(x)*100).toFixed(1)+"%"; }
+  function bps(x){ return x==null?"--":num(x).toFixed(1)+" bps"; }
+  function renderDeltaEventClock(d){
+    var el=$("deltaEventClock"),meta=$("deltaEventMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},w=(d&&d.event_window)||{},rows=(d&&d.rows)||[];
+    var ready=num(s.ready_now), secs=num(s.seconds_to_next_decision), close=num(s.seconds_to_close);
+    if(meta)meta.textContent=ready+" ready · next "+(secs?secs+"s":"now");
+    if(!rows.length){
+      el.innerHTML='<div class="note">Delta 5m timer unavailable. Waiting for the publisher artifact.</div>';
+      return;
+    }
+    var best=rows[0]||{}, route=String(best.route||"WAIT"), state=String(best.execution_window_state||"WAITING");
+    var cls=eventRouteCls(route,state), timer=String(w.decision_window_state||"").toUpperCase()==="OPEN" ? close+"s" : secs+"s";
+    var hero='<div class="eventhero"><div>'+
+      '<div class="k">best Delta 5m prep</div>'+
+      '<div class="v">'+safe(symShort(best.symbol))+' '+safe(best.direction||"--")+'</div>'+
+      '<div class="s">'+safe(route.replace(/_/g," ").toLowerCase())+' · p '+pct(best.selected_probability)+' · exp '+bps(best.expected_move_bps)+'</div>'+
+      '</div><div style="text-align:right"><div class="timer">'+safe(timer)+'</div>'+
+      '<span class="actstate '+cls+'">'+safe(state.toLowerCase().replace(/_/g," "))+'</span></div></div>';
+    var body=rows.slice(0,4).map(function(r){
+      var rcls=eventRouteCls(r.route,r.execution_window_state);
+      var net=r.route==="TAKER_NOW"?r.expected_net_taker_bps:r.expected_net_maker_bps;
+      return '<div class="eventrow">'+
+        '<div><b>'+safe(symShort(r.symbol))+' · '+safe(r.direction||"--")+'</b>'+
+        '<small>'+safe(String(r.why||"").slice(0,92))+'</small></div>'+
+        '<div class="eventroute"><span class="actstate '+rcls+'">'+safe(String(r.route||"WAIT").toLowerCase().replace(/_/g," "))+'</span>'+
+        '<span class="p '+(num(net)>=0?"up":"dn")+'">'+bps(net)+'</span></div></div>';
+    }).join('');
+    var fine='maker '+bps((d.fee_profile||{}).maker_first_cost_bps)+' · taker '+bps((d.fee_profile||{}).taker_round_trip_cost_bps)+
+      ' · paper '+moneyAbs((best.paper_margin_usd||((d.config||{}).paper_margin_usd)))+' margin at '+num(best.paper_leverage||((d.config||{}).paper_leverage)).toFixed(0)+'x · live locked';
+    el.innerHTML=hero+body+'<div class="eventfine">'+safe(fine)+'</div>';
   }
 
   /* ---- main render from /state snapshot ---- */
@@ -2684,6 +2745,7 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function pollDeltaEventClock(){ poll("/delta-5m-event-clock", renderDeltaEventClock); }
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
   function pollAgenticResearchOS(){ poll("/agentic-research-os", renderAgenticResearchOS); }
   function renderPreLive(d){
@@ -2878,8 +2940,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

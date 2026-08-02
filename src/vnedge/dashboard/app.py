@@ -479,6 +479,7 @@ def create_app(
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
     scanner_backtest_uplift_path: Path | None = None,
+    delta_5m_event_clock_path: Path | None = None,
     alpha_arena_lite_path: Path | None = None,
     quant_loop_governance_path: Path | None = None,
     evidence_index_path: Path | None = None,
@@ -665,6 +666,10 @@ def create_app(
     scanner_backtest_uplift_file = (
         scanner_backtest_uplift_path
         or Path("research/live_research/scanner_backtest_uplift_latest.json")
+    )
+    delta_5m_event_clock_file = (
+        delta_5m_event_clock_path
+        or Path("research/live_research/delta_5m_event_clock_latest.json")
     )
     lane_firing_causality_file = (
         lane_firing_causality_path
@@ -1922,6 +1927,30 @@ def create_app(
                     "rows": [],
                     "operator_answer": "real-time scanner report unavailable",
                     "mode": "live_observation_not_replay",
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/delta-5m-event-clock")
+    async def delta_5m_event_clock(request: Request) -> JSONResponse:
+        """Delta India 5-minute UP/DOWN prep clock.
+
+        Research-only and closed-candle-only: it tells the operator when the
+        next Delta 5m decision window opens and whether a paper perp route
+        clears the fee wall. It has no live-order authority.
+        """
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                delta_5m_event_clock_file,
+                {
+                    "summary": {},
+                    "rows": [],
+                    "operator_answer": "Delta 5m event clock unavailable",
+                    "mode": "read_only_delta_5m_up_down_perp_proxy",
                     "can_trade": False,
                     "can_promote": False,
                 },
