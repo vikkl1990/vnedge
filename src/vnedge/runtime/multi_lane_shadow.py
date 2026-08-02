@@ -1262,6 +1262,11 @@ _PRUNED_STRATEGIES = frozenset(
         "alpha_stack_confluence_v1",  # NO_TRADE_EVIDENCE every symbol; 0 edge
         "luxy_ut_bot_forecast_v1",    # worst fee-wall losers (BTC 15m -$30/-$29)
         "trend_continuation_v1",      # documented REJECT; XRP lane -$22, never fires
+        # Cut 2026-08-02 after a full-ledger pattern study (286 shadow trades):
+        "sats_5m_scalper_v1",         # -$681 / 250 trades / 29% win — the worst lane;
+                                      # 5m scalping is noise, 63% of losers gave back a
+                                      # >15bps profit (no breakeven/trailing stop)
+        "context_scalper_v2",         # -$27 / 14% win — no edge
     }
 )
 

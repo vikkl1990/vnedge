@@ -910,6 +910,9 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
     assert _pruned_lane(spec("quant_signal_pack_v1", "DOGE/USDT:USDT"))
     assert _pruned_lane(spec("funding_mean_reversion_v1", "XRP/USDT:USDT"))
     assert _pruned_lane(spec("funding_mean_reversion_v1", "ETH/USDT:USDT"))
+    # cut 2026-08-02 from the full-ledger pattern study (proven losers)
+    assert _pruned_lane(spec("sats_5m_scalper_v1", "ETH/USD:USD"))   # -$681 / 29% win
+    assert _pruned_lane(spec("context_scalper_v2", "ETH/USD:USD"))   # -$27 / 14% win
     # kept — the real edge / candidates
     assert not _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT"))
     assert not _pruned_lane(spec("quant_signal_pack_v1", "ETH/USDT:USDT"))
