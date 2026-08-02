@@ -17,6 +17,10 @@ def _env(**over):
     base = {
         "MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india",
         "MULTI_LANE_SATS_5M_DELTA": "0",
+        # These tests exercise velocity-lane GENERATION/mirroring, independent of
+        # the evidence prune. sats_5m_scalper_v1 was cut 2026-08-02 (-$681 ledger),
+        # so run the generation logic with the prune off.
+        "MULTI_LANE_PRUNE_DEAD": "0",
     }
     base.update(over)
     return base
