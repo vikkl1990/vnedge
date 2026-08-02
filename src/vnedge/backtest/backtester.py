@@ -31,6 +31,12 @@ from vnedge.runtime.active_exit import ActiveExitState
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.position_sizer import SymbolLimits, size_position
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
+from vnedge.runtime.daily_factory import (
+    DailySignalFactoryConfig,
+    entry_block_reason,
+    session_day,
+    should_force_flatten,
+)
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
 
@@ -55,6 +61,12 @@ class BacktestConfig(BaseModel):
     # live paper/shadow runner consults, so research and operations block the
     # same entry decisions. ALL DEFAULT OFF (zero behavior change).
     protections: ProtectionConfig = Field(default_factory=ProtectionConfig)
+    # Same-day signal-factory discipline. Default OFF to preserve historical
+    # judgments; enable when researching lanes intended to open and close
+    # within the session.
+    daily_factory: DailySignalFactoryConfig = Field(
+        default_factory=DailySignalFactoryConfig
+    )
 
     # Breakeven / profit-lock stop management (DEFAULT OFF). The 2026-08-02
     # ledger study found 63% of losers ran into profit then gave it back. When
@@ -162,6 +174,10 @@ class BacktestResult:
     # empty unless config.protections enables something. Mirrors the live
     # runner's lane_eval skip_reason records for engine-parity checks.
     protection_blocked: tuple[tuple[pd.Timestamp, str], ...] = ()
+    # Entry decisions blocked by daily-factory rules (cutoff, max entries,
+    # daily target already hit). Kept separate from protection blocks so
+    # research can tell "bad setup" from "factory closed for the day".
+    factory_blocked: tuple[tuple[pd.Timestamp, str], ...] = ()
 
 
 def _unrealized(pos: _OpenPosition, price: float) -> float:
@@ -235,6 +251,27 @@ def run_backtest(
     # time). Exits below NEVER consult it — stops/TPs always close.
     protections = ProtectionState(config.protections)
     protection_blocked: list[tuple[pd.Timestamp, str]] = []
+    factory_blocked: list[tuple[pd.Timestamp, str]] = []
+    n = len(df)
+    start = max(strategy.warmup_bars, 1)
+    timestamps = df["timestamp"]
+    factory_seed_ts = timestamps.iloc[start] if start < len(timestamps) else timestamps.iloc[-1]
+    factory_day = session_day(factory_seed_ts.to_pydatetime(), config.daily_factory)
+    factory_entries_today = 0
+    factory_day_open_equity = equity
+
+    def roll_factory_day(ts: pd.Timestamp) -> None:
+        nonlocal factory_day, factory_entries_today, factory_day_open_equity
+        day = session_day(ts.to_pydatetime(), config.daily_factory)
+        if day == factory_day:
+            return
+        factory_day = day
+        factory_entries_today = 0
+        factory_day_open_equity = equity
+
+    def factory_daily_pnl(mark_price: float) -> float:
+        mark = equity + (_unrealized(position, mark_price) if position else 0.0)
+        return mark - factory_day_open_equity
 
     def close_position(
         pos: _OpenPosition, ts, raw_price: float, reason: str, bar_index: int,
@@ -272,13 +309,10 @@ def run_backtest(
             position = None
             protections.on_exit(reason, bar_index)
 
-    n = len(df)
-    start = max(strategy.warmup_bars, 1)
-    timestamps = df["timestamp"]
-
     for j in range(start, n):
         bar = df.iloc[j]
         ts = timestamps.iloc[j]
+        roll_factory_day(ts)
 
         # 1) Funding on positions held into this bar (events in (prev_ts, ts]).
         if position is not None:
@@ -312,6 +346,7 @@ def run_backtest(
                         pending, entry_price=fill, quantity=sizing.quantity,
                         trail_atr_mult=config.trail_atr_mult,
                     )
+                factory_entries_today += 1
             else:
                 skipped += 1
                 logger.debug("sizing rejected at %s: %s", ts, sizing.reasons)
@@ -346,6 +381,8 @@ def run_backtest(
                     close_position(position, ts,
                                    float(exit_sig.exit_price) if exit_sig.exit_price is not None else cl,
                                    exit_sig.reason, j)
+                elif should_force_flatten(ts.to_pydatetime(), config.daily_factory):
+                    close_position(position, ts, cl, "daily_factory_close", j)
                 elif trail_atr is not None:
                     # trail the stop for LATER bars off the canonical ATR (no lookahead)
                     a = trail_atr[j]
@@ -360,6 +397,8 @@ def run_backtest(
                     close_position(position, ts,
                                    float(exit_sig.exit_price) if exit_sig.exit_price is not None else cl,
                                    exit_sig.reason, j)
+                elif should_force_flatten(ts.to_pydatetime(), config.daily_factory):
+                    close_position(position, ts, cl, "daily_factory_close", j)
                 elif j - position.entry_bar >= config.max_holding_bars:
                     close_position(position, ts, cl, "max_holding", j)
                 # arm the simple breakeven for LATER bars (no intrabar lookahead)
@@ -368,8 +407,16 @@ def run_backtest(
 
         # 4) New entry decision at this bar's close (only when flat).
         if position is None and j < n - 1 and equity > 0:
+            factory_block = entry_block_reason(
+                now=ts.to_pydatetime(),
+                config=config.daily_factory,
+                entries_today=factory_entries_today,
+                daily_pnl_usd=factory_daily_pnl(float(bar["close"])),
+            )
             allowed, block_reason = protections.entries_allowed(j)
-            if allowed:
+            if factory_block is not None:
+                factory_blocked.append((ts, factory_block))
+            elif allowed:
                 pending = strategy.signal(df, j)
             else:
                 protection_blocked.append((ts, block_reason))
@@ -399,4 +446,5 @@ def run_backtest(
         equity_curve=equity_curve, skipped_by_sizing=skipped,
         final_equity_usd=equity, config=config,
         protection_blocked=tuple(protection_blocked),
+        factory_blocked=tuple(factory_blocked),
     )
