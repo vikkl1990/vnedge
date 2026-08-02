@@ -914,3 +914,20 @@ async def test_non_maker_strategy_still_uses_immediate_market_entry(tmp_path):
     assert len(exchange.get_positions()) == 1        # market fill, immediate
     fill = exchange.get_fills()[-1]
     assert fill.fee_usd == pytest.approx(fill.quantity * fill.price * _TAKER_FEE)  # taker
+
+
+def test_runner_config_trail_flows_into_the_exit_state(tmp_path):
+    # RunnerConfig.trail_atr_mult must reach the plan's ActiveExitState, so the
+    # runtime trails with the SAME engine the backtester uses (parity).
+    feed = FakeFeed(live_rows(n=1))
+    session, _ = build_session(tmp_path, feed)
+    # rebuild the session's config with trailing on (frozen model → new instance)
+    session.config = session.config.model_copy(update={"trail_atr_mult": 3.0, "trail_atr_window": 10})
+    plan = session._new_plan(
+        SignalIntent(side="long", stop_price=99.0, take_profit_price=None,
+                     take_profit_levels=(), reason="t"),
+        history()["timestamp"].iloc[-1],
+    )
+    assert plan.exit_state.trail_atr_mult == 3.0
+    # and _trail_atr computes a canonical (finite) ATR from the candle history
+    assert session._trail_atr() >= 0.0
