@@ -196,6 +196,11 @@
   .strat{display:flex;flex-direction:column;gap:1px;min-width:0}
   .strat b{font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .strat span{font-size:10.5px;color:var(--txt-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dfchip{display:inline-block;font-size:8.5px;line-height:1;letter-spacing:.08em;text-transform:uppercase;font-weight:900;padding:3px 5px;border-radius:5px;margin-right:5px;vertical-align:middle;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line)}
+  .dfchip.open{background:var(--long-soft);color:var(--long);border-color:rgba(53,214,160,.28)}
+  .dfchip.wait{background:var(--info-soft);color:var(--info);border-color:rgba(79,176,255,.28)}
+  .dfchip.block{background:rgba(255,201,77,.13);color:var(--warn);border-color:rgba(255,201,77,.26)}
+  .dfchip.flat{background:var(--short-soft);color:var(--short);border-color:rgba(255,92,122,.3)}
   .vchip{font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#0A0D12;width:max-content;font-family:var(--sans)}
   .side{font-size:10px;font-weight:800;letter-spacing:.08em;padding:3px 8px;border-radius:6px;width:max-content}
   .side.l{background:var(--long-soft);color:var(--long)} .side.s{background:var(--short-soft);color:var(--short)}
@@ -1358,6 +1363,30 @@
     if(v==="NEGATIVE_AFTER_COST")return["wall","fee-walled"];
     return null;
   }
+  function factoryMinute(m){
+    m=num(m);
+    if(!fin(m)||m<0)return"--";
+    m=Math.max(0,Math.min(1439,Math.round(m)));
+    return pad2(Math.floor(m/60))+":"+pad2(m%60);
+  }
+  function dailyFactoryView(df){
+    if(!df||typeof df!=="object")return null;
+    if(!df.enabled)return{label:"day off",cls:"wait",detail:"daily factory disabled"};
+    var reason=String(df.entry_block_reason||"");
+    var entries=num(df.entries_today),max=num(df.max_entries_per_day);
+    var used=max>0?(entries+"/"+max+" entries"):(entries+" entries");
+    if(df.force_flatten_due)return{label:"force flat",cls:"flat",detail:"forced flat from "+factoryMinute(df.force_flatten_minute)};
+    if(reason.indexOf("target_hit")>=0)return{label:"target hit",cls:"block",detail:reason.replace(/^daily_factory_target_hit:\s*/,"")};
+    if(reason.indexOf("max_entries")>=0)return{label:"capped",cls:"block",detail:used+" used"};
+    if(reason.indexOf("entry_cutoff")>=0)return{label:"closed",cls:"flat",detail:"entry cutoff "+factoryMinute(df.entry_cutoff_minute)};
+    if(reason.indexOf("flatten_window")>=0)return{label:"flat window",cls:"flat",detail:"forced flat from "+factoryMinute(df.force_flatten_minute)};
+    return{label:"day open",cls:"open",detail:used+" · cutoff "+factoryMinute(df.entry_cutoff_minute)};
+  }
+  function dailyFactoryChip(df){
+    var d=dailyFactoryView(df);
+    if(!d)return"";
+    return '<span class="dfchip '+d.cls+'" title="'+safe(d.detail)+'">'+safe(d.label)+'</span>';
+  }
   function renderTickerTape(groups){
     var el=$("tickerTape"); if(!el)return;
     var rows=(groups||[]).slice(0,12);
@@ -1484,7 +1513,7 @@
       var isVel=String(l.lane_id||"").indexOf("velocity_")===0;
       var velTag=isVel?'<span style="font-size:8px;font-weight:800;letter-spacing:.04em;background:var(--bg-3);color:var(--txt-faint);border:1px solid var(--line);padding:1px 4px;border-radius:4px;margin-right:5px;vertical-align:middle">VEL</span>':'';
       return '<div class="brow"><span class="st '+st+'"></span>'+
-        '<div class="strat" title="'+(isVel?"velocity — ML training only, never a promotion candidate · ":"")+stratShort(l.strategy_id)+'">'+velTag+'<b>'+stratShort(l.strategy_id)+'</b><span>'+String(why).slice(0,44)+'</span></div>'+
+        '<div class="strat" title="'+(isVel?"velocity — ML training only, never a promotion candidate · ":"")+stratShort(l.strategy_id)+'">'+velTag+'<b>'+stratShort(l.strategy_id)+'</b><span>'+dailyFactoryChip(l.daily_factory)+safe(String(why).slice(0,44))+'</span></div>'+
         '<span class="vchip" style="background:'+v.col+'">'+v.lab+'</span>'+
         '<div><div style="font-size:11px;margin-bottom:3px;color:var(--txt-dim)">'+symShort(l.symbol)+(l.timeframe?' <span style="color:var(--txt-faint)">'+l.timeframe+'</span>':'')+'</div><span class="side '+sc+'">'+sl+'</span></div>'+
         '<div class="pnlbar"><span class="v '+pc+'">'+(p===0?"—":(p>0?"+":"")+"$"+p.toFixed(2))+'</span><div class="track">'+bar+'</div></div>'+
@@ -2495,13 +2524,14 @@
       var ml=mlByStrat[l.strategy_id]; if(ml==null)ml=mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")];
       var gate=tc.state||(String(l.mode||"").indexOf("shadow")>=0?"SHADOW_ONLY":"PAPER_COMPATIBLE");
       var gcls=(gate.indexOf("PAPER_COMPAT")>=0)?"maker":(gate.indexOf("PROBATION")>=0||gate.indexOf("BLOCK")>=0)?"wall":"pass";
+      var factory=dailyFactoryView(l.daily_factory);
       return "<div class='plrow' data-lane='"+jEsc(encodeURIComponent(l.lane_id||""))+"' style='cursor:pointer'>"+
         "<div class='plcell'>"+(isVel?"<span class='veltag'>VEL</span>":"")+"<b style='display:inline'>"+jEsc(short)+"</b><small>"+jEsc(symShort(l.symbol))+" · "+jEsc(l.timeframe||"?")+" · "+jEsc(ven(l.exchange).lab)+"</small></div>"+
         "<div class='plcell'><span class='plpill "+st[1]+"'>"+st[0]+"</span><small>"+(l.last_fired_ts?"fired "+agoShort(l.last_fired_ts):"no fire yet")+" · "+num(f.live_evals||f.evals)+" evals</small></div>"+
         "<div class='plcell'><b class='num "+vc+"'>"+(vt?usd(vn):"—")+"</b><small>"+vt+" shadow trades</small></div>"+
         "<div class='plcell'>"+(sc?("<span class='route "+(rb>=0?"pass":"wall")+"'>"+(rb>=0?"+":"")+rb.toFixed(0)+" bps</span><small>"+jEsc(String(sc.verdict||"").toLowerCase().replace(/_/g," "))+" · "+rs.toLocaleString()+" smpl</small>"):"<b style='color:var(--txt-faint)'>—</b><small>not on scorecard</small>")+"</div>"+
         "<div class='plcell'><b class='num'>"+(ml!=null?ml:"—")+"</b><small>meta-label"+((ml!=null&&ml!==1)?"s":"")+"</small></div>"+
-        "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span></div>"+
+        "<div class='plcell'><span class='route "+gcls+"'>"+jEsc(gate.toLowerCase().replace(/_/g," "))+"</span><small>"+(factory?jEsc(factory.label+" · "+factory.detail):"daily factory not published")+"</small></div>"+
       "</div>";
     }).join("");
   }
@@ -2518,10 +2548,12 @@
     var sc=l?scoreByStrat[stratShort(l.strategy_id)]:null;
     var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
     var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
+    var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
       "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Daily factory</div><div class='v' style='font-size:14px'>"+jEsc(factory?factory.label:'not published')+"</div><div class='s'>"+jEsc(factory?factory.detail:'waiting for lane payload')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>ML labels</div><div class='v num'>"+(ml!=null?ml:'—')+"</div><div class='s'>fed to meta-labeler</div></div>"+
     "</div>";
     var el=$("pipelineDetail"); if(el)el.innerHTML=head+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";

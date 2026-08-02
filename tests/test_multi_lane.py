@@ -96,6 +96,26 @@ def test_lane_summary_carries_feed_and_eval_observability():
     assert lane["trade_compatibility"]["gateway_required"] is True
 
 
+def test_lane_summary_carries_daily_factory_state():
+    p = MultiLaneProvider("binance")
+    s = snap(505.0)
+    s["session"] = {
+        "daily_factory": {
+            "enabled": True,
+            "entries_today": 1,
+            "max_entries_per_day": 3,
+            "entry_block_reason": None,
+            "force_flatten_due": False,
+        }
+    }
+    p.sink("binance", "binanceusdm").publish(s)
+
+    lane = p.latest()["lanes"][0]
+
+    assert lane["daily_factory"]["enabled"] is True
+    assert lane["daily_factory"]["entries_today"] == 1
+
+
 def test_lane_summary_degrades_without_feed_or_eval():
     p = MultiLaneProvider("binance")
     p.sink("binance", "binanceusdm").publish(snap(505.0))
@@ -134,6 +154,47 @@ def test_lane_spec_defaults():
     assert spec.daily_loss_usd == 10.0
     assert spec.is_primary is False
     assert spec.mode is RunnerMode.SHADOW
+
+
+def test_daily_factory_env_builds_global_policy():
+    spec = LaneSpec(lane_id="x", exchange="binanceusdm", symbol="BTC/USDT:USDT")
+
+    cfg = multi_lane._lane_daily_factory_config(spec, {
+        "MULTI_LANE_DAILY_FACTORY_ENABLED": "1",
+        "MULTI_LANE_DAILY_FACTORY_TIMEZONE": "Asia/Kolkata",
+        "MULTI_LANE_DAILY_FACTORY_ENTRY_CUTOFF_MINUTE": "1320",
+        "MULTI_LANE_DAILY_FACTORY_FORCE_FLATTEN_MINUTE": "1430",
+        "MULTI_LANE_DAILY_FACTORY_MAX_ENTRIES_PER_DAY": "2",
+        "MULTI_LANE_DAILY_FACTORY_DAILY_PROFIT_TARGET_USD": "8.5",
+    })
+
+    assert cfg.enabled is True
+    assert cfg.session_timezone == "Asia/Kolkata"
+    assert cfg.entry_cutoff_minute == 1320
+    assert cfg.force_flatten_minute == 1430
+    assert cfg.max_entries_per_day == 2
+    assert cfg.daily_profit_target_usd == 8.5
+
+
+def test_daily_factory_env_strategy_override_wins():
+    spec = LaneSpec(
+        lane_id="x",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        strategy_id="daily_scalper_pack_v1",
+    )
+
+    cfg = multi_lane._lane_daily_factory_config(spec, {
+        "MULTI_LANE_DAILY_FACTORY_ENABLED": "0",
+        "MULTI_LANE_DAILY_FACTORY_DAILY_SCALPER_PACK_V1_ENABLED": "1",
+        "MULTI_LANE_DAILY_FACTORY_ENTRY_CUTOFF_MINUTE": "1320",
+        "MULTI_LANE_DAILY_FACTORY_DAILY_SCALPER_PACK_V1_ENTRY_CUTOFF_MINUTE": "1200",
+        "MULTI_LANE_DAILY_FACTORY_FORCE_FLATTEN_MINUTE": "1430",
+    })
+
+    assert cfg.enabled is True
+    assert cfg.entry_cutoff_minute == 1200
+    assert cfg.force_flatten_minute == 1430
 
 
 def test_multi_lane_builds_stealth_trail_bbp_strategy():

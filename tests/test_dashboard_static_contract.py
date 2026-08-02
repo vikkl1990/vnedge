@@ -123,6 +123,16 @@ def test_dashboard_scanner_tape_renders_trade_lifecycle_truth():
     assert "TP ladder journal-only" in html
 
 
+def test_dashboard_renders_daily_signal_factory_lane_truth():
+    html = _index()
+    assert "function dailyFactoryView" in html
+    assert "dailyFactoryChip(l.daily_factory)" in html
+    assert "Daily factory" in html
+    assert "force flat" in html
+    assert "target hit" in html
+    assert "day open" in html
+
+
 def test_dashboard_panel_sections_are_balanced():
     html = _index()
     assert html.count("<section") == html.count("</section>")
