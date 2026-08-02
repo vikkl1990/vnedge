@@ -44,6 +44,11 @@ class ActiveExitState:
     tp_index: int = 0
     mfe_price: float | None = None
     tp_history: list[float] = field(default_factory=list)
+    #: Dynamic ATR-chandelier trail. 0.0 = no trailing (arm-and-lock only, the
+    #: legacy behavior). > 0 trails the stop `trail_atr_mult × ATR` behind the
+    #: peak favorable price, ratcheted TIGHTER only — a real trailing engine, not
+    #: a one-time lock. Shared identically by backtest / shadow / paper / live.
+    trail_atr_mult: float = 0.0
 
     @classmethod
     def from_signal(
@@ -52,6 +57,7 @@ class ActiveExitState:
         *,
         entry_price: float | None = None,
         quantity: float | None = None,
+        trail_atr_mult: float = 0.0,
     ) -> "ActiveExitState":
         return cls(
             side=signal.side,
@@ -64,6 +70,7 @@ class ActiveExitState:
             take_profit_levels=_clean_levels(signal.take_profit_levels),
             entry_price=entry_price if _positive(entry_price) else None,
             original_quantity=quantity if _positive(quantity) else None,
+            trail_atr_mult=max(0.0, float(trail_atr_mult)),
         )
 
     def seed_entry(self, *, entry_price: float | None, quantity: float | None) -> None:
@@ -172,6 +179,19 @@ class ActiveExitState:
                 mfe_price=self.mfe_price,
             )
         return None
+
+    def trail_stop(self, atr: float) -> None:
+        """Ratchet the stop to an ATR-chandelier level behind the peak favorable
+        price. Tighten-ONLY. Call once per bar AFTER a non-exit decide(), so this
+        bar's favorable extreme (already in mfe_price) sets a stop that applies to
+        LATER bars — never rescued inside its own bar (no intrabar lookahead)."""
+        if self.trail_atr_mult <= 0.0 or not _positive(atr) or self.mfe_price is None:
+            return
+        dist = self.trail_atr_mult * float(atr)
+        candidate = (
+            self.mfe_price - dist if self.side == "long" else self.mfe_price + dist
+        )
+        self.active_stop_price = _better_stop(self.side, self.current_stop, candidate)
 
     def mark_accepted(self, decision: ActiveExitDecision) -> None:
         if decision.tp_number <= 0 or decision.final:
