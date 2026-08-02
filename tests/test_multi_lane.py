@@ -318,6 +318,71 @@ def test_paper_observation_flag_off_is_a_no_op_on_desired_set():
     assert lane_specs_fingerprint(base) == lane_specs_fingerprint(off)
 
 
+def test_governor_paper_roster_filter_keeps_only_proposed_paper_lanes(tmp_path):
+    governor = {
+        "proposed_roster": {
+            "paper_lanes": [
+                {
+                    "lane_id": "funding_mr_btc_v1_20260703",
+                    "strategy_id": "funding_mean_reversion_v1",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                }
+            ]
+        }
+    }
+    path = tmp_path / "paper_lane_governor_latest.json"
+    path.write_text(json.dumps(governor))
+
+    specs = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+    })
+
+    paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
+    assert paper_ids == ["funding_mr_btc_v1_20260703"]
+    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
+    assert any(spec.mode is RunnerMode.SHADOW for spec in specs)
+
+
+def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primary(tmp_path):
+    governor = {
+        "proposed_roster": {
+            "paper_lanes": [
+                {
+                    "lane_id": "human_readable_alias",
+                    "strategy_id": "funding_mean_reversion_v1",
+                    "exchange": "bybit",
+                    "symbol": "BTC/USDT",
+                    "timeframe": "1h",
+                }
+            ]
+        }
+    }
+    path = tmp_path / "paper_lane_governor_latest.json"
+    path.write_text(json.dumps(governor))
+
+    specs = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+    })
+
+    paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
+    assert paper_ids == ["funding_mr_bybit_20260704"]
+    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_bybit_20260704"
+
+
+def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path):
+    base = desired_lane_specs({})
+    filtered = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(tmp_path / "missing.json"),
+    })
+
+    assert [spec.lane_id for spec in filtered] == [spec.lane_id for spec in base]
+
+
 def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
     # PRUNE_DEAD off: this exercises the MIRRORING logic against the full roster,
     # independent of which strategies the evidence-prune removes.
