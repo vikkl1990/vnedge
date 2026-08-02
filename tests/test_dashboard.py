@@ -165,7 +165,9 @@ def test_dashboard_shell_is_the_perps_desk(client):
     assert "/lane-survival" in html
     assert "Paper Lane Governor" in html
     assert "/paper-lane-governor" in html
-    assert "Paper Roster Drift" in html
+    # #358 renamed this panel "Paper Roster Drift" -> "Unified Lane Roster"
+    # (same id/endpoint, now the governor-bounded roster view).
+    assert "Unified Lane Roster" in html
     assert "/paper-roster-drift" in html
     assert "Maker Quote Lifecycle" in html
     assert "/maker-quote-lifecycle" in html
