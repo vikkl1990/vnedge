@@ -402,10 +402,13 @@ def test_lane_survival_reconciles_paper_truth_boards():
     assert "--min-profit-factor" in service["command"]
     assert "--min-avg-net-bps" in service["command"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    # Lean-by-default (2026-08-02): paper-route-doctor / paper-lane-cadence moved
+    # to the `research` profile. lane-survival reads their output from the shared
+    # research volume (stale-OK), so it no longer GATES on them — only on the two
+    # core paper-lane services. Detangling is what keeps the core startable
+    # without pulling the whole research cluster in.
     assert set(service["depends_on"]) == {
         "paper-lane-activation",
-        "paper-route-doctor",
-        "paper-lane-cadence",
         "paper-lane-performance",
     }
 
@@ -614,14 +617,13 @@ def test_evidence_index_publisher_reconciles_research_artifacts():
     assert "research/live_research/evidence_index_feed.jsonl" in service["command"]
     assert "./research/pine_scripts:/app/research/pine_scripts:ro" in service["volumes"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
-    assert set(service["depends_on"]) == {
-        "pine-backtest-evidence",
-        "scanner-backtest-uplift",
-        "alpha-arena-lite",
-        "fee-wall-forensics",
-        "candidate-replay-executor",
-        "vnedge-algo-ml-pro-contract-matrix",
-    }
+    # Lean-by-default (2026-08-02): the six research producers moved to the
+    # `research` profile. evidence-index-publisher aggregates their artifacts by
+    # READING them from the shared research volume (stale-OK), so it no longer
+    # gates on them — it runs in the lean core with no depends_on, indexing
+    # whatever artifacts are present.
+    assert "profiles" not in service  # stays in the always-on core
+    assert "depends_on" not in service
 
 
 def test_execution_replay_profile_publishes_execution_truth_surface():
@@ -748,3 +750,24 @@ def test_dashboard_tls_is_gated_on_dashboard_health():
     # long-form dependency gating the public proxy on the dashboard being HEALTHY
     assert isinstance(dep, dict)
     assert dep["multi-lane-shadow"]["condition"] == "service_healthy"
+
+
+def test_lean_core_is_the_default_profile_and_research_is_opt_in():
+    """Lean-by-default (2026-08-02): exactly the 12 core services run by default;
+    the other 54 carry the `research` profile (opt-in). No core service may
+    depend on a profiled service, or `docker compose up` would drag the whole
+    research cluster back in and re-wedge the box."""
+    services = compose_services()
+    core = {name for name, cfg in services.items() if "profiles" not in cfg}
+    research = {name for name, cfg in services.items() if "research" in (cfg.get("profiles") or [])}
+    assert len(services) == len(core) + len(research)
+    assert core == {
+        "multi-lane-shadow", "dashboard-tls", "realtime-scanner", "lane-survival",
+        "paper-lane-governor", "paper-lane-performance", "paper-roster-drift",
+        "evidence-index-publisher", "ml-pipeline-status", "paper-lane-activation",
+        "lane-firing-causality", "bitcoin-regime-sensor",
+    }
+    for name in core:
+        dep = services[name].get("depends_on") or []
+        deps = set(dep.keys()) if isinstance(dep, dict) else set(dep)
+        assert not (deps & research), f"{name} gates on research service(s): {deps & research}"
