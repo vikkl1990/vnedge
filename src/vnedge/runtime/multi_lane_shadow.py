@@ -184,7 +184,7 @@ def crypto_trend_doge_shadow_lanes(
         return []
     if "binanceusdm" not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
         return []
-    return [
+    lanes = [
         LaneSpec(
             lane_id="crypto_trend_doge_binanceusdm_shadow",
             exchange="binanceusdm",
@@ -195,6 +195,25 @@ def crypto_trend_doge_shadow_lanes(
             mode=RunnerMode.SHADOW,
         )
     ]
+    # PAPER trial — human-approved 2026-08-03 after a pre-registered untouched
+    # PASS (prereg_20260803: DOGE 1h 2024-01-01→2025-07-03, +$191.5 OOS, standard
+    # gates). Runs the EXACT judged exit: active-exit + ATR trail 3× (trail_atr_mult
+    # on the RunnerConfig). Simulated fills only — no live orders. Toggle off with
+    # MULTI_LANE_CRYPTO_TREND_DOGE_PAPER=0.
+    if _truthy(environ, "MULTI_LANE_CRYPTO_TREND_DOGE_PAPER", "1"):
+        lanes.append(
+            LaneSpec(
+                lane_id="crypto_trend_doge_binanceusdm_paper",
+                exchange="binanceusdm",
+                symbol="DOGE/USDT:USDT",
+                timeframe="1h",
+                strategy_id="crypto_trend_atr_margin_v1",
+                strategy_params=CRYPTO_TREND_ATR_MARGIN_PARAMS,
+                mode=RunnerMode.PAPER,
+                trail_atr_mult=3.0,
+            )
+        )
+    return lanes
 
 
 def _truthy(environ: Mapping[str, str], name: str, default: str) -> bool:
