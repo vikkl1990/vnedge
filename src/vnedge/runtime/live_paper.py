@@ -663,6 +663,26 @@ class LivePaperSession:
             now,
         )
 
+    def _max_holding_hit(self, bar: pd.Series) -> bool:
+        """True once the open plan has been held for ``max_holding_bars`` closed
+        bars — the SAME time cap the backtester (and shadow) enforce, so a
+        paper/live position times out exactly like the config it was judged
+        under. Counted statelessly from the persisted ``entry_bar_ts`` against
+        the (untrimmed, resume-seeded) candle history, so it survives restarts.
+        """
+        cap = self.config.max_holding_bars
+        if cap <= 0 or self._plan is None:
+            return False
+        entry_ts = self._plan.entry_bar_ts
+        current_ts = pd.Timestamp(bar["timestamp"])
+        held = int(
+            (
+                (self.candles["timestamp"] > entry_ts)
+                & (self.candles["timestamp"] <= current_ts)
+            ).sum()
+        )
+        return held >= cap
+
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
             return
@@ -674,6 +694,7 @@ class LivePaperSession:
             position_quantity=self._current_position_quantity(),
             min_qty=self.config.limits.min_qty,
             qty_step=self.config.limits.qty_step,
+            max_holding_hit=self._max_holding_hit(bar),
         )
         if decision is None:
             decision = self._strategy_exit_decision(bar)
