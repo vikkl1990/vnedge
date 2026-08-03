@@ -241,7 +241,10 @@ def test_stealth_trail_bbp_delta_lanes_are_shadow_first_and_5m():
 
 
 def test_stealth_trail_bbp_lanes_can_be_paper_observed_without_promotion():
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    specs = desired_lane_specs({
+        "MULTI_LANE_EARNED_ONLY": "0",
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+    })
     ids = {spec.lane_id for spec in specs}
 
     assert "stealth_trail_bbp_delta_india_eth_usd_usd_shadow" in ids

@@ -20,6 +20,7 @@ def _env(**over):
         # These tests exercise velocity-lane GENERATION/mirroring, independent of
         # the evidence prune. sats_5m_scalper_v1 was cut 2026-08-02 (-$681 ledger),
         # so run the generation logic with the prune off.
+        "MULTI_LANE_EARNED_ONLY": "0",
         "MULTI_LANE_PRUNE_DEAD": "0",
     }
     base.update(over)

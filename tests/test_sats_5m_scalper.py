@@ -183,7 +183,11 @@ def test_sats_5m_lanes_can_be_paper_observed_without_promotion():
     # tests the paper-observation mirroring of sats_5m lanes; sats_5m_scalper_v1
     # was evidence-pruned 2026-08-02 (-$681 ledger), so run the mirror logic with
     # the prune off.
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1", "MULTI_LANE_PRUNE_DEAD": "0"})
+    specs = desired_lane_specs({
+        "MULTI_LANE_EARNED_ONLY": "0",
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+        "MULTI_LANE_PRUNE_DEAD": "0",
+    })
     ids = {spec.lane_id for spec in specs}
 
     assert "sats_5m_scalper_delta_india_eth_usd_usd_shadow" in ids

@@ -131,6 +131,7 @@ DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
 DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
 DELTA_EXCHANGE = "delta_india"
+MINIMAL_FLEET_ENV = "MULTI_LANE_EARNED_ONLY"
 
 # The human-approved PAPER trials, keyed by (exchange, symbol). Their PAPER
 # lane reuses these exact ids so it continues the governed trial (account
@@ -1305,6 +1306,26 @@ def _pruned_lane(spec: LaneSpec) -> bool:
     return False
 
 
+def _earned_live_lane(spec: LaneSpec) -> bool:
+    """Default live fleet: only earned paper lanes plus their shadow comparators.
+
+    Research cohorts remain available behind their explicit env switches, but
+    the production VM should not keep noisy negative/under-earned scanners
+    running by default. This is intentionally narrower than ``_pruned_lane``:
+    pruning removes known-dead families; earned-only keeps just the lanes with
+    human-approved/OOS evidence and a minimal shadow twin for operator parity.
+    """
+    strat = str(spec.strategy_id or "")
+    base_symbol = str(spec.symbol or "").split("/")[0].upper()
+    if strat == "funding_mean_reversion_v1" and base_symbol == "BTC":
+        return True
+    return (
+        strat == "crypto_trend_atr_margin_v1"
+        and base_symbol == "DOGE"
+        and spec.exchange == "binanceusdm"
+    )
+
+
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """The full deduped spec list the runner is SUPPOSED to run.
 
@@ -1337,6 +1358,17 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     # mirrors are dropped too). Toggle off with MULTI_LANE_PRUNE_DEAD=0.
     if _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1"):
         base = [spec for spec in base if not _pruned_lane(spec)]
+    # Default production posture after the 2026-08-03 operational self-audit:
+    # paper/shadow runs only for earned lanes. Research scanners are opt-in with
+    # MULTI_LANE_EARNED_ONLY=0 so exploration stays possible without bleeding
+    # the default fleet or making the cockpit look busier than the evidence.
+    if _truthy(environ, MINIMAL_FLEET_ENV, "1"):
+        base = [spec for spec in base if _earned_live_lane(spec)]
+        if not base:
+            raise ValueError(
+                "earned-only multi-lane configuration produced no runnable lanes; "
+                f"set {MINIMAL_FLEET_ENV}=0 for research cohorts"
+            )
     return _governor_paper_roster_filter(
         dedupe_lane_specs(base + paper_observation_lanes(base, environ)),
         environ,
@@ -1361,6 +1393,7 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
             "mode": spec.mode.value,
             "strategy_id": spec.strategy_id,
             "strategy_params": spec.strategy_params or {},
+            "trail_atr_mult": spec.trail_atr_mult,
             "starting_equity": spec.starting_equity,
             "daily_loss_usd": spec.daily_loss_usd,
             "is_primary": spec.is_primary,

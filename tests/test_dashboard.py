@@ -1552,10 +1552,18 @@ def _history_world(tmp_path):
     _write_jsonl(tmp_path / "beta.equity.jsonl", [
         {"ts": recent, "equity": 250.0},
     ])
+    _write_jsonl(tmp_path / "ghost.equity.jsonl", [
+        {"ts": recent, "equity": 999.0},
+    ])
     _write_jsonl(tmp_path / "beta.fills.jsonl", [
         {"ts": recent, "symbol": SYM, "side": "buy", "quantity": 0.01,
          "price": 100.0, "fee_usd": 0.02, "realized_pnl_usd": 0.0,
          "client_order_id": "c1", "prev_hash": "0" * 64, "hash": "aa"},
+    ])
+    _write_jsonl(tmp_path / "ghost.fills.jsonl", [
+        {"ts": recent, "symbol": SYM, "side": "sell", "quantity": 0.99,
+         "price": 999.0, "fee_usd": 9.99, "realized_pnl_usd": -99.0,
+         "client_order_id": "stale", "prev_hash": "0" * 64, "hash": "bb"},
     ])
     provider = SnapshotProvider()
     provider.publish({
@@ -1643,6 +1651,12 @@ def test_export_csv_shape_and_auth(tmp_path):
     assert all(row["ts"] >= old for row in windowed)
     assert not any(row["detail"] == "old fill" for row in windowed)
 
+    # A retired lane's ledgers can remain on disk, but active-lane snapshots
+    # keep side exports from showing stale P&L as if it were still live.
+    ghost = list(csv.DictReader(io.StringIO(
+        client.get("/export.csv?token=t3st-token&lane=ghost").text)))
+    assert ghost == []
+
 
 def _write_jsonl(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1727,6 +1741,31 @@ def test_trade_journal_route_projects_journal_and_fill_ledgers(tmp_path):
             },
         },
     ])
+    _write_jsonl(tmp_path / "ghost.journal.jsonl", [
+        {
+            "ts": "2026-07-16T02:59:30+00:00",
+            "kind": "shadow_outcome",
+            "payload": {
+                "intent_key": "stale",
+                "resolution": "stop",
+                "side": "short",
+                "virtual_net_usd": -12.34,
+            },
+        },
+    ])
+    _write_jsonl(tmp_path / "ghost.fills.jsonl", [
+        {
+            "ts": "2026-07-16T02:59:45+00:00",
+            "symbol": SYM,
+            "side": "buy",
+            "quantity": 1,
+            "price": 120.0,
+            "fee_usd": 0.5,
+            "realized_pnl_usd": -12.34,
+            "client_order_id": "stale-exit",
+            "hash": "def",
+        },
+    ])
     client = TestClient(create_app(
         provider, token="t3st-token",
         history_path=tmp_path / "alpha.equity.jsonl", journal_dir=tmp_path,
@@ -1752,6 +1791,12 @@ def test_trade_journal_route_projects_journal_and_fill_ledgers(tmp_path):
         "shadow_outcome",
     }
     assert any(event["source"] == "snapshot_trade_log" for event in payload["events"])
+
+    stale = client.get("/trade-journal?token=t3st-token&lane=ghost").json()
+    assert stale["summary"]["fills"] == 0
+    assert stale["summary"]["closed_trades"] == 0
+    assert stale["fills"] == []
+    assert stale["closed_trades"] == []
 
 
 def _incident_world(tmp_path):
@@ -1832,6 +1877,38 @@ def test_incidents_limit_param_and_missing_files(tmp_path):
         journal_dir=tmp_path / "missing",
     ))
     assert bare.get("/incidents?token=t3st-token").json() == []
+
+
+def test_incidents_hide_retired_lane_journals_when_snapshot_is_lane_aware(tmp_path):
+    _write_jsonl(tmp_path / "active.journal.jsonl", [
+        {"ts": "2026-07-10T05:00:00+00:00", "kind": "emergency_flatten_started",
+         "payload": {"flatten_id": "live"}},
+    ])
+    _write_jsonl(tmp_path / "ghost.journal.jsonl", [
+        {"ts": "2026-07-10T06:00:00+00:00", "kind": "emergency_flatten_started",
+         "payload": {"flatten_id": "stale"}},
+    ])
+    _write_jsonl(tmp_path / "active.alerts.jsonl", [
+        {"ts": "2026-07-10T05:30:00+00:00", "rule_id": "feed_stale",
+         "severity": "warning", "message": "active stale"},
+    ])
+    _write_jsonl(tmp_path / "ghost.alerts.jsonl", [
+        {"ts": "2026-07-10T06:30:00+00:00", "rule_id": "feed_stale",
+         "severity": "critical", "message": "retired stale"},
+    ])
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "lanes": [{"lane_id": "active"}]})
+    client = TestClient(create_app(
+        provider, token="t3st-token", journal_dir=tmp_path
+    ))
+
+    incidents = client.get("/incidents?token=t3st-token").json()
+    assert {row["source"] for row in incidents} == {
+        "journal:active",
+        "alert:feed_stale",
+    }
+    assert all("stale" not in row["message"] or row["message"] == "active stale"
+               for row in incidents)
 
 
 def test_runbooks_route_is_auth_gated_and_anchored(client):
