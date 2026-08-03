@@ -129,10 +129,11 @@ def timed_rows(start: str, offsets: tuple[int, ...], low=99.5, high=100.5):
 
 def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
                   tick_stops_enabled=True, post_exit_cooldown_bars=1,
-                  trial_meta=None, daily_factory=None):
+                  trial_meta=None, daily_factory=None, max_holding_bars=48):
     config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
                           tick_stops_enabled=tick_stops_enabled,
                           post_exit_cooldown_bars=post_exit_cooldown_bars,
+                          max_holding_bars=max_holding_bars,
                           daily_factory=daily_factory or DailySignalFactoryConfig())
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
@@ -353,6 +354,39 @@ async def test_stop_exit_on_live_bar(tmp_path):
     assert exchange.get_positions() == []  # stopped out, flat
     assert report.fills == 2
     assert report.realized_pnl_usd < 0
+
+
+async def test_max_holding_times_out_paper_position(tmp_path):
+    # Parity with the backtester/shadow: a position that never hits its stop (95)
+    # or TP (106) must time out at max_holding_bars. Enter on bar 1, then feed
+    # three quiet held bars; with max_holding_bars=3 the third forces the exit.
+    rows = live_rows(n=1) + live_rows(start=6, n=3)
+    feed = FakeFeed(rows)
+    session, exchange = build_session(
+        tmp_path, feed, strategy=LongOnce(),
+        max_holding_bars=3, post_exit_cooldown_bars=0,
+    )
+    await session.run(max_bars=4)
+    assert exchange.get_positions() == []  # timed out, flat
+    exits = [
+        r["payload"]
+        for r in session.journal.read_all()
+        if r["kind"] == "live_paper_exit"
+    ]
+    assert any(e["reason"] == "max_holding" for e in exits), exits
+
+
+async def test_position_held_below_max_holding_stays_open(tmp_path):
+    # The cap must not fire early: two quiet held bars under a cap of 3 keep the
+    # position open (guards against an off-by-one that would exit too soon).
+    rows = live_rows(n=1) + live_rows(start=6, n=2)
+    feed = FakeFeed(rows)
+    session, exchange = build_session(
+        tmp_path, feed, strategy=LongOnce(),
+        max_holding_bars=3, post_exit_cooldown_bars=0,
+    )
+    await session.run(max_bars=3)
+    assert len(exchange.get_positions()) == 1  # still holding
 
 
 async def test_live_paper_ladder_partial_arms_breakeven(tmp_path):

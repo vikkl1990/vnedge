@@ -241,7 +241,11 @@ def test_stealth_trail_bbp_delta_lanes_are_shadow_first_and_5m():
 
 
 def test_stealth_trail_bbp_lanes_can_be_paper_observed_without_promotion():
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    # stealth_trail is pruned from the default roster (2026-08-03 hard-cut);
+    # prune-off verifies the generator + paper-observation wiring still work.
+    specs = desired_lane_specs(
+        {"MULTI_LANE_PAPER_OBSERVE_ALL": "1", "MULTI_LANE_PRUNE_DEAD": "0"}
+    )
     ids = {spec.lane_id for spec in specs}
 
     assert "stealth_trail_bbp_delta_india_eth_usd_usd_shadow" in ids

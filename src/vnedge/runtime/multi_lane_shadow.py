@@ -184,7 +184,7 @@ def crypto_trend_doge_shadow_lanes(
         return []
     if "binanceusdm" not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
         return []
-    return [
+    lanes = [
         LaneSpec(
             lane_id="crypto_trend_doge_binanceusdm_shadow",
             exchange="binanceusdm",
@@ -195,6 +195,25 @@ def crypto_trend_doge_shadow_lanes(
             mode=RunnerMode.SHADOW,
         )
     ]
+    # PAPER trial — human-approved 2026-08-03 after a pre-registered untouched
+    # PASS (prereg_20260803: DOGE 1h 2024-01-01→2025-07-03, +$191.5 OOS, standard
+    # gates). Runs the EXACT judged exit: active-exit + ATR trail 3× (trail_atr_mult
+    # on the RunnerConfig). Simulated fills only — no live orders. Toggle off with
+    # MULTI_LANE_CRYPTO_TREND_DOGE_PAPER=0.
+    if _truthy(environ, "MULTI_LANE_CRYPTO_TREND_DOGE_PAPER", "1"):
+        lanes.append(
+            LaneSpec(
+                lane_id="crypto_trend_doge_binanceusdm_paper",
+                exchange="binanceusdm",
+                symbol="DOGE/USDT:USDT",
+                timeframe="1h",
+                strategy_id="crypto_trend_atr_margin_v1",
+                strategy_params=CRYPTO_TREND_ATR_MARGIN_PARAMS,
+                mode=RunnerMode.PAPER,
+                trail_atr_mult=3.0,
+            )
+        )
+    return lanes
 
 
 def _truthy(environ: Mapping[str, str], name: str, default: str) -> bool:
@@ -1254,9 +1273,21 @@ def velocity_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSp
 # Running them only pins the VM and buries the few real signals in noise. Pruned
 # here (before paper-observation mirroring, so mirrors go too). REVERSIBLE:
 # remove a rule to bring a family back, or set MULTI_LANE_PRUNE_DEAD=0 to disable
-# the whole filter without a code change. KEEP: funding-MR BTC (proven 3× OOS+),
-# quant_signal_pack ETH/SOL (paper-positive), the vol-breakout / evidence /
-# crypto-trend-DOGE candidates. Rare-event lanes are not in this set.
+# the whole filter without a code change.
+#
+# KEEP (the only survivors): funding-MR BTC (proven 3× OOS+, the one paper
+# earner) and crypto-trend-DOGE (OOS PASS, human-approved to paper). Everything
+# else is cut.
+#
+# HUMAN-DIRECTED HARD CUT (2026-08-03): the operator chose an aggressive
+# lean-fleet cut over the default promotion discipline. NOTE FOR THE RECORD:
+# some strategies below (volatility_expansion_breakout_v1 OOS-passed on
+# DOGE/BTC; quant_signal_pack ETH/SOL documented paper-positive; stealth_trail
+# the claimed maker edge; vnedge_algo_ml_pro the ML evidence lane) were cut by
+# explicit operator direction on a recent live-shadow loss, NOT by the
+# pre-registered promotion machinery. This is deliberately recorded as an
+# override so it is never mistaken for the discipline rejecting them — restore
+# any of them (or set MULTI_LANE_PRUNE_DEAD=0) to resume observation.
 _PRUNED_STRATEGIES = frozenset(
     {
         "alpha_stack_confluence_v1",  # NO_TRADE_EVIDENCE every symbol; 0 edge
@@ -1267,6 +1298,14 @@ _PRUNED_STRATEGIES = frozenset(
                                       # 5m scalping is noise, 63% of losers gave back a
                                       # >15bps profit (no breakeven/trailing stop)
         "context_scalper_v2",         # -$27 / 14% win — no edge
+        # Human-directed aggressive cut 2026-08-03 (override, see note above):
+        "quant_signal_pack_v1",         # -$164 live shadow across symbols
+        "volatility_expansion_breakout_v1",  # -$48 live (OOS-passed — override)
+        "vnedge_algo_ml_pro_v1",        # ML evidence lane — paused per operator
+        "stealth_trail_bbp_v1",         # maker fee-wall probe — claimed edge, thin
+        "luxara_live_plan_qtm_v1",      # fee-wall probe, no OOS pedigree
+        "fvg_liquidity_breakout_v1",    # experimental scanner, no earner status
+        "luxara_break_bounce_v27_v1",   # experimental scanner, no earner status
     }
 )
 

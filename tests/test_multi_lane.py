@@ -347,7 +347,8 @@ def test_delta_paper_opt_in_still_uses_candle_only_strategy():
 
 def test_crypto_trend_doge_shadow_lane_enabled_by_default():
     lanes = crypto_trend_doge_shadow_lanes({})
-    assert len(lanes) == 1
+    # Shadow twin + the human-approved paper lane (prereg PASS 2026-08-03).
+    assert len(lanes) == 2
     lane = lanes[0]
     assert lane.lane_id == "crypto_trend_doge_binanceusdm_shadow"
     assert lane.exchange == "binanceusdm"
@@ -356,6 +357,27 @@ def test_crypto_trend_doge_shadow_lane_enabled_by_default():
     assert lane.strategy_id == "crypto_trend_atr_margin_v1"
     assert lane.mode is RunnerMode.SHADOW
     assert lane.strategy_params["take_profit_r"] is None
+    # Shadow twin keeps the legacy exit; only the paper lane carries the trail.
+    assert lane.trail_atr_mult == 0.0
+
+
+def test_crypto_trend_doge_paper_lane_runs_judged_exit():
+    # The paper lane must run the EXACT exit its promotion evidence was measured
+    # on: active-exit + ATR chandelier trail 3x (trail_atr_mult=3.0).
+    paper = [
+        l for l in crypto_trend_doge_shadow_lanes({})
+        if l.mode is RunnerMode.PAPER
+    ]
+    assert len(paper) == 1
+    lane = paper[0]
+    assert lane.lane_id == "crypto_trend_doge_binanceusdm_paper"
+    assert lane.strategy_id == "crypto_trend_atr_margin_v1"
+    assert lane.trail_atr_mult == 3.0
+
+
+def test_crypto_trend_doge_paper_lane_can_be_disabled():
+    lanes = crypto_trend_doge_shadow_lanes({"MULTI_LANE_CRYPTO_TREND_DOGE_PAPER": "0"})
+    assert [l.mode for l in lanes] == [RunnerMode.SHADOW]
 
 
 def test_crypto_trend_doge_shadow_lane_can_be_disabled():
@@ -974,12 +996,17 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
     # cut 2026-08-02 from the full-ledger pattern study (proven losers)
     assert _pruned_lane(spec("sats_5m_scalper_v1", "ETH/USD:USD"))   # -$681 / 29% win
     assert _pruned_lane(spec("context_scalper_v2", "ETH/USD:USD"))   # -$27 / 14% win
-    # kept — the real edge / candidates
+    # human-directed aggressive hard-cut 2026-08-03 (override; earners only)
+    assert _pruned_lane(spec("quant_signal_pack_v1", "ETH/USDT:USDT"))
+    assert _pruned_lane(spec("quant_signal_pack_v1", "SOL/USDT:USDT"))
+    assert _pruned_lane(spec("volatility_expansion_breakout_v1", "DOGE/USDT:USDT"))
+    assert _pruned_lane(spec("vnedge_algo_ml_pro_v1", "ETH/USD:USD"))
+    assert _pruned_lane(spec("stealth_trail_bbp_v1", "SOL/USDT:USDT"))
+    assert _pruned_lane(spec("luxara_break_bounce_v27_v1", "BTC/USD:USD"))
+    assert _pruned_lane(spec("fvg_liquidity_breakout_v1", "ETH/USD:USD"))
+    # kept — ONLY the two earners survive the hard-cut
     assert not _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT"))
-    assert not _pruned_lane(spec("quant_signal_pack_v1", "ETH/USDT:USDT"))
-    assert not _pruned_lane(spec("quant_signal_pack_v1", "SOL/USDT:USDT"))
     assert not _pruned_lane(spec("crypto_trend_atr_margin_v1", "DOGE/USDT:USDT"))
-    assert not _pruned_lane(spec("volatility_expansion_breakout_v1", "DOGE/USDT:USDT"))
 
 
 def test_prune_toggle_and_roster_effect():
