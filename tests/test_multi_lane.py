@@ -295,28 +295,30 @@ def test_lane_specs_expand_from_env():
     assert all(spec.mode is RunnerMode.SHADOW for spec in specs)
 
 
-def test_lane_specs_default_runs_both_modes_per_venue():
-    # default env: Binance/Bybit governed paper+shadow plus Delta shadow.
+def test_lane_specs_default_runs_paper_only_roster():
+    # default env: Binance/Bybit governed paper only. Delta paper still needs
+    # explicit opt-in because the active Delta route is not a generic default.
     specs = build_lane_specs_from_env({})
-    assert len(specs) == 5
-    assert {s.mode for s in specs} == {RunnerMode.PAPER, RunnerMode.SHADOW}
+    assert len(specs) == 2
+    assert {s.mode for s in specs} == {RunnerMode.PAPER}
     ids = {s.lane_id for s in specs}
     # governed paper trials keep their exact ids (continue their account files)
     assert "funding_mr_btc_v1_20260703" in ids
     assert "funding_mr_bybit_20260704" in ids
-    # shadow lanes are distinct, isolated ids
-    assert "funding_mr_binanceusdm_btc_usdt_usdt_shadow" in ids
-    assert "funding_mr_bybit_btc_usdt_usdt_shadow" in ids
-    assert "trend_continuation_delta_india_btc_usd_usd_shadow" in ids
-    delta = next(s for s in specs if s.exchange == "delta_india")
-    assert delta.symbol == "BTC/USD:USD"
-    assert delta.mode is RunnerMode.SHADOW
-    assert delta.strategy_id == "trend_continuation_v1"
     # the flat top-level snapshot is the governed Binance PAPER lane
     primary = [s for s in specs if s.is_primary]
     assert len(primary) == 1
     assert primary[0].lane_id == "funding_mr_btc_v1_20260703"
     assert primary[0].mode is RunnerMode.PAPER
+
+
+def test_lane_specs_shadow_mode_requires_explicit_opt_in():
+    specs = build_lane_specs_from_env({"MULTI_LANE_MODES": "paper,shadow"})
+    assert {s.mode for s in specs} == {RunnerMode.PAPER, RunnerMode.SHADOW}
+    ids = {s.lane_id for s in specs}
+    assert "funding_mr_binanceusdm_btc_usdt_usdt_shadow" in ids
+    assert "funding_mr_bybit_btc_usdt_usdt_shadow" in ids
+    assert "trend_continuation_delta_india_btc_usd_usd_shadow" in ids
 
 
 def test_delta_paper_requires_explicit_opt_in():
@@ -404,7 +406,7 @@ def test_governor_paper_roster_filter_keeps_only_proposed_paper_lanes(tmp_path):
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
     assert paper_ids == ["funding_mr_btc_v1_20260703"]
     assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
-    assert any(spec.mode is RunnerMode.SHADOW for spec in specs)
+    assert not any(spec.mode is RunnerMode.SHADOW for spec in specs)
 
 
 def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primary(tmp_path):
@@ -444,10 +446,36 @@ def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path
     assert [spec.lane_id for spec in filtered] == [spec.lane_id for spec in base]
 
 
+def test_completed_empty_survivor_registry_keeps_only_governed_baselines(tmp_path):
+    registry = {
+        "report_id": "paper_only_survivor_registry_v1",
+        "source_complete": True,
+        "proposed_roster": {"paper_lanes": []},
+    }
+    path = tmp_path / "paper_only_survivor_registry_latest.json"
+    path.write_text(json.dumps(registry))
+
+    specs = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+    })
+
+    assert [spec.lane_id for spec in specs] == [
+        "funding_mr_btc_v1_20260703",
+        "funding_mr_bybit_20260704",
+    ]
+    assert all(spec.mode is RunnerMode.PAPER for spec in specs)
+
+
 def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
     # PRUNE_DEAD off: this exercises the MIRRORING logic against the full roster,
     # independent of which strategies the evidence-prune removes.
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1", "MULTI_LANE_PRUNE_DEAD": "0"})
+    specs = desired_lane_specs({
+        "MULTI_LANE_MODES": "paper,shadow",
+        "MULTI_LANE_PAPER_ONLY": "0",
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+        "MULTI_LANE_PRUNE_DEAD": "0",
+    })
     ids = {spec.lane_id for spec in specs}
 
     # Governed BTC/Bybit paper-trial ledgers stay canonical and are not mirrored.
@@ -473,6 +501,8 @@ def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
 
 def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors():
     specs = desired_lane_specs({
+        "MULTI_LANE_MODES": "paper,shadow",
+        "MULTI_LANE_PAPER_ONLY": "0",
         "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
         "MULTI_LANE_DELTA_PAPER_OBSERVE": "0",
         # mirroring logic under test — independent of the evidence-prune:
@@ -983,7 +1013,11 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
 
 
 def test_prune_toggle_and_roster_effect():
-    env = {"MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india"}
+    env = {
+        "MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india",
+        "MULTI_LANE_MODES": "paper,shadow",
+        "MULTI_LANE_PAPER_ONLY": "0",
+    }
     on = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "1"})
     off = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "0"})
     assert len(on) <= len(off)  # prune never adds lanes

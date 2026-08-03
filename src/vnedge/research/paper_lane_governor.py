@@ -5,7 +5,7 @@ turns that into a proposed operating roster:
 
 * which lanes stay in paper observation,
 * which lanes move into a survivor tournament,
-* which lanes should be demoted back to shadow/research,
+* which lanes should be quarantined out of paper/research,
 * which lanes must be repaired before they can be judged.
 
 It is deliberately read-only. It writes recommendations and autopsies only;
@@ -31,7 +31,7 @@ DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "paper_lane_governor_feed.jsonl"
 
 ACTION_KEEP_PAPER_SURVIVOR = "KEEP_PAPER_SURVIVOR"
 ACTION_EXTEND_PAPER_SAMPLE = "EXTEND_PAPER_SAMPLE"
-ACTION_DEMOTE_TO_SHADOW_RECOMMENDED = "DEMOTE_TO_SHADOW_RECOMMENDED"
+ACTION_DEMOTE_TO_SHADOW_RECOMMENDED = "QUARANTINE_PAPER_LANE"
 ACTION_HOLD_PAPER_PROBATION = "HOLD_PAPER_PROBATION"
 ACTION_REPAIR_ROUTE_OR_CADENCE = "REPAIR_ROUTE_OR_CADENCE"
 ACTION_REPAIR_LEDGER = "REPAIR_LEDGER"
@@ -40,7 +40,7 @@ ACTION_WAIT_FOR_TRADE_EVIDENCE = "WAIT_FOR_TRADE_EVIDENCE"
 
 BUCKET_PAPER_ROSTER = "PAPER_ROSTER"
 BUCKET_SURVIVOR_TOURNAMENT = "SURVIVOR_TOURNAMENT"
-BUCKET_DEMOTION_QUEUE = "DEMOTION_QUEUE"
+BUCKET_DEMOTION_QUEUE = "PAPER_QUARANTINE"
 BUCKET_PROBATION_QUEUE = "PROBATION_QUEUE"
 BUCKET_REPAIR_QUEUE = "REPAIR_QUEUE"
 BUCKET_RESEARCH_ONLY = "RESEARCH_ONLY"
@@ -134,7 +134,7 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 40) -> str:
             f"{summary.get('paper_roster', 0)} paper roster, "
             f"{summary.get('survivor_tournament', 0)} tournament, "
             f"{summary.get('probation_queue', 0)} probation, "
-            f"{summary.get('demotion_queue', 0)} demote, "
+            f"{summary.get('paper_quarantine', 0)} quarantine, "
             f"{summary.get('repair_queue', 0)} repair"
         ),
     ]
@@ -227,11 +227,14 @@ def _action_bucket(
             BUCKET_REPAIR_QUEUE,
             "route, heartbeat, or evaluation cadence is not trustworthy",
         )
-    if decision == "DEMOTE_TO_SHADOW" or survival_state == "DEMOTE_TO_SHADOW":
+    if decision in {"DEMOTE_TO_SHADOW", "QUARANTINE_PAPER"} or survival_state in {
+        "DEMOTE_TO_SHADOW",
+        "PAPER_QUARANTINE",
+    }:
         return (
             ACTION_DEMOTE_TO_SHADOW_RECOMMENDED,
             BUCKET_DEMOTION_QUEUE,
-            "paper evidence is negative after costs; stop spending paper cycles here",
+            "paper evidence is negative after costs; quarantine from the paper roster",
         )
     if survival_state == "RESEARCH_ONLY" or decision == "KEEP_RESEARCH_ONLY":
         return (
@@ -272,12 +275,12 @@ def _action_bucket(
         return (
             ACTION_DEMOTE_TO_SHADOW_RECOMMENDED,
             BUCKET_DEMOTION_QUEUE,
-            "negative lane crossed the governor demotion sample threshold",
+            "negative lane crossed the governor quarantine sample threshold",
         )
     return (
         ACTION_HOLD_PAPER_PROBATION,
         BUCKET_PROBATION_QUEUE,
-        "negative but under-sampled; keep in shadow-observe until exit autopsy improves",
+        "negative but under-sampled; hold out of active paper until exit autopsy improves",
     )
 
 
@@ -388,6 +391,7 @@ def _summary(rows: list[dict[str, Any]], *, config: PaperLaneGovernorConfig) -> 
         "total_lanes": len(rows),
         "paper_roster": len(paper_roster),
         "survivor_tournament": buckets[BUCKET_SURVIVOR_TOURNAMENT],
+        "paper_quarantine": buckets[BUCKET_DEMOTION_QUEUE],
         "demotion_queue": buckets[BUCKET_DEMOTION_QUEUE],
         "probation_queue": buckets[BUCKET_PROBATION_QUEUE],
         "repair_queue": buckets[BUCKET_REPAIR_QUEUE],
@@ -425,8 +429,16 @@ def _proposed_roster(
     return {
         "paper_lanes": paper,
         "survivor_tournament": tournament,
+        "paper_quarantine": [
+            _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
+        ],
+        # Backward-compatible aliases for older dashboard code. New UI should
+        # read paper_quarantine/probation_watch.
         "demote_to_shadow": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
+        ],
+        "probation_watch": [
+            _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_PROBATION_QUEUE
         ],
         "probation_shadow_watch": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_PROBATION_QUEUE
@@ -447,6 +459,9 @@ def _boards(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         ],
         "survivor_tournament": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_SURVIVOR_TOURNAMENT
+        ],
+        "paper_quarantine": [
+            _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
         ],
         "demotion_queue": [
             _slim(r) for r in rows if r.get("governor_bucket") == BUCKET_DEMOTION_QUEUE
@@ -483,14 +498,14 @@ def _slim(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _operator_answer(summary: Mapping[str, Any]) -> str:
-    demote = _int(summary.get("demotion_queue"))
+    demote = _int(summary.get("paper_quarantine", summary.get("demotion_queue")))
     probation = _int(summary.get("probation_queue"))
     repair = _int(summary.get("repair_queue"))
     tournament = _int(summary.get("survivor_tournament"))
     paper = _int(summary.get("paper_roster"))
     no_evidence = _int(summary.get("no_evidence"))
     if demote:
-        return f"{demote} lane(s) are recommended for shadow demotion; stop expanding paper exposure there."
+        return f"{demote} lane(s) are paper-quarantined; stop spending paper cycles there."
     if probation:
         return f"{probation} negative under-sampled lane(s) are held out of the active paper roster."
     if repair:
