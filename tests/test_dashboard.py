@@ -96,6 +96,34 @@ def test_darwinian_agent_survival_endpoint_auth_gated_and_shaped(tmp_path):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_session_regime_endpoint_auth_gated_and_shaped(tmp_path):
+    provider = SnapshotProvider()
+    lane = "mystrat_binanceusdm_btcusdt_1h_shadow"
+    provider.publish({"mode": "shadow", "equity": 500.0,
+                      "lanes": [{"lane_id": lane}], "lane_id": lane})
+    (tmp_path / f"{lane}.journal.jsonl").write_text(
+        json.dumps({
+            "ts": "2026-08-01T15:00:00+00:00", "kind": "shadow_outcome",
+            "payload": {"symbol": "BTC/USDT:USDT", "side": "long",
+                        "resolution": "stop", "entry_price": 100.0,
+                        "exit_price": 97.0, "virtual_net_usd": -3.0,
+                        "fees_usd": 0.0, "intent_key": "k1", "bars_held": 0},
+        }) + "\n"
+    )
+    app = create_app(provider, token="t3st-token", journal_dir=tmp_path)
+    c = TestClient(app)
+
+    assert c.get("/session-regime").status_code == 401
+    r = c.get("/session-regime?token=t3st-token")
+    assert r.status_code == 200
+    p = r.json()
+    assert p["can_trade"] is False and p["can_promote"] is False
+    assert p["overall"]["trades"] == 1
+    us = [s for s in p["by_session"] if s["session"] == "us"][0]
+    assert us["net_usd"] == -3.0
+    assert p["worst_session"]["session"] == "us"
+
+
 def test_delta_5m_event_clock_endpoint_auth_gated_and_research_only(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})

@@ -60,6 +60,7 @@ from vnedge.dashboard.auth import (
 )
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
 from vnedge.research.quantified_blueprint_proof import (
@@ -986,6 +987,33 @@ def create_app(
                 snapshot=provider.latest(),
                 journal_dir=lane_dir,
                 history_path=history_path,
+                lane=lane,
+                since=since,
+                limit=limit,
+            ),
+            headers=_identity(user),
+        )
+
+    @app.get("/session-regime")
+    async def session_regime(request: Request, limit: str = "4000") -> JSONResponse:
+        """Session-regime rollup: closed trades bucketed by UTC entry session.
+
+        Answers *when* each strategy earns (asia/europe/us/late) — trades, win
+        rate, net $, worst stretch, break-even cushion per (strategy x session).
+        Recent-window view over the same active-lane-filtered ledgers as
+        /trade-journal. Read-only, no controls.
+        """
+        user = _authorized(request)
+        lane = _query_lane(request)
+        since = _since_iso(_query_days(request))
+        try:
+            limit = max(1, min(int(limit), 20000))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="limit must be an integer")
+        return JSONResponse(
+            build_session_regime(
+                snapshot=provider.latest(),
+                journal_dir=lane_dir,
                 lane=lane,
                 since=since,
                 limit=limit,
