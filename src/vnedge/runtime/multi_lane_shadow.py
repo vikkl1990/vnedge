@@ -3,18 +3,16 @@
     DASHBOARD_TOKEN=... python -m vnedge.runtime.multi_lane_shadow
 
 Runs fully isolated lanes on Binance, Bybit, and Delta. Binance/Bybit run the
-governed funding-MR paper/shadow lanes; Delta runs a candle-only trend shadow
-lane plus a funding-MR shadow lane that accumulates funding live off its native
-websocket (no REST funding history on Delta) and warms up until the percentile
-window fills. All lanes use live public market data, $500 imaginary base, and
-NO live orders.
+governed funding-MR paper lanes by default. Shadow/research lanes can still be
+enabled explicitly, but production defaults are paper-only so operators see one
+simulated-trading roster. All lanes use live public market data, $500 imaginary
+base, and NO live orders.
 
   - PAPER  — simulated fills on live data; produces the live-$ venue
              comparison and keeps the human-approved funding_mr_btc_v1_20260703
              trial (Binance) + funding_mr_bybit_20260704 (Bybit) progressing
              toward their pre-registered verdicts, reusing their account files.
-  - SHADOW — gateway-evaluated intents journaled per venue, never a fill;
-             a pure signal/decision record independent of position state.
+  - SHADOW — optional research-only intent journaling; disabled by default.
 
 Neither mode ever submits to a real exchange. Modes/venues/symbols are env
 driven (MULTI_LANE_MODES, MULTI_LANE_EXCHANGES, MULTI_LANE_SYMBOLS).
@@ -146,7 +144,9 @@ _MODES: dict[str, RunnerMode] = {
 }
 
 MANIFEST_RELOAD_EXIT_CODE = 75
-DEFAULT_PAPER_GOVERNOR_PATH = "research/live_research/paper_lane_governor_latest.json"
+DEFAULT_PAPER_GOVERNOR_PATH = (
+    "research/live_research/paper_only_survivor_registry_latest.json"
+)
 
 # Exploratory candidate lanes surfaced by the edge-research agent — run in
 # SHADOW only (gateway-evaluated intents journaled, NEVER a fill) so their live
@@ -765,6 +765,25 @@ def _csv_env(name: str, default: str, environ: Mapping[str, str]) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _paper_only_enabled(environ: Mapping[str, str] = os.environ) -> bool:
+    return _truthy(environ, "MULTI_LANE_PAPER_ONLY", "1")
+
+
+def _paper_only_filter(
+    specs: list[LaneSpec],
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Drop non-paper lanes when the operator wants one simulated roster."""
+
+    if not _paper_only_enabled(environ):
+        return specs
+    filtered = [spec for spec in specs if spec.mode is RunnerMode.PAPER]
+    removed = len(specs) - len(filtered)
+    if removed:
+        logger.info("paper-only mode removed %d non-paper lane(s)", removed)
+    return _ensure_primary(filtered)
+
+
 def _governor_paper_roster_filter(
     specs: list[LaneSpec],
     environ: Mapping[str, str] = os.environ,
@@ -1031,7 +1050,7 @@ def _modes_for_exchange(
 
 def _parse_modes(environ: Mapping[str, str]) -> list[RunnerMode]:
     modes: list[RunnerMode] = []
-    for name in _csv_env("MULTI_LANE_MODES", "paper,shadow", environ):
+    for name in _csv_env("MULTI_LANE_MODES", "paper", environ):
         try:
             mode = _MODES[name.lower()]
         except KeyError:
@@ -1293,7 +1312,8 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     (vnedge.runtime.lane_health), so "desired" can never silently diverge
     from what the runner actually launches.
 
-    When MULTI_LANE_PAPER_OBSERVE_ALL is on, shadow-only lanes are additionally
+    When MULTI_LANE_PAPER_OBSERVE_ALL is on and paper-only mode is off,
+    shadow-only lanes are additionally
     mirrored into isolated PAPER observation ledgers. It is layered on the fully
     deduped base set so the mirror sees which paper trials already exist and
     never duplicates a governed one; with the flag off it is a strict no-op.
@@ -1318,8 +1338,9 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     # mirrors are dropped too). Toggle off with MULTI_LANE_PRUNE_DEAD=0.
     if _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1"):
         base = [spec for spec in base if not _pruned_lane(spec)]
+    mirrors = [] if _paper_only_enabled(environ) else paper_observation_lanes(base, environ)
     return _governor_paper_roster_filter(
-        dedupe_lane_specs(base + paper_observation_lanes(base, environ)),
+        _paper_only_filter(dedupe_lane_specs(base + mirrors), environ),
         environ,
     )
 
@@ -1393,7 +1414,7 @@ async def main() -> int:
             "manifest_reload_enabled": reload_enabled,
             "manifest_reload_seconds": reload_interval if reload_enabled else None,
             "manifest_path": str(_manifest_path(os.environ)),
-            "mode_ladder": "paper/shadow only; live orders remain gated elsewhere",
+            "mode_ladder": "paper-only by default; live orders remain gated elsewhere",
             "real_time_trade_compatible": True,
             "orders_allowed": False,
             "safety": "same strategy -> gateway -> journal -> order-manager path; no live adapter mounted",

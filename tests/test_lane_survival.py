@@ -146,7 +146,7 @@ def test_lane_survival_keeps_positive_under_sampled_lane_observing():
     assert row["exit_quality"]["label"] == "CAPTURE_OK"
 
 
-def test_lane_survival_demotes_negative_fee_bleed_lane():
+def test_lane_survival_quarantines_negative_fee_bleed_lane():
     payload = build_lane_survival(
         activation=_activation(),
         cadence=_cadence(),
@@ -165,7 +165,9 @@ def test_lane_survival_demotes_negative_fee_bleed_lane():
     assert row["survival_state"] == STATE_DEMOTE_TO_SHADOW
     assert row["decision"] == DECISION_DEMOTE_TO_SHADOW
     assert row["exit_quality"]["label"] == "FEE_WALL_DRAG"
+    assert payload["summary"]["paper_quarantine"] == 1
     assert payload["summary"]["demote_to_shadow"] == 1
+    assert "paper-quarantined" in payload["operator_answer"]
 
 
 def test_lane_survival_refuses_judgment_on_stale_route():
