@@ -125,3 +125,21 @@ def test_registry_quarantines_cells_that_fail_fee_wall_gates():
     assert payload["summary"]["paper_quarantine"] == 1
     assert payload["proposed_roster"]["paper_lanes"] == []
 
+
+def test_registry_summary_uses_all_cells_even_when_rows_are_capped():
+    payload = build_paper_only_survivor_registry(
+        grid=_grid(
+            [
+                _cell("stealth_trail_bbp_v1"),
+                _cell("quant_signal_pack_v1", taker_net=-10, taker_pf=0.6, taker_bps=-12),
+                _cell("sats_5m_scalper_v1", taker_net=-20, taker_pf=0.4, taker_bps=-25),
+            ]
+        ),
+        config=PaperOnlySurvivorRegistryConfig(max_rows=1),
+        now=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert len(payload["rows"]) == 1
+    assert payload["summary"]["total_cells"] == 3
+    assert payload["summary"]["paper_survivors"] == 1
+    assert payload["summary"]["paper_quarantine"] == 2

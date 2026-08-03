@@ -1183,8 +1183,9 @@ services:
       options: { max-size: "10m", max-file: "3" }
 
   # Scanner backtest uplift: classifies every completed matrix/tournament row
-  # into promotable, sparse, fee-wall near-miss, overscalp bleed, or reject, then
-  # publishes concrete next experiments. It does not promote or trade.
+  # plus the second-eye full scanner grid into promotable, maker-fill proof,
+  # sparse, fee-wall near-miss, overscalp bleed, repair, or reject, then publishes
+  # concrete next experiments. It does not promote or trade.
   scanner-backtest-uplift:
     profiles: ["research"]
     build: .
@@ -1198,6 +1199,8 @@ services:
               "--source-name", "vnedge_algo_ml_pro_contract_matrix",
               "--input", "research/live_research/scanner_tournament_latest.json",
               "--source-name", "scanner_tournament",
+              "--input", "research/live_research/second_eye_grid.json",
+              "--source-name", "second_eye_grid",
               "--out", "research/live_research/scanner_backtest_uplift_latest.json",
               "--feed", "research/live_research/scanner_backtest_uplift_feed.jsonl"]
     volumes:

@@ -129,6 +129,15 @@ def _cell_metrics(trades, taker_bps: float) -> dict | None:
     }
 
 
+def _no_trade_cell_metrics() -> dict:
+    return {
+        "n": 0,
+        "taker": _agg([], []),
+        "maker": _agg([], []),
+        "no_trade_sample": True,
+    }
+
+
 def _parse_path(path: Path) -> tuple[str, str, str]:
     parts = {}
     for segment in path.parts:
@@ -213,21 +222,21 @@ def run(out_path: Path, *, config: SecondEyeConfig = SecondEyeConfig()) -> list[
                     timeframe=timeframe,
                 )
                 metrics = _cell_metrics(result.trades, taker_bps)
-                if metrics:
-                    metrics.update(
-                        strat=strategy_id,
-                        exch=exchange,
-                        sym=symbol,
-                        tf=timeframe,
-                        rows=len(candles),
-                        exit_model=(
-                            "active_exit"
-                            if config.use_active_exit
-                            else "legacy_single_stop_tp"
-                        ),
-                        trail_atr_mult=config.trail_atr_mult,
-                    )
-                    rows.append(metrics)
+                metrics = metrics or _no_trade_cell_metrics()
+                metrics.update(
+                    strat=strategy_id,
+                    exch=exchange,
+                    sym=symbol,
+                    tf=timeframe,
+                    rows=len(candles),
+                    exit_model=(
+                        "active_exit"
+                        if config.use_active_exit
+                        else "legacy_single_stop_tp"
+                    ),
+                    trail_atr_mult=config.trail_atr_mult,
+                )
+                rows.append(metrics)
             except Exception as exc:  # noqa: BLE001 - record and keep the grid going
                 rows.append(
                     {

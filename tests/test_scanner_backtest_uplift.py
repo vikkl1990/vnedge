@@ -8,6 +8,7 @@ import pytest
 from vnedge.research.scanner_backtest_uplift import (
     ScannerEvidenceRow,
     classify_evidence_row,
+    evidence_rows_from_payload,
     publish_scanner_backtest_uplift,
     run_scanner_backtest_uplift,
 )
@@ -137,3 +138,57 @@ def test_report_does_not_drop_payloads_when_source_names_are_short():
     )
 
     assert payload["summary"]["evidence_rows"] == 2
+
+
+def test_second_eye_grid_feeds_route_rows_and_scanner_family_study():
+    payload = {
+        "complete": True,
+        "pre_registry": {"registry_id": "paper_only_survivor_prereg_v1"},
+        "rows": [
+            {
+                "strat": "crypto_trend_atr_margin_v1",
+                "exch": "binanceusdm",
+                "sym": "XRPUSDT",
+                "tf": "4h",
+                "n": 28,
+                "taker": {"net": 40.0, "pf": 1.95, "avg_net_bps": 104.95, "win": 57.0},
+                "maker": {"net": 48.0, "pf": 2.3, "avg_net_bps": 125.0, "win": 61.0},
+            },
+            {
+                "strat": "fvg_liquidity_breakout_v1",
+                "exch": "bybit",
+                "sym": "BNBUSDT",
+                "tf": "4h",
+                "n": 26,
+                "taker": {"net": -1.0, "pf": 0.9, "avg_net_bps": -4.0, "win": 42.0},
+                "maker": {"net": 19.0, "pf": 1.7, "avg_net_bps": 57.0, "win": 55.0},
+            },
+            {
+                "strat": "sats_5m_scalper_v1",
+                "exch": "delta_india",
+                "sym": "ETHUSD",
+                "tf": "5m",
+                "n": 0,
+                "no_trade_sample": True,
+                "taker": {"net": 0.0, "pf": 0.0, "avg_net_bps": 0.0},
+                "maker": {"net": 0.0, "pf": 0.0, "avg_net_bps": 0.0},
+            },
+        ],
+    }
+
+    rows = evidence_rows_from_payload(payload, evidence_source="second_eye_grid")
+    assert len(rows) == 5
+    assert {row.mode for row in rows} == {"taker", "maker_upper_bound", "no_trade"}
+
+    report = run_scanner_backtest_uplift(
+        evidence_payloads=[payload],
+        source_names=["second_eye_grid"],
+        max_rows=20,
+    )
+
+    families = {row["strategy_id"]: row for row in report["scanner_families"]}
+    assert families["crypto_trend_atr_margin_v1"]["family_verdict"] == "FAMILY_STRICT_SURVIVOR"
+    assert families["fvg_liquidity_breakout_v1"]["family_verdict"] == "FAMILY_MAKER_PROBE"
+    assert families["sats_5m_scalper_v1"]["family_verdict"] == "FAMILY_NO_TRADES"
+    assert report["summary"]["families_with_strict_proof"] == 1
+    assert report["summary"]["families_with_maker_probe"] == 1

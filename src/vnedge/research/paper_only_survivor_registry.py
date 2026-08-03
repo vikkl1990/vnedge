@@ -78,8 +78,8 @@ def build_paper_only_survivor_registry(
         if isinstance(row, Mapping)
     ]
     rows.sort(key=_row_sort_key)
-    rows = rows[: max(1, int(config.max_rows))]
     summary = _summary(rows, config=config)
+    display_rows = rows[: max(1, int(config.max_rows))]
     return {
         "generated_at": now.isoformat(),
         "report_id": REPORT_ID,
@@ -93,8 +93,8 @@ def build_paper_only_survivor_registry(
         "config": config.to_dict(),
         "summary": summary,
         "proposed_roster": _proposed_roster(rows, config=config),
-        "boards": _boards(rows),
-        "rows": rows,
+        "boards": _boards(display_rows),
+        "rows": display_rows,
         "operator_answer": _operator_answer(summary),
         "policy": {
             "read_only": True,
@@ -293,7 +293,7 @@ def _proposed_roster(
         ],
         "paper_quarantine": [
             _slim(row) for row in rows if row.get("survivor_state") == STATE_PAPER_QUARANTINE
-        ],
+        ][: max(1, int(config.max_rows))],
         "policy": "paper_only_survivors_from_pre_registered_backtest_grid",
     }
 

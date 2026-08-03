@@ -1025,7 +1025,24 @@
     text("su_experiments",s.experiments);
     text("scannerUpliftAnswer",payload.operator_answer||"No scanner uplift artifact published yet.");
     const listEl=$("scannerUpliftTasks"); listEl.innerHTML="";
-    (payload.top_uplifts||[]).slice(0,6).forEach(row=>{
+    const families=(payload.scanner_families||[]).slice(0,6);
+    families.forEach(row=>{
+      const div=document.createElement("div");
+      div.className="task";
+      const title=document.createElement("b");
+      title.textContent=row.strategy_id||"--";
+      const score=document.createElement("div");
+      score.className="score";
+      score.textContent=row.score==null?"--":Number(row.score).toFixed(1)+"/100";
+      const best=row.best_cell||{};
+      const meta=document.createElement("span");
+      meta.textContent=(row.family_verdict||"--")+" | cells "+(row.evidence_cells||0)+" | best "+(best.symbol||"--")+" "+(best.timeframe||"--");
+      const action=document.createElement("span");
+      action.textContent=row.uplift_action||((row.improvements||[])[0])||"awaiting scanner-family study";
+      div.appendChild(title); div.appendChild(score); div.appendChild(meta); div.appendChild(action);
+      listEl.appendChild(div);
+    });
+    if(!families.length)(payload.top_uplifts||[]).slice(0,6).forEach(row=>{
       const div=document.createElement("div");
       div.className="task";
       const title=document.createElement("b");

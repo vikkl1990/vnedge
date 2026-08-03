@@ -510,6 +510,7 @@ def test_scanner_backtest_uplift_mines_matrix_and_tournament_failures():
     assert "--interval-seconds" in service["command"]
     assert "research/live_research/vnedge_algo_ml_pro_contract_matrix_latest.json" in service["command"]
     assert "research/live_research/scanner_tournament_latest.json" in service["command"]
+    assert "research/live_research/second_eye_grid.json" in service["command"]
     assert "research/live_research/scanner_backtest_uplift_latest.json" in service["command"]
     assert "./research/live_research:/app/research/live_research" in service["volumes"]
     assert set(service["depends_on"]) == {
@@ -777,7 +778,7 @@ def test_dashboard_tls_is_gated_on_dashboard_health():
 
 
 def test_lean_core_is_the_default_profile_and_research_is_opt_in():
-    """Lean-by-default (2026-08-02): exactly the 13 core services run by default;
+    """Lean-by-default (2026-08-02): exactly the core services run by default;
     the other services carry the `research` profile (opt-in). No core service may
     depend on a profiled service, or `docker compose up` would drag the whole
     research cluster back in and re-wedge the box."""
@@ -790,6 +791,7 @@ def test_lean_core_is_the_default_profile_and_research_is_opt_in():
         "paper-lane-governor", "paper-lane-performance", "paper-roster-drift",
         "evidence-index-publisher", "ml-pipeline-status", "paper-lane-activation",
         "lane-firing-causality", "bitcoin-regime-sensor", "delta-5m-event-clock",
+        "paper-only-survivor-registry",
     }
     for name in core:
         dep = services[name].get("depends_on") or []
