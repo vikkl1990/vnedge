@@ -591,6 +591,26 @@
   .cmdk-item.on .h{color:var(--brand)}
   .cmdk-empty{padding:14px 16px;color:var(--txt-dim);font:12px var(--mono)}
   .cmdk-foot{display:flex;flex-wrap:wrap;gap:14px;padding:8px 14px;border-top:1px solid var(--line);color:var(--txt-faint);font:11px var(--mono)}
+  /* session regime */
+  .rgcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+  .rgcard{border:1px solid var(--line);border-radius:9px;padding:11px 12px;background:rgba(255,255,255,.015)}
+  .rgh{font:800 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--txt-faint)}
+  .rgnet{font:900 20px var(--mono);margin:5px 0 6px;letter-spacing:-.02em}
+  .rgbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin-bottom:7px}
+  .rgbar span{display:block;height:100%}
+  .rgbar span.up{background:var(--long)} .rgbar span.dn{background:var(--short)}
+  .rgsub{font:600 11px var(--sans);color:var(--txt-dim)}
+  .rgsub2{font:600 10px var(--mono);color:var(--txt-faint);margin-top:2px}
+  .rgtblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:9px}
+  table.rgtbl{border-collapse:collapse;width:100%;font-size:12.5px;min-width:520px}
+  .rgtbl th,.rgtbl td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;vertical-align:top}
+  .rgtbl th:first-child,.rgtbl td:first-child{text-align:left}
+  .rgtbl th{font:700 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--txt-faint);background:rgba(255,255,255,.02)}
+  .rgtbl tbody tr:last-child td{border-bottom:none}
+  .rgtbl .rgname b{font:700 12px var(--sans);color:var(--txt)}
+  .rgc b{font:800 12.5px var(--mono);display:block} .rgc small{font:600 10px var(--mono);color:var(--txt-faint)}
+  .rgc.tot{background:rgba(255,255,255,.02)}
+  .rgc.win{background:var(--long-soft);border-radius:5px}
 </style>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
@@ -1108,6 +1128,10 @@
   <!-- ===== RESEARCH VIEW ===== -->
   <div class="view" data-view="research" hidden>
     <p class="intro"><b>Research lab.</b> Where edges are found and judged against untouched data. Nothing here trades or promotes on its own — every candidate needs human-gated approval before it can reach the desk.</p>
+    <section class="panel" style="margin-bottom:14px">
+      <div class="phead"><h2>Session Regime</h2><span class="meta" id="regimeMeta">when each strategy earns · loading…</span></div>
+      <div id="sessionRegime"><div class="note">session-regime rollup loading… — closed trades bucketed by UTC entry session (Asia / Europe / US / Late).</div></div>
+    </section>
     <div class="main">
       <div class="col">
         <section class="panel">
@@ -2810,6 +2834,44 @@
   renderDashboardHealth();
 
   /* ---- polled read-only endpoints: scorecard + scanner tape ---- */
+  function regimeCell(c,isWinner){
+    if(!c||!c.trades) return '<td class="rgc empty">·</td>';
+    var net=num(c.net_usd),cls=net>0?"up":(net<0?"dn":"");
+    return '<td class="rgc'+(isWinner?" win":"")+'"><b class="'+cls+'">'+usd(net)+'</b><small>'+num(c.trades)+'t · '+num(c.win_rate_pct).toFixed(0)+'%</small></td>';
+  }
+  function renderSessionRegime(d){
+    var el=$("sessionRegime"),meta=$("regimeMeta"); if(!el) return;
+    var sess=(d&&d.sessions)||[],bySess=(d&&d.by_session)||[],mtx=(d&&d.matrix)||[],ov=(d&&d.overall)||{},sm=(d&&d.summary)||{};
+    if(meta){
+      var bw=d&&d.best_session,ws=d&&d.worst_session;
+      meta.textContent=num(sm.dated_trades)+" trades · "+num(sm.strategies)+" strategies · "+num(sm.active_lanes)+" lanes"
+        +(bw?" · best "+esc(bw.label.split(" ")[0])+" "+usd(bw.net_usd):"")
+        +(ws?" · worst "+esc(ws.label.split(" ")[0])+" "+usd(ws.net_usd):"");
+    }
+    if(!bySess.length||!ov.trades){ el.innerHTML='<div class="note">no closed trades in the recent window yet — the fleet is mostly idle; this fills as lanes trade.</div>'; return; }
+    var winners={}; bySess.forEach(function(s){winners[s.session]=s.winner;});
+    var maxAbs=1; bySess.forEach(function(s){maxAbs=Math.max(maxAbs,Math.abs(num(s.net_usd)));});
+    var cards=bySess.map(function(s){
+      var net=num(s.net_usd),cls=net>0?"up":(net<0?"dn":""),w=Math.round(Math.abs(net)/maxAbs*100);
+      return '<div class="rgcard"><div class="rgh">'+esc(s.label)+'</div>'+
+        '<div class="rgnet '+cls+'">'+usd(net)+'</div>'+
+        '<div class="rgbar"><span class="'+(net<0?"dn":"up")+'" style="width:'+w+'%"></span></div>'+
+        '<div class="rgsub">'+num(s.trades)+' trades · '+num(s.win_rate_pct).toFixed(0)+'% win · worst '+usd(s.worst_stretch_usd)+'</div>'+
+        '<div class="rgsub2">winner: '+esc(stratShort(s.winner||"—"))+'</div></div>';
+    }).join('');
+    var head='<tr><th>Strategy</th><th>Total</th>'+sess.map(function(x){return '<th>'+esc(x.label.split(" ")[0])+'</th>';}).join('')+'</tr>';
+    var rows=mtx.map(function(r){
+      var t=r.total||{},tnet=num(t.net_usd),tcls=tnet>0?"up":(tnet<0?"dn":"");
+      var cells=sess.map(function(x){ return regimeCell((r.sessions||{})[x.key],winners[x.key]===r.strategy); }).join('');
+      return '<tr><td class="rgname"><b>'+esc(stratShort(r.strategy))+'</b></td>'+
+        '<td class="rgc tot"><b class="'+tcls+'">'+usd(tnet)+'</b><small>'+num(t.trades)+'t · '+num(t.win_rate_pct).toFixed(0)+'%</small></td>'+
+        cells+'</tr>';
+    }).join('');
+    el.innerHTML='<div class="rgcards">'+cards+'</div>'+
+      '<div class="rgtblwrap"><table class="rgtbl"><thead>'+head+'</thead><tbody>'+rows+'</tbody></table></div>'+
+      '<div class="note" style="margin-top:8px"><b>Read:</b> a strategy red in one session and green in another has a time-of-day edge — gate its entries to its winning session. Recent-window; net is virtual for shadow lanes, realized for paper. Highlighted cell = session winner.</div>';
+  }
+  function pollSessionRegime(){ poll("/session-regime", renderSessionRegime); }
   function poll(path,cb){
     if(!token){recordPoll(path,"skipped",null,"token missing");return;}   // no token → skip (banner already shown)
     fetch(path+(path.indexOf("?")<0?"?":"&")+"token="+encodeURIComponent(token),{cache:"no-store"})
@@ -3020,8 +3082,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollSessionRegime(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollSessionRegime,60000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
@@ -3136,6 +3198,7 @@
     if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     if(v==="pipeline") renderPipeline(lastSnap);
     if(v==="promote"){ pollPreLive(); pollPaperPromotionBridge(); pollOperatorActions(); }
+    if(v==="research") pollSessionRegime();
   }
   function setActiveNav(v){
     Array.prototype.forEach.call(nav.querySelectorAll("a[data-v]"),function(x){x.classList.toggle("on",x.getAttribute("data-v")===v)});
