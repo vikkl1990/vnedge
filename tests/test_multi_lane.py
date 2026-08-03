@@ -1019,3 +1019,28 @@ def test_prune_toggle_and_roster_effect():
                                      "trend_continuation_v1"} for s in on)
     # ...but they can be brought back with the toggle (if present in the base set)
     assert any(s.strategy_id == "trend_continuation_v1" for s in off)
+
+
+def test_governor_cannot_resurrect_a_pruned_strategy(tmp_path):
+    # A stale governor file that proposes a PRUNED strategy as a paper lane must
+    # NOT resurrect it — the final-prune pass keeps dead strategies out even when
+    # the governor injects them (regression: a cut luxara probe came back
+    # 2026-08-03 because governor-added specs bypassed the family prune).
+    gov = tmp_path / "governor.json"
+    gov.write_text(json.dumps({
+        "proposed_roster": {
+            "paper_lanes": [{
+                "strategy_id": "quant_signal_pack_v1",
+                "exchange": "binanceusdm",
+                "symbol": "ETH/USDT:USDT",
+                "timeframe": "1h",
+                "lane_id": "quant_signal_pack_v1_binanceusdm_ethusdt_gov_paper",
+            }]
+        }
+    }))
+    specs = desired_lane_specs({
+        "MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india",
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(gov),
+    })
+    assert not any(s.strategy_id == "quant_signal_pack_v1" for s in specs)

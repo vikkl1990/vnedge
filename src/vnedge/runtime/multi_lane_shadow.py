@@ -1355,12 +1355,20 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     )
     # Prune proven-dead lane families (before mirroring, so their paper-observation
     # mirrors are dropped too). Toggle off with MULTI_LANE_PRUNE_DEAD=0.
-    if _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1"):
+    prune = _truthy(environ, "MULTI_LANE_PRUNE_DEAD", "1")
+    if prune:
         base = [spec for spec in base if not _pruned_lane(spec)]
-    return _governor_paper_roster_filter(
+    roster = _governor_paper_roster_filter(
         dedupe_lane_specs(base + paper_observation_lanes(base, environ)),
         environ,
     )
+    # Re-apply the prune to the FINAL roster: the governor can inject paper lanes
+    # from its (possibly stale) JSON, which bypasses the family prune above. This
+    # guarantees a pruned/dead strategy can NEVER be resurrected by a governor
+    # proposal (a stale governor file resurrected a cut luxara probe on 2026-08-03).
+    if prune:
+        roster = [spec for spec in roster if not _pruned_lane(spec)]
+    return roster
 
 
 def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
