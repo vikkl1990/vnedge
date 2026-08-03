@@ -193,7 +193,10 @@ def test_fvg_liquidity_breakout_delta_lanes_are_mainline_shadow_5m():
 
 
 def test_fvg_liquidity_breakout_lanes_can_be_paper_observed_without_promotion():
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1"})
+    specs = desired_lane_specs({
+        "MULTI_LANE_EARNED_ONLY": "0",
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+    })
     ids = {spec.lane_id for spec in specs}
 
     assert "fvg_liquidity_breakout_delta_india_eth_usd_usd_shadow" in ids

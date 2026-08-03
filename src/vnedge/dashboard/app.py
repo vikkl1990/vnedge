@@ -285,12 +285,17 @@ def _alert_incidents(paths: list[Path]) -> list[dict]:
     return out
 
 
-def _journal_incidents(journal_dir: Path | None) -> list[dict]:
+def _journal_incidents(
+    journal_dir: Path | None,
+    allowed_lanes: set[str] | None = None,
+) -> list[dict]:
     out: list[dict] = []
     if journal_dir is None or not journal_dir.is_dir():
         return out
     for path in sorted(journal_dir.glob("*.journal.jsonl")):
         lane = path.name.removesuffix(".journal.jsonl")
+        if allowed_lanes is not None and lane not in allowed_lanes:
+            continue
         for record in _iter_jsonl(path):
             kind = str(record.get("kind", ""))
             mapped = _INCIDENT_JOURNAL_KINDS.get(kind)
@@ -873,9 +878,34 @@ def create_app(
 
         return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
+    def _active_lane_ids() -> set[str] | None:
+        """Active lane ids from the latest live snapshot.
+
+        ``None`` means the snapshot is not lane-aware (single-lane demos/tests),
+        so older callers keep working. A non-empty set means production knows
+        the current fleet and side endpoints must not read retired ledgers.
+        """
+        snapshot = provider.latest()
+        if not isinstance(snapshot, dict):
+            return None
+        ids: set[str] = set()
+        primary = snapshot.get("lane_id")
+        if primary:
+            ids.add(str(primary))
+        for entry in snapshot.get("lanes") or []:
+            if isinstance(entry, dict) and entry.get("lane_id"):
+                ids.add(str(entry["lane_id"]))
+        return ids or None
+
+    def _lane_is_active(lane: str) -> bool:
+        active = _active_lane_ids()
+        return active is None or lane in active
+
     def _lane_file(lane: str, suffix: str) -> Path | None:
         """Resolve a per-lane data file; empty lane means the primary lane."""
         if lane and lane_dir is not None:
+            if not _lane_is_active(lane):
+                return None
             return lane_dir / f"{lane}{suffix}"
         if suffix == ".equity.jsonl":
             return history_path
@@ -981,10 +1011,13 @@ def create_app(
             limit = max(1, min(int(limit), 500))
         except ValueError:
             raise HTTPException(status_code=400, detail="limit must be an integer")
+        journal_root = lane_dir
+        if lane and not _lane_is_active(lane):
+            journal_root = None
         return JSONResponse(
             build_trade_journal(
                 snapshot=provider.latest(),
-                journal_dir=lane_dir,
+                journal_dir=journal_root,
                 history_path=history_path,
                 lane=lane,
                 since=since,
@@ -1006,11 +1039,17 @@ def create_app(
         alert_files: list[Path] = []
         if alerts_path is not None:
             alert_files.append(alerts_path)
+        active_lanes = _active_lane_ids()
         if lane_dir is not None and lane_dir.is_dir():
             alert_files.extend(
-                p for p in sorted(lane_dir.glob("*.alerts.jsonl")) if p != alerts_path
+                p for p in sorted(lane_dir.glob("*.alerts.jsonl"))
+                if p != alerts_path
+                and (
+                    active_lanes is None
+                    or p.name.removesuffix(".alerts.jsonl") in active_lanes
+                )
             )
-        merged = _alert_incidents(alert_files) + _journal_incidents(lane_dir)
+        merged = _alert_incidents(alert_files) + _journal_incidents(lane_dir, active_lanes)
         merged.sort(key=lambda record: record["ts"], reverse=True)
         return JSONResponse(merged[:limit], headers=_identity(user))
 

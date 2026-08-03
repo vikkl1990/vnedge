@@ -347,7 +347,8 @@ def test_delta_paper_opt_in_still_uses_candle_only_strategy():
 
 def test_crypto_trend_doge_shadow_lane_enabled_by_default():
     lanes = crypto_trend_doge_shadow_lanes({})
-    assert len(lanes) == 1
+    # Shadow twin + the human-approved paper lane (prereg PASS 2026-08-03).
+    assert len(lanes) == 2
     lane = lanes[0]
     assert lane.lane_id == "crypto_trend_doge_binanceusdm_shadow"
     assert lane.exchange == "binanceusdm"
@@ -356,6 +357,40 @@ def test_crypto_trend_doge_shadow_lane_enabled_by_default():
     assert lane.strategy_id == "crypto_trend_atr_margin_v1"
     assert lane.mode is RunnerMode.SHADOW
     assert lane.strategy_params["take_profit_r"] is None
+    # Shadow twin keeps the legacy exit; only the paper lane carries the trail.
+    assert lane.trail_atr_mult == 0.0
+
+
+def test_crypto_trend_doge_paper_lane_runs_judged_exit():
+    # The paper lane must run the EXACT exit its promotion evidence was measured
+    # on: active-exit + ATR chandelier trail 3x (trail_atr_mult=3.0).
+    paper = [
+        l for l in crypto_trend_doge_shadow_lanes({})
+        if l.mode is RunnerMode.PAPER
+    ]
+    assert len(paper) == 1
+    lane = paper[0]
+    assert lane.lane_id == "crypto_trend_doge_binanceusdm_paper"
+    assert lane.strategy_id == "crypto_trend_atr_margin_v1"
+    assert lane.trail_atr_mult == 3.0
+
+
+def test_crypto_trend_doge_paper_lane_can_be_disabled():
+    lanes = crypto_trend_doge_shadow_lanes({"MULTI_LANE_CRYPTO_TREND_DOGE_PAPER": "0"})
+    assert [l.mode for l in lanes] == [RunnerMode.SHADOW]
+
+
+def test_default_desired_roster_is_earned_only():
+    specs = desired_lane_specs({})
+    ids = {spec.lane_id for spec in specs}
+    strategies = {spec.strategy_id for spec in specs}
+
+    assert "funding_mr_btc_v1_20260703" in ids
+    assert "funding_mr_bybit_20260704" in ids
+    assert "crypto_trend_doge_binanceusdm_paper" in ids
+    assert strategies <= {"funding_mean_reversion_v1", "crypto_trend_atr_margin_v1"}
+    assert not any(spec.strategy_id == "quant_signal_pack_v1" for spec in specs)
+    assert not any(spec.timeframe == "5m" for spec in specs)
 
 
 def test_crypto_trend_doge_shadow_lane_can_be_disabled():
@@ -447,7 +482,11 @@ def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path
 def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
     # PRUNE_DEAD off: this exercises the MIRRORING logic against the full roster,
     # independent of which strategies the evidence-prune removes.
-    specs = desired_lane_specs({"MULTI_LANE_PAPER_OBSERVE_ALL": "1", "MULTI_LANE_PRUNE_DEAD": "0"})
+    specs = desired_lane_specs({
+        "MULTI_LANE_EARNED_ONLY": "0",
+        "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
+        "MULTI_LANE_PRUNE_DEAD": "0",
+    })
     ids = {spec.lane_id for spec in specs}
 
     # Governed BTC/Bybit paper-trial ledgers stay canonical and are not mirrored.
@@ -473,6 +512,7 @@ def test_paper_observation_mirrors_shadow_only_lanes_without_duplicate_trials():
 
 def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors():
     specs = desired_lane_specs({
+        "MULTI_LANE_EARNED_ONLY": "0",
         "MULTI_LANE_PAPER_OBSERVE_ALL": "1",
         "MULTI_LANE_DELTA_PAPER_OBSERVE": "0",
         # mirroring logic under test — independent of the evidence-prune:
@@ -983,7 +1023,10 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
 
 
 def test_prune_toggle_and_roster_effect():
-    env = {"MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india"}
+    env = {
+        "MULTI_LANE_EARNED_ONLY": "0",
+        "MULTI_LANE_EXCHANGES": "binanceusdm,bybit,delta_india",
+    }
     on = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "1"})
     off = desired_lane_specs({**env, "MULTI_LANE_PRUNE_DEAD": "0"})
     assert len(on) <= len(off)  # prune never adds lanes

@@ -87,6 +87,10 @@ class LaneSpec:
     daily_loss_usd: float = 10.0
     mode: RunnerMode = RunnerMode.SHADOW
     strategy_id: str = "funding_mean_reversion_v1"
+    #: Dynamic ATR-chandelier trail on the active-exit remainder (0.0 = off, the
+    #: legacy arm-and-lock). Set per-lane when a strategy was JUDGED with a trail,
+    #: so the running lane uses the exit its promotion evidence was measured on.
+    trail_atr_mult: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -894,7 +898,8 @@ async def build_lane(
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk,
                           limits=venue_symbol_limits(spec.exchange, spec.symbol),
-                          daily_factory=daily_factory)
+                          daily_factory=daily_factory,
+                          trail_atr_mult=spec.trail_atr_mult)
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path
     )
