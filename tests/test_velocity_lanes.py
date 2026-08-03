@@ -47,12 +47,18 @@ def test_velocity_lanes_require_delta_exchange():
 
 
 def test_velocity_lanes_join_the_desired_roster():
-    lane_ids = {s.lane_id for s in desired_lane_specs(_env())}
+    lane_ids = {
+        s.lane_id for s in desired_lane_specs(_env(MULTI_LANE_PAPER_ONLY="0"))
+    }
     assert any(lid.startswith("velocity_") for lid in lane_ids)
     # and every velocity lane in the roster stays SHADOW (unpromotable path)
-    for spec in desired_lane_specs(_env()):
+    for spec in desired_lane_specs(_env(MULTI_LANE_PAPER_ONLY="0")):
         if spec.lane_id.startswith("velocity_"):
             assert spec.mode is RunnerMode.SHADOW
+
+
+def test_paper_only_default_removes_velocity_from_active_roster():
+    assert not any(s.lane_id.startswith("velocity_") for s in desired_lane_specs(_env()))
 
 
 def test_velocity_symbols_are_configurable():
@@ -65,7 +71,9 @@ def test_velocity_lanes_are_never_mirrored_to_paper():
     # lanes must stay shadow-only — never a paper ledger, never doubled.
     from vnedge.runtime.multi_lane_shadow import paper_observation_lanes
 
-    specs = desired_lane_specs(_env(MULTI_LANE_PAPER_OBSERVE_ALL="1"))
+    specs = desired_lane_specs(
+        _env(MULTI_LANE_PAPER_ONLY="0", MULTI_LANE_PAPER_OBSERVE_ALL="1")
+    )
     vel = [s for s in specs if s.lane_id.startswith("velocity_")]
     assert vel, "velocity lanes should exist"
     assert all(s.mode is RunnerMode.SHADOW for s in vel)

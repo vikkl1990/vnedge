@@ -1,13 +1,13 @@
 # ============================================================================
 # LEAN-BY-DEFAULT (2026-08-02). Running all 66 services drove this 8-core/24GB
-# box to load 18+ and starved sshd — it wedged repeatedly. Measured: the 12
-# profile-less "core" services (trading + dashboard) idle at load 0.5 / 2.7GB;
+# box to load 18+ and starved sshd — it wedged repeatedly. Measured: the lean
+# profile-less "core" services (trading + dashboard + tiny registries) idle low;
 # the other 54 (research/mining/diagnostics) are the entire cost and produced
 # zero promoted edge.
 #
 # So the 54 carry `profiles: ["research"]` and DO NOT start by default. Nothing
 # is deleted — every feature is one flag away:
-#   default          -> 12-core, lean, stable          (`docker compose up -d`)
+#   default          -> lean core, stable              (`docker compose up -d`)
 #   full research     -> all 66 (needs a bigger box)   (`COMPOSE_PROFILES=research docker compose up -d`)
 #   one service       -> `docker compose up -d <name>` (pulls its deps)
 # The dashboard stays fully up on the core; research-fed panels show STALE data
@@ -40,10 +40,10 @@ services:
       start_period: 300s
     mem_limit: 2500m
     mem_reservation: 256m
-    # Multi-exchange lanes: Binance + Bybit, each in BOTH fill modes —
+    # Multi-exchange lanes: paper-only by default —
     #   paper  = simulated fills on live data (live-$ venue comparison; the
     #            governed funding-MR trials continue on their account files)
-    #   shadow = gateway-evaluated intents journaled, never a fill
+    #   shadow = explicit opt-in research mode only
     # Both live data, $500 imaginary base, NO live orders. Read-only dashboard.
     command: ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
     environment:
@@ -67,7 +67,8 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       MULTI_LANE_EXCHANGES: "${MULTI_LANE_EXCHANGES:-binanceusdm,bybit,delta_india}"
       MULTI_LANE_SYMBOLS: "${MULTI_LANE_SYMBOLS:-BTC/USDT:USDT}"
-      MULTI_LANE_MODES: "${MULTI_LANE_MODES:-paper,shadow}"
+      MULTI_LANE_MODES: "${MULTI_LANE_MODES:-paper}"
+      MULTI_LANE_PAPER_ONLY: "${MULTI_LANE_PAPER_ONLY:-1}"
       MULTI_LANE_TIMEFRAME: "${MULTI_LANE_TIMEFRAME:-1h}"
       MULTI_LANE_PRIMARY_EXCHANGE: "${MULTI_LANE_PRIMARY_EXCHANGE:-binanceusdm}"
       MULTI_LANE_PRIMARY_SYMBOL: "${MULTI_LANE_PRIMARY_SYMBOL:-BTC/USDT:USDT}"
@@ -131,7 +132,7 @@ services:
       # lanes can keep exploring, but PAPER mode should only run the current
       # proposed roster; stale probes remain as historical evidence.
       MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY: "${MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY:-1}"
-      MULTI_LANE_PAPER_GOVERNOR_PATH: "${MULTI_LANE_PAPER_GOVERNOR_PATH:-research/live_research/paper_lane_governor_latest.json}"
+      MULTI_LANE_PAPER_GOVERNOR_PATH: "${MULTI_LANE_PAPER_GOVERNOR_PATH:-research/live_research/paper_only_survivor_registry_latest.json}"
       # Runtime control-plane guard: if research/live_research/shadow_lanes.json
       # changes after startup, exit deliberately so Docker reloads the exact
       # desired lane set. This prevents MISSING/STALE/ORPHAN drift.
@@ -874,6 +875,51 @@ services:
               "--demote-after-negative-closed", "${PAPER_LANE_GOVERNOR_DEMOTE_AFTER_NEGATIVE_CLOSED:-5}",
               "--max-paper-roster", "${PAPER_LANE_GOVERNOR_MAX_PAPER_ROSTER:-18}",
               "--max-tournament-lanes", "${PAPER_LANE_GOVERNOR_MAX_TOURNAMENT_LANES:-12}"]
+    volumes:
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # One-shot pre-registered lane backtest grid. It uses the active-exit
+  # backtester contract (next-open fills, stop-first ties, partial TP,
+  # fee-aware breakeven, ATR trail) and writes the evidence consumed by the
+  # paper-only survivor registry. Run on demand:
+  #   docker compose --profile research run --rm second-eye-grid
+  second-eye-grid:
+    profiles: ["research"]
+    build: .
+    restart: "no"
+    command: ["python", "research/second_eye_grid.py",
+              "--out", "research/live_research/second_eye_grid.json",
+              "--use-active-exit",
+              "--trail-atr-mult", "${SECOND_EYE_TRAIL_ATR_MULT:-3}",
+              "--trail-atr-window", "${SECOND_EYE_TRAIL_ATR_WINDOW:-14}",
+              "--min-trades", "${SECOND_EYE_MIN_TRADES:-20}",
+              "--min-profit-factor", "${SECOND_EYE_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${SECOND_EYE_MIN_AVG_NET_BPS:-25}"]
+    volumes:
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Paper-only survivor registry: converts the second-eye grid into the single
+  # proposed paper roster consumed by the runtime. Read-only, no promotion path.
+  paper-only-survivor-registry:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "vnedge.research.paper_only_survivor_registry",
+              "--interval-seconds", "${PAPER_ONLY_SURVIVOR_REGISTRY_INTERVAL_SECONDS:-60}",
+              "--grid", "research/live_research/second_eye_grid.json",
+              "--out", "research/live_research/paper_only_survivor_registry_latest.json",
+              "--feed", "research/live_research/paper_only_survivor_registry_feed.jsonl",
+              "--min-trades", "${PAPER_ONLY_SURVIVOR_MIN_TRADES:-20}",
+              "--min-profit-factor", "${PAPER_ONLY_SURVIVOR_MIN_PROFIT_FACTOR:-1.5}",
+              "--min-avg-net-bps", "${PAPER_ONLY_SURVIVOR_MIN_AVG_NET_BPS:-25}",
+              "--maker-probe-min-taker-bps", "${PAPER_ONLY_SURVIVOR_MAKER_PROBE_MIN_TAKER_BPS:--10}",
+              "--max-paper-lanes", "${PAPER_ONLY_SURVIVOR_MAX_PAPER_LANES:-18}"]
     volumes:
       - ./research/live_research:/app/research/live_research
     logging:

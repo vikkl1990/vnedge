@@ -116,14 +116,14 @@ def test_governor_extends_positive_under_sampled_lane():
     assert row["autopsy"]["sample_gap"] == 16
 
 
-def test_governor_recommends_shadow_demote_for_negative_lane():
+def test_governor_quarantines_negative_lane_from_paper():
     payload = build_paper_lane_governor(
         survival=_survival(
             [
                 _row(
                     "bleeder",
-                    state="DEMOTE_TO_SHADOW",
-                    decision="DEMOTE_TO_SHADOW",
+                    state="PAPER_QUARANTINE",
+                    decision="QUARANTINE_PAPER",
                     closed=6,
                     net=-18.0,
                     pf=0.42,
@@ -139,7 +139,9 @@ def test_governor_recommends_shadow_demote_for_negative_lane():
     assert row["governor_bucket"] == BUCKET_DEMOTION_QUEUE
     assert row["autopsy"]["primary_failure"] == "negative_after_fee_wall"
     assert row["autopsy"]["fee_wall_gap_bps"] == 60.0
+    assert payload["summary"]["paper_quarantine"] == 1
     assert payload["summary"]["demotion_queue"] == 1
+    assert "paper-quarantined" in payload["operator_answer"]
 
 
 def test_governor_holds_negative_under_sampled_lane_out_of_active_roster():
@@ -178,6 +180,9 @@ def test_governor_holds_negative_under_sampled_lane_out_of_active_roster():
     assert payload["summary"]["probation_queue"] == 1
     assert [r["lane_id"] for r in payload["proposed_roster"]["paper_lanes"]] == [
         "healthy_sample"
+    ]
+    assert [r["lane_id"] for r in payload["proposed_roster"]["probation_watch"]] == [
+        "probation"
     ]
     assert [r["lane_id"] for r in payload["proposed_roster"]["probation_shadow_watch"]] == [
         "probation"

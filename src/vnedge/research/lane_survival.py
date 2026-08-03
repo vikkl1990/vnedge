@@ -4,7 +4,7 @@ This report reconciles paper activation, route health, cadence, and corrected
 closed-trade performance into one operator answer:
 
     "Which lanes should stay in paper, which need more evidence, and which
-    should be demoted back to shadow/research before they keep bleeding fees?"
+    should be quarantined before they keep bleeding fees?"
 
 Read-only by design. It cannot start, stop, promote, demote, or trade a lane.
 """
@@ -32,7 +32,7 @@ DEFAULT_FEED = DEFAULT_RESEARCH_DIR / "lane_survival_feed.jsonl"
 STATE_PAPER_SURVIVOR_CANDIDATE = "PAPER_SURVIVOR_CANDIDATE"
 STATE_PAPER_OBSERVE_MORE = "PAPER_OBSERVE_MORE"
 STATE_PAPER_PROBATION = "PAPER_PROBATION"
-STATE_DEMOTE_TO_SHADOW = "DEMOTE_TO_SHADOW"
+STATE_DEMOTE_TO_SHADOW = "PAPER_QUARANTINE"
 STATE_RESEARCH_ONLY = "RESEARCH_ONLY"
 STATE_STALE_NO_JUDGMENT = "STALE_NO_JUDGMENT"
 STATE_ROUTE_BLOCKED = "ROUTE_BLOCKED"
@@ -41,7 +41,7 @@ STATE_LEDGER_REPAIR_REQUIRED = "LEDGER_REPAIR_REQUIRED"
 
 DECISION_KEEP_PAPER = "KEEP_PAPER"
 DECISION_OBSERVE_MORE = "OBSERVE_MORE"
-DECISION_DEMOTE_TO_SHADOW = "DEMOTE_TO_SHADOW"
+DECISION_DEMOTE_TO_SHADOW = "QUARANTINE_PAPER"
 DECISION_KEEP_RESEARCH_ONLY = "KEEP_RESEARCH_ONLY"
 DECISION_REPAIR_ROUTE_OR_CADENCE = "REPAIR_ROUTE_OR_CADENCE"
 DECISION_REPAIR_LEDGER = "REPAIR_LEDGER"
@@ -204,7 +204,7 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 40) -> str:
             f"{summary.get('total_lanes', 0)} lanes, "
             f"{summary.get('survivor_candidates', 0)} survivor candidates, "
             f"{summary.get('observe_more', 0)} observe-more, "
-            f"{summary.get('demote_to_shadow', 0)} demote recommendations"
+            f"{summary.get('paper_quarantine', 0)} paper quarantine"
         ),
     ]
     for row in list(payload.get("rows", []))[:limit]:
@@ -455,13 +455,13 @@ def _classify(
         return (
             STATE_DEMOTE_TO_SHADOW,
             DECISION_DEMOTE_TO_SHADOW,
-            "demote to shadow and mine entry/exit failures before more paper exposure",
+            "quarantine from paper and mine entry/exit failures before more paper exposure",
         )
     if closed_net < 0:
         return (
             STATE_PAPER_PROBATION,
             DECISION_OBSERVE_MORE,
-            "probation: one more negative close should trigger shadow demotion",
+            "probation: one more negative close should trigger paper quarantine",
         )
     return (
         STATE_PAPER_OBSERVE_MORE,
@@ -599,6 +599,7 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "survivor_candidates": states[STATE_PAPER_SURVIVOR_CANDIDATE],
         "observe_more": states[STATE_PAPER_OBSERVE_MORE],
         "probation": states[STATE_PAPER_PROBATION],
+        "paper_quarantine": states[STATE_DEMOTE_TO_SHADOW],
         "demote_to_shadow": states[STATE_DEMOTE_TO_SHADOW],
         "research_only": states[STATE_RESEARCH_ONLY],
         "stale_no_judgment": states[STATE_STALE_NO_JUDGMENT],
@@ -632,6 +633,9 @@ def _boards(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         "probation": [
             _slim(r) for r in rows if r.get("survival_state") == STATE_PAPER_PROBATION
         ],
+        "paper_quarantine": [
+            _slim(r) for r in rows if r.get("survival_state") == STATE_DEMOTE_TO_SHADOW
+        ],
         "demote_to_shadow": [
             _slim(r) for r in rows if r.get("survival_state") == STATE_DEMOTE_TO_SHADOW
         ],
@@ -664,7 +668,7 @@ def _slim(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def _operator_answer(summary: Mapping[str, Any]) -> str:
     candidates = _int(summary.get("survivor_candidates"))
-    demote = _int(summary.get("demote_to_shadow"))
+    demote = _int(summary.get("paper_quarantine", summary.get("demote_to_shadow")))
     probation = _int(summary.get("probation"))
     stale = _int(summary.get("stale_no_judgment")) + _int(summary.get("route_blocked"))
     observe = _int(summary.get("observe_more"))
@@ -676,7 +680,7 @@ def _operator_answer(summary: Mapping[str, Any]) -> str:
         )
     if demote:
         return (
-            f"{demote} lane(s) should be demoted to shadow before more paper fee bleed; "
+            f"{demote} lane(s) should be paper-quarantined before more fee bleed; "
             f"{probation} are on probation."
         )
     if stale:
