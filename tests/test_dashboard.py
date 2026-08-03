@@ -742,6 +742,28 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
         "can_promote": False,
         "live_orders_enabled": False,
     }))
+    uplift = tmp_path / "quantified_exit_route_uplift_latest.json"
+    uplift.write_text(json.dumps({
+        "uplift_id": "quantified_exit_route_uplift_v1",
+        "generated_at": "2026-08-01T00:00:00+00:00",
+        "summary": {
+            "source_actions": 1,
+            "experiment_cells": 3,
+            "completed_cells": 1,
+            "improved_cells": 1,
+            "clears_exploratory_gate": 0,
+        },
+        "rows": [{
+            "variant_id": "tp1_be_trail_taker_v1",
+            "status": "DONE_RESEARCH_ONLY",
+            "verdict": "UPLIFT_IMPROVED_BUT_STILL_THIN",
+            "can_trade": False,
+            "can_promote": False,
+        }],
+        "can_trade": False,
+        "can_promote": False,
+        "live_orders_enabled": False,
+    }))
     proof = tmp_path / "quantified_pullback_reversion_proof_latest.json"
     proof.write_text(json.dumps({
         "proof_id": "quantified_pullback_reversion_proof_v1",
@@ -758,6 +780,7 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
             token="t3st-token",
             quantified_blueprint_proof_path=blueprint,
             quantified_proof_arbiter_path=arbiter,
+            quantified_exit_route_uplift_path=uplift,
             quantified_pullback_proof_path=proof,
         )
     )
@@ -769,6 +792,9 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
     arbiter_payload = client.get(
         "/quantified-strategy-lab/proof-arbiter?token=t3st-token"
     ).json()
+    uplift_payload = client.get(
+        "/quantified-strategy-lab/exit-route-uplift?token=t3st-token"
+    ).json()
     payload = client.get(
         "/quantified-strategy-lab/pullback-proof?token=t3st-token"
     ).json()
@@ -776,6 +802,7 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
     assert page.status_code == 200
     assert "Blueprint Proof Matrix" in page.text
     assert "Proof Result Arbiter" in page.text
+    assert "Exit / Route Uplift" in page.text
     assert blueprint_payload["proof_id"] == "quantified_blueprint_proof_v1"
     assert blueprint_payload["summary"]["ports"] == 6
     assert blueprint_payload["can_trade"] is False
@@ -784,6 +811,10 @@ def test_quantified_strategy_lab_serves_pullback_proof(tmp_path):
     assert arbiter_payload["summary"]["ready_for_judgment"] == 1
     assert arbiter_payload["can_trade"] is False
     assert arbiter_payload["can_promote"] is False
+    assert uplift_payload["uplift_id"] == "quantified_exit_route_uplift_v1"
+    assert uplift_payload["summary"]["improved_cells"] == 1
+    assert uplift_payload["can_trade"] is False
+    assert uplift_payload["can_promote"] is False
     assert payload["proof_id"] == "quantified_pullback_reversion_proof_v1"
     assert payload["can_trade"] is False
     assert payload["can_promote"] is False

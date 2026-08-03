@@ -7,6 +7,7 @@ import json
 import pandas as pd
 
 from vnedge.agent_gateway.job_runner import JobOutcome, run_pending_jobs
+from vnedge.agent_gateway.job_runner import _backtest_config
 from vnedge.agent_gateway.jobs import (
     BLOCKED_STATUS,
     DONE_STATUS,
@@ -121,6 +122,36 @@ def test_registered_strategy_job_backtests_local_parquet_data(tmp_path):
     assert result["promotion_verdict"] == "NOT_EVALUATED_AGENT_JOB"
     assert result["can_trade"] is False
     assert result["can_promote"] is False
+
+
+def test_backtest_request_can_drive_exit_and_route_research_config():
+    cfg = _backtest_config(
+        _request(
+            parameters={
+                "max_holding_bars": 5,
+                "use_active_exit": True,
+                "trail_atr_mult": 2.0,
+                "trail_atr_window": 21,
+                "entry_fee_bps": 2.0,
+                "exit_fee_bps": 5.0,
+                "entry_slippage_bps": 0.5,
+                "exit_slippage_bps": 2.0,
+                "breakeven_arm_bps": 20.0,
+                "profit_lock_bps": 10.0,
+            }
+        )
+    )
+
+    assert cfg.max_holding_bars == 5
+    assert cfg.use_active_exit is True
+    assert cfg.trail_atr_mult == 2.0
+    assert cfg.trail_atr_window == 21
+    assert cfg.entry_fee_bps == 2.0
+    assert cfg.exit_fee_bps == 5.0
+    assert cfg.entry_slippage_bps == 0.5
+    assert cfg.exit_slippage_bps == 2.0
+    assert cfg.breakeven_arm_bps == 20.0
+    assert cfg.profit_lock_bps == 10.0
 
 
 def test_runner_blocks_missing_data_and_live_enabled_requests(tmp_path):

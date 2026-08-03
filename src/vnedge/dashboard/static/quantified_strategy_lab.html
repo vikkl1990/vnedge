@@ -305,6 +305,35 @@
       </div>
     </section>
 
+    <section class="card" style="margin-bottom:14px">
+      <div class="panel-title">
+        <h2>Exit / Route Uplift</h2>
+        <span class="badge study" id="upliftBadge">research only</span>
+      </div>
+      <div class="panel-body">
+        <div class="proof-grid" id="upliftSummary"></div>
+        <div class="note" id="upliftAnswer">Waiting for exit-route uplift artifact...</div>
+        <div class="proof-table" style="margin-top:12px">
+          <table>
+            <thead>
+              <tr>
+                <th>Variant</th>
+                <th>Lane</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>After</th>
+                <th>Uplift</th>
+                <th>Next</th>
+              </tr>
+            </thead>
+            <tbody id="upliftRows">
+              <tr><td colspan="7" class="loading">Loading exit-route uplift...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="panel-title">
         <h2>Strategy Inventory</h2>
@@ -357,6 +386,7 @@
     let factory = null;
     let blueprintProof = null;
     let proofArbiter = null;
+    let exitRouteUplift = null;
     let pullbackProof = null;
     const fmt = new Intl.NumberFormat("en-US");
 
@@ -526,6 +556,49 @@
       }).join("") || '<tr><td colspan="7" class="loading">No arbiter actions yet.</td></tr>';
     }
 
+    function renderExitRouteUplift(){
+      const summaryEl = document.getElementById("upliftSummary");
+      const rowsEl = document.getElementById("upliftRows");
+      if (!exitRouteUplift || !exitRouteUplift.summary) {
+        document.getElementById("upliftBadge").textContent = "unavailable";
+        summaryEl.innerHTML = "";
+        document.getElementById("upliftAnswer").textContent = "Exit-route uplift artifact unavailable. It will appear after near-fee-wall proof cells are converted into Agent Gateway experiments.";
+        rowsEl.innerHTML = '<tr><td colspan="7" class="loading">No uplift artifact published.</td></tr>';
+        return;
+      }
+      const s = exitRouteUplift.summary || {};
+      document.getElementById("upliftBadge").textContent = `${fmt.format(s.completed_cells || 0)}/${fmt.format(s.experiment_cells || 0)} complete`;
+      summaryEl.innerHTML = [
+        `<div class="factory-card"><div class="label">Source Cells</div><div class="big">${fmt.format(s.source_actions || 0)}</div><p>positive or near fee wall</p></div>`,
+        `<div class="factory-card"><div class="label">Experiments</div><div class="big">${fmt.format(s.experiment_cells || 0)}</div><p>${fmt.format(s.pending_cells || 0)} pending / ${fmt.format(s.running_cells || 0)} running / ${fmt.format(s.queued_cells || 0)} queued</p></div>`,
+        `<div class="factory-card"><div class="label">Improved</div><div class="big">${fmt.format(s.improved_cells || 0)}</div><p>after exit/routing test</p></div>`,
+        `<div class="factory-card"><div class="label">Clears Gate</div><div class="big">${fmt.format(s.clears_exploratory_gate || 0)}</div><p>still needs untouched proof</p></div>`,
+        `<div class="factory-card"><div class="label">Best Uplift</div><div class="big">${s.best_uplift_bps == null ? "--" : Number(s.best_uplift_bps).toFixed(2)}</div><p>bps over source row</p></div>`
+      ].join("");
+      document.getElementById("upliftAnswer").textContent = exitRouteUplift.operator_answer || "Exit-route uplift loaded.";
+      const rows = (exitRouteUplift.rows || []).slice().sort((a,b) => {
+        const av = a.uplift_bps == null ? -999999 : Number(a.uplift_bps);
+        const bv = b.uplift_bps == null ? -999999 : Number(b.uplift_bps);
+        return bv - av;
+      }).slice(0,36);
+      rowsEl.innerHTML = rows.map(row => {
+        const source = row.source_avg_net_bps == null ? "--" : `${Number(row.source_avg_net_bps).toFixed(2)} bps`;
+        const after = row.avg_net_bps == null ? "--" : `${Number(row.avg_net_bps).toFixed(2)} bps`;
+        const uplift = row.uplift_bps == null ? "--" : `${Number(row.uplift_bps).toFixed(2)} bps`;
+        const cls = (row.verdict || "").includes("CLEARS") ? "portable" :
+          (row.verdict || "").includes("BLOCKED") || (row.verdict || "").includes("FAILED") || (row.verdict || "").includes("NO_UPLIFT") ? "blocked" : "study";
+        return `<tr>
+          <td><div class="title">${row.variant_id || "--"}</div><div class="tiny">${row.execution_route_model || "--"}${row.maker_fill_modelled ? " · L2 proof required" : ""}</div></td>
+          <td><div class="title">${row.exchange} · ${row.symbol}</div><div class="tiny">${row.timeframe} · ${row.port_id}</div></td>
+          <td><span class="badge ${cls}">${row.verdict || row.status || "--"}</span></td>
+          <td class="num">${source}</td>
+          <td class="num">${after}</td>
+          <td class="num">${uplift}</td>
+          <td>${row.next_action || "--"}<div class="tiny">${row.route_assumption || ""}</div></td>
+        </tr>`;
+      }).join("") || '<tr><td colspan="7" class="loading">No uplift rows yet.</td></tr>';
+    }
+
     function populateFilters(){
       const ports = [...new Set((payload.strategy_reviews || []).map(r => r.recommended_port))].sort();
       document.getElementById("portFilter").innerHTML = '<option value="">All port families</option>' +
@@ -572,6 +645,7 @@
       const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
       const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const arbiterUrl = "/quantified-strategy-lab/proof-arbiter" + (token ? "?token=" + encodeURIComponent(token) : "");
+      const upliftUrl = "/quantified-strategy-lab/exit-route-uplift" + (token ? "?token=" + encodeURIComponent(token) : "");
       const proofUrl = "/quantified-strategy-lab/pullback-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
       const res = await fetch(url, {cache:"no-store"});
       if (!res.ok) throw new Error("request failed " + res.status);
@@ -595,6 +669,12 @@
         proofArbiter = null;
       }
       try {
+        const upliftRes = await fetch(upliftUrl, {cache:"no-store"});
+        exitRouteUplift = upliftRes.ok ? await upliftRes.json() : null;
+      } catch {
+        exitRouteUplift = null;
+      }
+      try {
         const proofRes = await fetch(proofUrl, {cache:"no-store"});
         pullbackProof = proofRes.ok ? await proofRes.json() : null;
       } catch {
@@ -607,6 +687,7 @@
       renderFactory();
       renderProof();
       renderArbiter();
+      renderExitRouteUplift();
       populateFilters();
       renderRows();
     }

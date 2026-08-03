@@ -69,6 +69,9 @@ class QuantSignalPackParams:
     stop_atr_mult: float = 1.35
     stop_buffer_atr: float = 0.15
     take_profit_r: float = 2.0
+    emit_tp_ladder: bool = False
+    tp1_r: float = 0.80
+    tp2_r: float = 1.50
     max_funding_against: float = 0.0008
     allowed_sides: tuple[str, ...] = ()
     allowed_families: tuple[str, ...] = ()
@@ -282,6 +285,9 @@ class QuantSignalPack(BaseStrategy):
         min_volume_z: float | None = None,
         stop_atr_mult: float = 1.35,
         take_profit_r: float = 2.0,
+        emit_tp_ladder: bool = False,
+        tp1_r: float = 0.80,
+        tp2_r: float = 1.50,
         max_funding_against: float = 0.0008,
         allowed_sides: tuple[str, ...] | list[str] | None = None,
         allowed_families: tuple[str, ...] | list[str] | None = None,
@@ -296,6 +302,9 @@ class QuantSignalPack(BaseStrategy):
             min_volume_z=base.min_volume_z if min_volume_z is None else min_volume_z,
             stop_atr_mult=stop_atr_mult,
             take_profit_r=take_profit_r,
+            emit_tp_ladder=emit_tp_ladder,
+            tp1_r=tp1_r,
+            tp2_r=tp2_r,
             max_funding_against=max_funding_against,
             allowed_sides=_validate_filter(
                 "allowed_sides",
@@ -347,10 +356,12 @@ class QuantSignalPack(BaseStrategy):
             if stop <= 0 or stop >= close:
                 return None
             target = close + self.params.take_profit_r * (close - stop)
+            levels = self._tp_ladder("long", close, stop)
             return SignalIntent(
                 "long",
                 stop_price=stop,
                 take_profit_price=target,
+                take_profit_levels=levels,
                 reason=self._reason("long", row, long_score, short_score),
             )
 
@@ -367,13 +378,33 @@ class QuantSignalPack(BaseStrategy):
             if stop <= close:
                 return None
             target = close - self.params.take_profit_r * (stop - close)
+            levels = self._tp_ladder("short", close, stop)
             return SignalIntent(
                 "short",
                 stop_price=stop,
                 take_profit_price=target,
+                take_profit_levels=levels,
                 reason=self._reason("short", row, long_score, short_score),
             )
         return None
+
+    def _tp_ladder(self, side: str, close: float, stop: float) -> tuple[float, ...]:
+        if not self.params.emit_tp_ladder:
+            return ()
+        risk = abs(close - stop)
+        if risk <= 0:
+            return ()
+        if side == "long":
+            return (
+                close + self.params.tp1_r * risk,
+                close + self.params.tp2_r * risk,
+                close + self.params.take_profit_r * risk,
+            )
+        return (
+            close - self.params.tp1_r * risk,
+            close - self.params.tp2_r * risk,
+            close - self.params.take_profit_r * risk,
+        )
 
     def _long_stop(self, row: pd.Series, close: float, atr_value: float) -> float:
         structure_stop = min(float(row["low"]), close - 0.5 * atr_value)

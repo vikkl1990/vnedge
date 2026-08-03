@@ -369,6 +369,33 @@ def test_quantified_proof_result_arbiter_publishes_operator_actions():
     assert service["depends_on"] == ["quantified-blueprint-proof"]
 
 
+def test_quantified_exit_route_uplift_publishes_experiments():
+    service = compose_services()["quantified-exit-route-uplift"]
+
+    assert service["command"][:3] == [
+        "python",
+        "-m",
+        "vnedge.research.quantified_exit_route_uplift",
+    ]
+    assert "--interval-seconds" in service["command"]
+    assert "${QUANTIFIED_EXIT_ROUTE_UPLIFT_INTERVAL_SECONDS:-300}" in service["command"]
+    assert "--seed-jobs" in service["command"]
+    assert "--arbiter" in service["command"]
+    assert "research/live_research/quantified_proof_result_arbiter_latest.json" in service["command"]
+    assert "--jobs-dir" in service["command"]
+    assert "${AGENT_GATEWAY_JOBS_DIR:-logs/agent_gateway/jobs}" in service["command"]
+    assert "--out" in service["command"]
+    assert "research/live_research/quantified_exit_route_uplift_latest.json" in service["command"]
+    assert "--feed" in service["command"]
+    assert "research/live_research/quantified_exit_route_uplift_feed.jsonl" in service["command"]
+    assert "./logs:/app/logs" in service["volumes"]
+    assert "./research/live_research:/app/research/live_research" in service["volumes"]
+    assert set(service["depends_on"]) == {
+        "agent-job-runner",
+        "quantified-proof-result-arbiter",
+    }
+
+
 def test_maker_quote_lifecycle_publishes_execution_path_truth():
     service = compose_services()["maker-quote-lifecycle"]
 

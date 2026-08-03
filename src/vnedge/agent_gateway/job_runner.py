@@ -52,7 +52,23 @@ from vnedge.strategy.strategy_registry import get_strategy_class
 logger = logging.getLogger(__name__)
 
 RUNNER_VERSION = "agent_job_runner_v1"
-CONFIG_PARAMETER_KEYS = frozenset({"max_holding_bars"})
+CONFIG_PARAMETER_KEYS = frozenset(
+    {
+        "max_holding_bars",
+        "breakeven_arm_bps",
+        "profit_lock_bps",
+        "use_active_exit",
+        "trail_atr_mult",
+        "trail_atr_window",
+        "entry_fee_bps",
+        "exit_fee_bps",
+        "entry_slippage_bps",
+        "exit_slippage_bps",
+        "execution_route_model",
+        "route_assumption",
+        "uplift_variant",
+    }
+)
 CANDIDATE_REPLAY_ALIASES = frozenset(
     {CANDIDATE_REPLAY_EXECUTOR_ID, "candidate_replay", "candidate_replay_executor"}
 )
@@ -505,6 +521,52 @@ def _backtest_config(request: dict[str, Any]) -> BacktestConfig:
         max_holding_bars=_bounded_int(params.get("max_holding_bars"), default=48, lower=1, upper=10_000),
         fees=fee,
         slippage=slippage,
+        breakeven_arm_bps=_optional_bounded_float(
+            params.get("breakeven_arm_bps"),
+            lower=0.0,
+            upper=10_000.0,
+        ),
+        profit_lock_bps=_bounded_float(
+            params.get("profit_lock_bps"),
+            default=0.0,
+            lower=0.0,
+            upper=10_000.0,
+        ),
+        use_active_exit=_truthy(str(params.get("use_active_exit")))
+        if params.get("use_active_exit") is not None
+        else False,
+        trail_atr_mult=_bounded_float(
+            params.get("trail_atr_mult"),
+            default=0.0,
+            lower=0.0,
+            upper=100.0,
+        ),
+        trail_atr_window=_bounded_int(
+            params.get("trail_atr_window"),
+            default=14,
+            lower=1,
+            upper=1_000,
+        ),
+        entry_fee_bps=_optional_bounded_float(
+            params.get("entry_fee_bps"),
+            lower=0.0,
+            upper=1_000.0,
+        ),
+        exit_fee_bps=_optional_bounded_float(
+            params.get("exit_fee_bps"),
+            lower=0.0,
+            upper=1_000.0,
+        ),
+        entry_slippage_bps=_optional_bounded_float(
+            params.get("entry_slippage_bps"),
+            lower=0.0,
+            upper=1_000.0,
+        ),
+        exit_slippage_bps=_optional_bounded_float(
+            params.get("exit_slippage_bps"),
+            lower=0.0,
+            upper=1_000.0,
+        ),
     )
 
 
@@ -527,6 +589,18 @@ def _bounded_float(value: Any, *, default: float, lower: float, upper: float) ->
         return default
     if not math.isfinite(parsed):
         return default
+    return max(lower, min(parsed, upper))
+
+
+def _optional_bounded_float(value: Any, *, lower: float, upper: float) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
     return max(lower, min(parsed, upper))
 
 

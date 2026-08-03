@@ -89,6 +89,16 @@ class BacktestConfig(BaseModel):
     # read from a strategy column (those are named inconsistently: `atr`,
     # `atr_margin`, …). Keeps trailing identical across every scanner.
     trail_atr_window: int = Field(default=14, ge=1)
+    # Route modelling overrides (DEFAULT OFF).  The legacy backtester treats
+    # both entry and exit as taker+adverse-slippage fills. Research lanes can now
+    # model asymmetric execution such as maker-first entry + taker exit without
+    # mutating the core FeeModel/SlippageModel defaults. This is still a candle
+    # backtest assumption; maker rows must later clear L2 fill proof before any
+    # promotion.
+    entry_fee_bps: float | None = Field(default=None, ge=0.0)
+    exit_fee_bps: float | None = Field(default=None, ge=0.0)
+    entry_slippage_bps: float | None = Field(default=None, ge=0.0)
+    exit_slippage_bps: float | None = Field(default=None, ge=0.0)
 
 
 @dataclass(frozen=True)
@@ -207,6 +217,30 @@ def _check_intrabar_exit(
     return None
 
 
+def _fee_usd(config: BacktestConfig, *, notional_usd: float, leg: str) -> float:
+    if leg == "entry" and config.entry_fee_bps is not None:
+        return abs(notional_usd) * config.entry_fee_bps / 10_000.0
+    if leg == "exit" and config.exit_fee_bps is not None:
+        return abs(notional_usd) * config.exit_fee_bps / 10_000.0
+    return config.fees.taker_fee_usd(notional_usd)
+
+
+def _fill_price(config: BacktestConfig, raw_price: float, side: str, *, leg: str) -> float:
+    override = (
+        config.entry_slippage_bps
+        if leg == "entry"
+        else config.exit_slippage_bps
+        if leg == "exit"
+        else None
+    )
+    if override is None:
+        return config.slippage.fill_price(raw_price, side)
+    if side not in ("buy", "sell"):
+        raise ValueError(f"invalid order side: {side}")
+    adj = override / 10_000.0
+    return raw_price * (1 + adj) if side == "buy" else raw_price * (1 - adj)
+
+
 def run_backtest(
     candles: pd.DataFrame,
     funding: pd.DataFrame | None,
@@ -286,8 +320,8 @@ def run_backtest(
             return
         direction = 1.0 if pos.intent.side == "long" else -1.0
         exit_side = "sell" if pos.intent.side == "long" else "buy"
-        fill = config.slippage.fill_price(raw_price, exit_side)
-        exit_fee = config.fees.taker_fee_usd(q * fill)
+        fill = _fill_price(config, raw_price, exit_side, leg="exit")
+        exit_fee = _fee_usd(config, notional_usd=q * fill, leg="exit")
         gross = direction * q * (fill - pos.entry_price)
         entry_fee_alloc = pos.entry_fee_usd * (q / pos.original_quantity if pos.original_quantity else 1.0)
         funding_alloc = pos.funding_usd * (q / pos.remaining_quantity) if pos.remaining_quantity else 0.0
@@ -329,13 +363,13 @@ def run_backtest(
         # 2) Fill last bar's intent at this bar's open.
         if position is None and pending is not None:
             entry_side = "buy" if pending.side == "long" else "sell"
-            fill = config.slippage.fill_price(float(bar["open"]), entry_side)
+            fill = _fill_price(config, float(bar["open"]), entry_side, leg="entry")
             sizing = size_position(
                 equity_usd=equity, entry_price=fill, stop_price=pending.stop_price,
                 side=pending.side, config=config.risk, limits=config.limits,
             )
             if sizing.approved:
-                fee = config.fees.taker_fee_usd(sizing.notional_usd)
+                fee = _fee_usd(config, notional_usd=sizing.notional_usd, leg="entry")
                 equity -= fee
                 position = _OpenPosition(
                     intent=pending, quantity=sizing.quantity, entry_price=fill,

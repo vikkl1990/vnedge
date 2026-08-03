@@ -12,6 +12,8 @@ from vnedge.backtest.backtester import (
     BacktestConfig,
     _OpenPosition,
     _check_intrabar_exit,
+    _fee_usd,
+    _fill_price,
     run_backtest,
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
@@ -141,3 +143,17 @@ def test_active_exit_default_off_matches_legacy():
     a=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(), symbol="X", timeframe="1h")
     b=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(use_active_exit=False), symbol="X", timeframe="1h")
     assert [t.net_pnl_usd for t in a.trades]==[t.net_pnl_usd for t in b.trades]
+
+
+def test_route_overrides_can_model_maker_entry_taker_exit():
+    cfg = BacktestConfig(
+        entry_fee_bps=2.0,
+        exit_fee_bps=5.0,
+        entry_slippage_bps=0.5,
+        exit_slippage_bps=2.0,
+    )
+
+    assert _fee_usd(cfg, notional_usd=1000.0, leg="entry") == pytest.approx(0.20)
+    assert _fee_usd(cfg, notional_usd=1000.0, leg="exit") == pytest.approx(0.50)
+    assert _fill_price(cfg, 100.0, "buy", leg="entry") == pytest.approx(100.005)
+    assert _fill_price(cfg, 100.0, "sell", leg="exit") == pytest.approx(99.98)

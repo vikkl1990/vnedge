@@ -84,6 +84,37 @@ def test_quant_pack_fires_on_liquidity_sweep_reclaim():
     assert intent.take_profit_price > float(df["close"].iloc[-1])
 
 
+def test_quant_pack_can_emit_ladder_for_active_exit_research():
+    rows = trend_rows()
+    prior_pool = min(row[2] for row in rows[-20:-1])
+    prev_close = rows[-1][3]
+    rows.append((
+        prev_close - 1.2,
+        prev_close + 1.6,
+        prior_pool - 0.8,
+        prev_close + 1.3,
+        320.0,
+    ))
+    candles = make_candles(rows)
+    strategy = QuantSignalPack(
+        params=params(),
+        min_score=4.5,
+        structure_window=14,
+        emit_tp_ladder=True,
+        tp1_r=0.8,
+        tp2_r=1.5,
+        take_profit_r=2.0,
+    )
+    df = strategy.prepare(candles)
+
+    intent = strategy.signal(df, len(df) - 1)
+
+    assert intent is not None
+    assert len(intent.take_profit_levels) == 3
+    assert intent.take_profit_levels[-1] == intent.take_profit_price
+    assert intent.take_profit_levels[0] < intent.take_profit_levels[1]
+
+
 def test_quant_pack_family_filter_blocks_mismatched_signal():
     rows = trend_rows()
     prior_pool = min(row[2] for row in rows[-20:-1])
