@@ -40,7 +40,9 @@ def test_evidence_aligned_lanes_toggle_off():
 
 
 def test_evidence_aligned_lanes_in_desired_specs():
-    specs = desired_lane_specs({})
+    # ml_pro is pruned from the default roster (2026-08-03 hard-cut); prune-off
+    # verifies the evidence-aligned generator still wires it into the base set.
+    specs = desired_lane_specs({"MULTI_LANE_PRUNE_DEAD": "0"})
     identity = {(s.strategy_id, s.timeframe, s.exchange) for s in specs}
     assert ("vnedge_algo_ml_pro_v1", "4h", "delta_india") in identity
 
@@ -75,7 +77,9 @@ def test_paper_trial_lanes_toggle_off():
 
 
 def test_paper_trial_lanes_in_desired_specs():
-    specs = desired_lane_specs({})
+    # ml_pro paper trials are pruned by default (2026-08-03 hard-cut); prune-off
+    # verifies the paper-trial generator still wires them into the base set.
+    specs = desired_lane_specs({"MULTI_LANE_PRUNE_DEAD": "0"})
     paper = {
         (s.strategy_id, s.timeframe)
         for s in specs

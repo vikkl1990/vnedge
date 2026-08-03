@@ -51,7 +51,9 @@ def test_luxara_break_bounce_delta_lanes_are_shadow_first_and_5m():
 
 
 def test_both_luxara_scanners_are_in_desired_lane_specs():
-    specs = desired_lane_specs({})
+    # Both luxara scanners are pruned from the default roster by the 2026-08-03
+    # hard-cut; prune-off verifies the generators still wire them into the base.
+    specs = desired_lane_specs({"MULTI_LANE_PRUNE_DEAD": "0"})
     strategy_ids = {spec.strategy_id for spec in specs}
 
     assert LUXARA_LIVE_PLAN_QTM_ID in strategy_ids
