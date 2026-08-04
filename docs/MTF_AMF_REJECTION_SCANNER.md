@@ -113,6 +113,19 @@ python -m vnedge.research.mtf_amf_rejection_scanner \
 The default report is written atomically to
 `research/live_research/mtf_amf_rejection_scanner_latest.json`.
 
+For a continuously refreshed, credential-free Delta India research snapshot:
+
+```bash
+python -m vnedge.research.mtf_amf_rejection_scanner \
+  --delta-live \
+  --symbols BTCUSD,ETHUSD,SOLUSD \
+  --interval-seconds 300
+```
+
+This mode downloads only public candles, removes the still-forming 1h/4h
+candles, and rewrites the same latest JSON atomically. It remains observation
+only and has no exchange order client.
+
 ## Promotion path
 
 The next legitimate step is shadow observation on a pre-registered untouched

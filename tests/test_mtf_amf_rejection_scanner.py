@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from itertools import pairwise
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 import pandas as pd
@@ -9,8 +10,10 @@ import pytest
 
 from vnedge.research.mtf_amf_rejection_scanner import (
     MtfAmfScannerConfig,
+    build_delta_live_scanner_payload,
     build_mtf_amf_feature_frame,
     build_scanner_payload,
+    fetch_delta_public_candles,
     scan_mtf_amf_rejections,
 )
 
@@ -154,3 +157,75 @@ def test_epoch_second_timestamp_resolution_is_normalized_for_asof_join():
     frame = build_mtf_amf_feature_frame(one, four)
 
     assert len(frame) == len(one)
+
+
+def test_delta_fetch_pages_and_excludes_forming_candle():
+    now = datetime(2026, 8, 4, 16, 30, tzinfo=UTC)
+    calls: list[str] = []
+
+    def getter(url: str) -> dict:
+        calls.append(url)
+        query = parse_qs(urlparse(url).query)
+        start = int(query["start"][0])
+        end = int(query["end"][0])
+        step = 3_600
+        return {
+            "success": True,
+            "result": [
+                {
+                    "time": stamp,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 10.0,
+                }
+                for stamp in range(start - (start % step), end + step, step)
+            ],
+        }
+
+    frame = fetch_delta_public_candles("ETHUSD", "1h", days=80, now=now, http_get_json=getter)
+
+    assert len(calls) == 2
+    assert (frame["timestamp"] + pd.Timedelta(hours=1) <= now).all()
+    assert frame["timestamp"].is_unique
+
+
+def test_delta_live_payload_is_multi_symbol_and_cannot_trade():
+    now = datetime(2026, 8, 4, 16, 0, tzinfo=UTC)
+
+    def getter(url: str) -> dict:
+        query = parse_qs(urlparse(url).query)
+        start = int(query["start"][0])
+        end = int(query["end"][0])
+        resolution = query["resolution"][0]
+        step = 3_600 if resolution == "1h" else 14_400
+        rows = []
+        for index, stamp in enumerate(range(start - (start % step), end, step)):
+            close = 100.0 + np.sin(index * 0.7)
+            rows.append(
+                {
+                    "time": stamp,
+                    "open": close,
+                    "high": 101.6,
+                    "low": 98.4,
+                    "close": close,
+                    "volume": 10.0,
+                }
+            )
+        return {"success": True, "result": rows}
+
+    payload = build_delta_live_scanner_payload(
+        (symbol for symbol in ("BTCUSD", "ETHUSD")),
+        days=30,
+        now=now,
+        http_get_json=getter,
+    )
+
+    assert payload["summary"]["requested_symbols"] == 2
+    assert payload["summary"]["healthy_symbols"] == 2
+    assert payload["summary"]["error_symbols"] == 0
+    assert set(payload["symbols"]) == {"BTCUSD", "ETHUSD"}
+    assert payload["policy"]["public_data_only"] is True
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
