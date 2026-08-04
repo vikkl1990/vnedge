@@ -127,6 +127,11 @@ services:
       MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED: "${MULTI_LANE_FEE_WALL_PROBE_MIN_ROUTED:-10}"
       MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS: "${MULTI_LANE_FEE_WALL_PROBE_MIN_AVG_NET_BPS:-8}"
       MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR: "${MULTI_LANE_FEE_WALL_PROBE_MIN_PROFIT_FACTOR:-1.15}"
+      # Paper-only live-forward test for the PR #376 MTF/AMF rejection scanner.
+      # Delta India BTC/ETH/SOL on 1h; simulated fills only; live trader refuses
+      # the strategy id. Set to 0 to remove the lane family from PAPER.
+      MULTI_LANE_MTF_AMF_PAPER: "${MULTI_LANE_MTF_AMF_PAPER:-1}"
+      MULTI_LANE_MTF_AMF_SYMBOLS: "${MULTI_LANE_MTF_AMF_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT}"
       # Paper exposure is bounded by the paper-lane governor. Research/shadow
       # lanes can keep exploring, but PAPER mode should only run the current
       # proposed roster; stale probes remain as historical evidence.

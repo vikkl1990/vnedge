@@ -7,19 +7,20 @@ class — never an ad-hoc script.
 
 from __future__ import annotations
 
-from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
+from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.datrend_nomada_scalper import DATrendNomadaScalper
-from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
 from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
 from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
 from vnedge.strategy.momentum_cascade_lyro import MomentumCascadeLyroScanner
+from vnedge.strategy.mtf_amf_rejection_paper import MtfAmfRejectionPaperStrategy
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.quantified_fee_wall_sniper import QuantifiedFeeWallSniper
@@ -58,6 +59,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     VNEDGEAlgoMLProScanner.strategy_id: VNEDGEAlgoMLProScanner,
     ContextScalperV2.strategy_id: ContextScalperV2,
     QuantifiedFeeWallSniper.strategy_id: QuantifiedFeeWallSniper,
+    MtfAmfRejectionPaperStrategy.strategy_id: MtfAmfRejectionPaperStrategy,
 }
 
 

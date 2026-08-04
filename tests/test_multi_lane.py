@@ -10,6 +10,7 @@ from vnedge.runtime.multi_lane_shadow import (
     desired_lane_specs,
     fee_wall_paper_probe_lanes,
     lane_specs_fingerprint,
+    mtf_amf_rejection_paper_lanes,
     paper_observation_lanes,
 )
 from vnedge.runtime.runner_config import RunnerMode
@@ -154,6 +155,7 @@ def test_lane_spec_defaults():
     assert spec.daily_loss_usd == 10.0
     assert spec.is_primary is False
     assert spec.mode is RunnerMode.SHADOW
+    assert spec.max_holding_bars == 48
 
 
 def test_daily_factory_env_builds_global_policy():
@@ -226,6 +228,20 @@ def test_multi_lane_builds_crypto_trend_atr_margin_strategy():
     )
 
     assert isinstance(strategy, CryptoTrendAtrMargin)
+
+
+def test_multi_lane_builds_mtf_amf_rejection_paper_strategy():
+    from vnedge.strategy.mtf_amf_rejection_paper import MtfAmfRejectionPaperStrategy
+
+    strategy = multi_lane._build_single_strategy(
+        "mtf_amf_rejection_paper_v1",
+        {},
+        None,
+        None,
+    )
+
+    assert isinstance(strategy, MtfAmfRejectionPaperStrategy)
+    assert strategy.paper_only is True
 
 
 def test_publish_error_adds_faulted_lane():
@@ -422,6 +438,7 @@ def test_governor_paper_roster_filter_keeps_only_proposed_paper_lanes(tmp_path):
     specs = desired_lane_specs({
         "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
         "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+        "MULTI_LANE_MTF_AMF_PAPER": "0",
     })
 
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
@@ -450,11 +467,71 @@ def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primar
     specs = desired_lane_specs({
         "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
         "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+        "MULTI_LANE_MTF_AMF_PAPER": "0",
     })
 
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
     assert paper_ids == ["funding_mr_bybit_20260704"]
     assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_bybit_20260704"
+
+
+def test_governor_paper_roster_filter_keeps_operator_seeded_mtf_trial(tmp_path):
+    governor = {
+        "proposed_roster": {
+            "paper_lanes": [
+                {
+                    "lane_id": "funding_mr_btc_v1_20260703",
+                    "strategy_id": "funding_mean_reversion_v1",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                }
+            ]
+        }
+    }
+    path = tmp_path / "paper_lane_governor_latest.json"
+    path.write_text(json.dumps(governor))
+
+    specs = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+    })
+
+    paper_ids = {spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER}
+    assert "funding_mr_btc_v1_20260703" in paper_ids
+    assert {
+        "mtf_amf_rejection_delta_india_btc_usd_usd_paper",
+        "mtf_amf_rejection_delta_india_eth_usd_usd_paper",
+        "mtf_amf_rejection_delta_india_sol_usd_usd_paper",
+    }.issubset(paper_ids)
+    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
+
+
+def test_governor_paper_roster_filter_can_disable_operator_seeded_trials(tmp_path):
+    governor = {
+        "proposed_roster": {
+            "paper_lanes": [
+                {
+                    "lane_id": "funding_mr_btc_v1_20260703",
+                    "strategy_id": "funding_mean_reversion_v1",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                }
+            ]
+        }
+    }
+    path = tmp_path / "paper_lane_governor_latest.json"
+    path.write_text(json.dumps(governor))
+
+    specs = desired_lane_specs({
+        "MULTI_LANE_GOVERNOR_PAPER_ROSTER_ONLY": "1",
+        "MULTI_LANE_KEEP_OPERATOR_PAPER_TRIALS": "0",
+        "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
+    })
+
+    paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
+    assert paper_ids == ["funding_mr_btc_v1_20260703"]
 
 
 def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path):
@@ -504,6 +581,7 @@ def test_delta_paper_observation_can_be_disabled_without_blocking_other_mirrors(
         # native Delta PAPER trial lane (its own MULTI_LANE_EVIDENCE_PAPER_TRIAL
         # flag), which is not a mirror.
         "MULTI_LANE_EVIDENCE_PAPER_TRIAL": "0",
+        "MULTI_LANE_MTF_AMF_PAPER": "0",
     })
     ids = {spec.lane_id for spec in specs}
 
@@ -621,6 +699,35 @@ def test_fee_wall_paper_probes_are_disabled_and_freshness_guarded(tmp_path):
         "MULTI_LANE_FEE_WALL_PAPER_PROBES": "1",
         "MULTI_LANE_FEE_WALL_FORENSICS_PATH": str(path),
     }) == []
+
+
+def test_mtf_amf_rejection_paper_lanes_enabled_by_default_on_delta():
+    lanes = mtf_amf_rejection_paper_lanes({})
+
+    assert len(lanes) == 3
+    assert {lane.symbol for lane in lanes} == {
+        "BTC/USD:USD",
+        "ETH/USD:USD",
+        "SOL/USD:USD",
+    }
+    assert all(lane.exchange == "delta_india" for lane in lanes)
+    assert all(lane.timeframe == "1h" for lane in lanes)
+    assert all(lane.strategy_id == "mtf_amf_rejection_paper_v1" for lane in lanes)
+    assert all(lane.mode is RunnerMode.PAPER for lane in lanes)
+    assert all(lane.trail_atr_mult == 2.5 for lane in lanes)
+    assert all(lane.max_holding_bars == 62 for lane in lanes)
+    assert all(lane.strategy_params["min_stop_bps"] == 25.0 for lane in lanes)
+
+
+def test_mtf_amf_rejection_paper_lanes_can_be_disabled_or_symbol_overridden():
+    assert mtf_amf_rejection_paper_lanes({"MULTI_LANE_MTF_AMF_PAPER": "0"}) == []
+
+    lanes = mtf_amf_rejection_paper_lanes({
+        "MULTI_LANE_MTF_AMF_SYMBOLS": "XRP/USDT:USDT",
+    })
+
+    assert [lane.symbol for lane in lanes] == ["XRP/USD:USD"]
+    assert lanes[0].lane_id == "mtf_amf_rejection_delta_india_xrp_usd_usd_paper"
 
 
 def test_fee_wall_probe_manifest_is_durable_after_source_artifact_ages(tmp_path):

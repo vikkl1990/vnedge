@@ -196,5 +196,5 @@ def test_registry_has_research_lanes():
         "luxy_ut_bot_forecast_v1", "momentum_cascade_lyro_v1",
         "luxara_live_plan_qtm_v1", "luxara_break_bounce_v27_v1",
         "vnedge_algo_ml_pro_v1", "context_scalper_v2",
-        "quantified_fee_wall_sniper_v1",
+        "quantified_fee_wall_sniper_v1", "mtf_amf_rejection_paper_v1",
     }
