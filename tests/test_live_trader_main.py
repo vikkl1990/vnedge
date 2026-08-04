@@ -9,6 +9,7 @@ from vnedge.runtime.live_trader_main import (
     _EXIT_CHECKLIST,
     _EXIT_GATES,
     _EXIT_OK,
+    _EXIT_STRATEGY_SCOPE,
     LiveTraderRunConfig,
     run_live_trader,
 )
@@ -114,6 +115,25 @@ async def test_refuses_when_checklist_not_cleared(tmp_path, monkeypatch):
     code = await run_live_trader(Settings(**LIVE_ENV), CFG, max_bars=0, **facs)
     assert code == _EXIT_CHECKLIST
     assert facs["adapter_factory"].calls == 0  # still no live client
+
+
+async def test_refuses_paper_only_strategy_before_live_clients(tmp_path, monkeypatch):
+    _live_env(monkeypatch, tmp_path)
+    facs = _facs()
+    cfg = LiveTraderRunConfig(
+        exchange="delta_india",
+        symbol="BTC/USD:USD",
+        timeframe="1h",
+        strategy_id="mtf_amf_rejection_paper_v1",
+    )
+
+    code = await run_live_trader(Settings(**LIVE_ENV), cfg, max_bars=0, **facs)
+
+    assert code == _EXIT_STRATEGY_SCOPE
+    assert facs["adapter_factory"].calls == 0
+    assert facs["feed_factory"].calls == 0
+    assert facs["account_factory"].calls == 0
+    assert facs["strategy_factory"].calls == 0
 
 
 async def test_all_gates_open_wires_and_runs(tmp_path, monkeypatch):

@@ -52,6 +52,7 @@ _EXIT_OK = 0
 _EXIT_GATES = 10
 _EXIT_CHECKLIST = 11
 _EXIT_CREDENTIALS = 12
+_EXIT_STRATEGY_SCOPE = 13
 
 _WARMUP_BARS = 500
 
@@ -111,6 +112,12 @@ def _default_strategy(strategy_id: str):
     return get_strategy_class(strategy_id)()
 
 
+def _strategy_live_allowed(strategy_id: str) -> bool:
+    from vnedge.strategy.strategy_registry import get_strategy_class
+
+    return not bool(getattr(get_strategy_class(strategy_id), "paper_only", False))
+
+
 async def run_live_trader(
     settings: Settings,
     config: LiveTraderRunConfig,
@@ -133,6 +140,15 @@ async def run_live_trader(
             settings.confirm_live_trading != "",
         )
         return _EXIT_GATES
+
+    # --- Strategy scope: paper-only research wrappers never reach live clients ------
+    if not _strategy_live_allowed(config.strategy_id):
+        logger.error(
+            "REFUSED: strategy %s is paper-only and cannot run live. "
+            "No live client constructed.",
+            config.strategy_id,
+        )
+        return _EXIT_STRATEGY_SCOPE
 
     # --- Gate 2: fail-closed pre-live checklist -----------------------------------
     checklist = run_pre_live_checklist_from_env(settings)

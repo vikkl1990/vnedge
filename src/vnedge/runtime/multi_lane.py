@@ -40,24 +40,27 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
 from vnedge.paper.account_store import PaperAccountStore
-from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
+from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
-from vnedge.strategy.alpha_stack import AlphaStackConfluence
+from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
+from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
-from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
 from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
 from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
 from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
+from vnedge.strategy.mtf_amf_rejection_paper import MtfAmfRejectionPaperStrategy
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.quant_signal_pack import QuantSignalPack
 from vnedge.strategy.quantified_fee_wall_sniper import QuantifiedFeeWallSniper
@@ -69,8 +72,6 @@ from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.trend_retest import TrendRetest
 from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
-from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,10 @@ class LaneSpec:
     #: legacy arm-and-lock). Set per-lane when a strategy was JUDGED with a trail,
     #: so the running lane uses the exit its promotion evidence was measured on.
     trail_atr_mult: float = 0.0
+    #: Runner-owned max holding period. Sparse research families often have a
+    #: specific evidence horizon; live paper must test that horizon instead of
+    #: drifting into open-ended holds.
+    max_holding_bars: int = 48
 
 
 @dataclass(frozen=True)
@@ -105,7 +110,7 @@ class _LaneRuntime:
 class _LaneSink:
     """A provider-shaped object one lane publishes to; tags + forwards."""
 
-    def __init__(self, parent: "MultiLaneProvider", lane_id: str, exchange: str) -> None:
+    def __init__(self, parent: MultiLaneProvider, lane_id: str, exchange: str) -> None:
         self._parent, self._lane_id, self._exchange = parent, lane_id, exchange
 
     def publish(self, snapshot: dict) -> None:
@@ -552,6 +557,8 @@ def _build_single_strategy(
         return AlphaDistillationPack(seed_funding, **params)
     if strategy_id == "vnedge_algo_ml_pro_v1":
         return VNEDGEAlgoMLProScanner(seed_funding, **params)
+    if strategy_id == "mtf_amf_rejection_paper_v1":
+        return MtfAmfRejectionPaperStrategy(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 
@@ -577,13 +584,13 @@ def _build_signal_arbiter_strategy(
 
     for index, child in enumerate(children):
         if not isinstance(child, dict):
-            raise ValueError("signal_arbiter_v1 child entries must be objects")
+            raise TypeError("signal_arbiter_v1 child entries must be objects")
         child_strategy_id = str(child.get("strategy_id", ""))
         if not child_strategy_id:
             raise ValueError("signal_arbiter_v1 child missing strategy_id")
         child_params = child.get("params", {})
         if not isinstance(child_params, dict):
-            raise ValueError("signal_arbiter_v1 child params must be an object")
+            raise TypeError("signal_arbiter_v1 child params must be an object")
 
         strategies.append(
             _build_single_strategy(
@@ -602,7 +609,7 @@ def _build_signal_arbiter_strategy(
 
     arbiter_params = params.get("arbiter", {})
     if not isinstance(arbiter_params, dict):
-        raise ValueError("signal_arbiter_v1 arbiter config must be an object")
+        raise TypeError("signal_arbiter_v1 arbiter config must be an object")
     return CompositeSignalStrategy(
         strategies,
         SignalArbiter(ArbiterConfig(**arbiter_params)),
@@ -899,7 +906,8 @@ async def build_lane(
                           starting_equity_usd=spec.starting_equity, risk=risk,
                           limits=venue_symbol_limits(spec.exchange, spec.symbol),
                           daily_factory=daily_factory,
-                          trail_atr_mult=spec.trail_atr_mult)
+                          trail_atr_mult=spec.trail_atr_mult,
+                          max_holding_bars=spec.max_holding_bars)
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path
     )
@@ -993,7 +1001,7 @@ class MultiLaneShadowRunner:
         for runtime in runtimes:
             try:
                 await runtime.feed.start()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "lane %s (%s %s) feed failed to start: %s",
                     runtime.spec.lane_id, runtime.spec.exchange,
@@ -1025,11 +1033,11 @@ class MultiLaneShadowRunner:
             await runtime.session.run(deadline_seconds=deadline_seconds)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception(
-                "lane %s (%s %s) stopped with error: %s",
+                "lane %s (%s %s) stopped with error",
                 runtime.spec.lane_id, runtime.spec.exchange,
-                runtime.spec.symbol, exc,
+                runtime.spec.symbol,
             )
             self.provider.publish_error(
                 runtime.spec.lane_id, runtime.spec.exchange,

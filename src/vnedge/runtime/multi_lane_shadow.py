@@ -84,6 +84,14 @@ FVG_LIQUIDITY_BREAKOUT_PARAMS: dict = {
     "min_body_atr": 0.55,
     "min_body_percentile": 0.60,
 }
+MTF_AMF_REJECTION_PAPER_PARAMS: dict = {
+    "stop_atr_buffer": 0.15,
+    "min_stop_bps": 25.0,
+    "tp_r_multiples": (1.0, 1.8, 2.8),
+    "exit_on_opposite": True,
+    "exit_on_regime_escape": True,
+    "ranging_regime_exit": 0.70,
+}
 CRYPTO_TREND_ATR_MARGIN_PARAMS: dict = {
     "fast_ema": 30,
     "slow_ema": 60,
@@ -131,6 +139,7 @@ DEFAULT_PRIMARY_LANE_ID = "funding_mr_btc_v1_20260703"
 DEFAULT_BYBIT_BTC_LANE_ID = "funding_mr_bybit_20260704"
 DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
 DELTA_EXCHANGE = "delta_india"
+OPERATOR_PAPER_TRIAL_STRATEGIES = frozenset({"mtf_amf_rejection_paper_v1"})
 
 # The human-approved PAPER trials, keyed by (exchange, symbol). Their PAPER
 # lane reuses these exact ids so it continues the governed trial (account
@@ -738,7 +747,7 @@ def _artifact_is_stale(
     if not isinstance(generated_at, str) or not generated_at:
         return True
     try:
-        ts = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(generated_at)
     except ValueError:
         return True
     if ts.tzinfo is None:
@@ -831,9 +840,16 @@ def _governor_paper_roster_filter(
 
     filtered: list[LaneSpec] = []
     removed = 0
+    kept_operator_trials = 0
     for spec in specs:
-        if spec.mode is not RunnerMode.PAPER or _paper_spec_allowed(spec, allowed):
+        if (
+            spec.mode is not RunnerMode.PAPER
+            or _paper_spec_allowed(spec, allowed)
+            or _operator_paper_trial_allowed(spec, environ)
+        ):
             filtered.append(spec)
+            if _operator_paper_trial_allowed(spec, environ):
+                kept_operator_trials += 1
         else:
             removed += 1
     filtered_paper = [spec for spec in filtered if spec.mode is RunnerMode.PAPER]
@@ -859,12 +875,28 @@ def _governor_paper_roster_filter(
             "paper governor roster filter removed %d non-roster PAPER lane(s)",
             removed,
         )
+    if kept_operator_trials:
+        logger.info(
+            "paper governor roster filter kept %d operator-seeded PAPER trial(s)",
+            kept_operator_trials,
+        )
     if added:
         logger.info(
             "paper governor roster filter added %d governor PAPER lane(s)",
             added,
         )
     return _ensure_primary(filtered)
+
+
+def _operator_paper_trial_allowed(
+    spec: LaneSpec,
+    environ: Mapping[str, str],
+) -> bool:
+    return (
+        spec.mode is RunnerMode.PAPER
+        and spec.strategy_id in OPERATOR_PAPER_TRIAL_STRATEGIES
+        and _truthy(environ, "MULTI_LANE_KEEP_OPERATOR_PAPER_TRIALS", "1")
+    )
 
 
 def _governor_paper_allowed_keys(rows: object) -> set[str]:
@@ -1229,6 +1261,45 @@ def evidence_paper_trial_lanes(
     return specs
 
 
+def mtf_amf_rejection_paper_lanes(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Paper-only live-forward test for the merged MTF/AMF rejection scanner.
+
+    PR #376 proved the scanner's causal source contract, but deliberately left
+    it research-only.  These lanes run a VNEDGE-owned wrapper strategy in PAPER
+    mode on Delta India only: real public market data, simulated fills, full
+    gateway, active exits, 62-bar max hold.  They are not live-capital enabled
+    and do not imply promotion.
+    """
+    if not _truthy(environ, "MULTI_LANE_MTF_AMF_PAPER", "1"):
+        return []
+    if DELTA_EXCHANGE not in _csv_env("MULTI_LANE_EXCHANGES", DEFAULT_EXCHANGES, environ):
+        return []
+    raw_symbols = _csv_env(
+        "MULTI_LANE_MTF_AMF_SYMBOLS",
+        "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT",
+        environ,
+    )
+    return [
+        LaneSpec(
+            lane_id=(
+                f"mtf_amf_rejection_{DELTA_EXCHANGE}_"
+                f"{_slug_symbol(symbol)}_paper"
+            ),
+            exchange=DELTA_EXCHANGE,
+            symbol=symbol,
+            timeframe="1h",
+            strategy_id="mtf_amf_rejection_paper_v1",
+            strategy_params=MTF_AMF_REJECTION_PAPER_PARAMS,
+            mode=RunnerMode.PAPER,
+            trail_atr_mult=2.5,
+            max_holding_bars=62,
+        )
+        for symbol in (_delta_india_symbol(symbol) for symbol in raw_symbols)
+    ]
+
+
 def velocity_delta_lanes(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
     """Small, clearly-labelled VELOCITY cohort — fast 5m lanes whose ONLY job is
     to accelerate ML meta-label collection and keep the live tape visibly active.
@@ -1323,9 +1394,7 @@ def _pruned_lane(spec: LaneSpec) -> bool:
     if strat == "quant_signal_pack_v1" and base_symbol == "DOGE":
         return True
     # funding mean-reversion: only BTC has a proven edge; ETH is DEAD, others lose.
-    if strat == "funding_mean_reversion_v1" and base_symbol != "BTC":
-        return True
-    return False
+    return strat == "funding_mean_reversion_v1" and base_symbol != "BTC"
 
 
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
@@ -1347,6 +1416,7 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
         + delta_funding_mr_lanes(environ)
         + evidence_aligned_shadow_lanes(environ)
         + evidence_paper_trial_lanes(environ)
+        + mtf_amf_rejection_paper_lanes(environ)
         + sats_5m_delta_lanes(environ)
         + stealth_trail_bbp_delta_lanes(environ)
         + fvg_liquidity_breakout_delta_lanes(environ)
@@ -1395,6 +1465,8 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
             "starting_equity": spec.starting_equity,
             "daily_loss_usd": spec.daily_loss_usd,
             "is_primary": spec.is_primary,
+            "trail_atr_mult": spec.trail_atr_mult,
+            "max_holding_bars": spec.max_holding_bars,
         }
         for spec in specs
     ]
@@ -1496,7 +1568,7 @@ async def main() -> int:
             name="lane-set-watch",
         ))
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             exc = task.exception()
             if isinstance(exc, LaneSetChanged):
