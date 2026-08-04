@@ -38,3 +38,27 @@ explicitly single-symbol. `funding_carry_v1` is the priority (it cleared the
 formal gate); session-gating is a secondary confirmation. Cross-sectional
 momentum (candidate 3) is deferred — it needs the multi-symbol portfolio
 backtester (roadmap 10B).
+
+## 2nd-window VERDICT (2026-08-03) — NO clean promotion
+
+Backfilled BTC/ETH 1h + funding for 2022-09→2024-07 and ran the pre-registered
+2nd-window judgment (research/validate_funding_carry_2ndwindow.py):
+
+| candidate | window-2 | PASS | trades | PF | net$ | reject |
+|---|---|---|---:|---:|---:|---|
+| funding_carry_v1 | BTC | no | 277 | 1.28 | +187.77 | IS/OOS retention 19% < 25% |
+| funding_carry_v1 | ETH | no | 306 | 1.08 | +67.53 | PF < 1.1 + retention |
+| funding_mr_session | BTC | no | 26 | 1.10 | +7.75 | zero-trade windows |
+
+**funding_carry BTC is OOS-positive on BOTH independent windows** (screen: PF
+1.19 +$82; window-2: PF 1.28 +$188) — genuinely notable. But it FAILS the
+IS/OOS-retention gate on window-2 (earns ~5x more in-sample), so the edge is
+weak/unstable OOS, not robust. NOT promoted. ETH never confirms; session-gating
+is too sparse.
+
+CONCLUSION: the edge search (all 3 directions) found no candidate that cleanly
+clears the full promotion bar on a 2nd untouched window. The two validated
+earners (funding_mr BTC, crypto_trend DOGE) remain the only promotable edges.
+funding_carry stays a documented near-miss (revisit if a robustness fix or more
+data changes the retention picture); cross-sectional momentum remains the one
+untested direction (needs the multi-symbol backtester).
