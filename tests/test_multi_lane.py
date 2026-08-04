@@ -357,8 +357,9 @@ def test_crypto_trend_doge_shadow_lane_enabled_by_default():
     assert lane.strategy_id == "crypto_trend_atr_margin_v1"
     assert lane.mode is RunnerMode.SHADOW
     assert lane.strategy_params["take_profit_r"] is None
-    # Shadow twin keeps the legacy exit; only the paper lane carries the trail.
-    assert lane.trail_atr_mult == 0.0
+    # P0 parity (2026-08-03): the shadow twin now runs the SAME trail 3x as the
+    # paper lane, so shadow predicts paper/live instead of the legacy fixed stop.
+    assert lane.trail_atr_mult == 3.0
 
 
 def test_crypto_trend_doge_paper_lane_runs_judged_exit():

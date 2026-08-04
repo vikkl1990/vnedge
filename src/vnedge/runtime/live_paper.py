@@ -197,6 +197,10 @@ class LivePaperSession:
                 # resting-limit route (touch-to-fill + maker entry fee); every
                 # other lane stays all-taker. Observability only either way.
                 maker_route=is_maker_route_strategy(strategy.strategy_id),
+                # Same ATR-chandelier trail as the paper/live ActiveExitState, so
+                # a shadow lane predicts its paper twin instead of the legacy
+                # fixed-stop exit. Fed the identical _trail_atr() per bar below.
+                trail_atr_mult=config.trail_atr_mult,
                 strategy_exit=self._shadow_strategy_exit,
             )
             if config.mode is RunnerMode.SHADOW
@@ -1537,7 +1541,11 @@ class LivePaperSession:
                 # its virtual fill is the NEXT bar, like the backtester
                 self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
                 self._log_shadow_outcomes(
-                    self.shadow_outcomes.resolve_bar(self._shadow_exit_df.iloc[-1]),
+                    # feed the IDENTICAL canonical ATR the paper/live trail uses,
+                    # so the shadow stop ratchets to the same value on the same bar
+                    self.shadow_outcomes.resolve_bar(
+                        self._shadow_exit_df.iloc[-1], atr=self._trail_atr()
+                    ),
                     now,
                 )
 

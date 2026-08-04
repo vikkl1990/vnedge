@@ -193,6 +193,9 @@ def crypto_trend_doge_shadow_lanes(
             strategy_id="crypto_trend_atr_margin_v1",
             strategy_params=CRYPTO_TREND_ATR_MARGIN_PARAMS,
             mode=RunnerMode.SHADOW,
+            # Same trail as the paper twin so shadow predicts paper/live, not the
+            # legacy fixed-stop exit (now that ShadowOutcomeTracker runs the trail).
+            trail_atr_mult=3.0,
         )
     ]
     # PAPER trial — human-approved 2026-08-03 after a pre-registered untouched

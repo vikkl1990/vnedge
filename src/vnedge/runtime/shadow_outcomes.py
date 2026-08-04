@@ -50,6 +50,7 @@ import pandas as pd
 
 from vnedge.execution.journal import DecisionJournal
 from vnedge.paper.fill_model import FillModel
+from vnedge.runtime.active_exit import _better_stop
 from vnedge.strategy.base_strategy import StrategyExitIntent
 
 logger = logging.getLogger(__name__)
@@ -137,11 +138,17 @@ class ShadowOutcomeTracker:
         max_holding_bars: int = 48,
         maker_route: bool = False,
         maker_fill_ttl_bars: int = 1,
+        trail_atr_mult: float = 0.0,
         strategy_exit: Callable[[str, float, pd.Series], StrategyExitIntent | None] | None = None,
     ) -> None:
         self.journal = journal
         self.fill_model = fill_model or FillModel()
         self.max_holding_bars = max_holding_bars
+        # ATR-chandelier trail on the virtual stop — mirrors the paper/live
+        # ActiveExitState exactly (same _better_stop ratchet, fed the same
+        # canonical ATR), so a shadow lane predicts its paper/live twin instead
+        # of running the legacy fixed-stop exit. 0.0 = off (unchanged behaviour).
+        self.trail_atr_mult = float(trail_atr_mult)
         # Maker route: entries fill only on a touch within maker_fill_ttl_bars,
         # and pay the maker fee. Off => the all-taker default, byte-for-byte.
         self.maker_route = maker_route
@@ -263,12 +270,19 @@ class ShadowOutcomeTracker:
         return bool(self._pending)
 
     # --- resolution --------------------------------------------------------------
-    def resolve_bar(self, bar: pd.Series) -> list[VirtualOutcome]:
+    def resolve_bar(
+        self, bar: pd.Series, atr: float | None = None
+    ) -> list[VirtualOutcome]:
         """Advance every pending intent through one closed bar.
 
         Only bars strictly AFTER an intent's decision bar count (the first
         such bar is the virtual fill bar). Stop wins ties, target second,
-        timeout at bar close once ``max_holding_bars`` is reached."""
+        timeout at bar close once ``max_holding_bars`` is reached.
+
+        ``atr`` is the canonical trail ATR for THIS bar (the same value the
+        paper/live ActiveExitState uses). When ``trail_atr_mult > 0`` and a
+        positive ATR is supplied, the virtual stop ratchets tighten-only off the
+        running MFE, byte-identically to ActiveExitState.trail_stop."""
         bar_ts = pd.Timestamp(bar["timestamp"])
         high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
         outcomes: list[VirtualOutcome] = []
@@ -298,8 +312,24 @@ class ShadowOutcomeTracker:
                 pending.mfe_price = max(pending.mfe_price, high)
             else:
                 pending.mfe_price = min(pending.mfe_price, low)
+            # Check the exit FIRST, against the stop set by the PREVIOUS bar's
+            # trail — exactly like ActiveExitState (resolve_bar then trail_stop).
             resolution, exit_price = self._check_exit(pending, high, low, close, bar)
             if resolution is None:
+                # No exit this bar: ratchet the virtual stop off MFE, tighten-only,
+                # using the SAME _better_stop + canonical ATR as paper/live. The
+                # tightened stop applies to LATER bars (this bar's extreme is
+                # already in mfe_price), so there is no intrabar lookahead —
+                # byte-identical to ActiveExitState.trail_stop.
+                if self.trail_atr_mult > 0.0 and atr is not None and atr > 0.0:
+                    dist = self.trail_atr_mult * float(atr)
+                    candidate = (
+                        pending.mfe_price - dist if pending.side == "long"
+                        else pending.mfe_price + dist
+                    )
+                    pending.stop_price = _better_stop(
+                        pending.side, pending.stop_price, candidate
+                    )
                 continue
             outcomes.append(self._close(pending, resolution, exit_price, bar_ts))
         return outcomes
