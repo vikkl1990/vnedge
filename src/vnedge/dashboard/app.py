@@ -58,9 +58,10 @@ from vnedge.dashboard.auth import (
     has_permission,
     permissions_for,
 )
+from vnedge.dashboard.scanner_bridge import dashboard_scanner_payload
 from vnedge.dashboard.session import SessionIssuer
-from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.dashboard.session_regime import build_session_regime
+from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.pine_script_research import load_pine_research_payload
 from vnedge.research.quantified_blueprint_proof import (
@@ -1976,18 +1977,19 @@ def create_app(
         it reads current runtime journals only and cannot trade or promote.
         """
         user = _authorized(request)
+        payload = _read_json_payload(
+            realtime_scanner_path,
+            {
+                "summary": {},
+                "rows": [],
+                "operator_answer": "real-time scanner report unavailable",
+                "mode": "live_observation_not_replay",
+                "can_trade": False,
+                "can_promote": False,
+            },
+        )
         return JSONResponse(
-            _read_json_payload(
-                realtime_scanner_path,
-                {
-                    "summary": {},
-                    "rows": [],
-                    "operator_answer": "real-time scanner report unavailable",
-                    "mode": "live_observation_not_replay",
-                    "can_trade": False,
-                    "can_promote": False,
-                },
-            ),
+            dashboard_scanner_payload(payload),
             headers=_identity(user),
         )
 
