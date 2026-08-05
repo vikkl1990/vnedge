@@ -26,6 +26,11 @@ def mtf_payload(now: datetime) -> dict:
                         "symbol": "BTCUSD",
                         "side": "short",
                         "observed_at": fresh,
+                        "l2_confirmation": {
+                            "status": "aligned",
+                            "context_only": True,
+                            "used_for_execution": False,
+                        },
                         "can_trade": False,
                         "can_promote": False,
                     },
@@ -59,6 +64,8 @@ def test_mtf_scanner_is_adapted_to_three_safe_dashboard_rows():
     }
     assert rows["BTCUSD"]["state"] == "FIRING"
     assert rows["BTCUSD"]["latest_eval"]["side"] == "short"
+    assert rows["BTCUSD"]["latest_eval"]["l2_confirmation"]["status"] == "aligned"
+    assert rows["BTCUSD"]["latest_eval"]["l2_confirmation"]["used_for_execution"] is False
     assert rows["ETHUSD"]["state"] == "WAITING"
     assert rows["SOLUSD"]["state"] == "DATA_ERROR"
     assert all(row["can_trade"] is False for row in rows.values())

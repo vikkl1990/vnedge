@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
@@ -278,8 +279,14 @@ def fetch_delta_public_candles(
     days: int = 120,
     now: datetime | None = None,
     http_get_json: Callable[[str], dict[str, Any]] | None = None,
+    include_incomplete: bool = False,
 ) -> pd.DataFrame:
-    """Fetch completed public Delta India candles without credentials."""
+    """Fetch public Delta India candles without credentials.
+
+    The default is completed candles only. ``include_incomplete`` exists only
+    so the forward-evidence journal can capture the already-fixed next-candle
+    open; scanner calculations never receive that forming candle.
+    """
 
     if days < 1:
         raise ValueError("days must be positive")
@@ -330,6 +337,9 @@ def fetch_delta_public_candles(
     frame = frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp")
     # The endpoint can include the candle currently being formed. Never pass it
     # into a close-confirmed scanner.
+    if include_incomplete:
+        started = frame["timestamp"] <= current
+        return _canonical_candles(frame.loc[started], f"delta_{symbol}_{resolution}")
     closed = frame["timestamp"] + pd.to_timedelta(seconds, unit="s") <= current
     return _canonical_candles(frame.loc[closed], f"delta_{symbol}_{resolution}")
 
@@ -582,12 +592,44 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=120)
     parser.add_argument("--interval-seconds", type=float, default=0.0)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--evidence-journal",
+        type=Path,
+        default=Path("research/live_research/mtf_amf_alerts.jsonl"),
+    )
+    parser.add_argument(
+        "--evidence-out",
+        type=Path,
+        default=Path("research/live_research/mtf_amf_forward_evidence_latest.json"),
+    )
+    parser.add_argument(
+        "--expanded-backtest",
+        type=Path,
+        default=Path("research/live_research/mtf_amf_expanded_backtest_latest.json"),
+    )
+    parser.add_argument(
+        "--l2-root",
+        type=Path,
+        default=Path(os.environ["VNEDGE_L2_ROOT"]) if os.environ.get("VNEDGE_L2_ROOT") else None,
+    )
+    parser.add_argument("--no-forward-evidence", action="store_true")
     args = parser.parse_args()
     if args.delta_live:
         while True:
-            payload = build_delta_live_scanner_payload(
-                (item for item in args.symbols.split(",")), days=args.days
-            )
+            requested = tuple(item for item in args.symbols.split(",") if item.strip())
+            generated = datetime.now(UTC)
+            payload = build_delta_live_scanner_payload(requested, days=args.days, now=generated)
+            if not args.no_forward_evidence:
+                _update_forward_evidence(
+                    payload,
+                    requested,
+                    days=args.days,
+                    generated=generated,
+                    journal_path=args.evidence_journal,
+                    evidence_out=args.evidence_out,
+                    backtest_path=args.expanded_backtest,
+                    l2_root=args.l2_root,
+                )
             publish_scanner_payload(payload, args.out)
             print(
                 f"{SCANNER_ID}: {payload['summary']['healthy_symbols']} healthy symbols, "
@@ -610,6 +652,74 @@ def main() -> None:
         f"{SCANNER_ID}: {payload['summary']['alerts']} research alerts; "
         "can_trade=false can_promote=false"
     )
+
+
+def _update_forward_evidence(
+    payload: dict[str, Any],
+    symbols: Iterable[str],
+    *,
+    days: int,
+    generated: datetime,
+    journal_path: Path,
+    evidence_out: Path,
+    backtest_path: Path,
+    l2_root: Path | None,
+) -> None:
+    """Update the append-only alert/outcome record without adding an order route."""
+
+    from vnedge.execution.journal import DecisionJournal
+    from vnedge.research.scanner_forward_evidence import (
+        build_forward_evidence_payload,
+        journal_fresh_alerts,
+        publish_json,
+        resolve_forward_outcomes,
+    )
+
+    frames: dict[str, pd.DataFrame] = {}
+    healthy = payload.get("symbols") if isinstance(payload.get("symbols"), dict) else {}
+    for raw in symbols:
+        symbol = str(raw).strip().upper()
+        if symbol not in healthy:
+            continue
+        try:
+            frames[symbol] = fetch_delta_public_candles(
+                symbol,
+                "1h",
+                days=max(days, 3),
+                now=generated,
+                include_incomplete=True,
+            )
+        except (OSError, TimeoutError, TypeError, ValueError):
+            # Candle scanner health remains truthful in the main payload. A
+            # missing evidence refresh must not rewrite or duplicate journals.
+            continue
+    journal = DecisionJournal(journal_path)
+    journal_fresh_alerts(
+        payload,
+        frames,
+        journal=journal,
+        now=generated,
+        l2_root=l2_root,
+    )
+    resolve_forward_outcomes(frames, journal=journal, now=generated)
+    try:
+        backtest = json.loads(backtest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        backtest = None
+    evidence = build_forward_evidence_payload(
+        journal,
+        now=generated,
+        backtest_payload=backtest if isinstance(backtest, dict) else None,
+    )
+    publish_json(evidence, evidence_out)
+    payload["forward_evidence"] = {
+        "report_path": str(evidence_out),
+        "journaled_alerts": evidence["summary"]["journaled_alerts"],
+        "resolved_outcomes": evidence["summary"]["resolved_outcomes"],
+        "promotion_verdict": evidence["promotion"]["verdict"],
+        "can_trade": False,
+        "can_promote": False,
+    }
 
 
 if __name__ == "__main__":

@@ -59,6 +59,17 @@ def dashboard_scanner_payload(payload: dict, *, now: datetime | None = None) -> 
         if fresh_alert:
             firing += 1
         side = str(latest.get("side") or "").lower() if latest else ""
+        l2_confirmation = (
+            latest.get("l2_confirmation")
+            if latest and isinstance(latest.get("l2_confirmation"), dict)
+            else {
+                "status": "unavailable",
+                "context_only": True,
+                "used_for_signal": False,
+                "used_for_execution": False,
+                "used_for_promotion": False,
+            }
+        )
         timeframe = str((report.get("config") or {}).get("chart_timeframe") or "1h")
         if source_stale:
             why = "public-candle scanner snapshot is stale; refresh required"
@@ -80,6 +91,7 @@ def dashboard_scanner_payload(payload: dict, *, now: datetime | None = None) -> 
                 "latest_eval": {
                     "side": side or None,
                     "signal": {"side": side or None},
+                    "l2_confirmation": l2_confirmation,
                     "research_only": True,
                     "can_trade": False,
                     "can_promote": False,
@@ -95,6 +107,7 @@ def dashboard_scanner_payload(payload: dict, *, now: datetime | None = None) -> 
                 "source_age_seconds": source_age_seconds,
                 "can_trade": False,
                 "can_promote": False,
+                "l2_confirmation": l2_confirmation,
             }
         )
 

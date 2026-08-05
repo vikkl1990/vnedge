@@ -794,6 +794,14 @@
 
       <section class="panel">
         <div class="phead">
+          <h2>Scanner Evidence</h2>
+          <span class="meta" id="scannerEvidenceMeta">loading…</span>
+        </div>
+        <div id="scannerEvidence"><div class="note">forward outcomes and promotion gates loading…</div></div>
+      </section>
+
+      <section class="panel">
+        <div class="phead">
           <h2>Delta 5m Event Clock</h2>
           <span class="meta" id="deltaEventMeta">loading…</span>
         </div>
@@ -1442,13 +1450,41 @@
       var tag=fired?'<span class="route pass">FIRING</span>':rt?'<span class="route '+rt[0]+'">'+rt[1]+'</span>':'<span class="route" style="background:var(--bg-3);color:var(--txt-faint)">'+String(r.state||"").toLowerCase()+'</span>';
       var stage=String(lc.stage||r.state||"waiting").toLowerCase().replace(/_/g," ");
       var levels=lc.take_profit_levels||[],ladder=levels.length?" · TP ladder journal-only":"";
+      var l2=ev.l2_confirmation||r.l2_confirmation||{},l2State=String(l2.status||"unavailable").toLowerCase();
+      var l2Text=" · L2 "+l2State+" (context only)";
       var why=String(lc.final_why_no_trade||r.final_why_no_trade||r.why||"").slice(0,76);
       return '<div class="sig"><span class="t">'+fmtTs(r.latest_eval_ts||r.latest_bar_ts)+'</span>'+
         '<div class="body"><div class="line1">'+
         '<span class="vchip" style="background:'+v.col+'">'+v.sh+'</span><b>'+stratShort(r.strategy_id)+'</b>'+
         (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
-        '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+'</div></div>'+tag+'</div>';
+        '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+safe(l2Text)+'</div></div>'+tag+'</div>';
     }).join('');
+  }
+  function evidenceValue(value,digits,suffix){
+    return value==null?"--":num(value).toFixed(digits)+(suffix||"");
+  }
+  function renderScannerEvidence(d){
+    var el=$("scannerEvidence"),meta=$("scannerEvidenceMeta"); if(!el)return;
+    var s=(d&&d.summary)||{},hs=(d&&d.horizons)||{},markets=(d&&d.market_breakdown)||{},p=(d&&d.promotion)||{};
+    if(!Object.keys(markets).length&&p.market_breakdown)markets=p.market_breakdown;
+    if(meta)meta.textContent=num(s.journaled_alerts)+" alerts · "+num(s.resolved_outcomes)+" labels";
+    var horizonRows=["1h","4h","12h","24h"].map(function(key){
+      var h=hs[key]||{},r=h.rolling_last_30||{},pf=r.profit_factor==null?"--":num(r.profit_factor).toFixed(2);
+      var exp=r.expectancy_bps,cls=exp==null?"":num(exp)>=0?"up":"dn";
+      return '<div class="perfk"><div class="l">'+key+' rolling</div><div class="v num '+cls+'">'+evidenceValue(exp,1,' bps')+'</div><div class="s">PF '+pf+' · false '+evidenceValue(r.false_signal_rate_pct,0,'%')+' · n '+num(r.samples)+'</div></div>';
+    }).join('');
+    var selected=String((p.selected_horizon_hours||24))+"h";
+    var marketRows=Object.keys(markets).sort().map(function(m){
+      var market=markets[m]||{},h=market[selected]||market,exp=h.expectancy_bps,cls=exp==null?"":num(exp)>=0?"up":"dn";
+      return '<div class="eventrow"><div><b>'+safe(symShort(m))+'</b><small>'+selected+' after 12 bps · n '+num(h.samples)+'</small></div><div class="eventroute"><span class="p '+cls+'">'+evidenceValue(exp,1,' bps')+'</span><span class="actstate wait">PF '+(h.profit_factor==null?'--':num(h.profit_factor).toFixed(2))+'</span></div></div>';
+    }).join('');
+    var gates=(p.gates||[]).map(function(g){
+      return '<span class="actstate '+(g.passed?'ok':'bad')+'" title="'+safe(String(g.name||'').replace(/_/g,' '))+' · need '+safe(g.requirement||'')+'">'+(g.passed?'✓ ':'✕ ')+safe(String(g.name||'gate').replace(/_/g,' '))+'</span>';
+    }).join(' ');
+    var verdict=String(p.verdict||'INSUFFICIENT_UNTOUCHED_BACKTEST'),vcls=p.eligible_for_paper_review?'ok':'bad';
+    el.innerHTML='<div class="perfgrid">'+horizonRows+'</div>'+
+      (marketRows?'<div style="padding:0 15px 8px">'+marketRows+'</div>':'<div class="note">No resolved forward market outcomes yet.</div>')+
+      '<div class="fblocker"><b>Promotion:</b> <span class="actstate '+vcls+'">'+safe(verdict.toLowerCase().replace(/_/g,' '))+'</span><div style="margin-top:7px;line-height:2">'+gates+'</div><div style="margin-top:6px">L2 is confirmation only · execution locked · paper remains off until every gate passes and a human approves it.</div></div>';
   }
   function eventRouteCls(route,state){
     route=String(route||""); state=String(state||"");
@@ -2886,6 +2922,7 @@
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
   function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
+  function pollScannerEvidence(){ poll("/scanner-evidence", renderScannerEvidence); }
   function pollDeltaEventClock(){ poll("/delta-5m-event-clock", renderDeltaEventClock); }
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
   function pollAgenticResearchOS(){ poll("/agentic-research-os", renderAgenticResearchOS); }
@@ -3082,8 +3119,8 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollSessionRegime(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollSessionRegime,60000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollScanner(); pollScannerEvidence(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollSessionRegime(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollScannerEvidence,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollSessionRegime,60000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};

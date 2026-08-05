@@ -454,6 +454,7 @@ def create_app(
     lane_readiness_path: Path | None = None,
     promotion_review_runbook_path: Path | None = None,
     realtime_scanner_path: Path | None = None,
+    scanner_forward_evidence_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
     paper_route_doctor_path: Path | None = None,
@@ -689,6 +690,10 @@ def create_app(
     agentic_research_os_file = (
         agentic_research_os_path
         or Path("research/live_research/agentic_research_os_latest.json")
+    )
+    scanner_forward_evidence_file = (
+        scanner_forward_evidence_path
+        or Path("research/live_research/mtf_amf_forward_evidence_latest.json")
     )
     fee_wall_forensics_file = Path(
         "research/live_research/fee_wall_forensics_latest.json"
@@ -1990,6 +1995,40 @@ def create_app(
         )
         return JSONResponse(
             dashboard_scanner_payload(payload),
+            headers=_identity(user),
+        )
+
+    @app.get("/scanner-evidence")
+    async def scanner_evidence(request: Request) -> JSONResponse:
+        """Forward outcomes, expanded backtest, and locked promotion gates.
+
+        The artifact is read-only and cannot place orders or promote a lane.
+        """
+
+        user = _authorized(request)
+        return JSONResponse(
+            _read_json_payload(
+                scanner_forward_evidence_file,
+                {
+                    "report_id": "mtf_amf_forward_evidence_v1",
+                    "summary": {"journaled_alerts": 0, "resolved_outcomes": 0},
+                    "horizons": {},
+                    "market_breakdown": {},
+                    "promotion": {
+                        "verdict": "INSUFFICIENT_UNTOUCHED_BACKTEST",
+                        "eligible_for_paper_review": False,
+                        "paper_trading_enabled": False,
+                        "gates": [],
+                    },
+                    "policy": {
+                        "l2_is_confirmation_only": True,
+                        "can_trade": False,
+                        "can_promote": False,
+                    },
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+            ),
             headers=_identity(user),
         )
 

@@ -190,6 +190,17 @@ def test_delta_fetch_pages_and_excludes_forming_candle():
     assert (frame["timestamp"] + pd.Timedelta(hours=1) <= now).all()
     assert frame["timestamp"].is_unique
 
+    with_forming = fetch_delta_public_candles(
+        "ETHUSD",
+        "1h",
+        days=80,
+        now=now,
+        http_get_json=getter,
+        include_incomplete=True,
+    )
+    assert with_forming.iloc[-1]["timestamp"] == pd.Timestamp("2026-08-04T16:00:00Z")
+    assert (with_forming["timestamp"] <= now).all()
+
 
 def test_delta_live_payload_is_multi_symbol_and_cannot_trade():
     now = datetime(2026, 8, 4, 16, 0, tzinfo=UTC)

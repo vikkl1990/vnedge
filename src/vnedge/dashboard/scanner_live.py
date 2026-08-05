@@ -28,6 +28,12 @@ SCANNER_PATH = Path(
         "research/live_research/mtf_amf_rejection_scanner_latest.json",
     )
 )
+SCANNER_EVIDENCE_PATH = Path(
+    os.environ.get(
+        "DASHBOARD_SCANNER_EVIDENCE_PATH",
+        "research/live_research/mtf_amf_forward_evidence_latest.json",
+    )
+)
 
 
 def read_scanner_payload(path: Path = SCANNER_PATH) -> dict[str, Any]:
@@ -82,6 +88,7 @@ def build_scanner_snapshot(payload: dict[str, Any], *, now: datetime | None = No
                     "fired": row.get("state") == "FIRING",
                     "side": latest.get("side"),
                     "signal_reason": row.get("why"),
+                    "l2_confirmation": latest.get("l2_confirmation"),
                 },
                 "last_fired_ts": row.get("latest_eval_ts")
                 if row.get("state") == "FIRING"
@@ -98,7 +105,9 @@ def build_scanner_snapshot(payload: dict[str, Any], *, now: datetime | None = No
     return {
         "ts": current.isoformat(),
         "mode": "research scanner observation",
-        "symbol": "BTCUSD,ETHUSD,SOLUSD",
+        "symbol": ",".join(
+            str(row.get("symbol")) for row in rows if isinstance(row, dict) and row.get("symbol")
+        ),
         "strategy_id": str(payload.get("scanner_id") or "mtf_amf_rejection_scanner_v1"),
         "recent_alerts": [],
         "price": None,
@@ -150,6 +159,7 @@ async def main() -> None:
         token=TOKEN,
         snapshot_hz=2.0,
         realtime_scanner_path=SCANNER_PATH,
+        scanner_forward_evidence_path=SCANNER_EVIDENCE_PATH,
     )
     server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
 

@@ -113,6 +113,11 @@ python -m vnedge.research.mtf_amf_rejection_scanner \
 The default report is written atomically to
 `research/live_research/mtf_amf_rejection_scanner_latest.json`.
 
+Forward alert journaling, 1h/4h/12h/24h MFE/MAE labels, expanded-market
+validation, and the dashboard evidence contract are documented in
+`docs/SCANNER_FORWARD_EVIDENCE.md`. L2 imbalance and flow are context fields
+only and never alter this scanner's signal or execution state.
+
 For a continuously refreshed, credential-free Delta India research snapshot:
 
 ```bash
