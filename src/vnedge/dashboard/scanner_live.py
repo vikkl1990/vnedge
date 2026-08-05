@@ -97,6 +97,7 @@ def read_scanner_payload(path: Path = SCANNER_PATH) -> dict[str, Any]:
         "sources": [bridge.get("mode") for bridge in bridges],
         "delta_scalper": {
             "summary": scalper.get("summary"),
+            "architecture": scalper.get("architecture"),
             "fee_model": scalper.get("fee_model"),
             "backtest_summary": scalper.get("backtest_summary"),
             "fee_effectiveness": scalper.get("fee_effectiveness"),

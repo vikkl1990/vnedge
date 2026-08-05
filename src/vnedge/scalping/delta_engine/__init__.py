@@ -5,8 +5,13 @@ plans, journals every decision, and can adapt a selected plan into the
 existing risk gateway.  It never submits an order itself.
 """
 
+from vnedge.scalping.delta_engine.architecture import architecture_manifest
 from vnedge.scalping.delta_engine.candle_store import MultiTimeframeCandleStore
 from vnedge.scalping.delta_engine.context import MarketContextBuilder
+from vnedge.scalping.delta_engine.factory import (
+    DeltaScalperAssembly,
+    build_delta_scalper_assembly,
+)
 from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel, FeeBreakdown
 from vnedge.scalping.delta_engine.flow_store import (
     ChannelSequenceTracker,
@@ -48,6 +53,7 @@ __all__ = [
     "Candle",
     "ChannelSequenceTracker",
     "DeltaFeeModel",
+    "DeltaScalperAssembly",
     "DeltaScalperSignalGenerator",
     "EngineDecision",
     "ExitPath",
@@ -69,6 +75,8 @@ __all__ = [
     "SequenceHealth",
     "Side",
     "SignalCandidate",
+    "architecture_manifest",
+    "build_delta_scalper_assembly",
     "fee_sensitivity",
     "robust_validation_report",
     "untouched_window_summary",

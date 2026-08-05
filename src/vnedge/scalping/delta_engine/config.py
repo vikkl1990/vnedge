@@ -26,6 +26,12 @@ class EngineSettings(_StrictModel):
     def enforce_research_lock(self) -> EngineSettings:
         if self.mode != "research" or self.live_orders_enabled or self.can_promote:
             raise ValueError("delta scalper v1 configuration must remain research-only")
+        if not self.symbols or any(not symbol.strip() for symbol in self.symbols):
+            raise ValueError("at least one non-empty symbol is required")
+        if not self.primary_timeframes:
+            raise ValueError("at least one primary timeframe is required")
+        if len(set(self.primary_timeframes)) != len(self.primary_timeframes):
+            raise ValueError("primary timeframes must be unique")
         if any(tf not in {"1m", "5m"} for tf in self.primary_timeframes):
             raise ValueError("only 1m and 5m may trigger scanner evaluation")
         return self

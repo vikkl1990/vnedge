@@ -1,5 +1,9 @@
 # VNEDGE Delta India Scalper Engine v1
 
+See [the deployed system architecture](DELTA_SCALPER_SYSTEM_ARCHITECTURE.md)
+for the component map, signal sequence, live/replay assembly, and promotion
+boundary.
+
 ## Status
 
 Research-only. The engine has no broker, account client, order manager, or

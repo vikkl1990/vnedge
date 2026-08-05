@@ -20,6 +20,7 @@ class SignalGateConfig:
     min_probability: float = 0.70
     min_confidence: float = 0.60
     allowed_symbols: tuple[str, ...] = ("BTCUSD", "ETHUSD")
+    primary_timeframes: tuple[str, ...] = ("1m", "5m")
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class DeltaScalperSignalGenerator:
         *,
         now: datetime | None = None,
     ) -> EngineDecision:
-        if timeframe not in {"1m", "5m"}:
+        if timeframe not in self.gates.primary_timeframes:
             current = now or datetime.now(UTC)
             return EngineDecision(symbol.upper(), current, None, (), ("non_primary_timeframe",))
         ctx = self.context_builder.build(symbol, now=now)

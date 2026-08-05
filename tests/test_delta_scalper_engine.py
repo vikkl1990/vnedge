@@ -11,6 +11,7 @@ import pytest
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import AccountState, PreTradeRiskGateway
+from vnedge.scalping.delta_engine.architecture import architecture_manifest
 from vnedge.scalping.delta_engine.backtester import CausalScalperBacktester
 from vnedge.scalping.delta_engine.candle_store import (
     ClosedCandleAggregator,
@@ -18,6 +19,7 @@ from vnedge.scalping.delta_engine.candle_store import (
 )
 from vnedge.scalping.delta_engine.config import DeltaScalperConfig, load_delta_scalper_config
 from vnedge.scalping.delta_engine.context import MarketContextBuilder
+from vnedge.scalping.delta_engine.factory import build_delta_scalper_assembly
 from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel
 from vnedge.scalping.delta_engine.flow_store import ChannelSequenceTracker, L2TradeFlowStore
 from vnedge.scalping.delta_engine.forward_tracker import ForwardOutcomeTracker
@@ -87,6 +89,43 @@ def test_checked_in_config_is_valid_and_cannot_unlock_live():
                 }
             }
         )
+
+
+def test_engine_config_rejects_empty_symbols_and_primary_timeframes():
+    with pytest.raises(ValueError, match="symbol"):
+        DeltaScalperConfig.model_validate({"engine": {"symbols": []}})
+    with pytest.raises(ValueError, match="primary timeframe"):
+        DeltaScalperConfig.model_validate({"engine": {"primary_timeframes": []}})
+
+
+def test_shared_assembly_applies_yaml_scanner_fee_and_timeframe_settings():
+    config = DeltaScalperConfig.model_validate(
+        {
+            "engine": {"symbols": ["BTCUSD"], "primary_timeframes": ["5m"]},
+            "fee_model": {"default_slippage_bps_per_leg": 2.3},
+            "scanners": {
+                "momentum_burst": {"enabled": False},
+                "imbalance_fade": {"enabled": True, "min_wick_ratio": 0.61},
+            },
+        }
+    )
+    assembly = build_delta_scalper_assembly(MultiTimeframeCandleStore(), config)
+    assert [scanner.scanner_id for scanner in assembly.scanners] == [
+        "delta_imbalance_fade_v1"
+    ]
+    assert assembly.generator.gates.primary_timeframes == ("5m",)
+    assert assembly.fee_model.default_slippage_bps_per_leg == 2.3
+
+
+def test_architecture_manifest_reports_deployed_research_boundary():
+    manifest = architecture_manifest()
+    assert manifest["runtime"]["process_model"] == "single_process_asyncio_research_sidecar"
+    assert manifest["runtime"]["offline_replay_uses_live_modules"] is True
+    assert manifest["components"]["existing_risk_gateway_adapter"] == (
+        "available_not_invoked"
+    )
+    assert manifest["safety"]["order_route_present"] is False
+    assert manifest["safety"]["can_trade"] is False
 
 
 def test_scalper_offer_is_never_assumed_without_opt_in():
@@ -351,6 +390,17 @@ def test_generator_journals_each_decision_key_once():
     duplicate = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
     assert first.selected is not None
     assert duplicate.selected is None and duplicate.duplicate
+
+
+def test_generator_uses_configured_primary_timeframes():
+    generator = DeltaScalperSignalGenerator(
+        _StaticBuilder(),
+        (_StaticScanner(),),
+        gates=SignalGateConfig(primary_timeframes=("5m",)),
+    )
+    decision = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
+    assert decision.selected is None
+    assert decision.rejection_reasons == ("non_primary_timeframe",)
 
 
 def test_forward_tracker_enters_next_bar_and_journals_once():

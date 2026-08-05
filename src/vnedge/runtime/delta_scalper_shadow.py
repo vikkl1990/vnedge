@@ -18,26 +18,15 @@ from tempfile import NamedTemporaryFile
 from vnedge.data.delta_native_history import fetch_delta_candle_history
 from vnedge.exchange.delta_ws import DeltaPublicWsClient
 from vnedge.execution.journal import DecisionJournal
+from vnedge.scalping.delta_engine.architecture import architecture_manifest
 from vnedge.scalping.delta_engine.candle_store import (
     TIMEFRAME_SECONDS,
     MultiTimeframeCandleStore,
 )
 from vnedge.scalping.delta_engine.config import DeltaScalperConfig, load_delta_scalper_config
-from vnedge.scalping.delta_engine.context import MarketContextBuilder
-from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel
+from vnedge.scalping.delta_engine.factory import build_delta_scalper_assembly
 from vnedge.scalping.delta_engine.flow_store import FlowSnapshot, L2TradeFlowStore
 from vnedge.scalping.delta_engine.forward_tracker import ForwardOutcomeTracker
-from vnedge.scalping.delta_engine.regime import RegimeConfig, RegimeEngine
-from vnedge.scalping.delta_engine.scanners import (
-    ImbalanceFadeConfig,
-    MomentumBurstConfig,
-    MomentumBurstScanner,
-    OrderFlowImbalanceFadeScanner,
-)
-from vnedge.scalping.delta_engine.signal_generator import (
-    DeltaScalperSignalGenerator,
-    SignalGateConfig,
-)
 from vnedge.scalping.delta_engine.types import Candle
 
 DEFAULT_SYMBOLS = ("BTCUSD", "ETHUSD")
@@ -72,73 +61,17 @@ class DeltaScalperShadowService:
         self.store = MultiTimeframeCandleStore(
             max_bars_per_timeframe=settings.features.max_bars_per_timeframe
         )
-        self.context = MarketContextBuilder(
-            self.store,
-            RegimeEngine(
-                RegimeConfig(
-                    fast_ema=settings.features.regime_fast_ema,
-                    slow_ema=settings.features.regime_slow_ema,
-                    efficiency_window=settings.features.regime_efficiency_window,
-                )
-            ),
-            max_l2_age_seconds=settings.features.max_l2_age_seconds,
-        )
-        self.fee_model = DeltaFeeModel(
-            deto_enabled=deto_enabled or settings.fee_model.deto_enabled,
-            scalper_opted_in=scalper_opted_in or settings.fee_model.scalper_opted_in,
-            maker_fee_bps_pre_tax=settings.fee_model.maker_fee_bps_pre_tax,
-            taker_fee_bps_pre_tax=settings.fee_model.taker_fee_bps_pre_tax,
-            gst_rate=settings.fee_model.gst_rate,
-            default_slippage_bps_per_leg=settings.fee_model.default_slippage_bps_per_leg,
-        )
         self.journal = DecisionJournal(journal_path)
-        self.generator = DeltaScalperSignalGenerator(
-            self.context,
-            (
-                *(
-                    (
-                        MomentumBurstScanner(
-                            self.fee_model,
-                            config=MomentumBurstConfig(
-                                min_volume_z=settings.scanners.momentum_burst.min_volume_z,
-                                min_body_ratio=settings.scanners.momentum_burst.min_body_ratio,
-                                min_breakout_bps=settings.scanners.momentum_burst.min_breakout_bps,
-                                time_stop_seconds=(
-                                    settings.scanners.momentum_burst.time_stop_seconds
-                                ),
-                                prefer_maker=settings.scanners.momentum_burst.prefer_maker,
-                            ),
-                        ),
-                    )
-                    if settings.scanners.momentum_burst.enabled
-                    else ()
-                ),
-                *(
-                    (
-                        OrderFlowImbalanceFadeScanner(
-                            self.fee_model,
-                            config=ImbalanceFadeConfig(
-                                min_wick_ratio=settings.scanners.imbalance_fade.min_wick_ratio,
-                                min_stretch_bps=settings.scanners.imbalance_fade.min_stretch_bps,
-                                time_stop_seconds=(
-                                    settings.scanners.imbalance_fade.time_stop_seconds
-                                ),
-                                prefer_maker=settings.scanners.imbalance_fade.prefer_maker,
-                            ),
-                        ),
-                    )
-                    if settings.scanners.imbalance_fade.enabled
-                    else ()
-                ),
-            ),
+        assembly = build_delta_scalper_assembly(
+            self.store,
+            settings,
             journal=self.journal,
-            gates=SignalGateConfig(
-                min_expectancy_bps=settings.engine.min_expectancy_bps,
-                min_probability=settings.engine.min_probability,
-                min_confidence=settings.engine.min_confidence,
-                allowed_symbols=settings.engine.symbols,
-            ),
+            deto_enabled=deto_enabled,
+            scalper_opted_in=scalper_opted_in,
         )
+        self.context = assembly.context
+        self.fee_model = assembly.fee_model
+        self.generator = assembly.generator
         self.flow_store = L2TradeFlowStore(
             imbalance_history=settings.features.l2_imbalance_history,
             trade_window_seconds=settings.features.trade_flow_window_seconds,
@@ -281,7 +214,7 @@ class DeltaScalperShadowService:
                     payload = outcome.to_dict()
                     self.recent_outcomes[symbol].append(payload)
                     self.journal.append("delta_scalper_shadow_outcome", payload)
-        if timeframe not in {"1m", "5m"}:
+        if timeframe not in self.generator.gates.primary_timeframes:
             return
         decision = self.generator.on_candle_closed(symbol, timeframe, now=now)
         self.evaluations[symbol] += 1
@@ -475,6 +408,7 @@ class DeltaScalperShadowService:
                     "deto_enabled": self.fee_model.deto_enabled,
                     "scalper_opted_in": self.fee_model.scalper_opted_in,
                 },
+                "architecture": architecture_manifest(),
                 "backtest_summary": backtest.get("summary"),
                 "fee_effectiveness": backtest.get("fee_sensitivity"),
                 "robust_validation": backtest.get("robust_validation"),

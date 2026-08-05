@@ -24,13 +24,8 @@ import pandas as pd
 from vnedge.data.delta_native_history import fetch_delta_candle_history
 from vnedge.scalping.delta_engine.backtester import CausalScalperBacktester
 from vnedge.scalping.delta_engine.candle_store import MultiTimeframeCandleStore
-from vnedge.scalping.delta_engine.context import MarketContextBuilder
-from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel
-from vnedge.scalping.delta_engine.scanners import (
-    MomentumBurstScanner,
-    OrderFlowImbalanceFadeScanner,
-)
-from vnedge.scalping.delta_engine.signal_generator import DeltaScalperSignalGenerator
+from vnedge.scalping.delta_engine.config import load_delta_scalper_config
+from vnedge.scalping.delta_engine.factory import build_delta_scalper_assembly
 from vnedge.scalping.delta_engine.types import Candle
 from vnedge.scalping.delta_engine.validation import (
     fee_sensitivity,
@@ -202,15 +197,22 @@ def _leverage_scenarios(trades: list[dict], margin_usd: float) -> list[dict]:
 
 
 async def run(args: argparse.Namespace) -> dict:
+    config = load_delta_scalper_config(args.config)
     start = _parse_date(args.start)
     end = _parse_date(args.end, end=True) if args.end else datetime.now(UTC)
     if start >= end:
         raise ValueError("start must be before end")
-    symbols = tuple(value.strip().upper() for value in args.symbols.split(",") if value.strip())
-    fee_model = DeltaFeeModel(
-        deto_enabled=args.deto,
-        scalper_opted_in=args.scalper_opted_in,
-        default_slippage_bps_per_leg=args.slippage_bps,
+    symbols = (
+        tuple(value.strip().upper() for value in args.symbols.split(",") if value.strip())
+        if args.symbols
+        else config.engine.symbols
+    )
+    if not symbols:
+        raise ValueError("at least one symbol is required")
+    slippage_bps = (
+        args.slippage_bps
+        if args.slippage_bps is not None
+        else config.fee_model.default_slippage_bps_per_leg
     )
     market_reports: dict[str, dict] = {}
     all_trades: list[dict] = []
@@ -222,16 +224,19 @@ async def run(args: argparse.Namespace) -> dict:
             cache_dir=Path(args.cache_dir),
             refresh=args.refresh,
         )
-        store = MultiTimeframeCandleStore(max_bars_per_timeframe=700)
-        context = MarketContextBuilder(store)
-        generator = DeltaScalperSignalGenerator(
-            context,
-            (
-                MomentumBurstScanner(fee_model),
-                OrderFlowImbalanceFadeScanner(fee_model),
-            ),
+        store = MultiTimeframeCandleStore(
+            max_bars_per_timeframe=config.features.max_bars_per_timeframe
         )
-        report = CausalScalperBacktester(generator, fee_model, store).run(symbol, candles)
+        assembly = build_delta_scalper_assembly(
+            store,
+            config,
+            deto_enabled=args.deto,
+            scalper_opted_in=args.scalper_opted_in,
+            slippage_bps=slippage_bps,
+        )
+        report = CausalScalperBacktester(
+            assembly.generator, assembly.fee_model, store
+        ).run(symbol, candles)
         market_reports[symbol] = report.to_dict()
         all_trades.extend(trade.to_dict() for trade in report.trades)
     all_trades.sort(key=lambda row: row["exit_ts"])
@@ -268,8 +273,14 @@ async def run(args: argparse.Namespace) -> dict:
         if total_positive_month_bps > 0
         else 0.0
     )
-    concentration_pass = max_market_trade_share <= 0.70 and max_positive_month_share <= 0.70
-    multiple_months_pass = len(positive_months) >= 2
+    concentration_limit = config.promotion.maximum_single_market_share
+    concentration_pass = (
+        max_market_trade_share <= concentration_limit
+        and max_positive_month_share <= concentration_limit
+    )
+    multiple_months_pass = (
+        len(positive_months) >= 2 if config.promotion.require_multiple_months else True
+    )
     performance_matrix = np.asarray(
         [float(row["net_bps"]) / 10_000.0 for row in all_trades], dtype=float
     ).reshape(-1, 1)
@@ -281,13 +292,14 @@ async def run(args: argparse.Namespace) -> dict:
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "delta_scalper_engine_v1",
+        "config": str(args.config),
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "cost_assumptions": {
-            "maker_bps_including_gst": fee_model.maker_bps,
-            "taker_bps_including_gst": fee_model.taker_bps,
-            "slippage_bps_per_leg": fee_model.default_slippage_bps_per_leg,
-            "deto_enabled": fee_model.deto_enabled,
-            "scalper_opted_in": fee_model.scalper_opted_in,
+            "maker_bps_including_gst": assembly.fee_model.maker_bps,
+            "taker_bps_including_gst": assembly.fee_model.taker_bps,
+            "slippage_bps_per_leg": assembly.fee_model.default_slippage_bps_per_leg,
+            "deto_enabled": assembly.fee_model.deto_enabled,
+            "scalper_opted_in": assembly.fee_model.scalper_opted_in,
         },
         "summary": {
             "markets": len(market_reports),
@@ -313,25 +325,31 @@ async def run(args: argparse.Namespace) -> dict:
         "quarterly": quarterly,
         "rolling_expectancy_30_trades": _rolling_expectancy(all_trades),
         "fee_sensitivity": fee_sensitivity(
-            all_trades, slippage_bps_per_leg=args.slippage_bps
+            all_trades, slippage_bps_per_leg=slippage_bps
         ),
         "untouched_window": untouched_window_summary(all_trades),
         "robust_validation": robust.to_dict(),
         "leverage_scenarios": _leverage_scenarios(all_trades, args.margin_usd),
         "promotion": {
-            "minimum_positive_markets": 2,
-            "positive_markets_pass": positive_markets >= 2,
-            "minimum_profit_factor": 1.2,
-            "profit_factor_pass": combined_pf is not None and combined_pf > 1.2,
+            "minimum_positive_markets": config.promotion.minimum_positive_markets,
+            "positive_markets_pass": (
+                positive_markets >= config.promotion.minimum_positive_markets
+            ),
+            "minimum_profit_factor": config.promotion.minimum_profit_factor_after_costs,
+            "profit_factor_pass": (
+                combined_pf is not None
+                and combined_pf > config.promotion.minimum_profit_factor_after_costs
+            ),
+            "maximum_concentration": concentration_limit,
             "market_and_month_concentration_pass": concentration_pass,
             "multiple_positive_months_pass": multiple_months_pass,
             "data_quality_pass": data_quality_pass,
             "intrabar_ambiguity_observed": same_bar_ambiguity_rate > 0,
             "intrabar_tick_replay_required": same_bar_ambiguity_rate > 0,
             "overall_pass": (
-                positive_markets >= 2
+                positive_markets >= config.promotion.minimum_positive_markets
                 and combined_pf is not None
-                and combined_pf > 1.2
+                and combined_pf > config.promotion.minimum_profit_factor_after_costs
                 and concentration_pass
                 and multiple_months_pass
                 and data_quality_pass
@@ -358,7 +376,8 @@ async def run(args: argparse.Namespace) -> dict:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", default="BTCUSD,ETHUSD")
+    parser.add_argument("--config", default="configs/delta_scalper.yaml")
+    parser.add_argument("--symbols")
     parser.add_argument("--start", default="2025-01-01")
     parser.add_argument("--end")
     parser.add_argument("--cache-dir", default="data/delta_scalper_cache")
@@ -366,7 +385,7 @@ def _parser() -> argparse.ArgumentParser:
         "--output", default="research/live_research/delta_scalper_backtest_latest.json"
     )
     parser.add_argument("--margin-usd", type=float, default=100.0)
-    parser.add_argument("--slippage-bps", type=float, default=1.5)
+    parser.add_argument("--slippage-bps", type=float)
     parser.add_argument("--deto", action="store_true")
     parser.add_argument("--scalper-opted-in", action="store_true")
     parser.add_argument("--refresh", action="store_true")

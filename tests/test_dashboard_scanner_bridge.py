@@ -140,6 +140,7 @@ def test_dashboard_merges_existing_and_delta_scalper_rows(tmp_path, monkeypatch)
             {
                 "generated_at": now.isoformat(),
                 "mode": "delta_scalper_research_shadow",
+                "architecture": {"version": "1.0", "safety": {"can_trade": False}},
                 "rows": [
                     {
                         "strategy_id": "delta_scalper_engine_v1",
@@ -160,6 +161,7 @@ def test_dashboard_merges_existing_and_delta_scalper_rows(tmp_path, monkeypatch)
 
     assert len(combined["rows"]) == 4
     assert any(row.get("strategy_id") == "delta_scalper_engine_v1" for row in combined["rows"])
+    assert combined["delta_scalper"]["architecture"]["version"] == "1.0"
     assert combined["policy"]["order_route_present"] is False
     assert combined["can_trade"] is False
 
