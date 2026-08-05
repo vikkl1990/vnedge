@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from time import perf_counter_ns
 
 from vnedge.execution.journal import DecisionJournal
 from vnedge.risk.risk_manager import AccountState, OrderIntent
@@ -24,12 +25,31 @@ class SignalGateConfig:
 
 
 @dataclass(frozen=True)
+class PipelineStage:
+    name: str
+    status: str
+    duration_us: int
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "duration_us": self.duration_us,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
 class EngineDecision:
     symbol: str
     decision_ts: datetime
     selected: SignalCandidate | None
     evaluated: tuple[SignalCandidate, ...]
     rejection_reasons: tuple[str, ...]
+    pipeline_trace: tuple[PipelineStage, ...] = ()
+    total_duration_us: int = 0
+    journal_write_success: bool | None = None
     duplicate: bool = False
     research_only: bool = True
     can_trade: bool = False
@@ -42,6 +62,9 @@ class EngineDecision:
             "selected": self.selected.to_dict() if self.selected else None,
             "evaluated": [row.to_dict() for row in self.evaluated],
             "rejection_reasons": list(self.rejection_reasons),
+            "pipeline_trace": [stage.to_dict() for stage in self.pipeline_trace],
+            "total_duration_us": self.total_duration_us,
+            "journal_write_success": self.journal_write_success,
             "duplicate": self.duplicate,
             "research_only": True,
             "can_trade": False,
@@ -73,17 +96,82 @@ class DeltaScalperSignalGenerator:
         *,
         now: datetime | None = None,
     ) -> EngineDecision:
+        pipeline_started = perf_counter_ns()
         if timeframe not in self.gates.primary_timeframes:
             current = now or datetime.now(UTC)
-            return EngineDecision(symbol.upper(), current, None, (), ("non_primary_timeframe",))
-        ctx = self.context_builder.build(symbol, now=now)
-        candidates = tuple(
-            candidate
-            for scanner in self.scanners
-            if (candidate := scanner.evaluate(ctx)) is not None
+            return EngineDecision(
+                symbol.upper(),
+                current,
+                None,
+                (),
+                ("non_primary_timeframe",),
+                pipeline_trace=(
+                    PipelineStage("timeframe_gate", "rejected", 0, timeframe),
+                ),
+                total_duration_us=self._elapsed_us(pipeline_started),
+            )
+        trace: list[PipelineStage] = []
+        context_started = perf_counter_ns()
+        try:
+            ctx = self.context_builder.build(symbol, now=now)
+        # Deliberate outer boundary: malformed context must become a rejection.
+        except Exception as exc:  # noqa: BLE001
+            trace.append(
+                PipelineStage(
+                    "context_builder",
+                    "error",
+                    self._elapsed_us(context_started),
+                    type(exc).__name__,
+                )
+            )
+            decision = EngineDecision(
+                symbol.upper(),
+                now or datetime.now(UTC),
+                None,
+                (),
+                (f"context_error:{type(exc).__name__}",),
+                pipeline_trace=tuple(trace),
+                total_duration_us=self._elapsed_us(pipeline_started),
+            )
+            return self._journal(decision)
+        trace.append(
+            PipelineStage(
+                "context_builder",
+                "complete",
+                self._elapsed_us(context_started),
+                ctx.regime.value,
+            )
         )
-        accepted: list[SignalCandidate] = []
+        candidates_list: list[SignalCandidate] = []
         reasons: list[str] = []
+        for scanner in self.scanners:
+            scanner_started = perf_counter_ns()
+            try:
+                candidate = scanner.evaluate(ctx)
+            # Deliberate plugin boundary: one scanner cannot stop its peers.
+            except Exception as exc:  # noqa: BLE001
+                reasons.append(f"{scanner.scanner_id}:scanner_error:{type(exc).__name__}")
+                trace.append(
+                    PipelineStage(
+                        f"scanner:{scanner.scanner_id}",
+                        "error",
+                        self._elapsed_us(scanner_started),
+                        type(exc).__name__,
+                    )
+                )
+                continue
+            if candidate is not None:
+                candidates_list.append(candidate)
+            trace.append(
+                PipelineStage(
+                    f"scanner:{scanner.scanner_id}",
+                    "candidate" if candidate is not None else "no_signal",
+                    self._elapsed_us(scanner_started),
+                )
+            )
+        candidates = tuple(candidates_list)
+        accepted: list[SignalCandidate] = []
+        gates_started = perf_counter_ns()
         for candidate in candidates:
             failed: list[str] = []
             if candidate.symbol not in self.gates.allowed_symbols:
@@ -100,6 +188,15 @@ class DeltaScalperSignalGenerator:
                 reasons.extend(f"{candidate.scanner_id}:{reason}" for reason in failed)
             else:
                 accepted.append(candidate)
+        trace.append(
+            PipelineStage(
+                "fee_probability_confidence_gates",
+                "complete",
+                self._elapsed_us(gates_started),
+                f"{len(accepted)}/{len(candidates)} accepted",
+            )
+        )
+        selection_started = perf_counter_ns()
         selected = max(accepted, key=lambda row: row.rank_score) if accepted else None
         duplicate = False
         if selected is not None:
@@ -109,16 +206,42 @@ class DeltaScalperSignalGenerator:
                 selected = None
             else:
                 self._seen.add(selected.dedup_key)
+        trace.append(
+            PipelineStage(
+                "ranking_and_dedup",
+                "selected" if selected is not None else "no_selection",
+                self._elapsed_us(selection_started),
+                selected.scanner_id if selected is not None else None,
+            )
+        )
         decision = EngineDecision(
             symbol=ctx.symbol,
             decision_ts=ctx.ts,
             selected=selected,
             evaluated=candidates,
             rejection_reasons=tuple(reasons),
+            pipeline_trace=tuple(trace),
+            total_duration_us=self._elapsed_us(pipeline_started),
             duplicate=duplicate,
         )
+        return self._journal(decision)
+
+    @staticmethod
+    def _elapsed_us(started_ns: int) -> int:
+        return max(0, (perf_counter_ns() - started_ns) // 1_000)
+
+    def _journal(self, decision: EngineDecision) -> EngineDecision:
         if self.journal is not None:
-            self.journal.append("delta_scalper_research_decision", decision.to_dict())
+            written = self.journal.append(
+                "delta_scalper_research_decision", decision.to_dict()
+            )
+            decision = replace(decision, journal_write_success=written)
+            if not written and decision.selected is not None:
+                decision = replace(
+                    decision,
+                    selected=None,
+                    rejection_reasons=(*decision.rejection_reasons, "journal_unavailable"),
+                )
         return decision
 
 

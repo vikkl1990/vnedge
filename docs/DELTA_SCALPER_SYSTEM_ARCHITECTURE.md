@@ -81,3 +81,65 @@ gateway—is a future paper-mode boundary, not current behavior. The 2025-to-dat
 untouched evidence fails the configured profitability and data-quality gates.
 Consequently the machine-readable architecture manifest and dashboard enforce
 `order_route_present=false`, `can_trade=false`, and `can_promote=false`.
+
+## Detailed stage ownership
+
+The supplied sequence places fee and move enrichment after scanner evaluation.
+In the implemented interface, each scanner asks the shared deterministic
+`MovePredictor` and `DeltaFeeModel` while constructing its complete immutable
+candidate. The signal generator then applies global gates, ranking, and dedup.
+This keeps every candidate self-describing and makes replay/live candidates
+identical.
+
+L2 and CVD are attached to both scanner outputs as confirmation metadata. They
+are not consulted by the entry predicates, even for Imbalance Fade. This is an
+intentional correction to the supplied diagram and preserves causal replay
+parity when historical event-level books are unavailable.
+
+## Error handling and edge cases
+
+| Condition | Behavior |
+|---|---|
+| Duplicate or regressing candle | Rejected before evaluation |
+| Missing candle interval | Pause that stream, REST backfill, resume next close |
+| Context construction error | Fail closed, journal typed rejection |
+| One scanner raises | Record typed scanner error; continue other scanners |
+| No candidate | Journal normal no-selection decision |
+| Duplicate candidate key | Suppress and record duplicate reason |
+| Journal unavailable | Remove selected candidate; no forward route |
+| L2 stale or sequence unhealthy | Mark confirmation status; never trigger execution |
+| Stop and target in one replay bar | Resolve stop first and flag ambiguity |
+| Historical L2 unavailable | Replay candles only and report L2 as unused |
+
+## Timing annotations
+
+Every decision contains monotonic microsecond measurements for context
+construction, each enabled scanner, global fee/probability/confidence gates,
+ranking/dedup, and total generation time. These values are observability only:
+they never enter features, ranking, or replay results. The latest trace and WAL
+write status are available in the authenticated `/delta-scalper` response.
+
+## Equivalent research replay flow
+
+```mermaid
+sequenceDiagram
+    participant Data as Historical closed 1m candles
+    participant Store as Shared candle store
+    participant Engine as Shared live/replay assembly
+    participant Pending as Pending candidate
+    participant Path as Conservative path simulator
+    participant Report as Evidence report
+
+    Data->>Store: append one closed 1m candle
+    Store->>Store: causally aggregate 5m, 15m, 1h and 4h
+    Store->>Engine: run identical context, scanners, predictor, fees and gates
+    alt accepted candidate
+        Engine->>Pending: wait; do not fill on decision candle
+        Pending->>Path: enter at next 1m open
+        Path->>Path: update MFE/MAE; stop-first ambiguity rule
+        Path->>Report: exit price, hold time, realized costs and net bps
+    else rejected or no candidate
+        Engine->>Report: count evaluation without a trade
+    end
+    Report->>Report: daily/weekly/monthly/quarterly and untouched validation
+```

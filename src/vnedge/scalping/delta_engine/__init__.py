@@ -31,6 +31,7 @@ from vnedge.scalping.delta_engine.scanners import (
 from vnedge.scalping.delta_engine.signal_generator import (
     DeltaScalperSignalGenerator,
     EngineDecision,
+    PipelineStage,
     ScalperRiskAdapter,
 )
 from vnedge.scalping.delta_engine.types import (
@@ -68,6 +69,7 @@ __all__ = [
     "MomentumBurstScanner",
     "MultiTimeframeCandleStore",
     "OrderFlowImbalanceFadeScanner",
+    "PipelineStage",
     "Regime",
     "RobustValidationReport",
     "ScalperRiskAdapter",

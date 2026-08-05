@@ -371,6 +371,13 @@ class DeltaScalperShadowService:
                             "scalper_compliance_rate"
                         ),
                         "forward_evidence": live_evidence,
+                        "pipeline_trace": decision.get("pipeline_trace") if decision else [],
+                        "pipeline_duration_us": (
+                            decision.get("total_duration_us") if decision else None
+                        ),
+                        "journal_write_success": (
+                            decision.get("journal_write_success") if decision else None
+                        ),
                         "research_only": True,
                         "can_trade": False,
                         "can_promote": False,

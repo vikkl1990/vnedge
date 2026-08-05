@@ -367,6 +367,26 @@ class _StaticScanner(Scanner):
         return ()
 
 
+class _BrokenScanner(Scanner):
+    scanner_id = "broken_scanner"
+
+    def evaluate(self, ctx):
+        raise RuntimeError("scanner defect")
+
+    def required_features(self):
+        return ()
+
+
+class _BrokenBuilder:
+    def build(self, symbol, now=None):
+        raise RuntimeError("context defect")
+
+
+class _UnavailableJournal:
+    def append(self, kind, payload):
+        return False
+
+
 class _StaticBuilder:
     def build(self, symbol, now=None):
         ts = now or NOW
@@ -390,6 +410,47 @@ def test_generator_journals_each_decision_key_once():
     duplicate = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
     assert first.selected is not None
     assert duplicate.selected is None and duplicate.duplicate
+    assert [stage.name for stage in first.pipeline_trace] == [
+        "context_builder",
+        "scanner:test_scanner",
+        "fee_probability_confidence_gates",
+        "ranking_and_dedup",
+    ]
+    assert first.total_duration_us >= 0
+
+
+def test_generator_isolates_scanner_failure_and_keeps_other_scanners_running():
+    generator = DeltaScalperSignalGenerator(
+        _StaticBuilder(),
+        (_BrokenScanner(), _StaticScanner()),
+        gates=SignalGateConfig(min_expectancy_bps=8, min_probability=0.7),
+    )
+    decision = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
+    assert decision.selected is not None
+    assert "broken_scanner:scanner_error:RuntimeError" in decision.rejection_reasons
+    broken = next(stage for stage in decision.pipeline_trace if "broken_scanner" in stage.name)
+    assert broken.status == "error"
+
+
+def test_generator_turns_context_failure_into_a_journalable_rejection():
+    generator = DeltaScalperSignalGenerator(_BrokenBuilder(), (_StaticScanner(),))
+    decision = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
+    assert decision.selected is None
+    assert decision.rejection_reasons == ("context_error:RuntimeError",)
+    assert decision.pipeline_trace[0].status == "error"
+
+
+def test_generator_fails_closed_when_research_journal_is_unavailable():
+    generator = DeltaScalperSignalGenerator(
+        _StaticBuilder(),
+        (_StaticScanner(),),
+        journal=_UnavailableJournal(),
+        gates=SignalGateConfig(min_expectancy_bps=8, min_probability=0.7),
+    )
+    decision = generator.on_candle_closed("BTCUSD", "1m", now=NOW)
+    assert decision.selected is None
+    assert decision.journal_write_success is False
+    assert decision.rejection_reasons[-1] == "journal_unavailable"
 
 
 def test_generator_uses_configured_primary_timeframes():
