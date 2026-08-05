@@ -32,3 +32,17 @@ an unfavorable (ranging) regime for a trend strategy. funding_mr BTC still holds
 2. Build the live book around funding_mr BTC (the edge that holds).
 3. Portfolio machinery is built + tested — ready to combine 2+ genuinely-positive
    uncorrelated edges when we have them.
+
+## CORRECTION (decay diagnostic) — chop, not death
+
+Ran crypto_trend DOGE over the full contiguous arc 2024-01 -> 2026-08 (monthly
+PnL + monthly efficiency-ratio regime). It is NOT dead: net +$108 over 2.5
+years. It is violently regime-dependent — climbs to +$201 (by 2025-06), gives
+back $137 (2025-08..11), recovers to +$161 (2026-02), gives back $94
+(2026-03..05), recovers (2026-06/07 positive). The forward -$69 window caught a
+bad phase. Winning months are more trending (ER 0.142 vs losing 0.130); the
+auto "DEATH" verdict is a coarse-ER threshold artifact — the arc says
+regime-gated. IMPLICATION: keep it, but it is a high-variance DIVERSIFIER (deep
+68% strategy drawdowns make it dangerous solo), not a live anchor. funding_mr
+BTC anchors; crypto_trend adds uncorrelated return, weighted down (inverse-vol
+0.42). Earlier "decayed/edge gone" call retracted.
