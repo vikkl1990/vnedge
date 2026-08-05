@@ -59,6 +59,78 @@ _RESOLUTION_SECONDS: dict[str, int] = {
 }
 
 
+async def fetch_delta_candle_history(
+    symbol: str,
+    *,
+    resolution: str,
+    start_s: int,
+    end_s: int,
+    base_url: str = DELTA_INDIA_API_URL,
+    http_get_json: Callable[[str], dict] | None = None,
+    include_incomplete: bool = False,
+) -> pd.DataFrame:
+    """Fetch paginated public Delta candles with explicit close filtering.
+
+    Returned timestamps are candle *start* times to match the venue API.  The
+    Delta scalper adapter adds exactly one timeframe duration when converting
+    these rows to its closed-candle domain type.
+    """
+    step_s = _RESOLUTION_SECONDS.get(resolution)
+    if step_s is None:
+        raise ValueError(f"unsupported delta candle resolution: {resolution!r}")
+    if start_s >= end_s:
+        raise ValueError("start_s must be before end_s")
+    get = http_get_json or _http_get_json
+    native = delta_native_symbol(symbol)
+    window_s = _CANDLES_PER_PAGE * step_s
+    rows: list[dict] = []
+    cursor = int(start_s)
+    while cursor < end_s:
+        window_end = min(cursor + window_s, int(end_s))
+        query = urllib.parse.urlencode(
+            {
+                "resolution": resolution,
+                "symbol": native,
+                "start": cursor,
+                "end": window_end,
+            }
+        )
+        payload = await asyncio.to_thread(get, f"{base_url}/v2/history/candles?{query}")
+        if not isinstance(payload, dict) or not payload.get("success", False):
+            raise ValueError(f"delta candle API error for {native}: {payload!r}")
+        result = payload.get("result")
+        if isinstance(result, list):
+            rows.extend(item for item in result if isinstance(item, dict))
+        cursor = window_end
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": item.get("time"),
+                "open": item.get("open"),
+                "high": item.get("high"),
+                "low": item.get("low"),
+                "close": item.get("close"),
+                "volume": item.get("volume", 0.0),
+            }
+            for item in rows
+        ]
+    )
+    if frame.empty:
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+    numeric = ["open", "high", "low", "close", "volume"]
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="s", utc=True)
+    for column in numeric:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close"])
+    frame = frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    if not include_incomplete:
+        cutoff = pd.Timestamp(end_s, unit="s", tz="UTC")
+        frame = frame.loc[frame["timestamp"] + pd.to_timedelta(step_s, unit="s") <= cutoff]
+    return frame.reset_index(drop=True)
+
+
 def _http_get_json(url: str) -> dict:
     """Blocking GET returning parsed JSON; run via ``asyncio.to_thread``."""
     with urllib.request.urlopen(url, timeout=_REQUEST_TIMEOUT_SECONDS) as resp:

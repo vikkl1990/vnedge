@@ -5,7 +5,10 @@ import urllib.parse
 import pandas as pd
 import pytest
 
-from vnedge.data.delta_native_history import fetch_delta_funding_history
+from vnedge.data.delta_native_history import (
+    fetch_delta_candle_history,
+    fetch_delta_funding_history,
+)
 
 _HOUR_S = 3_600
 _WINDOW_S = 1500 * _HOUR_S  # one 1h page as requested by the fetcher
@@ -133,3 +136,27 @@ async def test_unsupported_resolution_raises():
         await fetch_delta_funding_history(
             "BTC/USD:USD", days=1, resolution="7h", http_get_json=_FakeApi()
         )
+
+
+async def test_public_candle_history_filters_forming_bar_and_normalizes():
+    api = _FakeApi(
+        pages=[
+            {
+                "success": True,
+                "result": [
+                    {"time": 0, "open": "100", "high": 102, "low": 99, "close": 101},
+                    {"time": 60, "open": 101, "high": 103, "low": 100, "close": 102},
+                ],
+            }
+        ]
+    )
+    frame = await fetch_delta_candle_history(
+        "BTC/USD:USD",
+        resolution="1m",
+        start_s=0,
+        end_s=90,
+        http_get_json=api,
+    )
+    assert len(frame) == 1  # 00:01 bar is still forming at t=90
+    assert frame.loc[0, "close"] == 101
+    assert api.calls[0]["symbol"] == "BTCUSD"

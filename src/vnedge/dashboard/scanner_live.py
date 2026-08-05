@@ -34,21 +34,83 @@ SCANNER_EVIDENCE_PATH = Path(
         "research/live_research/mtf_amf_forward_evidence_latest.json",
     )
 )
+DELTA_SCALPER_PATH = Path(
+    os.environ.get(
+        "DASHBOARD_DELTA_SCALPER_PATH",
+        "research/live_research/delta_scalper_engine_latest.json",
+    )
+)
+COMBINED_SCANNER_PATH = Path(
+    os.environ.get(
+        "DASHBOARD_COMBINED_SCANNER_PATH",
+        "research/live_research/dashboard_scanner_combined_latest.json",
+    )
+)
 
 
-def read_scanner_payload(path: Path = SCANNER_PATH) -> dict[str, Any]:
+def _read_payload(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def read_scanner_payload(path: Path = SCANNER_PATH) -> dict[str, Any]:
+    primary = _read_payload(path)
+    scalper = _read_payload(DELTA_SCALPER_PATH)
+    if not primary and not scalper:
         return {
             "generated_at": None,
-            "scanner_id": "mtf_amf_rejection_scanner_v1",
-            "symbols": {},
+            "mode": "combined_research_scanners",
+            "rows": [],
             "errors": {"scanner": "scanner snapshot unavailable"},
             "can_trade": False,
             "can_promote": False,
         }
-    return payload if isinstance(payload, dict) else {}
+    current = datetime.now(UTC)
+    bridges = [
+        dashboard_scanner_payload(payload, now=current)
+        for payload in (primary, scalper)
+        if payload
+    ]
+    rows = [
+        row
+        for bridge in bridges
+        for row in bridge.get("rows", [])
+        if isinstance(row, dict)
+    ]
+    generated_values = [
+        bridge.get("generated_at") for bridge in bridges if bridge.get("generated_at")
+    ]
+    return {
+        "generated_at": max(generated_values, default=None),
+        "scanner_id": "vnedge_combined_research_scanners_v1",
+        "mode": "combined_research_scanners",
+        "summary": {
+            "connected_symbols": len(rows),
+            "firing": sum(row.get("state") == "FIRING" for row in rows),
+            "waiting": sum(row.get("state") == "WAITING" for row in rows),
+            "errors": sum(row.get("state") == "DATA_ERROR" for row in rows),
+        },
+        "rows": rows,
+        "sources": [bridge.get("mode") for bridge in bridges],
+        "policy": {
+            "research_only": True,
+            "order_route_present": False,
+            "can_trade": False,
+            "can_promote": False,
+        },
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def publish_combined_payload(payload: dict[str, Any]) -> None:
+    COMBINED_SCANNER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = COMBINED_SCANNER_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(COMBINED_SCANNER_PATH)
 
 
 def build_scanner_snapshot(payload: dict[str, Any], *, now: datetime | None = None) -> dict:
@@ -153,19 +215,23 @@ def build_scanner_snapshot(payload: dict[str, Any], *, now: datetime | None = No
 
 async def main() -> None:
     provider = SnapshotProvider()
-    provider.publish(build_scanner_snapshot(read_scanner_payload()))
+    initial = read_scanner_payload()
+    publish_combined_payload(initial)
+    provider.publish(build_scanner_snapshot(initial))
     app = create_app(
         provider,
         token=TOKEN,
         snapshot_hz=2.0,
-        realtime_scanner_path=SCANNER_PATH,
+        realtime_scanner_path=COMBINED_SCANNER_PATH,
         scanner_forward_evidence_path=SCANNER_EVIDENCE_PATH,
     )
     server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
 
     async def publish_forever() -> None:
         while True:
-            provider.publish(build_scanner_snapshot(read_scanner_payload()))
+            payload = read_scanner_payload()
+            publish_combined_payload(payload)
+            provider.publish(build_scanner_snapshot(payload))
             await asyncio.sleep(2.0)
 
     print(f"VNEDGE scanner dashboard: http://{HOST}:{PORT}/?token={TOKEN}")

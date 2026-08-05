@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
+from vnedge.dashboard import scanner_live
 from vnedge.dashboard.app import SnapshotProvider, create_app
 from vnedge.dashboard.scanner_bridge import dashboard_scanner_payload
 from vnedge.dashboard.scanner_live import build_scanner_snapshot
@@ -127,3 +128,37 @@ def test_scanner_dashboard_snapshot_has_no_demo_or_execution_state():
     assert snapshot["can_trade"] is False
     assert snapshot["can_promote"] is False
     assert all(lane["can_trade"] is False for lane in snapshot["lanes"])
+
+
+def test_dashboard_merges_existing_and_delta_scalper_rows(tmp_path, monkeypatch):
+    now = datetime.now(UTC)
+    primary = tmp_path / "primary.json"
+    scalper = tmp_path / "scalper.json"
+    primary.write_text(json.dumps(mtf_payload(now)))
+    scalper.write_text(
+        json.dumps(
+            {
+                "generated_at": now.isoformat(),
+                "mode": "delta_scalper_research_shadow",
+                "rows": [
+                    {
+                        "strategy_id": "delta_scalper_engine_v1",
+                        "symbol": "BTCUSD",
+                        "state": "WAITING",
+                        "can_trade": False,
+                        "can_promote": False,
+                    }
+                ],
+                "can_trade": False,
+                "can_promote": False,
+            }
+        )
+    )
+    monkeypatch.setattr(scanner_live, "DELTA_SCALPER_PATH", scalper)
+
+    combined = scanner_live.read_scanner_payload(primary)
+
+    assert len(combined["rows"]) == 4
+    assert any(row.get("strategy_id") == "delta_scalper_engine_v1" for row in combined["rows"])
+    assert combined["policy"]["order_route_present"] is False
+    assert combined["can_trade"] is False
