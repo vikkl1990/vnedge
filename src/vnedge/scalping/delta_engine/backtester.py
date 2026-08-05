@@ -36,6 +36,11 @@ class BacktestTrade:
     planned_stop_bps: float
     planned_target_bps: float
     same_bar_ambiguous: bool
+    regime_at_entry: str
+    expected_move_bps: float
+    expected_net_bps: float
+    deto_enabled: bool
+    entry_is_maker: bool
 
     def to_dict(self) -> dict[str, object]:
         row = self.__dict__.copy()
@@ -249,6 +254,11 @@ class CausalScalperBacktester:
             planned_stop_bps=stop_distance_bps,
             planned_target_bps=target_distance_bps,
             same_bar_ambiguous=stop_hit and target_hit,
+            regime_at_entry=str(candidate.metadata.get("regime") or "unknown"),
+            expected_move_bps=candidate.expected_move_bps,
+            expected_net_bps=candidate.fee_adjusted_expectancy_bps,
+            deto_enabled=costs.deto_enabled,
+            entry_is_maker=candidate.entry_is_maker,
         )
 
     @staticmethod

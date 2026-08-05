@@ -61,6 +61,11 @@ class L2Confirmation:
 
     imbalance: float = 0.0
     cvd: float = 0.0
+    imbalance_z: float = 0.0
+    buy_aggression_ratio: float = 0.5
+    absorption_score: float = 0.0
+    depth_usd: float = 0.0
+    sequence_healthy: bool | None = None
     status: str = "unavailable"
     observed_at: datetime | None = None
     context_only: bool = True
@@ -70,6 +75,12 @@ class L2Confirmation:
     def __post_init__(self) -> None:
         if not -1.0 <= self.imbalance <= 1.0:
             raise ValueError("L2 imbalance must be between -1 and 1")
+        if not 0.0 <= self.buy_aggression_ratio <= 1.0:
+            raise ValueError("buy aggression ratio must be in [0, 1]")
+        if not 0.0 <= self.absorption_score <= 1.0:
+            raise ValueError("absorption score must be in [0, 1]")
+        if self.depth_usd < 0:
+            raise ValueError("depth_usd cannot be negative")
         if self.observed_at is not None:
             object.__setattr__(self, "observed_at", _utc(self.observed_at))
         if not self.context_only or self.used_for_signal or self.used_for_execution:
@@ -111,6 +122,19 @@ class MarketContext:
 
 
 @dataclass(frozen=True)
+class ExitPath:
+    stop_loss: float
+    take_profits: tuple[float, ...]
+    time_stop_seconds: int
+    trailing_activate_bps: float | None = None
+    trailing_distance_bps: float | None = None
+
+    @property
+    def trailing_enabled(self) -> bool:
+        return self.trailing_activate_bps is not None and self.trailing_distance_bps is not None
+
+
+@dataclass(frozen=True)
 class SignalCandidate:
     scanner_id: str
     symbol: str
@@ -128,6 +152,8 @@ class SignalCandidate:
     scalper_probability: float
     confidence: float
     entry_is_maker: bool = True
+    trailing_activate_bps: float | None = None
+    trailing_distance_bps: float | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -144,6 +170,12 @@ class SignalCandidate:
             raise ValueError("expected hold cannot exceed the time stop")
         if not 0 <= self.scalper_probability <= 1 or not 0 <= self.confidence <= 1:
             raise ValueError("probability and confidence must be in [0, 1]")
+        if (self.trailing_activate_bps is None) != (self.trailing_distance_bps is None):
+            raise ValueError("trailing activation and distance must be configured together")
+        if self.trailing_activate_bps is not None and (
+            self.trailing_activate_bps <= 0 or self.trailing_distance_bps <= 0
+        ):
+            raise ValueError("trailing thresholds must be positive")
         if self.side is Side.LONG:
             if self.stop_loss >= self.entry_price or min(self.take_profits) <= self.entry_price:
                 raise ValueError("invalid long exit geometry")
@@ -157,6 +189,16 @@ class SignalCandidate:
     @property
     def dedup_key(self) -> str:
         return f"{self.scanner_id}:{self.symbol}:{self.side.value}:{self.decision_ts.isoformat()}"
+
+    @property
+    def exit_path(self) -> ExitPath:
+        return ExitPath(
+            stop_loss=self.stop_loss,
+            take_profits=self.take_profits,
+            time_stop_seconds=self.time_stop_seconds,
+            trailing_activate_bps=self.trailing_activate_bps,
+            trailing_distance_bps=self.trailing_distance_bps,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -176,5 +218,13 @@ class SignalCandidate:
             "scalper_probability": self.scalper_probability,
             "confidence": self.confidence,
             "entry_is_maker": self.entry_is_maker,
+            "exit_path": {
+                "stop_loss": self.stop_loss,
+                "take_profits": list(self.take_profits),
+                "time_stop_seconds": self.time_stop_seconds,
+                "trailing_activate_bps": self.trailing_activate_bps,
+                "trailing_distance_bps": self.trailing_distance_bps,
+                "trailing_enabled": self.exit_path.trailing_enabled,
+            },
             "metadata": dict(self.metadata),
         }

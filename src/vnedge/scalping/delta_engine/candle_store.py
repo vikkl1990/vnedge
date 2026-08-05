@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from vnedge.scalping.delta_engine.types import Candle
@@ -32,6 +33,7 @@ class MultiTimeframeCandleStore:
         self._rows: dict[tuple[str, str], deque[Candle]] = defaultdict(
             lambda: deque(maxlen=self._max_bars)
         )
+        self._callbacks: list[Callable[[str, Candle], None]] = []
 
     def append_closed(self, symbol: str, candle: Candle, *, observed_at: datetime) -> bool:
         current = observed_at.replace(tzinfo=UTC) if observed_at.tzinfo is None else observed_at
@@ -46,7 +48,13 @@ class MultiTimeframeCandleStore:
                 return False
             raise ValueError("conflicting duplicate closed candle")
         rows.append(candle)
+        for callback in tuple(self._callbacks):
+            callback(symbol.upper(), candle)
         return True
+
+    def on_closed_candle(self, callback: Callable[[str, Candle], None]) -> None:
+        """Register a synchronous callback for the owning asyncio event loop."""
+        self._callbacks.append(callback)
 
     def from_delta_row(
         self,
@@ -88,6 +96,12 @@ class MultiTimeframeCandleStore:
     def latest(self, symbol: str, timeframe: str) -> Candle | None:
         rows = self._rows.get((symbol.upper(), timeframe))
         return rows[-1] if rows else None
+
+    def get_candles(self, symbol: str, timeframe: str, n: int = 200) -> tuple[Candle, ...]:
+        return self.recent(symbol, timeframe, n)
+
+    def get_latest_closed(self, symbol: str, timeframe: str) -> Candle | None:
+        return self.latest(symbol, timeframe)
 
     def snapshot(
         self,

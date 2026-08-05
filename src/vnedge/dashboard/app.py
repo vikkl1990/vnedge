@@ -23,7 +23,7 @@ import re
 import socket
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -2032,6 +2032,37 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/delta-scalper")
+    async def delta_scalper(request: Request) -> JSONResponse:
+        """Research-only Delta scalper regimes, flow, costs, and evidence."""
+
+        user = _authorized(request)
+        payload = _read_json_payload(
+            realtime_scanner_path,
+            {"rows": [], "delta_scalper": None, "can_trade": False, "can_promote": False},
+        )
+        rows = [
+            row
+            for row in payload.get("rows", [])
+            if isinstance(row, dict) and row.get("strategy_id") == "delta_scalper_engine_v1"
+        ]
+        return JSONResponse(
+            {
+                "generated_at": payload.get("generated_at"),
+                "rows": rows,
+                "panels": payload.get("delta_scalper"),
+                "policy": {
+                    "research_only": True,
+                    "l2_is_confirmation_only": True,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+                "can_trade": False,
+                "can_promote": False,
+            },
+            headers=_identity(user),
+        )
+
     @app.get("/delta-5m-event-clock")
     async def delta_5m_event_clock(request: Request) -> JSONResponse:
         """Delta India 5-minute UP/DOWN prep clock.
@@ -2369,7 +2400,7 @@ def create_app(
         try:
             while True:
                 if result.expires_at is not None and (
-                    datetime.now(timezone.utc) >= result.expires_at
+                    datetime.now(UTC) >= result.expires_at
                 ):
                     # A token that expires mid-session loses the stream too.
                     await websocket.close(code=4401, reason="token expired")

@@ -223,6 +223,7 @@ class DeltaPublicWsClient:
             "size": size,
             "side": taker,
             "ts_ms": ts_ms,
+            "sequence": msg.get("sequence") or msg.get("sequence_number"),
         }
         self.last_trade[sym] = trade
         self._touch()

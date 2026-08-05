@@ -162,3 +162,41 @@ def test_dashboard_merges_existing_and_delta_scalper_rows(tmp_path, monkeypatch)
     assert any(row.get("strategy_id") == "delta_scalper_engine_v1" for row in combined["rows"])
     assert combined["policy"]["order_route_present"] is False
     assert combined["can_trade"] is False
+
+
+def test_delta_scalper_endpoint_exposes_research_panels_only(tmp_path):
+    path = tmp_path / "combined.json"
+    path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "rows": [
+                    {
+                        "strategy_id": "delta_scalper_engine_v1",
+                        "symbol": "BTCUSD",
+                        "state": "WAITING",
+                    },
+                    {"strategy_id": "other", "symbol": "ETHUSD"},
+                ],
+                "delta_scalper": {
+                    "backtest_summary": {"profit_factor": 0.4},
+                    "fee_effectiveness": [],
+                },
+                "can_trade": False,
+                "can_promote": False,
+            }
+        )
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "research"})
+    client = TestClient(create_app(provider, token="token", realtime_scanner_path=path))
+
+    assert client.get("/delta-scalper").status_code == 401
+    response = client.get("/delta-scalper?token=token")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 1
+    assert payload["panels"]["backtest_summary"]["profit_factor"] == 0.4
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False

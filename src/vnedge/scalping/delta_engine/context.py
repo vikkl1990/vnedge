@@ -43,10 +43,20 @@ class MarketContextBuilder:
         cvd: float,
         observed_at: datetime,
         status: str = "fresh",
+        imbalance_z: float = 0.0,
+        buy_aggression_ratio: float = 0.5,
+        absorption_score: float = 0.0,
+        depth_usd: float = 0.0,
+        sequence_healthy: bool | None = None,
     ) -> None:
         self._l2[symbol.upper()] = L2Confirmation(
             imbalance=imbalance,
             cvd=cvd,
+            imbalance_z=imbalance_z,
+            buy_aggression_ratio=buy_aggression_ratio,
+            absorption_score=absorption_score,
+            depth_usd=depth_usd,
+            sequence_healthy=sequence_healthy,
             status=status,
             observed_at=observed_at,
         )
@@ -65,6 +75,16 @@ class MarketContextBuilder:
         funding_velocity = (
             funding_rows[-1][1] - funding_rows[-2][1] if len(funding_rows) >= 2 else 0.0
         )
+        funding_values = [value for _, value in funding_rows]
+        funding_percentile = (
+            (
+                sum(value < funding_rate for value in funding_values)
+                + 0.5 * sum(value == funding_rate for value in funding_values)
+            )
+            / len(funding_values)
+            if funding_values
+            else 0.5
+        )
         l2 = self._l2.get(native, L2Confirmation())
         if l2.observed_at is not None and (
             current.astimezone(UTC) - l2.observed_at
@@ -72,16 +92,38 @@ class MarketContextBuilder:
             l2 = L2Confirmation(
                 imbalance=l2.imbalance,
                 cvd=l2.cvd,
+                imbalance_z=l2.imbalance_z,
+                buy_aggression_ratio=l2.buy_aggression_ratio,
+                absorption_score=l2.absorption_score,
+                depth_usd=l2.depth_usd,
+                sequence_healthy=l2.sequence_healthy,
                 status="stale",
                 observed_at=l2.observed_at,
             )
+        features = build_features(candles)
+        features.update(
+            {
+                "funding_percentile": funding_percentile,
+                "funding_velocity": funding_velocity,
+                "l2_imbalance": l2.imbalance,
+                "l2_imbalance_z": l2.imbalance_z,
+                "cvd_usd": l2.cvd,
+                "buy_aggression_ratio": l2.buy_aggression_ratio,
+                "absorption_score": l2.absorption_score,
+                "l2_depth_usd": l2.depth_usd,
+            }
+        )
         return MarketContext(
             symbol=native,
             ts=latest,
             candles=candles,
-            regime=self.regime_engine.classify(candles, funding_rate=funding_rate),
+            regime=self.regime_engine.classify(
+                candles,
+                funding_rate=funding_rate,
+                funding_percentile=funding_percentile,
+            ),
             funding_rate=funding_rate,
             funding_velocity=funding_velocity,
             l2=l2,
-            features=build_features(candles),
+            features=features,
         )

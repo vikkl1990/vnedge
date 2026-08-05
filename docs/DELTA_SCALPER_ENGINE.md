@@ -25,6 +25,34 @@ responsibility of VNEDGE's normal journaled execution path after promotion.
 10. The dashboard consumes the research snapshot. `can_trade` and
     `can_promote` remain false.
 
+## Complete-module HLD coverage
+
+- Public ingestion uses Delta REST backfill plus heartbeat/reconnecting WS.
+  Timestamp gaps schedule an automatic REST repair. Optional venue sequences
+  are tracked per channel; Delta L2 messages are full snapshots, so reconnect
+  itself restores book truth.
+- Private orders/fills reuse VNEDGE's existing `CcxtPrivateStream` and
+  `PrivateStreamEventApplier`. The public shadow process intentionally has no
+  credentials and cannot construct that path.
+- The L2/trade store exposes depth, raw/z-scored imbalance, rolling CVD,
+  aggression ratio, absorption score, and sequence health.
+- Candle features cover EMA stack, 1h/4h trend context, ADX, ATR/percentile,
+  Bollinger width, RSI/ROC, relative volume, and volume-delta proxy. Funding
+  rate, velocity, and percentile plus L2 features are attached by the context
+  builder. Live and replay call the same feature function.
+- Signal candidates carry a complete stop, TP ladder, time stop, and optional
+  trailing-rule contract. Trailing is disabled until a policy is explicitly
+  configured and replayed.
+- Robust research helpers support purged CPCV, DSR, PBO, chronological second
+  untouched windows, and DETO/Scalper cost sensitivity. DSR/PBO remain marked
+  unavailable for a single configuration rather than manufacturing confidence.
+- `/delta-scalper` exposes active regimes, hit rates, flow confirmation,
+  after-cost results, compliance, fee sensitivity, and robustness evidence.
+- Every accepted shadow alert is registered once, measured from the next
+  1-minute bar's open, and journaled again when its stop, first target, or time
+  stop resolves. Expected-versus-realized net basis points are displayed, but
+  this observation path cannot submit an order.
+
 ## Cost assumptions
 
 Defaults are configuration, not immutable venue truth:

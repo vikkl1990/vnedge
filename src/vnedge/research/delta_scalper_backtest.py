@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import numpy as np
 import pandas as pd
 
 from vnedge.data.delta_native_history import fetch_delta_candle_history
@@ -31,6 +32,11 @@ from vnedge.scalping.delta_engine.scanners import (
 )
 from vnedge.scalping.delta_engine.signal_generator import DeltaScalperSignalGenerator
 from vnedge.scalping.delta_engine.types import Candle
+from vnedge.scalping.delta_engine.validation import (
+    fee_sensitivity,
+    robust_validation_report,
+    untouched_window_summary,
+)
 
 
 def _parse_date(value: str, *, end: bool = False) -> datetime:
@@ -264,6 +270,14 @@ async def run(args: argparse.Namespace) -> dict:
     )
     concentration_pass = max_market_trade_share <= 0.70 and max_positive_month_share <= 0.70
     multiple_months_pass = len(positive_months) >= 2
+    performance_matrix = np.asarray(
+        [float(row["net_bps"]) / 10_000.0 for row in all_trades], dtype=float
+    ).reshape(-1, 1)
+    robust = robust_validation_report(
+        performance_matrix,
+        selected_config=0,
+        label_horizon=28,
+    )
     payload = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "delta_scalper_engine_v1",
@@ -298,6 +312,11 @@ async def run(args: argparse.Namespace) -> dict:
         "monthly": monthly,
         "quarterly": quarterly,
         "rolling_expectancy_30_trades": _rolling_expectancy(all_trades),
+        "fee_sensitivity": fee_sensitivity(
+            all_trades, slippage_bps_per_leg=args.slippage_bps
+        ),
+        "untouched_window": untouched_window_summary(all_trades),
+        "robust_validation": robust.to_dict(),
         "leverage_scenarios": _leverage_scenarios(all_trades, args.margin_usd),
         "promotion": {
             "minimum_positive_markets": 2,

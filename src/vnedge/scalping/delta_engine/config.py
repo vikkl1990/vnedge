@@ -40,6 +40,22 @@ class FeeModelSettings(_StrictModel):
     default_slippage_bps_per_leg: float = Field(default=1.5, ge=0)
 
 
+class FeatureSettings(_StrictModel):
+    max_bars_per_timeframe: int = Field(default=700, ge=100)
+    l2_imbalance_history: int = Field(default=240, ge=20)
+    trade_flow_window_seconds: int = Field(default=15, ge=1)
+    max_l2_age_seconds: float = Field(default=2.0, gt=0)
+    regime_fast_ema: int = Field(default=12, ge=2)
+    regime_slow_ema: int = Field(default=36, ge=3)
+    regime_efficiency_window: int = Field(default=12, ge=2)
+
+    @model_validator(mode="after")
+    def validate_regime_windows(self) -> FeatureSettings:
+        if self.regime_slow_ema <= self.regime_fast_ema:
+            raise ValueError("regime_slow_ema must exceed regime_fast_ema")
+        return self
+
+
 class MomentumSettings(_StrictModel):
     enabled: bool = True
     prefer_maker: bool = True
@@ -75,6 +91,7 @@ class PromotionSettings(_StrictModel):
 class DeltaScalperConfig(_StrictModel):
     engine: EngineSettings = EngineSettings()
     fee_model: FeeModelSettings = FeeModelSettings()
+    features: FeatureSettings = FeatureSettings()
     scanners: ScannerSettings = ScannerSettings()
     promotion: PromotionSettings = PromotionSettings()
 

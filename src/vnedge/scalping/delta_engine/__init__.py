@@ -8,6 +8,16 @@ existing risk gateway.  It never submits an order itself.
 from vnedge.scalping.delta_engine.candle_store import MultiTimeframeCandleStore
 from vnedge.scalping.delta_engine.context import MarketContextBuilder
 from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel, FeeBreakdown
+from vnedge.scalping.delta_engine.flow_store import (
+    ChannelSequenceTracker,
+    FlowSnapshot,
+    L2TradeFlowStore,
+    SequenceHealth,
+)
+from vnedge.scalping.delta_engine.forward_tracker import (
+    ForwardOutcome,
+    ForwardOutcomeTracker,
+)
 from vnedge.scalping.delta_engine.scanners import (
     MomentumBurstScanner,
     OrderFlowImbalanceFadeScanner,
@@ -20,28 +30,46 @@ from vnedge.scalping.delta_engine.signal_generator import (
 )
 from vnedge.scalping.delta_engine.types import (
     Candle,
+    ExitPath,
     L2Confirmation,
     MarketContext,
     Regime,
     Side,
     SignalCandidate,
 )
+from vnedge.scalping.delta_engine.validation import (
+    RobustValidationReport,
+    fee_sensitivity,
+    robust_validation_report,
+    untouched_window_summary,
+)
 
 __all__ = [
     "Candle",
+    "ChannelSequenceTracker",
     "DeltaFeeModel",
     "DeltaScalperSignalGenerator",
     "EngineDecision",
+    "ExitPath",
     "FeeBreakdown",
+    "FlowSnapshot",
+    "ForwardOutcome",
+    "ForwardOutcomeTracker",
     "L2Confirmation",
+    "L2TradeFlowStore",
     "MarketContext",
     "MarketContextBuilder",
     "MomentumBurstScanner",
     "MultiTimeframeCandleStore",
     "OrderFlowImbalanceFadeScanner",
     "Regime",
+    "RobustValidationReport",
     "ScalperRiskAdapter",
     "Scanner",
+    "SequenceHealth",
     "Side",
     "SignalCandidate",
+    "fee_sensitivity",
+    "robust_validation_report",
+    "untouched_window_summary",
 ]

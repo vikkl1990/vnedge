@@ -95,6 +95,16 @@ def read_scanner_payload(path: Path = SCANNER_PATH) -> dict[str, Any]:
         },
         "rows": rows,
         "sources": [bridge.get("mode") for bridge in bridges],
+        "delta_scalper": {
+            "summary": scalper.get("summary"),
+            "fee_model": scalper.get("fee_model"),
+            "backtest_summary": scalper.get("backtest_summary"),
+            "fee_effectiveness": scalper.get("fee_effectiveness"),
+            "robust_validation": scalper.get("robust_validation"),
+            "untouched_window": scalper.get("untouched_window"),
+        }
+        if scalper
+        else None,
         "policy": {
             "research_only": True,
             "order_route_present": False,

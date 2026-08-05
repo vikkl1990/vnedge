@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 import pytest
 
 from vnedge.config.risk_config import RiskConfig
@@ -18,6 +19,9 @@ from vnedge.scalping.delta_engine.candle_store import (
 from vnedge.scalping.delta_engine.config import DeltaScalperConfig, load_delta_scalper_config
 from vnedge.scalping.delta_engine.context import MarketContextBuilder
 from vnedge.scalping.delta_engine.fee_model import DeltaFeeModel
+from vnedge.scalping.delta_engine.flow_store import ChannelSequenceTracker, L2TradeFlowStore
+from vnedge.scalping.delta_engine.forward_tracker import ForwardOutcomeTracker
+from vnedge.scalping.delta_engine.regime import build_features
 from vnedge.scalping.delta_engine.scanners import MomentumBurstScanner, Scanner
 from vnedge.scalping.delta_engine.signal_generator import (
     DeltaScalperSignalGenerator,
@@ -32,6 +36,11 @@ from vnedge.scalping.delta_engine.types import (
     Regime,
     Side,
     SignalCandidate,
+)
+from vnedge.scalping.delta_engine.validation import (
+    fee_sensitivity,
+    robust_validation_report,
+    untouched_window_summary,
 )
 from vnedge.scalping.microstructure import MarketMicroState, PrivateStreamState, TopOfBook
 from vnedge.scalping.risk import ScalperRiskGateway
@@ -124,6 +133,48 @@ def test_closed_candle_aggregator_emits_only_complete_higher_bar():
     assert emitted[0].ts.minute == 5
 
 
+def test_candle_store_closed_callback_and_hld_aliases():
+    store = MultiTimeframeCandleStore()
+    observed = []
+    store.on_closed_candle(lambda symbol, row: observed.append((symbol, row.ts)))
+    store.append_closed("btcusd", candle(NOW), observed_at=NOW)
+    assert observed == [("BTCUSD", NOW)]
+    assert store.get_latest_closed("BTCUSD", "1m") == candle(NOW)
+    assert store.get_candles("BTCUSD", "1m", 1) == (candle(NOW),)
+
+
+def test_sequence_tracker_records_gaps_and_regressions():
+    tracker = ChannelSequenceTracker()
+    tracker.observe("l2", "BTCUSD", 10)
+    gap = tracker.observe("l2", "BTCUSD", 13)
+    regression = tracker.observe("l2", "BTCUSD", 12)
+    assert gap.gaps == 2
+    assert regression.regressions == 1
+    assert not regression.healthy
+
+
+def test_l2_trade_flow_store_computes_causal_confirmation_features():
+    store = L2TradeFlowStore(imbalance_history=10, trade_window_seconds=15)
+    bids = [
+        {"limit_price": "99.9", "size": "10"},
+        {"limit_price": "99.8", "size": "8"},
+    ]
+    asks = [
+        {"limit_price": "100.1", "size": "3"},
+        {"limit_price": "100.2", "size": "2"},
+    ]
+    store.on_book("BTCUSD", bids, asks, observed_at=NOW, sequence=1)
+    store.on_book("BTCUSD", bids, asks, observed_at=NOW, sequence=2)
+    snapshot = store.on_trade(
+        "BTCUSD", price=100, size=2, side="buy", observed_at=NOW, sequence=1
+    )
+    assert snapshot.raw_imbalance > 0
+    assert snapshot.cvd_usd == 200
+    assert snapshot.buy_aggression_ratio == 1
+    assert snapshot.depth_usd > 0
+    assert snapshot.sequence.healthy
+
+
 class _NoSignalGenerator:
     def on_candle_closed(self, symbol, timeframe, now=None):
         return EngineDecision(symbol, now, None, (), ())
@@ -170,6 +221,48 @@ def test_context_marks_old_l2_confirmation_stale():
     context = builder.build("BTCUSD", now=NOW)
     assert context.l2.status == "stale"
     assert context.l2.used_for_signal is False
+
+
+def test_feature_engine_includes_complete_hld_feature_categories():
+    rows = tuple(
+        candle(NOW - timedelta(minutes=50 - index), close=100 + index * 0.1)
+        for index in range(50)
+    )
+    features = build_features({"1m": rows, "1h": rows[-40:], "4h": rows[-16:]})
+    assert {
+        "adx_14",
+        "bb_width_bps",
+        "atr_percentile",
+        "relative_volume",
+        "volume_delta_proxy",
+        "rsi_14",
+        "ema_stack_up",
+        "context_1h_ema_gap_bps",
+        "context_4h_return_bps",
+    } <= set(features)
+
+
+def test_live_context_and_research_use_identical_candle_feature_definitions():
+    store = MultiTimeframeCandleStore()
+    candles_by_tf = {"1m": [], "15m": [], "1h": [], "4h": []}
+    for tf, count, step in (
+        ("1m", 50, timedelta(minutes=1)),
+        ("15m", 30, timedelta(minutes=15)),
+        ("1h", 40, timedelta(hours=1)),
+        ("4h", 16, timedelta(hours=4)),
+    ):
+        for index in range(count):
+            row = candle(
+                NOW - step * (count - index - 1),
+                close=100 + index * 0.1,
+                tf=tf,
+            )
+            store.append_closed("BTCUSD", row, observed_at=NOW)
+            candles_by_tf[tf].append(row)
+    context = MarketContextBuilder(store).build("BTCUSD", now=NOW)
+    direct = build_features({key: tuple(value) for key, value in candles_by_tf.items()})
+    for key, value in direct.items():
+        assert context.features[key] == pytest.approx(value)
 
 
 def _momentum_context(l2: float) -> MarketContext:
@@ -260,6 +353,31 @@ def test_generator_journals_each_decision_key_once():
     assert duplicate.selected is None and duplicate.duplicate
 
 
+def test_forward_tracker_enters_next_bar_and_journals_once():
+    fee = DeltaFeeModel(scalper_opted_in=True, default_slippage_bps_per_leg=0)
+    tracker = ForwardOutcomeTracker(fee)
+    candidate = _candidate()
+    assert tracker.register(candidate)
+    assert not tracker.register(candidate)
+    next_bar = Candle(
+        NOW + timedelta(minutes=1),
+        100.0,
+        100.3,
+        100.0,
+        100.25,
+        10,
+        "1m",
+    )
+    outcomes = tracker.on_closed_bar("BTCUSD", next_bar)
+    assert len(outcomes) == 1
+    assert outcomes[0].entry_ts == NOW.isoformat()
+    assert outcomes[0].entry_price == 100.0
+    assert outcomes[0].exit_reason == "target_1"
+    assert outcomes[0].gross_bps == pytest.approx(20.0)
+    assert outcomes[0].net_bps == pytest.approx(20.0 - 2.36)
+    assert outcomes[0].scalper_compliant
+
+
 def test_backtest_rebases_exit_distances_on_next_open_fill():
     store = MultiTimeframeCandleStore()
     generator = DeltaScalperSignalGenerator(
@@ -307,3 +425,38 @@ def test_risk_adapter_uses_existing_gateway_and_never_submits(tmp_path):
     assert result.intent.time_in_force == "PO"
     assert result.risk.approved
     assert result.submitted is False
+
+
+def test_robust_validation_requires_a_config_family_then_completes():
+    one = robust_validation_report(np.ones((30, 1)), selected_config=0)
+    assert one.status == "requires_multiple_preregistered_configs"
+    matrix = np.column_stack(
+        [np.linspace(-0.01, 0.02, 60), np.linspace(0.01, -0.005, 60)]
+    )
+    report = robust_validation_report(matrix, selected_config=0)
+    assert report.status == "complete"
+    assert report.deflated_sharpe is not None
+    assert report.pbo is not None
+    assert report.cpcv_paths == 15
+
+
+def test_fee_sensitivity_and_untouched_window_are_explicit():
+    trades = [
+        {
+            "symbol": "BTCUSD",
+            "exit_ts": (NOW + timedelta(minutes=index)).isoformat(),
+            "gross_bps": 10.0,
+            "net_bps": 4.64,
+            "hold_seconds": 600,
+            "entry_is_maker": True,
+        }
+        for index in range(10)
+    ]
+    sensitivity = fee_sensitivity(trades, slippage_bps_per_leg=1.5)
+    assert len(sensitivity) == 4
+    best = max(sensitivity, key=lambda row: row["net_bps"])
+    assert best["scalper_opted_in"] and best["deto_enabled"]
+    assert best["fixed_trade_set_only"]
+    untouched = untouched_window_summary(trades)
+    assert untouched["selection_window"]["trades"] == 8
+    assert untouched["second_untouched_window"]["trades"] == 2

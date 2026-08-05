@@ -16,6 +16,15 @@ fee_model:
   gst_rate: 0.18
   default_slippage_bps_per_leg: 1.5
 
+features:
+  max_bars_per_timeframe: 700
+  l2_imbalance_history: 240
+  trade_flow_window_seconds: 15
+  max_l2_age_seconds: 2.0
+  regime_fast_ema: 12
+  regime_slow_ema: 36
+  regime_efficiency_window: 12
+
 scanners:
   momentum_burst:
     enabled: true
