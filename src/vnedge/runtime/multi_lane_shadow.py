@@ -1325,6 +1325,12 @@ def _pruned_lane(spec: LaneSpec) -> bool:
     # funding mean-reversion: only BTC has a proven edge; ETH is DEAD, others lose.
     if strat == "funding_mean_reversion_v1" and base_symbol != "BTC":
         return True
+    # Venue-specific edge (2026-08-06 book review): the funding-MR fade is
+    # BINANCE-specific. Identical funding_pct=0.9 signals win on binance
+    # (shadow PF 2.04, +$79) but LOSE on bybit (PF 0.84, -$34) and delta (-$14) —
+    # funding differs by venue, so cross-venue lanes are drawdown, not diversification.
+    if strat == "funding_mean_reversion_v1" and str(spec.exchange) != "binanceusdm":
+        return True
     return False
 
 

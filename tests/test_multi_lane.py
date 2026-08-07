@@ -437,7 +437,7 @@ def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primar
                 {
                     "lane_id": "human_readable_alias",
                     "strategy_id": "funding_mean_reversion_v1",
-                    "exchange": "bybit",
+                    "exchange": "binanceusdm",
                     "symbol": "BTC/USDT",
                     "timeframe": "1h",
                 }
@@ -452,9 +452,11 @@ def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primar
         "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
     })
 
+    # governor alias matches the surviving binance funding_mr paper lane by
+    # signature (bybit funding_mr is now pruned as a venue-specific loser).
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
-    assert paper_ids == ["funding_mr_bybit_20260704"]
-    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_bybit_20260704"
+    assert paper_ids == ["funding_mr_btc_v1_20260703"]
+    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
 
 
 def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path):
@@ -982,8 +984,8 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
     Reversible via MULTI_LANE_PRUNE_DEAD=0."""
     from vnedge.runtime.multi_lane_shadow import _pruned_lane
 
-    def spec(strategy, symbol):
-        return LaneSpec(lane_id=f"{strategy}_{symbol}", exchange="bybit",
+    def spec(strategy, symbol, ex="bybit"):
+        return LaneSpec(lane_id=f"{strategy}_{symbol}", exchange=ex,
                         symbol=symbol, strategy_id=strategy, strategy_params={},
                         mode=RunnerMode.SHADOW)
 
@@ -1005,9 +1007,13 @@ def test_dead_lane_prune_excludes_proven_dead_keeps_edge():
     assert _pruned_lane(spec("stealth_trail_bbp_v1", "SOL/USDT:USDT"))
     assert _pruned_lane(spec("luxara_break_bounce_v27_v1", "BTC/USD:USD"))
     assert _pruned_lane(spec("fvg_liquidity_breakout_v1", "ETH/USD:USD"))
-    # kept — ONLY the two earners survive the hard-cut
-    assert not _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT"))
-    assert not _pruned_lane(spec("crypto_trend_atr_margin_v1", "DOGE/USDT:USDT"))
+    # funding-MR is a BINANCE-specific edge (2026-08-06 book review): bybit/delta
+    # lose the same signal binance wins on, so they are pruned as drawdown-only.
+    assert _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT", "bybit"))
+    assert _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USD:USD", "delta_india"))
+    # kept — the two earners on their proven venues
+    assert not _pruned_lane(spec("funding_mean_reversion_v1", "BTC/USDT:USDT", "binanceusdm"))
+    assert not _pruned_lane(spec("crypto_trend_atr_margin_v1", "DOGE/USDT:USDT", "binanceusdm"))
 
 
 def test_prune_toggle_and_roster_effect():
