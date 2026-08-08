@@ -1,0 +1,167 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © EMA34TRAD
+//@version=6
+indicator("Trinity ADX Pro Bias", shorttitle="Trinity ADX Pro Bias", overlay=false)
+
+// ── Inputs ─────────────────────
+len = input.int(14, title="ADX & DI Length", minval=1)
+th1 = input.int(10, title="Background Trigger Level (ADX >)", minval=1, maxval=50)
+th2 = input.int(20, title="Strong Trend Level", minval=1, maxval=100)
+
+bullColor = input.color(color.new(color.aqua, 90), title="Bullish Background Color")
+bearColor = input.color(color.new(color.purple, 90), title="Bearish Background Color")
+
+diPlusCol = input.color(color.rgb(6, 137, 243), title="+DI Color")
+diMinusCol = input.color(color.rgb(219, 11, 202), title="-DI Color")
+adxCol = input.color(color.yellow, title="ADX Color")
+
+// Table settings
+showTable = input.bool(true, title="Show Slope Table")
+tablePos = input.string("Top Right", title="Table Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Left", "Middle Right"])
+tableSizeInput = input.string("Small", title="Table Text Size", options=["Tiny", "Small", "Normal", "Large"])
+
+// Convert string to size constant
+textSize = tableSizeInput == "Tiny" ? size.tiny :
+           tableSizeInput == "Small" ? size.small :
+           tableSizeInput == "Normal" ? size.normal : size.large
+
+// ── Trinity ADX (exact Wilder smoothing) ─────────────────────
+TrueRange = math.max(math.max(high-low, math.abs(high-nz(close[1]))), math.abs(low-nz(close[1])))
+DirectionalMovementPlus = high - nz(high[1]) > nz(low[1]) - low ? math.max(high - nz(high[1]), 0) : 0
+DirectionalMovementMinus= nz(low[1]) - low > high - nz(high[1]) ? math.max(nz(low[1]) - low, 0) : 0
+
+var float STR = na
+var float SDP = na
+var float SDM = na
+STR := nz(STR[1]) - nz(STR[1])/len + TrueRange
+SDP := nz(SDP[1]) - nz(SDP[1])/len + DirectionalMovementPlus
+SDM := nz(SDM[1]) - nz(SDM[1])/len + DirectionalMovementMinus
+
+DIPlus = SDP / STR * 100
+DIMinus = SDM / STR * 100
+DX = math.abs(DIPlus - DIMinus) / (DIPlus + DIMinus) * 100
+ADX = ta.rma(DX, len)
+
+// ── Improved Slope Calculations ─────────────────────
+slope2 = ADX - ADX[1]
+slope5 = ADX - ADX[4]
+adxSlopeBias = (slope2 * 0.6 + slope5 * 0.4)
+
+// Combined Slope Bias
+isBullishDI = DIPlus > DIMinus
+
+var string slopeBiasDir = "Neutral"
+
+if isBullishDI
+    if adxSlopeBias > 0.2
+        slopeBiasDir := "Strong Bullish"
+    else if adxSlopeBias > 0
+        slopeBiasDir := "Bullish"
+    else if adxSlopeBias < -0.3
+        slopeBiasDir := "Weakening Bull"
+    else
+        slopeBiasDir := "Neutral Bull"
+else
+    if adxSlopeBias > 0.2
+        slopeBiasDir := "Strong Bearish"
+    else if adxSlopeBias > 0
+        slopeBiasDir := "Bearish"
+    else if adxSlopeBias < -0.3
+        slopeBiasDir := "Weakening Bear"
+    else
+        slopeBiasDir := "Neutral Bear"
+
+// Overall Trend
+trendDir = DIPlus > DIMinus and ADX > th1 ? "Strong Uptrend" :
+           DIMinus > DIPlus and ADX > th1 ? "Strong Downtrend" :
+           ADX > th2 ? "Strong Trend" : "Weak / Choppy"
+
+// Position logic
+var string pos = na
+if tablePos == "Top Left"
+    pos := position.top_left
+else if tablePos == "Top Right"
+    pos := position.top_right
+else if tablePos == "Bottom Left"
+    pos := position.bottom_left
+else if tablePos == "Bottom Right"
+    pos := position.bottom_right
+else if tablePos == "Middle Left"
+    pos := position.middle_left
+else
+    pos := position.middle_right
+
+// ── Visible plots ─────────────────────
+plot(DIPlus, color=diPlusCol, title="+DI", linewidth=2)
+plot(DIMinus, color=diMinusCol, title="-DI", linewidth=2)
+plot(ADX, color=adxCol, title="ADX", linewidth=2)
+
+hline(th1, "Trigger", color=color.orange)
+hline(th2, "Strong", color=color.white)
+
+// ── Background coloring ─────────────────────
+bullishSetup = DIPlus > DIMinus and ADX > th1
+bearishSetup = DIMinus > DIPlus and ADX > th1
+bgcolor(bullishSetup ? bullColor : na)
+bgcolor(bearishSetup ? bearColor : na)
+
+// ── Slope Table ─────────────────────
+var table slopeTable = table.new(pos, columns = 2, rows = 6, bgcolor = color.new(color.black, 80), border_width = 1)
+
+if showTable and barstate.islast
+    table.clear(slopeTable, 0, 0)
+
+    table.cell(slopeTable, 0, 0, "Metric", text_color=color.white, bgcolor=color.new(color.gray, 70), text_size=textSize)
+    table.cell(slopeTable, 1, 0, "Value",  text_color=color.white, bgcolor=color.new(color.gray, 70), text_size=textSize)
+
+    table.cell(slopeTable, 0, 1, "Slope (2 bars)", text_color=color.white, text_size=textSize)
+    table.cell(slopeTable, 1, 1, slope2 > 0 ? "↑ Up" : slope2 < 0 ? "↓ Down" : "→ Flat",
+               text_color=slope2 > 0 ? color.lime : slope2 < 0 ? color.red : color.yellow, text_size=textSize)
+
+    table.cell(slopeTable, 0, 2, "Slope (5 bars)", text_color=color.white, text_size=textSize)
+    table.cell(slopeTable, 1, 2, slope5 > 0 ? "↑ Up" : slope5 < 0 ? "↓ Down" : "→ Flat",
+               text_color=slope5 > 0 ? color.lime : slope5 < 0 ? color.red : color.yellow, text_size=textSize)
+
+    table.cell(slopeTable, 0, 3, "Slope Bias", text_color=color.white, text_size=textSize)
+    table.cell(slopeTable, 1, 3, slopeBiasDir,
+               text_color=isBullishDI ? color.lime : color.red, text_size=textSize)
+
+    table.cell(slopeTable, 0, 4, "Current ADX", text_color=color.white, text_size=textSize)
+    table.cell(slopeTable, 1, 4, str.tostring(ADX, "#.##"), text_color=adxCol, text_size=textSize)
+
+    table.cell(slopeTable, 0, 5, "Trend", text_color=color.white, text_size=textSize)
+    table.cell(slopeTable, 1, 5, trendDir, text_color=isBullishDI ? color.lime : color.red, text_size=textSize)
+
+// ── Hidden plots for alerts ─────────────────────
+plot(th1, title="Trigger Level", display=display.none)
+plot(th2, title="Strong Level", display=display.none)
+plot(ADX, title="ADX Current", display=display.none)
+
+// ── ALERTS ─────────────────────
+alertcondition(DIPlus > DIMinus and ADX > th1 and ADX[1] <= th1,
+     title = "Aqua ON → Bullish Starting",
+     message = "Trinity ADX | BULLISH: +DI > -DI & ADX crossed trigger on {{ticker}} {{interval}}")
+
+alertcondition(DIMinus > DIPlus and ADX > th1 and ADX[1] <= th1,
+     title = "Purple ON → Bearish Starting",
+     message = "Trinity ADX | BEARISH: -DI > +DI & ADX crossed trigger on {{ticker}} {{interval}}")
+
+alertcondition(ADX > th2 and ADX[1] <= th2,
+     title = "ADX Above Strong",
+     message = "Trinity ADX | STRONG TREND: ADX crossed above strong level on {{ticker}} {{interval}}")
+
+alertcondition(ADX < th2 and ADX[1] >= th2,
+     title = "ADX Below Strong",
+     message = "Trinity ADX | Weakening: ADX fell below strong level on {{ticker}} {{interval}}")
+
+alertcondition(ADX <= th1 and ADX[1] > th1,
+     title = "Trend Died",
+     message = "Trinity ADX | Trend ended - ADX below trigger on {{ticker}} {{interval}}")
+
+alertcondition(ta.crossover(DIPlus, DIMinus),
+     title = "+DI Cross Above -DI",
+     message = "Trinity ADX | +DI crossed above -DI → Bullish reversal on {{ticker}} {{interval}}")
+
+alertcondition(ta.crossover(DIMinus, DIPlus),
+     title = "-DI Cross Above +DI",
+     message = "Trinity ADX | -DI crossed above +DI → Bearish reversal on {{ticker}} {{interval}}")
