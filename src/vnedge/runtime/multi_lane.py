@@ -274,6 +274,9 @@ class MultiLaneProvider:
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
+                # pipeline latency: feed_lag_ms (candle close -> we act) +
+                # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
+                "latency": self._lanes[lid].get("session", {}).get("latency"),
                 "daily_factory": self._lanes[lid].get("session", {}).get("daily_factory"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),

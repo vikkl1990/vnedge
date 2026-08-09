@@ -160,6 +160,20 @@ async def test_closed_candle_triggers_full_pipeline(tmp_path):
     assert fill.price == pytest.approx(100.01 * (1 + 2 / 10_000))  # ask + slippage
 
 
+async def test_latency_is_measured_end_to_end(tmp_path):
+    # feed_lag (candle close -> we act) and decision_lag (candle -> signal)
+    # must both populate over a single processed bar.
+    feed = FakeFeed(live_rows(n=1))
+    session, _ = build_session(tmp_path, feed)
+    await session.run(max_bars=1)
+
+    snap = session.latency.snapshot()
+    assert snap["feed_lag_ms"]["n"] >= 1
+    assert snap["feed_lag_ms"]["last"] >= 0.0
+    assert snap["decision_lag_ms"]["n"] >= 1  # eval ran (plan was None)
+    assert snap["decision_lag_ms"]["last"] >= 0.0
+
+
 async def test_stale_feed_blocks_entries(tmp_path):
     feed = FakeFeed(live_rows(n=1), stale=True)
     session, exchange = build_session(tmp_path, feed)

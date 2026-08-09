@@ -27,8 +27,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -37,6 +38,7 @@ from vnedge.execution.idempotency import make_intent_key
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
+from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
@@ -175,6 +177,15 @@ class LivePaperSession:
         self.trial_meta = trial_meta
         self.bars_processed = 0
         self._started_at = datetime.now(UTC)
+        # pipeline latency: feed_lag (candle close -> we act) + decision_lag
+        # (candle in hand -> signal). Bad timeframe => feed_lag disabled, not a
+        # crash: a broken bar length must not take a lane down.
+        self.latency = LatencyTracker()
+        try:
+            self._tf_seconds: int | None = timeframe_to_seconds(config.timeframe)
+        except ValueError:
+            logger.warning("unparseable timeframe %r — feed-lag disabled", config.timeframe)
+            self._tf_seconds = None
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -334,6 +345,8 @@ class LivePaperSession:
             "dropped_candles": self.dropped_candles,
             "quote_seen": self.feed.quote is not None,
             "feed_staleness_seconds": float(self.feed.staleness_seconds()),
+            # candle->signal pipeline latency (offline trail for the dashboard)
+            "latency": self.latency.snapshot(),
             "last_bar_ts": last_bar_ts,
             "last_eval": self.last_eval,
             "trial_id": (self.trial_meta or {}).get("trial_id"),
@@ -1321,6 +1334,9 @@ class LivePaperSession:
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 "timeframe": self.config.timeframe,
+                # pipeline latency: feed_lag_ms (candle close -> we act) and
+                # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
+                "latency": self.latency.snapshot(),
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()
@@ -1501,6 +1517,17 @@ class LivePaperSession:
 
             bar = self.candles.iloc[-1]
             bar_clock = pd.Timestamp(bar["timestamp"]).to_pydatetime()
+            # feed lag: how stale this candle is now that we can act on it.
+            # bar_clock is the candle OPEN; it closed one timeframe later, so
+            # (now - close) captures network + exchange emit + any loop-
+            # saturation queue-wait. Clock skew can make it slightly negative
+            # (data-quality gate bounds skew separately) — floor at zero.
+            if self._tf_seconds is not None:
+                close_dt = bar_clock + timedelta(seconds=self._tf_seconds)
+                self.latency.record(
+                    "feed_lag_ms",
+                    max(0.0, (now - close_dt).total_seconds() * 1000.0),
+                )
             await self._manage_exit(bar, now)
             await self._enforce_daily_factory_flatten(bar_clock, now)
             await self._manage_pending_entry(now)
@@ -1509,6 +1536,11 @@ class LivePaperSession:
 
             if self._plan is None and self._pending_entry is None \
                     and len(self.candles) > prepared_warmup:
+                # decision lag: candle in hand -> signal decided (prepare +
+                # signal). perf_counter is monotonic — immune to wall-clock
+                # steps. Measured on every eval, blocked or not, so a slow
+                # strategy shows up even when it never fires.
+                _dec_t0 = time.perf_counter()
                 df = self.strategy.prepare(self.candles)
                 idx = len(df) - 1
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
@@ -1531,6 +1563,9 @@ class LivePaperSession:
                     self._protection_block_logged = False
                     sig = self.strategy.signal(df, idx)
                     self._record_eval(df, idx, sig)
+                self.latency.record(
+                    "decision_lag_ms", (time.perf_counter() - _dec_t0) * 1000.0
+                )
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)

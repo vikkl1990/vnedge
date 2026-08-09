@@ -1354,6 +1354,8 @@
   function pad2(x){return x<10?"0"+x:""+x;}
   function nowUTC(){var d=new Date();return pad2(d.getUTCHours())+":"+pad2(d.getUTCMinutes())+":"+pad2(d.getUTCSeconds());}
   function ageMs(ms){ms=num(ms);return ms<1000?Math.round(ms)+" ms":ms<60000?(ms/1000).toFixed(1)+" s":Math.round(ms/60000)+" m";}
+  // latency metric {last,p50,p95,max,n} -> "p50 · p95 X" ("--" when no samples)
+  function latPair(m){ if(!m||m.p50==null) return "--"; return ageMs(m.p50)+" · p95 "+ageMs(m.p95)+(m.n?" · n"+m.n:""); }
   function agoShort(ts){ if(!ts)return "—"; var t=Date.parse(ts); if(isNaN(t))return "—"; var s=(Date.now()-t)/1000; if(s<0)return "now"; if(s<60)return Math.round(s)+"s"; if(s<3600)return Math.round(s/60)+"m"; if(s<86400)return Math.round(s/3600)+"h"; return Math.round(s/86400)+"d"; }
   function symShort(s){return String(s||"").split(":")[0];}
   function stratShort(s){return String(s||"").replace(/_v\d+$/,"");}
@@ -2619,9 +2621,11 @@
     var sc=l?scoreByStrat[stratShort(l.strategy_id)]:null;
     var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
     var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
+    var lt=(l&&l.latency)||{},flat=lt.feed_lag_ms,dlat=lt.decision_lag_ms;
     var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
       "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Latency</div><div class='v num' style='font-size:14px'>"+(flat&&flat.p50!=null?ageMs(flat.p50):'—')+"</div><div class='s'>candle→act p50 · →signal "+(dlat&&dlat.p50!=null?ageMs(dlat.p50):'—')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Daily factory</div><div class='v' style='font-size:14px'>"+jEsc(factory?factory.label:'not published')+"</div><div class='s'>"+jEsc(factory?factory.detail:'waiting for lane payload')+"</div></div>"+
@@ -2678,13 +2682,17 @@
   function renderDeployProv(s){
     var el=$("deployProv"); if(!el)return; var rc=s.runtime_control||{},se=s.session||{},m=metaData||{};
     function row(k,v){return '<div class="kvrow"><span class="k">'+k+'</span><span class="num">'+v+'</span></div>';}
+    function latRow(k,m){return row(k,latPair(m));}
     function upt(x){x=num(x);var d=Math.floor(x/86400),h=Math.floor(x%86400/3600),mn=Math.floor(x%3600/60);return d?d+"d "+h+"h":h?h+"h "+mn+"m":mn+"m";}
+    var lat=se.latency||{};
     el.innerHTML=row("Build",m.build_sha?String(m.build_sha).slice(0,10):"--")+
       row("Host",m.host||"--")+
       row("Uptime",m.uptime_seconds!=null?upt(m.uptime_seconds):"--")+
       row("Mode",s.mode||"--")+
       row("Lane set",(rc.configured_lanes!=null?rc.configured_lanes+" lanes":"--")+(rc.lane_set_hash?" · "+String(rc.lane_set_hash).slice(0,8):""))+
-      row("Bars / signals",num(se.bars_processed).toLocaleString()+" / "+num(se.signals).toLocaleString());
+      row("Bars / signals",num(se.bars_processed).toLocaleString()+" / "+num(se.signals).toLocaleString())+
+      latRow("Feed lag · candle→act",lat.feed_lag_ms)+
+      latRow("Decision lag · candle→signal",lat.decision_lag_ms);
   }
   function renderBuildMeta(m){
     var b=(m&&m.build_sha)?String(m.build_sha).slice(0,10):"--";

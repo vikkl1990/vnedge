@@ -96,6 +96,24 @@ def test_lane_summary_carries_feed_and_eval_observability():
     assert lane["trade_compatibility"]["gateway_required"] is True
 
 
+def test_lane_summary_carries_latency():
+    # pipeline latency in session_stats must surface on the per-lane object
+    # the dashboard reads.
+    p = MultiLaneProvider("binance")
+    s = snap(505.0)
+    s["session"] = {
+        "latency": {
+            "feed_lag_ms": {"last": 1180.0, "p50": 900.0, "p95": 2100.0, "max": 3400.0, "n": 40},
+            "decision_lag_ms": {"last": 2.4, "p50": 1.9, "p95": 5.1, "max": 8.0, "n": 40},
+        }
+    }
+    p.sink("binance", "binanceusdm").publish(s)
+
+    lane = p.latest()["lanes"][0]
+    assert lane["latency"]["feed_lag_ms"]["p95"] == 2100.0
+    assert lane["latency"]["decision_lag_ms"]["last"] == 2.4
+
+
 def test_lane_summary_carries_daily_factory_state():
     p = MultiLaneProvider("binance")
     s = snap(505.0)
