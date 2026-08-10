@@ -66,3 +66,13 @@ Walk-forward OOS on the **selection window** (see §7):
 
 ## 9. Burn registry
 - 2026-08-10 · selection window declared seen on first run · tail sealed, unopened.
+- 2026-08-10 · **§5 VERDICT: FAILED — REJECTED.** Seen window 2023-01→2025-06,
+  158 trades (BTC 84, ETH 74). Net **−$62.54** (BTC −$30.58, ETH −$31.96),
+  **PF 0.73**, gross −$27.56 vs fees $34.98 (negative *before* costs), both
+  markets negative. Only the trade-count and false-signal gates passed
+  (false-signal 20% — the tight stop was fine; the directional edge simply
+  isn't there). Exits: 86 TP / 40 max-hold / 32 stop.
+  **DISPOSITION: shelved.** The mechanical HTF continuation, as frozen, has no
+  edge on BTC/ETH 1H. The **sealed tail (2025-07→2026-06) stays UNOPENED** (§5
+  did not pass) — preserved for a future, separately pre-registered hypothesis.
+  The seen window is now burned for this hypothesis; no tuning-to-pass.
