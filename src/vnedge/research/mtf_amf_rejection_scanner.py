@@ -11,12 +11,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Literal
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
@@ -25,6 +28,9 @@ from vnedge.strategy.indicators import atr, prior_high, prior_low
 
 SCANNER_ID = "mtf_amf_rejection_scanner_v1"
 DEFAULT_OUT = Path("research/live_research/mtf_amf_rejection_scanner_latest.json")
+DELTA_INDIA_CANDLES_URL = "https://api.india.delta.exchange/v2/history/candles"
+_RESOLUTION_SECONDS = {"1h": 3_600, "4h": 14_400}
+_DELTA_PAGE_BARS = 1_500
 Side = Literal["long", "short"]
 
 
@@ -265,6 +271,135 @@ def publish_scanner_payload(payload: dict[str, Any], out: Path | str) -> Path:
     return path
 
 
+def fetch_delta_public_candles(
+    symbol: str,
+    resolution: Literal["1h", "4h"],
+    *,
+    days: int = 120,
+    now: datetime | None = None,
+    http_get_json: Callable[[str], dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    """Fetch completed public Delta India candles without credentials."""
+
+    if days < 1:
+        raise ValueError("days must be positive")
+    seconds = _RESOLUTION_SECONDS[resolution]
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    end_s = int(current.timestamp())
+    start_s = int((current - timedelta(days=days)).timestamp())
+    page_seconds = seconds * _DELTA_PAGE_BARS
+    getter = http_get_json or _http_get_json
+    rows: list[dict[str, Any]] = []
+    cursor = start_s
+    while cursor < end_s:
+        page_end = min(cursor + page_seconds, end_s)
+        query = urlencode(
+            {
+                "resolution": resolution,
+                "symbol": symbol.upper(),
+                "start": cursor,
+                "end": page_end,
+            }
+        )
+        payload = getter(f"{DELTA_INDIA_CANDLES_URL}?{query}")
+        if not payload.get("success"):
+            raise ValueError(f"Delta candle API error for {symbol} {resolution}: {payload!r}")
+        result = payload.get("result")
+        if isinstance(result, list):
+            rows.extend(item for item in result if isinstance(item, dict))
+        cursor = page_end
+
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": item.get("time"),
+                "open": item.get("open"),
+                "high": item.get("high"),
+                "low": item.get("low"),
+                "close": item.get("close"),
+                "volume": item.get("volume", 0.0),
+            }
+            for item in rows
+        ]
+    )
+    if frame.empty:
+        raise ValueError(f"Delta returned no {resolution} candles for {symbol}")
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], unit="s", utc=True)
+    frame = frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    # The endpoint can include the candle currently being formed. Never pass it
+    # into a close-confirmed scanner.
+    closed = frame["timestamp"] + pd.to_timedelta(seconds, unit="s") <= current
+    return _canonical_candles(frame.loc[closed], f"delta_{symbol}_{resolution}")
+
+
+def build_delta_live_scanner_payload(
+    symbols: Iterable[str] = ("BTCUSD", "ETHUSD", "SOLUSD"),
+    *,
+    days: int = 120,
+    now: datetime | None = None,
+    config: MtfAmfScannerConfig = DEFAULT_CONFIG,
+    http_get_json: Callable[[str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build one multi-symbol research snapshot from public Delta candles."""
+
+    generated = now or datetime.now(UTC)
+    requested = tuple(
+        dict.fromkeys(str(raw).strip().upper() for raw in symbols if str(raw).strip())
+    )
+    reports: dict[str, dict[str, Any]] = {}
+    errors: dict[str, str] = {}
+    for symbol in requested:
+        try:
+            one = fetch_delta_public_candles(
+                symbol, "1h", days=days, now=generated, http_get_json=http_get_json
+            )
+            four = fetch_delta_public_candles(
+                symbol, "4h", days=days, now=generated, http_get_json=http_get_json
+            )
+            reports[symbol] = build_scanner_payload(
+                one, four, symbol=symbol, config=config, now=generated
+            )
+        except (OSError, TimeoutError, TypeError, ValueError) as exc:
+            errors[symbol] = str(exc)
+
+    return {
+        "generated_at": generated.isoformat(),
+        "scanner_id": SCANNER_ID,
+        "mode": "delta_india_public_candles_research_only",
+        "source": DELTA_INDIA_CANDLES_URL,
+        "symbols": reports,
+        "errors": errors,
+        "summary": {
+            "requested_symbols": len(requested),
+            "healthy_symbols": len(reports),
+            "error_symbols": len(errors),
+            "latest_alerts": {
+                symbol: report["summary"]["latest_alert"] for symbol, report in reports.items()
+            },
+        },
+        "policy": {
+            "public_data_only": True,
+            "research_only": True,
+            "can_trade": False,
+            "can_promote": False,
+            "order_route_present": False,
+        },
+        "can_trade": False,
+        "can_promote": False,
+    }
+
+
+def _http_get_json(url: str) -> dict[str, Any]:
+    request = Request(url, headers={"User-Agent": "VNEDGE-MTF-AMF-Scanner/1.0"})
+    with urlopen(request, timeout=20.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise TypeError("Delta candle response must be an object")
+    return payload
+
+
 def _alert_from_row(
     row: pd.Series,
     *,
@@ -439,15 +574,36 @@ def _read_candles(path: Path) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--one-hour", type=Path, required=True)
-    parser.add_argument("--four-hour", type=Path, required=True)
-    parser.add_argument("--symbol", required=True)
+    parser.add_argument("--one-hour", type=Path)
+    parser.add_argument("--four-hour", type=Path)
+    parser.add_argument("--symbol")
+    parser.add_argument("--delta-live", action="store_true")
+    parser.add_argument("--symbols", default="BTCUSD,ETHUSD,SOLUSD")
+    parser.add_argument("--days", type=int, default=120)
+    parser.add_argument("--interval-seconds", type=float, default=0.0)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
+    if args.delta_live:
+        while True:
+            payload = build_delta_live_scanner_payload(
+                (item for item in args.symbols.split(",")), days=args.days
+            )
+            publish_scanner_payload(payload, args.out)
+            print(
+                f"{SCANNER_ID}: {payload['summary']['healthy_symbols']} healthy symbols, "
+                f"{payload['summary']['error_symbols']} errors; "
+                "can_trade=false can_promote=false",
+                flush=True,
+            )
+            if args.interval_seconds <= 0:
+                break
+            time.sleep(max(1.0, args.interval_seconds))
+        return
+
+    if args.one_hour is None or args.four_hour is None or not args.symbol:
+        parser.error("local mode requires --one-hour, --four-hour, and --symbol")
     payload = build_scanner_payload(
-        _read_candles(args.one_hour),
-        _read_candles(args.four_hour),
-        symbol=args.symbol,
+        _read_candles(args.one_hour), _read_candles(args.four_hour), symbol=args.symbol
     )
     publish_scanner_payload(payload, args.out)
     print(
