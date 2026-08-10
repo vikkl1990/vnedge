@@ -277,6 +277,9 @@ class MultiLaneProvider:
                 # pipeline latency: feed_lag_ms (candle close -> we act) +
                 # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
+                # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
+                "degraded": self._lanes[lid].get("session", {}).get("degraded"),
+                "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
                 "daily_factory": self._lanes[lid].get("session", {}).get("daily_factory"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),

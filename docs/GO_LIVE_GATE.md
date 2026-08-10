@@ -65,6 +65,25 @@ These are BUILT but never exercised against reality:
 4. **Halt-vs-stop reconciliation**: a $20 daily halt against ~$15 stops = ~1.3
    trades. Either widen the halt to ~3× the stop, or cut risk/trade so the halt
    is a real circuit, not a hair-trigger.
+5. **Feed-continuity guard** ✅ BUILT (2026-08-10): a WS reconnect that skips
+   closed bars, or a wedged loop, no longer silently poisons contiguous-index
+   indicators. `_guard_candle_continuity` detects a time gap, REST-backfills it
+   (deterministic heal), or fails closed to **reduce-only** (blocks new entries,
+   keeps managing exits); a **stall detector** trips reduce-only when no bar
+   arrives in >2.5× the timeframe. Counters (`gapped_candles`, `gap_fills`,
+   `discontinuity_events`, `future_candles`) + `degraded` surface on the
+   dashboard + journal. Still to exercise against a real reconnect before live.
+
+### Residuals surfaced by the HLD review (2026-08-10)
+- **Cross-venue timestamp invariant** — latent while all live lanes are
+  binance-only; the guard now flags `future_candles` (a bar claiming to close in
+  the future = skew/close-time-convention). Assert per-venue open-time before a
+  second venue goes live.
+- **Secret-logging scan** — one-time grep for accidental key/token logging
+  (journal / alerts / dashboard) before the first live order.
+- **Venue-quirk checklist** — Delta order types/settlement, Bybit account modes,
+  Binance rate-limit/WS-outage behaviour: unexercised until the live adapter
+  places real orders.
 
 ---
 

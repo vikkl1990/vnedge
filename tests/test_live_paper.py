@@ -174,6 +174,92 @@ async def test_latency_is_measured_end_to_end(tmp_path):
     assert snap["decision_lag_ms"]["last"] >= 0.0
 
 
+_HR_MS = 3_600_000
+
+
+def _hourly(n, start_ms=BASE):
+    return normalize_candles(
+        [[start_ms + i * _HR_MS, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(n)]
+    )
+
+
+def _bar(ts_ms, open_=100.0):
+    return [ts_ms, open_, 100.5, 99.5, 100.0, 5.0]
+
+
+async def test_continuity_guard_contiguous_is_clean(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))  # default tf = 1h
+    session.candles = _hourly(5)
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+    await session._guard_candle_continuity(_bar(last + _HR_MS), datetime.now(UTC))
+    assert session.gapped_candles == 0
+    assert session._degraded_reason is None
+
+
+def test_candle_gap_bars_arithmetic(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(5)
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+    assert session._candle_gap_bars(last + _HR_MS) == 0        # contiguous
+    assert session._candle_gap_bars(last + 3 * _HR_MS) == 2    # 2 skipped
+    assert session._candle_gap_bars(last - _HR_MS) == -1       # backward
+
+
+async def test_feed_gap_fails_closed_when_backfill_unavailable(tmp_path):
+    # fake venue → _gap_fill raises → reduce-only (non-recoverable hole)
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(5)
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+    await session._guard_candle_continuity(_bar(last + 3 * _HR_MS), datetime.now(UTC))
+    assert session.gapped_candles == 1
+    assert session._degraded_reason is not None
+    assert session._degraded_recoverable is False
+    # a later contiguous bar must NOT clear a real hole (only a restart does)
+    await session._guard_candle_continuity(_bar(last + 4 * _HR_MS), datetime.now(UTC))
+    assert session._degraded_reason is not None
+
+
+async def test_feed_gap_heals_when_backfill_succeeds(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(5)
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+
+    async def fake_fill(since_ms, until_ms):
+        return [_bar(t) for t in range(since_ms, until_ms, _HR_MS)]
+
+    session._gap_fill = fake_fill
+    await session._guard_candle_continuity(_bar(last + 3 * _HR_MS), datetime.now(UTC))
+    assert session.gap_fills == 1
+    assert session._degraded_reason is None
+    # the two missing bars were spliced in, so the series is contiguous again
+    assert int(session.candles["timestamp"].iloc[-1].value // 1_000_000) == last + 2 * _HR_MS
+
+
+def test_degraded_recoverable_semantics(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session._enter_degraded("feed_stall:x", recoverable=True)
+    assert session._degraded_recoverable is True
+    # a real hole upgrades a stall to non-recoverable
+    session._enter_degraded("feed_gap:unfilled", recoverable=False)
+    assert session._degraded_recoverable is False
+    # a later stall must NOT downgrade the standing hole
+    session._enter_degraded("feed_stall:y", recoverable=True)
+    assert session._degraded_reason == "feed_gap:unfilled"
+    session._clear_degraded("resync")
+    assert session._degraded_reason is None
+
+
+async def test_degraded_lane_blocks_new_entries(tmp_path):
+    # reduce-only: a degraded lane evaluates no new entry (exits still run above)
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    session._degraded_reason = "feed_gap:unfilled"
+    session._degraded_recoverable = False
+    report = await session.run(max_bars=1)
+    assert report.orders_submitted == 0
+    assert exchange.get_positions() == []
+
+
 async def test_stale_feed_blocks_entries(tmp_path):
     feed = FakeFeed(live_rows(n=1), stale=True)
     session, exchange = build_session(tmp_path, feed)

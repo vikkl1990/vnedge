@@ -186,6 +186,18 @@ class LivePaperSession:
         except ValueError:
             logger.warning("unparseable timeframe %r — feed-lag disabled", config.timeframe)
             self._tf_seconds = None
+        self._tf_ms: int | None = self._tf_seconds * 1000 if self._tf_seconds else None
+        # feed-continuity guard: a WS reconnect can silently skip closed bars,
+        # and a wedged loop can leave a bar undelivered. Either would poison the
+        # contiguous-index indicators. On a gap we heal (REST gap-fill) or fail
+        # closed (reduce-only: block new entries, keep managing exits).
+        self._degraded_reason: str | None = None      # reduce-only while set
+        self._degraded_recoverable: bool = False       # stall clears on resume; a hole does not
+        self._last_bar_wall: datetime | None = None    # wall clock of last processed bar
+        self.gapped_candles = 0                        # time-gaps detected
+        self.gap_fills = 0                             # gaps healed by REST backfill
+        self.discontinuity_events = 0                  # large open≠prev-close jumps (soft)
+        self.future_candles = 0                        # bar claims to close in the future (skew/convention)
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -272,6 +284,111 @@ class LivePaperSession:
         )
         return True
 
+    # --- Feed-continuity guard (gap + stall → heal or fail closed) ----------------
+    def _candle_gap_bars(self, incoming_ms: int) -> int:
+        """Bars missing between our last candle and the incoming one.
+
+        0 = contiguous, N>0 = N skipped bars, -1 = backward/duplicate.
+        """
+        if self._tf_ms is None or not len(self.candles):
+            return 0
+        last_ms = int(self.candles["timestamp"].iloc[-1].value // 1_000_000)  # ns→ms
+        if incoming_ms <= last_ms:
+            return -1
+        return (incoming_ms - last_ms) // self._tf_ms - 1
+
+    def _enter_degraded(self, reason: str, *, recoverable: bool) -> None:
+        """Put the lane in reduce-only: NEW entries blocked, exits keep running.
+
+        A standing non-recoverable degrade (a real hole in the series) is never
+        downgraded to recoverable by a later transient stall.
+        """
+        if self._degraded_reason is not None and not self._degraded_recoverable:
+            return
+        if self._degraded_reason == reason:
+            return
+        self._degraded_reason = reason
+        self._degraded_recoverable = recoverable
+        logger.error("lane %s DEGRADED → reduce-only: %s", self.config.symbol, reason)
+        self.journal.append("lane_degraded", {
+            "symbol": self.config.symbol, "reason": reason, "recoverable": recoverable,
+        })
+
+    def _clear_degraded(self, note: str) -> None:
+        if self._degraded_reason is None:
+            return
+        logger.info("lane %s recovered from reduce-only (%s → %s)",
+                    self.config.symbol, self._degraded_reason, note)
+        self.journal.append("lane_recovered", {
+            "symbol": self.config.symbol, "was": self._degraded_reason, "note": note,
+        })
+        self._degraded_reason = None
+        self._degraded_recoverable = False
+
+    def _flag_discontinuity(self, raw_row: list) -> None:
+        """Soft observability: incoming open vs our last close (no halt)."""
+        if not len(self.candles):
+            return
+        prev_close = float(self.candles["close"].iloc[-1])
+        inc_open = float(raw_row[1])
+        if prev_close > 0 and abs(inc_open - prev_close) / prev_close > self._CONTINUITY_TOL:
+            self.discontinuity_events += 1
+
+    async def _gap_fill(self, since_ms: int, until_ms: int) -> list[list] | None:
+        """Best-effort REST backfill of the missing [since, until) bars."""
+        try:
+            from vnedge.data.ccxt_client import CcxtPublicClient
+
+            async with CcxtPublicClient(self.feed.exchange_id) as rest:
+                rows = await rest.fetch_candles(
+                    self.config.symbol, self.config.timeframe, since_ms, until_ms
+                )
+            return rows or None
+        except Exception as exc:  # noqa: BLE001 — heal is best-effort; failure ⇒ fail closed
+            logger.warning("gap-fill fetch failed for %s: %s", self.config.symbol, exc)
+            return None
+
+    async def _guard_candle_continuity(self, raw_row: list, now: datetime) -> None:
+        """Detect a time gap before the incoming closed bar; heal or fail closed.
+
+        A WS reconnect can silently skip closed bars — the forward-only append
+        gate would accept the jump and the contiguous-index indicators (EMA,
+        ATR, close_z, rolling_percentile) would compute across the hole. Here we
+        REST-backfill the missing bars (deterministic heal) or, if that fails,
+        go reduce-only (block new entries; the exit stack keeps running).
+        """
+        incoming_ms = int(raw_row[0])
+        # timestamp invariant: an open-time closed bar closed at open+tf, so it
+        # must not claim to close in the future (beyond a 5s skew tolerance).
+        if self._tf_ms is not None and incoming_ms + self._tf_ms > now.timestamp() * 1000 + 5000:
+            self.future_candles += 1
+            logger.warning("candle %s claims a future close (skew/convention?)", raw_row[0])
+        gap = self._candle_gap_bars(incoming_ms)
+        if gap <= 0:
+            # contiguous (or backward, which append() drops): a clean bar clears
+            # a transient (recoverable) stall degrade — but never a real hole.
+            if self._degraded_reason is not None and self._degraded_recoverable:
+                self._clear_degraded("bars_resumed")
+            self._flag_discontinuity(raw_row)
+            return
+        self.gapped_candles += 1
+        last_ms = int(self.candles["timestamp"].iloc[-1].value // 1_000_000)
+        logger.error("feed gap: %d missing %s bar(s) before %s",
+                     gap, self.config.timeframe, raw_row[0])
+        if gap > self._MAX_GAP_FILL_BARS:
+            self._enter_degraded(f"feed_gap:{gap}_bars_too_large", recoverable=False)
+        else:
+            filled = await self._gap_fill(last_ms + self._tf_ms, incoming_ms)
+            if filled:
+                added = sum(1 for r in filled if self._append_candle(r))
+                self.gap_fills += 1
+                logger.info("gap healed: backfilled %d/%d %s bar(s) via REST",
+                            added, gap, self.config.timeframe)
+                self._clear_degraded("gap_filled")
+            else:
+                self._enter_degraded(f"feed_gap:{gap}_bars_unfilled", recoverable=False)
+        self._flag_discontinuity(raw_row)
+
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
         self.trade_log.append({
             "ts": now.isoformat(), "event": event, "detail": detail,
@@ -285,6 +402,10 @@ class LivePaperSession:
     _RUNNER_HEARTBEAT_SECONDS = 60.0
     # Bars a maker entry limit rests before it is cancelled (touch-to-fill TTL).
     _MAKER_ENTRY_TTL_BARS = 2
+    # Feed-continuity guard tuning:
+    _STALL_BARS = 2.5           # no closed bar in > this × timeframe ⇒ feed stalled
+    _MAX_GAP_FILL_BARS = 240    # gaps larger than this fail closed instead of backfilling
+    _CONTINUITY_TOL = 0.01      # |open−prev_close|/prev_close above this is logged (soft)
 
     def _why_no_trade(self, reason: str) -> str:
         if self._plan is not None:
@@ -343,6 +464,12 @@ class LivePaperSession:
             "shadow_rejected": self.shadow_rejected,
             "recon_mismatches": self.recon_mismatches,
             "dropped_candles": self.dropped_candles,
+            # feed-continuity guard: reduce-only reason (or None) + counters
+            "degraded": self._degraded_reason,
+            "gapped_candles": self.gapped_candles,
+            "gap_fills": self.gap_fills,
+            "discontinuity_events": self.discontinuity_events,
+            "future_candles": self.future_candles,
             "quote_seen": self.feed.quote is not None,
             "feed_staleness_seconds": float(self.feed.staleness_seconds()),
             # candle->signal pipeline latency (offline trail for the dashboard)
@@ -1333,6 +1460,12 @@ class LivePaperSession:
                 "shadow_rejected": self.shadow_rejected,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
+                # feed-continuity guard: reduce-only reason (or None) + counters
+                "degraded": self._degraded_reason,
+                "gapped_candles": self.gapped_candles,
+                "gap_fills": self.gap_fills,
+                "discontinuity_events": self.discontinuity_events,
+                "future_candles": self.future_candles,
                 "timeframe": self.config.timeframe,
                 # pipeline latency: feed_lag_ms (candle close -> we act) and
                 # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
@@ -1503,13 +1636,30 @@ class LivePaperSession:
                 if self.feed.quote is not None:
                     self._sync_quote()
                     await self._enforce_daily_factory_flatten(idle_now, idle_now)
+                # stall guard: no closed bar in > _STALL_BARS × timeframe means
+                # the feed/loop is wedged — go reduce-only (recoverable: a clean
+                # bar resuming clears it) so we never sit silently late.
+                if self._tf_seconds is not None and self._last_bar_wall is not None:
+                    idle_s = (idle_now - self._last_bar_wall).total_seconds()
+                    if idle_s > self._STALL_BARS * self._tf_seconds:
+                        self._enter_degraded(
+                            f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True
+                        )
                 self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
                 self._publish_snapshot()  # keep the dashboard honest while idle
                 continue
 
             now = datetime.now(UTC)
+            # detect + heal (or fail-closed on) a feed gap BEFORE the bar reaches
+            # the strategy, so contiguous-index indicators never span a hole.
+            # Only the LIVE stream's internal continuity is guarded here — the
+            # warmup→first-live handover is build_lane's contract (it REST-seeds
+            # up to now), so the first live bar just establishes the baseline.
+            if self._last_bar_wall is not None:
+                await self._guard_candle_continuity(raw, now)
             if not self._append_candle(raw) or not self._sync_quote():
                 continue
+            self._last_bar_wall = now
             bars += 1
             self.bars_processed += 1
             self.tracker.on_bar(now)
@@ -1535,6 +1685,7 @@ class LivePaperSession:
             self._guard_orphaned_position()
 
             if self._plan is None and self._pending_entry is None \
+                    and self._degraded_reason is None \
                     and len(self.candles) > prepared_warmup:
                 # decision lag: candle in hand -> signal decided (prepare +
                 # signal). perf_counter is monotonic — immune to wall-clock

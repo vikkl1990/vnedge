@@ -2622,10 +2622,13 @@
     var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
     var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
     var lt=(l&&l.latency)||{},flat=lt.feed_lag_ms,dlat=lt.decision_lag_ms;
+    var deg=l&&l.degraded,gc=num(l&&l.gapped_candles);
+    var feedGuard="<div class='kpi'><div class='lbl'>Feed guard</div><div class='v' style='font-size:14px;color:"+(deg?'var(--short)':'var(--long)')+"'>"+(deg?'REDUCE-ONLY':'ok')+"</div><div class='s'>"+(deg?jEsc(String(deg).slice(0,40)):(gc?gc+' gap(s) healed':'contiguous'))+"</div></div>";
     var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
       "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Latency</div><div class='v num' style='font-size:14px'>"+(flat&&flat.p50!=null?ageMs(flat.p50):'—')+"</div><div class='s'>candle→act p50 · →signal "+(dlat&&dlat.p50!=null?ageMs(dlat.p50):'—')+"</div></div>"+
+      feedGuard+
       "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Daily factory</div><div class='v' style='font-size:14px'>"+jEsc(factory?factory.label:'not published')+"</div><div class='s'>"+jEsc(factory?factory.detail:'waiting for lane payload')+"</div></div>"+
