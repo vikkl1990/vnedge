@@ -127,6 +127,15 @@ class LiveMarketFeed:
             exchange_healthy=self.healthy,
         )
 
+    @property
+    def forming_candle(self) -> list | None:
+        """The currently-forming (not-yet-closed) candle row, or None.
+
+        Read-only awareness for the Time Machine. Never used for decisions — the
+        strategy path consumes only closed candles from ``closed_candles``.
+        """
+        return self._forming
+
     # --- Stream loops -----------------------------------------------------------------
     async def _watch_candles(self) -> None:
         while True:

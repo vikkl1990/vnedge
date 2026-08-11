@@ -103,6 +103,11 @@ class SharedFeedView:
         return self._feed.quote
 
     @property
+    def forming_candle(self) -> list | None:
+        # feeds without a forming bar (REST poll) simply report None
+        return getattr(self._feed, "forming_candle", None)
+
+    @property
     def funding_rate(self) -> float:
         return self._feed.funding_rate
 

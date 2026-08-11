@@ -260,6 +260,33 @@ async def test_degraded_lane_blocks_new_entries(tmp_path):
     assert exchange.get_positions() == []
 
 
+async def test_time_machine_wired_read_only(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, _ = build_session(tmp_path, feed)   # default tf 1h → TM created
+    await session.run(max_bars=1)
+    lc = session.time_machine.get_last_closed(SYM, "1h")
+    assert lc is not None and lc.is_closed        # closed bar reached the TM
+    snap = session._tm_snapshot()
+    assert snap is not None and "health" in snap and snap["degraded"] is False
+
+
+async def test_time_machine_fault_never_breaks_trading(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+
+    class Boom:
+        def on_kline_update(self, *a, **k):
+            raise RuntimeError("boom")
+
+        def check_health(self, *a, **k):
+            raise RuntimeError("boom")
+
+    session.time_machine = Boom()               # fail-closed: must not propagate
+    report = await session.run(max_bars=1)
+    assert report.bars_processed == 1           # trading proceeded untouched
+    assert session._tm_degraded is True         # TM flagged degraded
+
+
 async def test_stale_feed_blocks_entries(tmp_path):
     feed = FakeFeed(live_rows(n=1), stale=True)
     session, exchange = build_session(tmp_path, feed)

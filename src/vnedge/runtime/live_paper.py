@@ -39,6 +39,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
+from vnedge.data.time_machine import TimeMachine
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
@@ -198,6 +199,14 @@ class LivePaperSession:
         self.gap_fills = 0                             # gaps healed by REST backfill
         self.discontinuity_events = 0                  # large open≠prev-close jumps (soft)
         self.future_candles = 0                        # bar claims to close in the future (skew/convention)
+        # Time Machine (read-only observability) — multi-TF forming+closed
+        # awareness for this lane's timeframe. FAIL-CLOSED: any error updating it
+        # is swallowed and never touches the decision/execution path.
+        self.time_machine: TimeMachine | None = (
+            TimeMachine([config.symbol], [config.timeframe])
+            if config.timeframe in {"1m", "5m", "15m", "1h", "4h"} else None
+        )
+        self._tm_degraded = False
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -388,6 +397,46 @@ class LivePaperSession:
             else:
                 self._enter_degraded(f"feed_gap:{gap}_bars_unfilled", recoverable=False)
         self._flag_discontinuity(raw_row)
+
+    # --- Time Machine feed (read-only observability, fail-closed) -----------------
+    def _tm_kline(self, row: list, now: datetime) -> dict:
+        ts = pd.to_datetime(int(row[0]), unit="ms", utc=True).to_pydatetime()
+        return {
+            "open_time": ts, "open": float(row[1]), "high": float(row[2]),
+            "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
+            "exchange_ts": now,
+        }
+
+    def _feed_time_machine(self, now: datetime, closed_row: list | None = None) -> None:
+        """Feed the Time Machine. FAIL-CLOSED: never raises into the run loop.
+
+        A Time Machine fault marks its health degraded (surfaced in the snapshot)
+        but trading continues untouched under the existing feed guards.
+        """
+        if self.time_machine is None:
+            return
+        try:
+            sym, tf = self.config.symbol, self.config.timeframe
+            if closed_row is not None:
+                self.time_machine.on_kline_update(sym, tf, self._tm_kline(closed_row, now), is_closed=True)
+            forming = getattr(self.feed, "forming_candle", None)
+            if forming:
+                self.time_machine.on_kline_update(sym, tf, self._tm_kline(forming, now), is_closed=False)
+            self.time_machine.check_health(now)
+            self._tm_degraded = False
+        except Exception as exc:  # noqa: BLE001 — observability must NEVER affect trading
+            self._tm_degraded = True
+            logger.warning("time machine update failed (observability only): %s", exc)
+
+    def _tm_snapshot(self) -> dict | None:
+        if self.time_machine is None:
+            return None
+        try:
+            d = self.time_machine.snapshot_dict(self.config.symbol)
+            d["degraded"] = self._tm_degraded
+            return d
+        except Exception:  # noqa: BLE001
+            return {"degraded": True}
 
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
         self.trade_log.append({
@@ -1470,6 +1519,8 @@ class LivePaperSession:
                 # pipeline latency: feed_lag_ms (candle close -> we act) and
                 # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
                 "latency": self.latency.snapshot(),
+                # multi-TF forming+closed awareness (read-only; null if TF unsupported)
+                "time_machine": self._tm_snapshot(),
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()
@@ -1645,6 +1696,7 @@ class LivePaperSession:
                         self._enter_degraded(
                             f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True
                         )
+                self._feed_time_machine(idle_now)  # forming-bar progress (read-only)
                 self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
                 self._publish_snapshot()  # keep the dashboard honest while idle
                 continue
@@ -1660,6 +1712,7 @@ class LivePaperSession:
             if not self._append_candle(raw) or not self._sync_quote():
                 continue
             self._last_bar_wall = now
+            self._feed_time_machine(now, closed_row=raw)  # read-only, fail-closed
             bars += 1
             self.bars_processed += 1
             self.tracker.on_bar(now)
