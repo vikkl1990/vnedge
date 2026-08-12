@@ -351,6 +351,22 @@
   .boardrow:first-child{border-top:none}
   .boardrow .bt{font-weight:700}
   .boardrow .bs{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+  /* Candle Path panel (Phase C) — reads the canonical time_machine/latency schema */
+  .cpbanner{margin:0 14px 4px;padding:8px 11px;border-radius:var(--r-sm);font-size:11px;font-weight:700;letter-spacing:.02em}
+  .cpbanner.warn{background:rgba(224,165,47,.14);color:var(--warn);border:1px solid rgba(224,165,47,.35)}
+  .cpbanner.bad{background:rgba(224,80,80,.14);color:var(--short);border:1px solid rgba(224,80,80,.4)}
+  .cptable{padding:4px 0 0}
+  .cprow{display:grid;grid-template-columns:minmax(150px,1.6fr) 1.1fr .7fr .7fr .95fr .8fr;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
+  .cprow.cphead{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-dim);font-weight:700;background:var(--bg-inset)}
+  .cprow .cpname b{font-size:12px}
+  .cprow .cpname small{display:block;font-size:9.5px;color:var(--txt-faint)}
+  .cpbar{position:relative;height:7px;border-radius:4px;background:var(--bg-3);overflow:hidden}
+  .cpbar i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:4px}
+  .cppill{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.03em;padding:2px 6px;border-radius:5px;text-transform:uppercase}
+  .cppill.ok{background:var(--long-soft);color:var(--long)}
+  .cppill.soft{background:rgba(224,165,47,.16);color:var(--warn)}
+  .cppill.bad{background:rgba(224,80,80,.16);color:var(--short)}
+  .cppill.na{background:var(--bg-3);color:var(--txt-faint)}
   .actkpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:14px 14px 0}
   .actk{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
   .actk .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
@@ -826,6 +842,15 @@
             </div>
           </div>
         </div>
+      </section>
+      <section class="panel">
+        <div class="phead"><h2>Candle Path</h2><span class="meta" id="cpMeta">forming awareness · closed decisions</span></div>
+        <div id="cpBanner" class="cpbanner" hidden></div>
+        <div class="cptable">
+          <div class="cprow cphead"><span>Lane · decision TF</span><span>Forming</span><span>Health</span><span>Age</span><span>Decision lag p95</span><span>Arm skips</span></div>
+          <div id="candlePath"><div class="jempty" style="padding:12px 14px">Loading…</div></div>
+        </div>
+        <div style="padding:8px 14px;font-size:10px;color:var(--txt-faint)">New arms fire only when the decision-TF health is <b>ok</b>; a stale/gapped/future feed or a HARD age breach blocks new entries (exits always run).</div>
       </section>
     </div>
   </div>
@@ -1492,6 +1517,55 @@
     el.innerHTML=hero+body+'<div class="eventfine">'+safe(fine)+'</div>';
   }
 
+  /* ---- Candle Path (Phase C): decision-path health from canonical schema ---- */
+  // Budgets mirror src/vnedge/runtime/latency_thresholds.py (one config, two readers).
+  var TM_AGE_HARD={"1m":5000,"5m":12000,"15m":30000,"1h":90000,"4h":300000};
+  var TM_AGE_SOFT={"1m":1500,"5m":3000,"15m":5000,"1h":8000,"4h":15000};
+  function ageBand(tf,ms){if(ms==null)return"na";var h=TM_AGE_HARD[tf],sf=TM_AGE_SOFT[tf];if(h!=null&&ms>h)return"bad";if(sf!=null&&ms>sf)return"soft";return"ok";}
+  function healthBand(h){if(h==null)return"na";return h==="ok"?"ok":"bad";}
+  function skipCount(o){if(!o)return 0;var n=0;for(var k in o){if(Object.prototype.hasOwnProperty.call(o,k))n+=num(o[k]);}return n;}
+  function renderCandlePath(s){
+    var host=$("candlePath"); if(!host)return;
+    var lanes=Array.isArray(s.lanes)?s.lanes:[];
+    // single-lane views (paper session, demo) carry the canonical fields at the
+    // top level, not under lanes[]; synthesize one row so the panel still works.
+    if(!lanes.length && s.time_machine){
+      lanes=[{strategy_id:s.strategy_id, symbol:s.symbol,
+              timeframe:(s.session&&s.session.timeframe)||Object.keys((s.time_machine&&s.time_machine.health)||{})[0]||"1h",
+              time_machine:s.time_machine, latency:s.latency, decision_skips:s.decision_skips}];
+    }
+    var snapAge=(s.snapshot_age_ms!=null)?num(s.snapshot_age_ms):(s.ts?Math.max(0,Date.now()-Date.parse(s.ts)):null);
+    var cm=$("cpMeta"); if(cm)cm.textContent=(snapAge!=null?("snapshot "+ageMs(snapAge)):"forming awareness")+" · closed decisions";
+    var anyBlocked=false, anyStale=false, rows=[];
+    lanes.forEach(function(l){
+      var tf=l.timeframe||"?", tm=l.time_machine||null, lat=l.latency||null;
+      var fm=(tm&&tm.forming)?tm.forming[tf]:null, prog=(fm&&fin(fm.progress))?fm.progress:null;
+      var health=(tm&&tm.health)?tm.health[tf]:null;
+      var age=(tm&&tm.age_ms)?tm.age_ms[tf]:null;
+      var dlag=(lat&&lat.decision_lag_ms&&fin(lat.decision_lag_ms.p95))?lat.decision_lag_ms.p95:null;
+      var skips=skipCount(l.decision_skips);
+      var hB=healthBand(health), aB=ageBand(tf,age);
+      if(health&&health!=="ok")anyStale=true;
+      if(skips>0||(health&&health!=="ok"))anyBlocked=true;
+      var dB=(dlag==null)?"na":(dlag>200?"bad":dlag>50?"soft":"ok");
+      rows.push('<div class="cprow">'+
+        '<div class="cpname"><b>'+esc(stratShort(l.strategy_id))+'</b><small>'+esc(symShort(l.symbol))+' · '+esc(tf)+'</small></div>'+
+        '<div>'+(prog!=null?'<div class="cpbar"><i style="width:'+Math.round(prog*100)+'%"></i></div><small style="color:var(--txt-faint)">'+Math.round(prog*100)+'%</small>':'<span class="cppill na">—</span>')+'</div>'+
+        '<div><span class="cppill '+hB+'">'+esc(health||"n/a")+'</span></div>'+
+        '<div><span class="cppill '+aB+'">'+(age!=null?ageMs(age):"—")+'</span></div>'+
+        '<div><span class="cppill '+dB+'">'+(dlag!=null?dlag.toFixed(0)+" ms":"—")+'</span></div>'+
+        '<div><span class="cppill '+(skips>0?"bad":"ok")+'">'+skips+'</span></div></div>');
+    });
+    host.innerHTML=rows.length?rows.join(''):'<div class="jempty" style="padding:12px 14px">No lanes with candle-path telemetry.</div>';
+    var b=$("cpBanner");
+    if(b){
+      if(anyBlocked){b.hidden=false;b.className="cpbanner bad";b.textContent="NEW ARMS BLOCKED — a decision-TF feed is degraded (exits still run)";}
+      else if(snapAge!=null&&snapAge>10000){b.hidden=false;b.className="cpbanner warn";b.textContent="SNAPSHOT STALE ("+ageMs(snapAge)+") — panels may lag live state";}
+      else if(anyStale){b.hidden=false;b.className="cpbanner warn";b.textContent="A context timeframe is stale — decision TFs are ok";}
+      else{b.hidden=true;}
+    }
+  }
+
   /* ---- main render from /state snapshot ---- */
   function lpnl(l){return num(l.realized_pnl)+num(l.unrealized_pnl);}
   function render(s){
@@ -1513,8 +1587,9 @@
     text("railLanes",String(lanes.length));
     text("topGateway",(s.risk_status||"ok").toString().toUpperCase());
     text("topLiveLock",live?"OPEN":"LOCKED");
-    text("snap", s.ts?ageMs(Math.max(0,Date.now()-Date.parse(s.ts))):"--");
+    text("snap", (s.snapshot_age_ms!=null)?ageMs(num(s.snapshot_age_ms)):(s.ts?ageMs(Math.max(0,Date.now()-Date.parse(s.ts))):"--"));
     text("laneCount",lanes.length);
+    renderCandlePath(s);
 
     // watchlist — real per-symbol price + funding (each lane forwards its quote)
     var bySym={};

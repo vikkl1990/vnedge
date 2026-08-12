@@ -139,6 +139,21 @@ async def main() -> None:
                             "sizing_skips": runner.sizing_skips,
                             "recon_mismatches": runner.recon_mismatches,
                             "dropped_candles": 0,
+                            # candle-path telemetry so the Candle Path panel is
+                            # populated in the demo (mirrors the live schema).
+                            "timeframe": "5m",
+                            "time_machine": {
+                                "as_of": ts.isoformat() if hasattr(ts, "isoformat") else None,
+                                "forming": {"5m": {"progress": round((index % 5) / 5.0, 3)}},
+                                "health": {"5m": "ok", "1h": "ok"},
+                                "age_ms": {"5m": 420.0, "1h": 2100.0},
+                                "degraded": False,
+                            },
+                            "latency": {
+                                "feed_lag_ms": {"last": 380.0, "p50": 410.0, "p95": 900.0, "n": index},
+                                "decision_lag_ms": {"last": 22.0, "p50": 24.0, "p95": 31.0, "n": index},
+                            },
+                            "decision_skips": {},
                         },
                         trial={
                             "trial_id": "demo_replay", "started": "2026-07-03",
