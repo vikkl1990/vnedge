@@ -101,13 +101,17 @@ class TradePlan:
 
 
 def plan_gate(
-    plan: TradePlan, cost_model: CostModel, *, safety_mult: float = 2.0
+    plan: TradePlan, cost_model: CostModel, *, safety_mult: float | None = None
 ) -> tuple[bool, list[str]]:
     """The hard cost gate. Returns (ok, reasons); ok=False ⇒ never trade.
 
     A plan is tradable only if its expected NET bps (after all costs) is positive
-    AND its nearest target clears `safety_mult` × the full round-trip cost.
+    AND its nearest target clears `safety_mult` × the full round-trip cost. When
+    `safety_mult` is None it comes from the cost model's PROFILE (swing 2×, scalp
+    3×, delta_scalp 3.5×) so a scalp lane must clear a bigger edge than a swing.
     """
+    if safety_mult is None:
+        safety_mult = cost_model.config.gate_safety_mult
     reasons: list[str] = []
     full_rt = plan.costs.round_trip_bps + cost_model.config.safety_buffer_bps
     if plan.ai.expected_net_bps <= 0:
