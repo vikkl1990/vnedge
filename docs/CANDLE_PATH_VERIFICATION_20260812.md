@@ -86,15 +86,17 @@ health cockpit + a stale-snapshot banner.
 
 ## Gaps, ranked (→ phase that closes each)
 
-1. **TM health does not gate arms.** `_tm_degraded` feeds the snapshot only; the arm-block comes from the separate feed-continuity guard. The spec's composite decision-TF arm-gate (§5/§7) is not unified. → **Phase B5/B6**.
-2. **§6/§8 latency metrics not emitted** (per-TF forming age, closed-bar lag, skip counters) and budgets not applied. → **Phase A4 + B6**.
-3. **No live gap/stall drill / 2h observation.** → **Phase B7**.
-4. **No operator health cockpit** rendering TM/latency/regime/gates. → **Phase C**.
-5. **Canonical snapshot contract** (`snapshot_age_ms`, top-level `time_machine`/`latency`). → **Phase A — DONE (`3b359bc`)**.
+1. **TM health does not gate arms.** → **Phase B — DONE (`1b668c1`)**. `_candle_path_arm_block` blocks NEW entries on decision-TF health ≠ ok / HARD age / tm_error; consulted only on the entry branch so exits are structurally unblockable. **Confirmed live: `decision_skips={}` on all 4 lanes (no spurious blocking), `health[1h]=ok`, `age_ms[1h]≈0.4ms`.**
+2. **§6/§8 latency metrics.** → **Partially DONE (`1b668c1`)**: `decision_skips{reason}` + per-TF `age_ms` now emitted; `feed_lag`/`decision_lag` p50/p95 already present. **Still missing:** `closed_bar_process_lag_ms{tf}`, and the gap/stall/future events as monotonic counters.
+3. **No live gap/stall drill / 2h observation.** → **Phase B7 — OPEN** (the one remaining gate item; unit-tested in the library, not yet exercised on a live VM lane).
+4. **No operator health cockpit** rendering TM/latency/regime/gates. → **Phase C — OPEN**.
+5. **Canonical snapshot contract.** → **Phase A — DONE (`3b359bc`)**.
 
 ## Go / No-Go for scanner rework
 
-**NO-GO** until Phase B (arm-gate + metrics) and the B7 drill/observation pass.
-Per the program's own dependency graph, `funding_extreme_fade_short_v2` (G1)
-is correctly gated behind the B7 Go — its pre-registration is locked and its
-PlanBuilder is staged, waiting on this gate. Nothing is skipped; it is sequenced.
+**CONDITIONAL** — the blocking mechanism is now live and verified non-spurious.
+The formal **Go flips after the Phase B7 step**: a ≥2h observation window
+showing `decision_skips` stays clean under normal WS **and** one controlled
+gap/stall drill proving the gate *does* fire (and recovers) when it should.
+`funding_extreme_fade_short_v2` (G1) remains correctly gated behind that B7 Go —
+pre-registration locked, PlanBuilder staged. Nothing skipped; sequenced.
