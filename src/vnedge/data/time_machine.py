@@ -227,6 +227,19 @@ class TimeMachine:
                     self._emit("stall", symbol, tf)
 
     # --- queries -----------------------------------------------------------------
+    def health_of(self, symbol: str, tf: TF) -> Health:
+        """Current health of one (symbol, tf). Unknown/never-updated reads ``ok``
+        so a TF the lane does not drive cannot spuriously block its arm-gate."""
+        return self._health.get((symbol, tf), "ok")
+
+    def age_ms(self, symbol: str, tf: TF, now: datetime) -> float | None:
+        """Milliseconds since the last exchange update for (symbol, tf), or None
+        if the TF has never updated. Used by the decision-path latency budget."""
+        last = self._last_update.get((symbol, tf))
+        if last is None:
+            return None
+        return max(0.0, (now - last).total_seconds() * 1000.0)
+
     def get_forming(self, symbol: str, tf: TF) -> CandleState | None:
         return self._forming.get((symbol, tf))
 
@@ -257,10 +270,15 @@ class TimeMachine:
             forming=forming, last_closed=last_closed, health=health,
         )
 
-    def snapshot_dict(self, symbol: str) -> dict:
-        """Compact read-only dict for the state snapshot / dashboard."""
+    def snapshot_dict(self, symbol: str, now: datetime | None = None) -> dict:
+        """Compact read-only dict for the state snapshot / dashboard.
+
+        ``now`` (optional) adds a per-TF ``age_ms`` block (now - last exchange
+        update) so the health cockpit can colour forming-state freshness against
+        the shared latency budgets.
+        """
         st = self.get_state(symbol)
-        return {
+        out = {
             "as_of": st.as_of.isoformat() if st.as_of.tzinfo else None,
             "forming": {
                 tf: {"progress": round(c.forming_progress, 3), "open": c.open,
@@ -273,3 +291,10 @@ class TimeMachine:
             },
             "health": dict(st.health),
         }
+        if now is not None:
+            out["age_ms"] = {
+                tf: round(a, 1)
+                for tf in self.tfs
+                if (a := self.age_ms(symbol, tf, now)) is not None
+            }
+        return out

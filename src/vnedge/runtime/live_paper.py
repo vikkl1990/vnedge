@@ -39,6 +39,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
+from vnedge.runtime import latency_thresholds as LT
 from vnedge.data.time_machine import TimeMachine
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
@@ -207,6 +208,9 @@ class LivePaperSession:
             if config.timeframe in {"1m", "5m", "15m", "1h", "4h"} else None
         )
         self._tm_degraded = False
+        # candle-path arm-gate skip counter, keyed by coarse reason
+        # (decision_tf_stale / _gapped / _future / tm_error / tm_age_hard).
+        self._decision_skips: dict[str, int] = {}
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -432,11 +436,41 @@ class LivePaperSession:
         if self.time_machine is None:
             return None
         try:
-            d = self.time_machine.snapshot_dict(self.config.symbol)
+            d = self.time_machine.snapshot_dict(self.config.symbol, now=datetime.now(UTC))
             d["degraded"] = self._tm_degraded
             return d
         except Exception:  # noqa: BLE001
             return {"degraded": True}
+
+    def _candle_path_arm_block(self, now: datetime) -> str | None:
+        """Composite candle-path arm-gate: block a NEW entry (never an exit) when
+        the *decision* timeframe's Time Machine state is unsafe to arm on —
+        health != ok (stale / gapped / future), the last-update age breaches the
+        shared HARD budget, or the Time Machine itself faulted.
+
+        Returns the coarse block reason, or None to allow. FAIL-SAFE by design:
+        any error here returns None, because the independent feed-continuity
+        guard already forces reduce-only on gap/stall — a bug in this extra layer
+        must never be able to wedge a healthy lane. Exits bypass this entirely
+        (it is only consulted on the new-entry path).
+        """
+        tm = self.time_machine
+        if tm is None:
+            return None
+        try:
+            if self._tm_degraded:
+                return "tm_error"
+            tf = self.config.timeframe
+            health = tm.health_of(self.config.symbol, tf)
+            if health != "ok":
+                return f"decision_tf_{health}"
+            hard = LT.TM_AGE_HARD_LAST_MS.get(tf)
+            age = tm.age_ms(self.config.symbol, tf, now)
+            if hard is not None and age is not None and age > hard:
+                return "tm_age_hard"
+        except Exception:  # noqa: BLE001 — an arm-gate fault must not wedge the lane
+            return None
+        return None
 
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
         self.trade_log.append({
@@ -1521,6 +1555,8 @@ class LivePaperSession:
                 "latency": self.latency.snapshot(),
                 # multi-TF forming+closed awareness (read-only; null if TF unsupported)
                 "time_machine": self._tm_snapshot(),
+                # candle-path arm-gate: new entries skipped by reason (never exits)
+                "decision_skips": dict(self._decision_skips),
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()
@@ -1749,7 +1785,17 @@ class LivePaperSession:
                 idx = len(df) - 1
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
-                if factory_block is not None:
+                cp_block = self._candle_path_arm_block(now)
+                if cp_block is not None:
+                    # decision-TF candle path unsafe to arm on: block the NEW
+                    # entry (exits already ran above). Fail-closed for entries.
+                    sig = None
+                    self._decision_skips[cp_block] = self._decision_skips.get(cp_block, 0) + 1
+                    self._record_eval(df, idx, sig, skip_reason=f"candle_path:{cp_block}")
+                    self._log_trade_event(
+                        "candle_path_blocked", f"new arm blocked: decision-TF {cp_block}"[:140], now
+                    )
+                elif factory_block is not None:
                     sig = None
                     self._record_eval(df, idx, sig, skip_reason=factory_block)
                     self._log_trade_event(
