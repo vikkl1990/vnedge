@@ -24,6 +24,7 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -223,6 +224,18 @@ class MultiLaneProvider:
             return None
         primary = self._lanes.get(self.primary) or self._lanes[self._order[0]]
         out = dict(primary)
+        # canonical candle-path fields: promote from the primary lane's session
+        # and stamp the REAL serving-time freshness (age since the primary lane
+        # last published its snapshot). UI reads these top-level, not session.*.
+        primary_session = primary.get("session") or {}
+        out.setdefault("time_machine", primary_session.get("time_machine"))
+        out.setdefault("latency", primary_session.get("latency"))
+        try:
+            ts = primary.get("ts")
+            age_ms = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds() * 1000.0 if ts else None
+            out["snapshot_age_ms"] = round(max(0.0, age_ms), 1) if age_ms is not None else None
+        except (TypeError, ValueError):
+            out["snapshot_age_ms"] = None
         out["lanes"] = [
             {
                 "lane_id": self._lanes[lid]["lane_id"],

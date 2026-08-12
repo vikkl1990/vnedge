@@ -185,4 +185,10 @@ def build_snapshot(
         "fees_usd": sum(f.fee_usd for f in exchange.get_fills()),
         "last_risk_reject": _last_risk_reject(order_manager),
         "last_journal_write": "ok" if journal.available else "unavailable",
+        # --- canonical candle-path contract (promoted from session so the UI
+        # and any client can type against ONE stable schema; the multi-lane
+        # provider overwrites snapshot_age_ms with the real serving-time age).
+        "snapshot_age_ms": 0.0,
+        "time_machine": (session_stats or {}).get("time_machine"),
+        "latency": (session_stats or {}).get("latency"),
     }
