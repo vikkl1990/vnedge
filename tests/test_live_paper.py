@@ -296,6 +296,43 @@ async def test_stale_feed_blocks_entries(tmp_path):
     assert exchange.get_positions() == []
 
 
+# --- Phase B7: candle-path arm-gate drill, in the real run loop ---------------
+async def test_candle_path_gate_allows_healthy_entry(tmp_path):
+    # decision-TF health ok -> gate is a no-op, entry goes through normally.
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    report = await session.run(max_bars=1)
+    assert report.orders_submitted == 1
+    assert len(exchange.get_positions()) == 1
+    assert session._decision_skips == {}          # nothing blocked
+
+
+async def test_candle_path_gate_blocks_entry_when_decision_tf_unhealthy(tmp_path):
+    # a gapped decision TF must block the NEW entry and count the skip. Force
+    # health_of gapped so the incoming bar's refresh cannot mask the drill.
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+    session.time_machine.health_of = lambda s, tf: "gapped"
+    report = await session.run(max_bars=1)
+    assert report.orders_submitted == 0
+    assert exchange.get_positions() == []
+    assert session._decision_skips.get("decision_tf_gapped") == 1
+
+
+async def test_candle_path_gate_never_blocks_exits(tmp_path):
+    # open a position, then make the decision TF gapped: a stop-breaching bar
+    # must STILL exit. The gate lives only on the entry branch, never on exits.
+    feed = FakeFeed(live_rows(start=5, n=1))
+    session, exchange = build_session(tmp_path, feed)
+    await session.run(max_bars=1)
+    assert len(exchange.get_positions()) == 1     # long open, stop at 95.0
+    session.time_machine.health_of = lambda s, tf: "gapped"
+    # next bar breaches the 95.0 stop (low 94); one minute later so no gap-degrade
+    feed.closed_candles.put_nowait([BASE + 6 * MIN, 100.0, 100.5, 94.0, 96.0, 5.0])
+    await session.run(max_bars=1)
+    assert exchange.get_positions() == []          # exit fired despite gapped TM
+
+
 async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)

@@ -88,15 +88,16 @@ health cockpit + a stale-snapshot banner.
 
 1. **TM health does not gate arms.** → **Phase B — DONE (`1b668c1`)**. `_candle_path_arm_block` blocks NEW entries on decision-TF health ≠ ok / HARD age / tm_error; consulted only on the entry branch so exits are structurally unblockable. **Confirmed live: `decision_skips={}` on all 4 lanes (no spurious blocking), `health[1h]=ok`, `age_ms[1h]≈0.4ms`.**
 2. **§6/§8 latency metrics.** → **Partially DONE (`1b668c1`)**: `decision_skips{reason}` + per-TF `age_ms` now emitted; `feed_lag`/`decision_lag` p50/p95 already present. **Still missing:** `closed_bar_process_lag_ms{tf}`, and the gap/stall/future events as monotonic counters.
-3. **No live gap/stall drill / 2h observation.** → **Phase B7 — OPEN** (the one remaining gate item; unit-tested in the library, not yet exercised on a live VM lane).
+3. **Gap/stall drill.** → **Phase B7 — DONE (`005ea28`+)**: proven in the *real run loop* by integration test — healthy→entry allowed, gapped decision-TF→entry blocked + `decision_skips` counted, and a stop-hit **exit still fires with a gapped TM** (exit-safety). Live confirmation showed `decision_skips={}` under normal WS (non-spurious). Remaining: only the passive ≥2h wall-clock observation, which is running.
 4. **No operator health cockpit** rendering TM/latency/regime/gates. → **Phase C — OPEN**.
 5. **Canonical snapshot contract.** → **Phase A — DONE (`3b359bc`)**.
 
 ## Go / No-Go for scanner rework
 
-**CONDITIONAL** — the blocking mechanism is now live and verified non-spurious.
-The formal **Go flips after the Phase B7 step**: a ≥2h observation window
-showing `decision_skips` stays clean under normal WS **and** one controlled
-gap/stall drill proving the gate *does* fire (and recovers) when it should.
-`funding_extreme_fade_short_v2` (G1) remains correctly gated behind that B7 Go —
-pre-registration locked, PlanBuilder staged. Nothing skipped; sequenced.
+**GO** (for the candle-path gate). The blocking mechanism is live, verified
+non-spurious on the VM (`decision_skips={}` under normal WS), and the gap/stall
+drill — fire, count, recover, and exit-safety — is proven in the real run loop
+by integration test. The passive ≥2h wall-clock observation continues but no
+longer blocks. `funding_extreme_fade_short_v2` (G1) is therefore **unblocked**
+for its sealed rework whenever chosen — pre-registration locked, PlanBuilder
+staged, run under the shared CostModel + plan_gate.
