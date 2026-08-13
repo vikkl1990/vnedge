@@ -369,6 +369,7 @@
   .cptable{padding:4px 0 0}
   .cprow{display:grid;grid-template-columns:minmax(150px,1.6fr) 1.1fr .7fr .7fr .95fr .8fr;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
   .cprow.cphead{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-dim);font-weight:700;background:var(--bg-inset)}
+  .mprow{grid-template-columns:minmax(130px,1.5fr) 1fr .85fr 1.15fr .9fr 1fr}
   .cprow .cpname b{font-size:12px}
   .cprow .cpname small{display:block;font-size:9.5px;color:var(--txt-faint)}
   .cpbar{position:relative;height:7px;border-radius:4px;background:var(--bg-3);overflow:hidden}
@@ -870,6 +871,14 @@
           <div id="candlePath"><div class="jempty" style="padding:12px 14px">Loading…</div></div>
         </div>
         <div style="padding:8px 14px;font-size:10px;color:var(--txt-faint)">New arms fire only when the decision-TF health is <b>ok</b>; a stale/gapped/future feed or a HARD age breach blocks new entries (exits always run).</div>
+      </section>
+      <section class="panel">
+        <div class="phead"><h2>Model &amp; Plan</h2><span class="meta" id="mpMeta">regime · cost-aware plan preview (observe-only)</span></div>
+        <div class="cptable">
+          <div class="cprow mprow cphead"><span>Lane</span><span>Regime</span><span>Cost world</span><span>Plan</span><span>Exp net bps</span><span>Cost gate</span></div>
+          <div id="modelDesk"><div class="jempty" style="padding:12px 14px">Loading…</div></div>
+        </div>
+        <div style="padding:8px 14px;font-size:10px;color:var(--txt-faint)">Observe-only preview: regime_v0 + the cost-aware TradePlan run beside the live edge; they do <b>not</b> gate the running lane yet.</div>
       </section>
     </div>
   </div>
@@ -1585,6 +1594,31 @@
     }
   }
 
+  /* ---- Model & Plan desk (Phase D-lite): regime + cost-aware plan preview ---- */
+  function _regBand(label){return label==="high_vol"?"bad":label==="chop"?"soft":label==="unknown"?"na":"ok";}
+  function renderModelDesk(s){
+    var host=$("modelDesk"); if(!host)return;
+    var lanes=_laneRows(s);
+    var wb=0,rej=0,rows=[];
+    lanes.forEach(function(l){
+      var rg=l.regime||null, pl=l.plan_overlay||null, prof=l.cost_profile||"—";
+      wb+=num(l.regime_would_block); rej+=num(l.plan_gate_rejects);
+      var rlabel=rg?rg.label:null, conf=rg?rg.confidence:null;
+      var side=pl?pl.side:null, net=pl?pl.expected_net_bps:null;
+      var gate=pl?(pl.gate_ok?"PASS":"REJECT"):null;
+      var gateB=pl?(pl.gate_ok?"ok":"bad"):"na";
+      rows.push('<div class="cprow mprow">'+
+        '<div class="cpname"><b>'+esc(stratShort(l.strategy_id))+'</b><small>'+esc(symShort(l.symbol))+' · '+esc(l.timeframe||"")+'</small></div>'+
+        '<div>'+(rlabel?'<span class="cppill '+_regBand(rlabel)+'">'+esc(rlabel)+'</span>'+(conf!=null?' <small style="color:var(--txt-faint)">'+(conf*100).toFixed(0)+'%</small>':''):'<span class="cppill na">—</span>')+'</div>'+
+        '<div><span class="cppill ok" style="background:var(--bg-3);color:var(--txt-dim)">'+esc(prof)+'</span></div>'+
+        '<div>'+(side?'<span class="side '+(side==="short"?"s":"l")+'">'+side.toUpperCase()+'</span>':'<span style="color:var(--txt-faint)">no plan</span>')+'</div>'+
+        '<div>'+(net!=null?'<span class="cppill '+(net>0?"ok":"bad")+'">'+net.toFixed(0)+'</span>':'<span class="cppill na">—</span>')+'</div>'+
+        '<div>'+(gate?'<span class="cppill '+gateB+'">'+gate+'</span>':'<span class="cppill na">idle</span>')+'</div></div>');
+    });
+    host.innerHTML=rows.length?rows.join(''):'<div class="jempty" style="padding:12px 14px">No lane model/plan telemetry.</div>';
+    var m=$("mpMeta"); if(m)m.textContent="regime_v0 would-block "+wb+" · cost-gate rejects "+rej+" · observe-only";
+  }
+
   /* ---- System status strip (Phase C P1): safe-to-arm at a glance ---- */
   var _RANK={blocked:3,degraded:2,ok:1,unknown:0};
   function _worse(a,b){return _RANK[a]>=_RANK[b]?a:b;}
@@ -1595,11 +1629,14 @@
   }
   function _laneRows(s){
     var lanes=Array.isArray(s.lanes)?s.lanes:[];
-    if(!lanes.length && s.time_machine){          // single-lane view: synth from top-level
+    if(!lanes.length && s.time_machine){          // single-lane view: synth from top-level + session
+      var sess=s.session||{};
       lanes=[{strategy_id:s.strategy_id, symbol:s.symbol,
-              timeframe:(s.session&&s.session.timeframe)||Object.keys((s.time_machine.health)||{})[0]||"1h",
+              timeframe:sess.timeframe||Object.keys((s.time_machine.health)||{})[0]||"1h",
               time_machine:s.time_machine, latency:s.latency, decision_skips:s.decision_skips,
-              feed:(s.feed_health&&s.feed_health.candles)}];
+              feed:(s.feed_health&&s.feed_health.candles),
+              regime:sess.regime, plan_overlay:sess.plan_overlay, cost_profile:sess.cost_profile,
+              regime_would_block:sess.regime_would_block, plan_gate_rejects:sess.plan_gate_rejects}];
     }
     return lanes;
   }
@@ -1683,6 +1720,7 @@
     text("laneCount",lanes.length);
     renderCandlePath(s);
     renderStatusStrip(s);
+    renderModelDesk(s);
 
     // watchlist — real per-symbol price + funding (each lane forwards its quote)
     var bySym={};

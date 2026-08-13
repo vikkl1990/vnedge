@@ -41,6 +41,10 @@ from vnedge.execution.order_state import OrderState
 from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
 from vnedge.runtime import latency_thresholds as LT
 from vnedge.data.time_machine import TimeMachine
+from vnedge.ml.regime_v0 import RegimeV0
+from vnedge.plan.adapters import signal_intent_to_plan
+from vnedge.plan.cost_model import CostModel
+from vnedge.plan.trade_plan import plan_gate
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
@@ -211,6 +215,21 @@ class LivePaperSession:
         # candle-path arm-gate skip counter, keyed by coarse reason
         # (decision_tf_stale / _gapped / _future / tm_error / tm_age_hard).
         self._decision_skips: dict[str, int] = {}
+        # D-lite runtime wiring (OBSERVE-ONLY): the lane's cost world + what
+        # regime_v0 and the cost-aware plan contract WOULD say each decision bar.
+        # None of this changes the live decision; it only records for the cockpit.
+        tf = config.timeframe
+        ex = getattr(feed, "exchange_id", "") or ""
+        if tf in {"1m", "5m", "15m"}:
+            self.cost_profile = "delta_scalp" if "delta" in ex.lower() else "scalp"
+        else:
+            self.cost_profile = "swing"
+        self.cost_model = CostModel.for_profile(self.cost_profile)
+        self._regime_model = RegimeV0()
+        self._overlay_regime: dict | None = None
+        self._overlay_plan: dict | None = None
+        self._regime_would_block = 0
+        self._plan_gate_rejects = 0
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -471,6 +490,46 @@ class LivePaperSession:
         except Exception:  # noqa: BLE001 — an arm-gate fault must not wedge the lane
             return None
         return None
+
+    def _record_overlays(self, df: pd.DataFrame, idx: int, sig: SignalIntent | None) -> None:
+        """OBSERVE-ONLY (D-lite): record what regime_v0 and the cost-aware plan
+        contract WOULD say for this decision bar. Never changes the live decision
+        (the classic path already produced ``sig``). Fail-safe: any error here is
+        swallowed so an overlay bug can never touch trading."""
+        try:
+            row = df.iloc[idx]
+            reading = self._regime_model.read_row(row)   # reads regime cols already on df
+            self._overlay_regime = reading.to_dict()
+            if sig is None:
+                self._overlay_plan = None
+                return
+            allowed = reading.allow_long if sig.side == "long" else reading.allow_short
+            if not allowed:
+                self._regime_would_block += 1
+            ref = float(row["close"])
+            plan = signal_intent_to_plan(
+                sig, ref, self.cost_model,
+                decision_tf=self.config.timeframe,
+                time_stop_bars=self.config.max_holding_bars,
+                source=self.strategy.strategy_id,
+            )
+            if plan is None:
+                self._overlay_plan = None
+                return
+            ok, reasons = plan_gate(plan, self.cost_model)
+            if not ok:
+                self._plan_gate_rejects += 1
+            self._overlay_plan = {
+                "side": plan.side, "profile": self.cost_model.profile,
+                "stop_bps": round(plan.risk.stop_bps, 1),
+                "tp1_bps": round(plan.tp1_bps, 1),
+                "expected_net_bps": round(plan.ai.expected_net_bps, 1),
+                "round_trip_bps": round(plan.costs.round_trip_bps, 1),
+                "gate_ok": ok, "gate_reasons": reasons,
+                "regime_allows": allowed, "regime_label": reading.label,
+            }
+        except Exception as exc:  # noqa: BLE001 — observability must never affect trading
+            logger.debug("overlay recording failed (observability only): %s", exc)
 
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
         self.trade_log.append({
@@ -1557,6 +1616,13 @@ class LivePaperSession:
                 "time_machine": self._tm_snapshot(),
                 # candle-path arm-gate: new entries skipped by reason (never exits)
                 "decision_skips": dict(self._decision_skips),
+                # D-lite overlays (OBSERVE-ONLY): lane cost world + what regime_v0
+                # and the cost-aware plan contract WOULD say (never gates the lane)
+                "cost_profile": self.cost_profile,
+                "regime": self._overlay_regime,
+                "regime_would_block": self._regime_would_block,
+                "plan_overlay": self._overlay_plan,
+                "plan_gate_rejects": self._plan_gate_rejects,
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()
@@ -1816,6 +1882,7 @@ class LivePaperSession:
                 self.latency.record(
                     "decision_lag_ms", (time.perf_counter() - _dec_t0) * 1000.0
                 )
+                self._record_overlays(df, idx, sig)   # OBSERVE-ONLY: regime + plan
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)

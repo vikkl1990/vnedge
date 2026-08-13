@@ -333,6 +333,36 @@ async def test_candle_path_gate_never_blocks_exits(tmp_path):
     assert exchange.get_positions() == []          # exit fired despite gapped TM
 
 
+# --- D-lite: regime + plan overlays are OBSERVE-ONLY -------------------------
+async def test_overlays_recorded_without_changing_live_decision(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)      # AlwaysLong, 1h -> swing
+    report = await session.run(max_bars=1)
+    # live decision unchanged: the entry still submits exactly as before overlays
+    assert report.orders_submitted == 1 and len(exchange.get_positions()) == 1
+    # cost world attached
+    assert session.cost_profile == "swing"
+    assert session.cost_model.profile == "swing"
+    # regime + plan previews recorded for the cockpit
+    assert session._overlay_regime is not None and "label" in session._overlay_regime
+    assert session._overlay_plan is not None
+    assert session._overlay_plan["side"] == "long"
+    assert "gate_ok" in session._overlay_plan and "expected_net_bps" in session._overlay_plan
+
+
+async def test_overlay_fault_never_breaks_trading(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed)
+
+    class Boom:
+        def read_row(self, *a, **k):
+            raise RuntimeError("overlay boom")
+    session._regime_model = Boom()                         # overlay fault
+    report = await session.run(max_bars=1)
+    assert report.orders_submitted == 1                    # trading proceeded untouched
+    assert session._overlay_plan is None                   # overlay simply recorded nothing
+
+
 async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)

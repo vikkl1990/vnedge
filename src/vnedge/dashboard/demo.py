@@ -154,6 +154,15 @@ async def main() -> None:
                                 "decision_lag_ms": {"last": 22.0, "p50": 24.0, "p95": 31.0, "n": index},
                             },
                             "decision_skips": {},
+                            # D-lite overlays (observe-only): cost world + regime + plan preview
+                            "cost_profile": "swing",
+                            "regime": {"label": "chop", "allow_long": True, "allow_short": True,
+                                       "confidence": 0.62, "model_id": "regime_v0_20260812"},
+                            "regime_would_block": 0,
+                            "plan_overlay": {"side": "long", "profile": "swing", "stop_bps": 42.0,
+                                             "tp1_bps": 84.0, "expected_net_bps": 63.0,
+                                             "round_trip_bps": 14.0, "gate_ok": True, "gate_reasons": []},
+                            "plan_gate_rejects": 0,
                         },
                         trial={
                             "trial_id": "demo_replay", "started": "2026-07-03",

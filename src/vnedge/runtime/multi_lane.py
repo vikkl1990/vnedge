@@ -297,6 +297,12 @@ class MultiLaneProvider:
                 "time_machine": self._lanes[lid].get("session", {}).get("time_machine"),
                 # candle-path arm-gate: new-entry skips by reason (never exits)
                 "decision_skips": self._lanes[lid].get("session", {}).get("decision_skips"),
+                # D-lite overlays (observe-only): cost world + regime + plan preview
+                "cost_profile": self._lanes[lid].get("session", {}).get("cost_profile"),
+                "regime": self._lanes[lid].get("session", {}).get("regime"),
+                "regime_would_block": self._lanes[lid].get("session", {}).get("regime_would_block"),
+                "plan_overlay": self._lanes[lid].get("session", {}).get("plan_overlay"),
+                "plan_gate_rejects": self._lanes[lid].get("session", {}).get("plan_gate_rejects"),
                 "daily_factory": self._lanes[lid].get("session", {}).get("daily_factory"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),
