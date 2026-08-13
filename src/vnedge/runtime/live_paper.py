@@ -230,6 +230,7 @@ class LivePaperSession:
         self._overlay_plan: dict | None = None
         self._regime_would_block = 0
         self._plan_gate_rejects = 0
+        self._trail_atr_faults = 0     # ATR-compute faults that silently disabled the trail
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         self.signals = self.orders_submitted = self.risk_rejects = 0
@@ -735,6 +736,7 @@ class LivePaperSession:
         try:
             series = _atr_indicator(self.candles, self.config.trail_atr_window)
         except Exception:  # noqa: BLE001 - trailing must never break the exit loop
+            self._trail_atr_faults += 1     # surfaced in the snapshot so a stuck trail is visible
             return 0.0
         value = float(series.iloc[-1])
         return value if value == value else 0.0  # value==value drops NaN warmup
@@ -1675,6 +1677,7 @@ class LivePaperSession:
                 "regime_would_block": self._regime_would_block,
                 "plan_overlay": self._overlay_plan,
                 "plan_gate_rejects": self._plan_gate_rejects,
+                "trail_atr_faults": self._trail_atr_faults,
                 # per-lane drawdown vs its trial limit + live trial scorecard, so a
                 # lane breaching its own gate can't hide inside the fleet aggregate
                 "peak_equity": self.tracker.peak_equity_usd,

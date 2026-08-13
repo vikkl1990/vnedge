@@ -24,7 +24,12 @@ export function useSnapshot() {
 export function useJournal(limit = 50) {
   return useQuery({
     queryKey: ["journal", limit],
-    queryFn: () => apiGet<JournalRow[]>(`/journal?limit=${limit}`),
+    // the route is /trade-journal (not /journal), and it returns a projection
+    // object — the closed-trade rows live under `closed_trades`.
+    queryFn: async () => {
+      const r = await apiGet<{ closed_trades?: JournalRow[] }>(`/trade-journal?limit=${limit}`);
+      return r.closed_trades ?? [];
+    },
     refetchInterval: 20_000,
   });
 }

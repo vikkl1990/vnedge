@@ -124,6 +124,11 @@ class LiveTraderSession:
         # EMERGENCY_REDUCE_ONLY mode can't be flipped at runtime, so a live
         # divergence needs this latch to actually halt entries.
         self._reconciliation_halt = False
+        # A persistently failing account-read disables divergence detection while
+        # entries keep flowing; fail closed after this many consecutive failures.
+        self._recon_read_failures = 0
+
+    _MAX_RECON_READ_FAILURES = 3
 
     @property
     def entries_allowed(self) -> bool:
@@ -333,8 +338,17 @@ class LiveTraderSession:
         try:
             account = await self.accounts.account_state()
         except Exception as exc:  # noqa: BLE001 — a failed read must not crash the loop
-            logger.error("position reconciliation read failed: %s", exc)
+            self._recon_read_failures += 1
+            logger.error("position reconciliation read failed (%d consecutive): %s",
+                         self._recon_read_failures, exc)
+            if self._recon_read_failures >= self._MAX_RECON_READ_FAILURES:
+                # can't verify the venue is truth → fail closed, like a mismatch
+                self._reconciliation_halt = True
+                logger.error(
+                    "reconciliation read failed %d× — FAIL CLOSED (reduce-only) "
+                    "until a clean account read", self._recon_read_failures)
             return
+        self._recon_read_failures = 0          # clean read → clear the failure streak
         expected = self._plan is not None          # we believe we hold a position
         actual = account.open_positions > 0        # the venue's truth
         if expected != actual:

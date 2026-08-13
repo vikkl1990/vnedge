@@ -1,5 +1,11 @@
 # PRE-REGISTRATION — htf_structure_break_v1
 
+> **ABANDONED 2026-08-13.** The `HtfStructureBreak` implementation
+> (`src/vnedge/strategy/htf_structure_break.py`) was REJECTED in research, never
+> registered/wired/tested, and was removed as orphaned dead code in the code
+> audit. Any future attempt is a NEW locked pre-registration under the TradePlan
+> contract (G1 pattern), not a revival of this file. Original spec below.
+
 **Frozen: 2026-08-10.** No parameter, gate, or mechanical change after this date
 counts toward promotion. Editing this file invalidates the judgment. This is a
 research pre-registration, not a promotion or financial advice.

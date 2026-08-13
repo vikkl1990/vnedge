@@ -365,3 +365,27 @@ async def test_position_recon_skips_while_orders_in_flight(tmp_path):
     session._pending_exit_orders["k"] = "coid"
     await session._reconcile_positions()
     assert session.recon_mismatches == 0 and session.entries_allowed is True
+
+
+# --- A2 audit fix: reconciliation fails closed on persistent account-read failure ---
+async def test_reconcile_read_failure_fails_closed_after_n(tmp_path):
+    class BoomAccounts(FakeAccounts):
+        async def account_state(self):
+            raise RuntimeError("account read down")
+
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      BoomAccounts(), tmp_path, OneShotLong())
+    assert session._reconciliation_halt is False
+    for _ in range(session._MAX_RECON_READ_FAILURES):
+        await session._reconcile_positions()
+    assert session._recon_read_failures == session._MAX_RECON_READ_FAILURES
+    assert session._reconciliation_halt is True          # fail closed: can't verify the venue
+
+
+async def test_reconcile_clean_read_clears_failure_streak(tmp_path):
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(), tmp_path, OneShotLong())
+    session._recon_read_failures = 2
+    await session._reconcile_positions()                 # clean read, flat + agree
+    assert session._recon_read_failures == 0
+    assert session._reconciliation_halt is False

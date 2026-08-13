@@ -115,8 +115,14 @@ def size_delta_risk_trade(
     requested_leverage: float,
     acknowledge_high_leverage: bool,
     spec: DeltaContractSpec,
+    min_liquidation_buffer_pct: float = 20.0,
 ) -> DeltaSizedTrade:
-    """Mirror the Pine risk/stop sizing lens, then round to Delta contracts."""
+    """Mirror the Pine risk/stop sizing lens, then round to Delta contracts.
+
+    Enforces the same liquidation-buffer guard as the canonical
+    ``risk.position_sizer`` (default 20%): the stop must sit safely inside the
+    liquidation distance, or the trade is rejected — a stop near liquidation is
+    not a stop. Previously this second sizing path omitted that check."""
 
     if side not in ("long", "short"):
         return DeltaSizedTrade(approved=False, reason=f"invalid side: {side}")
@@ -161,6 +167,22 @@ def size_delta_risk_trade(
         leverage=effective_lev,
         maintenance_margin_pct=spec.maintenance_margin_pct,
     )
+    # Liquidation-buffer guard (canonical position_sizer parity): the stop must be
+    # at least `buffer` further inside than liquidation, else it is not a stop.
+    liq_distance = abs(entry_price - liq)
+    required_buffer = stop_distance * (1.0 + min_liquidation_buffer_pct / 100.0)
+    if liq_distance <= required_buffer:
+        return DeltaSizedTrade(
+            approved=False,
+            requested_leverage=requested_leverage,
+            effective_leverage=effective_lev,
+            leverage_clamped=lev_clamped,
+            liquidation_price=liq,
+            reason=(
+                f"stop too close to liquidation: liq_distance {liq_distance:.6f} "
+                f"<= {min_liquidation_buffer_pct:.0f}%-buffered stop {required_buffer:.6f}"
+            ),
+        )
     return DeltaSizedTrade(
         approved=True,
         contracts=contracts,
