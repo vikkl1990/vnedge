@@ -351,6 +351,17 @@
   .boardrow:first-child{border-top:none}
   .boardrow .bt{font-weight:700}
   .boardrow .bs{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
+  /* System status strip (Phase C P1) — safe-to-arm at a glance */
+  .statusstrip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:0 0 14px}
+  .schip{display:flex;align-items:center;gap:8px;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;border-left:3px solid var(--txt-faint)}
+  .schip b{font-size:10px;letter-spacing:.08em;color:var(--txt-dim);font-weight:800}
+  .schip .st{margin-left:auto;font-size:10.5px;font-weight:800;letter-spacing:.03em;color:var(--txt-faint)}
+  .schip .dot{width:8px;height:8px;border-radius:50%;background:var(--txt-faint);flex:0 0 auto}
+  .schip.ok{border-left-color:var(--long)} .schip.ok .dot{background:var(--long)} .schip.ok .st{color:var(--long)}
+  .schip.degraded{border-left-color:var(--warn)} .schip.degraded .dot{background:var(--warn)} .schip.degraded .st{color:var(--warn)}
+  .schip.blocked{border-left-color:var(--short)} .schip.blocked .dot{background:var(--short)} .schip.blocked .st{color:var(--short)}
+  .schip.unknown{opacity:.75}
+  @media(max-width:720px){.statusstrip{grid-template-columns:repeat(2,1fr)}}
   /* Candle Path panel (Phase C) — reads the canonical time_machine/latency schema */
   .cpbanner{margin:0 14px 4px;padding:8px 11px;border-radius:var(--r-sm);font-size:11px;font-weight:700;letter-spacing:.02em}
   .cpbanner.warn{background:rgba(224,165,47,.14);color:var(--warn);border:1px solid rgba(224,165,47,.35)}
@@ -746,6 +757,14 @@
 
   <!-- ===== DESK VIEW ===== -->
   <div class="view" data-view="desk">
+  <!-- ===== SYSTEM STATUS STRIP (safe-to-arm in <5s) ===== -->
+  <section class="statusstrip" id="statusStrip" aria-label="system status">
+    <div class="schip" id="chip_system"><span class="dot"></span><b>SYSTEM</b><span class="st">—</span></div>
+    <div class="schip" id="chip_feed"><span class="dot"></span><b>FEED</b><span class="st">—</span></div>
+    <div class="schip" id="chip_candle"><span class="dot"></span><b>CANDLE</b><span class="st">—</span></div>
+    <div class="schip" id="chip_decision"><span class="dot"></span><b>DECISION</b><span class="st">—</span></div>
+    <div class="schip" id="chip_risk"><span class="dot"></span><b>RISK</b><span class="st">—</span></div>
+  </section>
   <!-- ===== MARKET WATCHLIST ===== -->
   <section class="watch" id="watch" aria-label="market watchlist"></section>
 
@@ -1566,6 +1585,79 @@
     }
   }
 
+  /* ---- System status strip (Phase C P1): safe-to-arm at a glance ---- */
+  var _RANK={blocked:3,degraded:2,ok:1,unknown:0};
+  function _worse(a,b){return _RANK[a]>=_RANK[b]?a:b;}
+  function setChip(id,state,label){
+    var e=$(id); if(!e)return;
+    e.className="schip "+state;
+    var st=e.querySelector(".st"); if(st)st.textContent=label;
+  }
+  function _laneRows(s){
+    var lanes=Array.isArray(s.lanes)?s.lanes:[];
+    if(!lanes.length && s.time_machine){          // single-lane view: synth from top-level
+      lanes=[{strategy_id:s.strategy_id, symbol:s.symbol,
+              timeframe:(s.session&&s.session.timeframe)||Object.keys((s.time_machine.health)||{})[0]||"1h",
+              time_machine:s.time_machine, latency:s.latency, decision_skips:s.decision_skips,
+              feed:(s.feed_health&&s.feed_health.candles)}];
+    }
+    return lanes;
+  }
+  function renderStatusStrip(s){
+    var lanes=_laneRows(s);
+    var kill=!!s.kill_switch_active;
+    // CANDLE — decision-TF health + arm skips + 1m soft age
+    var candle="unknown",cLabel="no telemetry";
+    lanes.forEach(function(l){
+      var tm=l.time_machine; if(!tm||!tm.health)return;
+      if(candle==="unknown"){candle="ok";cLabel="ok";}
+      var h=tm.health[l.timeframe];
+      if(h&&h!=="ok"){candle=_worse(candle,"blocked");cLabel="decision-TF "+h;}
+      if(skipCount(l.decision_skips)>0){candle=_worse(candle,"blocked");cLabel="arms blocked";}
+      var a1=tm.age_ms&&tm.age_ms["1m"];
+      if(a1!=null&&a1>TM_AGE_SOFT["1m"]&&candle==="ok"){candle="degraded";cLabel="1m age soft";}
+    });
+    setChip("chip_candle",candle,cLabel);
+    // DECISION — new-arm skips (blocked) + compute lag (soft)
+    var decision="unknown",dLabel="no telemetry",skips=false,haveLat=false,latSoft=false;
+    lanes.forEach(function(l){
+      if(skipCount(l.decision_skips)>0)skips=true;
+      var lat=l.latency;
+      if(lat&&lat.decision_lag_ms&&fin(lat.decision_lag_ms.p95)){haveLat=true;if(lat.decision_lag_ms.p95>50)latSoft=true;}
+    });
+    if(skips){decision="blocked";dLabel="new arms blocked";}
+    else if(haveLat){decision=latSoft?"degraded":"ok";dLabel=latSoft?"compute lag":"ok";}
+    setChip("chip_decision",decision,dLabel);
+    // FEED — top-level feed_health + per-lane candle feed
+    var feed="unknown",fLabel="—",fh=s.feed_health||{},cand=String(fh.candles||"").toLowerCase();
+    if(cand){
+      if(cand.indexOf("ok")>=0||cand.indexOf("live")>=0){feed="ok";fLabel="live";}
+      else if(cand.indexOf("warm")>=0){feed="degraded";fLabel="warming";}
+      else{feed="blocked";fLabel=cand.slice(0,12);}
+    }
+    lanes.forEach(function(l){
+      var f=String(l.feed||"").toLowerCase(); if(!f)return;
+      if(f.indexOf("ok")<0&&f.indexOf("live")<0){
+        var base=feed==="unknown"?"ok":feed;
+        feed=_worse(base,f.indexOf("warm")>=0?"degraded":"blocked");
+      }
+    });
+    setChip("chip_feed",feed,fLabel);
+    // RISK — kill / gateway status / loss streak
+    var risk="ok",rLabel="ok",rs=String(s.risk_status||"ok").toLowerCase(),streak=num(s.consecutive_losses);
+    if(kill){risk="blocked";rLabel="kill tripped";}
+    else if(rs&&rs!=="ok"){risk="blocked";rLabel=rs.slice(0,14);}
+    else if(streak>=3){risk="degraded";rLabel=streak+" loss streak";}
+    setChip("chip_risk",risk,rLabel);
+    // SYSTEM — kill dominates, else rollup of the others
+    if(kill){setChip("chip_system","blocked","kill tripped");}
+    else{
+      var roll="ok";
+      [candle,decision,feed,risk].forEach(function(x){if(x!=="unknown")roll=_worse(roll,x);});
+      setChip("chip_system",roll,roll==="ok"?"nominal":roll==="degraded"?"degraded":"blocked");
+    }
+  }
+
   /* ---- main render from /state snapshot ---- */
   function lpnl(l){return num(l.realized_pnl)+num(l.unrealized_pnl);}
   function render(s){
@@ -1590,6 +1682,7 @@
     text("snap", (s.snapshot_age_ms!=null)?ageMs(num(s.snapshot_age_ms)):(s.ts?ageMs(Math.max(0,Date.now()-Date.parse(s.ts))):"--"));
     text("laneCount",lanes.length);
     renderCandlePath(s);
+    renderStatusStrip(s);
 
     // watchlist — real per-symbol price + funding (each lane forwards its quote)
     var bySym={};
