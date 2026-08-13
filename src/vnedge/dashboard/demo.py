@@ -39,7 +39,9 @@ logging.basicConfig(level=logging.WARNING)
 
 SYMBOL = "BTC/USDT:USDT"
 HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
-PORT = int(os.environ.get("DASHBOARD_PORT", "8080"))
+# honor the preview harness's assigned PORT (autoPort) before the fixed default,
+# so the demo never collides with another process squatting on 8080.
+PORT = int(os.environ.get("DASHBOARD_PORT") or os.environ.get("PORT") or "8080")
 TOKEN = os.environ.get("DASHBOARD_TOKEN", "vnedge-demo")
 BARS_PER_SECOND = float(os.environ.get("DEMO_BARS_PER_SECOND", "4"))
 

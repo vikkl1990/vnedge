@@ -5,7 +5,8 @@
       "name": "dashboard-demo",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["-m", "vnedge.dashboard.demo"],
-      "port": 8080
+      "port": 8080,
+      "autoPort": true
     }
   ]
 }
