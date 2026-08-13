@@ -1689,6 +1689,7 @@ class LivePaperSession:
             backfill_fired += sig_i is not None
         sig = self.strategy.signal(df, last)
         self._record_eval(df, last, sig)
+        self._record_overlays(df, last, sig)   # populate regime/plan on startup, not next close
         logger.info(
             "shadow prime [%s %s]: %d seeded bars backfilled (%d would have "
             "fired), latest -> %s",
