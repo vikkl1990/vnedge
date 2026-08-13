@@ -36,8 +36,10 @@ from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.risk.position_sizer import SymbolLimits, size_position
 from vnedge.risk.risk_manager import AccountState, OrderIntent
+from vnedge.runtime.active_exit import ActiveExitState
 from vnedge.runtime.run_report import RunReport
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,9 @@ class LiveTraderSession:
         private_stream_health: PrivateStreamHealthProvider | None = None,
         require_private_stream: bool = False,
         max_private_stream_age_seconds: float = 5.0,
+        max_holding_bars: int = 48,
+        trail_atr_mult: float = 0.0,
+        trail_atr_window: int = 14,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -118,6 +123,16 @@ class LiveTraderSession:
         self._pending_exit_orders: dict[str, str] = {}
         self._exit_retry_attempts: dict[str, int] = {}
         self._bars = 0
+        # A1: real live exits go through the SAME ActiveExitState engine that
+        # paper/shadow/backtest validate — trailing stop, breakeven arm, TP, and
+        # the max_holding time cap — instead of a bare bar-close stop/TP. Exits
+        # stay full-position (venue-is-truth), but the DECISION is the shared one.
+        self._max_holding_bars = max_holding_bars
+        self._trail_atr_mult = trail_atr_mult
+        self._trail_atr_window = trail_atr_window
+        self._exit_state: ActiveExitState | None = None
+        self._position_qty = 0.0        # tracked entry size (resolve_bar gate)
+        self._entry_bar_index: int | None = None
         # Runtime fail-closed latch: set when position reconciliation finds the
         # venue diverging from internal state; blocks new entries (exits still
         # flow) until a clean settled pass clears it. The static
@@ -179,11 +194,13 @@ class LiveTraderSession:
             self.orders_submitted += 1
             self._plan = sig
             self._entry_bar_ts = self.candles["timestamp"].iloc[-1]
+            self._open_exit_state(sig, sizing.quantity)
         elif order.state is OrderState.TIMEOUT_UNKNOWN:
             self.orders_submitted += 1
             self._parked_entries[order.client_order_id] = (
                 sig,
                 self.candles["timestamp"].iloc[-1],
+                sizing.quantity,
             )
 
     async def _submit_exit(self, reason: str, now: datetime) -> None:
@@ -230,8 +247,64 @@ class LiveTraderSession:
     def _clear_exit_plan(self) -> None:
         self._plan = None
         self._entry_bar_ts = None
+        self._exit_state = None
+        self._position_qty = 0.0
+        self._entry_bar_index = None
         self._pending_exit_orders.clear()
         self._exit_retry_attempts.clear()
+
+    # --- A1: shared exit engine (same ActiveExitState as paper/shadow/backtest) ---
+    def _open_exit_state(self, sig: SignalIntent, quantity: float) -> None:
+        self._exit_state = ActiveExitState.from_signal(sig, trail_atr_mult=self._trail_atr_mult)
+        self._position_qty = abs(float(quantity or 0.0))
+        self._entry_bar_index = self._bars
+
+    def _trail_atr(self) -> float:
+        """Canonical ATR for the trail — the SAME indicator + window paper/shadow/
+        backtest use, so the live trail matches what was validated. 0.0 if off/cold."""
+        if self._trail_atr_mult <= 0.0 or len(self.candles) < 2:
+            return 0.0
+        try:
+            v = float(_atr_indicator(self.candles, self._trail_atr_window).iloc[-1])
+        except Exception:  # noqa: BLE001 — trailing must never break the exit loop
+            return 0.0
+        return v if v == v else 0.0
+
+    def _max_holding_hit(self) -> bool:
+        cap = self._max_holding_bars
+        if cap <= 0 or self._entry_bar_index is None:
+            return False
+        return (self._bars - self._entry_bar_index) >= cap
+
+    async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
+        """Route the live exit DECISION through the shared ActiveExitState (stop,
+        breakeven, TP, trailing, max_holding). Submit is full-position (venue is
+        truth); any decision closes the whole position."""
+        if self._plan is None or self._exit_state is None:
+            return
+        # seed the entry price lazily from the venue position (needed for
+        # breakeven/ladder; the stop itself works without it).
+        if self._exit_state.entry_price is None:
+            try:
+                positions = await self.accounts.open_positions()
+                pos = next((p for p in positions if p.symbol == self.symbol), None)
+                if pos is not None:
+                    self._exit_state.seed_entry(entry_price=getattr(pos, "entry_price", None),
+                                                quantity=pos.quantity)
+                    if self._position_qty <= 0:
+                        self._position_qty = abs(float(pos.quantity))
+            except Exception as exc:  # noqa: BLE001 — a read fault must not break exits
+                logger.warning("exit-state seed read failed: %s", exc)
+        decision = self._exit_state.resolve_bar(
+            high=float(bar["high"]), low=float(bar["low"]), close=float(bar["close"]),
+            position_quantity=self._position_qty,
+            min_qty=self.limits.min_qty, qty_step=self.limits.qty_step,
+            max_holding_hit=self._max_holding_hit(),
+        )
+        if decision is None:
+            self._exit_state.trail_stop(self._trail_atr())   # tighten for later bars
+            return
+        await self._submit_exit(decision.reason, now)         # full-position close
 
     def _preserve_exit_plan(self, base_key: str, order) -> None:
         if order.state in (OrderState.TIMEOUT_UNKNOWN, OrderState.RECONCILING):
@@ -274,22 +347,9 @@ class LiveTraderSession:
             self._bars += 1
 
             bar = self.candles.iloc[-1]
-            # exits first (always allowed, even in emergency_reduce_only)
-            if self._plan is not None:
-                sig = self._plan
-                hit = None
-                if sig.side == "long":
-                    if float(bar["low"]) <= sig.stop_price:
-                        hit = "stop"
-                    elif sig.take_profit_price and float(bar["high"]) >= sig.take_profit_price:
-                        hit = "take_profit"
-                else:
-                    if float(bar["high"]) >= sig.stop_price:
-                        hit = "stop"
-                    elif sig.take_profit_price and float(bar["low"]) <= sig.take_profit_price:
-                        hit = "take_profit"
-                if hit is not None:
-                    await self._submit_exit(hit, now)
+            # exits first (always allowed, even in emergency_reduce_only) — the
+            # shared exit engine: stop/breakeven/TP/trailing/max_holding.
+            await self._manage_exit(bar, now)
 
             # entries only when allowed, flat, and nothing unresolved
             if (self.entries_allowed and self._plan is None
@@ -321,7 +381,9 @@ class LiveTraderSession:
                 continue
             order = self.om.orders[coid]
             if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
-                self._plan, self._entry_bar_ts = parked
+                sig, self._entry_bar_ts, qty = parked
+                self._plan = sig
+                self._open_exit_state(sig, qty)
         await self._reconcile_positions()
 
     async def _reconcile_positions(self) -> None:

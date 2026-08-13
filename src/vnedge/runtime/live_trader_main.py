@@ -62,6 +62,12 @@ class LiveTraderRunConfig:
     symbol: str
     timeframe: str = "1h"
     strategy_id: str = "funding_mean_reversion_v1"
+    # exit engine config — set these to the SAME values the strategy was judged
+    # under so live exits match paper/shadow/backtest (A1). Defaults mirror
+    # RunnerConfig; a trailed strategy (e.g. crypto_trend) must pass its trail.
+    max_holding_bars: int = 48
+    trail_atr_mult: float = 0.0
+    trail_atr_window: int = 14
 
 
 def _credentials_present() -> bool:
@@ -171,6 +177,9 @@ async def run_live_trader(
         strategy, feed, history, settings=settings, gateway=gateway,
         order_manager=om, reconciler=reconciler, account_provider=account,
         symbol=config.symbol, limits=limits, pre_live_report=checklist,
+        max_holding_bars=config.max_holding_bars,
+        trail_atr_mult=config.trail_atr_mult,
+        trail_atr_window=config.trail_atr_window,
     )
     try:
         await feed.start()

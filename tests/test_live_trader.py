@@ -389,3 +389,56 @@ async def test_reconcile_clean_read_clears_failure_streak(tmp_path):
     await session._reconcile_positions()                 # clean read, flat + agree
     assert session._recon_read_failures == 0
     assert session._reconciliation_halt is False
+
+
+# --- A1: live exits go through the shared ActiveExitState engine ---
+def test_a1_max_holding_hit_counts_bars(tmp_path):
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(), tmp_path, OneShotLong(), max_holding_bars=3)
+    session._entry_bar_index = 0
+    session._bars = 2
+    assert session._max_holding_hit() is False
+    session._bars = 3
+    assert session._max_holding_hit() is True
+
+
+async def test_a1_stop_exit_via_shared_engine_full_position(tmp_path):
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, om = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), accounts,
+                       tmp_path, OneShotLong())
+    sig = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    session._plan = sig
+    session._open_exit_state(sig, 0.01)
+    session.candles = normalize_candles([[BASE + i * HOUR, 100.0, 101.0, 99.0, 100.0, 10.0]
+                                         for i in range(3)])
+    # a bar whose LOW breaches the 95 stop → the shared engine returns a stop exit
+    bar = pd.Series({"high": 101.0, "low": 94.0, "close": 96.0})
+    await session._manage_exit(bar, __import__("datetime").datetime.now(__import__("datetime").UTC))
+    assert session.orders_submitted >= 1 and session._plan is None   # full-position exit fired
+
+
+async def test_a1_no_hit_holds_and_does_not_exit(tmp_path):
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), accounts,
+                      tmp_path, OneShotLong())
+    sig = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    session._plan = sig
+    session._open_exit_state(sig, 0.01)
+    bar = pd.Series({"high": 101.0, "low": 99.0, "close": 100.0})   # no stop, no TP
+    await session._manage_exit(bar, __import__("datetime").datetime.now(__import__("datetime").UTC))
+    assert session._plan is sig and session.orders_submitted == 0   # still holding
+
+
+def test_a1_trailing_tightens_stop(tmp_path):
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), FakeAccounts(),
+                      tmp_path, OneShotLong(), trail_atr_mult=2.0, trail_atr_window=2)
+    sig = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    session._open_exit_state(sig, 0.01)
+    session._exit_state.seed_entry(entry_price=100.0, quantity=0.01)
+    # tight candles → ATR≈1; trail 2×ATR behind the 108 favorable peak → stop ~106
+    session.candles = normalize_candles([[BASE + i * HOUR, 100.0, 100.5, 99.5, 100.0, 10.0]
+                                         for i in range(4)])
+    session._exit_state._update_mfe(high=108.0, low=99.5)   # favorable extreme
+    before = session._exit_state.current_stop
+    session._exit_state.trail_stop(session._trail_atr())
+    assert session._exit_state.current_stop > before        # ratcheted tighter (up for a long)
