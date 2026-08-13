@@ -161,8 +161,35 @@ class LiveTraderSession:
             return False
         return health.age_seconds(now) <= self.max_private_stream_age_seconds
 
+    async def _read_account(self):
+        """Guarded account read on the SUBMIT path — a fault fail-closes (counts
+        toward the reconciliation read-failure halt) instead of crashing run()."""
+        try:
+            st = await self.accounts.account_state()
+        except Exception as exc:  # noqa: BLE001 — a read fault must not crash the loop
+            self._note_submit_read_failure("account", exc)
+            return None
+        self._recon_read_failures = 0
+        return st
+
+    async def _read_positions(self):
+        try:
+            return await self.accounts.open_positions()
+        except Exception as exc:  # noqa: BLE001 — a read fault must not crash the loop
+            self._note_submit_read_failure("positions", exc)
+            return None
+
+    def _note_submit_read_failure(self, kind: str, exc: Exception) -> None:
+        self._recon_read_failures += 1
+        logger.error("submit-path %s read failed (%d consecutive): %s",
+                     kind, self._recon_read_failures, exc)
+        if self._recon_read_failures >= self._MAX_RECON_READ_FAILURES:
+            self._reconciliation_halt = True
+
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
-        account = await self.accounts.account_state()
+        account = await self._read_account()
+        if account is None:
+            return  # fail-closed: skip this entry, do not crash the loop
         if account.equity_usd >= self.settings.live_small_capital_cap_usd \
                 and self.settings.trading_mode is TradingMode.LIVE_SMALL:
             logger.warning("equity $%.2f at/above live_small cap $%.2f — entry refused",
@@ -204,7 +231,9 @@ class LiveTraderSession:
             )
 
     async def _submit_exit(self, reason: str, now: datetime) -> None:
-        positions = await self.accounts.open_positions()
+        positions = await self._read_positions()
+        if positions is None:
+            return  # read fault → retry next bar; the exit plan persists (never dropped)
         pos = next((p for p in positions if p.symbol == self.symbol), None)
         if pos is None:
             self._clear_exit_plan()
@@ -214,7 +243,9 @@ class LiveTraderSession:
             quantity=pos.quantity, notional_usd=0.0, leverage=1.0,
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
-        account = await self.accounts.account_state()
+        account = await self._read_account()
+        if account is None:
+            return  # read fault → retry next bar; the exit plan persists
         key_ts = (
             int(pd.Timestamp(self._entry_bar_ts).value)
             if self._entry_bar_ts is not None

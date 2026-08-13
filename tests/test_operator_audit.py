@@ -47,6 +47,7 @@ def test_kill_switch_persists_trip_and_reset_to_the_audit_log(tmp_path):
     audit = OperatorAuditLog(tmp_path / "audit.jsonl")
     ks = KillSwitch(kill_file=tmp_path / "KILL", audit_log=audit)
     ks.activate("daily loss breached", source="programmatic")
+    (tmp_path / "KILL").unlink()   # programmatic trip now persists the file; reset needs it removed
     ks.reset("investigated + cleared")
     actions = [json.loads(l)["action"] for l in (tmp_path / "audit.jsonl").read_text().splitlines()]
     assert actions == ["kill_switch_activate", "kill_switch_reset"]

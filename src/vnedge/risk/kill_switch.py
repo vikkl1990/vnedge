@@ -52,6 +52,16 @@ class KillSwitch:
             return  # already tripped; first reason wins, do not overwrite
         self._active = True
         self._reason = reason
+        # Persist the trip so a PROGRAMMATIC kill (reconciliation mismatch, orphan
+        # guard, etc.) survives a restart — like `touch KILL`, and cleared the same
+        # way (reset() requires the file removed). Failure to write must not undo
+        # the in-memory trip.
+        if source != "file":
+            try:
+                self.kill_file.write_text(f"{reason}\n", encoding="utf-8")
+            except OSError as exc:
+                logger.error("kill switch: could not persist KILL file %s: %s",
+                             self.kill_file, exc)
         event = KillSwitchEvent(datetime.now(UTC), "activate", reason, source)
         self.history.append(event)
         if self.audit_log is not None:

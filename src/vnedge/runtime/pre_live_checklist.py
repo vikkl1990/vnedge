@@ -98,17 +98,22 @@ def run_pre_live_checklist(
     frozen = bool(getattr(type(risk_config), "model_config", {}).get("frozen", False))
     lev = int(getattr(risk_config, "max_leverage_per_position", 0) or 0)
     lev_ok = 0 < lev <= ABSOLUTE_MAX_LEVERAGE
+    halt_on = getattr(risk_config, "daily_loss_halt_enabled", False) is True
+    no_fixed_margin = getattr(risk_config, "fixed_margin_usd", None) is None
     risk_ok = (
         frozen
         and risk_config.max_daily_loss_usd > 0
         and risk_config.min_account_equity_usd > 0
         and lev_ok
+        and halt_on            # live must keep the daily-loss halt ENABLED
+        and no_fixed_margin    # fixed-margin sizing is paper-only — never on live
     )
     r.append(CheckResult(
         "risk_config_frozen_valid", risk_ok,
         f"frozen={frozen}, daily_loss=${risk_config.max_daily_loss_usd}, "
         f"min_equity=${risk_config.min_account_equity_usd}, "
-        f"leverage={lev}/{ABSOLUTE_MAX_LEVERAGE}",
+        f"leverage={lev}/{ABSOLUTE_MAX_LEVERAGE}, halt_on={halt_on}, "
+        f"fixed_margin={'set' if not no_fixed_margin else 'none'}",
     ))
 
     r.append(CheckResult(

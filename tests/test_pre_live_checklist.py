@@ -118,3 +118,14 @@ def test_risk_config_is_frozen_and_within_leverage_cap(tmp_path):
     assert "frozen=True" in risk.detail
     # sanity: RiskConfig really is frozen (defence in depth)
     assert RiskConfig.model_config.get("frozen") is True
+
+
+# --- L6 audit fix: live config invariants enforced (daily-loss halt on, no fixed margin) ---
+def test_daily_loss_halt_disabled_blocks(tmp_path):
+    report = _run(_live_settings(), tmp_path, risk_config=RiskConfig(daily_loss_halt_enabled=False))
+    assert not report.cleared and any(f.name == "risk_config_frozen_valid" for f in report.failures)
+
+
+def test_fixed_margin_on_live_blocks(tmp_path):
+    report = _run(_live_settings(), tmp_path, risk_config=RiskConfig(fixed_margin_usd=50.0))
+    assert not report.cleared and any(f.name == "risk_config_frozen_valid" for f in report.failures)

@@ -442,3 +442,18 @@ def test_a1_trailing_tightens_stop(tmp_path):
     before = session._exit_state.current_stop
     session._exit_state.trail_stop(session._trail_atr())
     assert session._exit_state.current_stop > before        # ratcheted tighter (up for a long)
+
+
+# --- L5 audit fix: submit-path account-read fault fails closed (no loop crash) ---
+async def test_submit_entry_read_fault_fails_closed(tmp_path):
+    class BoomAccounts(FakeAccounts):
+        async def account_state(self):
+            raise RuntimeError("account read down")
+
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      BoomAccounts(), tmp_path, OneShotLong())
+    before = session._recon_read_failures
+    # must not raise out of the submit path
+    await session._submit_entry(SignalIntent("long", stop_price=95.0, take_profit_price=110.0),
+                                __import__("datetime").datetime.now(__import__("datetime").UTC))
+    assert session._recon_read_failures == before + 1 and session.orders_submitted == 0
