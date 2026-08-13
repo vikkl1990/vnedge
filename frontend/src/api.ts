@@ -52,6 +52,44 @@ export interface FeedHealth {
   last_update_ms?: number;
 }
 
+// Health blocks the classic cockpit already renders — typed here so React stops
+// ignoring them (the D-lite / candle-path schema). All optional + null-safe.
+export interface TimeMachine {
+  health?: Record<string, string>;
+  age_ms?: Record<string, number>;
+  forming?: Record<string, { progress?: number }>;
+}
+export interface LatencyStat {
+  p50?: number;
+  p95?: number;
+  n?: number;
+}
+export interface RegimeReading {
+  label?: string;
+  confidence?: number;
+  allow_long?: boolean;
+  allow_short?: boolean;
+}
+export interface PlanOverlay {
+  side?: string;
+  expected_net_bps?: number;
+  gate_ok?: boolean;
+}
+export interface LaneRow {
+  lane_id?: string;
+  strategy_id?: string;
+  symbol?: string;
+  timeframe?: string;
+  mode?: string;
+  cost_profile?: string;
+  feed?: string;
+  time_machine?: TimeMachine | null;
+  latency?: Record<string, LatencyStat> | null;
+  decision_skips?: Record<string, number> | null;
+  regime?: RegimeReading | null;
+  plan_overlay?: PlanOverlay | null;
+}
+
 export interface Snapshot {
   mode?: string;
   symbol?: string;
@@ -70,6 +108,16 @@ export interface Snapshot {
   positions?: Position[];
   fills?: number;
   fees_usd?: number;
+  // candle-path / D-lite health blocks
+  snapshot_age_ms?: number | null;
+  lanes?: LaneRow[];
+  time_machine?: TimeMachine | null;
+  latency?: Record<string, LatencyStat> | null;
+  decision_skips?: Record<string, number> | null;
+  cost_profile?: string | null;
+  regime?: RegimeReading | null;
+  plan_overlay?: PlanOverlay | null;
+  session?: Record<string, unknown>;
   [k: string]: unknown;
 }
 

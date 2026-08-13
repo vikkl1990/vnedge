@@ -4,17 +4,25 @@
 
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useJournal, useSnapshot, useWhoAmI } from "../queries";
-import type { JournalRow, Position } from "../api";
+import type { JournalRow, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
 const signed = (n: unknown) => (typeof n === "number" && n < 0 ? "text-short" : "text-long");
+
+const ageMs = (ms: unknown) => {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return "—";
+  return n < 1000 ? `${Math.round(n)} ms` : n < 60000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n / 60000)} m`;
+};
 
 export function Header() {
   const who = useWhoAmI();
   const snap = useSnapshot();
   const mode = (snap.data?.mode as string) ?? "…";
   const role = who.data?.role ?? "…";
+  const age = snap.data?.snapshot_age_ms;
+  const ageTone = typeof age === "number" ? (age > 10000 ? "bad" : age > 3000 ? "warn" : "good") : "neutral";
   return (
     <header className="flex items-center justify-between gap-4 flex-wrap">
       <div className="flex items-center gap-3">
@@ -22,11 +30,15 @@ export function Header() {
           VN
         </div>
         <div>
-          <div className="text-[15px] font-semibold">VN Edge — Control Room</div>
+          <div className="flex items-center gap-2">
+            <span className="text-[15px] font-semibold">VN Edge — Control Room</span>
+            <TerminalBadge tone="warn">partial — full ops at /</TerminalBadge>
+          </div>
           <div className="text-[11px] font-mono text-dim">React · TanStack · v2</div>
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <TerminalBadge tone={ageTone as never}>age {ageMs(age)}</TerminalBadge>
         <TerminalBadge tone="info">mode {mode}</TerminalBadge>
         <TerminalBadge tone={snap.data?.kill_switch_active ? "bad" : "good"}>
           kill {snap.data?.kill_switch_active ? "ARMED" : "clear"}
@@ -36,6 +48,158 @@ export function Header() {
         </TerminalBadge>
       </div>
     </header>
+  );
+}
+
+// ---- health helpers (mirror the classic strip; UNKNOWN never fakes OK) -------
+type Band = "ok" | "degraded" | "blocked" | "unknown";
+const TM_AGE_SOFT: Record<string, number> = { "1m": 1500, "5m": 3000, "15m": 5000, "1h": 8000, "4h": 15000 };
+const BAND_TONE: Record<Band, string> = { ok: "good", degraded: "warn", blocked: "bad", unknown: "neutral" };
+const RANK: Record<Band, number> = { blocked: 3, degraded: 2, ok: 1, unknown: 0 };
+const worse = (a: Band, b: Band): Band => (RANK[a] >= RANK[b] ? a : b);
+const skipCount = (o?: Record<string, number> | null) =>
+  o ? Object.values(o).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+
+function laneRows(s?: Snapshot): LaneRow[] {
+  if (!s) return [];
+  if (Array.isArray(s.lanes) && s.lanes.length) return s.lanes;
+  if (s.time_machine) {
+    const sess = (s.session ?? {}) as Record<string, unknown>;
+    return [
+      {
+        strategy_id: s.strategy_id as string | undefined,
+        symbol: s.symbol,
+        timeframe: (sess.timeframe as string) ?? Object.keys(s.time_machine.health ?? {})[0] ?? "1h",
+        mode: s.mode,
+        cost_profile: (s.cost_profile as string) ?? (sess.cost_profile as string),
+        feed: s.feed_health?.candles,
+        time_machine: s.time_machine,
+        latency: s.latency ?? null,
+        decision_skips: s.decision_skips ?? ((sess.decision_skips as Record<string, number>) ?? null),
+        regime: s.regime ?? ((sess.regime as RegimeReading) ?? null),
+        plan_overlay: s.plan_overlay ?? ((sess.plan_overlay as PlanOverlay) ?? null),
+      },
+    ];
+  }
+  return [];
+}
+
+function computeChips(s?: Snapshot): Record<string, { band: Band; label: string }> {
+  const lanes = laneRows(s);
+  const kill = !!s?.kill_switch_active;
+  // CANDLE
+  let candle: Band = "unknown";
+  let cLabel = "no telemetry";
+  for (const l of lanes) {
+    const tm = l.time_machine;
+    if (!tm?.health) continue;
+    if (candle === "unknown") { candle = "ok"; cLabel = "ok"; }
+    const h = tm.health[l.timeframe ?? ""];
+    if (h && h !== "ok") { candle = worse(candle, "blocked"); cLabel = `decision-TF ${h}`; }
+    if (skipCount(l.decision_skips) > 0) { candle = worse(candle, "blocked"); cLabel = "arms blocked"; }
+    const a1 = tm.age_ms?.["1m"];
+    if (a1 != null && a1 > TM_AGE_SOFT["1m"] && candle === "ok") { candle = "degraded"; cLabel = "1m age soft"; }
+  }
+  // DECISION
+  let decision: Band = "unknown";
+  let dLabel = "no telemetry";
+  let skips = false, haveLat = false, latSoft = false;
+  for (const l of lanes) {
+    if (skipCount(l.decision_skips) > 0) skips = true;
+    const p95 = l.latency?.decision_lag_ms?.p95;
+    if (typeof p95 === "number") { haveLat = true; if (p95 > 50) latSoft = true; }
+  }
+  if (skips) { decision = "blocked"; dLabel = "new arms blocked"; }
+  else if (haveLat) { decision = latSoft ? "degraded" : "ok"; dLabel = latSoft ? "compute lag" : "ok"; }
+  // FEED
+  let feed: Band = "unknown";
+  let fLabel = "—";
+  const cand = String(s?.feed_health?.candles ?? "").toLowerCase();
+  if (cand) {
+    if (cand.includes("ok") || cand.includes("live")) { feed = "ok"; fLabel = "live"; }
+    else if (cand.includes("warm")) { feed = "degraded"; fLabel = "warming"; }
+    else { feed = "blocked"; fLabel = cand.slice(0, 12); }
+  }
+  // RISK
+  let risk: Band = "ok";
+  let rLabel = "ok";
+  const rs = String(s?.risk_status ?? "ok").toLowerCase();
+  const streak = Number(s?.consecutive_losses) || 0;
+  if (kill) { risk = "blocked"; rLabel = "kill tripped"; }
+  else if (rs && rs !== "ok") { risk = "blocked"; rLabel = rs.slice(0, 14); }
+  else if (streak >= 3) { risk = "degraded"; rLabel = `${streak} loss streak`; }
+  // SYSTEM
+  let system: Band = "ok";
+  let sLabel = "nominal";
+  if (kill) { system = "blocked"; sLabel = "kill tripped"; }
+  else {
+    for (const x of [candle, decision, feed, risk]) if (x !== "unknown") system = worse(system, x);
+    sLabel = system === "ok" ? "nominal" : system === "degraded" ? "degraded" : "blocked";
+  }
+  return { SYSTEM: { band: system, label: sLabel }, FEED: { band: feed, label: fLabel }, CANDLE: { band: candle, label: cLabel }, DECISION: { band: decision, label: dLabel }, RISK: { band: risk, label: rLabel } };
+}
+
+const BAND_BORDER: Record<Band, string> = {
+  ok: "border-l-long",
+  degraded: "border-l-warn",
+  blocked: "border-l-short",
+  unknown: "border-l-line",
+};
+
+export function StatusStrip() {
+  const { data } = useSnapshot();
+  const chips = computeChips(data);
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
+      {Object.entries(chips).map(([name, c]) => (
+        <div
+          key={name}
+          className={`flex items-center gap-2 rounded-md border border-line border-l-[3px] ${BAND_BORDER[c.band]} bg-inset px-3 py-2.5`}
+        >
+          <span className="text-[10px] font-mono font-extrabold tracking-wider text-dim">{name}</span>
+          <span className="ml-auto">
+            <TerminalBadge tone={BAND_TONE[c.band] as never}>{c.label}</TerminalBadge>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function LanesPanel() {
+  const { data } = useSnapshot();
+  const lanes = laneRows(data);
+  const cols: Column<LaneRow>[] = [
+    { key: "strategy_id", header: "Lane", render: (r) => (r.strategy_id ?? "").replace(/_v\d+$/, "") },
+    { key: "mode", header: "Mode", render: (r) => String(r.mode ?? "—").split(" ")[0] },
+    { key: "cost_profile", header: "Cost", render: (r) => r.cost_profile ?? "—" },
+    {
+      key: "regime",
+      header: "Regime",
+      render: (r) => (r.regime?.label ? `${r.regime.label}${r.regime.confidence != null ? ` ${Math.round(r.regime.confidence * 100)}%` : ""}` : "—"),
+    },
+    {
+      key: "health",
+      header: "Candle",
+      render: (r) => {
+        const h = r.time_machine?.health?.[r.timeframe ?? ""];
+        const tone = !h ? "neutral" : h === "ok" ? "good" : "bad";
+        return <TerminalBadge tone={tone as never}>{h ?? "n/a"}</TerminalBadge>;
+      },
+    },
+    {
+      key: "plan",
+      header: "Plan",
+      render: (r) =>
+        r.plan_overlay?.side
+          ? `${r.plan_overlay.side} ${r.plan_overlay.expected_net_bps ?? "?"}bps ${r.plan_overlay.gate_ok ? "PASS" : "REJECT"}`
+          : "—",
+    },
+  ];
+  return (
+    <TerminalPanel title="Lanes" meta={`${lanes.length} · mode · cost · regime · candle · plan (observe-only)`}>
+      {lanes.length ? <DenseTable columns={cols} rows={lanes} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
+    </TerminalPanel>
   );
 }
 

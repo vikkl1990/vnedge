@@ -6,9 +6,11 @@ import {
   FeedPanel,
   Header,
   JournalPanel,
+  LanesPanel,
   MarketPanel,
   PositionsPanel,
   RiskPanel,
+  StatusStrip,
 } from "./panels/Panels";
 import { useUi } from "./store";
 
@@ -55,8 +57,10 @@ export default function App() {
 
       {tab === "desk" && (
         <div className="flex flex-col gap-5">
+          <StatusStrip />
           <BookPanel />
           <RiskPanel />
+          <LanesPanel />
           <PositionsPanel />
         </div>
       )}
