@@ -1645,10 +1645,13 @@
     var host=$("trialDesk"); if(!host)return;
     var lanes=_laneRows(s), breaching=0, rows=[];
     lanes.forEach(function(l){
-      var dd=l.drawdown_pct, lim=l.dd_limit_pct, sc=l.trial_scorecard, band=ddBand(dd,lim);
+      var dd=l.drawdown_pct, lim=l.dd_limit_pct, sc=l.trial_scorecard;
+      // prefer the server band (health_bands.py); map its ok/degraded/blocked → ok/soft/bad
+      var srvDd=l.bands&&l.bands.dd, band=srvDd?({ok:"ok",degraded:"soft",blocked:"bad",unknown:"na"}[srvDd]):ddBand(dd,lim);
       if(band==="bad")breaching++;
       var ddTxt=(dd!=null?num(dd).toFixed(2)+"%":"—")+(lim!=null?" / "+lim+"%":"");
-      var v=sc?sc.verdict:null, vB=v==="PASS"?"ok":v==="FAIL"?"bad":v==="PENDING"?"soft":"na";
+      var v=sc?sc.verdict:null;
+      var srvVt=l.bands&&l.bands.verdict_tone, vB=srvVt?({ok:"ok",degraded:"soft",blocked:"bad",unknown:"na"}[srvVt]):(v==="PASS"?"ok":v==="FAIL"?"bad":v==="PENDING"?"soft":"na");
       var crits=(sc&&sc.criteria)?sc.criteria.map(critChip).join(' '):'<span style="color:var(--txt-faint)">no trial</span>';
       rows.push('<div class="cprow trrow">'+
         '<div class="cpname"><b>'+esc(stratShort(l.strategy_id))+'</b><small>'+esc(symShort(l.symbol))+' · '+esc(l.mode||"")+'</small></div>'+
@@ -1681,14 +1684,21 @@
               regime_would_block:sess.regime_would_block, plan_gate_rejects:sess.plan_gate_rejects,
               mode:s.mode, equity:s.equity, peak_equity:s.peak_equity,
               drawdown_pct:sess.drawdown_pct, dd_limit_pct:sess.dd_limit_pct,
-              trial_scorecard:sess.trial_scorecard}];
+              trial_scorecard:sess.trial_scorecard, bands:s.lane_bands}];
     }
     return lanes;
   }
   function renderStatusStrip(s){
+    if(s.chips){   // server-computed (health_bands.py) — one source; UI can't disagree with the bot
+      ["SYSTEM","FEED","CANDLE","DECISION","RISK"].forEach(function(n){
+        var c=s.chips[n]||{band:"unknown",label:"—"};
+        setChip("chip_"+n.toLowerCase(), c.band, c.label);
+      });
+      return;
+    }
     var lanes=_laneRows(s);
     var kill=!!s.kill_switch_active;
-    // CANDLE — decision-TF health + arm skips + 1m soft age
+    // CANDLE — decision-TF health + arm skips + 1m soft age (client fallback only)
     var candle="unknown",cLabel="no telemetry";
     lanes.forEach(function(l){
       var tm=l.time_machine; if(!tm||!tm.health)return;

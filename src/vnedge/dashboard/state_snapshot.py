@@ -16,6 +16,7 @@ from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
+from vnedge.dashboard.health_bands import annotate
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 
 
@@ -138,7 +139,7 @@ def build_snapshot(
         }
         for fill in exchange.get_fills()[-12:]
     ]
-    return {
+    _snap = {
         "ts": now.isoformat(),
         "mode": mode,
         "symbol": symbol,
@@ -192,3 +193,4 @@ def build_snapshot(
         "time_machine": (session_stats or {}).get("time_machine"),
         "latency": (session_stats or {}).get("latency"),
     }
+    return annotate(_snap)   # attach server-computed chips + per-lane bands

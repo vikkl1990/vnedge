@@ -51,6 +51,7 @@ from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.dashboard.health_bands import annotate
 from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
@@ -334,6 +335,7 @@ class MultiLaneProvider:
             out["lane_health"] = health
         if self._runtime_control:
             out["runtime_control"] = dict(self._runtime_control)
+        annotate(out)   # server-computed chips + per-lane bands (one source for both UIs)
         # A single inf/nan anywhere (e.g. a degenerate quote's spread_bps) makes
         # the whole snapshot fail JSON serialization — Starlette's JSONResponse
         # and websocket.send_json both use allow_nan=False — which 500s /state

@@ -106,6 +106,12 @@ export interface LaneRow {
   drawdown_pct?: number | null;
   dd_limit_pct?: number | null;
   trial_scorecard?: TrialScorecard | null;
+  bands?: { age?: string; decision_lag?: string; dd?: string; verdict_tone?: string } | null;
+}
+
+export interface Chip {
+  band?: string;
+  label?: string;
 }
 
 export interface Snapshot {
@@ -136,6 +142,7 @@ export interface Snapshot {
   regime?: RegimeReading | null;
   plan_overlay?: PlanOverlay | null;
   session?: Record<string, unknown>;
+  chips?: Record<string, Chip>;
   [k: string]: unknown;
 }
 

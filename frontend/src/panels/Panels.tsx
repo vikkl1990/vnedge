@@ -83,6 +83,7 @@ function laneRows(s?: Snapshot): LaneRow[] {
         drawdown_pct: (sess.drawdown_pct as number) ?? null,
         dd_limit_pct: (sess.dd_limit_pct as number) ?? null,
         trial_scorecard: (sess.trial_scorecard as TrialScorecard) ?? null,
+        bands: (s.lane_bands as LaneRow["bands"]) ?? null,
       },
     ];
   }
@@ -153,7 +154,10 @@ const BAND_BORDER: Record<Band, string> = {
 
 export function StatusStrip() {
   const { data } = useSnapshot();
-  const chips = computeChips(data);
+  // prefer server-computed chips (health_bands.py) — one source for both cockpits;
+  // fall back to the client computation only if the snapshot predates them.
+  const server = data?.chips as Record<string, { band: Band; label: string }> | undefined;
+  const chips = server && Object.keys(server).length ? server : computeChips(data);
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
       {Object.entries(chips).map(([name, c]) => (
@@ -199,7 +203,11 @@ export function LanesPanel() {
         const dd = r.drawdown_pct;
         const lim = r.dd_limit_pct;
         if (dd == null) return "—";
-        const tone = lim == null ? "neutral" : dd >= lim ? "bad" : dd >= 0.8 * lim ? "warn" : "good";
+        // prefer the server band (health_bands.py); else classify client-side
+        const srv = r.bands?.dd;
+        const tone = srv
+          ? { ok: "good", degraded: "warn", blocked: "bad", unknown: "neutral" }[srv] ?? "neutral"
+          : lim == null ? "neutral" : dd >= lim ? "bad" : dd >= 0.8 * lim ? "warn" : "good";
         return <TerminalBadge tone={tone as never}>{`${dd.toFixed(2)}%${lim != null ? ` / ${lim}%` : ""}`}</TerminalBadge>;
       },
     },
