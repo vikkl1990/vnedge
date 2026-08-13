@@ -1256,3 +1256,20 @@ def test_runner_config_trail_flows_into_the_exit_state(tmp_path):
     assert plan.exit_state.trail_atr_mult == 3.0
     # and _trail_atr computes a canonical (finite) ATR from the candle history
     assert session._trail_atr() >= 0.0
+
+
+# --- O5 audit fix: warmup seam — equal-ts replaces the partial bar, not drop ---
+async def test_append_replaces_partial_seam_bar(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(3)
+    last_ts_ms = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+    # same interval delivered as its TRUE close → replace last bar, return True
+    assert session._append_candle([last_ts_ms, 100.0, 105.0, 95.0, 103.0, 20.0]) is True
+    assert float(session.candles["close"].iloc[-1]) == 103.0     # partial replaced by true close
+    assert len(session.candles) == 3 and session.dropped_candles == 0
+    # a strictly-older bar is still dropped as non-forward
+    assert session._append_candle([last_ts_ms - _HR_MS, 1.0, 1.0, 1.0, 1.0, 1.0]) is False
+    assert session.dropped_candles == 1
+    # a forward bar appends
+    assert session._append_candle([last_ts_ms + _HR_MS, 100.0, 101.0, 99.0, 100.0, 5.0]) is True
+    assert len(session.candles) == 4

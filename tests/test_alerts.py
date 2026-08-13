@@ -95,3 +95,17 @@ def test_broken_rule_and_notifier_never_raise(tmp_path):
     e = engine(tmp_path, rules=rules, notifiers=[ExplodingNotifier()])
     fired = e.evaluate(snapshot(), NOW)  # must not raise
     assert [a["rule_id"] for a in fired] == ["ok"]
+
+
+# --- O3 audit fix: critical rules fail LOUD; conditions are null-safe ---
+def test_critical_rule_that_raises_fires_loud(tmp_path):
+    engine = AlertEngine([AlertRule("boom", "critical", lambda s: 1 / 0, lambda s: "x")],
+                         tmp_path / "a.jsonl")
+    fired = engine.evaluate({"mode": "paper"})
+    assert any(a["rule_id"] == "boom_error" and a["severity"] == "critical" for a in fired)
+
+
+def test_default_rules_null_safe_on_empty_snapshot(tmp_path):
+    engine = AlertEngine(default_trial_rules(10.0), tmp_path / "a.jsonl")
+    fired = engine.evaluate({})   # empty snapshot — null-safe conditions must not fail-loud
+    assert not any(a["rule_id"].endswith("_error") for a in fired)

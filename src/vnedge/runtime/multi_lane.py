@@ -310,8 +310,9 @@ class MultiLaneProvider:
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
                 # multi-TF forming+closed awareness (read-only observability)
                 "time_machine": self._lanes[lid].get("session", {}).get("time_machine"),
-                # candle-path arm-gate: new-entry skips by reason (never exits)
+                # candle-path arm-gate: cumulative skips + CURRENT block reason
                 "decision_skips": self._lanes[lid].get("session", {}).get("decision_skips"),
+                "arm_blocked": self._lanes[lid].get("session", {}).get("arm_blocked"),
                 # D-lite overlays (observe-only): cost world + regime + plan preview
                 "cost_profile": self._lanes[lid].get("session", {}).get("cost_profile"),
                 "regime": self._lanes[lid].get("session", {}).get("regime"),

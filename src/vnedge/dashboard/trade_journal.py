@@ -73,16 +73,20 @@ def build_trade_journal(
     ]
     events = _snapshot_events(snapshot, lane, since_dt) + journal_events
 
-    fills = _sort_recent(fills)[:limit]
-    order_rows = _sort_recent(order_rows)[:limit]
-    closed_trades = _sort_recent(closed_trades)[:limit]
-    events = _sort_recent(events)[:limit]
-
+    # Aggregates sum the FULL read window (same population as actual_closed_net),
+    # NOT the display-truncated lists — otherwise the headline realized/fees would
+    # only reflect the last `limit` rows and disagree with actual_closed_net.
     actual_realized = sum(_float(row.get("realized_pnl_usd")) for row in fills)
     fees = sum(_float(row.get("fee_usd")) for row in fills)
     virtual_net = sum(_float(row.get("virtual_net_usd")) for row in closed_trades)
     actual_closed_net = sum(_float(row.get("net_after_this_fill_fee_usd")) for row in actual_closed)
     actual_closed_fees = sum(_float(row.get("fee_usd")) for row in actual_closed)
+
+    # truncate for DISPLAY only (the rows returned to the panel)
+    fills = _sort_recent(fills)[:limit]
+    order_rows = _sort_recent(order_rows)[:limit]
+    closed_trades = _sort_recent(closed_trades)[:limit]
+    events = _sort_recent(events)[:limit]
     lane_counts = _lane_counts(snapshot)
 
     return {

@@ -102,14 +102,14 @@ def compute_chips(snap: dict) -> dict:
         h = health.get(l.get("timeframe"))
         if h and h != "ok":
             candle, c_label = _worse(candle, "blocked"), f"decision-TF {h}"
-        if _skip_count(l.get("decision_skips")) > 0:
+        if l.get("arm_blocked"):          # CURRENT arm-gate state, not cumulative
             candle, c_label = _worse(candle, "blocked"), "arms blocked"
         a1 = (tm.get("age_ms") or {}).get("1m")
         if a1 is not None and a1 > LT.TM_AGE_SOFT_P99_MS.get("1m", 1e18) and candle == "ok":
             candle, c_label = "degraded", "1m age soft"
 
     decision, d_label = "unknown", "no telemetry"
-    skips = any(_skip_count(l.get("decision_skips")) > 0 for l in lanes)
+    skips = any(l.get("arm_blocked") for l in lanes)   # CURRENT block, not cumulative
     lat_vals = [(l.get("latency") or {}).get("decision_lag_ms", {}).get("p95")
                 for l in lanes if isinstance(l.get("latency"), dict)]
     lat_vals = [v for v in lat_vals if isinstance(v, (int, float))]

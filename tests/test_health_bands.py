@@ -29,9 +29,18 @@ def test_candle_blocked_on_stale_decision_tf():
     assert c["CANDLE"]["band"] == "blocked" and c["SYSTEM"]["band"] == "blocked"
 
 
-def test_decision_blocked_on_arm_skips():
-    l = _lane(decision_skips={"decision_tf_stale": 2})
-    assert compute_chips({"lanes": [l], "feed_health": {"candles": "ok"}})["DECISION"]["band"] == "blocked"
+def test_decision_blocked_on_current_arm_block():
+    l = _lane(arm_blocked="decision_tf_stale")
+    c = compute_chips({"lanes": [l], "feed_health": {"candles": "ok"}})
+    assert c["DECISION"]["band"] == "blocked" and c["CANDLE"]["band"] == "blocked"
+
+
+def test_cumulative_skips_alone_do_not_stick_blocked():
+    # O2: decision_skips is a cumulative metric; the chip reflects CURRENT state
+    # (arm_blocked), so a lane that hiccupped earlier but is fine now reads ok.
+    l = _lane(decision_skips={"decision_tf_stale": 5}, arm_blocked=None)
+    c = compute_chips({"lanes": [l], "feed_health": {"candles": "ok"}})
+    assert c["DECISION"]["band"] == "ok" and c["CANDLE"]["band"] == "ok"
 
 
 def test_kill_dominates_system_and_risk():

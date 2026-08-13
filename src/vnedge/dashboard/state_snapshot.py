@@ -74,8 +74,10 @@ def build_snapshot(
         # A just-resumed session can hold a restored position BEFORE the feed
         # publishes its first quote; mark at entry until real data arrives
         # (a raw lookup here killed both position-holding lanes on 2026-07-07).
-        quote = exchange.quotes.get(pos.symbol)
-        mark = (quote[0] + quote[1]) / 2.0 if quote else pos.entry_price
+        # NOTE: a distinct local — must NOT clobber the `quote` param (the primary
+        # symbol's live top-of-book that the price/spread tile reads below).
+        pos_quote = exchange.quotes.get(pos.symbol)
+        mark = (pos_quote[0] + pos_quote[1]) / 2.0 if pos_quote else pos.entry_price
         notional = abs(pos.quantity) * mark
         positions.append(
             {

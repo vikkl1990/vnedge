@@ -300,18 +300,30 @@ class LivePaperSession:
         return True
 
     def _append_candle(self, raw_row: list) -> bool:
-        """Incremental quality gate: strictly-forward timestamps only."""
+        """Incremental quality gate: forward timestamps append; an equal timestamp
+        REPLACES the last bar (the warmup seam — the REST seed includes the
+        in-progress interval as a partial bar, and the feed later delivers that
+        same interval's TRUE close; replacing lets the decision run on the real
+        close and keeps a partial bar out of the indicator windows); a strictly
+        older timestamp is dropped as non-forward (replay)."""
         ts = pd.to_datetime(raw_row[0], unit="ms", utc=True)
-        if len(self.candles) and ts <= self.candles["timestamp"].iloc[-1]:
-            self.dropped_candles += 1
-            logger.warning("dropped non-forward candle %s", ts)
-            return False
         row = {
             "timestamp": ts,
             "open": float(raw_row[1]), "high": float(raw_row[2]),
             "low": float(raw_row[3]), "close": float(raw_row[4]),
             "volume": float(raw_row[5]),
         }
+        if len(self.candles):
+            last_ts = self.candles["timestamp"].iloc[-1]
+            if ts == last_ts:
+                idx = self.candles.index[-1]
+                for col, val in row.items():
+                    self.candles.at[idx, col] = val
+                return True
+            if ts < last_ts:
+                self.dropped_candles += 1
+                logger.warning("dropped non-forward candle %s", ts)
+                return False
         self.candles = pd.concat(
             [self.candles, pd.DataFrame([row])], ignore_index=True
         )
@@ -1668,8 +1680,11 @@ class LivePaperSession:
                 "latency": self.latency.snapshot(),
                 # multi-TF forming+closed awareness (read-only; null if TF unsupported)
                 "time_machine": self._tm_snapshot(),
-                # candle-path arm-gate: new entries skipped by reason (never exits)
+                # candle-path arm-gate: cumulative skips (metric) + the CURRENT
+                # block reason (None if not blocking now) so the chips reflect
+                # live state, not "ever blocked this session".
                 "decision_skips": dict(self._decision_skips),
+                "arm_blocked": self._candle_path_arm_block(datetime.now(UTC)),
                 # D-lite overlays (OBSERVE-ONLY): lane cost world + what regime_v0
                 # and the cost-aware plan contract WOULD say (never gates the lane)
                 "cost_profile": self.cost_profile,

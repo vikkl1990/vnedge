@@ -57,30 +57,43 @@ class AlertEngine:
             try:
                 hit = rule.condition(snapshot)
             except Exception as exc:  # noqa: BLE001 — a broken rule must not kill the loop
-                logger.error("alert rule %s raised: %s", rule.rule_id, exc)
+                logger.error("alert rule %s condition raised: %s", rule.rule_id, exc)
+                # A CRITICAL safety rule that can't evaluate must FAIL LOUD — a
+                # silently muted feed/kill/loss alert is the worst failure mode.
+                if rule.severity == "critical":
+                    self._fire(fired, now, f"{rule.rule_id}_error", "critical",
+                               f"CRITICAL alert '{rule.rule_id}' failed to evaluate: {exc}",
+                               snapshot, cooldown_seconds=1800)
                 continue
             if not hit:
                 continue
             last = self._last_fired.get(rule.rule_id)
             if last is not None and (now - last).total_seconds() < rule.cooldown_seconds:
                 continue
-            self._last_fired[rule.rule_id] = now
-            alert = {
-                "ts": now.isoformat(),
-                "rule_id": rule.rule_id,
-                "severity": rule.severity,
-                "message": rule.message(snapshot),
-                "mode": snapshot.get("mode"),
-            }
-            fired.append(alert)
-            self.recent.append(alert)
-            self._persist(alert)
-            for notifier in self.notifiers:
-                try:
-                    notifier.send(alert)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("notifier %s failed: %s", type(notifier).__name__, exc)
+            try:
+                message = rule.message(snapshot)
+            except Exception as exc:  # noqa: BLE001 — a render fault must not swallow the alert
+                message = f"[{rule.rule_id}] alert (message render failed: {exc})"
+            self._fire(fired, now, rule.rule_id, rule.severity, message, snapshot,
+                       cooldown_seconds=rule.cooldown_seconds)
         return fired
+
+    def _fire(self, fired: list, now, rule_id: str, severity: str, message: str,
+              snapshot: dict, *, cooldown_seconds: float) -> None:
+        last = self._last_fired.get(rule_id)
+        if last is not None and (now - last).total_seconds() < cooldown_seconds:
+            return
+        self._last_fired[rule_id] = now
+        alert = {"ts": now.isoformat(), "rule_id": rule_id, "severity": severity,
+                 "message": message, "mode": snapshot.get("mode")}
+        fired.append(alert)
+        self.recent.append(alert)
+        self._persist(alert)
+        for notifier in self.notifiers:
+            try:
+                notifier.send(alert)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("notifier %s failed: %s", type(notifier).__name__, exc)
 
     def _persist(self, alert: dict) -> None:
         try:
@@ -115,38 +128,38 @@ def default_trial_rules(daily_loss_limit_usd: float, max_drawdown_pct: float = 6
     return [
         AlertRule(
             "feed_stale", "critical",
-            lambda s: s["feed_health"]["last_update_ms"] > 120_000,
-            lambda s: f"feed stale: {s['feed_health']['last_update_ms'] / 1000:.0f}s since last event",
+            lambda s: float((s.get("feed_health") or {}).get("last_update_ms") or 0) > 120_000,
+            lambda s: f"feed stale: {float((s.get('feed_health') or {}).get('last_update_ms') or 0) / 1000:.0f}s since last event",
             cooldown_seconds=1800,
         ),
         AlertRule(
             "kill_switch", "critical",
-            lambda s: bool(s["kill_switch_active"]),
+            lambda s: bool(s.get("kill_switch_active")),
             lambda s: "KILL SWITCH ACTIVE — entries blocked, exits only",
             cooldown_seconds=3600,
         ),
         AlertRule(
             "journal_unhealthy", "critical",
-            lambda s: s["last_journal_write"] != "ok",
+            lambda s: s.get("last_journal_write", "ok") != "ok",
             lambda s: "decision journal unavailable — new risk blocked",
             cooldown_seconds=1800,
         ),
         AlertRule(
             "risk_status", "warning",
-            lambda s: s["risk_status"] != "ok" and not s["kill_switch_active"],
-            lambda s: f"risk status: {s['risk_status']}",
+            lambda s: s.get("risk_status", "ok") != "ok" and not s.get("kill_switch_active"),
+            lambda s: f"risk status: {s.get('risk_status')}",
             cooldown_seconds=1800,
         ),
         AlertRule(
             "daily_loss", "critical",
-            lambda s: s["daily_pnl"] <= -daily_loss_limit_usd,
-            lambda s: f"daily loss stop: ${s['daily_pnl']:.2f} (limit -${daily_loss_limit_usd:.2f})",
+            lambda s: float(s.get("daily_pnl") or 0) <= -daily_loss_limit_usd,
+            lambda s: f"daily loss stop: ${float(s.get('daily_pnl') or 0):.2f} (limit -${daily_loss_limit_usd:.2f})",
             cooldown_seconds=6 * 3600,
         ),
         AlertRule(
             "loss_streak", "warning",
-            lambda s: int(s["consecutive_losses"]) >= 3,
-            lambda s: f"{s['consecutive_losses']} consecutive losing round trips",
+            lambda s: int(s.get("consecutive_losses") or 0) >= 3,
+            lambda s: f"{int(s.get('consecutive_losses') or 0)} consecutive losing round trips",
             cooldown_seconds=6 * 3600,
         ),
         AlertRule(
