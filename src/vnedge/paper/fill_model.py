@@ -13,16 +13,21 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from vnedge.plan.cost_model import (
+    DEFAULT_MAKER_FEE_BPS, DEFAULT_SLIP_BPS, DEFAULT_TAKER_FEE_BPS,
+)
+
 
 class FillModel(BaseModel):
     model_config = {"frozen": True}
 
-    slippage_bps: float = Field(default=2.0, ge=0)
-    taker_fee_bps: float = Field(default=5.0, ge=0)
+    # defaults sourced from plan.cost_model — one fee assumption across research/paper/live
+    slippage_bps: float = Field(default=DEFAULT_SLIP_BPS, ge=0)
+    taker_fee_bps: float = Field(default=DEFAULT_TAKER_FEE_BPS, ge=0)
     # Maker (resting-limit) fee. Only charged when a caller explicitly routes a
     # leg maker AND models the resting-fill realism itself (touch-to-fill); the
     # default fee path stays taker, so no existing caller is silently cheapened.
-    maker_fee_bps: float = Field(default=2.0, ge=0)
+    maker_fee_bps: float = Field(default=DEFAULT_MAKER_FEE_BPS, ge=0)
     # None = full fills. 0.5 = market orders fill half, rest cancelled.
     partial_fill_fraction: float | None = Field(default=None, gt=0, le=1.0)
 

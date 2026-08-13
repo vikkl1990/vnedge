@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from vnedge.plan.cost_model import DEFAULT_SLIP_BPS
+
 
 class SlippageModel(BaseModel):
     model_config = {"frozen": True}
 
-    bps: float = Field(default=2.0, ge=0)
+    bps: float = Field(default=DEFAULT_SLIP_BPS, ge=0)     # sourced from plan.cost_model
 
     def fill_price(self, reference_price: float, side: str) -> float:
         """Adverse fill for a market order. ``side`` is the order direction:

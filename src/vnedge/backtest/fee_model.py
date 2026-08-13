@@ -10,12 +10,15 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from vnedge.plan.cost_model import DEFAULT_MAKER_FEE_BPS, DEFAULT_TAKER_FEE_BPS
+
 
 class FeeModel(BaseModel):
     model_config = {"frozen": True}
 
-    maker_bps: float = Field(default=2.0, ge=0)
-    taker_bps: float = Field(default=5.0, ge=0)
+    # defaults sourced from plan.cost_model — one fee assumption across research/paper/live
+    maker_bps: float = Field(default=DEFAULT_MAKER_FEE_BPS, ge=0)
+    taker_bps: float = Field(default=DEFAULT_TAKER_FEE_BPS, ge=0)
 
     def taker_fee_usd(self, notional_usd: float) -> float:
         return abs(notional_usd) * self.taker_bps / 10_000.0

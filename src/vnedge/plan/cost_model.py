@@ -7,13 +7,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Canonical default fee/slip constants — the ONE source. The backtest FeeModel /
+# SlippageModel and the paper FillModel default from these (see their modules),
+# so research, paper, and the plan gate can't silently drift apart on costs.
+DEFAULT_TAKER_FEE_BPS = 5.0     # per side, Binance USDT-M standard tier
+DEFAULT_MAKER_FEE_BPS = 2.0
+DEFAULT_SLIP_BPS = 2.0
+
 
 @dataclass(frozen=True)
 class CostModelConfig:
-    taker_fee_bps: float = 5.0          # per side
-    maker_fee_bps: float = 2.0
-    default_slip_entry_bps: float = 2.0
-    default_slip_exit_bps: float = 2.0
+    taker_fee_bps: float = DEFAULT_TAKER_FEE_BPS     # per side
+    maker_fee_bps: float = DEFAULT_MAKER_FEE_BPS
+    default_slip_entry_bps: float = DEFAULT_SLIP_BPS
+    default_slip_exit_bps: float = DEFAULT_SLIP_BPS
     safety_buffer_bps: float = 3.0
     funding_accrual: bool = True
     # lane profile: the platform runs swing + scalp families on the SAME contract
