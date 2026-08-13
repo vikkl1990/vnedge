@@ -165,6 +165,19 @@ async def main() -> None:
                                              "tp1_bps": 84.0, "expected_net_bps": 63.0,
                                              "round_trip_bps": 14.0, "gate_ok": True, "gate_reasons": []},
                             "plan_gate_rejects": 0,
+                            # trial scorecard + drawdown vs limit (mirrors a real
+                            # governed paper trial past its 6% DD gate)
+                            "drawdown_pct": 7.35,
+                            "dd_limit_pct": 6.0,
+                            "trial_scorecard": {
+                                "trial_id": "demo_replay", "verdict": "FAIL",
+                                "criteria": [
+                                    {"name": "max_drawdown", "value": 7.35, "threshold": 6.0, "ok": False, "hard": True, "unit": "%"},
+                                    {"name": "min_trades", "value": 8, "threshold": 10, "ok": False, "hard": False, "unit": ""},
+                                    {"name": "min_days", "value": 41, "threshold": 14, "ok": True, "hard": False, "unit": "d"},
+                                    {"name": "daily_loss", "value": 0.0, "threshold": -10.0, "ok": True, "hard": True, "unit": "$"},
+                                ],
+                            },
                         },
                         trial={
                             "trial_id": "demo_replay", "started": "2026-07-03",

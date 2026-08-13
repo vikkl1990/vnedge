@@ -370,6 +370,7 @@
   .cprow{display:grid;grid-template-columns:minmax(150px,1.6fr) 1.1fr .7fr .7fr .95fr .8fr;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
   .cprow.cphead{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-dim);font-weight:700;background:var(--bg-inset)}
   .mprow{grid-template-columns:minmax(130px,1.5fr) 1fr .85fr 1.15fr .9fr 1fr}
+  .trrow{grid-template-columns:minmax(130px,1.4fr) .8fr 1.2fr .8fr 2.2fr}
   .cprow .cpname b{font-size:12px}
   .cprow .cpname small{display:block;font-size:9.5px;color:var(--txt-faint)}
   .cpbar{position:relative;height:7px;border-radius:4px;background:var(--bg-3);overflow:hidden}
@@ -879,6 +880,14 @@
           <div id="modelDesk"><div class="jempty" style="padding:12px 14px">Loading…</div></div>
         </div>
         <div style="padding:8px 14px;font-size:10px;color:var(--txt-faint)">Observe-only preview: regime_v0 + the cost-aware TradePlan run beside the live edge; they do <b>not</b> gate the running lane yet.</div>
+      </section>
+      <section class="panel">
+        <div class="phead"><h2>Trial &amp; Drawdown</h2><span class="meta" id="trialMeta">per-lane DD vs its own gate · trial pass/fail</span></div>
+        <div class="cptable">
+          <div class="cprow trrow cphead"><span>Lane</span><span>Equity</span><span>Drawdown / limit</span><span>Trial</span><span>Criteria</span></div>
+          <div id="trialDesk"><div class="jempty" style="padding:12px 14px">Loading…</div></div>
+        </div>
+        <div style="padding:8px 14px;font-size:10px;color:var(--txt-faint)">A lane past its own DD limit turns <b>red</b> even when the fleet nets flat — so a breaching lane can't hide in the aggregate.</div>
       </section>
     </div>
   </div>
@@ -1619,6 +1628,39 @@
     var m=$("mpMeta"); if(m)m.textContent="regime_v0 would-block "+wb+" · cost-gate rejects "+rej+" · observe-only";
   }
 
+  /* ---- Trial & Drawdown desk: per-lane DD vs its gate + trial scorecard ---- */
+  function ddBand(dd,limit){
+    if(dd==null)return"na";
+    if(limit==null)return"ok";
+    if(dd>=limit)return"bad";
+    if(dd>=0.8*limit)return"soft";
+    return"ok";
+  }
+  function critChip(c){
+    var tone=c.ok?"ok":(c.hard?"bad":"soft"), mark=c.ok?"✓":(c.hard?"✗":"⏳");
+    var u=c.unit||"";
+    return '<span class="cppill '+tone+'">'+mark+' '+esc(String(c.name).replace(/_/g," "))+' '+c.value+u+'/'+c.threshold+u+'</span>';
+  }
+  function renderTrialDesk(s){
+    var host=$("trialDesk"); if(!host)return;
+    var lanes=_laneRows(s), breaching=0, rows=[];
+    lanes.forEach(function(l){
+      var dd=l.drawdown_pct, lim=l.dd_limit_pct, sc=l.trial_scorecard, band=ddBand(dd,lim);
+      if(band==="bad")breaching++;
+      var ddTxt=(dd!=null?num(dd).toFixed(2)+"%":"—")+(lim!=null?" / "+lim+"%":"");
+      var v=sc?sc.verdict:null, vB=v==="PASS"?"ok":v==="FAIL"?"bad":v==="PENDING"?"soft":"na";
+      var crits=(sc&&sc.criteria)?sc.criteria.map(critChip).join(' '):'<span style="color:var(--txt-faint)">no trial</span>';
+      rows.push('<div class="cprow trrow">'+
+        '<div class="cpname"><b>'+esc(stratShort(l.strategy_id))+'</b><small>'+esc(symShort(l.symbol))+' · '+esc(l.mode||"")+'</small></div>'+
+        '<div class="num">'+(l.equity!=null?"$"+num(l.equity).toFixed(2):"—")+'</div>'+
+        '<div><span class="cppill '+band+'">'+ddTxt+'</span></div>'+
+        '<div>'+(v?'<span class="cppill '+vB+'">'+v+'</span>':'<span class="cppill na">—</span>')+'</div>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:4px">'+crits+'</div></div>');
+    });
+    host.innerHTML=rows.length?rows.join(''):'<div class="jempty" style="padding:12px 14px">No lane equity telemetry.</div>';
+    var m=$("trialMeta"); if(m)m.textContent=breaching>0?(breaching+" lane(s) PAST their DD limit"):"all lanes within DD limits";
+  }
+
   /* ---- System status strip (Phase C P1): safe-to-arm at a glance ---- */
   var _RANK={blocked:3,degraded:2,ok:1,unknown:0};
   function _worse(a,b){return _RANK[a]>=_RANK[b]?a:b;}
@@ -1636,7 +1678,10 @@
               time_machine:s.time_machine, latency:s.latency, decision_skips:s.decision_skips,
               feed:(s.feed_health&&s.feed_health.candles),
               regime:sess.regime, plan_overlay:sess.plan_overlay, cost_profile:sess.cost_profile,
-              regime_would_block:sess.regime_would_block, plan_gate_rejects:sess.plan_gate_rejects}];
+              regime_would_block:sess.regime_would_block, plan_gate_rejects:sess.plan_gate_rejects,
+              mode:s.mode, equity:s.equity, peak_equity:s.peak_equity,
+              drawdown_pct:sess.drawdown_pct, dd_limit_pct:sess.dd_limit_pct,
+              trial_scorecard:sess.trial_scorecard}];
     }
     return lanes;
   }
@@ -1721,6 +1766,7 @@
     renderCandlePath(s);
     renderStatusStrip(s);
     renderModelDesk(s);
+    renderTrialDesk(s);
 
     // watchlist — real per-symbol price + funding (each lane forwards its quote)
     var bySym={};

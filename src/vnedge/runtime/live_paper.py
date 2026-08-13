@@ -531,6 +531,58 @@ class LivePaperSession:
         except Exception as exc:  # noqa: BLE001 — observability must never affect trading
             logger.debug("overlay recording failed (observability only): %s", exc)
 
+    def _drawdown_pct(self) -> float:
+        """Current drawdown from the (persisted) equity peak, in percent."""
+        peak = self.tracker.peak_equity_usd
+        if peak <= 0:
+            return 0.0
+        return max(0.0, (peak - self.tracker.equity_usd()) / peak * 100.0)
+
+    def _trial_days_elapsed(self, t: dict) -> int | None:
+        started = t.get("started")
+        if not started:                                   # fall back to trailing YYYYMMDD in the id
+            tail = str(t.get("trial_id") or "")[-8:]
+            started = f"{tail[:4]}-{tail[4:6]}-{tail[6:]}" if tail.isdigit() else None
+        if not started:
+            return None
+        try:
+            return (datetime.now(UTC).date() - datetime.fromisoformat(str(started)).date()).days
+        except ValueError:
+            return None
+
+    def _trial_scorecard(self) -> dict | None:
+        """Live pass/fail of the governed paper trial's locked criteria. A HARD
+        criterion (drawdown, daily loss) failing ⇒ FAIL; an unmet accumulation
+        criterion (trades, days) ⇒ PENDING; all met ⇒ PASS. Observe-only."""
+        t = self.trial_meta or {}
+        if not t.get("trial_id"):
+            return None
+        crit: list[dict] = []
+
+        def add(name, value, threshold, ok, hard, unit=""):
+            crit.append({"name": name, "value": value, "threshold": threshold,
+                         "ok": bool(ok), "hard": hard, "unit": unit})
+
+        dd = self._drawdown_pct()
+        max_dd = t.get("max_dd_pct")
+        add("max_drawdown", round(dd, 2), max_dd, (dd <= max_dd) if max_dd is not None else True, True, "%")
+        trades = (self.fill_ledger.records // 2) if self.fill_ledger is not None else 0
+        min_trades = t.get("min_trades")
+        add("min_trades", trades, min_trades, (trades >= min_trades) if min_trades is not None else True, False)
+        days = self._trial_days_elapsed(t)
+        min_days = t.get("min_days")
+        if days is not None and min_days is not None:
+            add("min_days", days, min_days, days >= min_days, False, "d")
+        stop = t.get("daily_stop_usd")
+        if stop is not None:
+            daily = self.tracker.account_state().daily_pnl_usd
+            add("daily_loss", round(daily, 2), -abs(stop), daily >= -abs(stop), True, "$")
+
+        hard_fail = any(c["hard"] and not c["ok"] for c in crit)
+        pending = any((not c["hard"]) and not c["ok"] for c in crit)
+        verdict = "FAIL" if hard_fail else ("PENDING" if pending else "PASS")
+        return {"trial_id": t.get("trial_id"), "verdict": verdict, "criteria": crit}
+
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
         self.trade_log.append({
             "ts": now.isoformat(), "event": event, "detail": detail,
@@ -1623,6 +1675,12 @@ class LivePaperSession:
                 "regime_would_block": self._regime_would_block,
                 "plan_overlay": self._overlay_plan,
                 "plan_gate_rejects": self._plan_gate_rejects,
+                # per-lane drawdown vs its trial limit + live trial scorecard, so a
+                # lane breaching its own gate can't hide inside the fleet aggregate
+                "peak_equity": self.tracker.peak_equity_usd,
+                "drawdown_pct": round(self._drawdown_pct(), 2),
+                "dd_limit_pct": (self.trial_meta or {}).get("max_dd_pct"),
+                "trial_scorecard": self._trial_scorecard(),
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "shadow_perf": self.shadow_outcomes.stats()

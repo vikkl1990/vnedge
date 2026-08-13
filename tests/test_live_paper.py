@@ -363,6 +363,39 @@ async def test_overlay_fault_never_breaks_trading(tmp_path):
     assert session._overlay_plan is None                   # overlay simply recorded nothing
 
 
+# --- trial scorecard + per-lane drawdown vs limit --------------------------
+def test_drawdown_pct_from_peak(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.tracker.peak_equity_usd = 550.0          # equity ~500 → 9.09% DD
+    assert 8.5 < session._drawdown_pct() < 9.5
+
+
+def test_trial_scorecard_fails_on_drawdown_breach(tmp_path):
+    trial = {"trial_id": "funding_mr_btc_v1_20260703", "max_dd_pct": 6.0,
+             "min_trades": 10, "min_days": 14, "daily_stop_usd": 10.0, "started": "2026-07-03"}
+    session, _ = build_session(tmp_path, FakeFeed([]), trial_meta=trial)
+    session.tracker.peak_equity_usd = 550.0          # 9.09% DD > 6% hard limit
+    sc = session._trial_scorecard()
+    assert sc["verdict"] == "FAIL"                   # a HARD criterion breached
+    dd = next(c for c in sc["criteria"] if c["name"] == "max_drawdown")
+    assert dd["hard"] and not dd["ok"] and dd["threshold"] == 6.0
+
+
+def test_trial_scorecard_pending_when_dd_ok_but_trades_short(tmp_path):
+    trial = {"trial_id": "t_20260703", "max_dd_pct": 6.0, "min_trades": 10,
+             "min_days": 14, "daily_stop_usd": 10.0}
+    session, _ = build_session(tmp_path, FakeFeed([]), trial_meta=trial)
+    sc = session._trial_scorecard()                  # no DD, 0 trades
+    assert sc["verdict"] == "PENDING"                # accumulation, not failure
+    trades = next(c for c in sc["criteria"] if c["name"] == "min_trades")
+    assert trades["value"] == 0 and not trades["ok"] and not trades["hard"]
+
+
+def test_no_trial_scorecard_without_a_trial(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    assert session._trial_scorecard() is None
+
+
 async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)

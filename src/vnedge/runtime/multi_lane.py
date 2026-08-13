@@ -317,6 +317,11 @@ class MultiLaneProvider:
                 "regime_would_block": self._lanes[lid].get("session", {}).get("regime_would_block"),
                 "plan_overlay": self._lanes[lid].get("session", {}).get("plan_overlay"),
                 "plan_gate_rejects": self._lanes[lid].get("session", {}).get("plan_gate_rejects"),
+                # per-lane drawdown vs trial limit + trial scorecard (observe-only)
+                "peak_equity": self._lanes[lid].get("session", {}).get("peak_equity"),
+                "drawdown_pct": self._lanes[lid].get("session", {}).get("drawdown_pct"),
+                "dd_limit_pct": self._lanes[lid].get("session", {}).get("dd_limit_pct"),
+                "trial_scorecard": self._lanes[lid].get("session", {}).get("trial_scorecard"),
                 "daily_factory": self._lanes[lid].get("session", {}).get("daily_factory"),
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),

@@ -75,6 +75,19 @@ export interface PlanOverlay {
   expected_net_bps?: number;
   gate_ok?: boolean;
 }
+export interface TrialCriterion {
+  name?: string;
+  value?: number;
+  threshold?: number;
+  ok?: boolean;
+  hard?: boolean;
+  unit?: string;
+}
+export interface TrialScorecard {
+  trial_id?: string;
+  verdict?: string;
+  criteria?: TrialCriterion[];
+}
 export interface LaneRow {
   lane_id?: string;
   strategy_id?: string;
@@ -88,6 +101,11 @@ export interface LaneRow {
   decision_skips?: Record<string, number> | null;
   regime?: RegimeReading | null;
   plan_overlay?: PlanOverlay | null;
+  equity?: number;
+  peak_equity?: number;
+  drawdown_pct?: number | null;
+  dd_limit_pct?: number | null;
+  trial_scorecard?: TrialScorecard | null;
 }
 
 export interface Snapshot {

@@ -4,7 +4,7 @@
 
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useJournal, useSnapshot, useWhoAmI } from "../queries";
-import type { JournalRow, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot } from "../api";
+import type { JournalRow, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
@@ -78,6 +78,11 @@ function laneRows(s?: Snapshot): LaneRow[] {
         decision_skips: s.decision_skips ?? ((sess.decision_skips as Record<string, number>) ?? null),
         regime: s.regime ?? ((sess.regime as RegimeReading) ?? null),
         plan_overlay: s.plan_overlay ?? ((sess.plan_overlay as PlanOverlay) ?? null),
+        equity: s.equity,
+        peak_equity: s.peak_equity as number | undefined,
+        drawdown_pct: (sess.drawdown_pct as number) ?? null,
+        dd_limit_pct: (sess.dd_limit_pct as number) ?? null,
+        trial_scorecard: (sess.trial_scorecard as TrialScorecard) ?? null,
       },
     ];
   }
@@ -185,6 +190,27 @@ export function LanesPanel() {
         const h = r.time_machine?.health?.[r.timeframe ?? ""];
         const tone = !h ? "neutral" : h === "ok" ? "good" : "bad";
         return <TerminalBadge tone={tone as never}>{h ?? "n/a"}</TerminalBadge>;
+      },
+    },
+    {
+      key: "dd",
+      header: "DD / limit",
+      render: (r) => {
+        const dd = r.drawdown_pct;
+        const lim = r.dd_limit_pct;
+        if (dd == null) return "—";
+        const tone = lim == null ? "neutral" : dd >= lim ? "bad" : dd >= 0.8 * lim ? "warn" : "good";
+        return <TerminalBadge tone={tone as never}>{`${dd.toFixed(2)}%${lim != null ? ` / ${lim}%` : ""}`}</TerminalBadge>;
+      },
+    },
+    {
+      key: "trial",
+      header: "Trial",
+      render: (r) => {
+        const v = r.trial_scorecard?.verdict;
+        if (!v) return "—";
+        const tone = v === "PASS" ? "good" : v === "FAIL" ? "bad" : "warn";
+        return <TerminalBadge tone={tone as never}>{v}</TerminalBadge>;
       },
     },
     {
