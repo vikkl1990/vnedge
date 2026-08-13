@@ -23,7 +23,7 @@ import math
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -51,6 +51,7 @@ from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.strategy.alpha_stack import AlphaStackConfluence
 from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
 from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.context_scalper_v2 import ContextScalperV2
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
@@ -92,6 +93,19 @@ class LaneSpec:
     #: legacy arm-and-lock). Set per-lane when a strategy was JUDGED with a trail,
     #: so the running lane uses the exit its promotion evidence was measured on.
     trail_atr_mult: float = 0.0
+
+    def capital_downgraded(self) -> "LaneSpec":
+        """Fail-closed roster safety: a research-only (structurally over-fit)
+        family may run SHADOW for observation but must never back a PAPER capital
+        lane. Applied at roster build so a single edit can't deploy the scanner
+        zoo — returns self, or a SHADOW copy if the strategy is research-only.
+        ``_paper_observation`` mirrors are PAPER-mode but non-capital (they submit
+        no orders), so they are left untouched. See docs/SCANNER_REVIEW_20260813."""
+        if (self.mode is RunnerMode.PAPER
+                and not self.lane_id.endswith("_paper_observation")
+                and not is_capital_eligible(self.strategy_id)):
+            return replace(self, mode=RunnerMode.SHADOW)
+        return self
 
 
 @dataclass(frozen=True)

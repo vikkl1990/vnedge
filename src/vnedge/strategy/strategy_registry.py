@@ -61,6 +61,30 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
 }
 
 
+# Structurally over-fit families — geometry (FVG / liquidity), Pine-port stacks
+# (Luxara), and confluence votes (alpha_stack / quant_signal / momentum cascade /
+# distillation). Their flaws are architectural (DOF explosion, geometry ≠
+# mechanism, unitless confluence scores, private cost math), not bad luck OOS —
+# see docs/SCANNER_REVIEW_20260813. They stay importable for RESEARCH and may run
+# a SHADOW lane for observation, but must NEVER back a capital (paper/live) lane.
+# The fix for a dead scanner is inertness + a locked re-registration under the
+# TradePlan contract (G1-style), NEVER an in-place refactor of its zoo of knobs.
+# Derived from the class ids so the guard can never drift from a renamed strategy.
+_RESEARCH_ONLY_CLASSES = (
+    FvgLiquidityBreakoutScanner,
+    LuxaraBreakBounceV27Scanner, LuxaraLivePlanQTMScanner, LuxyUTBotForecastScanner,
+    AlphaStackConfluence, QuantSignalPack, MomentumCascadeLyroScanner,
+    AlphaDistillationPack,
+)
+RESEARCH_ONLY: frozenset[str] = frozenset(c.strategy_id for c in _RESEARCH_ONLY_CLASSES)
+
+
+def is_capital_eligible(strategy_id: str) -> bool:
+    """False for research-only families: they may run SHADOW (observation) but
+    must never back a capital (paper/live) lane."""
+    return strategy_id not in RESEARCH_ONLY
+
+
 def get_strategy_class(strategy_id: str) -> type[BaseStrategy]:
     try:
         return STRATEGIES[strategy_id]

@@ -1377,6 +1377,11 @@ def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec
     # proposal (a stale governor file resurrected a cut luxara probe on 2026-08-03).
     if prune:
         roster = [spec for spec in roster if not _pruned_lane(spec)]
+    # Capital-eligibility guard (docs/SCANNER_REVIEW_20260813): research-only
+    # families (over-fit geometry/confluence) may run SHADOW for observation but
+    # never a PAPER capital lane — a distinct, class-derived layer beside the
+    # prune list, so the scanner zoo can't reach capital by any roster path.
+    roster = [spec.capital_downgraded() for spec in roster]
     return roster
 
 
