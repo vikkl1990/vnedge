@@ -125,13 +125,26 @@ become dumb band→color mappers. (Same fix as B2, one move.)
 
 ---
 
-## Recommended remediation order
+## Remediation — DONE 2026-08-13
 
-1. **B4** React `/journal` → `/trade-journal` (trivial, ship now).
-2. **B2+B3** server-side bands/chips block in the snapshot → deletes the JS/TS
-   threshold + chip + DD duplication and closes the UI/bot "safe to arm" mismatch.
-3. **A2** consecutive-read-failure → reduce-only in `_reconcile_positions`.
-4. **A1** unify the live/paper exit engine (shared exit/position manager) — the pre-live
-   blocker; do before any live gate opens.
-5. **B1** collapse the four cost sources onto `CostModel` profiles (research/paper/live).
-6. **C2/C3/C4/C5** housekeeping as capacity allows.
+All eight fixes landed, tested, and deployed (VM current):
+
+1. ✅ **B4** React `/journal` → `/trade-journal` (+ extract `closed_trades`).
+2. ✅ **B2+B3** `health_bands.py` computes chips + per-lane bands server-side from
+   `latency_thresholds.py`; both UIs render them (client compute kept as fallback).
+   UI colour and the fail-closed arm-gate can no longer disagree. **Verified live.**
+3. ✅ **A2** `_reconcile_positions` fails closed (reduce-only) after 3 consecutive
+   account-read failures.
+4. ✅ **A1** `LiveTraderSession` routes exits through the shared `ActiveExitState`
+   engine (stop/breakeven/TP/trailing/max_holding), full-position venue-truth submit;
+   exit config plumbed through `LiveTraderRunConfig`. Parity tests added.
+5. ◑ **B1** backtest `FeeModel`/`SlippageModel` + paper `FillModel` now default from
+   `plan.cost_model` constants (one source for research/paper/live). **Scoped:** the 9
+   research-only strategies' private fees + the per-venue table (bybit 5.5) are left
+   flagged — capital-ineligible + research-frozen, so rewriting them risks frozen
+   research for no live benefit. `plan_gate` stays observe-only by design.
+6. ✅ **C3** `size_delta_risk_trade` liq-buffer guard · **C4** orphaned
+   `htf_structure_break` deleted · **C5** `_trail_atr` fault counter surfaced.
+
+Not changed (intentional, tracked): the plan/ enforcement engines, `regime_v0`,
+`ml/` layer, and `PromotionService` remain deferred/observe-only by design (C1/C2).
