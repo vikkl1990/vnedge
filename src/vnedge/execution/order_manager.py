@@ -76,6 +76,24 @@ class OrderManager:
         self._adapter = adapter
         self._registry = IntentRegistry()
         self.orders: dict[str, ManagedOrder] = {}  # by client_order_id
+        # Durable idempotency (L2): the in-memory registry alone can't catch a
+        # re-presented intent after a RESTART, so a duplicate would get a fresh
+        # client_order_id the venue can't dedupe → double-book window. Replay the
+        # journal's order_intent records into the registry so a same-key intent is
+        # dropped as a duplicate (referencing the ORIGINAL id) instead.
+        self._seed_registry_from_journal()
+
+    def _seed_registry_from_journal(self) -> None:
+        try:
+            for rec in self._journal.read_all():
+                if rec.get("kind") != "order_intent":
+                    continue
+                p = rec.get("payload") or {}
+                key, coid = p.get("intent_key"), p.get("client_order_id")
+                if key and coid:
+                    self._registry.register(key, coid)
+        except Exception as exc:  # noqa: BLE001 — a replay fault must not break construction
+            logger.warning("intent registry journal seed failed: %s", exc)
 
     @property
     def has_unresolved_orders(self) -> bool:

@@ -189,6 +189,24 @@ async def test_reconciliation_unblocks_entries(journal, gateway):
     assert order.state is S.ACKNOWLEDGED
 
 
+async def test_registry_seeded_from_journal_survives_restart(journal, gateway):
+    # First process submits an intent -> order_intent journaled durably.
+    om1 = OrderManager(gateway, journal, AckAdapter(journal))
+    first = await om1.submit(intent(), account(), market(), key(0))
+    assert first.state is S.ACKNOWLEDGED
+
+    # A fresh OrderManager (simulating a RESTART) rebuilds its in-memory registry
+    # from the journal, so the SAME intent re-presented is caught as a duplicate —
+    # no double-book with a fresh client_order_id the venue can't dedupe.
+    adapter2 = AckAdapter(journal)
+    om2 = OrderManager(gateway, journal, adapter2)
+    assert om2._registry.existing_order_id(key(0)) == first.client_order_id  # seeded
+    dup = await om2.submit(intent(), account(), market(), key(0))
+    assert dup.state is S.RISK_REJECTED
+    assert "duplicate" in dup.history[-1].note
+    assert adapter2.submissions == []  # never reached the venue
+
+
 class PlainAckAdapter:
     async def submit_order(self, order):
         return "ex_plain"
