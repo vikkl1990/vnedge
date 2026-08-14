@@ -575,6 +575,33 @@ async def test_l3_daily_factory_read_fault_fails_closed(tmp_path):
     assert block == "account_read_failed"   # no account truth -> refuse the entry
 
 
+# --- L1 increment 2: immutable hash-chained fill ledger on the live path ---
+async def test_l1inc2_accepted_entry_is_chained_and_deduped(tmp_path):
+    from vnedge.execution.fill_ledger import FillLedger, verify_chain
+    ledger = FillLedger(tmp_path / "fills.jsonl")
+    adapter = FakeLiveAdapter()
+    session, _ = wire(live_settings(), FakeFeed([bar(0)]), adapter, FakeAccounts(),
+                      tmp_path, OneShotLong(at_bar=6), fill_ledger=ledger)
+    await session.run(max_bars=1)
+    assert ledger.records == 1                       # the accepted entry was chained
+    assert verify_chain(tmp_path / "fills.jsonl").ok  # tamper-evident chain intact
+    rec = [__import__("json").loads(l) for l in (tmp_path / "fills.jsonl").read_text().splitlines()][0]
+    assert rec["kind"] == "entry" and rec["side"] == "buy"
+    assert rec["fee_usd"] is None                    # honest: not faked pending the fill stream
+    session._ledger_sweep(datetime.now(UTC))         # a second sweep must NOT double-record
+    assert ledger.records == 1
+    assert session._report().fills == 1              # report reflects the ledger count
+
+
+def test_l1inc2_ledger_resumes_chain_across_restart(tmp_path):
+    from vnedge.execution.fill_ledger import FillLedger, verify_chain
+    p = tmp_path / "fills.jsonl"
+    FillLedger(p).append({"ts": "t", "symbol": SYM, "side": "buy", "quantity": 0.01})
+    resumed = FillLedger(p)                           # reopen: continues, doesn't restart
+    resumed.append({"ts": "t2", "symbol": SYM, "side": "sell", "quantity": 0.01})
+    assert resumed.records == 2 and verify_chain(p).ok
+
+
 # --- L1 increment 1: _report tracks real venue equity / peak-drawdown ---
 async def test_l1_report_tracks_real_equity_and_drawdown(tmp_path):
     class MovingAccounts(FakeAccounts):

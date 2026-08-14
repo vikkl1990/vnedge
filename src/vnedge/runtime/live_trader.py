@@ -32,6 +32,7 @@ import pandas as pd
 
 from vnedge.config.settings import Settings, TradingMode
 from vnedge.data.time_machine import TimeMachine
+from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.order_state import OrderState
@@ -98,6 +99,7 @@ class LiveTraderSession:
         time_machine: TimeMachine | None = None,
         protections: ProtectionState | None = None,
         daily_factory: DailySignalFactoryConfig | None = None,
+        fill_ledger: FillLedger | None = None,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -153,6 +155,13 @@ class LiveTraderSession:
         self._starting_equity_usd = 0.0
         self._peak_equity_usd = 0.0
         self._max_drawdown_pct = 0.0
+        # L1 increment 2: immutable, hash-chained execution record. The live path
+        # has no simulated exchange to read fills from, so we sweep the OM's
+        # accepted/filled orders into the SAME resume-aware FillLedger paper uses
+        # (deduped by client_order_id). Per-fill fee/realized_pnl await the private
+        # fill stream (increment 3) — recorded null now, never faked.
+        self.fill_ledger = fill_ledger
+        self._ledgered_orders: set[str] = set()
         # Runtime fail-closed latch: set when position reconciliation finds the
         # venue diverging from internal state; blocks new entries (exits still
         # flow) until a clean settled pass clears it. The static
@@ -505,6 +514,7 @@ class LiveTraderSession:
         fid = f"flatten|{int(datetime.now(UTC).timestamp() * 1000)}"
         await self.om.emergency_flatten(positions, account, markets, fid,
                                         now=datetime.now(UTC))
+        self._ledger_sweep(datetime.now(UTC))   # chain the flatten executions
 
     async def run(self, *, max_bars: int | None = None) -> RunReport:
         import asyncio
@@ -549,7 +559,10 @@ class LiveTraderSession:
             if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
                 await self._reconcile()
 
+            self._ledger_sweep(now)   # chain any newly-accepted executions
+
         await self._reconcile()
+        self._ledger_sweep(datetime.now(UTC))
         return self._report()
 
     async def _reconcile(self) -> None:
@@ -674,17 +687,57 @@ class LiveTraderSession:
             self._pending_exit_orders.pop(base_key, None)
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
 
+    def _ledger_sweep(self, now: datetime) -> None:
+        """Append any OM order that reached an accepted/filled state and isn't
+        chained yet. Resume-aware + deduped by client_order_id, so a restart
+        continues the chain rather than re-recording. FAIL-SAFE: a ledger fault
+        must never break the trading loop."""
+        if self.fill_ledger is None:
+            return
+        try:
+            bid, ask = getattr(self.feed, "quote", (None, None))
+            ref = (float(bid) + float(ask)) / 2.0 if bid and ask else None
+        except Exception:  # noqa: BLE001
+            ref = None
+        for coid, order in list(self.om.orders.items()):
+            if coid in self._ledgered_orders or order.state not in _EXIT_ACCEPTED_STATES:
+                continue
+            try:
+                self.fill_ledger.append({
+                    "ts": now.isoformat(),
+                    "mode": self.settings.trading_mode.value,
+                    "venue": getattr(self.feed, "exchange_id", "live"),
+                    "strategy_id": self.strategy.strategy_id,
+                    "symbol": order.intent.symbol,
+                    "side": "buy" if order.intent.side == "long" else "sell",
+                    "quantity": order.intent.quantity,
+                    "price": ref,                    # feed mid; exact fill px awaits the fill stream
+                    "fee_usd": None,                 # unknown until the private fill stream
+                    "realized_pnl_usd": None,
+                    "client_order_id": coid,
+                    "exchange_order_id": order.exchange_order_id,
+                    "kind": "exit" if order.intent.reduce_only else "entry",
+                    "state": order.state.value,
+                    "record_type": "order_ack",      # honest: acceptance, not an enriched fill
+                })
+                self._ledgered_orders.add(coid)
+            except Exception as exc:  # noqa: BLE001 — the ledger must not wedge the loop
+                logger.error("fill ledger append failed for %s: %s", coid, exc)
+                return
+
     def _report(self) -> RunReport:
-        # L1 increment 1: real equity / peak-drawdown / net-since-start from the
-        # venue account truth. fills/fees are 0 pending the fill ledger (increment
-        # 2); net_change is the account equity delta (realized + any open uPnL).
+        # L1: real equity / peak-drawdown / net-since-start from the venue account
+        # truth. `fills` is the count of chained execution records (increment 2);
+        # per-fill fees await the private fill stream, so fees_usd stays 0 here.
+        # net_change is the account equity delta (realized + any open uPnL).
         net_change = (self._last_equity_usd - self._starting_equity_usd
                       if self._starting_equity_usd > 0 else 0.0)
+        fills = self.fill_ledger.records if self.fill_ledger is not None else 0
         return RunReport(
             mode=self.settings.trading_mode.value, symbol=self.symbol,
             strategy_id=self.strategy.strategy_id, bars_processed=self._bars,
             signals_generated=self.signals, orders_submitted=self.orders_submitted,
-            fills=0, fees_usd=0.0, realized_pnl_usd=round(net_change, 6),
+            fills=fills, fees_usd=0.0, realized_pnl_usd=round(net_change, 6),
             unrealized_pnl_usd=0.0,
             max_drawdown_pct=round(self._max_drawdown_pct, 4),
             risk_rejects=self.risk_rejects,
