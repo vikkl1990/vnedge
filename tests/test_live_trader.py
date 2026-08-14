@@ -273,7 +273,10 @@ async def test_timeout_order_blocks_new_risk_until_reconciled(tmp_path):
 async def test_timeout_reached_entry_plan_survives_reconciliation(tmp_path):
     adapter = FakeLiveAdapter(script=["timeout_reached"])
     feed = FakeFeed([bar(0)])
-    session, om = wire(live_settings(), feed, adapter, FakeAccounts(), tmp_path,
+    # the venue ACCEPTED the order (ack lost), so the account truly holds the
+    # position — position reconciliation then AGREES with the adopted plan.
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, om = wire(live_settings(), feed, adapter, accounts, tmp_path,
                        OneShotLong(at_bar=6))
 
     await session.run(max_bars=1)
@@ -281,6 +284,7 @@ async def test_timeout_reached_entry_plan_survives_reconciliation(tmp_path):
     assert session.orders_submitted == 1
     assert not om.has_unresolved_orders
     assert session._plan is not None
+    assert session._reconciliation_halt is False   # venue agrees → no spurious halt
 
 
 async def test_live_exit_plan_survives_reject_and_retries_with_new_key(tmp_path):
@@ -367,6 +371,40 @@ async def test_position_recon_skips_while_orders_in_flight(tmp_path):
     session._pending_exit_orders["k"] = "coid"
     await session._reconcile_positions()
     assert session.recon_mismatches == 0 and session.entries_allowed is True
+
+
+# --- L4: reconciliation rebuild-from-venue ---
+async def test_l4_stale_plan_dropped_when_venue_flat(tmp_path):
+    # We believe we hold, but the venue is flat (external close/liquidation).
+    # Without the rebuild the halt is PERMANENT (plan never clears); with it,
+    # the stale plan is dropped and entries auto-resume after a clean pass.
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      FakeAccounts(positions=[]), tmp_path, OneShotLong())
+    sig = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._plan = sig
+    session._open_exit_state(sig, 0.01)
+    await session._reconcile_positions()          # expected=True, actual=False → drop plan
+    assert session.recon_mismatches == 1
+    assert session._plan is None                  # rebuilt to flat (venue truth)
+    assert session._reconciliation_halt is True
+    await session._reconcile_positions()          # flat both sides → clean pass
+    assert session._reconciliation_halt is False  # auto-resumed
+    assert session.recon_mismatches == 1          # the one real mismatch, not re-counted
+
+
+async def test_l4_orphan_position_flagged_and_journaled(tmp_path):
+    # The venue holds a position we don't track: reduce-only + surfaced, no auto-adopt.
+    session, om = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                       FakeAccounts(positions=[{"contracts": 1.0}]), tmp_path, OneShotLong())
+    await session._reconcile_positions()
+    assert session._orphan_position is True
+    assert session.entries_allowed is False       # reduce-only until an operator flatten
+    kinds = [r["kind"] for r in om._journal.read_all()]
+    assert "reconciliation_rebuild" in kinds
+    # once the orphan is gone, the latch (and the flag) clear on a clean pass
+    session.accounts._positions = []
+    await session._reconcile_positions()
+    assert session._orphan_position is False and session.entries_allowed is True
 
 
 # --- A2 audit fix: reconciliation fails closed on persistent account-read failure ---

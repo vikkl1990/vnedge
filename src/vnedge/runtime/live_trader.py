@@ -162,6 +162,9 @@ class LiveTraderSession:
         # A persistently failing account-read disables divergence detection while
         # entries keep flowing; fail closed after this many consecutive failures.
         self._recon_read_failures = 0
+        # L4: an untracked venue position (orphan) discovered by settled
+        # reconciliation — reduce-only until an operator flatten clears it.
+        self._orphan_position = False
         # L3 entry-hygiene gates: the SAME three checks paper runs before an entry
         # — the candle-path arm-gate (Time Machine health/age), the post-stop
         # protections breaker, and the daily-factory session/cap windows. All are
@@ -603,9 +606,50 @@ class LiveTraderSession:
                 "FAIL CLOSED (reduce-only) until a clean pass",
                 expected, account.open_positions,
             )
+            self._rebuild_from_venue(expected=expected, venue_positions=account.open_positions)
         elif self._reconciliation_halt:
             self._reconciliation_halt = False       # settled + agreeing → re-open
+            self._orphan_position = False
             logger.info("position reconciliation clean — entries re-enabled")
+
+    def _rebuild_from_venue(self, *, expected: bool, venue_positions: int) -> None:
+        """Rebuild INTERNAL state to venue truth on a settled mismatch — the
+        invariant's 'rebuild state from the exchange'. The halt stays set; a clean
+        pass re-opens entries.
+
+        - we believe we hold but the venue is FLAT (external close / liquidation /
+          a stop we missed): DROP the stale plan so the next settled pass agrees
+          and entries auto-resume. Without this the halt would be PERMANENT — the
+          plan never clears, so expected != actual forever.
+        - the venue holds a position we DON'T track (orphan): we have no validated
+          stop to manage it, so we stay reduce-only and surface it (flag + journal)
+          for an operator flatten. The latch auto-clears once the orphan is gone.
+        """
+        self._journal_reconciliation(expected=expected, venue_positions=venue_positions)
+        if expected and venue_positions == 0:
+            logger.error("venue flat but internal plan present — dropping stale plan "
+                         "(external close/liquidation); entries resume after a clean pass")
+            self._clear_exit_plan()
+            self._orphan_position = False
+            return
+        self._orphan_position = True   # untracked venue position → operator flatten
+        logger.error("untracked venue position (%d) with no trade plan — reduce-only "
+                     "until an operator flatten clears it", venue_positions)
+
+    def _journal_reconciliation(self, *, expected: bool, venue_positions: int) -> None:
+        journal = getattr(self.om, "_journal", None)
+        if journal is None:
+            return
+        try:
+            journal.append("reconciliation_rebuild", {
+                "symbol": self.symbol,
+                "internal_plan": expected,
+                "venue_positions": venue_positions,
+                "action": ("drop_stale_plan" if (expected and venue_positions == 0)
+                           else "orphan_halt"),
+            })
+        except Exception as exc:  # noqa: BLE001 — journaling must not crash the loop
+            logger.warning("reconciliation journal failed: %s", exc)
 
     def _resolve_pending_exit(self, client_order_id: str) -> None:
         base_key = next(
