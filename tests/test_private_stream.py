@@ -179,6 +179,43 @@ async def test_private_fill_stream_is_idempotent_and_can_map_exchange_order(tmp_
     assert order.fees_paid == 0.03
 
 
+async def test_l1inc3_private_fill_is_chained_with_real_economics(tmp_path):
+    import json
+
+    from vnedge.execution.fill_ledger import FillLedger, verify_chain
+    om, order = await submitted_order(tmp_path)
+    order.exchange_order_id = "ex_1"
+    ledger = FillLedger(tmp_path / "fills.jsonl")
+    applier = PrivateStreamEventApplier(om, fill_ledger=ledger, venue="binanceusdm")
+    fill = PrivateFillUpdate(
+        client_order_id=None, exchange_order_id="ex_1", trade_id="t1", symbol=SYM,
+        side="buy", price=100.0, quantity=0.5, fee_cost=0.03, fee_currency="USDT",
+        raw={"realizedPnl": "1.25"},   # venue-reported pnl on this fill
+    )
+    assert applier.apply_fill(fill)
+    assert applier.apply_fill(fill)                 # duplicate trade id: no double-chain
+    assert ledger.records == 1
+    assert verify_chain(tmp_path / "fills.jsonl").ok
+    rec = json.loads((tmp_path / "fills.jsonl").read_text().splitlines()[0])
+    assert rec["record_type"] == "fill"
+    assert rec["price"] == 100.0 and rec["fee_usd"] == 0.03   # REAL economics, not null
+    assert rec["realized_pnl_usd"] == 1.25                    # venue pnl captured, not faked
+    assert rec["trade_id"] == "t1" and rec["client_order_id"] == order.client_order_id
+
+
+async def test_l1inc3_unmatched_fill_is_not_chained(tmp_path):
+    from vnedge.execution.fill_ledger import FillLedger
+    om, order = await submitted_order(tmp_path)   # exchange_order_id left unmapped
+    ledger = FillLedger(tmp_path / "fills.jsonl")
+    applier = PrivateStreamEventApplier(om, fill_ledger=ledger)
+    fill = PrivateFillUpdate(
+        client_order_id=None, exchange_order_id="ex_unknown", trade_id="x", symbol=SYM,
+        side="buy", price=100.0, quantity=0.5, fee_cost=0.01, fee_currency="USDT", raw={},
+    )
+    assert not applier.apply_fill(fill)   # unmatched → not applied
+    assert ledger.records == 0            # and not chained (OM journals it as an anomaly)
+
+
 async def test_unmapped_fill_can_be_retried_after_order_mapping(tmp_path):
     om, order = await submitted_order(tmp_path)
     applier = PrivateStreamEventApplier(om)

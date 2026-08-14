@@ -8,12 +8,16 @@ submits orders and never bypasses the gateway; it is reconciliation input.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Iterable, Literal
 
+from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
+
+logger = logging.getLogger(__name__)
 
 
 _CCXT_ORDER_STATUS_MAP = {
@@ -99,9 +103,21 @@ class PrivateStreamHealth:
 class PrivateStreamEventApplier:
     """Apply normalized private stream events to the order manager."""
 
-    def __init__(self, order_manager: OrderManager) -> None:
+    def __init__(
+        self,
+        order_manager: OrderManager,
+        *,
+        fill_ledger: FillLedger | None = None,
+        venue: str = "live",
+    ) -> None:
         self._om = order_manager
         self._seen_trade_ids: set[str] = set()
+        # L1 increment 3: the private stream is the ONLY source of real per-fill
+        # economics (price, fee, venue realized-pnl). When a ledger is wired, each
+        # matched fill is chained here with its true numbers — the authoritative
+        # execution record, superseding the coarse null-economics acceptance sweep.
+        self._fill_ledger = fill_ledger
+        self._venue = venue
 
     def apply_order(self, update: PrivateOrderUpdate) -> bool:
         client_id = self._resolve_client_id(update.client_order_id, update.exchange_order_id)
@@ -148,7 +164,34 @@ class PrivateStreamEventApplier:
             )
         if applied:
             self._seen_trade_ids.add(update.trade_id)
+            self._ledger_fill(update, client_id)
         return applied
+
+    def _ledger_fill(self, update: "PrivateFillUpdate", client_id: str | None) -> None:
+        """Chain the REAL fill (price/fee/realized-pnl) into the immutable ledger.
+        FAIL-SAFE: a ledger fault is logged, never raised into the stream loop.
+        Only matched fills are chained (unmatched ones are journaled as anomalies
+        by the OM); dedup is the trade_id gate in ``apply_fill``."""
+        if self._fill_ledger is None:
+            return
+        try:
+            self._fill_ledger.append({
+                "ts": datetime.now(UTC).isoformat(),
+                "venue": self._venue,
+                "symbol": update.symbol,
+                "side": update.side,
+                "quantity": update.quantity,
+                "price": update.price,
+                "fee_usd": update.fee_cost,
+                "fee_currency": update.fee_currency,
+                "realized_pnl_usd": _realized_pnl_from_raw(update.raw),
+                "trade_id": update.trade_id,
+                "client_order_id": client_id,
+                "exchange_order_id": update.exchange_order_id,
+                "record_type": "fill",
+            })
+        except Exception as exc:  # noqa: BLE001 — the ledger must never break the stream
+            logger.error("private fill ledger append failed for %s: %s", update.trade_id, exc)
 
     def _resolve_client_id(
         self, client_order_id: str | None, exchange_order_id: str | None
@@ -291,6 +334,12 @@ def normalize_fill_update(raw: dict[str, Any]) -> PrivateFillUpdate:
         fee_currency=_str_or_none(fee.get("currency") or _get(raw, ("feeCurrency", "N"))),
         raw=raw,
     )
+
+
+def _realized_pnl_from_raw(raw: dict[str, Any]) -> float | None:
+    """Venue-reported realized PnL for this fill, if present (Binance futures
+    userTrade carries it as 'realizedPnl'/'rp'); else None — never fabricated."""
+    return _float_or_none(_get(raw, ("realizedPnl", "realized_pnl", "rp")))
 
 
 def _as_items(raw: Any) -> Iterable[dict[str, Any]]:
