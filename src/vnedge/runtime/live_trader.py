@@ -31,12 +31,20 @@ from typing import Protocol
 import pandas as pd
 
 from vnedge.config.settings import Settings, TradingMode
+from vnedge.data.time_machine import TimeMachine
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.risk.position_sizer import SymbolLimits, size_position
+from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import AccountState, OrderIntent
+from vnedge.runtime import latency_thresholds as LT
 from vnedge.runtime.active_exit import ActiveExitState
+from vnedge.runtime.daily_factory import (
+    DailySignalFactoryConfig,
+    entry_block_reason,
+    session_day,
+)
 from vnedge.runtime.run_report import RunReport
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
@@ -86,6 +94,10 @@ class LiveTraderSession:
         max_holding_bars: int = 48,
         trail_atr_mult: float = 0.0,
         trail_atr_window: int = 14,
+        timeframe: str = "1m",
+        time_machine: TimeMachine | None = None,
+        protections: ProtectionState | None = None,
+        daily_factory: DailySignalFactoryConfig | None = None,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -150,6 +162,22 @@ class LiveTraderSession:
         # A persistently failing account-read disables divergence detection while
         # entries keep flowing; fail closed after this many consecutive failures.
         self._recon_read_failures = 0
+        # L3 entry-hygiene gates: the SAME three checks paper runs before an entry
+        # — the candle-path arm-gate (Time Machine health/age), the post-stop
+        # protections breaker, and the daily-factory session/cap windows. All are
+        # optional (injected); when unwired the gate is a no-op, so the gateway
+        # remains the floor and existing construction is unchanged. Exits never
+        # consult these (reduce-only always flows).
+        self.timeframe = timeframe
+        self.time_machine = time_machine
+        self.protections = protections
+        self.daily_factory = daily_factory
+        self._tm_degraded = False
+        self._factory_day = None
+        self._factory_entries_today = 0
+        self.entry_hygiene_blocks = 0
+        self._last_entry_block: str | None = None
+        self._entry_block_counts: dict[str, int] = {}
 
     _MAX_RECON_READ_FAILURES = 3
 
@@ -208,6 +236,95 @@ class LiveTraderSession:
         if self._recon_read_failures >= self._MAX_RECON_READ_FAILURES:
             self._reconciliation_halt = True
 
+    # --- L3: entry-hygiene gates (parity with paper's pre-entry discipline) ------
+    def _tm_kline(self, row: list, now: datetime) -> dict:
+        ts = pd.to_datetime(int(row[0]), unit="ms", utc=True).to_pydatetime()
+        return {"open_time": ts, "open": float(row[1]), "high": float(row[2]),
+                "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
+                "exchange_ts": now}
+
+    def _feed_time_machine(self, now: datetime, closed_row: list | None = None) -> None:
+        """Feed the arm-gate's Time Machine. FAIL-SAFE: never raises into the loop;
+        a fault only marks it degraded (which the arm-gate then reads as a block)."""
+        if self.time_machine is None:
+            return
+        try:
+            sym, tf = self.symbol, self.timeframe
+            if closed_row is not None:
+                self.time_machine.on_kline_update(sym, tf, self._tm_kline(closed_row, now), is_closed=True)
+            forming = getattr(self.feed, "forming_candle", None)
+            if forming:
+                self.time_machine.on_kline_update(sym, tf, self._tm_kline(forming, now), is_closed=False)
+            self.time_machine.check_health(now)
+            self._tm_degraded = False
+        except Exception as exc:  # noqa: BLE001 — the arm-gate must never break the loop
+            self._tm_degraded = True
+            logger.warning("time machine update failed: %s", exc)
+
+    def _candle_path_arm_block(self, now: datetime) -> str | None:
+        """Block a NEW entry (never an exit) when the decision timeframe's candle
+        path is unsafe to arm on — health != ok, last-update age past the shared
+        HARD budget, or a Time Machine fault. Same logic paper enforces."""
+        tm = self.time_machine
+        if tm is None:
+            return None
+        try:
+            if self._tm_degraded:
+                return "tm_error"
+            tf = self.timeframe
+            health = tm.health_of(self.symbol, tf)
+            if health != "ok":
+                return f"decision_tf_{health}"
+            hard = LT.TM_AGE_HARD_LAST_MS.get(tf)
+            age = tm.age_ms(self.symbol, tf, now)
+            if hard is not None and age is not None and age > hard:
+                return "tm_age_hard"
+        except Exception:  # noqa: BLE001 — an arm-gate fault must not wedge the lane
+            return None
+        return None
+
+    def _roll_daily_factory(self, clock: datetime) -> None:
+        if self.daily_factory is None or not self.daily_factory.enabled:
+            return
+        day = session_day(clock, self.daily_factory)
+        if day == self._factory_day:
+            return
+        self._factory_day = day
+        self._factory_entries_today = 0
+
+    def _daily_factory_entry_block_reason(self, now: datetime, account) -> str | None:
+        self._roll_daily_factory(now)
+        return entry_block_reason(
+            now=now, config=self.daily_factory,
+            entries_today=self._factory_entries_today,
+            daily_pnl_usd=float(getattr(account, "daily_pnl_usd", 0.0) or 0.0),
+        )
+
+    async def _entry_hygiene_block(self, now: datetime, idx: int) -> str | None:
+        """The three pre-entry gates, cheapest first. Returns a block reason or
+        None. Fail-closed: if the daily-factory account read faults, refuse."""
+        cp = self._candle_path_arm_block(now)
+        if cp is not None:
+            return f"candle_path:{cp}"
+        if self.protections is not None:
+            allowed, reason = self.protections.entries_allowed(idx)
+            if not allowed:
+                return f"protection:{reason}"
+        if self.daily_factory is not None and self.daily_factory.enabled:
+            account = await self._read_account()
+            if account is None:
+                return "account_read_failed"   # no entry without account truth
+            fb = self._daily_factory_entry_block_reason(now, account)
+            if fb is not None:
+                return f"daily_factory:{fb}"
+        return None
+
+    def _note_entry_block(self, block: str) -> None:
+        self.entry_hygiene_blocks += 1
+        self._last_entry_block = block
+        self._entry_block_counts[block] = self._entry_block_counts.get(block, 0) + 1
+        logger.info("live entry blocked by hygiene gate: %s", block)
+
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
         account = await self._read_account()
         if account is None:
@@ -241,11 +358,13 @@ class LiveTraderSession:
             self.risk_rejects += 1
         elif order.state is OrderState.ACKNOWLEDGED:
             self.orders_submitted += 1
+            self._factory_entries_today += 1
             self._plan = sig
             self._entry_bar_ts = self.candles["timestamp"].iloc[-1]
             self._open_exit_state(sig, sizing.quantity)
         elif order.state is OrderState.TIMEOUT_UNKNOWN:
             self.orders_submitted += 1
+            self._factory_entries_today += 1
             self._parked_entries[order.client_order_id] = (
                 sig,
                 self.candles["timestamp"].iloc[-1],
@@ -289,6 +408,8 @@ class LiveTraderSession:
         )
         self.orders_submitted += 1
         if order.state in _EXIT_ACCEPTED_STATES:
+            if self.protections is not None:
+                self.protections.on_exit(reason, self._bars)   # arm post-stop breaker
             self._clear_exit_plan()
         else:
             self._preserve_exit_plan(base_key, order)
@@ -399,6 +520,7 @@ class LiveTraderSession:
                    "low": float(raw[3]), "close": float(raw[4]), "volume": float(raw[5])}
             self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
             self._bars += 1
+            self._feed_time_machine(now, raw)   # arm-gate input (fail-safe)
 
             bar = self.candles.iloc[-1]
             # exits first (always allowed, even in emergency_reduce_only) — the
@@ -411,10 +533,15 @@ class LiveTraderSession:
                     and self.private_stream_ready(now)
                     and len(self.candles) > self.strategy.warmup_bars):
                 df = self.strategy.prepare(self.candles)
-                sig = self.strategy.signal(df, len(df) - 1)
-                if sig is not None:
-                    self.signals += 1
-                    await self._submit_entry(sig, now)
+                idx = len(df) - 1
+                block = await self._entry_hygiene_block(now, idx)
+                if block is not None:
+                    self._note_entry_block(block)   # arm-gate / protections / factory
+                else:
+                    sig = self.strategy.signal(df, idx)
+                    if sig is not None:
+                        self.signals += 1
+                        await self._submit_entry(sig, now)
 
             if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
                 await self._reconcile()
@@ -493,6 +620,10 @@ class LiveTraderSession:
             return
         order = self.om.orders[client_order_id]
         if order.state in _EXIT_ACCEPTED_STATES:
+            if self.protections is not None:
+                parts = base_key.split("|")   # exit|SYMBOL|reason|ts
+                if len(parts) >= 3:
+                    self.protections.on_exit(parts[2], self._bars)
             self._clear_exit_plan()
             return
         if order.state in _EXIT_RETRYABLE_STATES:

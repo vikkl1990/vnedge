@@ -15,7 +15,9 @@ from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.private_stream import PrivateStreamHealth
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.position_sizer import SymbolLimits
+from vnedge.risk.protections import ProtectionConfig, ProtectionState
 from vnedge.risk.risk_manager import AccountState, MarketState, PreTradeRiskGateway
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist
 from vnedge.runtime.live_trader import LiveTraderSession
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
@@ -457,6 +459,82 @@ async def test_submit_entry_read_fault_fails_closed(tmp_path):
     await session._submit_entry(SignalIntent("long", stop_price=95.0, take_profit_price=110.0),
                                 __import__("datetime").datetime.now(__import__("datetime").UTC))
     assert session._recon_read_failures == before + 1 and session.orders_submitted == 0
+
+
+# --- L3: entry-hygiene gates (arm-gate / protections / daily-factory) ---
+async def test_l3_no_gates_wired_entry_flows(tmp_path):
+    adapter = FakeLiveAdapter()
+    session, _ = wire(live_settings(), FakeFeed([bar(0)]), adapter, FakeAccounts(),
+                      tmp_path, OneShotLong(at_bar=6))
+    await session.run(max_bars=1)
+    assert len(adapter.submitted) == 1 and session.entry_hygiene_blocks == 0
+
+
+async def test_l3_protection_cooldown_blocks_entry(tmp_path):
+    prot = ProtectionState(ProtectionConfig(cooldown_bars_after_stop=10))
+    prot.on_exit("stop", 0)   # cooldown armed through bar 10
+    adapter = FakeLiveAdapter()
+    session, _ = wire(live_settings(), FakeFeed([bar(0)]), adapter, FakeAccounts(),
+                      tmp_path, OneShotLong(at_bar=6), protections=prot)
+    await session.run(max_bars=1)
+    assert adapter.submitted == []                            # never reached the venue
+    assert session.entry_hygiene_blocks == 1
+    assert session._last_entry_block.startswith("protection:")
+
+
+async def test_l3_stop_exit_arms_protection_cooldown(tmp_path):
+    prot = ProtectionState(ProtectionConfig(cooldown_bars_after_stop=5))
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), accounts,
+                      tmp_path, OneShotLong(), protections=prot)
+    session._plan = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._entry_bar_ts = pd.Timestamp(BASE, unit="ms", tz="UTC")
+    session._bars = 3
+    await session._submit_exit("stop", datetime.now(UTC))     # a live stop exit
+    allowed, reason = prot.entries_allowed(4)                 # 4 < cooldown_until(3+5)
+    assert allowed is False and "cooldown" in reason          # the exit armed the breaker
+
+
+async def test_l3_daily_factory_max_entries_blocks_entry(tmp_path):
+    cfg = DailySignalFactoryConfig(enabled=True, max_entries_per_day=2)
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), FakeAccounts(),
+                      tmp_path, OneShotLong(), daily_factory=cfg)
+    now = datetime.now(UTC)
+    session._roll_daily_factory(now)      # establish the session day
+    session._factory_entries_today = 2    # already at the per-day cap
+    block = await session._entry_hygiene_block(now, idx=5)
+    assert block is not None and block.startswith("daily_factory:daily_factory_max_entries")
+
+
+async def test_l3_arm_gate_blocks_entry_when_tm_degraded(tmp_path):
+    class BrokenTM:
+        def on_kline_update(self, *a, **k):
+            raise RuntimeError("tm down")           # -> _feed_time_machine sets degraded
+        def check_health(self, *a, **k):
+            pass
+        def health_of(self, *a, **k):
+            return "ok"
+        def age_ms(self, *a, **k):
+            return 0
+    adapter = FakeLiveAdapter()
+    session, _ = wire(live_settings(), FakeFeed([bar(0)]), adapter, FakeAccounts(),
+                      tmp_path, OneShotLong(at_bar=6), time_machine=BrokenTM(), timeframe="1h")
+    await session.run(max_bars=1)
+    assert adapter.submitted == []
+    assert session.entry_hygiene_blocks == 1
+    assert session._last_entry_block == "candle_path:tm_error"
+
+
+async def test_l3_daily_factory_read_fault_fails_closed(tmp_path):
+    class BoomAccounts(FakeAccounts):
+        async def account_state(self):
+            raise RuntimeError("account read down")
+    cfg = DailySignalFactoryConfig(enabled=True, max_entries_per_day=5)
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), BoomAccounts(),
+                      tmp_path, OneShotLong(), daily_factory=cfg)
+    now = datetime.now(UTC)
+    block = await session._entry_hygiene_block(now, idx=5)
+    assert block == "account_read_failed"   # no account truth -> refuse the entry
 
 
 # --- L1 increment 1: _report tracks real venue equity / peak-drawdown ---
