@@ -457,3 +457,28 @@ async def test_submit_entry_read_fault_fails_closed(tmp_path):
     await session._submit_entry(SignalIntent("long", stop_price=95.0, take_profit_price=110.0),
                                 __import__("datetime").datetime.now(__import__("datetime").UTC))
     assert session._recon_read_failures == before + 1 and session.orders_submitted == 0
+
+
+# --- L1 increment 1: _report tracks real venue equity / peak-drawdown ---
+async def test_l1_report_tracks_real_equity_and_drawdown(tmp_path):
+    class MovingAccounts(FakeAccounts):
+        _eqs = [800.0, 850.0, 810.0]
+
+        def __init__(self):
+            super().__init__()
+            self._i = 0
+
+        async def account_state(self):
+            eq = self._eqs[min(self._i, len(self._eqs) - 1)]
+            self._i += 1
+            return AccountState(equity_usd=eq, daily_pnl_usd=0.0,
+                                peak_equity_usd=eq, open_positions=0)
+
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(),
+                      MovingAccounts(), tmp_path, OneShotLong())
+    for _ in range(3):                       # 800 (start+peak) -> 850 (peak) -> 810
+        await session._read_account()
+    rep = session._report()
+    assert rep.final_equity_usd == 810.0                      # real current equity, not 0
+    assert rep.realized_pnl_usd == 10.0                       # 810 - 800 starting
+    assert abs(rep.max_drawdown_pct - (850 - 810) / 850 * 100) < 0.01   # ~4.7% from the 850 peak

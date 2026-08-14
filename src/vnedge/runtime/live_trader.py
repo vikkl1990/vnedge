@@ -133,6 +133,14 @@ class LiveTraderSession:
         self._exit_state: ActiveExitState | None = None
         self._position_qty = 0.0        # tracked entry size (resolve_bar gate)
         self._entry_bar_index: int | None = None
+        # L1 settlement: real equity/peak/drawdown from the venue (account_state is
+        # truth), tracked every account read, so _report() and the snapshot report
+        # real capital instead of zeros. (Fill-level accounting = the fill ledger,
+        # increment 2.)
+        self._last_equity_usd = 0.0
+        self._starting_equity_usd = 0.0
+        self._peak_equity_usd = 0.0
+        self._max_drawdown_pct = 0.0
         # Runtime fail-closed latch: set when position reconciliation finds the
         # venue diverging from internal state; blocks new entries (exits still
         # flow) until a clean settled pass clears it. The static
@@ -161,6 +169,19 @@ class LiveTraderSession:
             return False
         return health.age_seconds(now) <= self.max_private_stream_age_seconds
 
+    def _track_equity(self, account) -> None:
+        """L1: maintain real equity / peak / max-drawdown from the venue truth."""
+        eq = float(getattr(account, "equity_usd", 0.0) or 0.0)
+        if eq <= 0:
+            return
+        self._last_equity_usd = eq
+        if self._starting_equity_usd <= 0:
+            self._starting_equity_usd = eq
+        self._peak_equity_usd = max(self._peak_equity_usd, eq)
+        if self._peak_equity_usd > 0:
+            dd = (self._peak_equity_usd - eq) / self._peak_equity_usd * 100.0
+            self._max_drawdown_pct = max(self._max_drawdown_pct, dd)
+
     async def _read_account(self):
         """Guarded account read on the SUBMIT path — a fault fail-closes (counts
         toward the reconciliation read-failure halt) instead of crashing run()."""
@@ -170,6 +191,7 @@ class LiveTraderSession:
             self._note_submit_read_failure("account", exc)
             return None
         self._recon_read_failures = 0
+        self._track_equity(st)
         return st
 
     async def _read_positions(self):
@@ -354,6 +376,7 @@ class LiveTraderSession:
         """Close every venue position reduce-only through the normal pipeline."""
         positions = await self.accounts.open_positions()
         account = await self.accounts.account_state()
+        self._track_equity(account)
         markets = {self.symbol: self.feed.market_state()}
         fid = f"flatten|{int(datetime.now(UTC).timestamp() * 1000)}"
         await self.om.emergency_flatten(positions, account, markets, fid,
@@ -442,6 +465,7 @@ class LiveTraderSession:
                     "until a clean account read", self._recon_read_failures)
             return
         self._recon_read_failures = 0          # clean read → clear the failure streak
+        self._track_equity(account)            # L1: real equity/peak/drawdown from venue truth
         expected = self._plan is not None          # we believe we hold a position
         actual = account.open_positions > 0        # the venue's truth
         if expected != actual:
@@ -476,13 +500,20 @@ class LiveTraderSession:
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
 
     def _report(self) -> RunReport:
+        # L1 increment 1: real equity / peak-drawdown / net-since-start from the
+        # venue account truth. fills/fees are 0 pending the fill ledger (increment
+        # 2); net_change is the account equity delta (realized + any open uPnL).
+        net_change = (self._last_equity_usd - self._starting_equity_usd
+                      if self._starting_equity_usd > 0 else 0.0)
         return RunReport(
             mode=self.settings.trading_mode.value, symbol=self.symbol,
             strategy_id=self.strategy.strategy_id, bars_processed=self._bars,
             signals_generated=self.signals, orders_submitted=self.orders_submitted,
-            fills=0, fees_usd=0.0, realized_pnl_usd=0.0, unrealized_pnl_usd=0.0,
-            max_drawdown_pct=0.0, risk_rejects=self.risk_rejects,
+            fills=0, fees_usd=0.0, realized_pnl_usd=round(net_change, 6),
+            unrealized_pnl_usd=0.0,
+            max_drawdown_pct=round(self._max_drawdown_pct, 4),
+            risk_rejects=self.risk_rejects,
             sizing_skips=self.sizing_skips, shadow_approved=0, shadow_rejected=0,
             reconciliation_mismatches=self.recon_mismatches,
-            final_equity_usd=0.0,
+            final_equity_usd=round(self._last_equity_usd, 6),
         )
