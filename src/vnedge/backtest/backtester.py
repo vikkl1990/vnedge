@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass, field
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from vnedge.backtest.fee_model import FeeModel
 from vnedge.backtest.slippage_model import SlippageModel
@@ -77,18 +77,32 @@ class BacktestConfig(BaseModel):
     breakeven_arm_bps: float | None = Field(default=None)
     profit_lock_bps: float = Field(default=0.0, ge=0.0)
 
-    # RESEARCH↔RUNTIME EXIT PARITY (2026-08-02). When True the backtester drives
-    # the EXACT `ActiveExitState` machine that paper/live use — TP-ladder partials,
-    # fee-aware breakeven, and (with `trail_atr_mult`) a real per-bar ATR-chandelier
-    # trail — instead of the single stop/TP check. This is what lets a scanner be
-    # JUDGED on the same exit it will RUN. Default off = legacy behavior unchanged;
-    # the simple breakeven_arm_bps above is ignored when this is on.
-    use_active_exit: bool = Field(default=False)
+    # RESEARCH↔RUNTIME EXIT PARITY (2026-08-02; default flipped 2026-08-15, H4).
+    # When True the backtester drives the EXACT `ActiveExitState` machine that
+    # paper/live use — TP-ladder partials, fee-aware breakeven, and (with
+    # `trail_atr_mult`) a real per-bar ATR-chandelier trail — instead of the single
+    # stop/TP check. This is what lets a scanner be JUDGED on the same exit it will
+    # RUN, so it now DEFAULTS ON: a promotion judgment matches deployment unless a
+    # caller explicitly opts into the legacy exit. `use_active_exit=False` keeps the
+    # old single stop/TP (and the simple breakeven_arm_bps) for the legacy tests.
+    use_active_exit: bool = Field(default=True)
     trail_atr_mult: float = Field(default=0.0, ge=0.0)
     # Canonical ATR window for the trail — computed by the backtester itself, NOT
     # read from a strategy column (those are named inconsistently: `atr`,
     # `atr_margin`, …). Keeps trailing identical across every scanner.
     trail_atr_window: int = Field(default=14, ge=1)
+
+    @model_validator(mode="after")
+    def _trail_requires_active_exit(self) -> "BacktestConfig":
+        # A trail set with the legacy exit is a SILENT no-op — the backtester only
+        # trails under use_active_exit (see run loop). Catch the contradiction so a
+        # judgment can't believe it trailed when it didn't (H4).
+        if self.trail_atr_mult > 0.0 and not self.use_active_exit:
+            raise ValueError(
+                "trail_atr_mult>0 requires use_active_exit=True — the legacy exit "
+                "ignores the trail, so this would judge on an exit the lane won't run"
+            )
+        return self
 
 
 @dataclass(frozen=True)

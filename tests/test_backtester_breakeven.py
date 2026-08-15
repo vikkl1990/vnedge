@@ -136,8 +136,21 @@ def test_active_exit_takes_ladder_partials_and_trails():
     assert sum(t.net_pnl_usd for t in r.trades) > 0
 
 
-def test_active_exit_default_off_matches_legacy():
+def test_active_exit_is_default_legacy_is_explicit_opt_out():
+    # H4: the shared ActiveExitState engine is now the DEFAULT, so a promotion
+    # judgment uses the same exit production runs. Legacy single-stop/TP is an
+    # explicit opt-out.
     df=_rise_then_fall()
-    a=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(), symbol="X", timeframe="1h")
-    b=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(use_active_exit=False), symbol="X", timeframe="1h")
-    assert [t.net_pnl_usd for t in a.trades]==[t.net_pnl_usd for t in b.trades]
+    default=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(), symbol="X", timeframe="1h")
+    active=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(use_active_exit=True), symbol="X", timeframe="1h")
+    legacy=run_backtest(df.copy(), None, _LadderOnce(), BacktestConfig(use_active_exit=False), symbol="X", timeframe="1h")
+    # default behaves like the active engine (ladder takes partials), NOT legacy
+    assert [t.net_pnl_usd for t in default.trades]==[t.net_pnl_usd for t in active.trades]
+    assert len(default.trades) > len(legacy.trades)   # ladder partials vs one exit
+
+
+def test_trail_without_active_exit_is_rejected():
+    # a silent-no-op trail is a config error, not a quietly-ignored field (H4)
+    import pytest
+    with pytest.raises(ValueError, match="use_active_exit"):
+        BacktestConfig(use_active_exit=False, trail_atr_mult=2.0)

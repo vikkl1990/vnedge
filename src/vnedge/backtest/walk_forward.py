@@ -285,15 +285,14 @@ def evaluate_promotion(
     if oos_net <= 0:
         reasons.append(f"aggregate OOS net ${oos_net:+.2f} is not positive")
 
-    # Aggregate profit factor from per-window gross wins/losses (recovered
-    # exactly from avg_win * win_count / avg_loss * loss_count).
-    gross_wins = gross_losses = 0.0
-    for w in windows:
-        m = w.test_metrics
-        n_wins = round(m.win_rate_pct / 100.0 * m.num_trades)
-        n_losses = m.num_trades - n_wins
-        gross_wins += m.avg_win_usd * n_wins
-        gross_losses += -m.avg_loss_usd * n_losses
+    # Aggregate profit factor + payoff from the EXACT per-window OOS trades
+    # (test_trades) — the same list the concentration gate below uses — not from
+    # rounded win_rate summary stats, which could misclassify a borderline gate.
+    oos_pnls = [t.net_pnl_usd for w in windows for t in w.test_trades]
+    gross_wins = sum(p for p in oos_pnls if p > 0)
+    gross_losses = -sum(p for p in oos_pnls if p <= 0)
+    n_wins = sum(1 for p in oos_pnls if p > 0)
+    n_losses = sum(1 for p in oos_pnls if p <= 0)
     if gross_losses > 0:
         agg_pf = gross_wins / gross_losses
         if agg_pf < gates.min_profit_factor:
@@ -304,11 +303,6 @@ def evaluate_promotion(
         reasons.append("no OOS gross wins — profit factor 0")
 
     if gates.min_payoff_ratio > 0:
-        n_wins = sum(
-            round(w.test_metrics.win_rate_pct / 100.0 * w.test_metrics.num_trades)
-            for w in windows
-        )
-        n_losses = total_trades - n_wins
         if n_wins > 0 and n_losses > 0 and gross_losses > 0:
             payoff = (gross_wins / n_wins) / (gross_losses / n_losses)
             if payoff < gates.min_payoff_ratio:
