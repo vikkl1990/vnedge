@@ -649,7 +649,11 @@ class OrderManager:
             logger.error("private stream fill for unknown order %s", client_order_id)
             return False
 
-        order.filled_quantity += max(float(fill_quantity), 0.0)
+        # M5: accumulate per-trade quantity separately, then take the MAX against
+        # any cumulative already set by a watch_orders update — the two streams
+        # report the SAME fills, so adding both double-counts.
+        order.venue_trade_filled += max(float(fill_quantity), 0.0)
+        order.filled_quantity = max(order.filled_quantity, order.venue_trade_filled)
         order.fees_paid += max(float(fee_cost), 0.0)
         target = (
             OrderState.FILLED

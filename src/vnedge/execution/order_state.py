@@ -89,6 +89,10 @@ class ManagedOrder:
     state: OrderState = OrderState.SIGNAL_CREATED
     exchange_order_id: str | None = None
     filled_quantity: float = 0.0
+    # M5: running sum of per-trade (watch_my_trades) fill quantities, kept SEPARATE
+    # from filled_quantity so the cumulative from order updates (watch_orders) and
+    # the per-trade sum never double-count — filled_quantity is the max of the two.
+    venue_trade_filled: float = 0.0
     fees_paid: float = 0.0
     # Lineage: client_order_id of the order this one replaced (cancel/replace).
     replaces: str | None = None

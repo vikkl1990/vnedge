@@ -68,6 +68,18 @@ class FakeStrategy(BaseStrategy):
         return None
 
 
+class FakeStream:
+    def __init__(self):
+        self.closed = False
+
+    async def run_forever(self, *, symbol=None, stop_event=None, retry_delay_seconds=1.0):
+        if stop_event is not None:
+            await stop_event.wait()
+
+    async def close(self):
+        self.closed = True
+
+
 def _warmup():
     async def load(config, bars):
         return normalize_candles(
@@ -93,6 +105,9 @@ def _facs():
         "account_factory": Fac(FakeAccount()),
         "strategy_factory": Fac(FakeStrategy()),
         "warmup_loader": _warmup(),
+        # M2: a fake private stream so the happy path doesn't construct a real venue
+        # client (the default fill ledger writes under the chdir'd tmp_path).
+        "private_stream_factory": Fac(FakeStream()),
     }
 
 
@@ -127,3 +142,6 @@ async def test_all_gates_open_wires_and_runs(tmp_path, monkeypatch):
     assert facs["account_factory"].calls == 1
     assert facs["strategy_factory"].calls == 1
     assert facs["feed_factory"].obj.started and facs["feed_factory"].obj.stopped
+    # M2: the private fill/order stream is wired and torn down with the session
+    assert facs["private_stream_factory"].calls == 1
+    assert facs["private_stream_factory"].obj.closed

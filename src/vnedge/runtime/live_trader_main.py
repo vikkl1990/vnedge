@@ -38,9 +38,14 @@ import pandas as pd
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings
 from vnedge.data.schemas import normalize_candles
 from vnedge.exchange.venue_specs import venue_symbol_limits
+from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import OrderManager
+from vnedge.execution.private_stream import (
+    PrivateStreamEventApplier,
+    PrivateStreamHealth,
+)
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.live_trader import LiveTraderSession
@@ -118,6 +123,26 @@ def _default_strategy(strategy_id: str):
     return get_strategy_class(strategy_id)()
 
 
+def _default_fill_ledger(config: LiveTraderRunConfig) -> FillLedger:
+    return FillLedger(f"logs/live/{config.exchange}_{config.strategy_id}.fills.jsonl")
+
+
+def _default_private_stream(config, applier, health):
+    # The mainnet private order/fill stream. Constructed ONLY after the gate chain
+    # passes; same live_confirmed gate as the execution adapter.
+    from vnedge.execution.private_stream import CcxtPrivateStream
+
+    return CcxtPrivateStream(
+        config.exchange,
+        api_key=os.environ["VNEDGE_EXEC_API_KEY"],
+        api_secret=os.environ["VNEDGE_EXEC_API_SECRET"],
+        applier=applier,
+        testnet=False,
+        live_confirmed=True,
+        health=health,
+    )
+
+
 async def run_live_trader(
     settings: Settings,
     config: LiveTraderRunConfig,
@@ -127,6 +152,8 @@ async def run_live_trader(
     feed_factory=None,
     strategy_factory=None,
     warmup_loader=None,
+    fill_ledger_factory=None,
+    private_stream_factory=None,
     max_bars: int | None = None,
 ) -> int:
     """Enforce the full gate chain, then (only if it clears) wire + run the
@@ -179,6 +206,14 @@ async def run_live_trader(
     reconciler = LiveReconciler(om, adapter)
     limits = venue_symbol_limits(config.exchange, config.symbol)
 
+    # M2: immutable fill ledger + the private order/fill stream. The stream is the
+    # ONLY source of real per-fill economics (price/fee) AND the freshness signal
+    # the session gates entries on — so require_private_stream is True on live.
+    fill_ledger = (fill_ledger_factory or _default_fill_ledger)(config)
+    health = PrivateStreamHealth()
+    applier = PrivateStreamEventApplier(om, fill_ledger=fill_ledger, venue=config.exchange)
+    stream = (private_stream_factory or _default_private_stream)(config, applier, health)
+
     session = LiveTraderSession(
         strategy, feed, history, settings=settings, gateway=gateway,
         order_manager=om, reconciler=reconciler, account_provider=account,
@@ -186,19 +221,31 @@ async def run_live_trader(
         max_holding_bars=config.max_holding_bars,
         trail_atr_mult=config.trail_atr_mult,
         trail_atr_window=config.trail_atr_window,
+        fill_ledger=fill_ledger,
+        private_stream_health=health, require_private_stream=True,
+    )
+    stop_event = asyncio.Event()
+    stream_task = asyncio.create_task(
+        stream.run_forever(symbol=config.symbol, stop_event=stop_event)
     )
     try:
         await feed.start()
         await session.run(max_bars=max_bars)
     finally:
+        stop_event.set()
+        stream_task.cancel()
         try:
-            await feed.stop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("feed stop failed: %s", exc)
-        try:
-            await adapter.close()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("adapter close failed: %s", exc)
+            await stream_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — best-effort teardown
+            pass
+        for name, closer in (("feed", feed.stop), ("adapter", adapter.close),
+                             ("stream", getattr(stream, "close", None))):
+            if closer is None:
+                continue
+            try:
+                await closer()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s close failed: %s", name, exc)
     return _EXIT_OK
 
 
