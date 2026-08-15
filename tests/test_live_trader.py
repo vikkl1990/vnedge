@@ -150,6 +150,26 @@ def test_constructs_when_all_gates_open(tmp_path):
     assert session.entries_allowed
 
 
+def test_m3_live_refuses_disabled_daily_loss_halt(tmp_path):
+    # A direct construction with a paper-only risk config (halt OFF) must be refused
+    # for a live session even without a pre-live report wired.
+    bad = Settings(_env_file=None, trading_mode=TradingMode.LIVE_SMALL,
+                   live_trading_enabled=True, confirm_live_trading=LIVE_CONFIRMATION_PHRASE,
+                   live_small_capital_cap_usd=100_000.0,
+                   risk=RiskConfig(daily_loss_halt_enabled=False))
+    with pytest.raises(RuntimeError, match="daily_loss_halt_enabled"):
+        wire(bad, FakeFeed([]), FakeLiveAdapter(), FakeAccounts(), tmp_path, OneShotLong())
+
+
+def test_m3_live_refuses_fixed_margin_sizing(tmp_path):
+    bad = Settings(_env_file=None, trading_mode=TradingMode.LIVE_SMALL,
+                   live_trading_enabled=True, confirm_live_trading=LIVE_CONFIRMATION_PHRASE,
+                   live_small_capital_cap_usd=100_000.0,
+                   risk=RiskConfig(fixed_margin_usd=10.0))
+    with pytest.raises(RuntimeError, match="fixed_margin_usd"):
+        wire(bad, FakeFeed([]), FakeLiveAdapter(), FakeAccounts(), tmp_path, OneShotLong())
+
+
 def test_refuses_failed_pre_live_report(tmp_path):
     settings = live_settings()
     report = run_pre_live_checklist(

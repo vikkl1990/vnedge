@@ -1,6 +1,7 @@
 """Operator-action audit log — durable, append-only, hash-chained, tamper-evident."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -59,3 +60,18 @@ def test_kill_switch_without_audit_log_is_unchanged(tmp_path):
     ks = KillSwitch(kill_file=tmp_path / "KILL")
     ks.activate("test")
     assert ks.is_active
+
+
+def test_h1_kill_switch_coerces_str_path_and_trips(tmp_path):
+    # H1: the live entrypoint passed a str; is_active()/.exists() then crashed on
+    # the first entry, silently disabling `touch KILL`. A str must now coerce to
+    # Path and behave identically.
+    kill = tmp_path / "KILL"
+    ks = KillSwitch(kill_file=str(kill))   # str, as live_trader_main once did
+    assert isinstance(ks.kill_file, Path)
+    assert ks.is_active is False           # previously raised AttributeError
+    kill.write_text("halt")
+    assert ks.is_active is True            # touch KILL trips it
+    ks2 = KillSwitch(kill_file=str(tmp_path / "K2"))
+    ks2.activate("programmatic trip")      # write_text on a coerced Path works
+    assert (tmp_path / "K2").exists()

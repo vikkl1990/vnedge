@@ -47,6 +47,13 @@ class KillSwitch:
     # used to promise. Duck-typed so risk/ never imports execution/ at runtime.
     audit_log: "OperatorAuditLog | None" = None
 
+    def __post_init__(self) -> None:
+        # H1: coerce a str path to Path so a caller passing "KILL" (as the live
+        # entrypoint did) can never make is_active()/.exists() crash on the first
+        # entry — which would silently disable `touch KILL` on the live path.
+        if not isinstance(self.kill_file, Path):
+            self.kill_file = Path(self.kill_file)
+
     def activate(self, reason: str, source: str = "programmatic") -> None:
         if self._active:
             return  # already tripped; first reason wins, do not overwrite

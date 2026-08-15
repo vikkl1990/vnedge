@@ -31,10 +31,11 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
-from vnedge.config.settings import Settings
+from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings
 from vnedge.data.schemas import normalize_candles
 from vnedge.exchange.venue_specs import venue_symbol_limits
 from vnedge.execution.journal import DecisionJournal
@@ -136,7 +137,7 @@ async def run_live_trader(
             "REFUSED: three live gates not open (mode=%s, enabled=%s, phrase_ok=%s). "
             "No live client constructed.",
             settings.trading_mode.value, settings.live_trading_enabled,
-            settings.confirm_live_trading != "",
+            settings.confirm_live_trading == LIVE_CONFIRMATION_PHRASE,
         )
         return _EXIT_GATES
 
@@ -168,7 +169,12 @@ async def run_live_trader(
     history = await (warmup_loader or _default_warmup)(config, _WARMUP_BARS)
 
     journal = DecisionJournal(f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl")
-    gateway = PreTradeRiskGateway(settings.risk, KillSwitch(kill_file="KILL"))
+    # H1: the field is a Path — a str here makes is_active()/.exists() crash on the
+    # first entry, so `touch KILL` could not halt a live bot. Honor KILL_FILE so the
+    # gateway's switch and the pre-live checklist (which reads KILL_FILE) agree.
+    gateway = PreTradeRiskGateway(
+        settings.risk, KillSwitch(kill_file=Path(os.environ.get("KILL_FILE", "KILL")))
+    )
     om = OrderManager(gateway, journal, adapter)
     reconciler = LiveReconciler(om, adapter)
     limits = venue_symbol_limits(config.exchange, config.symbol)

@@ -30,7 +30,7 @@ from typing import Protocol
 
 import pandas as pd
 
-from vnedge.config.settings import Settings, TradingMode
+from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
 from vnedge.data.time_machine import TimeMachine
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.live_reconciliation import LiveReconciler
@@ -108,7 +108,22 @@ class LiveTraderSession:
                 "live_trading_enabled=true, and the exact confirmation phrase. "
                 f"Current: mode={settings.trading_mode.value}, "
                 f"enabled={settings.live_trading_enabled}, "
-                f"phrase_ok={settings.confirm_live_trading != ''}"
+                f"phrase_ok={settings.confirm_live_trading == LIVE_CONFIRMATION_PHRASE}"
+            )
+        # M3 (defense in depth): the two paper-only risk knobs must never reach a
+        # live session even by DIRECT construction (bypassing the entrypoint's
+        # checklist) — a disabled daily-loss halt or leverage-based fixed-margin
+        # sizing on real orders is exactly what the charter forbids.
+        _rc = settings.risk
+        if getattr(_rc, "daily_loss_halt_enabled", True) is not True:
+            raise RuntimeError(
+                "live session requires daily_loss_halt_enabled=True — the halt is "
+                "paper-only-disableable and must be ON for live"
+            )
+        if getattr(_rc, "fixed_margin_usd", None) is not None:
+            raise RuntimeError(
+                "live session requires fixed_margin_usd=None — leverage-based sizing "
+                "is paper-only; live sizes from risk-per-trade and stop distance"
             )
         if pre_live_report is not None and not pre_live_report.cleared:
             failures = ", ".join(f.name for f in pre_live_report.failures)
