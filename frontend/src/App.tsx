@@ -5,6 +5,7 @@ import {
   BookPanel,
   FeedPanel,
   Header,
+  HealthPanel,
   JournalPanel,
   LanesPanel,
   MarketPanel,
@@ -61,6 +62,7 @@ export default function App() {
           <BookPanel />
           <RiskPanel />
           <LanesPanel />
+          <HealthPanel />
           <PositionsPanel />
         </div>
       )}

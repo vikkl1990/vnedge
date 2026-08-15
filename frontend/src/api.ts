@@ -114,6 +114,23 @@ export interface Chip {
   label?: string;
 }
 
+export interface LaneHealthProblem {
+  lane_id?: string;
+  verdict?: string;
+  age_seconds?: number | null;
+  detail?: string;
+  trade_compatible?: boolean;
+}
+
+export interface LaneHealth {
+  healthy?: boolean;
+  production_healthy?: boolean;
+  summary?: string;
+  production_summary?: string;
+  totals?: Record<string, number>;
+  problems?: LaneHealthProblem[];
+}
+
 export interface Snapshot {
   mode?: string;
   symbol?: string;
@@ -143,6 +160,7 @@ export interface Snapshot {
   plan_overlay?: PlanOverlay | null;
   session?: Record<string, unknown>;
   chips?: Record<string, Chip>;
+  lane_health?: LaneHealth | null;
   [k: string]: unknown;
 }
 

@@ -4,7 +4,7 @@
 
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useJournal, useSnapshot, useWhoAmI } from "../queries";
-import type { JournalRow, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
+import type { JournalRow, LaneHealth, LaneHealthProblem, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
@@ -14,6 +14,12 @@ const ageMs = (ms: unknown) => {
   const n = Number(ms);
   if (!Number.isFinite(n)) return "—";
   return n < 1000 ? `${Math.round(n)} ms` : n < 60000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n / 60000)} m`;
+};
+
+const ageSec = (s: unknown) => {
+  const n = Number(s);
+  if (!Number.isFinite(n)) return "—";
+  return n < 90 ? `${Math.round(n)}s` : n < 5400 ? `${(n / 60).toFixed(1)}m` : `${(n / 3600).toFixed(1)}h`;
 };
 
 export function Header() {
@@ -233,6 +239,47 @@ export function LanesPanel() {
   return (
     <TerminalPanel title="Lanes" meta={`${lanes.length} · mode · cost · regime · candle · plan (observe-only)`}>
       {lanes.length ? <DenseTable columns={cols} rows={lanes} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
+    </TerminalPanel>
+  );
+}
+
+// Verdict severity → badge tone. Mirrors lane_health.py: STALE/MISSING are
+// hard-broken (bad); ORPHAN/SILENT/SHADOW_PROBATION are attention-not-dead (warn).
+const HEALTH_TONE: Record<string, string> = {
+  OK: "good",
+  STALE: "bad",
+  MISSING: "bad",
+  SILENT: "warn",
+  ORPHAN: "warn",
+  SHADOW_PROBATION: "warn",
+};
+
+export function HealthPanel() {
+  const { data } = useSnapshot();
+  const lh = (data?.lane_health ?? null) as LaneHealth | null;
+  const problems = lh?.problems ?? [];
+  const cols: Column<LaneHealthProblem>[] = [
+    { key: "lane_id", header: "Lane", render: (r) => r.lane_id ?? "—" },
+    {
+      key: "verdict",
+      header: "Verdict",
+      render: (r) => <TerminalBadge tone={(HEALTH_TONE[r.verdict ?? ""] ?? "neutral") as never}>{r.verdict ?? "—"}</TerminalBadge>,
+    },
+    { key: "age", header: "Last rec", render: (r) => ageSec(r.age_seconds) },
+    { key: "detail", header: "Detail", render: (r) => <span className="text-dim">{r.detail ?? "—"}</span> },
+  ];
+  return (
+    <TerminalPanel title="Lane health" meta={lh?.summary ?? "—"}>
+      {!lh ? (
+        <div className="text-faint text-[12px] p-2">No lane-health audit.</div>
+      ) : problems.length === 0 ? (
+        <div className="flex items-center gap-2 p-2">
+          <TerminalBadge tone="good">all lanes OK</TerminalBadge>
+          <span className="text-dim text-[12px]">{lh.production_summary ?? lh.summary}</span>
+        </div>
+      ) : (
+        <DenseTable columns={cols} rows={problems} />
+      )}
     </TerminalPanel>
   );
 }
