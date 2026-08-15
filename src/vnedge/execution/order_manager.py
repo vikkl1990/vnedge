@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Iterable, Protocol
 
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
 from vnedge.execution.journal import DecisionJournal
-from vnedge.execution.order_state import ManagedOrder, OrderState
+from vnedge.execution.order_state import ManagedOrder, OrderState, StateEvent
 from vnedge.execution.order_state import IllegalTransition
 from vnedge.risk.risk_manager import (
     AccountState,
@@ -82,6 +82,10 @@ class OrderManager:
         # journal's order_intent records into the registry so a same-key intent is
         # dropped as a duplicate (referencing the ORIGINAL id) instead.
         self._seed_registry_from_journal()
+        # H3: also rehydrate potentially-live-but-UNRESOLVED orders, so a restart
+        # doesn't forget a pre-crash TIMEOUT_UNKNOWN/mid-submit order and re-allow
+        # new risk while it still exists at the venue.
+        self._seed_orders_from_journal()
 
     def _seed_registry_from_journal(self) -> None:
         try:
@@ -94,6 +98,61 @@ class OrderManager:
                     self._registry.register(key, coid)
         except Exception as exc:  # noqa: BLE001 — a replay fault must not break construction
             logger.warning("intent registry journal seed failed: %s", exc)
+
+    #: an order whose LAST journaled lifecycle record is one of these is not
+    #: resolved — after a crash its real venue state is unknown, so it must block
+    #: new risk until the reconciler confirms it. Every other last-kind (ack,
+    #: rejected, resolved, cancelled, refused, ...) means the order is known/done,
+    #: so paper lanes — which ack synchronously — are never rehydrated.
+    _UNRESOLVED_LAST_KINDS = frozenset(
+        {"order_intent", "order_timeout_unknown", "reconciling"}
+    )
+    _ORDER_LIFECYCLE_KINDS = frozenset({
+        "order_intent", "order_acknowledged", "order_ack_race_resolved",
+        "order_timeout_unknown", "order_rejected", "order_refused", "order_cancel",
+        "order_fill_sync", "cancel_replace_outcome", "reconciling", "order_resolved",
+    })
+
+    def _seed_orders_from_journal(self) -> None:
+        try:
+            records = self._journal.read_all()
+        except Exception as exc:  # noqa: BLE001 — a replay fault must not break construction
+            logger.warning("order rehydration journal read failed: %s", exc)
+            return
+        intents: dict[str, dict] = {}       # coid -> the order_intent payload
+        last_kind: dict[str, str] = {}      # coid -> last lifecycle kind seen
+        for rec in records:
+            kind = rec.get("kind")
+            if kind not in self._ORDER_LIFECYCLE_KINDS:
+                continue
+            coid = (rec.get("payload") or {}).get("client_order_id")
+            if not coid:
+                continue
+            if kind == "order_intent":
+                intents[coid] = rec["payload"]
+            last_kind[coid] = kind
+        for coid, kind in last_kind.items():
+            if kind not in self._UNRESOLVED_LAST_KINDS or coid in self.orders:
+                continue
+            p = intents.get(coid)
+            if not p or "intent" not in p:
+                continue  # can't reconstruct the intent — nothing safe to restore
+            try:
+                intent = OrderIntent(**p["intent"])
+            except Exception:  # noqa: BLE001 — a malformed record must not break construction
+                continue
+            order = ManagedOrder(
+                intent_key=p.get("intent_key", ""), client_order_id=coid,
+                intent=intent, state=OrderState.TIMEOUT_UNKNOWN,
+            )
+            order.history.append(StateEvent(
+                datetime.now(UTC), OrderState.TIMEOUT_UNKNOWN,
+                f"rehydrated unresolved from journal on startup (last={kind})",
+            ))
+            self.orders[coid] = order
+            logger.critical(
+                "REHYDRATED unresolved order %s (last=%s) — reconciliation required "
+                "before any new risk", coid, kind)
 
     @property
     def has_unresolved_orders(self) -> bool:

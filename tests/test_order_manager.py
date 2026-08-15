@@ -207,6 +207,32 @@ async def test_registry_seeded_from_journal_survives_restart(journal, gateway):
     assert adapter2.submissions == []  # never reached the venue
 
 
+async def test_h3_rehydrates_unresolved_order_across_restart(journal, gateway):
+    # First process: an entry times out (parked TIMEOUT_UNKNOWN) and is journaled.
+    om1 = OrderManager(gateway, journal, TimeoutAdapter())
+    stuck = await om1.submit(intent(), account(), market(), key(0))
+    assert stuck.state is S.TIMEOUT_UNKNOWN and om1.has_unresolved_orders
+
+    # Restart: a fresh OM on the SAME journal rehydrates the unresolved order so new
+    # risk stays blocked until reconciliation — it is not silently forgotten.
+    om2 = OrderManager(gateway, journal, AckAdapter(journal))
+    assert om2.has_unresolved_orders
+    assert om2.orders[stuck.client_order_id].state is S.TIMEOUT_UNKNOWN
+    blocked = await om2.submit(intent(), account(), market(), key(1))
+    assert blocked.state is S.RISK_REJECTED
+    assert "TIMEOUT_UNKNOWN" in blocked.history[-1].note
+
+
+async def test_h3_resolved_order_not_rehydrated(journal, gateway):
+    # A cleanly ACKNOWLEDGED order (paper-style, acks synchronously) must NOT be
+    # rehydrated as unresolved — otherwise a restart would wedge the paper fleet.
+    om1 = OrderManager(gateway, journal, AckAdapter(journal))
+    ackd = await om1.submit(intent(), account(), market(), key(0))
+    assert ackd.state is S.ACKNOWLEDGED
+    om2 = OrderManager(gateway, journal, AckAdapter(journal))
+    assert not om2.has_unresolved_orders   # last kind = order_acknowledged -> skipped
+
+
 class PlainAckAdapter:
     async def submit_order(self, order):
         return "ex_plain"

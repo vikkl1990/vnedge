@@ -427,6 +427,47 @@ async def test_l4_orphan_position_flagged_and_journaled(tmp_path):
     assert session._orphan_position is False and session.entries_allowed is True
 
 
+# --- H2: reconciliation catches a wrong-SIDE / wrong-symbol venue position ---
+async def test_h2_wrong_side_venue_position_fails_closed(tmp_path):
+    # We believe we hold a LONG; the venue holds a SHORT on the same symbol. Count
+    # agrees (1 == 1), but the side diverges — must fail closed, not read clean.
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "short", 0.01)])
+    session, om = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), accounts,
+                       tmp_path, OneShotLong())
+    session._plan = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._open_exit_state(session._plan, 0.01)
+    await session._reconcile_positions()
+    assert session.recon_mismatches == 1
+    assert session.entries_allowed is False               # halted on the side divergence
+    kinds = [r["kind"] for r in om._journal.read_all()]
+    assert "reconciliation_divergence" in kinds
+
+
+async def test_h2_same_side_is_clean(tmp_path):
+    # Same symbol + same side + count agrees → genuinely clean, no false halt.
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), accounts,
+                      tmp_path, OneShotLong())
+    session._plan = SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+    session._open_exit_state(session._plan, 0.01)
+    await session._reconcile_positions()
+    assert session.recon_mismatches == 0 and session.entries_allowed is True
+
+
+# --- M1: a bar-level fault is contained, not fatal to the live loop ---
+async def test_m1_bar_fault_is_contained(tmp_path):
+    class BoomExit(OneShotLong):
+        pass
+    session, _ = wire(live_settings(), FakeFeed([bar(0)]), FakeLiveAdapter(),
+                      FakeAccounts(), tmp_path, OneShotLong(at_bar=6))
+    # make the per-bar body raise an unmapped error (not Adapter*): _manage_exit throws
+    async def boom(*a, **k):
+        raise KeyError("unmapped venue payload")
+    session._manage_exit = boom
+    await session.run(max_bars=1)          # must NOT raise out of run()
+    assert session.bar_faults == 1         # the fault was counted + contained
+
+
 # --- A2 audit fix: reconciliation fails closed on persistent account-read failure ---
 async def test_reconcile_read_failure_fails_closed_after_n(tmp_path):
     class BoomAccounts(FakeAccounts):

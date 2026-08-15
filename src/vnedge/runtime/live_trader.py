@@ -145,7 +145,7 @@ class LiveTraderSession:
         self.require_private_stream = require_private_stream
         self.max_private_stream_age_seconds = max_private_stream_age_seconds
         self.signals = self.orders_submitted = self.risk_rejects = 0
-        self.sizing_skips = self.recon_mismatches = 0
+        self.sizing_skips = self.recon_mismatches = self.bar_faults = 0
         self._plan: SignalIntent | None = None
         self._entry_bar_ts = None
         self._parked_entries = {}
@@ -541,40 +541,51 @@ class LiveTraderSession:
                 await self._reconcile()
                 continue
             now = datetime.now(UTC)
-            ts = pd.to_datetime(raw[0], unit="ms", utc=True)
-            if len(self.candles) and ts <= self.candles["timestamp"].iloc[-1]:
-                continue
-            row = {"timestamp": ts, "open": float(raw[1]), "high": float(raw[2]),
-                   "low": float(raw[3]), "close": float(raw[4]), "volume": float(raw[5])}
-            self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
-            self._bars += 1
-            self._feed_time_machine(now, raw)   # arm-gate input (fail-safe)
+            # M1: contain any bar-level fault — an unmapped submit error, a bad raw
+            # candle, a strategy exception — to THIS bar instead of terminating the
+            # real-money loop. The bar is skipped and a reconcile forced (a fault
+            # mid-submit could have left an order in flight; new risk stays gated
+            # until it resolves). Exit plans persist regardless (never dropped here).
+            try:
+                ts = pd.to_datetime(raw[0], unit="ms", utc=True)
+                if len(self.candles) and ts <= self.candles["timestamp"].iloc[-1]:
+                    continue
+                row = {"timestamp": ts, "open": float(raw[1]), "high": float(raw[2]),
+                       "low": float(raw[3]), "close": float(raw[4]), "volume": float(raw[5])}
+                self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
+                self._bars += 1
+                self._feed_time_machine(now, raw)   # arm-gate input (fail-safe)
 
-            bar = self.candles.iloc[-1]
-            # exits first (always allowed, even in emergency_reduce_only) — the
-            # shared exit engine: stop/breakeven/TP/trailing/max_holding.
-            await self._manage_exit(bar, now)
+                bar = self.candles.iloc[-1]
+                # exits first (always allowed, even in emergency_reduce_only) — the
+                # shared exit engine: stop/breakeven/TP/trailing/max_holding.
+                await self._manage_exit(bar, now)
 
-            # entries only when allowed, flat, and nothing unresolved
-            if (self.entries_allowed and self._plan is None
-                    and not self.om.has_unresolved_orders
-                    and self.private_stream_ready(now)
-                    and len(self.candles) > self.strategy.warmup_bars):
-                df = self.strategy.prepare(self.candles)
-                idx = len(df) - 1
-                block = await self._entry_hygiene_block(now, idx)
-                if block is not None:
-                    self._note_entry_block(block)   # arm-gate / protections / factory
-                else:
-                    sig = self.strategy.signal(df, idx)
-                    if sig is not None:
-                        self.signals += 1
-                        await self._submit_entry(sig, now)
+                # entries only when allowed, flat, and nothing unresolved
+                if (self.entries_allowed and self._plan is None
+                        and not self.om.has_unresolved_orders
+                        and self.private_stream_ready(now)
+                        and len(self.candles) > self.strategy.warmup_bars):
+                    df = self.strategy.prepare(self.candles)
+                    idx = len(df) - 1
+                    block = await self._entry_hygiene_block(now, idx)
+                    if block is not None:
+                        self._note_entry_block(block)   # arm-gate / protections / factory
+                    else:
+                        sig = self.strategy.signal(df, idx)
+                        if sig is not None:
+                            self.signals += 1
+                            await self._submit_entry(sig, now)
 
-            if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
-                await self._reconcile()
+                if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
+                    await self._reconcile()
 
-            self._ledger_sweep(now)   # chain any newly-accepted executions
+                self._ledger_sweep(now)   # chain any newly-accepted executions
+            except Exception as exc:  # noqa: BLE001 — a bar fault must not crash the live loop
+                self.bar_faults += 1
+                logger.error("live bar processing fault (bar %d) — skipping bar: %s",
+                             self._bars, exc)
+                await self._reconcile()   # resolve any in-flight order; keep risk gated
 
         await self._reconcile()
         self._ledger_sweep(datetime.now(UTC))
@@ -635,10 +646,57 @@ class LiveTraderSession:
                 expected, account.open_positions,
             )
             self._rebuild_from_venue(expected=expected, venue_positions=account.open_positions)
-        elif self._reconciliation_halt:
+            return
+        # H2: existence agrees — but a WRONG-SIDE venue position (or a position on
+        # ANOTHER symbol standing in for ours in a shared account) also diverges from
+        # our model and must not read as "clean". When we believe we hold, verify the
+        # venue's position FOR THIS SYMBOL matches our side.
+        if expected and actual:
+            divergence = await self._symbol_position_divergence()
+            if divergence is not None:
+                self.recon_mismatches += 1
+                self._reconciliation_halt = True
+                self._orphan_position = True
+                self._journal_reconciliation_divergence(divergence)
+                logger.error(
+                    "position divergence on %s (%s) — FAIL CLOSED (reduce-only) "
+                    "until an operator reconciles", self.symbol, divergence)
+                return
+        if self._reconciliation_halt:
             self._reconciliation_halt = False       # settled + agreeing → re-open
             self._orphan_position = False
             logger.info("position reconciliation clean — entries re-enabled")
+
+    async def _symbol_position_divergence(self) -> str | None:
+        """H2: compare the venue position FOR THIS SYMBOL against the internal plan's
+        side. Returns a divergence reason or None. A read fault returns None — the
+        account-state read already gates the read-failure fail-closed path; this only
+        UPGRADES an existence-agreeing pass to a divergence, never masks a real one.
+        Size is intentionally not gated (partial fills/funding drift legitimately),
+        only the unambiguous wrong-side / wrong-symbol cases."""
+        positions = await self._read_positions()
+        if positions is None:
+            return None
+        pos = next((p for p in positions if getattr(p, "symbol", None) == self.symbol), None)
+        if pos is None:
+            # the account holds a position, but NOT on our symbol → we are actually
+            # flat here while believing we hold (shared-account false agreement).
+            return "no venue position on symbol while plan is held"
+        plan_side = getattr(self._plan, "side", None)
+        venue_side = getattr(pos, "side", None)
+        if plan_side and venue_side and plan_side != venue_side:
+            return f"side plan={plan_side} venue={venue_side}"
+        return None
+
+    def _journal_reconciliation_divergence(self, reason: str) -> None:
+        journal = getattr(self.om, "_journal", None)
+        if journal is None:
+            return
+        try:
+            journal.append("reconciliation_divergence",
+                           {"symbol": self.symbol, "reason": reason})
+        except Exception as exc:  # noqa: BLE001 — journaling must not crash the loop
+            logger.warning("divergence journal failed: %s", exc)
 
     def _rebuild_from_venue(self, *, expected: bool, venue_positions: int) -> None:
         """Rebuild INTERNAL state to venue truth on a settled mismatch — the
