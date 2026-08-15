@@ -124,6 +124,44 @@ def test_session_regime_endpoint_auth_gated_and_shaped(tmp_path):
     assert p["worst_session"]["session"] == "us"
 
 
+def test_side_endpoints_reject_orphan_lane(tmp_path):
+    # An ORPHAN lane (journal leftover from a config change) is flagged in
+    # lane_health.problems. The per-lane side endpoints must refuse it rather
+    # than serve its stale journal as if it were a live lane.
+    provider = SnapshotProvider()
+    orphan = "deadstrat_binanceusdm_btcusdt_1h_shadow"
+    live = "livestrat_binanceusdm_btcusdt_1h_shadow"
+    provider.publish({
+        "mode": "shadow", "equity": 500.0,
+        "lanes": [{"lane_id": live}], "lane_id": live,
+        "lane_health": {"problems": [
+            {"lane_id": orphan, "verdict": "ORPHAN",
+             "detail": "journal file has no desired lane spec",
+             "trade_compatible": False},
+        ]},
+    })
+    # both lanes have an on-disk journal, so only the filter — not a missing
+    # file — is what refuses the orphan.
+    for lid in (orphan, live):
+        (tmp_path / f"{lid}.journal.jsonl").write_text(
+            json.dumps({"ts": "2026-08-01T15:00:00+00:00", "kind": "shadow_outcome",
+                        "payload": {"symbol": "BTC/USDT:USDT", "side": "long",
+                                    "resolution": "stop", "entry_price": 100.0,
+                                    "exit_price": 97.0, "virtual_net_usd": -3.0,
+                                    "fees_usd": 0.0, "intent_key": "k1",
+                                    "bars_held": 0}}) + "\n")
+    app = create_app(provider, token="t3st-token", journal_dir=tmp_path)
+    c = TestClient(app)
+
+    for path in ("/history", "/trade-journal", "/session-regime", "/export.csv"):
+        r = c.get(f"{path}?token=t3st-token&lane={orphan}")
+        assert r.status_code == 409, path
+        assert "ORPHAN" in r.json()["detail"]
+    # a live (non-orphan) lane and the primary (no lane) are served normally
+    assert c.get(f"/trade-journal?token=t3st-token&lane={live}").status_code == 200
+    assert c.get("/history?token=t3st-token").status_code == 200
+
+
 def test_delta_5m_event_clock_endpoint_auth_gated_and_research_only(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})

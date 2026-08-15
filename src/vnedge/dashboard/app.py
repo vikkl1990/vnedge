@@ -874,6 +874,28 @@ def create_app(
 
         return (datetime.now(UTC) - timedelta(days=days)).isoformat()
 
+    def _orphan_lane_ids() -> set[str]:
+        """Lane ids the auditor flagged ORPHAN — a journal file with no desired
+        spec, left behind by a config change. It represents nothing live, so the
+        per-lane side endpoints must not serve it as if it were a real lane."""
+        snap = provider.latest() or {}
+        health = snap.get("lane_health") or {}
+        return {
+            str(p.get("lane_id"))
+            for p in (health.get("problems") or [])
+            if p.get("verdict") == "ORPHAN" and p.get("lane_id")  # VERDICT_ORPHAN
+        }
+
+    def _reject_if_orphan(lane: str) -> None:
+        """Filter orphan lanes out of the side endpoints (empty lane = primary,
+        never orphan). A config leftover must not look like a queryable lane."""
+        if lane and lane in _orphan_lane_ids():
+            raise HTTPException(
+                status_code=409,
+                detail=(f"lane '{lane}' is an ORPHAN (journal leftover from a "
+                        "config change) — not a live lane; nothing to serve"),
+            )
+
     def _lane_file(lane: str, suffix: str) -> Path | None:
         """Resolve a per-lane data file; empty lane means the primary lane."""
         if lane and lane_dir is not None:
@@ -903,6 +925,7 @@ def create_app(
         equity file next to the primary one)."""
         user = _authorized(request)
         lane = _query_lane(request)
+        _reject_if_orphan(lane)
         since = _since_iso(_query_days(request))
         return JSONResponse(_equity_points(lane, since), headers=_identity(user))
 
@@ -912,6 +935,7 @@ def create_app(
         table keyed by record_type. Same filters as /history."""
         user = _authorized(request)
         lane = _query_lane(request)
+        _reject_if_orphan(lane)
         since = _since_iso(_query_days(request))
         lane_label = lane
         if not lane_label and history_path is not None:
@@ -977,6 +1001,7 @@ def create_app(
         """
         user = _authorized(request)
         lane = _query_lane(request)
+        _reject_if_orphan(lane)
         since = _since_iso(_query_days(request))
         try:
             limit = max(1, min(int(limit), 500))
@@ -1005,6 +1030,7 @@ def create_app(
         """
         user = _authorized(request)
         lane = _query_lane(request)
+        _reject_if_orphan(lane)
         since = _since_iso(_query_days(request))
         try:
             limit = max(1, min(int(limit), 20000))
