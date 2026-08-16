@@ -167,6 +167,7 @@ async def test_latency_is_measured_end_to_end(tmp_path):
     snap = session.latency.snapshot()
     assert snap["feed_lag_ms"]["n"] >= 1
     assert snap["feed_lag_ms"]["last"] >= 0.0
+    assert snap["bar_close_processing_ms"] == snap["feed_lag_ms"]
     assert snap["decision_lag_ms"]["n"] >= 1  # eval ran (plan was None)
     assert snap["decision_lag_ms"]["last"] >= 0.0
 

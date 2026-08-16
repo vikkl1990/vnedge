@@ -27,6 +27,9 @@ CLOSED_BAR_LAG_SOFT_P99_MS = 500
 CLOSED_BAR_LAG_HARD_P99_MS = 2000
 DECISION_COMPUTE_SOFT_P99_MS = 50
 DECISION_COMPUTE_HARD_P99_MS = 200
+# A p95 arm gate needs at least 20 observations (one 5% tail sample). Before
+# then the metric is visible but statistically immature and cannot halt arms.
+LATENCY_GATE_MIN_SAMPLES = 20
 
 # --- snapshot / UI path (ms) — observability, never gates arms ---------------
 SNAPSHOT_AGE_SOFT_P99_MS = 3000

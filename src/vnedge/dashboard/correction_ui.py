@@ -101,6 +101,13 @@ def _latency_value(lane: Mapping[str, Any], name: str) -> float | None:
     return _number(metric.get("p95") if metric else latency.get(name))
 
 
+def _latency_value_with_alias(
+    lane: Mapping[str, Any], name: str, alias: str
+) -> float | None:
+    value = _latency_value(lane, name)
+    return value if value is not None else _latency_value(lane, alias)
+
+
 def _timeframe_health(lane: Mapping[str, Any]) -> tuple[str, float | None]:
     timeframe = str(lane.get("timeframe") or "")
     machine = _mapping(lane.get("time_machine"))
@@ -189,6 +196,9 @@ def build_lanes_payload(
                 or _latency_value(lane, "venue_rtt_ms"),
                 "candle_status": candle_status,
                 "candle_age_ms": candle_age_ms,
+                "bar_close_processing_ms": _latency_value_with_alias(
+                    lane, "bar_close_processing_ms", "feed_lag_ms"
+                ),
                 "decision_lag_ms": _latency_value(lane, "decision_lag_ms"),
                 "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (

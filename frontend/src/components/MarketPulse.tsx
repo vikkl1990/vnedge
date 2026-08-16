@@ -203,6 +203,9 @@ function CandleChart({
   selected,
   avwap,
   avwapLabel,
+  priorDayPoc,
+  priorDayVah,
+  priorDayVal,
 }: {
   hours: PulseHour[];
   forming: Record<string, unknown> | null | undefined;
@@ -210,6 +213,9 @@ function CandleChart({
   selected: string | null;
   avwap: number | null | undefined;
   avwapLabel: string | null | undefined;
+  priorDayPoc: number | null | undefined;
+  priorDayVah: number | null | undefined;
+  priorDayVal: number | null | undefined;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -218,6 +224,9 @@ function CandleChart({
   const lowAvwapRef = useRef<ISeriesApi<"Line"> | null>(null);
   const highAvwapRef = useRef<ISeriesApi<"Line"> | null>(null);
   const avwapRef = useRef<IPriceLine | null>(null);
+  const pocRef = useRef<IPriceLine | null>(null);
+  const vahRef = useRef<IPriceLine | null>(null);
+  const valRef = useRef<IPriceLine | null>(null);
   const markerRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const historySignatureRef = useRef("");
   const formingTimeRef = useRef<UTCTimestamp | null>(null);
@@ -354,6 +363,9 @@ function CandleChart({
         lowAvwapRef.current = null;
         highAvwapRef.current = null;
         avwapRef.current = null;
+        pocRef.current = null;
+        vahRef.current = null;
+        valRef.current = null;
         markerRef.current = null;
         historySignatureRef.current = "";
         formingTimeRef.current = null;
@@ -441,6 +453,53 @@ function CandleChart({
     }
   }, [avwap, avwapLabel]);
 
+  useEffect(() => {
+    const candles = candleRef.current;
+    if (!candles) return;
+    if (pocRef.current) {
+      candles.removePriceLine(pocRef.current);
+      pocRef.current = null;
+    }
+    if (vahRef.current) {
+      candles.removePriceLine(vahRef.current);
+      vahRef.current = null;
+    }
+    if (valRef.current) {
+      candles.removePriceLine(valRef.current);
+      valRef.current = null;
+    }
+    if (typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc)) {
+      pocRef.current = candles.createPriceLine({
+        price: priorDayPoc,
+        color: "#F0883E",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "PRIOR-DAY POC",
+      });
+    }
+    if (typeof priorDayVah === "number" && Number.isFinite(priorDayVah)) {
+      vahRef.current = candles.createPriceLine({
+        price: priorDayVah,
+        color: "#8B949E",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: "VAH",
+      });
+    }
+    if (typeof priorDayVal === "number" && Number.isFinite(priorDayVal)) {
+      valRef.current = candles.createPriceLine({
+        price: priorDayVal,
+        color: "#8B949E",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: "VAL",
+      });
+    }
+  }, [priorDayPoc, priorDayVah, priorDayVal]);
+
   return (
     <div className="relative overflow-hidden rounded-md bg-inset">
       <div
@@ -463,6 +522,8 @@ function CandleChart({
         <span className="flex items-center gap-1.5 text-warn"><span className="h-0.5 w-4 bg-warn" />SESSION VWAP</span>
         {hasDualAvwap && <span className="flex items-center gap-1.5 text-info"><span className="h-0.5 w-4 bg-info" />AVWAP L</span>}
         {hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
+        {typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc) && <span className="flex items-center gap-1.5 text-[#F0883E]"><span className="h-0.5 w-4 bg-[#F0883E]" />PRIOR-DAY POC</span>}
+        {typeof priorDayVah === "number" && typeof priorDayVal === "number" && <span className="flex items-center gap-1.5 text-dim"><span className="h-px w-4 border-t border-dotted border-dim" />VAH / VAL</span>}
         {livePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
         {hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
       </div>
@@ -531,6 +592,8 @@ export function MarketPulse() {
         ? `L ${fullUtcHour(pulse.data.indicators.avwap_low_anchor_utc)} · H ${fullUtcHour(pulse.data.indicators.avwap_high_anchor_utc)} UTC`
         : undefined
     );
+  const priorDayProfile = pulse.data?.volume_profile.prior_day;
+  const profileReason = priorDayProfile?.reason?.replace(/_/g, " ");
   const events = [
     ...(pulse.data?.alerts ?? []),
     ...((risk.data?.gateway.last_reject_reasons ?? []).map((item) => ({
@@ -601,6 +664,7 @@ export function MarketPulse() {
                 <span>1h range</span><span className="text-right text-txt">{fmt(itemForming?.range_bps as number | undefined)} bps</span>
                 <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
                 <span>dual AVWAP</span><span className="text-right text-txt">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
+                <span>vs prior POC</span><span className="text-right text-txt">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
                 <span>feed age</span><span className="text-right text-txt">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
               </div>
             </button>
@@ -617,6 +681,9 @@ export function MarketPulse() {
             selected={selectedHour?.open_time ?? null}
             avwap={pulse.data?.indicators.avwap}
             avwapLabel={pulse.data?.indicators.avwap_label}
+            priorDayPoc={priorDayProfile?.poc}
+            priorDayVah={priorDayProfile?.value_area_high}
+            priorDayVal={priorDayProfile?.value_area_low}
           />
         </TerminalPanel>
 
@@ -634,6 +701,8 @@ export function MarketPulse() {
               <Metric label="Volume" value={formingVolumeRank == null ? "rank —" : `${Math.round(formingVolumeRank * 100)}th pct`} note={formingVolumeVsMedian == null ? "24h median unavailable" : `${fmt(formingVolumeVsMedian, 2)}× 24h median`} />
               <Metric label="vs session VWAP" value={`${signed((forming?.vs_session_vwap_bps as number | undefined) ?? pulse.data?.indicators.vs_session_vwap_bps)} bps`} />
               <Metric label="Dual AVWAP" value={forming?.dual_avwap_bias ?? pulse.data?.indicators.dual_avwap_bias ?? "n/a"} note={dualAvwapNote ?? undefined} />
+              <Metric label="Prior-day POC" value={priorDayProfile?.poc?.toLocaleString() ?? "unavailable"} note={priorDayProfile?.available ? `${signed(priorDayProfile.vs_poc_bps)} bps · trade-derived` : profileReason} />
+              <Metric label="VAL / VAH" value={priorDayProfile?.available ? `${priorDayProfile.value_area_low?.toLocaleString()} – ${priorDayProfile.value_area_high?.toLocaleString()}` : "unavailable"} note={priorDayProfile?.available ? `${priorDayProfile.location.replace(/_/g, " ")} · ${((priorDayProfile.va_volume_pct ?? 0) * 100).toFixed(1)}% volume` : profileReason} />
               <Metric label="Session" value={(forming?.session_label as string | undefined) ?? pulse.data?.market.session_label ?? "—"} note={((forming?.session_active as boolean | undefined) ?? pulse.data?.market.session_label === "us_overlap") ? "active overlap" : "off overlap"} />
               <Metric label="Quality" value={quality} note={pulse.data?.last_gap ? `${pulse.data.last_gap.kind} · ${fullUtcHour(pulse.data.last_gap.start)} UTC` : "no recorded gap in window"} />
             </div>

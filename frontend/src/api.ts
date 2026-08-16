@@ -106,7 +106,7 @@ export interface LaneRow {
   drawdown_pct?: number | null;
   dd_limit_pct?: number | null;
   trial_scorecard?: TrialScorecard | null;
-  bands?: { age?: string; decision_lag?: string; dd?: string; verdict_tone?: string } | null;
+  bands?: { age?: string; bar_close_lag?: string; decision_lag?: string; dd?: string; verdict_tone?: string } | null;
 }
 
 export interface CorrectionLane {
@@ -121,6 +121,7 @@ export interface CorrectionLane {
   venue_rtt_ms: number | null;
   candle_status: string;
   candle_age_ms: number | null;
+  bar_close_processing_ms: number | null;
   decision_lag_ms: number | null;
   arm_skips: number;
   last_signal_age_seconds: number | null;
@@ -424,6 +425,9 @@ export interface PulseForming {
   dual_avwap_reason: string | null;
   avwap_low: number | null;
   avwap_high: number | null;
+  prior_day_poc: number | null;
+  vs_prior_day_poc_bps: number | null;
+  prior_day_value_area_location: string;
   session_label: string;
   session_active: boolean;
   status: "forming" | "awaiting_trades";
@@ -455,6 +459,32 @@ export interface PulsePayload {
     low: Array<{ time: number; value: number }>;
     high: Array<{ time: number; value: number }>;
   };
+  volume_profile: {
+    prior_day: {
+      available: boolean;
+      source: "trades";
+      source_exchange: string | null;
+      window: "prior_utc_day";
+      window_id: string;
+      start: string;
+      end: string;
+      bin_size?: number;
+      poc: number | null;
+      val?: number;
+      vah?: number;
+      value_area_low: number | null;
+      value_area_high: number | null;
+      value_area_fraction?: number;
+      target_pct?: number;
+      va_volume_pct?: number;
+      total_volume?: number;
+      trade_count?: number;
+      reference_price?: number | null;
+      vs_poc_bps: number | null;
+      location: string;
+      reason?: string;
+    };
+  };
   market: {
     last: number | null;
     mid: number | null;
@@ -475,6 +505,12 @@ export interface PulsePayload {
     avwap_low_confirmed_at_utc: string | null;
     avwap_high_confirmed_at_utc: string | null;
     avwap_unavailable_reason: string | null;
+    prior_day_poc: number | null;
+    prior_day_value_area_low: number | null;
+    prior_day_value_area_high: number | null;
+    vs_prior_day_poc_bps: number | null;
+    prior_day_value_area_location: string;
+    volume_profile_unavailable_reason: string | null;
   };
   last_gap: {
     kind: string;

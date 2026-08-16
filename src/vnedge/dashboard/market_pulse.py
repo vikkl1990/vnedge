@@ -23,6 +23,12 @@ from typing import Any
 from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import GapParquetStore, GapRecord
 from vnedge.data.swings import SwingAnchor, SwingDetectConfig, SwingKind, detect_swings
+from vnedge.data.volume_profile import (
+    TickLakeVolumeProfileStore,
+    VolumeProfileArtifactStore,
+    profile_bin_size,
+    profile_location,
+)
 from vnedge.data.vwap import dual_avwap_bias
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
@@ -549,6 +555,7 @@ class MarketPulseService:
         gap_root: Path | str,
         analysis_path: Path | str,
         *,
+        tick_root: Path | str | None = None,
         analyzer: BriefAnalyzer = bounded_observation_brief,
         model: str | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -557,6 +564,12 @@ class MarketPulseService:
         if stale_after <= timedelta(0):
             raise ValueError("pulse stale_after must be positive")
         self.candle_root = Path(candle_root)
+        self.profile_store = TickLakeVolumeProfileStore(
+            tick_root if tick_root is not None else self.candle_root.parent
+        )
+        self.profile_artifact_store = VolumeProfileArtifactStore(
+            self.candle_root.parent / "volume_profiles"
+        )
         self.gap_store = GapParquetStore(gap_root)
         self.analysis_store = HourAnalysisStore(analysis_path)
         self.analyzer = analyzer
@@ -567,6 +580,89 @@ class MarketPulseService:
         )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.stale_after = stale_after
+
+    def _prior_day_profile(
+        self,
+        exchange: str,
+        symbol: str,
+        *,
+        now: datetime,
+        gaps: Sequence[GapRecord],
+        reference_price: float | None,
+    ) -> dict[str, Any]:
+        day_end = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = day_end - timedelta(days=1)
+        window_id = self.profile_artifact_store.window_id(
+            exchange, symbol, "prior_utc_day", day_start
+        )
+        unavailable: dict[str, Any] = {
+            "available": False,
+            "source": "trades",
+            "source_exchange": None,
+            "window": "prior_utc_day",
+            "window_id": window_id,
+            "start": _iso(day_start),
+            "end": _iso(day_end),
+            "poc": None,
+            "value_area_low": None,
+            "value_area_high": None,
+            "vs_poc_bps": None,
+            "location": "unavailable",
+        }
+        try:
+            bin_size = profile_bin_size(symbol)
+            profile_exchange = (
+                "binanceusdm_hist" if exchange == "binanceusdm" else exchange
+            )
+            profile = self.profile_store.read(
+                profile_exchange, symbol, day_start, day_end, bin_size
+            )
+            if profile is None:
+                if any(gap.start < day_end and gap.end > day_start for gap in gaps):
+                    return {**unavailable, "reason": "known_trade_coverage_gap"}
+                profile_exchange = exchange
+                profile = self.profile_store.read(
+                    profile_exchange, symbol, day_start, day_end, bin_size
+                )
+        except Exception as exc:  # noqa: BLE001 - profile I/O must fail closed
+            logger.warning(
+                "prior-day volume profile unavailable: exchange=%s symbol=%s reason=%s",
+                exchange,
+                symbol,
+                exc,
+            )
+            return {**unavailable, "reason": "profile_read_error"}
+        if profile is None:
+            return {**unavailable, "reason": "closed_trade_window_unavailable"}
+        try:
+            stored_window_id, _ = self.profile_artifact_store.put(
+                exchange=exchange,
+                symbol=symbol,
+                window_kind="prior_utc_day",
+                source_exchange=profile_exchange,
+                profile=profile,
+            )
+        except Exception as exc:  # noqa: BLE001 - artifact boundary fails closed
+            logger.warning(
+                "prior-day volume profile artifact unavailable: "
+                "exchange=%s symbol=%s reason=%s",
+                exchange,
+                symbol,
+                exc,
+            )
+            return {**unavailable, "reason": "artifact_write_error"}
+        payload = profile.to_dict()
+        payload["window"] = "prior_utc_day"
+        payload["window_id"] = stored_window_id
+        payload["source_exchange"] = profile_exchange
+        payload["reference_price"] = reference_price
+        payload["location"] = profile_location(reference_price, profile)
+        payload["vs_poc_bps"] = (
+            (reference_price - float(profile.poc)) / float(profile.poc) * 10_000
+            if reference_price is not None and profile.poc > 0
+            else None
+        )
+        return payload
 
     def _hours(self, exchange: str, symbol: str) -> list[PulseHour]:
         candles = CandleParquetStore(self.candle_root, exchange=exchange).read(symbol, "1h")
@@ -815,6 +911,7 @@ class MarketPulseService:
         mid: float | None,
         quality: str,
         latest: PulseHour | None,
+        prior_day_profile: Mapping[str, Any],
     ) -> dict[str, Any]:
         current = dict(forming or {})
         current.setdefault(
@@ -857,6 +954,9 @@ class MarketPulseService:
         )
         current["avwap_low"] = latest.avwap_low if latest is not None else None
         current["avwap_high"] = latest.avwap_high if latest is not None else None
+        current["prior_day_poc"] = prior_day_profile.get("poc")
+        current["vs_prior_day_poc_bps"] = prior_day_profile.get("vs_poc_bps")
+        current["prior_day_value_area_location"] = prior_day_profile.get("location")
         current.setdefault("session_label", _session_label(now.hour))
         current.setdefault("session_active", 12 <= now.hour < 17)
         current["data_quality"] = quality
@@ -978,12 +1078,20 @@ class MarketPulseService:
         latest_gap = gaps[-1] if gaps else None
         book = runtime.get("price") if runtime and runtime_matches else None
         mid = _number(_mapping(book).get("mid"))
+        prior_day_profile = self._prior_day_profile(
+            exchange,
+            symbol,
+            now=now,
+            gaps=gaps,
+            reference_price=mid if mid is not None else (latest.close if latest else None),
+        )
         forming = self._forming_contract(
             forming_metrics,
             now=now,
             mid=mid,
             quality=pulse_quality,
             latest=latest,
+            prior_day_profile=prior_day_profile,
         )
         fee_wall = DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile(
             exchange
@@ -1029,6 +1137,7 @@ class MarketPulseService:
                     if hour.avwap_high is not None
                 ],
             },
+            "volume_profile": {"prior_day": prior_day_profile},
             "market": {
                 "last": latest.close if latest else None,
                 "mid": mid,
@@ -1067,6 +1176,12 @@ class MarketPulseService:
                     or latest.avwap_high is None
                     else None
                 ),
+                "prior_day_poc": prior_day_profile.get("poc"),
+                "prior_day_value_area_low": prior_day_profile.get("value_area_low"),
+                "prior_day_value_area_high": prior_day_profile.get("value_area_high"),
+                "vs_prior_day_poc_bps": prior_day_profile.get("vs_poc_bps"),
+                "prior_day_value_area_location": prior_day_profile.get("location"),
+                "volume_profile_unavailable_reason": prior_day_profile.get("reason"),
             },
             "last_gap": (
                 {

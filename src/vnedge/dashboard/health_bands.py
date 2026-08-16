@@ -75,10 +75,21 @@ def lane_bands(lane: dict) -> dict:
     age = (tm.get("age_ms") or {}).get(tf)
     lat = lane.get("latency") or {}
     p95 = (lat.get("decision_lag_ms") or {}).get("p95") if isinstance(lat, dict) else None
-    dlag = LT.classify_p99(p95, LT.DECISION_COMPUTE_SOFT_P99_MS, LT.DECISION_COMPUTE_HARD_P99_MS)
+    bar_p95 = None
+    if isinstance(lat, dict):
+        bar_p95 = (
+            lat.get("bar_close_processing_ms") or lat.get("feed_lag_ms") or {}
+        ).get("p95")
+    dlag = LT.classify_p99(
+        p95, LT.DECISION_COMPUTE_SOFT_P99_MS, LT.DECISION_COMPUTE_HARD_P99_MS
+    )
+    blag = LT.classify_p99(
+        bar_p95, LT.CLOSED_BAR_LAG_SOFT_P99_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS
+    )
     sc = lane.get("trial_scorecard") or {}
     return {
         "age": _BAND[LT.classify_tm_age(tf, age)],
+        "bar_close_lag": _BAND[blag],
         "decision_lag": _BAND[dlag],
         "dd": _dd_band(lane.get("drawdown_pct"), lane.get("dd_limit_pct")),
         "verdict_tone": _verdict_tone(sc.get("verdict")),
@@ -113,11 +124,31 @@ def compute_chips(snap: dict) -> dict:
     lat_vals = [(l.get("latency") or {}).get("decision_lag_ms", {}).get("p95")
                 for l in lanes if isinstance(l.get("latency"), dict)]
     lat_vals = [v for v in lat_vals if isinstance(v, (int, float))]
+    bar_vals = []
+    for lane in lanes:
+        lat = lane.get("latency")
+        if not isinstance(lat, dict):
+            continue
+        value = (
+            lat.get("bar_close_processing_ms") or lat.get("feed_lag_ms") or {}
+        ).get("p95")
+        if isinstance(value, (int, float)):
+            bar_vals.append(value)
     if skips:
         decision, d_label = "blocked", "new arms blocked"
-    elif lat_vals:
-        soft = any(v > LT.DECISION_COMPUTE_SOFT_P99_MS for v in lat_vals)
-        decision, d_label = ("degraded", "compute lag") if soft else ("ok", "ok")
+    elif any(v > LT.CLOSED_BAR_LAG_HARD_P99_MS for v in bar_vals):
+        decision, d_label = "blocked", "bar close lag"
+    elif any(v > LT.DECISION_COMPUTE_HARD_P99_MS for v in lat_vals):
+        decision, d_label = "blocked", "compute lag"
+    elif lat_vals or bar_vals:
+        bar_soft = any(v > LT.CLOSED_BAR_LAG_SOFT_P99_MS for v in bar_vals)
+        compute_soft = any(v > LT.DECISION_COMPUTE_SOFT_P99_MS for v in lat_vals)
+        if bar_soft:
+            decision, d_label = "degraded", "bar close lag"
+        elif compute_soft:
+            decision, d_label = "degraded", "compute lag"
+        else:
+            decision, d_label = "ok", "ok"
 
     feed, f_label = "unknown", "—"
     cand = str((snap.get("feed_health") or {}).get("candles") or "").lower()

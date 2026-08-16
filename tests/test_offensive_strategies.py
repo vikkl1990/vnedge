@@ -189,5 +189,5 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "crypto_trend_atr_margin_v1",
         "trend_continuation_v1", "funding_mean_reversion_v1",
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
-        "funding_squeeze_continuation_v1",
+        "funding_squeeze_continuation_v1", "structure_bos_1h",
     }

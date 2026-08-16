@@ -15,7 +15,7 @@ def _spec(strategy_id, mode):
 
 
 def test_measurement_runtime_is_explicitly_non_capital():
-    assert RESEARCH_ONLY == {"measurement_only_v1"}
+    assert RESEARCH_ONLY == {"measurement_only_v1", "structure_bos_1h"}
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
 
@@ -28,6 +28,9 @@ def test_capital_permission_requires_an_explicit_promotion():
     )
     assert capital_denial_reason("funding_mean_reversion_v1") == "strategy is killed"
     assert capital_denial_reason("measurement_only_v1") == (
+        "strategy is research/measurement only"
+    )
+    assert capital_denial_reason("structure_bos_1h") == (
         "strategy is research/measurement only"
     )
     # funding_mr FAILED forward paper (2026-08-14) -> post-mortem KILLED, capital

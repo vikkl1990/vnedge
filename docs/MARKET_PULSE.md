@@ -96,7 +96,8 @@ The React `/app` surface adds a Market Pulse tab with:
   forming bar;
 - UTC-only chart labels and whitespace points for absent hours, never synthetic
   zero-volume OHLC;
-- forming-hour range, relative volume, and VWAP/AVWAP context;
+- forming-hour range, relative volume, VWAP/AVWAP context, and prior UTC-day
+  trade-derived POC plus 70% value area;
 - a horizontally scrollable UTC hour strip;
 - click-to-lock cached analysis;
 - hour-close and integrity notifications;
@@ -106,7 +107,16 @@ The desktop layout uses chart plus context rail. At mobile widths it stacks
 chart, forming hour, brief, hour strip, and notifications without page-level
 horizontal overflow.
 
-The chart is a renderer only. All VWAP/AVWAP values come from the Python
-measurement layer. A history change uses `setData`; ordinary forming-hour
-refreshes use the incremental `update` path. No chart plugin may emit an order,
-signal, promotion decision, or capital permission.
+The chart is a renderer only. All VWAP/AVWAP and Volume Profile values come
+from the Python measurement layer. The prior-day profile reads exact public
+trade shards, preferring the atomic Binance aggTrades archive for a completed
+day and reporting its `source_exchange` instead of relabeling it as live tape.
+It uses frozen fixed-price bins (BTC 10, ETH 1, SOL 0.1), and returns
+unavailable when neither a complete archive nor gap-free live coverage exists.
+The 70% contiguous area grows from POC toward the higher-volume adjacent bin;
+an exact tie expands upward. Pulse reports target and realized volume share,
+classifies exact VAH/VAL contact as `at_value_edge`, and atomically stores the
+closed result under `data/volume_profiles` with a stable `window_id`. It never
+distributes bar volume across an OHLC range. A history change uses `setData`;
+ordinary forming-hour refreshes use the incremental `update` path. No chart
+plugin may emit an order, signal, promotion decision, or capital permission.

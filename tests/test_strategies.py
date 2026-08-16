@@ -250,6 +250,7 @@ def test_registry_contains_core_candidates():
         "crypto_trend_atr_margin_v1",
         "trend_continuation_v1",
         "funding_mean_reversion_v1",
+        "structure_bos_1h",
     } <= set(STRATEGIES)
     assert get_strategy_class("crypto_trend_atr_margin_v1") is CryptoTrendAtrMargin
     assert get_strategy_class("trend_continuation_v1") is TrendContinuation

@@ -130,14 +130,30 @@ function computeChips(s?: Snapshot): Record<string, { band: Band; label: string 
   // DECISION
   let decision: Band = "unknown";
   let dLabel = "no telemetry";
-  let skips = false, haveLat = false, latSoft = false;
+  let skips = false, haveLat = false, latSoft = false, latHard = false;
+  let haveBarLat = false, barLatSoft = false, barLatHard = false;
   for (const l of lanes) {
     if (skipCount(l.decision_skips) > 0) skips = true;
     const p95 = l.latency?.decision_lag_ms?.p95;
-    if (typeof p95 === "number") { haveLat = true; if (p95 > 50) latSoft = true; }
+    if (typeof p95 === "number") {
+      haveLat = true;
+      if (p95 > 50) latSoft = true;
+      if (p95 > 200) latHard = true;
+    }
+    const barP95 = (l.latency?.bar_close_processing_ms ?? l.latency?.feed_lag_ms)?.p95;
+    if (typeof barP95 === "number") {
+      haveBarLat = true;
+      if (barP95 > 500) barLatSoft = true;
+      if (barP95 > 2000) barLatHard = true;
+    }
   }
   if (skips) { decision = "blocked"; dLabel = "new arms blocked"; }
-  else if (haveLat) { decision = latSoft ? "degraded" : "ok"; dLabel = latSoft ? "compute lag" : "ok"; }
+  else if (barLatHard) { decision = "blocked"; dLabel = "bar close lag"; }
+  else if (latHard) { decision = "blocked"; dLabel = "compute lag"; }
+  else if (haveLat || haveBarLat) {
+    decision = barLatSoft || latSoft ? "degraded" : "ok";
+    dLabel = barLatSoft ? "bar close lag" : latSoft ? "compute lag" : "ok";
+  }
   // FEED
   let feed: Band = "unknown";
   let fLabel = "—";
@@ -215,6 +231,7 @@ export function DeskPanel() {
     { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
     { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
     { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
+    { key: "close-lag", header: "Close p95", align: "right", render: (r) => r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms` },
     { key: "lag", header: "Decision p95", align: "right", render: (r) => r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms` },
     { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString() },
     { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.last_signal_reason}</span></span> },

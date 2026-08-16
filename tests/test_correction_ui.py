@@ -47,15 +47,16 @@ def snapshot() -> dict:
                     "health": {"1h": "ok"},
                     "age_ms": {"1h": 4_200.0},
                 },
-                "latency": {"decision_lag_ms": {"p95": 4.5}},
+                "latency": {
+                    "bar_close_processing_ms": {"p95": 120.0},
+                    "decision_lag_ms": {"p95": 4.5},
+                },
                 "decision_skips": {"forming_1h": 2},
                 "cost_profile": "delta_swing",
                 "plan_overlay": {"round_trip_bps": 13.0},
                 "journal": {"available": True, "recovery_degraded": True},
                 "trial_scorecard": {
-                    "criteria": [
-                        {"name": "daily_loss", "threshold": -10.0, "value": -3.0}
-                    ]
+                    "criteria": [{"name": "daily_loss", "threshold": -10.0, "value": -3.0}]
                 },
             },
             {
@@ -88,14 +89,13 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["last_signal_age_seconds"] is None
     assert measurement["candle_status"] == "ok"
     assert measurement["candle_age_ms"] == 4200.0
+    assert measurement["bar_close_processing_ms"] == 120.0
     assert measurement["decision_lag_ms"] == 4.5
     assert measurement["arm_skips"] == 2
     assert measurement["last_signal_reason"] == "observe_only"
     assert measurement["cost_profile"] == "delta_swing"
     assert measurement["round_trip_bps"] == 13.0
-    assert measurement["why_no_fire"] == (
-        "measurement lane emits no OrderIntent by design"
-    )
+    assert measurement["why_no_fire"] == ("measurement lane emits no OrderIntent by design")
     assert killed["eligibility"] == "KILLED"
     assert killed["mode"] == "off"
     assert killed["capital"] is False

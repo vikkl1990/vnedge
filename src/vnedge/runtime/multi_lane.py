@@ -298,8 +298,8 @@ class MultiLaneProvider:
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
-                # pipeline latency: feed_lag_ms (candle close -> we act) +
-                # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
+                # pipeline latency: bar_close_processing_ms (close -> dequeue)
+                # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),

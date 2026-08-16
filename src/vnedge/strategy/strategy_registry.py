@@ -8,6 +8,7 @@ from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -19,11 +20,15 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     VolatilityExpansionBreakout.strategy_id: VolatilityExpansionBreakout,
     PanicReversal.strategy_id: PanicReversal,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
+    StructureBos1H.strategy_id: StructureBos1H,
 }
 
-# Observation is deliberately non-capital even though it uses the same
-# feed/DQ/Time-Machine/snapshot machinery as an executable lane.
-RESEARCH_ONLY: frozenset[str] = frozenset({MeasurementOnly.strategy_id})
+# Observation and pre-registered candidates are deliberately non-capital even
+# though they use the same feed/DQ/Time-Machine/snapshot machinery as an
+# executable lane. Promotion requires a separate reviewed allowlist change.
+RESEARCH_ONLY: frozenset[str] = frozenset(
+    {MeasurementOnly.strategy_id, StructureBos1H.strategy_id}
+)
 
 # Failed forward paper; retained only so historical evidence can be replayed.
 KILLED: frozenset[str] = frozenset({FundingMeanReversion.strategy_id})

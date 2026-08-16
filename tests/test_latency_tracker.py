@@ -1,8 +1,12 @@
 import math
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from vnedge.runtime.latency_tracker import (
+    BAR_CLOSE_PROCESSING_MS,
+    CLOCK_SKEW_MS,
+    INGEST_LAG_MS,
     LatencyTracker,
     timeframe_to_seconds,
 )
@@ -81,3 +85,37 @@ def test_snapshot_multi_metric():
     for st in snap.values():
         for v in st.values():
             assert not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
+
+
+def test_event_latency_separates_ingest_from_future_clock_skew():
+    tracker = LatencyTracker()
+    base = datetime(2026, 8, 16, 12, tzinfo=UTC)
+
+    normal = tracker.record_event(base, base + timedelta(milliseconds=75))
+    future = tracker.record_event(base + timedelta(milliseconds=40), base)
+
+    assert normal == {INGEST_LAG_MS: 75.0, CLOCK_SKEW_MS: 0.0}
+    assert future == {INGEST_LAG_MS: 0.0, CLOCK_SKEW_MS: 40.0}
+    assert tracker.stats(INGEST_LAG_MS)["n"] == 2
+    assert tracker.stats(CLOCK_SKEW_MS)["max"] == 40.0
+
+
+def test_closed_bar_metric_keeps_legacy_alias_exactly_equal():
+    tracker = LatencyTracker()
+    close = datetime(2026, 8, 16, 12, tzinfo=UTC)
+
+    result = tracker.record_bar_close(close, close + timedelta(milliseconds=320))
+
+    assert result[BAR_CLOSE_PROCESSING_MS] == 320.0
+    assert tracker.stats(BAR_CLOSE_PROCESSING_MS) == tracker.stats("feed_lag_ms")
+
+
+def test_latency_boundaries_reject_naive_datetimes():
+    tracker = LatencyTracker()
+    aware = datetime(2026, 8, 16, 12, tzinfo=UTC)
+    naive = aware.replace(tzinfo=None)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        tracker.record_event(naive, aware)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        tracker.record_bar_close(aware, naive)

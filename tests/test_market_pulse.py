@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -94,6 +95,101 @@ def test_pulse_metrics_are_closed_hour_measurements_only(tmp_path) -> None:
     assert pulse["avwap_series"] is None
     assert pulse["hours"][-1]["open_time_utc"] == pulse["hours"][-1]["open_time"]
     assert pulse["hours"][-1]["is_gap"] is False
+    assert pulse["volume_profile"]["prior_day"]["available"] is False
+    assert pulse["volume_profile"]["prior_day"]["reason"] == (
+        "closed_trade_window_unavailable"
+    )
+
+
+def test_prior_day_trade_profile_is_measurement_only_pulse_context(tmp_path) -> None:
+    rows = tuple(candle(hour, volume=str(hour + 1)) for hour in range(26))
+    CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)
+    trade_dir = (
+        tmp_path
+        / "ticks/exchange=binanceusdm/symbol=BTCUSDT/stream=trades/20260815"
+    )
+    trade_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"ts_ms": int((START + timedelta(hours=1)).timestamp() * 1000), "price": 100.0, "amount": 2.0},
+            {"ts_ms": int((START + timedelta(hours=2)).timestamp() * 1000), "price": 111.0, "amount": 8.0},
+            {"ts_ms": int((START + timedelta(hours=3)).timestamp() * 1000), "price": 121.0, "amount": 1.0},
+        ]
+    ).to_parquet(trade_dir / "trades.parquet", index=False)
+    pulse_service = MarketPulseService(
+        tmp_path / "candles",
+        tmp_path / "gaps",
+        tmp_path / "analysis.sqlite",
+        clock=lambda: START + timedelta(days=1, hours=2),
+    )
+
+    payload = pulse_service.pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={"symbol": "BTCUSDT", "price": {"mid": 120.0}},
+    )
+
+    profile = payload["volume_profile"]["prior_day"]
+    assert profile["available"] is True
+    assert profile["source"] == "trades"
+    assert profile["window_id"] == (
+        "binanceusdm:BTCUSDT:prior_utc_day:2026-08-15"
+    )
+    assert profile["poc"] == 115.0
+    assert profile["val"] == 110.0
+    assert profile["vah"] == 120.0
+    assert profile["va_volume_pct"] == pytest.approx(8 / 11)
+    assert profile["vs_poc_bps"] == pytest.approx((120.0 - 115.0) / 115.0 * 10_000)
+    assert payload["forming"]["prior_day_poc"] == 115.0
+    assert payload["indicators"]["prior_day_poc"] == 115.0
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert payload["live_orders_enabled"] is False
+    artifact = (
+        tmp_path
+        / "volume_profiles/exchange=binanceusdm/symbol=BTCUSDT"
+        / "window=prior_utc_day/2026-08-15.json"
+    )
+    assert artifact.exists()
+
+    GapParquetStore(tmp_path / "gaps").upsert(
+        (
+            GapRecord(
+                "BTCUSDT",
+                "binanceusdm",
+                GapKind.STREAM_STALE,
+                START + timedelta(hours=4),
+                START + timedelta(hours=5),
+                START + timedelta(hours=5),
+                "trade coverage unproven",
+            ),
+        )
+    )
+    blocked = pulse_service.pulse("binanceusdm", "BTCUSDT")
+    assert blocked["volume_profile"]["prior_day"]["available"] is False
+    assert blocked["volume_profile"]["prior_day"]["reason"] == (
+        "known_trade_coverage_gap"
+    )
+
+    archive_dir = (
+        tmp_path
+        / "ticks/exchange=binanceusdm_hist/symbol=BTCUSDT/stream=trades/2026-08-15"
+    )
+    archive_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ts_ms": int((START + timedelta(hours=6)).timestamp() * 1000),
+                "price": 211.0,
+                "amount": 20.0,
+            }
+        ]
+    ).to_parquet(archive_dir / "aggtrades.parquet", index=False)
+    archive_backed = pulse_service.pulse("binanceusdm", "BTCUSDT")
+    archive_profile = archive_backed["volume_profile"]["prior_day"]
+    assert archive_profile["available"] is True
+    assert archive_profile["source_exchange"] == "binanceusdm_hist"
+    assert archive_profile["poc"] == 215.0
 
 
 def test_single_symbol_runtime_quote_never_leaks_into_other_market_strip_row(

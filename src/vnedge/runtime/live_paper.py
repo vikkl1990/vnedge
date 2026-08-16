@@ -55,7 +55,12 @@ from vnedge.runtime.daily_factory import (
     session_day,
     should_force_flatten,
 )
-from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
+from vnedge.runtime.latency_tracker import (
+    BAR_CLOSE_PROCESSING_MS,
+    DECISION_LAG_MS,
+    LatencyTracker,
+    timeframe_to_seconds,
+)
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -183,9 +188,9 @@ class LivePaperSession:
         self.trial_meta = trial_meta
         self.bars_processed = 0
         self._started_at = datetime.now(UTC)
-        # pipeline latency: feed_lag (candle close -> we act) + decision_lag
-        # (candle in hand -> signal). Bad timeframe => feed_lag disabled, not a
-        # crash: a broken bar length must not take a lane down.
+        # pipeline latency: bar_close_processing (candle close -> we act) +
+        # decision_lag (candle in hand -> signal). Bad timeframe disables close
+        # lag rather than crashing: a broken bar length must not take a lane down.
         self.latency = LatencyTracker()
         try:
             self._tf_seconds: int | None = timeframe_to_seconds(config.timeframe)
@@ -483,6 +488,40 @@ class LivePaperSession:
         Returns the coarse block reason, or None to allow.  Any unreadable state
         blocks arming a new position; exits bypass this gate entirely.
         """
+        # A hard processing/compute breach is unsafe even if the candle values
+        # themselves are healthy. A p95 needs 20 samples before it can gate;
+        # immature samples remain visible to operators without halting arms.
+        latency = getattr(self, "latency", None)
+        if latency is not None:
+            bar_stats = latency.stats(BAR_CLOSE_PROCESSING_MS) or latency.stats(
+                "feed_lag_ms"
+            )
+            bar_p95 = bar_stats.get("p95") if bar_stats else None
+            if (
+                (bar_stats or {}).get("n", 0) >= LT.LATENCY_GATE_MIN_SAMPLES
+                and LT.blocks_new_arms(
+                    LT.classify_p99(
+                        bar_p95,
+                        LT.CLOSED_BAR_LAG_SOFT_P99_MS,
+                        LT.CLOSED_BAR_LAG_HARD_P99_MS,
+                    )
+                )
+            ):
+                return "bar_close_lag_hard"
+            decision_stats = latency.stats(DECISION_LAG_MS)
+            decision_p95 = decision_stats.get("p95") if decision_stats else None
+            if (
+                (decision_stats or {}).get("n", 0) >= LT.LATENCY_GATE_MIN_SAMPLES
+                and LT.blocks_new_arms(
+                    LT.classify_p99(
+                        decision_p95,
+                        LT.DECISION_COMPUTE_SOFT_P99_MS,
+                        LT.DECISION_COMPUTE_HARD_P99_MS,
+                    )
+                )
+            ):
+                return "decision_compute_hard"
+
         tm = self.time_machine
         if tm is None:
             return None
@@ -1673,8 +1712,9 @@ class LivePaperSession:
                 "discontinuity_events": self.discontinuity_events,
                 "future_candles": self.future_candles,
                 "timeframe": self.config.timeframe,
-                # pipeline latency: feed_lag_ms (candle close -> we act) and
-                # decision_lag_ms (candle -> signal), each {last,p50,p95,max,n}
+                # pipeline latency: bar_close_processing_ms (close -> dequeue)
+                # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}.
+                # feed_lag_ms remains a compatibility alias for the former.
                 "latency": self.latency.snapshot(),
                 # multi-TF forming+closed awareness (read-only; null if TF unsupported)
                 "time_machine": self._tm_snapshot(),
@@ -1897,17 +1937,15 @@ class LivePaperSession:
 
             bar = self.candles.iloc[-1]
             bar_clock = pd.Timestamp(bar["timestamp"]).to_pydatetime()
-            # feed lag: how stale this candle is now that we can act on it.
+            # closed-bar processing lag: how stale this candle is now that the
+            # bar path is allowed to act on it.
             # bar_clock is the candle OPEN; it closed one timeframe later, so
             # (now - close) captures network + exchange emit + any loop-
             # saturation queue-wait. Clock skew can make it slightly negative
             # (data-quality gate bounds skew separately) — floor at zero.
             if self._tf_seconds is not None:
                 close_dt = bar_clock + timedelta(seconds=self._tf_seconds)
-                self.latency.record(
-                    "feed_lag_ms",
-                    max(0.0, (now - close_dt).total_seconds() * 1000.0),
-                )
+                self.latency.record_bar_close(close_dt, now)
             await self._manage_exit(bar, now)
             await self._enforce_daily_factory_flatten(bar_clock, now)
             await self._manage_pending_entry(now)
@@ -1955,7 +1993,7 @@ class LivePaperSession:
                     sig = self.strategy.signal(df, idx)
                     self._record_eval(df, idx, sig)
                 self.latency.record(
-                    "decision_lag_ms", (time.perf_counter() - _dec_t0) * 1000.0
+                    DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0
                 )
                 self._record_overlays(df, idx, sig)   # OBSERVE-ONLY: regime + plan
                 if sig is not None:

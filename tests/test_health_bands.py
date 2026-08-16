@@ -1,25 +1,36 @@
 """Server-side health bands/chips — the single source both cockpits render."""
+
 from vnedge.dashboard.health_bands import annotate, compute_chips, lane_bands
 
 
 def _lane(**kw):
-    d = {"timeframe": "1h",
-         "time_machine": {"health": {"1h": "ok"}, "age_ms": {"1h": 400}},
-         "latency": {"decision_lag_ms": {"p95": 25}}, "decision_skips": {}}
+    d = {
+        "timeframe": "1h",
+        "time_machine": {"health": {"1h": "ok"}, "age_ms": {"1h": 400}},
+        "latency": {"decision_lag_ms": {"p95": 25}},
+        "decision_skips": {},
+    }
     d.update(kw)
     return d
 
 
 def test_all_ok_chips():
-    c = compute_chips({"lanes": [_lane()], "feed_health": {"candles": "ok"},
-                       "risk_status": "ok", "consecutive_losses": 0})
+    c = compute_chips(
+        {
+            "lanes": [_lane()],
+            "feed_health": {"candles": "ok"},
+            "risk_status": "ok",
+            "consecutive_losses": 0,
+        }
+    )
     assert c["SYSTEM"]["band"] == "ok" and c["CANDLE"]["band"] == "ok"
     assert c["FEED"]["band"] == "ok" and c["DECISION"]["band"] == "ok"
 
 
 def test_risk_streak_degrades_and_rolls_into_system():
-    c = compute_chips({"lanes": [_lane()], "feed_health": {"candles": "ok"},
-                       "consecutive_losses": 3})
+    c = compute_chips(
+        {"lanes": [_lane()], "feed_health": {"candles": "ok"}, "consecutive_losses": 3}
+    )
     assert c["RISK"]["band"] == "degraded" and c["SYSTEM"]["band"] == "degraded"
 
 
@@ -44,8 +55,9 @@ def test_cumulative_skips_alone_do_not_stick_blocked():
 
 
 def test_kill_dominates_system_and_risk():
-    c = compute_chips({"lanes": [_lane()], "kill_switch_active": True,
-                       "feed_health": {"candles": "ok"}})
+    c = compute_chips(
+        {"lanes": [_lane()], "kill_switch_active": True, "feed_health": {"candles": "ok"}}
+    )
     assert c["SYSTEM"]["band"] == "blocked" and c["RISK"]["band"] == "blocked"
 
 
@@ -56,13 +68,36 @@ def test_unknown_never_fakes_ok():
 
 def test_lane_bands_drawdown():
     assert lane_bands(_lane(drawdown_pct=7.35, dd_limit_pct=6.0))["dd"] == "blocked"
-    assert lane_bands(_lane(drawdown_pct=5.0, dd_limit_pct=6.0))["dd"] == "degraded"   # >= 0.8*6
+    assert lane_bands(_lane(drawdown_pct=5.0, dd_limit_pct=6.0))["dd"] == "degraded"  # >= 0.8*6
     assert lane_bands(_lane(drawdown_pct=2.0, dd_limit_pct=6.0))["dd"] == "ok"
 
 
 def test_lane_bands_verdict_tone():
     assert lane_bands(_lane(trial_scorecard={"verdict": "FAIL"}))["verdict_tone"] == "blocked"
     assert lane_bands(_lane(trial_scorecard={"verdict": "PENDING"}))["verdict_tone"] == "degraded"
+
+
+def test_bar_close_latency_has_its_own_band_and_degrades_decision_chip():
+    lane = _lane(
+        latency={
+            "bar_close_processing_ms": {"p95": 750},
+            "decision_lag_ms": {"p95": 25},
+        }
+    )
+    assert lane_bands(lane)["bar_close_lag"] == "degraded"
+    chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
+    assert chips["DECISION"] == {"band": "degraded", "label": "bar close lag"}
+
+
+def test_hard_bar_close_latency_blocks_decision_chip():
+    lane = _lane(
+        latency={
+            "bar_close_processing_ms": {"p95": 2_500},
+            "decision_lag_ms": {"p95": 25},
+        }
+    )
+    chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
+    assert chips["DECISION"] == {"band": "blocked", "label": "bar close lag"}
 
 
 def test_annotate_attaches_chips_and_per_lane_bands():

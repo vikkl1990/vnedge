@@ -70,7 +70,7 @@ is empty, and Compose contains no live-order service.
 ```mermaid
 flowchart TB
     Control["L0 Control<br/>mode · live lock · kill · capital roster · human promotion"]
-    Measure["L1 Data / measurement<br/>public feed · candles · gaps · VWAP · swings · dual AVWAP"]
+    Measure["L1 Data / measurement<br/>public feed · candles · gaps · VWAP · swings · dual AVWAP · volume profile"]
     Lanes["L2 Runtime lanes<br/>venue · symbol · timeframe · eligibility · mode · health"]
     Evidence["L3 Evidence only<br/>research · ML meta-labels · agent task governor"]
     Gates["L4 Hard gates<br/>data quality · CostGate · halt · arm · RiskGateway"]
