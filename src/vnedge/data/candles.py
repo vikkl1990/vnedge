@@ -656,25 +656,32 @@ class CandlePipeline:
             if not source_rows:
                 continue
             target_rows = self.store.read(self.symbol, target)
-            target_close = target_rows[-1].close_time if target_rows else None
-            forward = [
-                candle
-                for candle in source_rows
-                if target_close is None or candle.open_time >= target_close
-            ]
-            rebuilt = aggregate_candle_series(
+            existing_opens = {candle.open_time for candle in target_rows}
+            complete = aggregate_candle_series(
                 self.symbol,
                 source,
                 target,
-                forward,
+                source_rows,
             )
+            # A prior restart can leave an interior target hole even when a
+            # newer target bar already exists. Reconstruct only bars whose
+            # complete source bucket is present; source gaps therefore remain
+            # visible and existing authoritative bars are never rewritten.
+            rebuilt = [
+                candle for candle in complete if candle.open_time not in existing_opens
+            ]
             if rebuilt:
                 self.store.upsert(rebuilt)
                 rebuilt_count += len(rebuilt)
-                target_close = rebuilt[-1].close_time
+                target_rows = [*target_rows, *rebuilt]
+            target_close = (
+                max(candle.close_time for candle in target_rows)
+                if target_rows
+                else None
+            )
             pending = [
                 candle
-                for candle in forward
+                for candle in source_rows
                 if target_close is None or candle.open_time >= target_close
             ]
             for candle in pending:

@@ -220,6 +220,34 @@ def test_pipeline_restart_repairs_higher_bars_from_persisted_base(tmp_path) -> N
     assert hours[0].trade_count == 60
 
 
+def test_pipeline_restart_repairs_interior_holes_without_filling_source_gap(tmp_path) -> None:
+    trades = [
+        Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"))
+        for minute in range(120)
+    ]
+    output = build_candles_from_trades(
+        "BTCUSDT",
+        trades,
+        close_through=START + timedelta(hours=2),
+    )
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    # Simulate a real source hole plus a newer child bar left behind by a
+    # restart. Recovery may repair complete buckets around the hole, but must
+    # never synthesize the missing 00:30 minute or its parent buckets.
+    base = [candle for candle in output["1m"] if candle.open_time != START + timedelta(minutes=30)]
+    store.upsert(base)
+    store.upsert((output["5m"][-1],))
+
+    CandlePipeline("BTCUSDT", store=store)
+
+    five_minute_opens = {candle.open_time for candle in store.read("BTCUSDT", "5m")}
+    assert START + timedelta(minutes=30) not in five_minute_opens
+    assert START + timedelta(minutes=25) in five_minute_opens
+    assert START + timedelta(minutes=35) in five_minute_opens
+    hours = store.read("BTCUSDT", "1h")
+    assert [candle.open_time for candle in hours] == [START + timedelta(hours=1)]
+
+
 def test_late_trade_is_logged_quarantined_and_cannot_rewrite_closed_parquet(
     tmp_path, caplog
 ) -> None:
