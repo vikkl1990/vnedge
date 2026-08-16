@@ -345,12 +345,22 @@
   </div>
 
   <script>
-    const tokenFromUrl = new URLSearchParams(location.search).get("token");
-    if (tokenFromUrl) localStorage.setItem("vnedge_dashboard_token", tokenFromUrl);
-    const token = tokenFromUrl || localStorage.getItem("vnedge_dashboard_token") || "";
-    if (token) {
-      const cockpit = document.getElementById("cockpit");
-      cockpit.href = "/?token=" + encodeURIComponent(token);
+    const tokenFromUrl = new URLSearchParams(location.search).get("token") || "";
+    let token = "";
+    try { localStorage.removeItem("vnedge_dashboard_token"); } catch {}
+
+    async function establishSession(){
+      const headers = tokenFromUrl ? {Authorization: "Bearer " + tokenFromUrl} : {};
+      const response = await fetch("/auth/session", {
+        method: "POST", headers, credentials: "same-origin", cache: "no-store",
+      });
+      if (!response.ok) throw new Error("authentication failed " + response.status);
+      token = (await response.json()).token || "";
+      if (tokenFromUrl) {
+        const clean = new URL(location.href);
+        clean.searchParams.delete("token");
+        history.replaceState({}, "", clean.pathname + clean.search + clean.hash);
+      }
     }
 
     let payload = null;
@@ -568,6 +578,7 @@
 
     async function load(){
       document.getElementById("status").textContent = "LOADING";
+      if (!token) await establishSession();
       const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
       const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
       const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof" + (token ? "?token=" + encodeURIComponent(token) : "");

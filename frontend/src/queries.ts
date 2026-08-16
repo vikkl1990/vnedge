@@ -17,6 +17,9 @@ import {
   type MlStatus,
   type AgenticResearchStatus,
   type WhoAmI,
+  type SettingsSecurity,
+  type OperatorProfile,
+  type ExchangeConnectionPublic,
 } from "./api";
 
 export function useWhoAmI() {
@@ -24,6 +27,30 @@ export function useWhoAmI() {
     queryKey: ["whoami"],
     queryFn: () => apiGet<WhoAmI>("/whoami"),
     staleTime: 60_000,
+  });
+}
+
+export function useSettingsSecurity() {
+  return useQuery({
+    queryKey: ["settings-security"],
+    queryFn: () => apiGet<SettingsSecurity>("/api/settings/security"),
+    staleTime: 60_000,
+  });
+}
+
+export function useOperatorProfile() {
+  return useQuery({
+    queryKey: ["settings-profile"],
+    queryFn: () => apiGet<OperatorProfile>("/api/settings/profile"),
+    staleTime: 60_000,
+  });
+}
+
+export function useExchangeConnections() {
+  return useQuery({
+    queryKey: ["settings-exchanges"],
+    queryFn: () => apiGet<ExchangeConnectionPublic[]>("/api/settings/exchanges"),
+    staleTime: 30_000,
   });
 }
 

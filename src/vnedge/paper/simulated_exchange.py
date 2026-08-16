@@ -37,6 +37,10 @@ class PaperOrderRequest:
     reduce_only: bool = False
     order_type: str = "market"  # "market" | "limit"
     limit_price: float | None = None
+    # Frozen when the request first reaches the simulated venue.  A resting
+    # limit fill keeps this original value so its execution label has no
+    # future quote leakage.
+    mid_at_send: float | None = None
 
 
 @dataclass
@@ -61,6 +65,9 @@ class PaperFill:
     price: float
     fee_usd: float
     realized_pnl_usd: float = 0.0  # nonzero only on position-reducing fills
+    mid_at_send: float | None = None
+    liquidity: str = "taker"
+    realized_exec_bps: float | None = None
 
 
 @dataclass
@@ -114,6 +121,10 @@ class SimulatedExchange:
             status.state, status.reason = "rejected", "non-positive quantity"
             return status
 
+        bid, ask = self.quotes[req.symbol]
+        if req.mid_at_send is None:
+            req = replace(req, mid_at_send=(bid + ask) / 2.0)
+
         qty = req.quantity
         if req.reduce_only:
             pos = self.positions.get(req.symbol)
@@ -131,8 +142,14 @@ class SimulatedExchange:
                 status.state, status.reason = "rejected", "limit order without valid price"
                 return status
             self._resting[req.client_order_id] = PaperOrderRequest(
-                req.client_order_id, req.symbol, req.buy, qty,
-                req.reduce_only, "limit", req.limit_price,
+                client_order_id=req.client_order_id,
+                symbol=req.symbol,
+                buy=req.buy,
+                quantity=qty,
+                reduce_only=req.reduce_only,
+                order_type="limit",
+                limit_price=req.limit_price,
+                mid_at_send=req.mid_at_send,
             )
             # Crossing on arrival = marketable limit = taker; only a later quote
             # crossing a still-resting limit earns the maker fee.
@@ -155,7 +172,14 @@ class SimulatedExchange:
         bid, ask = self.quotes[req.symbol]
         price = self.fill_model.market_fill_price(bid, ask, req.buy)
         fill_qty = self.fill_model.fill_quantity(qty)
-        self._apply_fill(req.client_order_id, req.symbol, req.buy, fill_qty, price)
+        self._apply_fill(
+            req.client_order_id,
+            req.symbol,
+            req.buy,
+            fill_qty,
+            price,
+            mid_at_send=req.mid_at_send,
+        )
         status.filled_qty = fill_qty
         status.avg_fill_price = price
         if fill_qty < qty:
@@ -170,7 +194,7 @@ class SimulatedExchange:
         # (it provided liquidity); an immediately-marketable limit is taker.
         self._apply_fill(
             req.client_order_id, req.symbol, req.buy, req.quantity, req.limit_price,
-            maker=maker,
+            maker=maker, mid_at_send=req.mid_at_send,
         )
         status = self._record_limit_fill(req, req.quantity)
         status.state = "filled"
@@ -197,7 +221,13 @@ class SimulatedExchange:
             )
         # A resting limit that fills after placement provided liquidity: maker.
         self._apply_fill(
-            client_order_id, req.symbol, req.buy, quantity, req.limit_price, maker=True,
+            client_order_id,
+            req.symbol,
+            req.buy,
+            quantity,
+            req.limit_price,
+            maker=True,
+            mid_at_send=req.mid_at_send,
         )
         status = self._record_limit_fill(req, quantity)
         status.state = "partially_filled"
@@ -220,7 +250,7 @@ class SimulatedExchange:
 
     def _apply_fill(
         self, client_order_id: str, symbol: str, buy: bool, qty: float, price: float,
-        *, maker: bool = False,
+        *, maker: bool = False, mid_at_send: float | None = None,
     ) -> None:
         signed = qty if buy else -qty
         fee = self.fill_model.fee_usd(qty * price, maker=maker)
@@ -253,8 +283,24 @@ class SimulatedExchange:
                 pos.entry_price = price
 
         self._seq += 1
+        realized_exec_bps = None
+        if mid_at_send is not None and mid_at_send > 0:
+            direction = 1.0 if buy else -1.0
+            realized_exec_bps = direction * (price - mid_at_send) / mid_at_send * 10_000
         self.fills.append(
-            PaperFill(self._seq, client_order_id, symbol, buy, qty, price, fee, realized)
+            PaperFill(
+                seq=self._seq,
+                client_order_id=client_order_id,
+                symbol=symbol,
+                buy=buy,
+                quantity=qty,
+                price=price,
+                fee_usd=fee,
+                realized_pnl_usd=realized,
+                mid_at_send=mid_at_send,
+                liquidity="maker" if maker else "taker",
+                realized_exec_bps=realized_exec_bps,
+            )
         )
 
     # --- Exchange truth (the reconciliation surface) --------------------------------

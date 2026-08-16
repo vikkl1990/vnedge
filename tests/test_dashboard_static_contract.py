@@ -217,10 +217,12 @@ def test_journal_has_pnl_by_cohort_panel():
 
 def test_nav_links_to_the_quantified_strategy_lab_page():
     html = _index()
-    # a real href (separate FileResponse page), not an SPA data-v view-switch
+    # A real href (separate FileResponse page), authenticated by the HttpOnly
+    # same-origin session cookie. Credentials must not be propagated in URLs.
     assert 'id="navLab"' in html
     assert 'href="/quantified-strategy-lab"' in html
-    assert "navLab" in html and "quantified-strategy-lab?token=" in html  # token carried
+    assert "quantified-strategy-lab?token=" not in html
+    assert 'localStorage.setItem("vnedge_token"' not in html
 
 
 def test_quantified_lab_page_renders_complete_blueprint_proof_matrix():

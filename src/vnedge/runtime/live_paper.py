@@ -1644,6 +1644,12 @@ class LivePaperSession:
             return
         fills = self.exchange.get_fills()
         for fill in fills[self._ledgered_fills:]:
+            managed_order = self.om.orders.get(fill.client_order_id)
+            fee_leg = (
+                "close"
+                if managed_order is not None and managed_order.intent.reduce_only
+                else "open"
+            )
             self._log_trade_event(
                 "fill",
                 f"{'buy' if fill.buy else 'sell'} {fill.quantity:g} @ {fill.price:g} "
@@ -1663,6 +1669,20 @@ class LivePaperSession:
                 "realized_pnl_usd": fill.realized_pnl_usd,
                 "client_order_id": fill.client_order_id,
                 "exchange_seq": fill.seq,
+                "mid_at_send": fill.mid_at_send,
+                "fill_price": fill.price,
+                "realized_exec_bps": fill.realized_exec_bps,
+                "liquidity": fill.liquidity,
+                "schedule_fee_bps": (
+                    self.exchange.fill_model.maker_fee_bps
+                    if fill.liquidity == "maker"
+                    else self.exchange.fill_model.taker_fee_bps
+                ),
+                "fee_leg": fee_leg,
+                "hold_seconds": None,
+                "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
+                "execution_label_resolved": fill.realized_exec_bps is not None,
+                "execution_label_schema_version": "execution_cost_label_v1",
             })
         self._ledgered_fills = len(fills)
 

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -27,6 +26,7 @@ from vnedge.plan.cost_model import (
     DEFAULT_SLIP_BPS,
     DEFAULT_TAKER_FEE_BPS,
 )
+from vnedge.risk.fee_model import FeeModelPrediction
 
 # Perp funding accrues per interval (Binance / Delta India = 8h).
 _FUNDING_INTERVAL_SECONDS = Decimal(8 * 3600)
@@ -42,18 +42,18 @@ def _dec(x: object) -> Decimal:
 
 
 class CostProfile(str, Enum):
-    SCALP = "scalp"                # aggressive HF (Binance USDT-M)
-    SWING = "swing"               # fallback / slower holds
-    DELTA_SCALP = "delta_scalp"   # Delta India HF (adds 18% GST on fees)
+    SCALP = "scalp"  # aggressive HF (Binance USDT-M)
+    SWING = "swing"  # fallback / slower holds
+    DELTA_SCALP = "delta_scalp"  # Delta India HF (adds 18% GST on fees)
 
 
 class _ProfileParams(BaseModel):
     model_config = {"frozen": True}
-    maker_fee_bps: Decimal        # per side
-    taker_fee_bps: Decimal        # per side
-    taker_slip_bps: Decimal       # spread cross + impact per taker leg
-    maker_adverse_bps: Decimal    # adverse selection suffered on a posted (maker) leg
-    fee_gst_mult: Decimal         # India GST on the exchange fee (1.0 = none)
+    maker_fee_bps: Decimal  # per side
+    taker_fee_bps: Decimal  # per side
+    taker_slip_bps: Decimal  # spread cross + impact per taker leg
+    maker_adverse_bps: Decimal  # adverse selection suffered on a posted (maker) leg
+    fee_gst_mult: Decimal  # India GST on the exchange fee (1.0 = none)
 
 
 _M = _dec(DEFAULT_MAKER_FEE_BPS)
@@ -62,27 +62,44 @@ _S = _dec(DEFAULT_SLIP_BPS)
 
 _PROFILES: dict[CostProfile, _ProfileParams] = {
     CostProfile.SCALP: _ProfileParams(
-        maker_fee_bps=_M, taker_fee_bps=_T, taker_slip_bps=_S,
-        maker_adverse_bps=Decimal("1.0"), fee_gst_mult=Decimal("1.0"),
+        maker_fee_bps=_M,
+        taker_fee_bps=_T,
+        taker_slip_bps=_S,
+        maker_adverse_bps=Decimal("1.0"),
+        fee_gst_mult=Decimal("1.0"),
     ),
     CostProfile.SWING: _ProfileParams(
-        maker_fee_bps=_M, taker_fee_bps=_T, taker_slip_bps=_S,
-        maker_adverse_bps=Decimal("1.0"), fee_gst_mult=Decimal("1.0"),
+        maker_fee_bps=_M,
+        taker_fee_bps=_T,
+        taker_slip_bps=_S,
+        maker_adverse_bps=Decimal("1.0"),
+        fee_gst_mult=Decimal("1.0"),
     ),
     # Delta India: thinner books (higher slip) + 18% GST on the fee itself.
     CostProfile.DELTA_SCALP: _ProfileParams(
-        maker_fee_bps=_M, taker_fee_bps=_T, taker_slip_bps=Decimal("3.0"),
-        maker_adverse_bps=Decimal("1.5"), fee_gst_mult=Decimal("1.18"),
+        maker_fee_bps=_M,
+        taker_fee_bps=_T,
+        taker_slip_bps=Decimal("3.0"),
+        maker_adverse_bps=Decimal("1.5"),
+        fee_gst_mult=Decimal("1.18"),
     ),
 }
 
 
 class CostEstimate(BaseModel):
     model_config = {"frozen": True}
-    fee_bps: Decimal            # round-trip exchange fee (GST-adjusted)
-    slippage_bps: Decimal       # round-trip spread/impact + maker adverse selection
-    funding_bps: Decimal        # signed: +cost for the paying side, -rebate for the other
+    fee_bps: Decimal  # round-trip exchange fee (GST-adjusted)
+    slippage_bps: Decimal  # round-trip spread/impact + maker adverse selection
+    funding_bps: Decimal  # signed: +cost for the paying side, -rebate for the other
     total_cost_bps: Decimal
+    execution_model_id: str = "rules_only"
+    execution_model_fallback: bool = True
+    execution_model_reason: str | None = None
+    execution_p90_bps: Decimal | None = None
+    fee_schedule_id: str = "cost_gate_profile"
+    fee_schedule_account_verified: bool = False
+    fee_modifiers_applied: tuple[str, ...] = ()
+    fee_schedule_reason: str | None = None
 
 
 class CostGateResult(BaseModel):
@@ -91,22 +108,39 @@ class CostGateResult(BaseModel):
     expected_net_bps: Decimal
     min_required_bps: Decimal
     cost: CostEstimate
-    reason: Optional[str] = None   # only when rejected
+    available_room_bps: Decimal | None = None
+    min_room_bps: Decimal | None = None
+    reason: str | None = None  # only when rejected
 
 
 class CostGateConfig(BaseModel):
     """Frozen so neither the profile nor the min-net threshold can be mutated at
     runtime — limit changes require reconstruction (a restart), like every risk config."""
+
     model_config = {"frozen": True}
     profile: CostProfile
     min_net_edge_bps: Decimal = Decimal("4.0")
+    min_room_cost_multiple: Decimal = Decimal(0)
 
 
 class CostGate:
     """Hard gate. Runs BEFORE sizing and the risk gateway."""
 
-    def __init__(self, profile: CostProfile, min_net_edge_bps: Decimal = Decimal("4.0")):
-        self.config = CostGateConfig(profile=profile, min_net_edge_bps=_dec(min_net_edge_bps))
+    def __init__(
+        self,
+        profile: CostProfile,
+        min_net_edge_bps: Decimal = Decimal("4.0"),
+        *,
+        min_room_cost_multiple: Decimal = Decimal(0),
+    ):
+        room_multiple = _dec(min_room_cost_multiple)
+        if room_multiple < 0:
+            raise ValueError("min_room_cost_multiple cannot be negative")
+        self.config = CostGateConfig(
+            profile=profile,
+            min_net_edge_bps=_dec(min_net_edge_bps),
+            min_room_cost_multiple=room_multiple,
+        )
 
     @property
     def profile(self) -> CostProfile:
@@ -116,14 +150,20 @@ class CostGate:
     def min_net_edge_bps(self) -> Decimal:
         return self.config.min_net_edge_bps
 
+    @property
+    def min_room_cost_multiple(self) -> Decimal:
+        return self.config.min_room_cost_multiple
+
     def evaluate(
         self,
         signal_edge_bps: object,
         side: str,
-        urgency: str,                     # "maker" | "taker" | "aggressive"
+        urgency: str,  # "maker" | "taker" | "aggressive"
         expected_holding_seconds: int,
-        current_funding_rate: object,     # per-interval fraction, e.g. 0.0001 = 1bp/8h
+        current_funding_rate: object,  # per-interval fraction, e.g. 0.0001 = 1bp/8h
         symbol: str,
+        available_room_bps: object | None = None,
+        fee_model_prediction: FeeModelPrediction | None = None,
     ) -> CostGateResult:
         p = _PROFILES[self.profile]
         edge = _dec(signal_edge_bps)
@@ -136,36 +176,124 @@ class CostGate:
 
         # --- Slippage / adverse selection, round trip. ---
         aggressive = urgency == "aggressive"
-        exit_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal("1"))
+        exit_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal(1))
         if is_maker:
-            slippage_bps = p.maker_adverse_bps + exit_slip     # post entry, cross exit
+            slippage_bps = p.maker_adverse_bps + exit_slip  # post entry, cross exit
         else:
-            entry_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal("1"))
-            slippage_bps = entry_slip + exit_slip              # cross both legs
+            entry_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal(1))
+            slippage_bps = entry_slip + exit_slip  # cross both legs
+
+        # Only a capital-safe prediction can bind. An account-verified fee
+        # schedule may replace the generic tariff profile; otherwise the card
+        # can only raise it. Execution cost always keeps the stricter floor.
+        execution_model_id = "rules_only"
+        execution_model_fallback = True
+        execution_model_reason: str | None = None
+        execution_p90_bps: Decimal | None = None
+        fee_schedule_id = "cost_gate_profile"
+        fee_schedule_account_verified = False
+        fee_modifiers_applied: tuple[str, ...] = ()
+        fee_schedule_reason: str | None = None
+        prediction_context_matches = bool(
+            fee_model_prediction is not None
+            and fee_model_prediction.predicted_symbol.upper() == symbol.upper()
+            and (
+                "scalper_close_waiver"
+                not in fee_model_prediction.schedule_modifiers_applied
+                or fee_model_prediction.expected_holding_seconds
+                == max(0, int(expected_holding_seconds))
+            )
+        )
+        if (
+            fee_model_prediction is not None
+            and fee_model_prediction.capital_safe
+            and prediction_context_matches
+        ):
+            if fee_model_prediction.schedule_account_verified:
+                # Account statement/API truth is authoritative for tariff,
+                # including verified temporary modifiers.  An unverified card
+                # can only raise the generic profile, never lower it.
+                fee_bps = fee_model_prediction.schedule_rt_bps
+            else:
+                fee_bps = max(fee_bps, fee_model_prediction.schedule_rt_bps)
+            slippage_bps = max(
+                slippage_bps,
+                fee_model_prediction.exec_cost_for_gate_bps,
+            )
+            execution_model_id = fee_model_prediction.model_id
+            execution_model_fallback = fee_model_prediction.fallback
+            execution_model_reason = fee_model_prediction.fallback_reason
+            execution_p90_bps = fee_model_prediction.ml_exec_p90_bps
+            fee_schedule_id = fee_model_prediction.schedule_id
+            fee_schedule_account_verified = fee_model_prediction.schedule_account_verified
+            fee_modifiers_applied = fee_model_prediction.schedule_modifiers_applied
+            fee_schedule_reason = fee_model_prediction.schedule_fallback_reason
+        elif fee_model_prediction is not None:
+            execution_model_id = "rules_only"
+            execution_model_fallback = True
+            execution_model_reason = (
+                "fee_prediction_context_mismatch"
+                if not prediction_context_matches
+                else "unapproved_execution_model_ignored"
+            )
 
         # --- Funding over the expected hold (signed). Long pays +funding; short earns it. ---
         hold = Decimal(max(0, int(expected_holding_seconds)))
         funding_frac = _dec(current_funding_rate) * (hold / _FUNDING_INTERVAL_SECONDS)
-        funding_signed = funding_frac * Decimal(10000)         # -> bps
+        funding_signed = funding_frac * Decimal(10000)  # -> bps
         funding_bps = funding_signed if side in _LONG else -funding_signed
 
         total = fee_bps + slippage_bps + funding_bps
         net = edge - total
-        approved = net >= self.min_net_edge_bps
-        reason = None
-        if not approved:
-            reason = (
+        edge_ok = net >= self.min_net_edge_bps
+        room = None if available_room_bps is None else _dec(available_room_bps)
+        # A favorable funding estimate may improve net EV, but it must never
+        # shrink the physical fee/slippage wall that price still has to clear.
+        room_cost_wall = fee_bps + slippage_bps + max(funding_bps, Decimal(0))
+        min_room = (
+            room_cost_wall * self.min_room_cost_multiple
+            if self.min_room_cost_multiple > 0
+            else None
+        )
+        room_ok = min_room is None or (room is not None and room >= min_room)
+        approved = edge_ok and room_ok
+        reasons: list[str] = []
+        if not edge_ok:
+            reasons.append(
                 f"net {net:.2f}bps < min {self.min_net_edge_bps}bps "
                 f"(edge {edge:.2f} − cost {total:.2f}: fee {fee_bps:.2f}, "
                 f"slip {slippage_bps:.2f}, funding {funding_bps:.2f})"
             )
+        if not room_ok:
+            if room is None:
+                reasons.append(
+                    f"room missing; requires at least {min_room:.2f}bps "
+                    f"({self.min_room_cost_multiple}× cost wall)"
+                )
+            else:
+                reasons.append(
+                    f"room {room:.2f}bps < min {min_room:.2f}bps "
+                    f"({self.min_room_cost_multiple}× cost wall)"
+                )
         return CostGateResult(
             approved=approved,
             expected_net_bps=net,
             min_required_bps=self.min_net_edge_bps,
+            available_room_bps=room,
+            min_room_bps=min_room,
             cost=CostEstimate(
-                fee_bps=fee_bps, slippage_bps=slippage_bps,
-                funding_bps=funding_bps, total_cost_bps=total,
+                fee_bps=fee_bps,
+                slippage_bps=slippage_bps,
+                funding_bps=funding_bps,
+                total_cost_bps=total,
+                execution_model_id=execution_model_id,
+                execution_model_fallback=execution_model_fallback,
+                execution_model_reason=execution_model_reason,
+                execution_p90_bps=execution_p90_bps,
+                fee_schedule_id=fee_schedule_id,
+                fee_schedule_account_verified=fee_schedule_account_verified,
+                fee_modifiers_applied=fee_modifiers_applied,
+                fee_schedule_reason=fee_schedule_reason,
             ),
-            reason=reason,
+            reason="; ".join(reasons) if reasons else None,
         )

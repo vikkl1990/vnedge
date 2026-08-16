@@ -24,6 +24,15 @@ def test_empty_status_is_honest_and_collecting(tmp_path):
     # foundation reports the real (enriched) feature count
     assert status["foundation"]["feature_count"] == len(FEATURE_COLUMNS)
     assert status["active_role"] == "meta_labeling"
+    assert status["online_shadow"]["library"] == "river"
+    assert status["online_shadow"]["configured"] is False
+    assert status["online_shadow"]["binding"] is False
+    assert status["online_shadow"]["can_trade"] is False
+    drift = status["online_shadow"]["drift_supervisor"]
+    assert drift["configured_streams"] == 8
+    assert drift["detectors"] == ["adwin", "kswin", "page_hinkley"]
+    assert drift["classes"] == ["cost", "real", "virtual"]
+    assert drift["automatic_action"] == "none"
 
 
 def test_main_writes_the_artifact(tmp_path):

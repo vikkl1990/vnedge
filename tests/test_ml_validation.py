@@ -6,6 +6,7 @@ import pytest
 from vnedge.ml.validation import (
     combinatorial_purged_splits,
     deflated_sharpe_ratio,
+    effective_number_of_trials,
     expected_max_sharpe,
     probabilistic_sharpe_ratio,
     probability_of_backtest_overfitting,
@@ -48,6 +49,24 @@ def test_expected_max_sharpe_grows_with_trials():
     v = 0.01
     assert expected_max_sharpe(v, 1) == 0.0
     assert expected_max_sharpe(v, 100) > expected_max_sharpe(v, 10) > 0.0
+
+
+def test_effective_trials_collapses_duplicate_searches() -> None:
+    rng = np.random.default_rng(12)
+    returns = rng.normal(0.0, 1.0, 2_000)
+    duplicated = np.column_stack([returns, returns, returns, returns])
+
+    assert effective_number_of_trials(duplicated) == pytest.approx(1.0)
+
+
+def test_effective_trials_approaches_raw_count_for_independent_trials() -> None:
+    rng = np.random.default_rng(13)
+    independent = rng.normal(0.0, 1.0, (5_000, 5))
+
+    result = effective_number_of_trials(independent)
+
+    assert 4.8 <= result <= 5.0
+    assert expected_max_sharpe(0.02, result) > 0.0
 
 
 def test_deflation_lowers_the_sharpe_verdict():

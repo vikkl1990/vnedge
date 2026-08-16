@@ -86,6 +86,9 @@ def test_pulse_metrics_are_closed_hour_measurements_only(tmp_path) -> None:
         "us",
         "off_session",
     }
+    assert pulse["regime"]["1h"]["label"] == "unavailable"
+    assert pulse["regime"]["1h"]["reason"] == "insufficient_history"
+    assert pulse["regime"]["1h"]["measurement_only"] is True
     assert pulse["indicators"]["avwap_unavailable_reason"] == (
         "no confirmed swing pair"
     )
@@ -99,6 +102,28 @@ def test_pulse_metrics_are_closed_hour_measurements_only(tmp_path) -> None:
     assert pulse["volume_profile"]["prior_day"]["reason"] == (
         "closed_trade_window_unavailable"
     )
+
+
+def test_pulse_exposes_closed_1h_and_4h_regime_measurements(tmp_path) -> None:
+    rows = tuple(candle(hour, volume="100") for hour in range(180))
+    CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)
+    pulse_service = MarketPulseService(
+        tmp_path / "candles",
+        tmp_path / "gaps",
+        tmp_path / "analysis.sqlite",
+        clock=lambda: START + timedelta(hours=181),
+    )
+
+    payload = pulse_service.pulse("binanceusdm", "BTCUSDT")
+
+    assert payload["regime"]["1h"]["ready"] is True
+    assert payload["regime"]["1h"]["label"] == "trending_up"
+    assert payload["regime"]["4h"]["ready"] is True
+    assert payload["regime"]["4h"]["label"] == "trending_up"
+    assert payload["market"]["regime_1h"] == "trending_up"
+    assert payload["indicators"]["regime_4h"] == "trending_up"
+    assert payload["read_only"] is True
+    assert payload["can_trade"] is False
 
 
 def test_prior_day_trade_profile_is_measurement_only_pulse_context(tmp_path) -> None:

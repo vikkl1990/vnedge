@@ -1,9 +1,33 @@
-// Thin fetch client over the existing token-gated dashboard endpoints.
-// The token is read from the ?token= query param (same convention as the
-// classic dashboard) and sent as a Bearer header — never placed in logs.
+// Browser auth bootstrap: exchange the one-time URL/root token for a short
+// HttpOnly cookie, then remove it from the address bar. Subsequent data and
+// WebSocket calls rely on the cookie; no credential enters React state/cache.
 
 export function getToken(): string {
   return new URLSearchParams(window.location.search).get("token") ?? "";
+}
+
+export async function establishBrowserSession(): Promise<void> {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const response = await fetch("/auth/session", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new ApiError(response.status, "session exchange failed");
+  } finally {
+    const clean = new URL(window.location.href);
+    clean.searchParams.delete("token");
+    window.history.replaceState({}, "", `${clean.pathname}${clean.search}${clean.hash}`);
+  }
+}
+
+function cookie(name: string): string {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : "";
 }
 
 export class ApiError extends Error {
@@ -12,13 +36,55 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
+async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  if (method !== "GET" && method !== "HEAD") {
+    const csrf = cookie("vnedge_csrf");
+    if (csrf) headers.set("X-VNEDGE-CSRF", csrf);
+  }
   const res = await fetch(path, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    ...init,
+    method,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
   });
-  if (res.status === 401) throw new ApiError(401, "unauthorized — check the token");
-  if (!res.ok) throw new ApiError(res.status, `request failed (${res.status})`);
+  if (res.status === 401) throw new ApiError(401, "unauthorized — start a new session");
+  if (!res.ok) {
+    let message = `request failed (${res.status})`;
+    try {
+      const body = await res.json() as { detail?: string };
+      if (body.detail) message = body.detail;
+    } catch { /* non-JSON error */ }
+    throw new ApiError(res.status, message);
+  }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  return apiRequest<T>(path);
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return apiRequest<T>(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return apiRequest<T>(path, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+export async function apiDelete(path: string): Promise<void> {
+  return apiRequest<void>(path, { method: "DELETE" });
 }
 
 // --- Response shapes (only the fields the panels read) ---------------------
@@ -26,6 +92,37 @@ export interface WhoAmI {
   name: string | null;
   role: string | null;
   permissions: string[];
+}
+
+export interface SettingsSecurity {
+  session: string;
+  secrets_store_ready: boolean;
+  live_controls_available: false;
+  operator_id: string;
+}
+
+export interface OperatorProfile {
+  operator_id: string;
+  display_name: string;
+  timezone: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ExchangeId = "binanceusdm" | "bybit" | "delta_india";
+export type KeyPurpose = "read" | "trade";
+export type ConnectionStatus = "not_configured" | "configured" | "verified" | "invalid" | "disabled";
+
+export interface ExchangeConnectionPublic {
+  exchange: ExchangeId;
+  purpose: KeyPurpose;
+  status: ConnectionStatus;
+  api_key_hint: string;
+  permissions_note: string;
+  last_verified_at: string | null;
+  last_error: string | null;
+  can_trade: boolean;
+  private_stream: string;
 }
 
 export interface Position {
@@ -310,12 +407,41 @@ export interface ResearchScorecard {
   strategies: Array<{
     strategy: string;
     best_net_bps: number | null;
+    oos_net_bps: number | null;
     verdict: string | null;
+    source_verdict: string | null;
+    metric_state: "SAMPLE_QUALIFIED" | "UNDER_SAMPLED";
+    sample_qualified: boolean;
     profit_factor: number | null;
+    profit_factor_display: string;
+    profit_factor_reason: string | null;
+    sharpe: number | null;
+    sharpe_reason: string | null;
+    sharpe_convention: string;
+    deflated_sharpe: number | null;
+    deflated_sharpe_gate: number;
+    deflated_sharpe_pass: boolean;
+    raw_trials: number | null;
+    effective_trials: number | null;
+    trial_count_reason: string | null;
+    max_drawdown_pct: number | null;
     break_rate_pct: number | null;
     samples: number;
+    samples_total: number;
+    sample_unit: string;
+    min_samples: number;
+    metrics_after_cost: true;
     venues: string[];
   }>;
+  performance_policy: {
+    min_samples: number;
+    sample_rule: string;
+    profit_factor_basis: string;
+    sharpe_basis: string;
+    deflated_sharpe_gate: number;
+    trial_disclosure_rule: string;
+    ranking_rule: string;
+  };
   can_trade: false;
   can_promote: false;
 }
@@ -345,6 +471,26 @@ export interface MlStatus {
     [k: string]: unknown;
   };
   gates: Record<string, unknown>;
+  online_shadow?: {
+    library: "river";
+    installed: boolean;
+    configured: boolean;
+    active: boolean;
+    role: string;
+    min_resolved_labels: number;
+    binding: false;
+    can_trade: false;
+    auto_retrain_live: false;
+    drift_supervisor?: {
+      policies_registered: boolean;
+      configured_streams: number;
+      detectors: string[];
+      classes: string[];
+      event_route: string;
+      automatic_action: "none";
+    };
+    note: string;
+  };
   model: Record<string, unknown> | null;
   can_trade: false;
   can_promote: false;
@@ -443,6 +589,25 @@ export interface PulseAlert {
   recovered: boolean;
 }
 
+export interface PulseRegimeContext {
+  as_of_utc: string | null;
+  symbol: string;
+  timeframe: string;
+  label: string;
+  trend_direction: "up" | "down" | "flat";
+  adx: number | null;
+  atr_percentile: number | null;
+  ema_slope_bps: number | null;
+  bb_width_bps: number | null;
+  bb_width_percentile: number | null;
+  volume_ratio: number | null;
+  confidence: number;
+  data_quality: string;
+  ready: boolean;
+  reason: string;
+  measurement_only: true;
+}
+
 export interface PulsePayload {
   exchange: string;
   symbol: string;
@@ -485,14 +650,22 @@ export interface PulsePayload {
       reason?: string;
     };
   };
+  regime: {
+    "1h": PulseRegimeContext;
+    "4h": PulseRegimeContext;
+  };
   market: {
     last: number | null;
     mid: number | null;
     feed_age_ms: number | null;
     canonical_age_ms: number | null;
     session_label: string;
+    regime_1h: string;
+    regime_4h: string;
   };
   indicators: {
+    regime_1h: string;
+    regime_4h: string;
     session_vwap: number | null;
     vs_session_vwap_bps: number | null;
     dual_avwap_bias: string;

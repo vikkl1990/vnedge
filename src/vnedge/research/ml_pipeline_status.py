@@ -16,12 +16,18 @@ Run periodically:  python -m vnedge.research.ml_pipeline_status --interval-secon
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from vnedge.ml.feature_matrix import FEATURE_COLUMNS, FeatureParams, build_feature_matrix  # noqa: F401
+from vnedge.ml.drift_supervisor import DRIFT_POLICIES
+from vnedge.ml.feature_matrix import (  # noqa: F401
+    FEATURE_COLUMNS,
+    FeatureParams,
+    build_feature_matrix,
+)
 from vnedge.ml.meta_label_dataset import build_meta_label_dataset, load_lane_journal_trades
 
 #: labels needed before role ① can honestly train (>= this, then validate).
@@ -165,6 +171,30 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
             "feature_count": len(FEATURE_COLUMNS),
             "dataset_builder": True,
         },
+        "online_shadow": {
+            "library": "river",
+            "installed": importlib.util.find_spec("river") is not None,
+            "configured": False,
+            "active": False,
+            "role": "delayed after-cost probability + alert-only drift monitoring",
+            "min_resolved_labels": MIN_LABELS_TO_TRAIN,
+            "binding": False,
+            "can_trade": False,
+            "auto_retrain_live": False,
+            "drift_supervisor": {
+                "policies_registered": True,
+                "configured_streams": len(DRIFT_POLICIES),
+                "detectors": sorted(
+                    {policy.detector.value for policy in DRIFT_POLICIES.values()}
+                ),
+                "classes": sorted(
+                    {policy.drift_class.value for policy in DRIFT_POLICIES.values()}
+                ),
+                "event_route": "alert-compatible JSONL + read-only status artifact",
+                "automatic_action": "none",
+            },
+            "note": "requires an explicit pre-registered shadow trial before activation",
+        },
         "gates": PROMOTION_GATES,
         # The live gated verdict from the meta-labeling harness (null until there
         # are any labels). Shows the real CPCV PF / DSR / PBO / beats-baseline
@@ -173,7 +203,10 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
         "model": None,   # role ① not trained yet — honest null until data + validation
         "can_trade": False,
         "can_promote": False,
-        "policy": "models trade ONLY via MLStrategy/gateway/registry; judgment on untouched windows only",
+        "policy": (
+            "batch models trade ONLY via MLStrategy/gateway/registry; River remains "
+            "non-binding shadow; judgment on untouched windows only"
+        ),
         "note": (
             "Meta-labeling is DATA-GATED: it trains once enough primary-signal "
             "outcomes accumulate from the paper trials (4h fires ~2/week). The "

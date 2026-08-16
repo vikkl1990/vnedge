@@ -20,8 +20,13 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.candles import (
+    Candle,
+    CandleParquetStore,
+    aggregate_candle_series,
+)
 from vnedge.data.gaps import GapParquetStore, GapRecord
+from vnedge.data.regime_context import REGIME_CONFIG, RegimeContext, detect_regime
 from vnedge.data.swings import SwingAnchor, SwingDetectConfig, SwingKind, detect_swings
 from vnedge.data.volume_profile import (
     TickLakeVolumeProfileStore,
@@ -978,6 +983,53 @@ class MarketPulseService:
             "read_only": True,
         }
 
+    @staticmethod
+    def _regime_payload(context: RegimeContext) -> dict[str, Any]:
+        return {
+            "as_of_utc": _iso(context.as_of) if context.as_of is not None else None,
+            "symbol": context.symbol,
+            "timeframe": context.timeframe,
+            "label": context.label.value,
+            "trend_direction": context.trend_direction,
+            "adx": context.adx,
+            "atr_percentile": context.atr_percentile,
+            "ema_slope_bps": context.ema_slope_bps,
+            "bb_width_bps": context.bb_width_bps,
+            "bb_width_percentile": context.bb_width_percentile,
+            "volume_ratio": context.volume_ratio,
+            "confidence": context.confidence,
+            "data_quality": context.data_quality,
+            "ready": context.ready,
+            "reason": context.reason,
+            "measurement_only": True,
+        }
+
+    def _regime_context(
+        self,
+        exchange: str,
+        symbol: str,
+        gaps: Sequence[GapRecord],
+    ) -> dict[str, dict[str, Any]]:
+        """Build closed 1h/4h Pulse tags from the canonical candle lake."""
+        stored_1h = CandleParquetStore(
+            self.candle_root, exchange=exchange
+        ).read(symbol, "1h")
+        candles_1h = stored_1h[-(REGIME_CONFIG.warmup_bars * 4 + 4) :]
+        quality = "ok"
+        if candles_1h and any(
+            gap.start < candles_1h[-1].close_time
+            and gap.end > candles_1h[0].open_time
+            for gap in gaps
+        ):
+            quality = "gap"
+        context_1h = detect_regime(candles_1h, data_quality=quality)
+        candles_4h = aggregate_candle_series(symbol, "1h", "4h", candles_1h)
+        context_4h = detect_regime(candles_4h, data_quality=quality)
+        return {
+            "1h": self._regime_payload(context_1h),
+            "4h": self._regime_payload(context_4h),
+        }
+
     def pulse(
         self,
         exchange: str,
@@ -989,6 +1041,7 @@ class MarketPulseService:
         rows = self._hours(exchange, symbol)[-max(1, min(limit, 168)) :]
         latest = rows[-1] if rows else None
         gaps = self.gap_store.read(exchange, symbol)
+        regimes = self._regime_context(exchange, symbol, gaps)
         degraded = self._runtime_degraded(runtime)
         now = _utc(self.clock(), label="pulse clock")
         latest_close = (
@@ -1138,6 +1191,7 @@ class MarketPulseService:
                 ],
             },
             "volume_profile": {"prior_day": prior_day_profile},
+            "regime": regimes,
             "market": {
                 "last": latest.close if latest else None,
                 "mid": mid,
@@ -1148,8 +1202,12 @@ class MarketPulseService:
                     else None
                 ),
                 "session_label": _session_label(now.hour),
+                "regime_1h": regimes["1h"]["label"],
+                "regime_4h": regimes["4h"]["label"],
             },
             "indicators": {
+                "regime_1h": regimes["1h"]["label"],
+                "regime_4h": regimes["4h"]["label"],
                 "session_vwap": latest.session_vwap if latest else None,
                 "vs_session_vwap_bps": latest.vs_session_vwap_bps if latest else None,
                 "dual_avwap_bias": (

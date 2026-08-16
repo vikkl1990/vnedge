@@ -201,7 +201,9 @@ def walk_forward(
 @dataclass(frozen=True)
 class PromotionGates:
     min_splits: int = 3
-    min_total_oos_trades: int = 10
+    # General promotion statistics are not trusted below 30 OOS trades. Sparse
+    # and offensive profiles override this explicitly when pre-registered.
+    min_total_oos_trades: int = 30
     min_profit_factor: float = 1.1
     max_window_drawdown_pct: float = 15.0
     # If in-sample was profitable, OOS must retain at least this fraction of
@@ -236,6 +238,7 @@ OFFENSIVE_GATES = PromotionGates(
 #: Round-3 pre-registered configuration for sparse event strategies. Chosen
 #: BEFORE seeing round-3 data; do not adjust after results exist.
 SPARSE_STRATEGY_GATES = PromotionGates(
+    min_total_oos_trades=10,
     reject_zero_trade_windows=False,
     min_windows_with_trades_pct=60.0,
 )

@@ -21,6 +21,7 @@ from typing import Literal
 import pandas as pd
 
 from vnedge.data.candles import Candle
+from vnedge.data.regime_context import RegimeContext, RegimeLabel
 from vnedge.data.structure import (
     StructureEvent,
     StructureEventType,
@@ -75,6 +76,7 @@ class StructureBosParams:
     min_bars: int = 50
     cost_edge_reward_r: Decimal = Decimal("1.5")
     min_net_edge_bps: Decimal = Decimal(4)
+    min_room_cost_multiple: Decimal = Decimal("1.5")
     entry_urgency: Literal["taker"] = "taker"
     mtf: MTFParams = MTF_PARAMS
 
@@ -87,7 +89,11 @@ class StructureBosParams:
             raise ValueError("ATR settings must be positive")
         if self.max_hold_hours < 1 or self.min_bars < self.left + self.right + 1:
             raise ValueError("time stop or minimum history is invalid")
-        if self.cost_edge_reward_r <= 0 or self.min_net_edge_bps < 0:
+        if (
+            self.cost_edge_reward_r <= 0
+            or self.min_net_edge_bps < 0
+            or self.min_room_cost_multiple <= 0
+        ):
             raise ValueError("cost-edge settings are invalid")
 
 
@@ -114,10 +120,12 @@ STRATEGY_SPEC: Mapping[str, object] = MappingProxyType(
 
 @dataclass(frozen=True, slots=True)
 class StructureContext:
-    """Measurement-layer context; neither field can grant trade permission."""
+    """Measurement context; no field can grant execution permission."""
 
     dual_avwap_bias: Bias = "n/a"
     data_quality: DataQuality = "ok"
+    regime_1h: RegimeContext | None = None
+    regime_4h: RegimeContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,7 +266,62 @@ def evaluate_bos_intent(
         expected_holding_seconds=holding_seconds,
         current_funding_rate=current_funding_rate,
         symbol=intent.symbol,
+        available_room_bps=edge_bps,
     )
+
+
+def _regime_permission(
+    side: Side,
+    context: StructureContext,
+    *,
+    symbol: str,
+    as_of: datetime,
+) -> tuple[bool, str, dict[str, str]]:
+    """Apply supplied measurements as blockers and expose a score-free vector.
+
+    Missing regime context is recorded but remains backward compatible.  Once a
+    caller supplies a context, stale/future/bad-quality or opposing measurements
+    fail closed.  A regime never upgrades an otherwise ineligible candidate.
+    """
+    diagnostics: dict[str, str] = {
+        "diagnostics_policy": "measurement_vector_no_grade",
+        "regime_1h": "not_supplied",
+        "regime_4h": "not_supplied",
+    }
+    blocked_labels = {
+        RegimeLabel.LOW_LIQUIDITY,
+        RegimeLabel.MEAN_REVERSION,
+        RegimeLabel.SIDEWAYS,
+        RegimeLabel.UNAVAILABLE,
+    }
+    opposing = RegimeLabel.TRENDING_DOWN if side == Side.LONG else RegimeLabel.TRENDING_UP
+    for expected_tf, regime in (("1h", context.regime_1h), ("4h", context.regime_4h)):
+        if regime is None:
+            continue
+        prefix = f"regime_{expected_tf}"
+        diagnostics[prefix] = regime.label.value
+        diagnostics[f"{prefix}_confidence"] = f"{regime.confidence:.4f}"
+        diagnostics[f"{prefix}_adx"] = "n/a" if regime.adx is None else f"{regime.adx:.4f}"
+        diagnostics[f"{prefix}_atr_percentile"] = (
+            "n/a" if regime.atr_percentile is None else f"{regime.atr_percentile:.4f}"
+        )
+        diagnostics[f"{prefix}_volume_ratio"] = (
+            "n/a" if regime.volume_ratio is None else f"{regime.volume_ratio:.4f}"
+        )
+        if (
+            not regime.ready
+            or regime.data_quality != "ok"
+            or regime.symbol != symbol
+            or regime.timeframe != expected_tf
+            or not isinstance(regime.as_of, datetime)
+            or regime.as_of > as_of
+        ):
+            return False, f"invalid_{prefix}", diagnostics
+        if regime.label in blocked_labels:
+            return False, f"{prefix}_{regime.label.value}", diagnostics
+        if regime.label == opposing:
+            return False, f"{prefix}_opposes_{side.value}", diagnostics
+    return True, "regime_context_clear", diagnostics
 
 
 def evaluate_bos_intents(
@@ -342,16 +405,10 @@ def _closed_candles(
         volume = row.volume
         quote_volume = row.quote_volume
         trade_count = row.trade_count
-        if (
-            str(getattr(row, "timeframe", expected_timeframe)).strip().lower()
-            != expected_timeframe
-        ):
+        if str(getattr(row, "timeframe", expected_timeframe)).strip().lower() != expected_timeframe:
             return None
         is_closed = bool(getattr(row, "is_closed", True))
-        quality_ok = (
-            str(row.data_quality).strip().lower() == "ok"
-            and is_closed
-        )
+        quality_ok = str(row.data_quality).strip().lower() == "ok" and is_closed
         exact_volume_ok = (
             _finite(volume)
             and _finite(quote_volume)
@@ -385,8 +442,7 @@ def _closed_candles(
                     timeframe=expected_timeframe,
                     open_time=timestamp.to_pydatetime(),
                     close_time=(
-                        timestamp
-                        + pd.Timedelta(hours=4 if expected_timeframe == "4h" else 1)
+                        timestamp + pd.Timedelta(hours=4 if expected_timeframe == "4h" else 1)
                     ).to_pydatetime(),
                     open=Decimal(str(row.open)),
                     high=Decimal(str(row.high)),
@@ -591,9 +647,7 @@ def _add_mtf_features(
             _set_feature(out, index, "mtf_reason", "invalid_ltf_quality")
             continue
         as_of = ltf_bar.close_time
-        relevant = [
-            position for position, bar in enumerate(htf_bars) if bar.close_time <= as_of
-        ]
+        relevant = [position for position, bar in enumerate(htf_bars) if bar.close_time <= as_of]
         if any(not htf_eligible[position] for position in relevant):
             _set_feature(out, index, "mtf_reason", "invalid_htf_quality")
             continue
@@ -651,6 +705,7 @@ class StructureBos1H(BaseStrategy):
         self._cost_gate = CostGate(
             self.cost_profile,
             min_net_edge_bps=self.params.min_net_edge_bps,
+            min_room_cost_multiple=self.params.min_room_cost_multiple,
         )
 
     def on_closed_candle(
@@ -681,6 +736,14 @@ class StructureBos1H(BaseStrategy):
         for intent in intents:
             if intent.side != expected_side:
                 continue
+            regime_ok, regime_reason, diagnostics = _regime_permission(
+                intent.side,
+                context,
+                symbol=symbol,
+                as_of=intent.ts,
+            )
+            if not regime_ok:
+                continue
             aligned.append(
                 replace(
                     intent,
@@ -692,6 +755,9 @@ class StructureBos1H(BaseStrategy):
                             "htf_tf": snapshot.htf_tf,
                             "htf_trend": snapshot.htf.trend.value,
                             "htf_labels": ",".join(snapshot.htf.labels),
+                            "regime_reason": regime_reason,
+                            "min_room_cost_multiple": str(self.params.min_room_cost_multiple),
+                            **diagnostics,
                         }
                     ),
                 )
@@ -708,8 +774,7 @@ class StructureBos1H(BaseStrategy):
         if context.data_quality != "ok" or len(bars) < p.min_bars:
             return []
         if any(
-            not bar.is_closed or bar.timeframe != timeframe or bar.symbol != symbol
-            for bar in bars
+            not bar.is_closed or bar.timeframe != timeframe or bar.symbol != symbol for bar in bars
         ):
             return []
 
@@ -727,9 +792,7 @@ class StructureBos1H(BaseStrategy):
         if event.event == StructureEventType.BOS_UP:
             level = last_high.anchor_price
             break_price = _bps_offset(level, p.break_buffer_bps, 1)
-            bias_ok = not (
-                p.require_bias_not_against and context.dual_avwap_bias == "strong_short"
-            )
+            bias_ok = not (p.require_bias_not_against and context.dual_avwap_bias == "strong_short")
             if previous.close <= break_price < latest.close and bias_ok:
                 stop = _long_stop(bars, latest.close, last_low.anchor_price, p)
                 if 0 < stop < latest.close:
@@ -750,9 +813,7 @@ class StructureBos1H(BaseStrategy):
         if event.event == StructureEventType.BOS_DOWN:
             level = last_low.anchor_price
             break_price = _bps_offset(level, p.break_buffer_bps, -1)
-            bias_ok = not (
-                p.require_bias_not_against and context.dual_avwap_bias == "strong_long"
-            )
+            bias_ok = not (p.require_bias_not_against and context.dual_avwap_bias == "strong_long")
             if previous.close >= break_price > latest.close and bias_ok:
                 stop = _short_stop(bars, latest.close, last_high.anchor_price, p)
                 if stop > latest.close:
@@ -867,9 +928,7 @@ class StructureBos1H(BaseStrategy):
             entry=Decimal(str(row["close"])),
             stop=Decimal(str(candidate.stop_price)),
             level=Decimal(str(row["last_swing_high" if is_long else "last_swing_low"])),
-            opposite_swing=Decimal(
-                str(row["last_swing_low" if is_long else "last_swing_high"])
-            ),
+            opposite_swing=Decimal(str(row["last_swing_low" if is_long else "last_swing_high"])),
             bias=bias,  # type: ignore[arg-type]
             trend="up" if is_long else "down",
             p=self.params,

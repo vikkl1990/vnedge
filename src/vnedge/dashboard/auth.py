@@ -10,10 +10,10 @@ Replaces the single shared ``DASHBOARD_TOKEN`` with a token *store*:
   without any env change.
 
 Roles are ``viewer``, ``operator``, and ``auditor``, mapped to permissions by
-``PERMISSIONS`` / :func:`has_permission`. Every current route is read-only
-(``view``), so the map gates nothing yet — it exists so a future control
-surface (live-gate flip, promotion, kill-switch) enforces without another auth
-migration. Stored tokens may be plaintext (legacy) or a salted hash
+``PERMISSIONS`` / :func:`has_permission`. Most routes are read-only; the
+operator-only settings surface is explicitly gated by ``manage_settings``.
+Future capital controls (live-gate flip, promotion, kill-switch) use separate
+permissions. Stored tokens may be plaintext (legacy) or a salted hash
 (``vnedge-sha256$…``, see :func:`hash_token`) so the deployed config need not
 hold a usable secret.
 
@@ -46,11 +46,9 @@ ROLES: tuple[str, ...] = ("viewer", "operator", "auditor")
 LEGACY_USER_NAME = "operator"
 
 # --------------------------------------------------------------------------- #
-# RBAC — a role→permission map. The dashboard is read-only TODAY (zero control
-# routes), so `has_permission` gates nothing yet; the point is that when a
-# control surface lands (live-gate flip, promotion, kill-switch reset) the
-# enforcement primitive already exists and is tested, with no second auth
-# migration. Roles: viewer (read-only), operator (read + every control),
+# RBAC — a role→permission map. Profile/credential settings are operator-only;
+# they cannot flip runtime or capital state. Future capital controls remain on
+# their own permissions. Roles: viewer (read-only), operator (read + controls),
 # auditor (read + the audit trail, but NO control).
 # --------------------------------------------------------------------------- #
 PERM_VIEW = "view"  # read dashboards, lanes, journals, research
@@ -58,12 +56,20 @@ PERM_VIEW_AUDIT = "view_audit"  # read the operator-action audit trail
 PERM_PROMOTE = "promote"  # promote a strategy up the mode ladder
 PERM_FLIP_LIVE_GATE = "flip_live_gate"  # toggle a live_* mode / live gate
 PERM_KILL_SWITCH = "kill_switch"  # trip / reset the kill switch
+PERM_MANAGE_SETTINGS = "manage_settings"  # profile + encrypted connection lifecycle
 
 PERMISSIONS: dict[str, frozenset[str]] = {
     "viewer": frozenset({PERM_VIEW}),
     "auditor": frozenset({PERM_VIEW, PERM_VIEW_AUDIT}),
     "operator": frozenset(
-        {PERM_VIEW, PERM_VIEW_AUDIT, PERM_PROMOTE, PERM_FLIP_LIVE_GATE, PERM_KILL_SWITCH}
+        {
+            PERM_VIEW,
+            PERM_VIEW_AUDIT,
+            PERM_PROMOTE,
+            PERM_FLIP_LIVE_GATE,
+            PERM_KILL_SWITCH,
+            PERM_MANAGE_SETTINGS,
+        }
     ),
 }
 

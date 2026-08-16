@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from vnedge.data.candles import Candle
+from vnedge.data.regime_context import RegimeContext, RegimeLabel
 from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.strategy.structure_bos_1h import (
     PARAMS,
@@ -133,6 +134,7 @@ def test_preregistration_is_frozen_and_non_capital() -> None:
     assert PARAMS.max_hold_hours == 48
     assert PARAMS.min_bars == 50
     assert PARAMS.cost_edge_reward_r == Decimal("1.5")
+    assert PARAMS.min_room_cost_multiple == Decimal("1.5")
     assert STRATEGY_SPEC["capital_eligible"] is False
     assert STRATEGY_SPEC["tradeable"] is False
     assert StructureBos1h is StructureBos1H
@@ -154,9 +156,7 @@ def test_closed_candle_api_emits_deterministic_long_research_intent() -> None:
     assert first == second
     intent = first[0]
     assert intent.side is Side.LONG
-    assert intent.signal_id == (
-        f"structure_bos_1h:BTCUSDT:{intent.ts.strftime('%Y%m%d%H%M')}:long"
-    )
+    assert intent.signal_id == (f"structure_bos_1h:BTCUSDT:{intent.ts.strftime('%Y%m%d%H%M')}:long")
     assert intent.stop_ref < intent.entry_ref
     assert intent.time_stop - intent.ts == pd.Timedelta(hours=48).to_pytimedelta()
     assert intent.meta["break_buffer_bps"] == "5"
@@ -169,9 +169,10 @@ def test_closed_candle_api_fails_closed_on_quality_and_forming_bar() -> None:
     bars = _bars(_canonical_frame())
     bars_4h = _bars(_htf_frame())
 
-    assert engine.on_closed_candle(
-        "BTCUSDT", bars, bars_4h, StructureContext(data_quality="gap")
-    ) == []
+    assert (
+        engine.on_closed_candle("BTCUSDT", bars, bars_4h, StructureContext(data_quality="gap"))
+        == []
+    )
     forming = [*bars[:-1], replace(bars[-1], is_closed=False)]
     assert engine.on_closed_candle("BTCUSDT", forming, bars_4h) == []
 
@@ -181,17 +182,88 @@ def test_closed_candle_api_applies_dual_avwap_conflict_only() -> None:
     bars = _bars(_canonical_frame())
     bars_4h = _bars(_htf_frame())
 
-    assert engine.on_closed_candle(
-        "BTCUSDT",
-        bars,
-        bars_4h,
-        StructureContext(dual_avwap_bias="strong_short"),
-    ) == []
-    assert len(
+    assert (
         engine.on_closed_candle(
-            "BTCUSDT", bars, bars_4h, StructureContext(dual_avwap_bias="n/a")
+            "BTCUSDT",
+            bars,
+            bars_4h,
+            StructureContext(dual_avwap_bias="strong_short"),
         )
-    ) == 1
+        == []
+    )
+    assert (
+        len(
+            engine.on_closed_candle(
+                "BTCUSDT", bars, bars_4h, StructureContext(dual_avwap_bias="n/a")
+            )
+        )
+        == 1
+    )
+
+
+def _regime(
+    bars: list[Candle],
+    label: RegimeLabel,
+    *,
+    as_of=None,
+) -> RegimeContext:
+    return RegimeContext(
+        as_of=as_of or bars[-1].close_time,
+        symbol="BTCUSDT",
+        timeframe=bars[-1].timeframe,
+        label=label,
+        trend_direction=(
+            "up"
+            if label is RegimeLabel.TRENDING_UP
+            else "down"
+            if label is RegimeLabel.TRENDING_DOWN
+            else "flat"
+        ),
+        adx=35.0,
+        atr_percentile=0.5,
+        ema_slope_bps=4.0,
+        bb_width_bps=120.0,
+        bb_width_percentile=0.5,
+        volume_ratio=1.0,
+        confidence=0.7,
+        data_quality="ok",
+        ready=True,
+        reason="ok",
+    )
+
+
+def test_supplied_regime_context_blocks_opposition_and_adds_diagnostics() -> None:
+    engine = StructureBos1H()
+    bars_1h = _bars(_canonical_frame())
+    bars_4h = _bars(_htf_frame())
+    visible_4h = [bar for bar in bars_4h if bar.close_time <= bars_1h[-1].close_time]
+
+    opposed = StructureContext(
+        regime_1h=_regime(bars_1h, RegimeLabel.TRENDING_DOWN),
+        regime_4h=_regime(visible_4h, RegimeLabel.TRENDING_UP),
+    )
+    assert engine.on_closed_candle("BTCUSDT", bars_1h, bars_4h, opposed) == []
+
+    aligned = StructureContext(
+        regime_1h=_regime(bars_1h, RegimeLabel.TRENDING_UP),
+        regime_4h=_regime(visible_4h, RegimeLabel.TRENDING_UP),
+    )
+    intent = engine.on_closed_candle("BTCUSDT", bars_1h, bars_4h, aligned)[0]
+    assert intent.meta["regime_1h"] == "trending_up"
+    assert intent.meta["regime_4h"] == "trending_up"
+    assert intent.meta["diagnostics_policy"] == "measurement_vector_no_grade"
+    assert intent.meta["min_room_cost_multiple"] == "1.5"
+
+
+def test_supplied_low_liquidity_regime_blocks_bos() -> None:
+    engine = StructureBos1H()
+    bars_1h = _bars(_canonical_frame())
+    bars_4h = _bars(_htf_frame())
+    context = StructureContext(
+        regime_1h=_regime(bars_1h, RegimeLabel.LOW_LIQUIDITY),
+    )
+
+    assert engine.on_closed_candle("BTCUSDT", bars_1h, bars_4h, context) == []
 
 
 def test_long_bos_is_confirmed_buffered_atr_capped_and_cost_approved() -> None:
@@ -222,6 +294,9 @@ def test_long_bos_is_confirmed_buffered_atr_capped_and_cost_approved() -> None:
     )
     assert evaluation.cost is not None and evaluation.cost.approved
     assert evaluation.cost.cost.total_cost_bps > 0
+    assert evaluation.cost.available_room_bps is not None
+    assert evaluation.cost.min_room_bps is not None
+    assert evaluation.cost.available_room_bps >= evaluation.cost.min_room_bps
 
     intent = strategy.signal(prepared, _BREAK_INDEX)
     assert intent is not None

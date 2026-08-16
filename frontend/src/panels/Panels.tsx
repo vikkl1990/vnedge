@@ -388,22 +388,23 @@ export function RiskPanel() {
 export function ResearchPanel() {
   const scorecard = useResearchScorecard();
   const [showUndersampled, setShowUndersampled] = useState(false);
-  const token = new URLSearchParams(window.location.search).get("token");
-  const href = (path: string) => token ? `${path}?token=${encodeURIComponent(token)}` : path;
   const artifacts = [
     ["Strategy scorecard", "/scorecard"],
     ["OOS research evidence", "/research"],
     ["Pre-live checklist", "/pre-live-checklist"],
     ["Promotion review runbook", "/promotion-review-runbook"],
   ];
-  const scoreRows = (scorecard.data?.strategies ?? []).filter((row) => showUndersampled || row.samples >= 30);
+  const scoreRows = (scorecard.data?.strategies ?? []).filter((row) => showUndersampled || row.sample_qualified);
   const scoreCols: Column<(typeof scoreRows)[number]>[] = [
     { key: "strategy", header: "Strategy", render: (r) => <span className="font-mono">{r.strategy}</span> },
-    { key: "samples", header: "n", align: "right", render: (r) => <span className={r.samples < 30 ? "text-warn" : ""}>{r.samples}</span> },
-    { key: "net", header: "Best net", align: "right", render: (r) => r.best_net_bps == null ? "—" : `${r.best_net_bps.toFixed(2)} bps` },
-    { key: "pf", header: "PF", align: "right", render: (r) => r.profit_factor == null ? "—" : r.profit_factor.toFixed(2) },
-    { key: "break", header: "Break rate", align: "right", render: (r) => r.break_rate_pct == null ? "—" : `${r.break_rate_pct.toFixed(1)}%` },
-    { key: "verdict", header: "Evidence verdict", render: (r) => <TerminalBadge tone={String(r.verdict).toLowerCase().includes("pass") ? "info" : "neutral"}>{r.verdict ?? "unreported"}</TerminalBadge> },
+    { key: "samples", header: "n", align: "right", render: (r) => <span className={r.sample_qualified ? "" : "text-warn"} title={`${r.sample_unit}; ${r.samples_total} across all cells`}>{r.samples}</span> },
+    { key: "net", header: "OOS net", align: "right", render: (r) => r.oos_net_bps == null ? "—" : `${r.oos_net_bps.toFixed(2)} bps` },
+    { key: "pf", header: "PF · net", align: "right", render: (r) => <span title={r.profit_factor_reason ?? "after fees"}>{r.profit_factor_display}</span> },
+    { key: "sharpe", header: "Sharpe", align: "right", render: (r) => <span title={r.sharpe_reason ?? r.sharpe_convention}>{r.metric_state === "UNDER_SAMPLED" ? "hidden" : r.sharpe == null ? "—" : r.sharpe.toFixed(2)}</span> },
+    { key: "dsr", header: "DSR", align: "right", render: (r) => r.metric_state === "UNDER_SAMPLED" ? "hidden" : r.deflated_sharpe == null ? "—" : <span className={r.deflated_sharpe_pass ? "text-long" : "text-short"}>{r.deflated_sharpe.toFixed(3)} · {r.deflated_sharpe_pass ? "PASS" : "FAIL"}</span> },
+    { key: "trials", header: "N / N_eff", align: "right", render: (r) => <span title={r.trial_count_reason ?? "raw / correlation-adjusted trials"}>{r.raw_trials == null || r.effective_trials == null ? "not reported" : `${r.raw_trials.toFixed(0)} / ${r.effective_trials.toFixed(1)}`}</span> },
+    { key: "dd", header: "Max DD", align: "right", render: (r) => r.max_drawdown_pct == null ? "—" : `${r.max_drawdown_pct.toFixed(2)}%` },
+    { key: "verdict", header: "Evidence", render: (r) => <TerminalBadge tone={r.metric_state === "UNDER_SAMPLED" ? "warn" : String(r.verdict).toLowerCase().includes("pass") ? "info" : "neutral"}>{r.metric_state === "UNDER_SAMPLED" ? "UNDER_SAMPLED" : r.verdict ?? "unreported"}</TerminalBadge> },
   ];
   return (
     <div className="space-y-4">
@@ -418,14 +419,14 @@ export function ResearchPanel() {
       </div>
       <div className="mt-4 rounded-lg border border-line bg-inset p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">Scorecard</div><div className="mt-1 text-[11px] text-dim">Production view requires n ≥ 30. Historical passes do not grant capital.</div></div>
+          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">After-cost OOS scorecard</div><div className="mt-1 text-[11px] text-dim">PF, Sharpe, and DSR use one evidence cell and require n ≥ {scorecard.data?.performance_policy.min_samples ?? 30}. Sharpe is hidden unless its annualization convention is declared.</div></div>
           <label className="flex items-center gap-2 text-[11px] text-dim"><input type="checkbox" checked={showUndersampled} onChange={(event) => setShowUndersampled(event.target.checked)} /> show undersampled</label>
         </div>
         <DenseTable columns={scoreCols} rows={scoreRows} empty={scorecard.isLoading ? "loading evidence…" : "no sample-qualified scorecard rows"} />
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {artifacts.map(([label, path]) => (
-          <a key={path} href={href(path)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-lg border border-line bg-inset px-4 py-3 text-[12px] hover:border-line2">
+          <a key={path} href={path} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-lg border border-line bg-inset px-4 py-3 text-[12px] hover:border-line2">
             <span>{label}</span><TerminalBadge tone="neutral">evidence only ↗</TerminalBadge>
           </a>
         ))}
@@ -471,6 +472,13 @@ function IntelligencePanel() {
                 {stage.label} · {stage.done ? "done" : stage.active ? "active" : "locked"}
               </TerminalBadge>
             ))}
+          </div>
+          <div className="mt-4 rounded-md border border-line px-3 py-3 text-[11px] text-dim">
+            <div className="flex items-center justify-between gap-3">
+              <span><strong className="text-txt">River shadow</strong> · delayed after-cost labels · drift alerts only</span>
+              <TerminalBadge tone={ml.data?.online_shadow?.active ? "info" : "neutral"}>{ml.data?.online_shadow?.active ? "shadow active" : "not configured"}</TerminalBadge>
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-faint">{ml.data?.online_shadow?.installed ? "optional library installed" : "optional library not installed"} · {ml.data?.online_shadow?.drift_supervisor?.configured_streams ?? 0} drift streams · non-binding · cannot trade</div>
           </div>
           <div className="mt-4 border-t border-line pt-3">
             <div className="font-mono text-[10px] uppercase text-faint">Pre-registered gates</div>
@@ -518,8 +526,8 @@ export function PromotePanel() {
   const killed = runtime.filter((lane) => lane.eligibility === "KILLED");
   const researchOnly = runtime.filter((lane) => lane.eligibility === "RESEARCH_ONLY");
   const evidence = scorecard.data?.strategies ?? [];
-  const sampleQualified = evidence.filter((row) => row.samples >= 30).length;
-  const undersampled = evidence.filter((row) => row.samples < 30).length;
+  const sampleQualified = evidence.filter((row) => row.sample_qualified).length;
+  const undersampled = evidence.filter((row) => !row.sample_qualified).length;
   return (
     <div className="space-y-4">
       <TerminalPanel title="Promote" meta="human ladder · no mutation controls">

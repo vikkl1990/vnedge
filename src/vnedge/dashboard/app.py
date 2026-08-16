@@ -1,12 +1,12 @@
-"""Read-only dashboard server (docs/DESIGN.md §6).
+"""Safety-first dashboard server (docs/DESIGN.md §6).
 
 Hard invariants, enforced structurally:
 - No token, no dashboard: `create_app` refuses to start without at least one
   authorized user (legacy shared token or per-user store — see auth.py and
   docs/DASHBOARD_AUTH.md).
 - Zero order or promotion actions: operational/research data routes are GET or
-  read-only WebSockets.  The sole POST route exchanges an existing dashboard
-  credential for a short-lived session; it cannot mutate trading state.
+  read-only WebSockets. Scoped settings mutations can manage an operator
+  profile and encrypted credentials, but cannot mutate trading state.
 - Cannot slow the bot: the server only reads whatever snapshot the bot last
   published; a dead or slow browser drops its own socket and nothing else.
 """
@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hmac
 import html
 import io
 import json
 import logging
 import os
 import re
+import secrets
 import socket
 import time
 from collections import Counter
@@ -53,6 +55,7 @@ from vnedge.agent_gateway.task_registry import (
     quant_os_event_stream,
 )
 from vnedge.dashboard.auth import (
+    PERM_MANAGE_SETTINGS,
     AuthResult,
     DashboardUser,
     TokenStore,
@@ -64,9 +67,15 @@ from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.execution.operator_audit import OperatorAuditLog
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
+from vnedge.research.performance_scorecard import performance_disclosure, scorecard_policy
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
+from vnedge.settings.api_routes import mount_settings_routes
+from vnedge.settings.crypto import SecretBox
+from vnedge.settings.exchange_connections import SettingsService
+from vnedge.settings.store import SettingsStore
 
 
 def _load_retired_artifact(path: Path | None, fallback: dict | None = None) -> dict:
@@ -93,6 +102,8 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _APP_START = time.time()
+_SESSION_COOKIE = "vnedge_session"
+_CSRF_COOKIE = "vnedge_csrf"
 
 
 def _build_sha() -> str:
@@ -505,8 +516,13 @@ def create_app(
     session_issuer: SessionIssuer | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
     market_pulse_service: MarketPulseService | None = None,
+    settings_service: SettingsService | None = None,
+    settings_path: Path | None = None,
+    settings_audit_path: Path | None = None,
+    session_cookie_secure: bool | None = None,
+    fee_wall_forensics_path: Path | None = None,
 ) -> FastAPI:
-    """Build the read-only dashboard app.
+    """Build the dashboard app with scoped, non-trading settings mutations.
 
     Auth accepts either a per-user ``token_store`` (DASHBOARD_USERS), the
     legacy shared ``token`` (DASHBOARD_TOKEN — becomes the ``operator``
@@ -524,10 +540,21 @@ def create_app(
     # Short-lived session tokens: present the root token once to POST /auth/session
     # to mint a JWT, then the root secret stops travelling on every request.
     issuer = session_issuer if session_issuer is not None else SessionIssuer.from_env()
+    cookie_secure = (
+        session_cookie_secure
+        if session_cookie_secure is not None
+        else os.environ.get("DASHBOARD_COOKIE_SECURE", "true").strip().lower()
+        not in {"0", "false", "no"}
+    )
     pulse_service = market_pulse_service or MarketPulseService(
         Path("data/candles"),
         Path("data/gaps"),
         Path("data/hour_analysis.sqlite"),
+    )
+    resolved_settings = settings_service or SettingsService(
+        SettingsStore(settings_path or Path("data/settings.sqlite")),
+        SecretBox.from_env(),
+        OperatorAuditLog(settings_audit_path or Path("logs/settings_audit.jsonl")),
     )
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
@@ -597,8 +624,13 @@ def create_app(
         e.g. expiry) on failure. Never returns an unauthorized result."""
         header = request.headers.get("authorization", "")
         candidate = header.removeprefix("Bearer ").strip()
+        method = "bearer" if candidate else ""
         if not candidate:
             candidate = request.query_params.get("token", "")
+            method = "query" if candidate else ""
+        if not candidate:
+            candidate = request.cookies.get(_SESSION_COOKIE, "")
+            method = "session_cookie" if candidate else ""
         # A short-lived session JWT is honored first; anything that isn't one of
         # ours (verify -> None) falls through to the long-lived token store, so
         # existing tokens keep working unchanged.
@@ -606,12 +638,14 @@ def create_app(
         if session is not None:
             if not session.authorized:
                 raise HTTPException(status_code=401, detail=session.reason or "invalid session")
+            request.state.vnedge_auth_method = method
             return session
         result = store.authenticate(candidate)
         if not result.authorized:
             raise HTTPException(
                 status_code=401, detail=result.reason or "missing or invalid token"
             )
+        request.state.vnedge_auth_method = method or "root"
         return result
 
     def _identity(user: AuthResult) -> dict[str, str]:
@@ -636,6 +670,61 @@ def create_app(
                 )
             return user
         return _dep
+
+    def _require_settings(request: Request) -> AuthResult:
+        return _require_permission(PERM_MANAGE_SETTINGS)(request)
+
+    def _require_csrf(request: Request) -> None:
+        """Double-submit CSRF protection for cookie-authenticated mutations.
+
+        Explicit bearer clients are not vulnerable to ambient-cookie CSRF and
+        remain usable for automation. Browser settings calls use the HttpOnly
+        session cookie and must echo the non-secret CSRF cookie in a header.
+        """
+        if getattr(request.state, "vnedge_auth_method", "") != "session_cookie":
+            return
+        cookie = request.cookies.get(_CSRF_COOKIE, "")
+        header = request.headers.get("x-vnedge-csrf", "")
+        if not cookie or not header or not hmac.compare_digest(cookie, header):
+            raise HTTPException(status_code=403, detail="missing or invalid CSRF token")
+
+    def _issue_session_response(user: AuthResult) -> JSONResponse:
+        session = issuer.issue(user.name or "", user.role or "viewer")
+        csrf = secrets.token_urlsafe(32)
+        response = JSONResponse(
+            {
+                # Kept for non-browser/API compatibility. The React app never
+                # stores this value and immediately removes the root token URL.
+                "token": session.token,
+                "expires_at": session.expires_at.isoformat(),
+                "name": user.name,
+                "role": user.role,
+                "rotated": True,
+            },
+            headers=_identity(user),
+        )
+        response.set_cookie(
+            _SESSION_COOKIE,
+            session.token,
+            max_age=issuer.ttl_seconds,
+            expires=session.expires_at,
+            path="/",
+            secure=cookie_secure,
+            httponly=True,
+            samesite="strict",
+        )
+        response.set_cookie(
+            _CSRF_COOKIE,
+            csrf,
+            max_age=issuer.ttl_seconds,
+            expires=session.expires_at,
+            path="/",
+            secure=cookie_secure,
+            httponly=False,
+            samesite="strict",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     def _read_json_payload(path: Path | None, fallback: dict) -> dict:
         if path is None or not path.exists():
@@ -702,8 +791,9 @@ def create_app(
         agentic_research_os_path
         or Path("research/live_research/agentic_research_os_latest.json")
     )
-    fee_wall_forensics_file = Path(
-        "research/live_research/fee_wall_forensics_latest.json"
+    fee_wall_forensics_file = (
+        fee_wall_forensics_path
+        or Path("research/live_research/fee_wall_forensics_latest.json")
     )
     fee_wall_probes_file = Path(
         "research/live_research/fee_wall_paper_probes.json"
@@ -932,17 +1022,15 @@ def create_app(
         a JWT carrying the same identity/role. The browser uses the JWT after
         this, so the root secret stops travelling on every request. Read-only:
         this grants no new capability — the session's role equals the token's."""
-        user = _authorized(request)
-        session = issuer.issue(user.name or "", user.role or "viewer")
-        return JSONResponse(
-            {
-                "token": session.token,
-                "expires_at": session.expires_at.isoformat(),
-                "name": user.name,
-                "role": user.role,
-            },
-            headers=_identity(user),
-        )
+        return _issue_session_response(_authorized(request))
+
+    mount_settings_routes(
+        app,
+        service=resolved_settings,
+        authorize=_require_settings,
+        require_csrf=_require_csrf,
+        issue_session=_issue_session_response,
+    )
 
     def _query_lane(request: Request) -> str:
         lane = request.query_params.get("lane", "").strip()
@@ -1372,6 +1460,15 @@ def create_app(
                     "dataset": {"samples": 0, "min_to_train": 200, "progress_pct": 0.0, "by_strategy": {}},
                     "foundation": {},
                     "gates": {},
+                    "online_shadow": {
+                        "library": "river",
+                        "installed": False,
+                        "configured": False,
+                        "active": False,
+                        "binding": False,
+                        "can_trade": False,
+                        "note": "River shadow status unavailable",
+                    },
                     "model": None,
                     "can_trade": False,
                     "can_promote": False,
@@ -2060,23 +2157,29 @@ def create_app(
                 {
                     "strategy": strat, "best_net_bps": None, "verdict": None,
                     "profit_factor": None, "break_rate_pct": None,
-                    "samples": 0, "venues": set(),
+                    "samples": 0, "samples_total": 0, "venues": set(),
                 },
             )
             if r.get("exchange"):
                 g["venues"].add(r["exchange"])
-            g["samples"] += int(summ.get("opportunities") or 0)
+            disclosure = performance_disclosure(summ, r)
+            g["samples_total"] += disclosure["samples"]
             if g["best_net_bps"] is None or net > g["best_net_bps"]:
                 g["best_net_bps"] = net
-                g["verdict"] = summ.get("verdict")
-                g["profit_factor"] = summ.get("profit_factor")
+                g.update(disclosure)
                 g["break_rate_pct"] = summ.get("fee_wall_break_rate_pct")
         rows = []
         for g in by.values():
             g = dict(g)
             g["venues"] = sorted(v for v in g["venues"] if v)
             rows.append(g)
-        rows.sort(key=lambda r: (r["best_net_bps"] is None, -(r["best_net_bps"] or -1e9)))
+        rows.sort(
+            key=lambda r: (
+                not r.get("sample_qualified", False),
+                r["best_net_bps"] is None,
+                -(r["best_net_bps"] or -1e9),
+            )
+        )
         return JSONResponse(
             {
                 "generated_at": forensics.get("generated_at"),
@@ -2084,6 +2187,7 @@ def create_app(
                 "probes": probes.get("paper_probes", []),
                 "probe_actuals": probe_actuals.get("rows", []),
                 "probe_actuals_summary": probe_actuals.get("summary", {}),
+                "performance_policy": scorecard_policy(),
                 "can_trade": False,
                 "can_promote": False,
             }
@@ -2379,7 +2483,10 @@ def create_app(
     @app.websocket("/api/pulse/stream")
     async def market_pulse_stream(websocket: WebSocket) -> None:
         """Five-second coalesced pulse stream; never forwards individual ticks."""
-        candidate = websocket.query_params.get("token", "")
+        candidate = (
+            websocket.cookies.get(_SESSION_COOKIE, "")
+            or websocket.query_params.get("token", "")
+        )
         result = issuer.verify(candidate) or store.authenticate(candidate)
         if not result.authorized:
             await websocket.close(
@@ -2412,7 +2519,11 @@ def create_app(
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
-        result = store.authenticate(websocket.query_params.get("token", ""))
+        candidate = (
+            websocket.cookies.get(_SESSION_COOKIE, "")
+            or websocket.query_params.get("token", "")
+        )
+        result = issuer.verify(candidate) or store.authenticate(candidate)
         if not result.authorized:
             await websocket.close(
                 code=4401, reason=(result.reason or "missing or invalid token")[:120]

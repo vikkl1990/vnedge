@@ -1335,22 +1335,22 @@
 </div>
 
 <script>
-(function(){
+(async function(){
   var reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
-  // Token: take it from ?token= if present and REMEMBER it, so a later bare URL
-  // still works; otherwise fall back to the remembered one. A read-only
-  // dashboard token on the user's own machine — standard for token-gated tools.
+  // Exchange the root URL token once for a short-lived session. Keep only that
+  // session in page memory; the root token is removed from the address bar and
+  // neither credential is written to localStorage.
   var token = "";
   try{
     var urlTok = new URLSearchParams(location.search).get("token") || "";
-    if(urlTok){ token = urlTok; try{ localStorage.setItem("vnedge_token", urlTok); }catch(e){} }
-    else { try{ token = localStorage.getItem("vnedge_token") || ""; }catch(e){} }
-  }catch(e){}
-  // Carry the token onto the separate-page nav links (Strategy Lab is its own
-  // FileResponse page, not an SPA view, so it needs the token in its own URL).
-  try{
-    var _nl=document.getElementById("navLab");
-    if(_nl && token){ _nl.href="/quantified-strategy-lab?token="+encodeURIComponent(token); }
+    try{ localStorage.removeItem("vnedge_token"); }catch(e){}
+    var authHeaders=urlTok?{"Authorization":"Bearer "+urlTok}:{};
+    var sessionRes=await fetch("/auth/session",{method:"POST",headers:authHeaders,credentials:"same-origin",cache:"no-store"});
+    if(sessionRes.ok){ token=(await sessionRes.json()).token||""; }
+    if(urlTok){
+      var cleanUrl=new URL(location.href); cleanUrl.searchParams.delete("token");
+      history.replaceState({},"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);
+    }
   }catch(e){}
   // favicon (suppresses the /favicon.ico 404; the VN mark in amber)
   try{
@@ -1363,7 +1363,7 @@
     try{
       var tb=document.createElement("div");
       tb.style.cssText="position:fixed;top:0;left:0;right:0;z-index:300;background:linear-gradient(90deg,#2a1c08,#1a1206);color:#F6A93B;padding:13px 20px;font:600 13px/1.4 var(--sans);text-align:center;border-bottom:1px solid rgba(246,169,59,.45)";
-      tb.innerHTML="Access token required — append <b>?token=YOUR_TOKEN</b> to the URL. It will be remembered for next time.";
+      tb.innerHTML="Authenticated session required — open the dashboard with a valid one-time <b>?token=…</b> URL.";
       document.body.appendChild(tb);
     }catch(e){}
   }
@@ -3395,7 +3395,7 @@
     var view=VIEW_ALIASES[k];
     if(view){gotoView(view);return;}
     if(k==="strat_lab"||k==="strategy_lab"||k==="quantified"){
-      location.href=token?"/quantified-strategy-lab?token="+encodeURIComponent(token):"/quantified-strategy-lab";
+      location.href="/quantified-strategy-lab";
       return;
     }
     var input=$("goInput");
@@ -3422,7 +3422,7 @@
     {label:"Research",hint:"scorecard · edge",kw:"research scorecard edge scanner",run:function(){gotoView("research");}},
     {label:"System",hint:"ops · health",kw:"system sys ops health",run:function(){gotoView("system");}},
     {label:"About",hint:"what VN Edge is",kw:"about info",run:function(){gotoView("about");}},
-    {label:"Strategy Lab ↗",hint:"95-strategy quant lab",kw:"strat lab strategy quantified",run:function(){location.href=token?"/quantified-strategy-lab?token="+encodeURIComponent(token):"/quantified-strategy-lab";}},
+    {label:"Strategy Lab ↗",hint:"95-strategy quant lab",kw:"strat lab strategy quantified",run:function(){location.href="/quantified-strategy-lab";}},
     {label:"Focus GO bar",hint:"type symbol / lane / view",kw:"go search jump symbol lane bar",run:function(){if(goInput){goInput.focus();goInput.select();}}}
   ];
   var cmdk=$("cmdk"),cmdkInput=$("cmdkInput"),cmdkList=$("cmdkList"),cmdkActive=0,cmdkFiltered=[];

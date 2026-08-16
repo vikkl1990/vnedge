@@ -14,6 +14,7 @@ import {
   SystemPanel,
 } from "./panels/Panels";
 import { useUi } from "./store";
+import { SettingsPanel } from "./panels/Settings/SettingsPanel";
 
 const TABS = [
   { id: "pulse", label: "Pulse" },
@@ -23,6 +24,7 @@ const TABS = [
   { id: "research", label: "Research" },
   { id: "promote", label: "Promote" },
   { id: "system", label: "System" },
+  { id: "settings", label: "Settings" },
 ];
 
 export default function App() {
@@ -38,13 +40,13 @@ export default function App() {
       { id: "research", label: "Research", hint: "evidence · ML · agents", run: () => setTab("research") },
       { id: "promote", label: "Promote", hint: "human gates · sealed strategies", run: () => setTab("promote") },
       { id: "system", label: "System", hint: "freshness · health · build", run: () => setTab("system") },
+      { id: "settings", label: "Settings", hint: "profile · encrypted exchange connections", run: () => setTab("settings") },
       {
         id: "classic",
         label: "Legacy dashboard ↗",
         hint: "explicit fallback",
         run: () => {
-          const t = new URLSearchParams(window.location.search).get("token");
-          window.location.href = t ? `/?token=${encodeURIComponent(t)}` : "/";
+          window.location.href = "/";
         },
       },
     ],
@@ -73,9 +75,10 @@ export default function App() {
       {tab === "research" && <ResearchPanel />}
       {tab === "promote" && <PromotePanel />}
       {tab === "system" && <SystemPanel />}
+      {tab === "settings" && <SettingsPanel />}
 
       <footer className="text-[11px] font-mono text-faint pt-2">
-        correction cockpit · read-only · no order or promotion controls
+        correction cockpit · scoped settings only · no order, live-enable, or promotion controls
       </footer>
 
       <CommandPalette commands={commands} />

@@ -63,14 +63,48 @@ def probabilistic_sharpe_ratio(returns, benchmark_sr: float = 0.0) -> float:
     return float(norm.cdf(z))
 
 
-def expected_max_sharpe(sr_variance: float, n_trials: int) -> float:
+def effective_number_of_trials(perf_matrix) -> float:
+    """Correlation-adjusted number of independently different trials.
+
+    ``perf_matrix`` is shaped ``(observations, trials)`` and must contain the
+    aligned after-cost return series for every configuration in one search.
+    The eigenvalue participation ratio of its correlation matrix is one when
+    all trials are duplicates and approaches the raw trial count when their
+    outcomes are independent.  This is a disclosure statistic, not permission
+    to hide the raw number of configurations attempted.
+    """
+    matrix = np.asarray(perf_matrix, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError("perf_matrix must be 2-D (observations, trials)")
+    observations, trials = matrix.shape
+    if observations < 3 or trials < 1:
+        raise ValueError("need >= 3 observations and >= 1 trial")
+    if not np.isfinite(matrix).all():
+        raise ValueError("perf_matrix must contain only finite values")
+    if trials == 1:
+        return 1.0
+    if np.any(matrix.std(axis=0, ddof=1) == 0):
+        raise ValueError("every trial must have non-zero return variance")
+
+    correlation = np.corrcoef(matrix, rowvar=False)
+    eigenvalues = np.clip(np.linalg.eigvalsh(correlation), 0.0, None)
+    squared_sum = float(np.square(eigenvalues).sum())
+    if squared_sum == 0:
+        return 1.0
+    effective = float(eigenvalues.sum() ** 2 / squared_sum)
+    if effective <= 1.0 + 1e-12:
+        return 1.0
+    return min(float(trials), max(1.0, effective))
+
+
+def expected_max_sharpe(sr_variance: float, n_trials: float) -> float:
     """E[max Sharpe] under the null of ZERO true Sharpe across `n_trials`.
 
     The more independent configs you tried, the higher a Sharpe you expect from
     luck alone — this is that expected best-of-N, in per-observation units.
     `sr_variance` is the variance of the Sharpe estimates across the trials.
     """
-    if n_trials < 1:
+    if not math.isfinite(float(n_trials)) or n_trials < 1:
         raise ValueError("n_trials must be >= 1")
     if n_trials == 1 or sr_variance <= 0.0:
         return 0.0
@@ -84,7 +118,7 @@ def expected_max_sharpe(sr_variance: float, n_trials: int) -> float:
 
 def deflated_sharpe_ratio(
     returns,
-    n_trials: int,
+    n_trials: float,
     *,
     sr_variance: float | None = None,
     trial_sharpes=None,
@@ -95,7 +129,9 @@ def deflated_sharpe_ratio(
     Sharpe estimates across all configs tried) or as `trial_sharpes` (the list
     of per-observation Sharpes, from which the variance is computed). A DSR
     below ~0.95 means the Sharpe is not convincingly real once the number of
-    trials is accounted for.
+    trials is accounted for. ``n_trials`` may be the correlation-adjusted value
+    returned by :func:`effective_number_of_trials`, but reports must retain the
+    raw trial count too.
     """
     if sr_variance is None:
         if trial_sharpes is None:

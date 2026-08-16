@@ -664,6 +664,7 @@ export function MarketPulse() {
                 <span>1h range</span><span className="text-right text-txt">{fmt(itemForming?.range_bps as number | undefined)} bps</span>
                 <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
                 <span>dual AVWAP</span><span className="text-right text-txt">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
+                <span>regime 1h</span><span className="text-right text-txt">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
                 <span>vs prior POC</span><span className="text-right text-txt">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
                 <span>feed age</span><span className="text-right text-txt">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
               </div>
@@ -701,6 +702,7 @@ export function MarketPulse() {
               <Metric label="Volume" value={formingVolumeRank == null ? "rank —" : `${Math.round(formingVolumeRank * 100)}th pct`} note={formingVolumeVsMedian == null ? "24h median unavailable" : `${fmt(formingVolumeVsMedian, 2)}× 24h median`} />
               <Metric label="vs session VWAP" value={`${signed((forming?.vs_session_vwap_bps as number | undefined) ?? pulse.data?.indicators.vs_session_vwap_bps)} bps`} />
               <Metric label="Dual AVWAP" value={forming?.dual_avwap_bias ?? pulse.data?.indicators.dual_avwap_bias ?? "n/a"} note={dualAvwapNote ?? undefined} />
+              <Metric label="Regime 1h / 4h" value={`${pulse.data?.regime?.["1h"].label.replace(/_/g, " ") ?? "unavailable"} / ${pulse.data?.regime?.["4h"].label.replace(/_/g, " ") ?? "unavailable"}`} note="closed bars · measurement only" />
               <Metric label="Prior-day POC" value={priorDayProfile?.poc?.toLocaleString() ?? "unavailable"} note={priorDayProfile?.available ? `${signed(priorDayProfile.vs_poc_bps)} bps · trade-derived` : profileReason} />
               <Metric label="VAL / VAH" value={priorDayProfile?.available ? `${priorDayProfile.value_area_low?.toLocaleString()} – ${priorDayProfile.value_area_high?.toLocaleString()}` : "unavailable"} note={priorDayProfile?.available ? `${priorDayProfile.location.replace(/_/g, " ")} · ${((priorDayProfile.va_volume_pct ?? 0) * 100).toFixed(1)}% volume` : profileReason} />
               <Metric label="Session" value={(forming?.session_label as string | undefined) ?? pulse.data?.market.session_label ?? "—"} note={((forming?.session_active as boolean | undefined) ?? pulse.data?.market.session_label === "us_overlap") ? "active overlap" : "off overlap"} />

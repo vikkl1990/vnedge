@@ -66,3 +66,67 @@ def test_threshold_immutable_at_runtime():
         g.min_net_edge_bps = Decimal("0")        # property, no setter
     with pytest.raises(Exception):
         g.config.min_net_edge_bps = Decimal("0")  # frozen config
+
+
+def test_room_multiple_fails_closed_when_room_is_missing_or_too_small():
+    gate = CostGate(
+        CostProfile.SCALP,
+        min_net_edge_bps=Decimal("4"),
+        min_room_cost_multiple=Decimal("1.5"),
+    )
+    common = dict(
+        signal_edge_bps=100,
+        side="buy",
+        urgency="taker",
+        expected_holding_seconds=0,
+        current_funding_rate=0,
+        symbol="BTCUSDT",
+    )
+
+    missing = gate.evaluate(**common)
+    thin = gate.evaluate(**common, available_room_bps=Decimal("20"))
+
+    assert not missing.approved and "room missing" in (missing.reason or "")
+    assert not thin.approved and "room 20.00bps" in (thin.reason or "")
+    assert thin.min_room_bps == Decimal("21.0")
+
+
+def test_room_multiple_approves_only_after_net_and_room_checks_pass():
+    gate = CostGate(
+        CostProfile.SCALP,
+        min_net_edge_bps=Decimal("4"),
+        min_room_cost_multiple=Decimal("1.5"),
+    )
+    result = gate.evaluate(
+        signal_edge_bps=100,
+        side="buy",
+        urgency="taker",
+        expected_holding_seconds=0,
+        current_funding_rate=0,
+        symbol="BTCUSDT",
+        available_room_bps=Decimal("21"),
+    )
+
+    assert result.approved
+    assert result.available_room_bps == Decimal("21")
+    assert result.min_room_bps == Decimal("21.0")
+
+
+def test_funding_rebate_cannot_reduce_the_physical_room_wall():
+    gate = CostGate(
+        CostProfile.SCALP,
+        min_room_cost_multiple=Decimal("1.5"),
+    )
+    result = gate.evaluate(
+        signal_edge_bps=100,
+        side="sell",
+        urgency="taker",
+        expected_holding_seconds=28_800,
+        current_funding_rate="0.001",
+        symbol="BTCUSDT",
+        available_room_bps=Decimal("10"),
+    )
+
+    assert result.cost.funding_bps == Decimal("-10")
+    assert result.min_room_bps == Decimal("21.0")
+    assert not result.approved
