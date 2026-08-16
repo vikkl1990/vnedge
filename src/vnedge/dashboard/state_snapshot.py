@@ -11,12 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from vnedge.dashboard.health_bands import annotate
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
-from vnedge.dashboard.health_bands import annotate
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 
 
@@ -188,6 +188,14 @@ def build_snapshot(
         "fees_usd": sum(f.fee_usd for f in exchange.get_fills()),
         "last_risk_reject": _last_risk_reject(order_manager),
         "last_journal_write": "ok" if journal.available else "unavailable",
+        "journal": {
+            "available": journal.available,
+            "recovery_degraded": journal.recovery_degraded,
+            "recovery_error": journal.recovery_error or None,
+            "quarantine_path": (
+                str(journal.quarantine_path) if journal.quarantine_path else None
+            ),
+        },
         # --- canonical candle-path contract (promoted from session so the UI
         # and any client can type against ONE stable schema; the multi-lane
         # provider overwrites snapshot_age_ms with the real serving-time age).

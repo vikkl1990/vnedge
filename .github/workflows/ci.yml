@@ -21,8 +21,14 @@ jobs:
         run: >-
           python -m ruff check
           src/vnedge/execution/journal.py
+          src/vnedge/dashboard/correction_ui.py
+          src/vnedge/dashboard/market_pulse.py
+          src/vnedge/data/candles.py
+          src/vnedge/data/gaps.py
+          src/vnedge/data/vwap.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
+          src/vnedge/runtime/fleet_policy.py
           src/vnedge/runtime/live_trader_main.py
           src/vnedge/runtime/multi_lane_shadow.py
           src/vnedge/research/continuous_research.py
@@ -32,13 +38,25 @@ jobs:
         run: >-
           python -m mypy --ignore-missing-imports
           src/vnedge/execution/journal.py
+          src/vnedge/dashboard/correction_ui.py
+          src/vnedge/dashboard/market_pulse.py
+          src/vnedge/data/candles.py
+          src/vnedge/data/gaps.py
+          src/vnedge/data/vwap.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
+          src/vnedge/runtime/fleet_policy.py
           src/vnedge/runtime/live_trader_main.py
           src/vnedge/runtime/multi_lane_shadow.py
           src/vnedge/research/continuous_research.py
           src/vnedge/strategy/measurement_only.py
           src/vnedge/strategy/strategy_registry.py
+      - name: Ruff full-package debt visibility
+        continue-on-error: true
+        run: python -m ruff check src/vnedge --statistics
+      - name: Mypy full-package debt visibility
+        continue-on-error: true
+        run: python -m mypy --ignore-missing-imports src/vnedge
 
   frontend:
     runs-on: ubuntu-latest

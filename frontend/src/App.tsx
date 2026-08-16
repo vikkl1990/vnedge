@@ -1,35 +1,36 @@
 import { useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import { MarketPulse } from "./components/MarketPulse";
 import { TerminalTabs } from "./components/Terminal";
 import {
-  BookPanel,
-  FeedPanel,
   Header,
-  HealthPanel,
   JournalPanel,
   LanesPanel,
-  MarketPanel,
-  PositionsPanel,
+  LiveBlockedBanner,
+  ResearchPanel,
   RiskPanel,
-  StatusStrip,
 } from "./panels/Panels";
 import { useUi } from "./store";
 
 const TABS = [
-  { id: "desk", label: "Desk" },
-  { id: "markets", label: "Markets" },
+  { id: "pulse", label: "Pulse" },
+  { id: "lanes", label: "Lanes" },
+  { id: "risk", label: "Risk" },
   { id: "journal", label: "Journal" },
+  { id: "research", label: "Research" },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState("desk");
+  const [tab, setTab] = useState("pulse");
   const setPalette = useUi((s) => s.setPalette);
 
   const commands: Command[] = useMemo(
     () => [
-      { id: "desk", label: "Desk", hint: "book · risk · positions", run: () => setTab("desk") },
-      { id: "markets", label: "Markets", hint: "price · spread · feed", run: () => setTab("markets") },
-      { id: "journal", label: "Journal", hint: "closed trades", run: () => setTab("journal") },
+      { id: "pulse", label: "Pulse", hint: "1h story · VWAP · AI observation", run: () => setTab("pulse") },
+      { id: "lanes", label: "Lanes", hint: "eligibility · mode · capital", run: () => setTab("lanes") },
+      { id: "risk", label: "Risk", hint: "kill · journal · streams", run: () => setTab("risk") },
+      { id: "journal", label: "Journal", hint: "read-only decisions", run: () => setTab("journal") },
+      { id: "research", label: "Research", hint: "evidence only", run: () => setTab("research") },
       {
         id: "classic",
         label: "Classic dashboard ↗",
@@ -46,6 +47,7 @@ export default function App() {
   return (
     <div className="min-h-full max-w-[1180px] mx-auto px-5 py-6 flex flex-col gap-5">
       <Header />
+      <LiveBlockedBanner />
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <TerminalTabs tabs={TABS} active={tab} onChange={setTab} />
         <button
@@ -56,26 +58,14 @@ export default function App() {
         </button>
       </div>
 
-      {tab === "desk" && (
-        <div className="flex flex-col gap-5">
-          <StatusStrip />
-          <BookPanel />
-          <RiskPanel />
-          <LanesPanel />
-          <HealthPanel />
-          <PositionsPanel />
-        </div>
-      )}
-      {tab === "markets" && (
-        <div className="flex flex-col gap-5">
-          <MarketPanel />
-          <FeedPanel />
-        </div>
-      )}
+      {tab === "pulse" && <MarketPulse />}
+      {tab === "lanes" && <LanesPanel />}
+      {tab === "risk" && <RiskPanel />}
       {tab === "journal" && <JournalPanel />}
+      {tab === "research" && <ResearchPanel />}
 
       <footer className="text-[11px] font-mono text-faint pt-2">
-        v2 · read-only · classic dashboard remains at <code>/</code>
+        correction cockpit · read-only · no order or promotion controls
       </footer>
 
       <CommandPalette commands={commands} />

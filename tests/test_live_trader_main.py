@@ -157,7 +157,12 @@ async def test_killed_strategy_is_refused_before_any_live_client(tmp_path, monke
 
 
 async def test_all_gates_open_wires_and_runs(tmp_path, monkeypatch):
+    from vnedge.strategy import strategy_registry
+
     _live_env(monkeypatch, tmp_path)
+    # Exercise the post-approval wiring path without changing the production
+    # default, whose capital allowlist is deliberately empty.
+    monkeypatch.setattr(strategy_registry, "CAPITAL_APPROVED", frozenset({CFG.strategy_id}))
     facs = _facs()
     code = await run_live_trader(Settings(**LIVE_ENV), CFG, max_bars=0, **facs)
     assert code == _EXIT_OK

@@ -65,13 +65,15 @@ IS +$1,343 vs OOS −$18.50 = classic overfit, caught by the IS/OOS
 collapse gate. ML judgment round deferred until an exploratory config
 shows promise; do not judge on the untouched window before then.
 
-## Paper trial: funding_mean_reversion_v1 on BTC (APPROVED 2026-07-03)
+## Historical paper trial: funding_mean_reversion_v1 on BTC (KILLED 2026-08-16)
 
-Human approval received ("approved for paper: funding_mean_reversion_v1 BTC
-only"). Manifest + locked pass/fail criteria:
+The 2026-07-03 human paper approval is historical and has been revoked after
+the forward-paper failure/post-mortem. The strategy is in `KILLED`, the capital
+allowlist is empty, and the trial entrypoint refuses it before network startup.
+Retain the manifest and reports as evidence only; do not run or reactivate it.
+Original manifest + locked pass/fail criteria:
 research/paper_trials/funding_mr_btc_v1_20260703.yaml. Run with:
-  python -m vnedge.runtime.paper_trial research/paper_trials/funding_mr_btc_v1_20260703.yaml --hours 24
-(repeat daily or run long sessions; add --dashboard with DASHBOARD_TOKEN set).
+  [RETIRED — command intentionally refused by runtime policy]
 Params frozen (0.85/1.5), $500 equity, $10 daily loss, 14-30 days, >=10
 trades, <=6% DD. NO parameter changes mid-trial. NO live orders (manifest
 validation refuses live_orders_enabled). Reports append to

@@ -72,15 +72,14 @@ def test_unknown_and_killed_strategies_cannot_enter_capital_roster():
         )
 
 
-def test_explicit_eligible_strategy_builds_one_paper_lane():
-    specs = build_capital_lane_specs(
-        {
-            "MULTI_LANE_CAPITAL_ENABLED": "1",
-            "MULTI_LANE_CAPITAL_STRATEGY": "trend_continuation_v1",
-        }
-    )
-    assert len(specs) == 1
-    assert specs[0].mode is RunnerMode.PAPER
+def test_registered_but_unapproved_strategy_cannot_build_a_paper_lane():
+    with pytest.raises(ValueError, match="not capital eligible"):
+        build_capital_lane_specs(
+            {
+                "MULTI_LANE_CAPITAL_ENABLED": "1",
+                "MULTI_LANE_CAPITAL_STRATEGY": "trend_continuation_v1",
+            }
+        )
 
 
 def test_lane_capital_downgrade_is_fail_closed():

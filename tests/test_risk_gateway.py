@@ -146,6 +146,22 @@ def test_exchange_health_warns_but_does_not_block_reduce_only_exit(gateway):
     assert any("exchange_health" in f for f in decision.warning_checks)
 
 
+def test_data_integrity_gap_blocks_entries_but_not_reduce_only_exits(gateway):
+    market = healthy_market(data_degraded=True)
+    entry = gateway.evaluate(entry_intent(), healthy_account(), market, now=NOW)
+    assert not entry.approved
+    assert any("data_integrity" in failure for failure in entry.failed_checks)
+
+    exit_decision = gateway.evaluate(
+        entry_intent(reduce_only=True),
+        healthy_account(open_positions=1),
+        market,
+        now=NOW,
+    )
+    assert exit_decision.approved, exit_decision.explanation
+    assert any("data_integrity" in warning for warning in exit_decision.warning_checks)
+
+
 def test_symbol_mismatch_still_blocks_reduce_only_exit(gateway):
     market = healthy_market(symbol="ETH/USDT:USDT")
     decision = gateway.evaluate(

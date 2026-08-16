@@ -28,14 +28,34 @@ RESEARCH_ONLY: frozenset[str] = frozenset({MeasurementOnly.strategy_id})
 # Failed forward paper; retained only so historical evidence can be replayed.
 KILLED: frozenset[str] = frozenset({FundingMeanReversion.strategy_id})
 
+# Capital permission is an explicit promotion decision, not the absence of a
+# kill decision. The safe default is deliberately empty after the 2026-08 edge
+# investigation. Adding an ID here requires its reviewed, pre-registered OOS
+# and paper evidence in the same change.
+CAPITAL_APPROVED: frozenset[str] = frozenset()
+
 
 def is_capital_eligible(strategy_id: str) -> bool:
-    """True only for a known, registered, non-killed executable."""
+    """True only for a registered strategy with explicit capital approval."""
     return (
         strategy_id in STRATEGIES
+        and strategy_id in CAPITAL_APPROVED
         and strategy_id not in RESEARCH_ONLY
         and strategy_id not in KILLED
     )
+
+
+def capital_denial_reason(strategy_id: str) -> str | None:
+    """Explain a capital denial; ``None`` means the explicit allowlist grants it."""
+    if strategy_id not in STRATEGIES:
+        return "unknown strategy"
+    if strategy_id in KILLED:
+        return "strategy is killed"
+    if strategy_id in RESEARCH_ONLY:
+        return "strategy is research/measurement only"
+    if strategy_id not in CAPITAL_APPROVED:
+        return "strategy has no explicit capital approval"
+    return None
 
 
 def get_strategy_class(strategy_id: str) -> type[BaseStrategy]:

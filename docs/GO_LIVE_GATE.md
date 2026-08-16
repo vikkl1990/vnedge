@@ -1,5 +1,11 @@
 # funding_mr BTC — Go-Live Gate + Capacity Math (2026-08-07)
 
+> **RETIRED / KILLED (2026-08-16):** Funding MR failed forward paper and its
+> capital permission was revoked. The runtime refuses this trial, the approved
+> capital set is empty, and the Docker image defaults to measurement-only.
+> Everything below is preserved as historical decision evidence; none of it is
+> a current go-live procedure or permission.
+
 The bot has been in paper/shadow limbo because there was no written criterion
 for when it goes live or gets shelved — so "one more scanner" always won. This
 is that criterion. It applies to the one validated edge, **funding_mean_

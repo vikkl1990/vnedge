@@ -43,10 +43,8 @@ def test_funding_mr_killed_not_capital_eligible():
     assert not is_capital_eligible("funding_mean_reversion_v1")
 
 
-def test_crypto_trend_still_capital_eligible():
-    # Immature (3 trades) != killed. The swing-adjacent candidate keeps its permission
-    # so a future swing-timescale validation can promote it through the ladder.
-    assert is_capital_eligible("crypto_trend_atr_margin_v1")
+def test_non_killed_strategy_still_needs_explicit_capital_approval():
+    assert not is_capital_eligible("crypto_trend_atr_margin_v1")
 
 
 def test_known_hf_engines_are_recorded_killed_and_barred():

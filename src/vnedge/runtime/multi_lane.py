@@ -140,6 +140,9 @@ class MultiLaneProvider:
         self._health_cache: dict | None = None
         self._health_at = 0.0
         self._runtime_control = dict(runtime_control or {})
+        self._specs_by_id = {
+            spec.lane_id: spec for spec in (lane_specs or [])
+        }
 
     def _lane_health(self) -> dict | None:
         """Cached desired-vs-active audit for the snapshot (never raises).
@@ -182,9 +185,11 @@ class MultiLaneProvider:
         dashboard shows the whole fleet immediately (each lane 'warming up')
         instead of a blank board until all builds finish. Overwritten by the
         lane's real snapshot as soon as it starts."""
+        spec = self._specs_by_id.get(lane_id)
         self._publish(lane_id, exchange, {
             "mode": "warming up",
             "symbol": symbol,
+            "strategy_id": spec.strategy_id if spec is not None else "",
             "equity": 0.0,
             "realized_pnl": 0.0,
             "unrealized_pnl": 0.0,
@@ -245,7 +250,10 @@ class MultiLaneProvider:
                 # per-lane mode + strategy so the dashboard lane matrix can
                 # label paper vs shadow and which strategy each lane runs
                 "mode": self._lanes[lid].get("mode", ""),
-                "strategy_id": self._lanes[lid].get("strategy_id", ""),
+                "strategy_id": self._lanes[lid].get("strategy_id", "") or (
+                    self._specs_by_id[lid].strategy_id
+                    if lid in self._specs_by_id else ""
+                ),
                 # per-lane last price + funding so the dashboard watchlist can
                 # show real per-symbol quotes (one live price per lane symbol)
                 "price": self._lanes[lid].get("price"),
@@ -256,6 +264,8 @@ class MultiLaneProvider:
                 "fills": self._lanes[lid].get("fills", 0),
                 "fees_usd": self._lanes[lid].get("fees_usd", 0.0),
                 "risk_status": self._lanes[lid].get("risk_status", "?"),
+                "last_risk_reject": self._lanes[lid].get("last_risk_reject"),
+                "journal": self._lanes[lid].get("journal"),
                 "feed": self._lanes[lid].get("feed_health", {}).get("candles", "?"),
                 # transport + staleness so the dashboard connections panel can
                 # show per-venue pipe health without new endpoints

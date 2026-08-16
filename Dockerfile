@@ -35,8 +35,7 @@ COPY --from=frontend /ui/dist ./frontend/dist
 ARG VNEDGE_BUILD_SHA=dev
 RUN echo "$VNEDGE_BUILD_SHA" > /app/BUILD_SHA
 
-# Runtime state lives in mounted volumes: /app/logs, /app/data,
-# /app/research/paper_trials (account resume + reports survive the container).
-CMD ["python", "-m", "vnedge.runtime.paper_trial", \
-     "research/paper_trials/funding_mr_btc_v1_20260703.yaml", \
-     "--hours", "720", "--dashboard"]
+# Safe image default: public-data measurement lanes + read-only dashboard.
+# Compose specifies the same command explicitly. Paper/live runtimes are never
+# an image fallback and require a reviewed, explicit invocation.
+CMD ["python", "-m", "vnedge.runtime.multi_lane_shadow"]

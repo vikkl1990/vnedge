@@ -109,6 +109,63 @@ export interface LaneRow {
   bands?: { age?: string; decision_lag?: string; dd?: string; verdict_tone?: string } | null;
 }
 
+export interface CorrectionLane {
+  lane_id: string;
+  strategy_id: string;
+  eligibility: "eligible" | "KILLED" | "RESEARCH_ONLY" | "unknown";
+  mode: "shadow" | "paper" | "measurement" | "off";
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  capital: boolean;
+  last_signal_age_seconds: number | null;
+  health: "ok" | "degraded" | "unknown";
+}
+
+export interface LanesPayload {
+  lanes: CorrectionLane[];
+  capital_roster_size: number;
+  measurement_only: boolean;
+  banner: string | null;
+  read_only: true;
+  can_promote: false;
+  can_trade: false;
+}
+
+export interface RiskSnapshot {
+  runtime_mode: "measurement" | "shadow" | "paper" | "live_blocked" | string;
+  runtime_label: string;
+  capital: { enabled: boolean; roster_size: number };
+  kill: { active: boolean; latched: boolean };
+  feed: { status: "healthy" | "stale" | "gap" | "unknown"; label: string };
+  live: {
+    blocked: boolean;
+    message: string | null;
+    delta_private_status: "not_implemented" | "connected" | "degraded";
+  };
+  daily_halt: {
+    used_usd: number;
+    limit_usd: number | null;
+    used_pct_of_peak_equity: number | null;
+    active: boolean;
+  };
+  journal: {
+    available: boolean;
+    recovery_degraded: boolean;
+    quarantine_path: string | null;
+    recovery_error: string | null;
+    entries_blocked: boolean;
+  };
+  gateway: { last_reject_reasons: { reason: string; count: number }[] };
+  streams: {
+    exchange: string;
+    public_feed: string;
+    private_stream: "not_implemented" | "not_required" | "connected" | "degraded";
+  }[];
+  read_only: true;
+  can_trade: false;
+}
+
 export interface Chip {
   band?: string;
   label?: string;
@@ -171,4 +228,89 @@ export interface JournalRow {
   net_pnl_usd?: number;
   exit_reason?: string;
   [k: string]: unknown;
+}
+
+export interface PulseHour {
+  symbol: string;
+  open_time: string;
+  close_time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  vwap: number | null;
+  session_vwap: number | null;
+  range_bps: number;
+  body_bps: number;
+  close_vs_open_bps: number;
+  volume_vs_median_20h: number | null;
+  volume_vs_median_24h: number | null;
+  volume_rank_24h: number | null;
+  vs_session_vwap_bps: number | null;
+  prior_hour_range_bps: number | null;
+  dual_avwap_bias: string;
+  session_active: boolean;
+  session_label: string;
+  data_quality: string;
+  gap_minutes: number;
+  stream_healthy: boolean;
+  forming: boolean;
+}
+
+export interface PulseAlert {
+  kind: string;
+  at: string;
+  severity: "info" | "warning" | "critical";
+  message: string;
+  recovered: boolean;
+}
+
+export interface PulsePayload {
+  exchange: string;
+  symbol: string;
+  as_of: string;
+  status: string;
+  data_quality: string;
+  forming: Record<string, unknown> | null;
+  hours: PulseHour[];
+  indicators: {
+    session_vwap: number | null;
+    vs_session_vwap_bps: number | null;
+    dual_avwap_bias: string;
+    avwap: number | null;
+    avwap_label: string | null;
+  };
+  book: PriceBook | null;
+  alerts: PulseAlert[];
+  policy: string;
+  read_only: boolean;
+  can_trade: false;
+}
+
+export interface HourBrief {
+  schema_version: "1.0";
+  brief_id: string;
+  exchange: string;
+  symbol: string;
+  hour_open_utc: string;
+  hour_close_utc: string;
+  generated_at_utc: string;
+  data_quality: "ok" | "degraded" | "gap";
+  inputs: Record<string, unknown>;
+  sections: {
+    state: { label: string; summary: string };
+    what_mattered: { bullets: string[] };
+    structure: { summary: string; bias_tag: string };
+    risks: { bullets: string[] };
+    watch_next: { summary: string };
+  };
+  flags: {
+    feed_degraded: boolean;
+    high_volume: boolean;
+    wide_range: boolean;
+    above_vwap: boolean;
+  };
+  disclaimer: string;
+  model: string;
 }

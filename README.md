@@ -22,7 +22,7 @@ bot, not a leverage casino, not a profit machine.
 | Position sizing     | Risk-based (% of equity to stop), never leverage-based                |
 | Deployment          | Linux VPS + Docker (dev on macOS)                                     |
 | Default runtime     | Public-data measurement only; no signal-producing strategy            |
-| Paper capital       | Empty roster; two explicit gates plus an eligible registry ID          |
+| Paper capital       | Empty roster; explicit approval set currently empty                     |
 | Live trading        | **Not deployed.** Manual guarded entrypoint only                       |
 
 ## Current product boundary
@@ -32,12 +32,17 @@ bot, not a leverage casino, not a profit machine.
 - `docker compose --profile research up research-loop` adds quality-gated
   ingest and walk-forward evidence. Research cannot mutate the runtime roster.
 - Paper capital requires both `MULTI_LANE_CAPITAL_ENABLED=1` and an explicit
-  `MULTI_LANE_CAPITAL_STRATEGY`. Unknown, measurement-only, and killed IDs are
-  refused.
-- The manual live entrypoint remains fail-closed. Delta uses its native REST
-  adapter but cannot start live until a native private order/fill stream exists.
+  `MULTI_LANE_CAPITAL_STRATEGY`, and that ID must also appear in the reviewed
+  `CAPITAL_APPROVED` set. The set is currently empty. Registration or absence
+  from `KILLED` is not capital permission.
+- The manual live entrypoint remains fail-closed and currently refuses every
+  strategy because `CAPITAL_APPROVED` is empty. Independently, Delta cannot
+  start live until a native private order/fill stream exists.
 
 See [the architecture flow](docs/ARCHITECTURE_FLOW.md).
+Documentation status and precedence are defined in
+[docs/STATUS_INDEX.md](docs/STATUS_INDEX.md); unlisted strategy notes are
+research references, never runtime permission.
 
 ## Exchange sequencing
 

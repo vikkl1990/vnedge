@@ -4,8 +4,9 @@ Hard invariants, enforced structurally:
 - No token, no dashboard: `create_app` refuses to start without at least one
   authorized user (legacy shared token or per-user store — see auth.py and
   docs/DASHBOARD_AUTH.md).
-- Zero control actions: the only routes are the static page, GET /state,
-  and the snapshot WebSocket. There is nothing to POST to.
+- Zero order or promotion actions: operational/research data routes are GET or
+  read-only WebSockets.  The sole POST route exchanges an existing dashboard
+  credential for a short-lived session; it cannot mutate trading state.
 - Cannot slow the bot: the server only reads whatever snapshot the bot last
   published; a dead or slow browser drops its own socket and nothing else.
 """
@@ -58,9 +59,11 @@ from vnedge.dashboard.auth import (
     has_permission,
     permissions_for,
 )
+from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_payload
+from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
-from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.dashboard.session_regime import build_session_regime
+from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
@@ -501,6 +504,7 @@ def create_app(
     v2_dist_path: Path | None = None,
     session_issuer: SessionIssuer | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
+    market_pulse_service: MarketPulseService | None = None,
 ) -> FastAPI:
     """Build the read-only dashboard app.
 
@@ -520,11 +524,17 @@ def create_app(
     # Short-lived session tokens: present the root token once to POST /auth/session
     # to mint a JWT, then the root secret stops travelling on every request.
     issuer = session_issuer if session_issuer is not None else SessionIssuer.from_env()
+    pulse_service = market_pulse_service or MarketPulseService(
+        Path("data/candles"),
+        Path("data/gaps"),
+        Path("data/hour_analysis.sqlite"),
+    )
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
     ws_connections: dict[str, int] = {}  # user name -> live socket count (never tokens)
 
     @app.get("/health")
+    @app.get("/healthz")
     async def health() -> JSONResponse:
         """Unauthenticated liveness probe for container healthchecks + the TLS
         proxy. Returns 200 as soon as the app is serving; deliberately requires
@@ -810,7 +820,87 @@ def create_app(
             return JSONResponse(
                 {"status": "no snapshot yet"}, status_code=503, headers=_identity(user)
             )
-        return JSONResponse(snapshot, headers=_identity(user))
+        return JSONResponse(
+            {**snapshot, "build_sha": _build_sha()},
+            headers=_identity(user),
+        )
+
+    @app.get("/api/lanes")
+    async def correction_lanes(request: Request) -> JSONResponse:
+        """Policy-labelled active roster for the read-only React cockpit."""
+        user = _authorized(request)
+        snapshot = provider.latest()
+        if snapshot is None:
+            return JSONResponse(
+                {"status": "no snapshot yet"},
+                status_code=503,
+                headers=_identity(user),
+            )
+        return JSONResponse(build_lanes_payload(snapshot), headers=_identity(user))
+
+    @app.get("/api/risk/snapshot")
+    async def correction_risk(request: Request) -> JSONResponse:
+        """Truthful kill, halt, journal, stream, and live-block posture."""
+        user = _authorized(request)
+        snapshot = provider.latest()
+        if snapshot is None:
+            return JSONResponse(
+                {"status": "no snapshot yet"},
+                status_code=503,
+                headers=_identity(user),
+            )
+        return JSONResponse(build_risk_payload(snapshot), headers=_identity(user))
+
+    @app.get("/api/pulse/{symbol}")
+    async def market_pulse(
+        symbol: str,
+        request: Request,
+        exchange: str = "binanceusdm",
+        n: int = 48,
+    ) -> JSONResponse:
+        """Coalesced read-only pulse: closed hours, forming state, book, and alerts."""
+        user = _authorized(request)
+        payload = await asyncio.to_thread(
+            pulse_service.pulse,
+            exchange,
+            symbol,
+            limit=n,
+            runtime=provider.latest(),
+        )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/pulse/{symbol}/hours")
+    async def market_pulse_hours(
+        symbol: str,
+        request: Request,
+        exchange: str = "binanceusdm",
+        n: int = 48,
+    ) -> JSONResponse:
+        """Closed UTC-hour strip projection, bounded to seven days."""
+        user = _authorized(request)
+        payload = await asyncio.to_thread(pulse_service.hours, exchange, symbol, limit=n)
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/pulse/{symbol}/hours/{open_time}/analysis")
+    async def market_pulse_analysis(
+        symbol: str,
+        open_time: str,
+        request: Request,
+        exchange: str = "binanceusdm",
+    ) -> JSONResponse:
+        """Cached fixed-schema observation brief for one closed hour."""
+        user = _authorized(request)
+        try:
+            parsed = datetime.fromisoformat(open_time)
+            payload = await asyncio.to_thread(
+                pulse_service.analysis,
+                exchange,
+                symbol,
+                parsed,
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/whoami")
     async def whoami(request: Request) -> JSONResponse:
@@ -2282,6 +2372,40 @@ def create_app(
             ),
             headers=_identity(user),
         )
+
+    @app.websocket("/api/pulse/stream")
+    async def market_pulse_stream(websocket: WebSocket) -> None:
+        """Five-second coalesced pulse stream; never forwards individual ticks."""
+        candidate = websocket.query_params.get("token", "")
+        result = issuer.verify(candidate) or store.authenticate(candidate)
+        if not result.authorized:
+            await websocket.close(
+                code=4401,
+                reason=(result.reason or "missing or invalid token")[:120],
+            )
+            return
+        symbol = websocket.query_params.get("symbol", "BTCUSDT")
+        exchange = websocket.query_params.get("exchange", "binanceusdm")
+        await websocket.accept()
+        try:
+            while True:
+                if result.expires_at is not None and datetime.now(timezone.utc) >= result.expires_at:
+                    await websocket.close(code=4401, reason="token expired")
+                    return
+                payload = await asyncio.to_thread(
+                    pulse_service.pulse,
+                    exchange,
+                    symbol,
+                    limit=48,
+                    runtime=provider.latest(),
+                )
+                await websocket.send_json(payload)
+                await asyncio.sleep(5)
+        except (WebSocketDisconnect, ConnectionError):
+            return
+        except Exception as exc:  # noqa: BLE001 — browser isolation boundary
+            logger.warning("market pulse websocket dropped: %s", exc)
+            return
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

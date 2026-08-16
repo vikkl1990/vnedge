@@ -94,6 +94,10 @@ class MarketState:
     # perspective (positive = longs pay shorts).
     funding_rate: float
     exchange_healthy: bool
+    # Set by the stream-integrity layer when complete public-data coverage
+    # cannot be proven. This is intentionally separate from venue health: a
+    # venue can be operational while our local websocket has a sequence gap.
+    data_degraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,11 @@ class PreTradeRiskGateway:
 
         # --- Always-on checks (apply to entries AND exits) -------------------
         check_exit_warning("exchange_health", market.exchange_healthy, "exchange unhealthy/degraded")
+        check_exit_warning(
+            "data_integrity",
+            not market.data_degraded,
+            "public stream continuity is unproven",
+        )
 
         staleness = (now - market.last_update).total_seconds()
         check_exit_warning(

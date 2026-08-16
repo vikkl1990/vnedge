@@ -27,6 +27,7 @@ runtime.
 ## Start the default stack
 
 ```bash
+export VNEDGE_BUILD_SHA="$(git rev-parse --short HEAD)"
 docker compose config -q
 docker compose up -d --build multi-lane-shadow dashboard-tls
 docker compose ps
@@ -35,6 +36,12 @@ docker compose logs -f multi-lane-shadow
 
 The default service builds SHADOW measurement lanes and exposes the read-only
 dashboard. It does not submit venue orders.
+
+Both application and edge health are explicit:
+
+- `GET /health` and `GET /healthz` are public liveness-only responses;
+- Compose checks the application directly and checks the Caddy TLS listener;
+- `/ready` remains the snapshot-readiness probe and may return 503 during warmup.
 
 ## Optional continuous research
 
@@ -47,18 +54,13 @@ docker compose --profile research up -d research-loop
 It may ingest public candles and funding data and publish walk-forward evidence.
 It cannot change the capital roster, promote a strategy, or route orders.
 
-## Optional paper-capital evaluation
+## Paper-capital evaluation is frozen
 
-Paper capital is deliberately not a deployment default. To evaluate one
-registered eligible strategy with simulated fills, set both gates:
-
-```dotenv
-MULTI_LANE_CAPITAL_ENABLED=1
-MULTI_LANE_CAPITAL_STRATEGY=trend_continuation_v1
-```
-
-Restart `multi-lane-shadow` after the change. Unknown, research-only, or killed
-strategy IDs fail closed. Clear both values to return to measurement-only mode.
+The reviewed `CAPITAL_APPROVED` set is currently empty. Registration, a past
+paper trial, or absence from the killed set is not permission. Supplying the
+paper-capital environment gates therefore fails closed until a strategy is
+promoted through a reviewed code change containing its pre-registered OOS and
+paper evidence.
 
 ## Dashboard access
 
@@ -72,6 +74,17 @@ Then open `http://127.0.0.1:8080/?token=<DASHBOARD_TOKEN>`. The optional Caddy
 service can expose TLS on port 8765; configure `DASHBOARD_ALLOWLIST` before
 making it internet-reachable.
 
+The IP-based `:8765` configuration uses a self-signed certificate and is not a
+production-trusted browser endpoint. Verify it with the explicit public
+certificate as a trust anchor—never by disabling certificate validation:
+
+```bash
+curl --cacert cert.pem https://HOST:8765/healthz
+```
+
+For production browser access, configure a DNS name and ACME certificate first;
+enable HSTS only after the valid-certificate path is serving reliably.
+
 ## Verification and shutdown
 
 ```bash
@@ -82,3 +95,20 @@ docker compose down
 
 There is no live trading service in this Compose file. Adding one is an
 architecture and security change, not an environment toggle.
+## Fleet policy verification
+
+After every image recreate, verify the running snapshot before treating the
+deployment as healthy:
+
+```bash
+docker compose exec multi-lane-shadow \
+  python -m vnedge.runtime.fleet_policy \
+  --url http://127.0.0.1:8080/state \
+  --expected-build-sha "$VNEDGE_BUILD_SHA"
+```
+
+The command is read-only and exits non-zero if the build differs, live trading
+is enabled, any paper/live lane uses a killed or non-approved strategy, or the
+declared capital roster cannot be audited. The current approved-capital set is
+empty, so the expected production result is `safe: true` with measurement-only
+shadow lanes.

@@ -67,7 +67,7 @@ class TrialManifest:
     promotion_source_commit: str
 
     @classmethod
-    def load(cls, path: Path) -> "TrialManifest":
+    def load(cls, path: Path) -> TrialManifest:
         raw = yaml.safe_load(path.read_text())
         manifest = cls(
             trial_id=raw["trial_id"],
@@ -272,6 +272,17 @@ async def _seed_via_rest(manifest: TrialManifest, warmup_hours: int = 450):
 
 async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
     manifest = TrialManifest.load(manifest_path)
+    from vnedge.strategy.strategy_registry import capital_denial_reason
+
+    denial = capital_denial_reason(manifest.strategy)
+    if denial is not None:
+        logger.error(
+            "REFUSED: paper trial %s cannot start: %s (%s)",
+            manifest.trial_id,
+            denial,
+            manifest.strategy,
+        )
+        return 13
     logger.info("trial %s: seeding warmup history via REST", manifest.trial_id)
     history, seed_funding = await _seed_via_rest(manifest)
 

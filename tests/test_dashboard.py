@@ -2126,10 +2126,13 @@ def test_snapshot_marks_restored_position_at_entry_without_quote(tmp_path):
 
 
 def test_health_is_unauthenticated_liveness(client):
-    # /health must answer 200 WITHOUT a token — container healthchecks + the TLS
-    # proxy hit it with no credentials. It reveals no state.
+    # /health and its production-monitor alias /healthz answer without a token.
+    # The proxy hits it with no credentials. It reveals no state.
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+    rz = client.get("/healthz")
+    assert rz.status_code == 200
+    assert rz.json() == {"status": "ok"}
     # and it is a pure liveness probe, not an auth bypass into real data
     assert client.get("/state").status_code == 401

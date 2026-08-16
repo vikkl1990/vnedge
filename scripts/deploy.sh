@@ -207,5 +207,47 @@ if [ "$NEED_BUILD" = 1 ]; then
     fi
     echo "freshness OK: container recreated at $started, image newer than code"
 fi
+
+# Edge assertion: the serving process can be healthy while Caddy is missing,
+# misconfigured, or unable to reach its upstream. The proxy healthcheck hits
+# the real TLS listener and /healthz; make that a deployment gate.
+echo "waiting for TLS edge health..."
+EDGE_CID=$(docker compose ps -q dashboard-tls)
+if [ -z "$EDGE_CID" ]; then
+    echo "TLS EDGE FAILED — dashboard-tls container is absent" >&2
+    exit 1
+fi
+EDGE_OK=0
+for _ in $(seq 1 30); do
+    edge_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$EDGE_CID" 2>/dev/null || echo missing)
+    if [ "$edge_health" = "healthy" ]; then
+        EDGE_OK=1
+        break
+    fi
+    if [ "$edge_health" = "unhealthy" ] || [ "$edge_health" = "missing" ]; then
+        echo "TLS edge health is $edge_health" >&2
+        break
+    fi
+    sleep 2
+done
+if [ "$EDGE_OK" != 1 ]; then
+    echo "TLS EDGE FAILED — /healthz did not become healthy" >&2
+    docker compose logs --tail=40 dashboard-tls >&2 || true
+    exit 1
+fi
+echo "TLS edge health OK"
+
+# Policy assertion: process health and image freshness are not enough. Refuse a
+# deploy that came up with live enabled, a killed/unapproved strategy in a
+# paper/live lane, or a roster count the snapshot does not expose for audit.
+echo "verifying deployed capital policy..."
+if ! docker compose exec -T multi-lane-shadow \
+        python -m vnedge.runtime.fleet_policy \
+        --url http://127.0.0.1:8080/state \
+        --expected-build-sha "$HEAD_SHA"; then
+    echo "FLEET POLICY FAILED — deployment is running but unsafe; investigate immediately" >&2
+    exit 1
+fi
+echo "fleet policy OK: measurement-only posture confirmed"
 exit 0
 }

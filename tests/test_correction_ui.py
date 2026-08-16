@@ -1,0 +1,125 @@
+"""Correction cockpit: policy truth is server-owned and read-only."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from fastapi.testclient import TestClient
+
+from vnedge.dashboard.app import SnapshotProvider, create_app
+from vnedge.dashboard.correction_ui import (
+    build_lanes_payload,
+    build_risk_payload,
+)
+
+NOW = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
+
+
+def snapshot() -> dict:
+    return {
+        "mode": "shadow (live data)",
+        "live_trading_enabled": False,
+        "kill_switch_active": False,
+        "daily_pnl": -3.0,
+        "peak_equity": 500.0,
+        "last_journal_write": "ok",
+        "journal": {
+            "available": True,
+            "recovery_degraded": True,
+            "recovery_error": "malformed record at line 4",
+            "quarantine_path": "/logs/lane.journal.jsonl.corrupt",
+        },
+        "runtime_control": {
+            "capital_roster_size": 0,
+            "orders_allowed": False,
+        },
+        "lanes": [
+            {
+                "lane_id": "measurement_delta_btc",
+                "exchange": "delta_india",
+                "strategy_id": "measurement_only_v1",
+                "mode": "shadow (live data)",
+                "symbol": "BTC/USD:USD",
+                "timeframe": "1h",
+                "feed": "ok",
+                "gapped_candles": 1,
+                "journal": {"available": True, "recovery_degraded": True},
+                "trial_scorecard": {
+                    "criteria": [
+                        {"name": "daily_loss", "threshold": -10.0, "value": -3.0}
+                    ]
+                },
+            },
+            {
+                "lane_id": "stale_killed_lane",
+                "exchange": "binanceusdm",
+                "strategy_id": "funding_mean_reversion_v1",
+                # A stale runtime must not let a killed strategy look like paper.
+                "mode": "paper (live data)",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "1h",
+                "feed": "ok",
+                "last_fired_ts": (NOW - timedelta(minutes=12)).isoformat(),
+                "last_risk_reject": "capital approval missing",
+            },
+        ],
+    }
+
+
+def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
+    payload = build_lanes_payload(snapshot(), now=NOW)
+
+    assert payload["measurement_only"] is True
+    assert payload["capital_roster_size"] == 0
+    assert payload["banner"] == "No capital strategies — measurement only."
+    assert payload["can_trade"] is False
+
+    measurement, killed = payload["lanes"]
+    assert measurement["eligibility"] == "RESEARCH_ONLY"
+    assert measurement["mode"] == "measurement"
+    assert measurement["last_signal_age_seconds"] is None
+    assert killed["eligibility"] == "KILLED"
+    assert killed["mode"] == "off"
+    assert killed["capital"] is False
+    assert killed["last_signal_age_seconds"] == 720.0
+
+
+def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:
+    payload = build_risk_payload(snapshot())
+
+    assert payload["runtime_mode"] == "measurement"
+    assert payload["capital"] == {"enabled": False, "roster_size": 0}
+    assert payload["feed"]["status"] == "gap"
+    assert payload["journal"]["entries_blocked"] is True
+    assert payload["journal"]["quarantine_path"].endswith(".corrupt")
+    assert payload["daily_halt"]["used_usd"] == 3.0
+    assert payload["daily_halt"]["limit_usd"] == 10.0
+    assert payload["daily_halt"]["used_pct_of_peak_equity"] == 0.6
+    assert payload["live"]["blocked"] is True
+    assert payload["live"]["delta_private_status"] == "not_implemented"
+    assert payload["gateway"]["last_reject_reasons"] == [
+        {"reason": "capital approval missing", "count": 1}
+    ]
+    delta = next(row for row in payload["streams"] if row["exchange"] == "delta_india")
+    assert delta["private_stream"] == "not_implemented"
+    assert payload["can_trade"] is False
+
+
+def test_correction_routes_are_authenticated_get_only_projections() -> None:
+    provider = SnapshotProvider()
+    provider.publish(snapshot())
+    app = create_app(provider, token="secret")
+    client = TestClient(app)
+
+    for path in ("/api/lanes", "/api/risk/snapshot"):
+        assert client.get(path).status_code == 401
+        response = client.get(f"{path}?token=secret")
+        assert response.status_code == 200
+        assert response.json()["read_only"] is True
+
+    order_routes = [
+        route
+        for route in app.routes
+        if "order" in route.path.lower() and set(route.methods or ()) - {"GET", "HEAD"}
+    ]
+    assert order_routes == []

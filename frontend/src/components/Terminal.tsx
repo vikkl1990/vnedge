@@ -61,7 +61,12 @@ export function DenseTable<T>({
 }) {
   if (!rows.length) return <div className="text-[12px] font-mono text-dim py-2">{empty}</div>;
   return (
-    <div className="overflow-x-auto">
+    <div
+      className="overflow-x-auto rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info"
+      role="region"
+      aria-label="Scrollable data table"
+      tabIndex={0}
+    >
       <table className="w-full border-collapse text-[12px]">
         <thead>
           <tr className="text-faint uppercase text-[10px]">
@@ -114,6 +119,7 @@ export function TerminalTabs({
               ? "border-brand/50 text-brand bg-brand/10"
               : "border-transparent text-dim hover:text-txt"
           }`}
+          aria-current={active === t.id ? "page" : undefined}
         >
           {t.label}
         </button>

@@ -2,19 +2,14 @@
 // the growing parity subset (header, book, risk, positions, journal); the
 // remaining classic panels port onto these same primitives incrementally.
 
+import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useJournal, useSnapshot, useWhoAmI } from "../queries";
-import type { JournalRow, LaneHealth, LaneHealthProblem, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
+import { useJournal, useLanes, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
+import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
 const signed = (n: unknown) => (typeof n === "number" && n < 0 ? "text-short" : "text-long");
-
-const ageMs = (ms: unknown) => {
-  const n = Number(ms);
-  if (!Number.isFinite(n)) return "—";
-  return n < 1000 ? `${Math.round(n)} ms` : n < 60000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n / 60000)} m`;
-};
 
 const ageSec = (s: unknown) => {
   const n = Number(s);
@@ -24,36 +19,49 @@ const ageSec = (s: unknown) => {
 
 export function Header() {
   const who = useWhoAmI();
-  const snap = useSnapshot();
-  const mode = (snap.data?.mode as string) ?? "…";
+  const risk = useRiskSnapshot();
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const posture = risk.data;
   const role = who.data?.role ?? "…";
-  const age = snap.data?.snapshot_age_ms;
-  const ageTone = typeof age === "number" ? (age > 10000 ? "bad" : age > 3000 ? "warn" : "good") : "neutral";
+  const feedTone = posture?.feed.status === "healthy" ? "good" : posture?.feed.status === "stale" ? "warn" : posture?.feed.status === "gap" ? "bad" : "neutral";
+  const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
   return (
-    <header className="flex items-center justify-between gap-4 flex-wrap">
-      <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">
-          VN
-        </div>
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[15px] font-semibold">VN Edge — Control Room</span>
-            <TerminalBadge tone="warn">partial — full ops at /</TerminalBadge>
+    <header className="sticky top-0 z-30 -mx-2 rounded-xl border border-line bg-bg/95 px-4 py-3 shadow-xl shadow-black/20 backdrop-blur">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">VN</div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[15px] font-semibold">VNEDGE</span>
+              <TerminalBadge tone="info">{posture?.runtime_mode ?? "syncing"}</TerminalBadge>
+              <span className="hidden sm:inline text-[11px] font-mono text-dim">BTC · ETH</span>
+            </div>
+            <div className="text-[11px] font-mono text-dim">mode: {posture?.runtime_label ?? "…"}</div>
           </div>
-          <div className="text-[11px] font-mono text-dim">React · TanStack · v2</div>
         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <TerminalBadge tone={ageTone as never}>age {ageMs(age)}</TerminalBadge>
-        <TerminalBadge tone="info">mode {mode}</TerminalBadge>
-        <TerminalBadge tone={snap.data?.kill_switch_active ? "bad" : "good"}>
-          kill {snap.data?.kill_switch_active ? "ARMED" : "clear"}
-        </TerminalBadge>
-        <TerminalBadge tone="neutral">
-          {who.data?.name ?? "…"} · {role}
-        </TerminalBadge>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <span className="text-[11px] font-mono text-dim">{time} UTC</span>
+          <TerminalBadge tone={posture?.capital.enabled ? "bad" : "neutral"}>capital {posture?.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
+          <TerminalBadge tone={posture?.kill.active ? "bad" : "neutral"}>kill {posture?.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
+          <TerminalBadge tone={feedTone}>{`● feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
+          <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+        </div>
       </div>
     </header>
+  );
+}
+
+export function LiveBlockedBanner() {
+  const { data } = useRiskSnapshot();
+  if (!data?.live.blocked) return null;
+  return (
+    <div className="rounded-lg border border-short/50 bg-short/10 px-4 py-3 text-[12px] text-short" role="status">
+      <strong>Live blocked.</strong> {data.live.message}
+    </div>
   );
 }
 
@@ -182,62 +190,24 @@ export function StatusStrip() {
 }
 
 export function LanesPanel() {
-  const { data } = useSnapshot();
-  const lanes = laneRows(data);
-  const cols: Column<LaneRow>[] = [
-    { key: "strategy_id", header: "Lane", render: (r) => (r.strategy_id ?? "").replace(/_v\d+$/, "") },
-    { key: "mode", header: "Mode", render: (r) => String(r.mode ?? "—").split(" ")[0] },
-    { key: "cost_profile", header: "Cost", render: (r) => r.cost_profile ?? "—" },
+  const { data } = useLanes();
+  const lanes = data?.lanes ?? [];
+  const cols: Column<CorrectionLane>[] = [
+    { key: "strategy_id", header: "Strategy", render: (r) => <span className={r.eligibility === "KILLED" ? "text-faint line-through" : "font-mono"}>{r.strategy_id}</span> },
     {
-      key: "regime",
-      header: "Regime",
-      render: (r) => (r.regime?.label ? `${r.regime.label}${r.regime.confidence != null ? ` ${Math.round(r.regime.confidence * 100)}%` : ""}` : "—"),
+      key: "eligibility", header: "Eligibility", render: (r) => (
+        <TerminalBadge tone={r.eligibility === "eligible" ? "info" : r.eligibility === "KILLED" ? "bad" : r.eligibility === "RESEARCH_ONLY" ? "warn" : "neutral"}>{r.eligibility}</TerminalBadge>
+      ),
     },
-    {
-      key: "health",
-      header: "Candle",
-      render: (r) => {
-        const h = r.time_machine?.health?.[r.timeframe ?? ""];
-        const tone = !h ? "neutral" : h === "ok" ? "good" : "bad";
-        return <TerminalBadge tone={tone as never}>{h ?? "n/a"}</TerminalBadge>;
-      },
-    },
-    {
-      key: "dd",
-      header: "DD / limit",
-      render: (r) => {
-        const dd = r.drawdown_pct;
-        const lim = r.dd_limit_pct;
-        if (dd == null) return "—";
-        // prefer the server band (health_bands.py); else classify client-side
-        const srv = r.bands?.dd;
-        const tone = srv
-          ? { ok: "good", degraded: "warn", blocked: "bad", unknown: "neutral" }[srv] ?? "neutral"
-          : lim == null ? "neutral" : dd >= lim ? "bad" : dd >= 0.8 * lim ? "warn" : "good";
-        return <TerminalBadge tone={tone as never}>{`${dd.toFixed(2)}%${lim != null ? ` / ${lim}%` : ""}`}</TerminalBadge>;
-      },
-    },
-    {
-      key: "trial",
-      header: "Trial",
-      render: (r) => {
-        const v = r.trial_scorecard?.verdict;
-        if (!v) return "—";
-        const tone = v === "PASS" ? "good" : v === "FAIL" ? "bad" : "warn";
-        return <TerminalBadge tone={tone as never}>{v}</TerminalBadge>;
-      },
-    },
-    {
-      key: "plan",
-      header: "Plan",
-      render: (r) =>
-        r.plan_overlay?.side
-          ? `${r.plan_overlay.side} ${r.plan_overlay.expected_net_bps ?? "?"}bps ${r.plan_overlay.gate_ok ? "PASS" : "REJECT"}`
-          : "—",
-    },
+    { key: "mode", header: "Mode", render: (r) => <TerminalBadge tone={r.mode === "paper" ? "warn" : "neutral"}>{r.mode}</TerminalBadge> },
+    { key: "market", header: "Symbol / TF", render: (r) => <span className="font-mono">{r.symbol || "—"} · {r.timeframe || "—"}</span> },
+    { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
+    { key: "signal", header: "Last signal", render: (r) => r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds) },
+    { key: "health", header: "Health", render: (r) => <TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "bad" : "neutral"}>{r.health}</TerminalBadge> },
   ];
   return (
-    <TerminalPanel title="Lanes" meta={`${lanes.length} · mode · cost · regime · candle · plan (observe-only)`}>
+    <TerminalPanel title="Lanes" meta={`${lanes.length} active · policy truth · read only`}>
+      {data?.banner && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[12px] text-warn">{data.banner}</div>}
       {lanes.length ? <DenseTable columns={cols} rows={lanes} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
     </TerminalPanel>
   );
@@ -308,25 +278,67 @@ export function BookPanel() {
 }
 
 export function RiskPanel() {
-  const { data } = useSnapshot();
-  const status = (data?.risk_status as string) ?? "—";
-  const statusTone = status.toLowerCase().includes("ok") ? "good" : status === "—" ? "neutral" : "warn";
+  const { data } = useRiskSnapshot();
+  const journalBlocked = data?.journal.entries_blocked;
   return (
-    <TerminalPanel title="Risk" meta="gateway · breaker · kill">
+    <TerminalPanel title="Risk" meta="kill · halt · journal · gateway · streams">
+      {journalBlocked && (
+        <div className="mb-4 rounded-lg border border-short/50 bg-short/10 px-3 py-3 text-[12px] text-short">
+          <strong>Journal degraded.</strong> New entries blocked until operator ack.
+          {data?.journal.quarantine_path && <div className="mt-1 break-all font-mono text-[10px]">quarantine: {data.journal.quarantine_path}</div>}
+        </div>
+      )}
       <div className="flex items-center gap-3 flex-wrap">
-        <TerminalBadge tone={statusTone as never}>{status}</TerminalBadge>
-        <TerminalBadge tone={data?.live_trading_enabled ? "bad" : "good"}>
-          live {data?.live_trading_enabled ? "ENABLED" : "locked"}
-        </TerminalBadge>
+        <TerminalBadge tone={data?.kill.active ? "bad" : "neutral"}>kill {data?.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
+        <TerminalBadge tone={data?.daily_halt.active ? "bad" : "neutral"}>daily halt {data?.daily_halt.active ? "ACTIVE" : "clear"}</TerminalBadge>
+        <TerminalBadge tone={data?.journal.available && !journalBlocked ? "good" : "bad"}>journal {data?.journal.available && !journalBlocked ? "healthy" : "blocked"}</TerminalBadge>
+        <TerminalBadge tone="bad">Delta private: {data?.live.delta_private_status ?? "unknown"}</TerminalBadge>
       </div>
-      <div className="flex items-end gap-10 flex-wrap mt-4">
-        <Kpi label="Daily PnL" value={usd(data?.daily_pnl)} tone={signed(data?.daily_pnl)} />
-        <Kpi
-          label="Loss streak"
-          value={typeof data?.consecutive_losses === "number" ? String(data.consecutive_losses) : "—"}
-        />
-        <Kpi label="Fills" value={typeof data?.fills === "number" ? String(data.fills) : "—"} />
-        <Kpi label="Fees" value={usd(data?.fees_usd)} />
+      <div className="flex items-end gap-10 flex-wrap my-5">
+        <Kpi label="Daily loss used" value={usd(data?.daily_halt.used_usd)} />
+        <Kpi label="Daily limit" value={usd(data?.daily_halt.limit_usd)} />
+        <Kpi label="% peak equity" value={data?.daily_halt.used_pct_of_peak_equity == null ? "—" : `${data.daily_halt.used_pct_of_peak_equity.toFixed(2)}%`} />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-line bg-inset p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase text-faint">Stream health</div>
+          <div className="space-y-2">
+            {(data?.streams ?? []).map((stream) => (
+              <div key={stream.exchange} className="flex items-center justify-between gap-3 text-[11px]">
+                <span className="font-mono">{stream.exchange}</span>
+                <span className="text-dim">public {stream.public_feed} · private {stream.private_stream}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg border border-line bg-inset p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase text-faint">Gateway rejects</div>
+          {(data?.gateway.last_reject_reasons ?? []).length ? data?.gateway.last_reject_reasons.map((item) => (
+            <div key={item.reason} className="flex justify-between gap-3 text-[11px]"><span className="text-dim">{item.reason}</span><span className="font-mono">{item.count}</span></div>
+          )) : <div className="text-[11px] text-dim">No recent reject reason in snapshot.</div>}
+        </div>
+      </div>
+    </TerminalPanel>
+  );
+}
+
+export function ResearchPanel() {
+  const token = new URLSearchParams(window.location.search).get("token");
+  const href = (path: string) => token ? `${path}?token=${encodeURIComponent(token)}` : path;
+  const artifacts = [
+    ["Strategy scorecard", "/scorecard"],
+    ["OOS research evidence", "/research"],
+    ["Pre-live checklist", "/pre-live-checklist"],
+    ["Promotion review runbook", "/promotion-review-runbook"],
+  ];
+  return (
+    <TerminalPanel title="Research" meta="evidence links only · no mutation">
+      <div className="grid gap-3 md:grid-cols-2">
+        {artifacts.map(([label, path]) => (
+          <a key={path} href={href(path)} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-lg border border-line bg-inset px-4 py-3 text-[12px] hover:border-line2">
+            <span>{label}</span><TerminalBadge tone="neutral">evidence only ↗</TerminalBadge>
+          </a>
+        ))}
       </div>
     </TerminalPanel>
   );

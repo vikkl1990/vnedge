@@ -245,7 +245,8 @@ async def run_live_trader(
 
     if not is_capital_eligible(config.strategy_id):
         logger.error(
-            "REFUSED: strategy %r is unknown, measurement-only, or killed. "
+            "REFUSED: strategy %r is unknown, measurement-only, killed, or not "
+            "explicitly capital-approved. "
             "No live client constructed.",
             config.strategy_id,
         )

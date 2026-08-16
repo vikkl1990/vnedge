@@ -12,6 +12,7 @@ from vnedge.runtime.paper_trial import (
     TrialManifest,
     append_trial_report,
     build_trial_session,
+    run_trial,
 )
 
 BASE = 1_750_000_000_000
@@ -58,6 +59,17 @@ def test_unapproved_strategy_refused(tmp_path):
     path = write_manifest(tmp_path, strategy="secret_profit_machine")
     with pytest.raises(ValueError, match="no promotion-gate approval"):
         TrialManifest.load(path)
+
+
+async def test_killed_historical_trial_refuses_before_network(monkeypatch):
+    async def network_must_not_start(*_args, **_kwargs):
+        raise AssertionError("killed paper trial attempted network warmup")
+
+    monkeypatch.setattr(
+        "vnedge.runtime.paper_trial._seed_via_rest",
+        network_must_not_start,
+    )
+    assert await run_trial(MANIFEST, hours=0, dashboard=False) == 13
 
 
 def test_non_human_approval_refused(tmp_path):
