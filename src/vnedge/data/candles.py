@@ -634,6 +634,57 @@ class CandlePipeline:
             source: CandleAggregator(symbol, source, target)
             for source, target in _AGGREGATION_CHAIN[start:]
         }
+        if self.store is not None:
+            self._restore_aggregators()
+
+    def _restore_aggregators(self) -> None:
+        """Repair forward higher bars and restore incomplete buckets.
+
+        A recorder restart must not make the 1m→4h ladder wait for a completely
+        new target bucket. Persisted closed source bars are authoritative, so
+        rebuild only the forward tail after the latest stored target and prime
+        each live aggregator with the remaining incomplete bucket. Historical
+        gaps still fail closed through ``aggregate_candle_series``.
+        """
+        assert self.store is not None
+        rebuilt_count = 0
+        for source, target in _AGGREGATION_CHAIN:
+            aggregator = self._aggregators.get(source)
+            if aggregator is None:
+                continue
+            source_rows = self.store.read(self.symbol, source)
+            if not source_rows:
+                continue
+            target_rows = self.store.read(self.symbol, target)
+            target_close = target_rows[-1].close_time if target_rows else None
+            forward = [
+                candle
+                for candle in source_rows
+                if target_close is None or candle.open_time >= target_close
+            ]
+            rebuilt = aggregate_candle_series(
+                self.symbol,
+                source,
+                target,
+                forward,
+            )
+            if rebuilt:
+                self.store.upsert(rebuilt)
+                rebuilt_count += len(rebuilt)
+                target_close = rebuilt[-1].close_time
+            pending = [
+                candle
+                for candle in forward
+                if target_close is None or candle.open_time >= target_close
+            ]
+            for candle in pending:
+                aggregator.on_candle(candle)
+        if rebuilt_count:
+            logger.info(
+                "restored canonical aggregation: symbol=%s rebuilt=%d",
+                self.symbol,
+                rebuilt_count,
+            )
 
     def _publish(self, candle: Candle, published: list[Candle]) -> None:
         if not candle.is_closed:

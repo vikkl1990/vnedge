@@ -197,6 +197,29 @@ def test_pipeline_never_publishes_forming_bar() -> None:
     assert seen == [published[0]]
 
 
+def test_pipeline_restart_repairs_higher_bars_from_persisted_base(tmp_path) -> None:
+    trades = [
+        Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"))
+        for minute in range(60)
+    ]
+    base = build_candles_from_trades(
+        "BTCUSDT",
+        trades,
+        close_through=START + timedelta(hours=1),
+    )["1m"]
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    store.upsert(base)
+    assert store.read("BTCUSDT", "1h") == []
+
+    CandlePipeline("BTCUSDT", store=store)
+
+    hours = store.read("BTCUSDT", "1h")
+    assert len(hours) == 1
+    assert hours[0].open_time == START
+    assert hours[0].close_time == START + timedelta(hours=1)
+    assert hours[0].trade_count == 60
+
+
 def test_late_trade_is_logged_quarantined_and_cannot_rewrite_closed_parquet(
     tmp_path, caplog
 ) -> None:
