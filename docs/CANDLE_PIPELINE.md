@@ -304,6 +304,19 @@ python -m vnedge.data.candle_bootstrap \
 The live recorder then appends forward. Missing tick coverage stays visible;
 neither command creates empty bars or midpoint-derived OHLC.
 
+For an audited current-day `storage_hole` whose daily Vision archive is not yet
+published, recover the exact interval from Binance's public aggregate-trade API:
+
+```bash
+python -m vnedge.data.binance_gap_recovery \
+  --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
+```
+
+The recovery command reads the persisted gap boundaries, rate-limits REST
+pagination, requires contiguous aggregate-trade IDs, atomically writes the live
+tick shards, replays canonical candles, and only then marks the gap recovered.
+Any fetch or replay inconsistency leaves the gap open.
+
 ## Enforced invariants
 
 - Timestamps must be timezone-aware and align to UTC Unix-epoch buckets.

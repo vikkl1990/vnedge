@@ -26,7 +26,12 @@ from vnedge.data.candles import (
     aggregate_candle_series,
 )
 from vnedge.data.gaps import GapParquetStore, GapRecord
-from vnedge.data.regime_context import REGIME_CONFIG, RegimeContext, detect_regime
+from vnedge.data.regime_context import (
+    REGIME_CONFIG,
+    DataQuality,
+    RegimeContext,
+    detect_regime,
+)
 from vnedge.data.swings import SwingAnchor, SwingDetectConfig, SwingKind, detect_swings
 from vnedge.data.volume_profile import (
     TickLakeVolumeProfileStore,
@@ -1015,7 +1020,7 @@ class MarketPulseService:
             self.candle_root, exchange=exchange
         ).read(symbol, "1h")
         candles_1h = stored_1h[-(REGIME_CONFIG.warmup_bars * 4 + 4) :]
-        quality = "ok"
+        quality: DataQuality = "ok"
         if candles_1h and any(
             gap.start < candles_1h[-1].close_time
             and gap.end > candles_1h[0].open_time
