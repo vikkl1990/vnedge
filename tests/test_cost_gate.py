@@ -58,3 +58,11 @@ def test_result_is_frozen():
                          expected_holding_seconds=0, current_funding_rate=0, symbol="X")
     with pytest.raises(Exception):
         r.approved = True   # frozen pydantic model
+
+
+def test_threshold_immutable_at_runtime():
+    g = _gate()
+    with pytest.raises(Exception):
+        g.min_net_edge_bps = Decimal("0")        # property, no setter
+    with pytest.raises(Exception):
+        g.config.min_net_edge_bps = Decimal("0")  # frozen config

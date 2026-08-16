@@ -94,12 +94,27 @@ class CostGateResult(BaseModel):
     reason: Optional[str] = None   # only when rejected
 
 
+class CostGateConfig(BaseModel):
+    """Frozen so neither the profile nor the min-net threshold can be mutated at
+    runtime — limit changes require reconstruction (a restart), like every risk config."""
+    model_config = {"frozen": True}
+    profile: CostProfile
+    min_net_edge_bps: Decimal = Decimal("4.0")
+
+
 class CostGate:
     """Hard gate. Runs BEFORE sizing and the risk gateway."""
 
     def __init__(self, profile: CostProfile, min_net_edge_bps: Decimal = Decimal("4.0")):
-        self.profile = profile
-        self.min_net_edge_bps = _dec(min_net_edge_bps)
+        self.config = CostGateConfig(profile=profile, min_net_edge_bps=_dec(min_net_edge_bps))
+
+    @property
+    def profile(self) -> CostProfile:
+        return self.config.profile
+
+    @property
+    def min_net_edge_bps(self) -> Decimal:
+        return self.config.min_net_edge_bps
 
     def evaluate(
         self,
