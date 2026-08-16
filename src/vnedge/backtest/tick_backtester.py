@@ -91,22 +91,33 @@ def run_tick_backtest(
     *,
     account_equity: Decimal = Decimal("500"),
     current_funding_rate: object = Decimal("0"),
+    extra_cost_bps: object = Decimal("0"),
 ) -> TickBacktestReport:
+    """``extra_cost_bps`` is subtracted from the REALIZED net of every trade — the
+    honest slippage knob: the exit-sim gross move is unchanged, extra slippage just
+    eats into it, so a sweep measures how much slippage the real edge tolerates
+    (not the circular ``edge_estimate − cost``)."""
+    signals, survived, nets, holds, span = _simulate(
+        ticks, engines, gate, account_equity, current_funding_rate)
+    return _report_from(len(ticks), signals, survived, nets, holds, span,
+                        Decimal(str(extra_cost_bps)))
+
+
+def _simulate(ticks, engines, gate, account_equity, current_funding_rate):
+    """Run the pipeline ONCE and return the per-trade realized nets (at zero extra
+    slippage) + hold times. Extra slippage only shifts nets uniformly and never
+    changes which trades happen, so a sweep re-derives from this without re-running."""
     open_trade: Optional[_OpenTrade] = None
     signals = survived = 0
     nets: list[Decimal] = []
     holds: list[float] = []
-
     for tick in ticks:
-        # 1) manage an open trade
         if open_trade is not None:
             net = _exit_net_bps(open_trade, tick)
             if net is not None:
                 nets.append(net)
                 holds.append((tick.ts - open_trade.entry_ts).total_seconds())
                 open_trade = None
-
-        # 2) run engines (flat-only: they see the open position and stay quiet)
         positions = [] if open_trade is None else [{"symbol": open_trade.intent.symbol}]
         for eng in engines:
             for intent in eng.generate(tick, account_equity, positions):
@@ -115,30 +126,26 @@ def run_tick_backtest(
                 if not res.approved:
                     continue
                 survived += 1
-                if open_trade is None:          # open one (flat-only)
+                if open_trade is None:
                     open_trade = _OpenTrade(intent, tick.mid, tick.ts,
                                             res.cost.total_cost_bps)
                     positions = [{"symbol": intent.symbol}]
+    span = (ticks[-1].ts - ticks[0].ts).total_seconds() if len(ticks) >= 2 else 0.0
+    return signals, survived, nets, holds, span
 
+
+def _report_from(n_ticks, signals, survived, nets0, holds, span_sec, extra):
+    nets = [n - extra for n in nets0]
     trades = len(nets)
     wins = sum(1 for n in nets if n > 0)
-    span_sec = (ticks[-1].ts - ticks[0].ts).total_seconds() if len(ticks) >= 2 else 0.0
     avg = float(sum(nets) / trades) if trades else 0.0
-    verdict = (
-        "NO_TRADES" if trades == 0
-        else "POSITIVE" if avg > 1.0
-        else "MARGINAL" if avg >= -1.0
-        else "NEGATIVE"
-    )
+    verdict = ("NO_TRADES" if trades == 0 else "POSITIVE" if avg > 1.0
+               else "MARGINAL" if avg >= -1.0 else "NEGATIVE")
     return TickBacktestReport(
-        ticks=len(ticks),
-        span_hours=round(span_sec / 3600.0, 3),
-        signals_generated=signals,
-        cost_gate_survived=survived,
+        ticks=n_ticks, span_hours=round(span_sec / 3600.0, 3),
+        signals_generated=signals, cost_gate_survived=survived,
         survival_rate=round(survived / signals, 4) if signals else 0.0,
-        trades=trades,
-        wins=wins,
-        losses=trades - wins,
+        trades=trades, wins=wins, losses=trades - wins,
         win_rate=round(wins / trades, 4) if trades else 0.0,
         avg_net_bps=round(avg, 3),
         median_net_bps=round(float(statistics.median(nets)), 3) if trades else 0.0,
@@ -147,3 +154,50 @@ def run_tick_backtest(
         trades_per_day=round(trades / (span_sec / 86400.0), 2) if span_sec > 0 else 0.0,
         verdict=verdict,
     )
+
+
+class SlippageSweepRow(BaseModel):
+    model_config = {"frozen": True}
+    extra_cost_bps: float
+    trades: int
+    avg_net_bps: float
+    win_rate: float
+    verdict: str
+
+
+class SlippageSweep(BaseModel):
+    model_config = {"frozen": True}
+    rows: list[SlippageSweepRow]
+    #: extra slippage (bps) at which realized avg net crosses zero (linear interp);
+    #: None if it never crosses in the grid. NEGATIVE-at-zero means already underwater.
+    break_even_extra_bps: Optional[float] = None
+
+
+def slippage_sweep(
+    ticks: Sequence[TickSnapshot],
+    engines: Sequence[SignalEngine],
+    gate: CostGate,
+    *,
+    grid: Optional[Sequence[Decimal]] = None,
+    account_equity: Decimal = Decimal("500"),
+    current_funding_rate: object = Decimal("0"),
+) -> SlippageSweep:
+    """How much EXTRA slippage can the realized edge tolerate before avg net ≤ 0?
+    Simulates once, then re-derives each grid point (extra slippage only shifts net)."""
+    if grid is None:
+        grid = [Decimal(x) for x in ("0", "1", "2", "4", "6", "8")]
+    signals, survived, nets, holds, span = _simulate(
+        ticks, engines, gate, account_equity, current_funding_rate)
+    rows: list[SlippageSweepRow] = []
+    for extra in grid:
+        rep = _report_from(len(ticks), signals, survived, nets, holds, span, Decimal(str(extra)))
+        rows.append(SlippageSweepRow(
+            extra_cost_bps=float(extra), trades=rep.trades, avg_net_bps=rep.avg_net_bps,
+            win_rate=rep.win_rate, verdict=rep.verdict))
+    be: Optional[float] = None
+    for a, b in zip(rows, rows[1:]):
+        if a.avg_net_bps > 0 >= b.avg_net_bps:
+            frac = a.avg_net_bps / (a.avg_net_bps - b.avg_net_bps)
+            be = round(a.extra_cost_bps + frac * (b.extra_cost_bps - a.extra_cost_bps), 2)
+            break
+    return SlippageSweep(rows=rows, break_even_extra_bps=be)
