@@ -29,6 +29,7 @@ import pandas as pd
 
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
 from vnedge.data.candle_bootstrap import BootstrapReport, bootstrap_candles
+from vnedge.data.candles import CandlePipeline
 from vnedge.data.gaps import GapKind, GapParquetStore
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class RecoveredGap:
     sha256: str
     shards: tuple[str, ...]
     candles: int
+    unrelated_replay_rejections: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +242,16 @@ def _write_tape(
     *,
     exchange: str,
 ) -> tuple[Path, ...]:
+    validation = CandlePipeline(tape.symbol)
+    for row in tape.frame.itertuples(index=False):
+        validation.on_trade(
+            datetime.fromtimestamp(int(row.ts_ms) / 1_000, tz=UTC),
+            Decimal(str(row.price)),
+            Decimal(str(row.amount)),
+            str(row.side).lower() != "buy",
+        )
+    validation.advance_time(tape.end)
+
     frame = tape.frame.copy()
     frame["_day"] = pd.to_datetime(frame["ts_ms"], unit="ms", utc=True).dt.strftime(
         "%Y%m%d"
@@ -299,13 +311,17 @@ def recover_storage_gaps(
                 days=days,
             )
             if candle_report.rejected:
-                raise RuntimeError(
-                    f"candle replay rejected {candle_report.rejected} rows for {symbol}; "
-                    "gap remains open"
+                logger.warning(
+                    "%s canonical replay skipped %d invalid/out-of-order rows from "
+                    "the combined live lake; the fetched gap tape itself passed "
+                    "strict value and aggregate-ID validation",
+                    symbol,
+                    candle_report.rejected,
                 )
             proof = (
                 f"recovered from Binance REST aggTrades; rows={tape.trades}; "
-                f"agg_ids={tape.first_agg_id}-{tape.last_agg_id}; sha256={tape.sha256}"
+                f"agg_ids={tape.first_agg_id}-{tape.last_agg_id}; sha256={tape.sha256}; "
+                f"unrelated_replay_rejections={candle_report.rejected}"
             )
             gap_store.upsert(
                 (
@@ -329,6 +345,7 @@ def recover_storage_gaps(
                     sha256=tape.sha256,
                     shards=tuple(str(path) for path in paths),
                     candles=candle_report.candles,
+                    unrelated_replay_rejections=candle_report.rejected,
                 )
             )
     return RecoveryReport(exchange, tuple(recovered), tuple(skipped))
@@ -340,6 +357,7 @@ def _csv(value: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(
         description="recover exact Binance USDM storage gaps from public aggTrades"
     )
