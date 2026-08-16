@@ -37,6 +37,11 @@ class SignalIntent(BaseModel):
     stop_distance_bps: Decimal
     take_profit_bps: Optional[Decimal] = None
     urgency: str                            # "maker" | "taker" | "aggressive"
+    #: CONSERVATIVE expected move (bps) from a MEASURED rule — never a heuristic
+    #: continuation fantasy. The CostGate treats this as the gross edge that must
+    #: beat cost, so it should come from a backtested realized-net distribution, not
+    #: a live formula. Every fast-tick engine that fed this a heuristic died OOS —
+    #: see docs/EDGE_INVESTIGATION_POSTMORTEM_20260816.
     edge_estimate_bps: Decimal              # REQUIRED by the CostGate
     expected_holding_seconds: int
     signal_id: str                          # deterministic — idempotency + audit
@@ -91,6 +96,14 @@ class SignalEngine(ABC):
     """Deterministic (under ordered replay) producer of HF SignalIntents."""
 
     engine_id: str = "signal_engine"
+
+    #: Measurement-by-default. An engine may emit intents for RESEARCH/backtesting,
+    #: but NO fast-tick engine may back a capital lane: the whole HF world was killed
+    #: OOS (taker cost wall) and passive quoting by adverse selection. Stays False —
+    #: flipping it requires a pre-registered OOS pass through the promotion ladder,
+    #: never an in-place edit. Trade permission is enforced by hf_engine_registry
+    #: (see docs/EDGE_INVESTIGATION_POSTMORTEM_20260816).
+    tradeable: bool = False
 
     @abstractmethod
     def generate(

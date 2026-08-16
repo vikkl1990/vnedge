@@ -20,8 +20,12 @@ def test_research_only_set_is_the_named_families():
 
 
 def test_survivors_stay_capital_eligible():
-    assert is_capital_eligible("funding_mean_reversion_v1")
+    # crypto_trend is immature (few trades) but NOT killed -> keeps capital permission
+    # so a future swing-timescale validation can promote it.
     assert is_capital_eligible("crypto_trend_atr_margin_v1")
+    # funding_mr FAILED forward paper (2026-08-14) -> post-mortem KILLED, capital
+    # permission revoked (see docs/EDGE_INVESTIGATION_POSTMORTEM_20260816).
+    assert not is_capital_eligible("funding_mean_reversion_v1")
 
 
 def test_paper_lane_for_research_only_is_downgraded_to_shadow():
@@ -35,8 +39,14 @@ def test_shadow_lane_for_research_only_is_untouched():
 
 
 def test_paper_lane_for_survivor_is_untouched():
-    spec = _spec("funding_mean_reversion_v1", RunnerMode.PAPER).capital_downgraded()
+    spec = _spec("crypto_trend_atr_margin_v1", RunnerMode.PAPER).capital_downgraded()
     assert spec.mode is RunnerMode.PAPER            # survivors keep capital
+
+
+def test_paper_lane_for_killed_strategy_is_downgraded_to_shadow():
+    # funding_mr is post-mortem KILLED: capital denied, observation kept.
+    spec = _spec("funding_mean_reversion_v1", RunnerMode.PAPER).capital_downgraded()
+    assert spec.mode is RunnerMode.SHADOW
 
 
 def test_downgrade_preserves_all_other_fields():

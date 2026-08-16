@@ -79,10 +79,26 @@ _RESEARCH_ONLY_CLASSES = (
 RESEARCH_ONLY: frozenset[str] = frozenset(c.strategy_id for c in _RESEARCH_ONLY_CLASSES)
 
 
+# Post-mortem KILLS — strategies whose edge was investigated through the promotion
+# machinery and FAILED (forward-paper loss or IS/OOS collapse), as opposed to the
+# RESEARCH_ONLY families above whose flaw is structural over-fit by construction. A
+# kill revokes capital permission exactly like RESEARCH_ONLY (may still run a SHADOW
+# lane for continued measurement — "delete permission to trade, not the measurement
+# code"). Re-enabling requires NEW structural evidence on untouched data through the
+# ladder, never an in-place tweak. See docs/EDGE_INVESTIGATION_POSTMORTEM_20260816.
+_KILLED_CLASSES = (
+    # funding_mean_reversion_v1 — forward paper FAILED 2026-08-14: net -$16.60,
+    # breached the 6% DD cap (7.35%), 3W/5L over 8 trades, despite 3x OOS-positive
+    # backtests. Thin and fee-sensitive; dies at the ~8bps taker cost wall.
+    FundingMeanReversion,
+)
+KILLED: frozenset[str] = frozenset(c.strategy_id for c in _KILLED_CLASSES)
+
+
 def is_capital_eligible(strategy_id: str) -> bool:
-    """False for research-only families: they may run SHADOW (observation) but
-    must never back a capital (paper/live) lane."""
-    return strategy_id not in RESEARCH_ONLY
+    """False for research-only families AND post-mortem-killed strategies: both may
+    run SHADOW (observation) but must never back a capital (paper/live) lane."""
+    return strategy_id not in RESEARCH_ONLY and strategy_id not in KILLED
 
 
 def get_strategy_class(strategy_id: str) -> type[BaseStrategy]:

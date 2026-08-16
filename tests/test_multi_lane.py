@@ -442,9 +442,13 @@ def test_governor_paper_roster_filter_keeps_only_proposed_paper_lanes(tmp_path):
         "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
     })
 
+    # funding_mr is post-mortem KILLED: the governor still SELECTS it (dropping the
+    # other paper lanes) and reassigns primary, but the capital guard then downgrades
+    # it PAPER->SHADOW, so this bounded roster yields no PAPER capital lane.
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
-    assert paper_ids == ["funding_mr_btc_v1_20260703"]
-    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
+    assert paper_ids == []
+    funding = next(spec for spec in specs if spec.lane_id == "funding_mr_btc_v1_20260703")
+    assert funding.mode is RunnerMode.SHADOW and funding.is_primary
     assert any(spec.mode is RunnerMode.SHADOW for spec in specs)
 
 
@@ -470,11 +474,13 @@ def test_governor_paper_roster_filter_can_match_by_signature_and_reassign_primar
         "MULTI_LANE_PAPER_GOVERNOR_PATH": str(path),
     })
 
-    # governor alias matches the surviving binance funding_mr paper lane by
-    # signature (bybit funding_mr is now pruned as a venue-specific loser).
+    # governor alias matches the binance funding_mr lane by signature and reassigns
+    # primary; funding_mr is post-mortem KILLED, so the capital guard then downgrades
+    # the matched lane PAPER->SHADOW (bybit funding_mr is pruned as a venue loser).
     paper_ids = [spec.lane_id for spec in specs if spec.mode is RunnerMode.PAPER]
-    assert paper_ids == ["funding_mr_btc_v1_20260703"]
-    assert next(spec for spec in specs if spec.is_primary).lane_id == "funding_mr_btc_v1_20260703"
+    assert paper_ids == []
+    funding = next(spec for spec in specs if spec.lane_id == "funding_mr_btc_v1_20260703")
+    assert funding.mode is RunnerMode.SHADOW and funding.is_primary
 
 
 def test_governor_paper_roster_filter_fails_open_when_report_is_missing(tmp_path):
