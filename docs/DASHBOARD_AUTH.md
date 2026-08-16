@@ -113,6 +113,10 @@ Two **unauthenticated** probes (they reveal only process state, never data):
   `X-Dashboard-Role: <role>`.
 - WebSocket snapshots include `dashboard_connections`: the **count** of live
   dashboard sockets. Names and tokens are never serialized into snapshots.
+- While the React dashboard remains open, it renews the short-lived HttpOnly
+  session every eight minutes through `POST /auth/session/refresh`. Renewal
+  requires both the valid session cookie and the CSRF cookie/header pair; an
+  expired session still requires a fresh root-token bootstrap.
 - Auth events are logged with name and role only — token values never appear
   in logs, responses, or snapshots.
 

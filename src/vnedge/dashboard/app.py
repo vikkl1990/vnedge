@@ -1024,6 +1024,20 @@ def create_app(
         this grants no new capability — the session's role equals the token's."""
         return _issue_session_response(_authorized(request))
 
+    @app.post("/auth/session/refresh")
+    async def refresh_auth_session(request: Request) -> JSONResponse:
+        """Renew an active browser session without reusing the root token.
+
+        The HttpOnly session cookie proves the caller's identity and the
+        double-submit CSRF token proves the request came from the dashboard.
+        Renewal preserves the existing role and mints no new capability. An
+        expired session cannot be revived; the operator must authenticate with
+        the root token again.
+        """
+        user = _authorized(request)
+        _require_csrf(request)
+        return _issue_session_response(user)
+
     mount_settings_routes(
         app,
         service=resolved_settings,

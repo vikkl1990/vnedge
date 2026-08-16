@@ -24,6 +24,35 @@ export async function establishBrowserSession(): Promise<void> {
   }
 }
 
+const SESSION_REFRESH_MS = 8 * 60 * 1000;
+
+async function refreshBrowserSession(): Promise<void> {
+  const csrf = cookie("vnedge_csrf");
+  if (!csrf) return;
+  const response = await fetch("/auth/session/refresh", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-VNEDGE-CSRF": csrf },
+    cache: "no-store",
+  });
+  if (response.status === 401) return;
+  if (!response.ok) throw new ApiError(response.status, "session refresh failed");
+}
+
+export function keepBrowserSessionAlive(): () => void {
+  const refresh = () => {
+    if (document.visibilityState === "visible") {
+      void refreshBrowserSession().catch(() => undefined);
+    }
+  };
+  const timer = window.setInterval(refresh, SESSION_REFRESH_MS);
+  window.addEventListener("focus", refresh);
+  return () => {
+    window.clearInterval(timer);
+    window.removeEventListener("focus", refresh);
+  };
+}
+
 function cookie(name: string): string {
   const prefix = `${encodeURIComponent(name)}=`;
   const item = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(prefix));

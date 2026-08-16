@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
-import { establishBrowserSession } from "./api";
+import { establishBrowserSession, keepBrowserSessionAlive } from "./api";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -11,6 +11,7 @@ const queryClient = new QueryClient({
 
 async function bootstrap() {
   await establishBrowserSession();
+  keepBrowserSessionAlive();
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>

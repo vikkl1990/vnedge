@@ -58,7 +58,10 @@ def _client():
     ])
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})
-    return TestClient(create_app(provider, token_store=store, session_issuer=SessionIssuer(b"test-secret")))
+    return TestClient(
+        create_app(provider, token_store=store, session_issuer=SessionIssuer(b"test-secret")),
+        base_url="https://testserver",
+    )
 
 
 def test_session_endpoint_mints_a_working_jwt():
@@ -79,3 +82,30 @@ def test_session_preserves_not_escalates_role():
     jwt = client.post("/auth/session?token=vt").json()["token"]  # viewer root
     who = client.get(f"/whoami?token={jwt}").json()
     assert who["role"] == "viewer"  # session role == token role, never elevated
+
+
+def test_browser_session_refreshes_with_cookie_and_csrf():
+    client = _client()
+    issued = client.post("/auth/session?token=ot")
+    assert issued.status_code == 200
+    csrf = client.cookies.get("vnedge_csrf")
+    assert csrf
+
+    refreshed = client.post(
+        "/auth/session/refresh",
+        headers={"X-VNEDGE-CSRF": csrf},
+    )
+
+    assert refreshed.status_code == 200
+    assert refreshed.json()["role"] == "operator"
+    assert client.cookies.get("vnedge_session") == refreshed.json()["token"]
+    assert client.get("/whoami").json()["name"] == "op1"
+
+
+def test_browser_session_refresh_requires_csrf():
+    client = _client()
+    assert client.post("/auth/session?token=ot").status_code == 200
+
+    response = client.post("/auth/session/refresh")
+
+    assert response.status_code == 403
