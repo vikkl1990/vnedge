@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 import math
 from collections import deque
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -146,6 +148,8 @@ def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
     rec._last_trade_ts_ms = {}
     rec._seen_trade_ids = {"BTC/USDT:USDT": set()}
     rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
+    rec._skipped_trade_counts = {"BTC/USDT:USDT": [0, 0, 0, 0]}
+    rec._next_skip_log = {"BTC/USDT:USDT": 0.0}
     buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
     batch = [
         {"id": "2", "timestamp": 2000, "price": 101, "amount": 1},
@@ -170,6 +174,32 @@ def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
         ("BTC/USDT:USDT", 2000),
         ("BTC/USDT:USDT", 3000),
     ]
+
+
+def test_skip_warnings_are_rate_limited_per_symbol(caplog):
+    rec = TickRecorder.__new__(TickRecorder)
+    rec.candle_sink = None
+    rec.trade_count = 0
+    rec._last_trade_ts_ms = {}
+    rec._seen_trade_ids = {"BTC/USDT:USDT": set()}
+    rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
+    rec._skipped_trade_counts = {"BTC/USDT:USDT": [0, 0, 0, 0]}
+    rec._next_skip_log = {"BTC/USDT:USDT": 0.0}
+    buf = _Buffer(Path("/tmp"), "binanceusdm", "BTC/USDT:USDT", "trades")
+
+    with caplog.at_level(logging.WARNING):
+        rec._ingest_trade_batch(
+            "BTC/USDT:USDT",
+            [{"id": "bad-1", "timestamp": 1000, "price": 0, "amount": 1}],
+            buf,
+        )
+        rec._ingest_trade_batch(
+            "BTC/USDT:USDT",
+            [{"id": "bad-2", "timestamp": 2000, "price": 0, "amount": 1}],
+            buf,
+        )
+
+    assert sum("60s summary" in record.message for record in caplog.records) == 1
 
 
 # -- Delta native recorder -------------------------------------------------

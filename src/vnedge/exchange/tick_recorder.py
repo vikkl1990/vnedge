@@ -26,6 +26,7 @@ import asyncio
 import logging
 import math
 import os
+import time
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ FLUSH_EVERY = 500       # records
 FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
 _SEEN_TRADE_IDS = 50_000
+_SKIP_LOG_SECONDS = 60.0
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
 
@@ -229,6 +231,12 @@ class TickRecorder:
         self._seen_trade_order: dict[str, deque[str]] = {
             symbol: deque() for symbol in symbols
         }
+        self._skipped_trade_counts: dict[str, list[int]] = {
+            symbol: [0, 0, 0, 0] for symbol in symbols
+        }
+        self._next_skip_log: dict[str, float] = {
+            symbol: 0.0 for symbol in symbols
+        }
 
     def _remember_trade(self, symbol: str, key: str | None) -> None:
         if key is None:
@@ -239,6 +247,36 @@ class TickRecorder:
             seen.discard(order.popleft())
         order.append(key)
         seen.add(key)
+
+    def _report_skipped_trades(
+        self,
+        symbol: str,
+        *,
+        malformed: int,
+        late: int,
+        duplicate: int,
+        candle_rejected: int,
+    ) -> None:
+        if not (malformed or late or candle_rejected):
+            if duplicate:
+                logger.debug("%s skipped %d replayed trade rows", symbol, duplicate)
+            return
+        totals = self._skipped_trade_counts[symbol]
+        for index, count in enumerate(
+            (malformed, late, duplicate, candle_rejected)
+        ):
+            totals[index] += count
+        now = time.monotonic()
+        if now < self._next_skip_log[symbol]:
+            return
+        logger.warning(
+            "%s skipped trade rows (60s summary): malformed=%d late=%d "
+            "duplicate=%d candle=%d",
+            symbol,
+            *totals,
+        )
+        totals[:] = [0, 0, 0, 0]
+        self._next_skip_log[symbol] = now + _SKIP_LOG_SECONDS
 
     def _ingest_trade_batch(
         self,
@@ -286,16 +324,13 @@ class TickRecorder:
             last_timestamp = timestamp
         if last_timestamp is not None:
             self._last_trade_ts_ms[symbol] = last_timestamp
-        skipped = malformed + late + duplicate + candle_rejected
-        if skipped:
-            logger.warning(
-                "%s skipped trade rows: malformed=%d late=%d duplicate=%d candle=%d",
-                symbol,
-                malformed,
-                late,
-                duplicate,
-                candle_rejected,
-            )
+        self._report_skipped_trades(
+            symbol,
+            malformed=malformed,
+            late=late,
+            duplicate=duplicate,
+            candle_rejected=candle_rejected,
+        )
 
     async def _watch_trades(self, symbol: str, clock) -> None:
         buf = _Buffer(self.root, self.exchange_id, symbol, "trades")
