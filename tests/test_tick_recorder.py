@@ -1,11 +1,20 @@
 """Tick/L2 recorder — L2 schema, NaN padding, atomic sharded writes."""
 
+import asyncio
+import json
 import math
 
 import pandas as pd
 import pytest
 
-from vnedge.exchange.tick_recorder import TickRecorder, _book_row, _Buffer
+from vnedge.exchange.tick_recorder import (
+    CanonicalCandleSink,
+    DeltaTickRecorder,
+    TickRecorder,
+    _book_row,
+    _Buffer,
+    _delta_ob,
+)
 
 DAY_TS = 1_751_000_000_000  # fixed ms timestamp
 
@@ -77,12 +86,34 @@ def test_empty_flush_is_a_noop(tmp_path):
     assert buf.flush(0.0) == 0
 
 
+def test_canonical_sink_persists_only_closed_trade_built_hour(tmp_path):
+    start = pd.Timestamp("2026-08-16T10:00:00Z")
+    sink = CanonicalCandleSink(
+        "binanceusdm", ["BTC/USDT:USDT"], tmp_path / "candles"
+    )
+    for minute in range(60):
+        timestamp = start + pd.Timedelta(minutes=minute)
+        sink.on_trade(
+            "BTC/USDT:USDT",
+            {
+                "timestamp": int(timestamp.timestamp() * 1000),
+                "price": 60_000 + minute,
+                "amount": 1,
+                "side": "buy",
+            },
+        )
+    sink.advance_time((start + pd.Timedelta(hours=1)).to_pydatetime())
+
+    from vnedge.data.candles import CandleParquetStore
+
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    assert len(store.read("BTCUSDT", "1m")) == 60
+    hours = store.read("BTCUSDT", "1h")
+    assert len(hours) == 1
+    assert hours[0].trade_count == 60
+
+
 # -- Delta native recorder -------------------------------------------------
-
-import asyncio  # noqa: E402
-import json  # noqa: E402
-
-from vnedge.exchange.tick_recorder import DeltaTickRecorder, _delta_ob  # noqa: E402
 
 
 def test_delta_ob_to_ccxt_book_shape():

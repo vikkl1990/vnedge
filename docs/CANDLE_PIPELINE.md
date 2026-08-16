@@ -264,6 +264,27 @@ an `OrderIntent`. Risk gateway, CostGate, kill policy, and promotion rules remai
 downstream. The only runtime coupling is the hard `MarketState.data_degraded`
 check described above.
 
+## Live Market Pulse wiring
+
+The default compose stack runs `pulse-recorder` as a public, trades-only
+Binance USDM stream for BTC, ETH, and SOL. Every trade is written to the tick
+lake and passed to `CandlePipeline`; only closed bars are persisted under
+`data/candles/exchange=binanceusdm`. The dashboard reads that store and remains
+strictly read-only.
+
+After a fresh deployment, recent Binance Vision trade archives can seed the
+same store without substituting exchange OHLCV:
+
+```bash
+python -m vnedge.data.aggtrades_backfill \
+  --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT --days 3
+python -m vnedge.data.candle_bootstrap \
+  --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT --days 3
+```
+
+The live recorder then appends forward. Missing tick coverage stays visible;
+neither command creates empty bars or midpoint-derived OHLC.
+
 ## Enforced invariants
 
 - Timestamps must be timezone-aware and align to UTC Unix-epoch buckets.

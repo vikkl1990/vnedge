@@ -24,8 +24,10 @@ jobs:
           src/vnedge/dashboard/correction_ui.py
           src/vnedge/dashboard/market_pulse.py
           src/vnedge/data/candles.py
+          src/vnedge/data/candle_bootstrap.py
           src/vnedge/data/gaps.py
           src/vnedge/data/vwap.py
+          src/vnedge/exchange/tick_recorder.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
           src/vnedge/runtime/fleet_policy.py
@@ -41,8 +43,10 @@ jobs:
           src/vnedge/dashboard/correction_ui.py
           src/vnedge/dashboard/market_pulse.py
           src/vnedge/data/candles.py
+          src/vnedge/data/candle_bootstrap.py
           src/vnedge/data/gaps.py
           src/vnedge/data/vwap.py
+          src/vnedge/exchange/tick_recorder.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
           src/vnedge/runtime/fleet_policy.py

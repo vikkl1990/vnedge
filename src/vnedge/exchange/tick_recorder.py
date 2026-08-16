@@ -25,9 +25,13 @@ import argparse
 import asyncio
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+
+from vnedge.data.candles import CandleParquetStore, CandlePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,40 @@ FLUSH_EVERY = 500       # records
 FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
+
+
+def _canonical_symbol(symbol: str) -> str:
+    """Match the tick-lake/candle-store symbol key used by the dashboard."""
+    return symbol.split(":", 1)[0].replace("/", "")
+
+
+class CanonicalCandleSink:
+    """Feed public trades into per-symbol canonical candle pipelines.
+
+    This is measurement-only plumbing. It consumes the same public trades that
+    are durably written to the tick lake and persists only closed candles.
+    """
+
+    def __init__(self, exchange: str, symbols: list[str], root: Path | str) -> None:
+        store = CandleParquetStore(root, exchange=exchange)
+        self.pipelines = {
+            symbol: CandlePipeline(_canonical_symbol(symbol), store=store)
+            for symbol in symbols
+        }
+
+    def on_trade(self, symbol: str, trade: dict[str, Any]) -> None:
+        side = str(trade.get("side") or "").lower()
+        buyer_maker = False if side == "buy" else True if side == "sell" else None
+        self.pipelines[symbol].on_trade(
+            datetime.fromtimestamp(int(trade["timestamp"]) / 1000, tz=UTC),
+            trade["price"],
+            trade["amount"],
+            buyer_maker,
+        )
+
+    def advance_time(self, now: datetime) -> None:
+        for pipeline in self.pipelines.values():
+            pipeline.advance_time(now)
 
 
 def _book_row(ob: dict, levels: int, ts_ms: int) -> dict:
@@ -86,7 +124,7 @@ class _Buffer:
 
     def should_flush(self, now: float) -> bool:
         return len(self._rows) >= FLUSH_EVERY or (
-            self._rows and now - self._last_flush >= FLUSH_SECONDS
+            bool(self._rows) and now - self._last_flush >= FLUSH_SECONDS
         )
 
     def flush(self, now: float) -> int:
@@ -113,7 +151,8 @@ class _Buffer:
 
 class TickRecorder:
     def __init__(self, exchange_id: str, symbols: list[str], root: Path,
-                 *, levels: int = 10) -> None:
+                 *, levels: int = 10, candle_root: Path | None = None,
+                 trades_only: bool = False) -> None:
         import ccxt.pro as ccxtpro
 
         if not hasattr(ccxtpro, exchange_id):
@@ -128,6 +167,12 @@ class TickRecorder:
         # depth-stream limit BOTH Binance USDT-M and Bybit swaps accept (Bybit
         # rejects 5/10/20 — only {1,50,200,1000}); we slice to `levels` on write.
         self._book_limit = 50 if levels <= 50 else 200
+        self.trades_only = trades_only
+        self.candle_sink = (
+            CanonicalCandleSink(exchange_id, symbols, candle_root)
+            if candle_root is not None
+            else None
+        )
         self.trade_count = 0
         self.book_count = 0
 
@@ -137,12 +182,15 @@ class TickRecorder:
             try:
                 trades = await self._ex.watch_trades(symbol)
                 for t in trades:
-                    buf.add({
+                    row = {
                         "ts_ms": int(t["timestamp"]),
                         "price": float(t["price"]),
                         "amount": float(t["amount"]),
                         "side": t.get("side", ""),
-                    })
+                    }
+                    buf.add(row)
+                    if self.candle_sink is not None:
+                        self.candle_sink.on_trade(symbol, t)
                     self.trade_count += 1
                 now = clock()
                 if buf.should_flush(now):
@@ -153,6 +201,12 @@ class TickRecorder:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s trades error: %s", symbol, exc)
                 await asyncio.sleep(_BACKOFF)
+
+    async def _advance_candles(self) -> None:
+        assert self.candle_sink is not None
+        while True:
+            self.candle_sink.advance_time(datetime.now(UTC))
+            await asyncio.sleep(1.0)
 
     async def _watch_book(self, symbol: str, clock) -> None:
         buf = _Buffer(self.root, self.exchange_id, symbol, "book")
@@ -180,7 +234,10 @@ class TickRecorder:
         tasks = []
         for symbol in self.symbols:
             tasks.append(asyncio.create_task(self._watch_trades(symbol, clock)))
-            tasks.append(asyncio.create_task(self._watch_book(symbol, clock)))
+            if not self.trades_only:
+                tasks.append(asyncio.create_task(self._watch_book(symbol, clock)))
+        if self.candle_sink is not None:
+            tasks.append(asyncio.create_task(self._advance_candles()))
         logger.info("tick recorder: %s %s -> %s", self.exchange_id, self.symbols, self.root)
         try:
             await asyncio.gather(*tasks)
@@ -320,6 +377,15 @@ def main(argv=None) -> int:
     p.add_argument("--exchange", default="binanceusdm")
     p.add_argument("--symbols", default="BTC/USDT:USDT")
     p.add_argument("--data-root", default="data")
+    p.add_argument(
+        "--candle-root",
+        help="optional canonical candle store populated from the live trade stream",
+    )
+    p.add_argument(
+        "--trades-only",
+        action="store_true",
+        help="record trades without the L2 book stream (sufficient for candles)",
+    )
     p.add_argument("--levels", type=int, default=10, help="L2 depth levels per side")
     args = p.parse_args(argv)
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -328,8 +394,14 @@ def main(argv=None) -> int:
             symbols, Path(args.data_root), levels=args.levels, exchange_id=args.exchange
         )
     else:
-        recorder = TickRecorder(args.exchange, symbols, Path(args.data_root),
-                                levels=args.levels)
+        recorder = TickRecorder(
+            args.exchange,
+            symbols,
+            Path(args.data_root),
+            levels=args.levels,
+            candle_root=Path(args.candle_root) if args.candle_root else None,
+            trades_only=args.trades_only,
+        )
     asyncio.run(recorder.run())
     return 0
 
