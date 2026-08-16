@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+from collections import deque
 
 import pandas as pd
 import pytest
@@ -14,6 +15,7 @@ from vnedge.exchange.tick_recorder import (
     _book_row,
     _Buffer,
     _delta_ob,
+    _normalize_trade_batch,
 )
 
 DAY_TS = 1_751_000_000_000  # fixed ms timestamp
@@ -111,6 +113,63 @@ def test_canonical_sink_persists_only_closed_trade_built_hour(tmp_path):
     hours = store.read("BTCUSDT", "1h")
     assert len(hours) == 1
     assert hours[0].trade_count == 60
+
+
+def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
+    rows, rejected = _normalize_trade_batch(
+        [
+            {"id": "b", "timestamp": 2000, "price": 101, "amount": 2},
+            {"id": "zero", "timestamp": 2500, "price": 0, "amount": 1},
+            {"id": "nan", "timestamp": 2600, "price": float("nan"), "amount": 1},
+            {"id": "a", "timestamp": 1000, "price": 100, "amount": 1},
+            {"id": "missing", "timestamp": 3000, "amount": 1},
+        ]
+    )
+
+    assert rejected == 3
+    assert [row["ts_ms"] for row, _ in rows] == [1000, 2000]
+    assert [key for _, key in rows] == ["1000:a", "2000:b"]
+
+
+class _TradeSink:
+    def __init__(self):
+        self.timestamps = []
+
+    def on_trade(self, symbol, trade):
+        self.timestamps.append((symbol, trade["timestamp"]))
+
+
+def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
+    rec = TickRecorder.__new__(TickRecorder)
+    rec.candle_sink = _TradeSink()
+    rec.trade_count = 0
+    rec._last_trade_ts_ms = {}
+    rec._seen_trade_ids = {"BTC/USDT:USDT": set()}
+    rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
+    buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
+    batch = [
+        {"id": "2", "timestamp": 2000, "price": 101, "amount": 1},
+        {"id": "1", "timestamp": 1000, "price": 100, "amount": 1},
+    ]
+
+    rec._ingest_trade_batch("BTC/USDT:USDT", batch, buf)
+    rec._ingest_trade_batch(
+        "BTC/USDT:USDT",
+        [
+            *batch,
+            {"id": "3", "timestamp": 1500, "price": 100.5, "amount": 1},
+            {"id": "4", "timestamp": 3000, "price": 102, "amount": 1},
+        ],
+        buf,
+    )
+
+    assert rec.trade_count == 3
+    assert [row["ts_ms"] for row in buf._rows] == [1000, 2000, 3000]
+    assert rec.candle_sink.timestamps == [
+        ("BTC/USDT:USDT", 1000),
+        ("BTC/USDT:USDT", 2000),
+        ("BTC/USDT:USDT", 3000),
+    ]
 
 
 # -- Delta native recorder -------------------------------------------------

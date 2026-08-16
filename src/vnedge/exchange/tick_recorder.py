@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import os
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,12 +40,55 @@ logger = logging.getLogger(__name__)
 FLUSH_EVERY = 500       # records
 FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
+_SEEN_TRADE_IDS = 50_000
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
 
 def _canonical_symbol(symbol: str) -> str:
     """Match the tick-lake/candle-store symbol key used by the dashboard."""
     return symbol.split(":", 1)[0].replace("/", "")
+
+
+def _normalize_trade_batch(
+    trades: list[dict[str, Any]],
+) -> tuple[list[tuple[dict[str, Any], str | None]], int]:
+    """Validate and stably order one CCXT trade update.
+
+    Public websocket caches can include malformed placeholders and are not
+    guaranteed to arrive in timestamp order. Invalid rows are measurement
+    gaps, not a reason to abort every valid trade in the same update.
+    """
+    accepted: list[tuple[dict[str, Any], str | None]] = []
+    rejected = 0
+    for trade in trades:
+        try:
+            timestamp = int(trade["timestamp"])
+            price = float(trade["price"])
+            amount = float(trade["amount"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            rejected += 1
+            continue
+        if timestamp <= 0 or not math.isfinite(price) or price <= 0:
+            rejected += 1
+            continue
+        if not math.isfinite(amount) or amount <= 0:
+            rejected += 1
+            continue
+        trade_id = trade.get("id")
+        key = f"{timestamp}:{trade_id}" if trade_id not in (None, "") else None
+        accepted.append(
+            (
+                {
+                    "ts_ms": timestamp,
+                    "price": price,
+                    "amount": amount,
+                    "side": str(trade.get("side") or ""),
+                },
+                key,
+            )
+        )
+    accepted.sort(key=lambda item: item[0]["ts_ms"])
+    return accepted, rejected
 
 
 class CanonicalCandleSink:
@@ -159,7 +204,9 @@ class TickRecorder:
             raise ValueError(f"unknown CCXT Pro exchange id: {exchange_id}")
         if levels < 1:
             raise ValueError("levels must be >= 1")
-        self._ex = getattr(ccxtpro, exchange_id)({"enableRateLimit": True})
+        self._ex = getattr(ccxtpro, exchange_id)(
+            {"enableRateLimit": True, "newUpdates": True}
+        )
         self.exchange_id = exchange_id
         self.symbols = symbols
         self.root = root
@@ -175,23 +222,87 @@ class TickRecorder:
         )
         self.trade_count = 0
         self.book_count = 0
+        self._last_trade_ts_ms: dict[str, int] = {}
+        self._seen_trade_ids: dict[str, set[str]] = {
+            symbol: set() for symbol in symbols
+        }
+        self._seen_trade_order: dict[str, deque[str]] = {
+            symbol: deque() for symbol in symbols
+        }
+
+    def _remember_trade(self, symbol: str, key: str | None) -> None:
+        if key is None:
+            return
+        seen = self._seen_trade_ids[symbol]
+        order = self._seen_trade_order[symbol]
+        if len(order) >= _SEEN_TRADE_IDS:
+            seen.discard(order.popleft())
+        order.append(key)
+        seen.add(key)
+
+    def _ingest_trade_batch(
+        self,
+        symbol: str,
+        trades: list[dict[str, Any]],
+        buf: _Buffer,
+    ) -> None:
+        candidates, malformed = _normalize_trade_batch(trades)
+        late = 0
+        duplicate = 0
+        candle_rejected = 0
+        last_timestamp = self._last_trade_ts_ms.get(symbol)
+        seen = self._seen_trade_ids[symbol]
+        for row, key in candidates:
+            timestamp = int(row["ts_ms"])
+            if last_timestamp is not None and timestamp < last_timestamp:
+                late += 1
+                continue
+            if key is not None and key in seen:
+                duplicate += 1
+                continue
+            if self.candle_sink is not None:
+                try:
+                    self.candle_sink.on_trade(
+                        symbol,
+                        {
+                            "timestamp": timestamp,
+                            "price": row["price"],
+                            "amount": row["amount"],
+                            "side": row["side"],
+                        },
+                    )
+                except ValueError as exc:
+                    candle_rejected += 1
+                    logger.warning(
+                        "canonical trade skipped: symbol=%s timestamp=%s reason=%s",
+                        symbol,
+                        timestamp,
+                        exc,
+                    )
+                    continue
+            buf.add(row)
+            self.trade_count += 1
+            self._remember_trade(symbol, key)
+            last_timestamp = timestamp
+        if last_timestamp is not None:
+            self._last_trade_ts_ms[symbol] = last_timestamp
+        skipped = malformed + late + duplicate + candle_rejected
+        if skipped:
+            logger.warning(
+                "%s skipped trade rows: malformed=%d late=%d duplicate=%d candle=%d",
+                symbol,
+                malformed,
+                late,
+                duplicate,
+                candle_rejected,
+            )
 
     async def _watch_trades(self, symbol: str, clock) -> None:
         buf = _Buffer(self.root, self.exchange_id, symbol, "trades")
         while True:
             try:
                 trades = await self._ex.watch_trades(symbol)
-                for t in trades:
-                    row = {
-                        "ts_ms": int(t["timestamp"]),
-                        "price": float(t["price"]),
-                        "amount": float(t["amount"]),
-                        "side": t.get("side", ""),
-                    }
-                    buf.add(row)
-                    if self.candle_sink is not None:
-                        self.candle_sink.on_trade(symbol, t)
-                    self.trade_count += 1
+                self._ingest_trade_batch(symbol, trades, buf)
                 now = clock()
                 if buf.should_flush(now):
                     buf.flush(now)
