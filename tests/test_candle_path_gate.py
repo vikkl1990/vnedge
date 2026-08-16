@@ -99,12 +99,12 @@ def test_gate_blocks_on_hard_age_while_health_ok():
     assert _gate(_Stub(tm), now) == "tm_age_hard"
 
 
-def test_gate_faults_safe_returns_none(monkeypatch):
-    # a fault inside the gate must never wedge the lane -> returns None (allow)
+def test_gate_faults_fail_closed(monkeypatch):
+    # Unknown health must never arm new risk.
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
 
     def boom(*a, **k):
         raise RuntimeError("sensor down")
     monkeypatch.setattr(tm, "health_of", boom)
-    assert _gate(_Stub(tm), BASE) is None
+    assert _gate(_Stub(tm), BASE) == "tm_error"

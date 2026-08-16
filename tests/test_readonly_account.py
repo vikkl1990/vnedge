@@ -46,19 +46,35 @@ async def test_missing_balance_raises():
 
 async def test_open_positions_mapped():
     p = provider(positions=[
-        {"symbol": "BTC/USDT:USDT", "contracts": 0.01, "side": "long"},
+        {"symbol": "BTC/USDT:USDT", "contracts": 0.01, "side": "long",
+         "markPrice": 50_000.0},
         {"symbol": "ETH/USDT:USDT", "contracts": 0.0, "side": "long"},   # flat -> skipped
-        {"symbol": "SOL/USDT:USDT", "contracts": 2.0, "side": "short"},
+        {"symbol": "SOL/USDT:USDT", "contracts": 2.0, "side": "short",
+         "notional": 240.0},
     ])
-    positions = await p.open_positions()
-    assert len(positions) == 2
-    assert positions[0].symbol == "BTC/USDT:USDT" and positions[0].side == "long"
-    assert positions[1].side == "short" and positions[1].quantity == 2.0
+    result = await p.open_positions()
+    assert result.ok
+    assert len(result.positions) == 2
+    assert result.positions[0].symbol == "BTC/USDT:USDT" and result.positions[0].side == "long"
+    assert result.positions[1].side == "short" and result.positions[1].quantity == 2.0
+    assert dict(result.exposure_by_symbol_usd)["BTC/USDT:USDT"] == 500.0
 
 
-async def test_flat_account_when_fetch_positions_errors():
+async def test_position_error_is_not_reported_as_flat():
     p = provider(positions_raises=True)
-    assert await p.open_positions() == []
+    result = await p.open_positions()
+    assert not result.ok
+    assert result.positions == ()
+    assert "400 no positions" in str(result.error)
+
+
+async def test_unknown_position_exposure_fails_closed():
+    p = provider(positions=[
+        {"symbol": "BTC/USDT:USDT", "contracts": 0.01, "side": "long"},
+    ])
+    result = await p.open_positions()
+    assert not result.ok
+    assert "exposure unavailable" in str(result.error)
 
 
 def test_has_no_order_submission_methods():

@@ -62,18 +62,28 @@ from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
-from vnedge.research.pine_script_research import load_pine_research_payload
-from vnedge.research.quantified_blueprint_proof import (
-    load_quantified_blueprint_proof_payload,
-)
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
-from vnedge.research.quantified_proof_result_arbiter import (
-    load_quantified_proof_result_arbiter_payload,
-)
-from vnedge.research.quantified_pullback_reversion_proof import (
-    load_quantified_pullback_reversion_proof_payload,
-)
 from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
+
+
+def _load_retired_artifact(path: Path | None, fallback: dict | None = None) -> dict:
+    """Read an old research artifact without importing its retired generator."""
+    if path is None or not path.exists():
+        return dict(fallback or {})
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return dict(fallback or {})
+    return payload if isinstance(payload, dict) else dict(fallback or {})
+
+
+def load_pine_research_payload(path: Path | None) -> dict:
+    return _load_retired_artifact(path, {"retired": True, "rows": []})
+
+
+load_quantified_blueprint_proof_payload = _load_retired_artifact
+load_quantified_proof_result_arbiter_payload = _load_retired_artifact
+load_quantified_pullback_reversion_proof_payload = _load_retired_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +462,6 @@ def create_app(
     runbooks_path: Path | None = None,
     lane_readiness_path: Path | None = None,
     promotion_review_runbook_path: Path | None = None,
-    realtime_scanner_path: Path | None = None,
     lane_firing_causality_path: Path | None = None,
     paper_lane_activation_path: Path | None = None,
     paper_route_doctor_path: Path | None = None,
@@ -481,7 +490,6 @@ def create_app(
     pine_edge_uplift_path: Path | None = None,
     edge_uplift_executor_path: Path | None = None,
     scanner_backtest_uplift_path: Path | None = None,
-    delta_5m_event_clock_path: Path | None = None,
     alpha_arena_lite_path: Path | None = None,
     quant_loop_governance_path: Path | None = None,
     evidence_index_path: Path | None = None,
@@ -571,7 +579,6 @@ def create_app(
                 alpha_workbench_path=alpha_workbench_path,
                 vibe_intelligence_path=vibe_intelligence_path,
                 lane_readiness_path=lane_readiness_path,
-                realtime_scanner_path=realtime_scanner_path,
             ),
         )
 
@@ -668,10 +675,6 @@ def create_app(
     scanner_backtest_uplift_file = (
         scanner_backtest_uplift_path
         or Path("research/live_research/scanner_backtest_uplift_latest.json")
-    )
-    delta_5m_event_clock_file = (
-        delta_5m_event_clock_path
-        or Path("research/live_research/delta_5m_event_clock_latest.json")
     )
     lane_firing_causality_file = (
         lane_firing_causality_path
@@ -785,7 +788,6 @@ def create_app(
             headers={"Cache-Control": "no-store, must-revalidate"},
         )
 
-    @app.get("/pine-research")
     async def pine_research_page() -> FileResponse:
         # Separate static research page. Data remains token-gated below.
         return FileResponse(
@@ -1994,54 +1996,6 @@ def create_app(
             }
         )
 
-    @app.get("/realtime-scanner")
-    async def realtime_scanner(request: Request) -> JSONResponse:
-        """Latest live scanner pressure report.
-
-        This is intentionally separate from replay/candidate-replay reports:
-        it reads current runtime journals only and cannot trade or promote.
-        """
-        user = _authorized(request)
-        return JSONResponse(
-            _read_json_payload(
-                realtime_scanner_path,
-                {
-                    "summary": {},
-                    "rows": [],
-                    "operator_answer": "real-time scanner report unavailable",
-                    "mode": "live_observation_not_replay",
-                    "can_trade": False,
-                    "can_promote": False,
-                },
-            ),
-            headers=_identity(user),
-        )
-
-    @app.get("/delta-5m-event-clock")
-    async def delta_5m_event_clock(request: Request) -> JSONResponse:
-        """Delta India 5-minute UP/DOWN prep clock.
-
-        Research-only and closed-candle-only: it tells the operator when the
-        next Delta 5m decision window opens and whether a paper perp route
-        clears the fee wall. It has no live-order authority.
-        """
-        user = _authorized(request)
-        return JSONResponse(
-            _read_json_payload(
-                delta_5m_event_clock_file,
-                {
-                    "summary": {},
-                    "rows": [],
-                    "operator_answer": "Delta 5m event clock unavailable",
-                    "mode": "read_only_delta_5m_up_down_perp_proxy",
-                    "can_trade": False,
-                    "can_promote": False,
-                },
-            ),
-            headers=_identity(user),
-        )
-
-    @app.get("/lane-firing-causality")
     async def lane_firing_causality(request: Request) -> JSONResponse:
         """Joined lane truth: live scanner cause, risk/execution route, and
         paper promotion state. Read-only and non-promoting."""
@@ -2061,7 +2015,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/kb")
     async def pine_research_kb(request: Request) -> JSONResponse:
         """Public-script review KB.
 
@@ -2127,7 +2080,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/distiller")
     async def pine_alpha_distiller(request: Request) -> JSONResponse:
         """Source-backed Pine primitive/task distillation artifact."""
         user = _authorized(request)
@@ -2148,7 +2100,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/progress")
     async def pine_backtest_progress(request: Request) -> JSONResponse:
         """Live scanner tournament/backtest progress.
 
@@ -2186,7 +2137,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/uplift-agent")
     async def pine_edge_uplift_agent(request: Request) -> JSONResponse:
         """Agentic failure-salvage and edge-uplift artifact."""
         user = _authorized(request)
@@ -2207,7 +2157,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/uplift-executor")
     async def edge_uplift_executor(request: Request) -> JSONResponse:
         """Replay/port task queue produced from the edge-uplift agent."""
         user = _authorized(request)
@@ -2227,7 +2176,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/scanner-uplift")
     async def scanner_backtest_uplift(request: Request) -> JSONResponse:
         """Backtest-failure classifications and scanner uplift experiments."""
         user = _authorized(request)
@@ -2247,7 +2195,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/alpha-arena-lite")
     async def alpha_arena_lite(request: Request) -> JSONResponse:
         """Durable Arena task/scorecard layer for scanner uplift candidates."""
         user = _authorized(request)
@@ -2267,7 +2214,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/quant-loop-governance")
     async def quant_loop_governance(request: Request) -> JSONResponse:
         """Research-loop readiness, collision, and budget governance."""
         user = _authorized(request)
@@ -2291,7 +2237,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/evidence-index")
     async def pine_research_evidence_index(request: Request) -> JSONResponse:
         """Unified research evidence index across Pine/scanner/arena artifacts."""
         user = _authorized(request)
@@ -2315,7 +2260,6 @@ def create_app(
             headers=_identity(user),
         )
 
-    @app.get("/pine-research/execution-profile")
     async def pine_research_execution_profile(request: Request) -> JSONResponse:
         """Execution-realistic replay profile for research evidence rows."""
         user = _authorized(request)

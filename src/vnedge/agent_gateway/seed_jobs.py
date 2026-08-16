@@ -22,28 +22,6 @@ SEED_AGENT = "quantos_seed"
 
 DEFAULT_SEED_REQUESTS: tuple[dict[str, Any], ...] = (
     {
-        "seed_id": "quantos_seed_sats_5m_delta_eth",
-        "strategy_id": "sats_5m_scalper_v1",
-        "exchange": "delta_india",
-        "symbol": "ETH/USD:USD",
-        "timeframe": "5m",
-        "hypothesis_id": "quantos_seed_sats_5m_delta_eth",
-        "notes": "Starter 5m SATS/BBP/stealth-trail scalper evidence job.",
-        "initial_capital_usd": 500.0,
-        "commission_bps": None,
-        "slippage_bps": None,
-        "strict_mode": True,
-        "live_orders_enabled": False,
-        "parameters": {
-            "seed_id": "quantos_seed_sats_5m_delta_eth",
-            "min_tqi": 0.58,
-            "min_quality_strength": 0.08,
-            "min_momentum_persistence": 0.55,
-            "max_holding_bars": 16,
-            "seed_family": "candle_scalper_backtest",
-        },
-    },
-    {
         "seed_id": "quantos_seed_candidate_replay",
         "strategy_id": "candidate_replay_executor_v1",
         "exchange": "delta_india",

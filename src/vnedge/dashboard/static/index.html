@@ -223,28 +223,6 @@
   .kpi .v{font-size:17px;font-weight:700;margin-top:5px}
   .kpi .s{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
 
-  /* signal tape */
-  .tape{max-height:428px;overflow:hidden;position:relative}
-  .tape:after{content:"";position:absolute;left:0;right:0;bottom:0;height:44px;background:linear-gradient(transparent,var(--bg-2));pointer-events:none}
-  .eventclock{padding:12px 14px 14px;display:flex;flex-direction:column;gap:8px}
-  .eventhero{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:linear-gradient(135deg,rgba(45,212,191,.10),rgba(7,11,17,.78));border:1px solid rgba(45,212,191,.24);border-radius:var(--r-sm);padding:11px 12px}
-  .eventhero .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-faint);font-weight:900}
-  .eventhero .v{font-family:var(--mono);font-size:22px;font-weight:900;margin-top:2px;color:var(--txt)}
-  .eventhero .s{font-size:10.5px;color:var(--txt-faint);margin-top:2px}
-  .eventhero .timer{font-family:var(--mono);font-size:25px;font-weight:900;color:var(--brand)}
-  .eventrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 10px;font-size:11.5px}
-  .eventrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .eventrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .eventroute{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-  .eventroute .p{font-family:var(--mono);font-size:13px;font-weight:900}
-  .eventfine{font-size:10.5px;color:var(--txt-faint);line-height:1.45;border-top:1px solid var(--line);padding-top:9px}
-  .sig{display:grid;grid-template-columns:46px 1fr auto;gap:9px;align-items:center;padding:9px 15px;border-bottom:1px solid var(--line);animation:slidein .5s ease}
-  @keyframes slidein{from{opacity:0;transform:translateY(-7px)}to{opacity:1;transform:none}}
-  .sig .t{font-family:var(--mono);font-size:10.5px;color:var(--txt-faint)}
-  .sig .body{min-width:0}
-  .sig .line1{display:flex;align-items:center;gap:7px}
-  .sig .line1 b{font-size:12px;font-weight:600}
-  .sig .why{font-size:10.5px;color:var(--txt-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
   .route{font-size:9px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;padding:2px 7px;border-radius:5px;white-space:nowrap}
   .route.wall{background:var(--short-soft);color:var(--short)}
   .route.maker{background:var(--info-soft);color:var(--info)}
@@ -822,24 +800,6 @@
     <!-- RIGHT RAIL -->
     <div class="col">
       <section class="panel">
-        <div class="phead">
-          <h2>Live Signal Tape</h2>
-          <span class="live"><i></i>streaming</span>
-        </div>
-        <div class="tape" id="tape"></div>
-      </section>
-
-      <section class="panel">
-        <div class="phead">
-          <h2>Delta 5m Event Clock</h2>
-          <span class="meta" id="deltaEventMeta">loading…</span>
-        </div>
-        <div id="deltaEventClock" class="eventclock">
-          <div class="note">Delta 5m timer loading…</div>
-        </div>
-      </section>
-
-      <section class="panel">
         <div class="phead"><h2>Risk &amp; Health</h2><span class="tag">gateway</span></div>
         <div class="risk">
           <div class="meter">
@@ -1325,7 +1285,7 @@
         <div class="about-eyebrow">Autonomous Perps Desk</div>
         <div class="wordmark" style="font-size:27px;margin-top:6px">VN&nbsp;<b>EDGE</b></div>
         <h1 class="about-tag">A trading desk that hunts for edge — and refuses to risk your capital finding it.</h1>
-        <p class="about-lede">VN Edge watches BTC, ETH, SOL, XRP and DOGE across Binance, Bybit and Delta India, and runs a fleet of scanners that read the market on every bar. It holds only shadow and paper positions. It never places a live order until a strategy earns it — through governed, human-gated promotion on data it has never seen.</p>
+        <p class="about-lede">VN Edge measures BTC, ETH, SOL, XRP and DOGE across Binance, Bybit and Delta India. Its default roster is observation-only and contains no signal-producing strategy or live-order path.</p>
       </div>
     </section>
 
@@ -1338,7 +1298,7 @@
       <div class="pcard">
         <div class="pn">Principle 02</div>
         <h3>Deny by default</h3>
-        <p>Every scanner is suppressed until it proves a real, fee-aware edge on untouched data. Most never do — and that is the point. The fee wall is the honest judge; permutation tests catch the lucky.</p>
+        <p>Research evidence remains separate from runtime permission. A paper lane requires explicit configuration and a registered, capital-eligible strategy.</p>
       </div>
       <div class="pcard">
         <div class="pn">Principle 03</div>
@@ -1446,15 +1406,7 @@
       '<circle cx="'+lx.toFixed(1)+'" cy="'+ly.toFixed(1)+'" r="4" fill="'+c+'"/>';
   }
 
-  /* ---- live signal tape from the real-time scanner ---- */
-  function fmtTs(ts){ if(!ts)return nowUTC(); var d=new Date(ts); return isNaN(d)?nowUTC():(pad2(d.getUTCHours())+":"+pad2(d.getUTCMinutes())+":"+pad2(d.getUTCSeconds())); }
-  function routeTag(strat){
-    var v=verdictByStrat[stratShort(strat)];
-    if(v==="MAKER_EDGE"||v==="MIXED_ROUTE_EDGE")return["maker","maker-first"];
-    if(v==="TAKER_EDGE")return["pass","tradeable"];
-    if(v==="NEGATIVE_AFTER_COST")return["wall","fee-walled"];
-    return null;
-  }
+  /* ---- public measurement summary ---- */
   function factoryMinute(m){
     m=num(m);
     if(!fin(m)||m<0)return"--";
@@ -1493,67 +1445,6 @@
       return '<span><i>'+safe(g.sym)+'</i>'+px+' <b class="'+cls+'">'+safe(fund)+'</b></span>';
     }).join('');
   }
-  function renderScannerTape(rows){
-    var el=$("tape"); if(!el)return;
-    rows=(rows||[]).filter(function(r){return r.strategy_id;});
-    rows.sort(function(a,b){var af=a.state==="FIRING"?1:0,bf=b.state==="FIRING"?1:0;return (bf-af)||((b.live_fire_rate||0)-(a.live_fire_rate||0));});
-    var top=rows.slice(0,14);
-    if(!top.length){el.innerHTML='<div class="sig"><span class="t">--</span><div class="body"><div class="why">scanner report loading…</div></div></div>';return;}
-    el.innerHTML=top.map(function(r){
-      var v=ven(r.exchange),fired=r.state==="FIRING",ev=r.latest_eval||r.latest_shadow_intent||{},lc=r.trade_lifecycle||{};
-      var sigPlan=ev.signal||{},side=String(ev.side||sigPlan.side||lc.side||"").toLowerCase(),sc=side==="short"?"s":"l",sl=side==="short"?"SHORT":side==="long"?"LONG":"";
-      var rt=routeTag(r.strategy_id);
-      var tag=fired?'<span class="route pass">FIRING</span>':rt?'<span class="route '+rt[0]+'">'+rt[1]+'</span>':'<span class="route" style="background:var(--bg-3);color:var(--txt-faint)">'+String(r.state||"").toLowerCase()+'</span>';
-      var stage=String(lc.stage||r.state||"waiting").toLowerCase().replace(/_/g," ");
-      var levels=lc.take_profit_levels||[],ladder=levels.length?" · TP ladder journal-only":"";
-      var why=String(lc.final_why_no_trade||r.final_why_no_trade||r.why||"").slice(0,76);
-      return '<div class="sig"><span class="t">'+fmtTs(r.latest_eval_ts||r.latest_bar_ts)+'</span>'+
-        '<div class="body"><div class="line1">'+
-        '<span class="vchip" style="background:'+v.col+'">'+v.sh+'</span><b>'+stratShort(r.strategy_id)+'</b>'+
-        (sl?'<span class="side '+sc+'">'+sl+'</span>':'')+'<span style="font-size:11px;color:var(--txt-dim)">'+symShort(r.symbol)+'</span>'+
-        '</div><div class="why"><b>'+safe(stage)+'</b> · '+safe(why)+safe(ladder)+'</div></div>'+tag+'</div>';
-    }).join('');
-  }
-  function eventRouteCls(route,state){
-    route=String(route||""); state=String(state||"");
-    if(route==="TAKER_NOW"||route==="MAKER_THEN_TAKER"||route==="MAKER_ONLY")return"ok";
-    if(state==="DATA_STALE"||state==="DATA_MISSING")return"bad";
-    if(state==="EDGE_TOO_SMALL"||state==="WAITING_FEE_WALL")return"warn";
-    return"wait";
-  }
-  function pct(x){ return x==null?"--":(num(x)*100).toFixed(1)+"%"; }
-  function bps(x){ return x==null?"--":num(x).toFixed(1)+" bps"; }
-  function renderDeltaEventClock(d){
-    var el=$("deltaEventClock"),meta=$("deltaEventMeta"); if(!el)return;
-    var s=(d&&d.summary)||{},w=(d&&d.event_window)||{},rows=(d&&d.rows)||[];
-    var ready=num(s.ready_now), secs=num(s.seconds_to_next_decision), close=num(s.seconds_to_close);
-    if(meta)meta.textContent=ready+" ready · next "+(secs?secs+"s":"now");
-    if(!rows.length){
-      el.innerHTML='<div class="note">Delta 5m timer unavailable. Waiting for the publisher artifact.</div>';
-      return;
-    }
-    var best=rows[0]||{}, route=String(best.route||"WAIT"), state=String(best.execution_window_state||"WAITING");
-    var cls=eventRouteCls(route,state), timer=String(w.decision_window_state||"").toUpperCase()==="OPEN" ? close+"s" : secs+"s";
-    var hero='<div class="eventhero"><div>'+
-      '<div class="k">best Delta 5m prep</div>'+
-      '<div class="v">'+safe(symShort(best.symbol))+' '+safe(best.direction||"--")+'</div>'+
-      '<div class="s">'+safe(route.replace(/_/g," ").toLowerCase())+' · p '+pct(best.selected_probability)+' · exp '+bps(best.expected_move_bps)+'</div>'+
-      '</div><div style="text-align:right"><div class="timer">'+safe(timer)+'</div>'+
-      '<span class="actstate '+cls+'">'+safe(state.toLowerCase().replace(/_/g," "))+'</span></div></div>';
-    var body=rows.slice(0,4).map(function(r){
-      var rcls=eventRouteCls(r.route,r.execution_window_state);
-      var net=r.route==="TAKER_NOW"?r.expected_net_taker_bps:r.expected_net_maker_bps;
-      return '<div class="eventrow">'+
-        '<div><b>'+safe(symShort(r.symbol))+' · '+safe(r.direction||"--")+'</b>'+
-        '<small>'+safe(String(r.why||"").slice(0,92))+'</small></div>'+
-        '<div class="eventroute"><span class="actstate '+rcls+'">'+safe(String(r.route||"WAIT").toLowerCase().replace(/_/g," "))+'</span>'+
-        '<span class="p '+(num(net)>=0?"up":"dn")+'">'+bps(net)+'</span></div></div>';
-    }).join('');
-    var fine='maker '+bps((d.fee_profile||{}).maker_first_cost_bps)+' · taker '+bps((d.fee_profile||{}).taker_round_trip_cost_bps)+
-      ' · paper '+moneyAbs((best.paper_margin_usd||((d.config||{}).paper_margin_usd)))+' margin at '+num(best.paper_leverage||((d.config||{}).paper_leverage)).toFixed(0)+'x · live locked';
-    el.innerHTML=hero+body+'<div class="eventfine">'+safe(fine)+'</div>';
-  }
-
   /* ---- Candle Path (Phase C): decision-path health from canonical schema ---- */
   // Budgets mirror src/vnedge/runtime/latency_thresholds.py (one config, two readers).
   var TM_AGE_HARD={"1m":5000,"5m":12000,"15m":30000,"1h":90000,"4h":300000};
@@ -3161,8 +3052,8 @@
       }).catch(function(e){recordPoll(path,"error",null,e);});
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
-  function pollScanner(){ poll("/realtime-scanner", function(d){ renderScannerTape(d.rows||[]); }); }
-  function pollDeltaEventClock(){ poll("/delta-5m-event-clock", renderDeltaEventClock); }
+  function pollScanner(){}
+  function pollDeltaEventClock(){}
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
   function pollAgenticResearchOS(){ poll("/agentic-research-os", renderAgenticResearchOS); }
   function renderPreLive(d){
@@ -3186,7 +3077,7 @@
   }
   function pollPreLive(){ poll("/pre-live-checklist", renderPreLive); }
   function pollLaneReadiness(){ poll("/lane-readiness", renderLaneFunnel); }
-  function pollCausality(){ poll("/lane-firing-causality", applyCausality); }
+  function pollCausality(){}
   function pollPaperActivation(){ poll("/paper-lane-activation", renderPaperActivation); }
   function pollPaperRouteDoctor(){ poll("/paper-route-doctor", renderPaperRouteDoctor); }
   function pollPaperCadence(){ poll("/paper-lane-cadence", renderPaperCadence); }

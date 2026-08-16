@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
 SHADOW_JOURNAL_GLOB = "*shadow*.journal.jsonl"
 
-# The real-time shadow scalp runner (vnedge.runtime.realtime_shadow_scalp)
+# Legacy high-frequency shadow journals (read-only historical compatibility)
 # writes its per-family journals here, with scalp_shadow_intent /
 # scalp_shadow_outcome records. They carry the same intent identity + virtual
 # net the aggregator needs, so folding them in is a small path addition, not a

@@ -32,6 +32,7 @@ import pandas as pd
 
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
 from vnedge.data.time_machine import TimeMachine
+from vnedge.exchange.readonly_account import PositionRead
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
@@ -64,7 +65,7 @@ class AccountProvider(Protocol):
     """Supplies live account truth to the gateway."""
 
     async def account_state(self) -> AccountState: ...
-    async def open_positions(self) -> list[FlattenTarget]: ...
+    async def open_positions(self) -> PositionRead | list[FlattenTarget]: ...
 
 
 class PrivateStreamHealthProvider(Protocol):
@@ -251,10 +252,18 @@ class LiveTraderSession:
 
     async def _read_positions(self):
         try:
-            return await self.accounts.open_positions()
+            result = await self.accounts.open_positions()
         except Exception as exc:  # noqa: BLE001 — a read fault must not crash the loop
             self._note_submit_read_failure("positions", exc)
             return None
+        if isinstance(result, PositionRead):
+            if not result.ok:
+                self._note_submit_read_failure(
+                    "positions", RuntimeError(result.error or "unknown position read failure")
+                )
+                return None
+            return list(result.positions)
+        return result
 
     def _note_submit_read_failure(self, kind: str, exc: Exception) -> None:
         self._recon_read_failures += 1
@@ -306,8 +315,9 @@ class LiveTraderSession:
             age = tm.age_ms(self.symbol, tf, now)
             if hard is not None and age is not None and age > hard:
                 return "tm_age_hard"
-        except Exception:  # noqa: BLE001 — an arm-gate fault must not wedge the lane
-            return None
+        except Exception as exc:  # noqa: BLE001 — never arm on unknown TM state
+            logger.error("time machine arm check failed — blocking entry: %s", exc)
+            return "tm_error"
         return None
 
     def _roll_daily_factory(self, clock: datetime) -> None:
@@ -537,7 +547,7 @@ class LiveTraderSession:
         while max_bars is None or self._bars < max_bars:
             try:
                 raw = await asyncio.wait_for(self.feed.closed_candles.get(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await self._reconcile()
                 continue
             now = datetime.now(UTC)

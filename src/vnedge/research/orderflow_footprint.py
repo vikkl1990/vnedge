@@ -15,17 +15,30 @@ import math
 import os
 import time
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
-from vnedge.research.continuous_research import _scalper_research_days
 from vnedge.research.universe import ResearchTarget, load_research_targets
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
 from vnedge.scalping.replay_backtester import load_tick_events
 
 logger = logging.getLogger(__name__)
+
+
+def _recorded_days(root: Path, targets) -> tuple[str, ...]:
+    """Days with recorded public trade tape for any requested target."""
+    days: set[str] = set()
+    for target in targets:
+        lane = root / "ticks" / f"exchange={target.exchange}"
+        if not lane.exists():
+            continue
+        for path in lane.rglob("date=*"):
+            if path.is_dir():
+                days.add(path.name.removeprefix("date="))
+    return tuple(sorted(days))
 
 ORDERFLOW_FOOTPRINT_ID = "orderflow_footprint_v1"
 DEFAULT_LATEST = Path("research/live_research/orderflow_footprint_latest.json")
@@ -341,7 +354,7 @@ def run_orderflow_footprint(
 ) -> dict[str, Any]:
     root = Path(data_root)
     targets = targets or load_research_targets()
-    days = days if days is not None else _scalper_research_days(root, targets)
+    days = days if days is not None else _recorded_days(root, targets)
     reports = mine_orderflow_footprints(root, targets, days, config=config)
     candidates = sorted(
         (candidate for report in reports for candidate in report.candidates),
@@ -616,7 +629,7 @@ def _parse_days(
     targets: tuple[ResearchTarget, ...],
 ) -> tuple[str, ...]:
     if not raw or raw.lower() == "latest":
-        return _scalper_research_days(data_root, targets)
+        return _recorded_days(data_root, targets)
     return _split_csv(raw)
 
 

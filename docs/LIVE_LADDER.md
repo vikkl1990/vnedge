@@ -1,5 +1,10 @@
 # Live Promotion Ladder
 
+> **Current status:** historical safety contract only. No strategy is live-ready,
+> `live_small` is not enabled, and the deployment stack contains no live-order
+> service. This document describes evidence that would be required before a
+> future reviewed implementation; it is not an operating procedure.
+
 VNEDGE does not go live because a signal looks exciting. A lane advances one
 rung at a time, with evidence attached at each step.
 

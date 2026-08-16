@@ -21,7 +21,7 @@ testable end-to-end without ever touching a real venue.
 
 Run (only meaningful once the operator has opened the gates + installed keys):
   python -m vnedge.runtime.live_trader_main --exchange delta_india \
-      --symbol BTC/USD:USD --timeframe 1h --strategy funding_mean_reversion_v1
+      --symbol BTC/USD:USD --timeframe 1h --strategy trend_continuation_v1
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -58,6 +59,7 @@ _EXIT_OK = 0
 _EXIT_GATES = 10
 _EXIT_CHECKLIST = 11
 _EXIT_CREDENTIALS = 12
+_EXIT_STRATEGY = 13
 
 _WARMUP_BARS = 500
 
@@ -67,7 +69,7 @@ class LiveTraderRunConfig:
     exchange: str
     symbol: str
     timeframe: str = "1h"
-    strategy_id: str = "funding_mean_reversion_v1"
+    strategy_id: str = "measurement_only_v1"
     # exit engine config — set these to the SAME values the strategy was judged
     # under so live exits match paper/shadow/backtest (A1). Defaults mirror
     # RunnerConfig; a trailed strategy (e.g. crypto_trend) must pass its trail.
@@ -85,19 +87,59 @@ def _credentials_present() -> bool:
 async def _default_warmup(config: LiveTraderRunConfig, bars: int) -> pd.DataFrame:
     from vnedge.data.ccxt_client import CcxtPublicClient
 
+    timeframe_ms = _timeframe_milliseconds(config.timeframe)
+    until_ms = int(datetime.now(UTC).timestamp() * 1000)
+    since_ms = until_ms - timeframe_ms * max(int(bars), 1)
     async with CcxtPublicClient(config.exchange) as rest:
-        raw = await rest.fetch_candles(config.symbol, config.timeframe, limit=bars)
+        raw = await rest.fetch_candles(
+            config.symbol,
+            config.timeframe,
+            since_ms=since_ms,
+            until_ms=until_ms,
+        )
     return normalize_candles(raw)
+
+
+def _timeframe_milliseconds(timeframe: str) -> int:
+    units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+    raw = str(timeframe).strip().lower()
+    if len(raw) < 2 or raw[-1] not in units:
+        raise ValueError(f"unsupported timeframe for live warmup: {timeframe!r}")
+    try:
+        count = int(raw[:-1])
+    except ValueError as exc:
+        raise ValueError(f"invalid timeframe for live warmup: {timeframe!r}") from exc
+    if count <= 0:
+        raise ValueError("timeframe must be positive")
+    return count * units[raw[-1]]
 
 
 def _default_adapter(config: LiveTraderRunConfig):
     # The mainnet execution client. Constructed ONLY after the gate chain passes.
+    api_key = os.environ["VNEDGE_EXEC_API_KEY"]
+    api_secret = os.environ["VNEDGE_EXEC_API_SECRET"]
+    if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
+        from vnedge.exchange.delta_contracts import fetch_india_contract_spec
+        from vnedge.exchange.delta_execution import DeltaRestExecutionAdapter
+
+        spec = fetch_india_contract_spec(config.symbol)
+        if spec.product_id is None:
+            raise RuntimeError(f"Delta product {config.symbol} has no product id")
+        return DeltaRestExecutionAdapter(
+            api_key=api_key,
+            api_secret=api_secret,
+            dry_run=False,
+            live_confirmed=True,
+            product_ids={config.symbol: spec.product_id},
+            contract_specs={config.symbol: spec},
+        )
+
     from vnedge.exchange.live_execution import CcxtExecutionAdapter
 
     return CcxtExecutionAdapter(
         config.exchange,
-        api_key=os.environ["VNEDGE_EXEC_API_KEY"],
-        api_secret=os.environ["VNEDGE_EXEC_API_SECRET"],
+        api_key=api_key,
+        api_secret=api_secret,
         testnet=False,
         live_confirmed=True,
     )
@@ -106,7 +148,19 @@ def _default_adapter(config: LiveTraderRunConfig):
 def _default_account(config: LiveTraderRunConfig):
     from vnedge.exchange.readonly_account import CcxtReadOnlyAccountProvider
 
-    return CcxtReadOnlyAccountProvider(exchange_id=config.exchange)
+    try:
+        api_key = os.environ["VNEDGE_EXEC_API_KEY"]
+        api_secret = os.environ["VNEDGE_EXEC_API_SECRET"]
+    except KeyError as exc:
+        raise RuntimeError(
+            "live account provider requires VNEDGE_EXEC_API_KEY and "
+            "VNEDGE_EXEC_API_SECRET"
+        ) from exc
+    return CcxtReadOnlyAccountProvider(
+        exchange_id=config.exchange,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
 
 
 def _default_feed(config: LiveTraderRunConfig):
@@ -118,8 +172,10 @@ def _default_feed(config: LiveTraderRunConfig):
 
 
 def _default_strategy(strategy_id: str):
-    from vnedge.strategy.strategy_registry import get_strategy_class
+    from vnedge.strategy.strategy_registry import get_strategy_class, is_capital_eligible
 
+    if not is_capital_eligible(strategy_id):
+        raise RuntimeError(f"strategy {strategy_id!r} is not capital eligible")
     return get_strategy_class(strategy_id)()
 
 
@@ -130,6 +186,13 @@ def _default_fill_ledger(config: LiveTraderRunConfig) -> FillLedger:
 def _default_private_stream(config, applier, health):
     # The mainnet private order/fill stream. Constructed ONLY after the gate chain
     # passes; same live_confirmed gate as the execution adapter.
+    if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
+        raise RuntimeError(
+            "Delta live trading remains disabled: native private order/fill stream "
+            "is not implemented. Execution is native, but live cannot start "
+            "without private venue truth."
+        )
+
     from vnedge.execution.private_stream import CcxtPrivateStream
 
     return CcxtPrivateStream(
@@ -177,7 +240,18 @@ async def run_live_trader(
         )
         return _EXIT_CHECKLIST
 
-    # --- Gate 3: mainnet trade-only credentials -----------------------------------
+    # --- Gate 3: strategy registration and kill policy ---------------------------
+    from vnedge.strategy.strategy_registry import is_capital_eligible
+
+    if not is_capital_eligible(config.strategy_id):
+        logger.error(
+            "REFUSED: strategy %r is unknown, measurement-only, or killed. "
+            "No live client constructed.",
+            config.strategy_id,
+        )
+        return _EXIT_STRATEGY
+
+    # --- Gate 4: mainnet trade-only credentials -----------------------------------
     if not _credentials_present():
         logger.error(
             "REFUSED: VNEDGE_EXEC_API_KEY/SECRET not set. No live client constructed."
@@ -236,8 +310,8 @@ async def run_live_trader(
         stream_task.cancel()
         try:
             await stream_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — best-effort teardown
-            pass
+        except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+            logger.debug("private stream teardown completed with error: %s", exc)
         for name, closer in (("feed", feed.stop), ("adapter", adapter.close),
                              ("stream", getattr(stream, "close", None))):
             if closer is None:
@@ -254,7 +328,7 @@ def _parse_args(argv=None) -> LiveTraderRunConfig:
     ap.add_argument("--exchange", required=True)
     ap.add_argument("--symbol", required=True)
     ap.add_argument("--timeframe", default="1h")
-    ap.add_argument("--strategy", dest="strategy_id", default="funding_mean_reversion_v1")
+    ap.add_argument("--strategy", dest="strategy_id", required=True)
     a = ap.parse_args(argv)
     return LiveTraderRunConfig(
         exchange=a.exchange, symbol=a.symbol, timeframe=a.timeframe,

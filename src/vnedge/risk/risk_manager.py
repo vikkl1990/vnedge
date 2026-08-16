@@ -21,6 +21,7 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -53,6 +54,18 @@ class OrderIntent:
     time_in_force: str | None = None
 
     def __post_init__(self) -> None:
+        if not self.symbol.strip():
+            raise ValueError("symbol must be non-empty")
+        if self.side not in {"long", "short"}:
+            raise ValueError("side must be 'long' or 'short'")
+        if not math.isfinite(self.quantity) or self.quantity <= 0:
+            raise ValueError("quantity must be finite and positive")
+        if not math.isfinite(self.notional_usd) or self.notional_usd < 0:
+            raise ValueError("notional_usd must be finite and non-negative")
+        if not self.reduce_only and self.notional_usd <= 0:
+            raise ValueError("risk-increasing orders require positive notional_usd")
+        if not math.isfinite(self.leverage) or self.leverage <= 0:
+            raise ValueError("leverage must be finite and positive")
         if self.time_in_force is not None and self.time_in_force not in ALLOWED_TIME_IN_FORCE:
             raise ValueError(
                 f"invalid time_in_force {self.time_in_force!r} "

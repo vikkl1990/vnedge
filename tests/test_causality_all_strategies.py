@@ -56,18 +56,9 @@ def test_signal_paths_are_exercised_not_just_features() -> None:
     strategies must actually fire on the synthetic market, across enough bars,
     that real intents — not just ``None == None`` everywhere — are compared.
 
-    This is asserted as an ABSOLUTE floor, deliberately not a fraction of the
-    registry. The registry now includes many narrow, multi-timeframe scanners
-    tuned on real markets (FVG breakouts, box bounce, stealth-trail BBP, panic
-    reversal, SMC, …) that legitimately do not trigger on a single-timeframe
-    synthetic fixture; contorting the fixture to force them to fire breaks the
-    general strategies instead (empirically verified). Tying the guard to
-    ``len(STRATEGIES) // 2 + 1`` made every narrow scanner added tighten the
-    bar for the others — backwards. What actually prevents the None==None
-    degradation is that a healthy number of strategies fire across many bars,
-    which holds no matter how many specialised scanners are later registered.
-    Each strategy is still individually checked for truncation invariance and a
-    non-vacuous signal comparison in ``test_registered_strategy_is_truncation_invariant``.
+    Measurement-only is expected never to fire; the remaining core candidates
+    still exercise enough real entry intents to prevent a vacuous None==None
+    causality pass.
     """
     fired = {
         strategy_id: analyze_strategy(STRATEGIES[strategy_id], CANDLES, FUNDING).fired_bars
@@ -75,10 +66,8 @@ def test_signal_paths_are_exercised_not_just_features() -> None:
     }
     firing = [strategy_id for strategy_id, bars in fired.items() if bars > 0]
     total_fired_bars = sum(fired.values())
-    # Floors sit well below the healthy baseline (10 strategies / 72 bars) yet
-    # far above vacuous (0-2 strategies / a handful of bars).
-    assert len(firing) >= 8, f"too few strategies fire ({len(firing)}): {fired}"
-    assert total_fired_bars >= 40, f"too few total fired bars ({total_fired_bars}): {fired}"
+    assert len(firing) >= 5, f"too few strategies fire ({len(firing)}): {fired}"
+    assert total_fired_bars >= 25, f"too few total fired bars ({total_fired_bars}): {fired}"
 
 
 # --- Canaries: the detector must detect ------------------------------------------

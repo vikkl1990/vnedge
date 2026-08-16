@@ -338,6 +338,7 @@ def explore_env(tmp_path, monkeypatch):
     return store, tmp_path / "burns.jsonl"
 
 
+@pytest.mark.skip(reason="automatic alpha exploration removed")
 def test_auto_explore_same_window_skipped_new_window_allowed(explore_env):
     store, burns = explore_env
 
@@ -374,6 +375,7 @@ def test_auto_explore_same_window_skipped_new_window_allowed(explore_env):
     assert len(state["tried"]) == 2
 
 
+@pytest.mark.skip(reason="automatic alpha exploration removed")
 def test_auto_explore_legacy_keys_still_skipped(explore_env):
     store, burns = explore_env
     cr.OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -388,6 +390,7 @@ def test_auto_explore_legacy_keys_still_skipped(explore_env):
     assert state["tried"] == [PROPOSAL["proposal_id"]]  # format preserved
 
 
+@pytest.mark.skip(reason="automatic alpha exploration removed")
 def test_auto_explore_burn_failure_does_not_kill_cycle(explore_env, monkeypatch):
     store, _ = explore_env
 

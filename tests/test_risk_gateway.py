@@ -71,6 +71,24 @@ def test_clean_entry_is_approved(gateway):
     assert decision.approved, decision.explanation
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("symbol", ""),
+        ("side", "buy"),
+        ("quantity", 0.0),
+        ("quantity", float("nan")),
+        ("notional_usd", 0.0),
+        ("notional_usd", float("inf")),
+        ("leverage", 0.0),
+        ("leverage", float("nan")),
+    ],
+)
+def test_invalid_order_intents_are_rejected_at_construction(field, value):
+    with pytest.raises(ValueError):
+        entry_intent(**{field: value})
+
+
 def test_kill_switch_blocks_entries(gateway, kill_switch):
     kill_switch.activate("test trip")
     decision = gateway.evaluate(entry_intent(), healthy_account(), healthy_market(), now=NOW)

@@ -34,29 +34,29 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
+from vnedge.data.time_machine import TimeMachine
 from vnedge.execution.idempotency import make_intent_key
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import OrderState
-from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
-from vnedge.runtime import latency_thresholds as LT
-from vnedge.data.time_machine import TimeMachine
 from vnedge.ml.regime_v0 import RegimeV0
+from vnedge.paper.paper_reconciliation import PaperReconciler
+from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.plan.adapters import signal_intent_to_plan
 from vnedge.plan.cost_model import CostModel
 from vnedge.plan.trade_plan import plan_gate
-from vnedge.paper.paper_reconciliation import PaperReconciler
-from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
-from vnedge.runtime.portfolio_tracker import PortfolioTracker
+from vnedge.runtime import latency_thresholds as LT
 from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
     should_force_flatten,
 )
+from vnedge.runtime.latency_tracker import LatencyTracker, timeframe_to_seconds
+from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_outcomes import (
@@ -480,11 +480,8 @@ class LivePaperSession:
         health != ok (stale / gapped / future), the last-update age breaches the
         shared HARD budget, or the Time Machine itself faulted.
 
-        Returns the coarse block reason, or None to allow. FAIL-SAFE by design:
-        any error here returns None, because the independent feed-continuity
-        guard already forces reduce-only on gap/stall — a bug in this extra layer
-        must never be able to wedge a healthy lane. Exits bypass this entirely
-        (it is only consulted on the new-entry path).
+        Returns the coarse block reason, or None to allow.  Any unreadable state
+        blocks arming a new position; exits bypass this gate entirely.
         """
         tm = self.time_machine
         if tm is None:
@@ -500,8 +497,9 @@ class LivePaperSession:
             age = tm.age_ms(self.config.symbol, tf, now)
             if hard is not None and age is not None and age > hard:
                 return "tm_age_hard"
-        except Exception:  # noqa: BLE001 — an arm-gate fault must not wedge the lane
-            return None
+        except Exception as exc:  # noqa: BLE001 — unknown state must fail closed
+            logger.error("time machine arm check failed — blocking entry: %s", exc)
+            return "tm_error"
         return None
 
     def _record_overlays(self, df: pd.DataFrame, idx: int, sig: SignalIntent | None) -> None:
@@ -1858,7 +1856,7 @@ class LivePaperSession:
                 raw = await asyncio.wait_for(
                     self.feed.closed_candles.get(), timeout=self._IDLE_TICK_SECONDS
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # capital protection between bars: stops (and ONLY stops) are
                 # evaluated against the current quote on every idle tick
                 idle_now = datetime.now(UTC)

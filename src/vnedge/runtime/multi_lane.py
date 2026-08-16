@@ -31,6 +31,7 @@ import pandas as pd
 from ccxt.base.errors import NetworkError, NotSupported
 
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
+from vnedge.dashboard.health_bands import annotate
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
@@ -41,39 +42,24 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.signal_arbiter import ArbiterConfig, SignalArbiter
 from vnedge.paper.account_store import PaperAccountStore
-from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.daily_factory import DailySignalFactoryConfig
+from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
-from vnedge.strategy.alpha_stack import AlphaStackConfluence
-from vnedge.strategy.alpha_distillation_pack import AlphaDistillationPack
-from vnedge.strategy.base_strategy import BaseStrategy
-from vnedge.dashboard.health_bands import annotate
-from vnedge.strategy.strategy_registry import is_capital_eligible
-from vnedge.strategy.composite import CompositeSignalStrategy
-from vnedge.strategy.context_scalper_v2 import ContextScalperV2
-from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
-from vnedge.strategy.fvg_liquidity_breakout import FvgLiquidityBreakoutScanner
-from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
-from vnedge.strategy.luxara_break_bounce_v27 import LuxaraBreakBounceV27Scanner
-from vnedge.strategy.luxara_live_plan_qtm import LuxaraLivePlanQTMScanner
-from vnedge.strategy.luxy_ut_bot_forecast import LuxyUTBotForecastScanner
-from vnedge.strategy.panic_reversal import PanicReversal
-from vnedge.strategy.quant_signal_pack import QuantSignalPack
-from vnedge.strategy.quantified_fee_wall_sniper import QuantifiedFeeWallSniper
-from vnedge.strategy.sats_5m_scalper import Sats5mScalper
-from vnedge.strategy.scalper_1m import Scalper1m
-from vnedge.strategy.smc_playbook_scalper import SMCPlaybookScalper
-from vnedge.strategy.stealth_trail_bbp import StealthTrailBBPScanner
-from vnedge.strategy.trend_continuation import TrendContinuation
-from vnedge.strategy.trend_retest import TrendRetest
-from vnedge.strategy.vnedge_algo_ml_pro import VNEDGEAlgoMLProScanner
-from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
-from vnedge.runtime.daily_factory import DailySignalFactoryConfig
+from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.composite import CompositeSignalStrategy
+from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
+from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.measurement_only import MeasurementOnly
+from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.strategy_registry import is_capital_eligible
+from vnedge.strategy.trend_continuation import TrendContinuation
+from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +75,17 @@ class LaneSpec:
     is_primary: bool = False   # the governed lane shown as the flat snapshot
     daily_loss_usd: float = 10.0
     mode: RunnerMode = RunnerMode.SHADOW
-    strategy_id: str = "funding_mean_reversion_v1"
+    strategy_id: str = "measurement_only_v1"
     #: Dynamic ATR-chandelier trail on the active-exit remainder (0.0 = off, the
     #: legacy arm-and-lock). Set per-lane when a strategy was JUDGED with a trail,
     #: so the running lane uses the exit its promotion evidence was measured on.
     trail_atr_mult: float = 0.0
 
-    def capital_downgraded(self) -> "LaneSpec":
-        """Fail-closed roster safety: a research-only (structurally over-fit)
-        family may run SHADOW for observation but must never back a PAPER capital
-        lane. Applied at roster build so a single edit can't deploy the scanner
-        zoo — returns self, or a SHADOW copy if the strategy is research-only.
+    def capital_downgraded(self) -> LaneSpec:
+        """Fail-closed roster safety for non-capital and killed strategies.
+
+        Applied at roster build so a config or stale artifact cannot grant
+        PAPER permission to a measurement-only or killed strategy.
         ``_paper_observation`` mirrors are PAPER-mode but non-capital (they submit
         no orders), so they are left untouched. See docs/SCANNER_REVIEW_20260813."""
         if (self.mode is RunnerMode.PAPER
@@ -121,7 +107,7 @@ class _LaneRuntime:
 class _LaneSink:
     """A provider-shaped object one lane publishes to; tags + forwards."""
 
-    def __init__(self, parent: "MultiLaneProvider", lane_id: str, exchange: str) -> None:
+    def __init__(self, parent: MultiLaneProvider, lane_id: str, exchange: str) -> None:
         self._parent, self._lane_id, self._exchange = parent, lane_id, exchange
 
     def publish(self, snapshot: dict) -> None:
@@ -560,6 +546,8 @@ def _build_single_strategy(
             )
         # needs the funding stream augmented live off the feed
         return LiveFundingMR(seed_funding, feed, **params)
+    if strategy_id == "measurement_only_v1":
+        return MeasurementOnly(seed_funding, **params)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -571,38 +559,6 @@ def _build_single_strategy(
         return PanicReversal(seed_funding, **params)
     if strategy_id == "funding_squeeze_continuation_v1":
         return FundingSqueezeContinuation(seed_funding, **params)
-    if strategy_id == "scalper_1m_v1":
-        return Scalper1m(seed_funding, **params)
-    if strategy_id == "alpha_stack_confluence_v1":
-        return AlphaStackConfluence(seed_funding, **params)
-    if strategy_id == "quant_signal_pack_v1":
-        return QuantSignalPack(seed_funding, **params)
-    if strategy_id == "sats_5m_scalper_v1":
-        return Sats5mScalper(seed_funding, **params)
-    if strategy_id == "stealth_trail_bbp_v1":
-        return StealthTrailBBPScanner(seed_funding, **params)
-    if strategy_id == "vnedge_algo_ml_pro_v1":
-        return VNEDGEAlgoMLProScanner(seed_funding, **params)
-    if strategy_id == "context_scalper_v2":
-        return ContextScalperV2(seed_funding, **params)
-    if strategy_id == "quantified_fee_wall_sniper_v1":
-        return QuantifiedFeeWallSniper(seed_funding, **params)
-    if strategy_id == "fvg_liquidity_breakout_v1":
-        return FvgLiquidityBreakoutScanner(seed_funding, **params)
-    if strategy_id == "luxy_ut_bot_forecast_v1":
-        return LuxyUTBotForecastScanner(seed_funding, **params)
-    if strategy_id == "luxara_live_plan_qtm_v1":
-        return LuxaraLivePlanQTMScanner(seed_funding, **params)
-    if strategy_id == "luxara_break_bounce_v27_v1":
-        return LuxaraBreakBounceV27Scanner(seed_funding, **params)
-    if strategy_id == "smc_playbook_scalper_v1":
-        return SMCPlaybookScalper(seed_funding, **params)
-    if strategy_id == "trend_retest_v1":
-        return TrendRetest(seed_funding, **params)
-    if strategy_id == "alpha_distillation_pack_v1":
-        return AlphaDistillationPack(seed_funding, **params)
-    if strategy_id == "vnedge_algo_ml_pro_v1":
-        return VNEDGEAlgoMLProScanner(seed_funding, **params)
     raise ValueError(f"unsupported lane strategy_id: {strategy_id!r}")
 
 
@@ -1044,7 +1000,7 @@ class MultiLaneShadowRunner:
         for runtime in runtimes:
             try:
                 await runtime.feed.start()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "lane %s (%s %s) feed failed to start: %s",
                     runtime.spec.lane_id, runtime.spec.exchange,
@@ -1076,7 +1032,7 @@ class MultiLaneShadowRunner:
             await runtime.session.run(deadline_seconds=deadline_seconds)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception(
                 "lane %s (%s %s) stopped with error: %s",
                 runtime.spec.lane_id, runtime.spec.exchange,

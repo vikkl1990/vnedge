@@ -19,7 +19,6 @@ from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
-from vnedge.strategy.quant_signal_pack import QuantSignalPack
 
 BASE = 1_750_000_000_000
 MIN = 60_000
@@ -84,12 +83,10 @@ class LadderLong(AlwaysLong):
 
 
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
-    strategy = QuantSignalPack(
-        None,
-        min_score=6.0,
-        min_score_delta=1.25,
-        min_volume_z=0.55,
-    )
+    strategy = AlwaysLong()
+    strategy.min_score = 6.0
+    strategy.min_score_delta = 1.25
+    strategy.min_volume_z = 0.55
 
     thresholds = _extract_strategy_thresholds(
         strategy, ("min_score", "min_score_delta", "min_volume_z")

@@ -13,6 +13,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.private_stream import PrivateStreamHealth
+from vnedge.exchange.readonly_account import PositionRead
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.position_sizer import SymbolLimits
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
@@ -490,6 +491,19 @@ async def test_reconcile_clean_read_clears_failure_streak(tmp_path):
     await session._reconcile_positions()                 # clean read, flat + agree
     assert session._recon_read_failures == 0
     assert session._reconciliation_halt is False
+
+
+async def test_position_read_error_is_not_flat_and_counts_toward_halt(tmp_path):
+    class PositionErrAccounts(FakeAccounts):
+        async def open_positions(self):
+            return PositionRead(error="venue timeout")
+
+    session, _ = wire(
+        live_settings(), FakeFeed([]), FakeLiveAdapter(),
+        PositionErrAccounts(), tmp_path, OneShotLong(),
+    )
+    assert await session._read_positions() is None
+    assert session._recon_read_failures == 1
 
 
 # --- A1: live exits go through the shared ActiveExitState engine ---

@@ -130,11 +130,11 @@ def test_dashboard_has_agentic_research_os_supervisor_panel():
     assert "research-only supervisor; no trade authority" in html
 
 
-def test_dashboard_scanner_tape_renders_trade_lifecycle_truth():
+def test_dashboard_has_no_scanner_tape():
     html = _index()
-    assert "trade_lifecycle" in html
-    assert "final_why_no_trade" in html
-    assert "TP ladder journal-only" in html
+    assert "Live Signal Tape" not in html
+    assert 'id="tape"' not in html
+    assert "function renderScannerTape" not in html
 
 
 def test_dashboard_renders_daily_signal_factory_lane_truth():

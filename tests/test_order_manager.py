@@ -262,3 +262,32 @@ def test_journal_roundtrip(tmp_path):
     assert len(records) == 2
     assert records[1]["payload"]["a"] == 2
     assert records[0]["kind"] == "test_event"
+
+
+async def test_corrupt_wal_tail_is_quarantined_and_entries_fail_closed(tmp_path, gateway):
+    path = tmp_path / "j.jsonl"
+    initial = DecisionJournal(path)
+    assert initial.append("test_event", {"valid": True})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"ts":"truncated"')
+
+    recovered = DecisionJournal(path)
+    assert recovered.recovery_degraded
+    assert recovered.quarantine_path is not None
+    assert recovered.quarantine_path.exists()
+    assert recovered.read_all()[0]["payload"] == {"valid": True}
+
+    om = OrderManager(gateway, recovered, PlainAckAdapter())
+    assert om.has_unresolved_orders
+    entry = await om.submit(intent(), account(), market(), key(0))
+    assert entry.state is S.RISK_REJECTED
+    assert "recovery degraded" in entry.history[-1].note
+
+    exit_order = await om.submit(
+        intent(reduce_only=True, side="short"),
+        account(open_positions=1), market(), key(1, side="short"),
+    )
+    assert exit_order.state is S.ACKNOWLEDGED
+
+    assert recovered.acknowledge_recovery("venue reconciliation found no open order")
+    assert not recovered.recovery_degraded

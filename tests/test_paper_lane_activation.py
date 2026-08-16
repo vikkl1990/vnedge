@@ -153,12 +153,14 @@ max_leverage: 25
     )
 
     row = payload["rows"][0]
-    assert row["activation_state"] == ACTIVATION_PAPER_ONLINE_WAITING
+    assert row["activation_state"] == ACTIVATION_ROUTE_BLOCKED
+    assert row["route_checks"]["strategy_registered"] is False
     assert row["route_checks"]["journal_seen"] is True
     assert row["evidence"]["paper_journal"]["paper_lane_heartbeats"] == 1
     assert row["evidence"]["paper_journal"]["evals"] == 0
-    assert row["blockers"] == ["last_eval_no_signal"]
-    assert payload["summary"]["paper_online"] == 1
+    assert row["blockers"] == ["strategy is not registered: stealth_trail_bbp_v1"]
+    assert payload["summary"]["paper_online"] == 0
+    assert payload["summary"]["route_blocked"] == 1
     assert payload["summary"]["paper_journal_heartbeats"] == 1
 
 
@@ -216,7 +218,7 @@ max_leverage: 25
 
     row = payload["rows"][0]
     assert row["activation_state"] == ACTIVATION_ROUTE_BLOCKED
-    assert row["route_checks"]["strategy_registered"] is True
+    assert row["route_checks"]["strategy_registered"] is False
     assert row["route_checks"]["desired_paper_route"] is False
     assert row["requested_experiment"]["can_run_requested"] is True
     assert row["sizing_profiles"]["paper"]["requested_notional_usd"] == 2500.0

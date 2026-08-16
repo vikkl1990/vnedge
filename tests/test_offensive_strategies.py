@@ -183,18 +183,11 @@ def test_squeeze_requires_funding_series():
         FundingSqueezeContinuation(pd.DataFrame())
 
 
-def test_registry_has_research_lanes():
+def test_registry_has_only_measurement_and_remaining_core_lanes():
     assert set(STRATEGIES) == {
+        "measurement_only_v1",
         "crypto_trend_atr_margin_v1",
         "trend_continuation_v1", "funding_mean_reversion_v1",
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
-        "funding_squeeze_continuation_v1", "datrend_nomada_scalper_v1",
-        "fvg_liquidity_breakout_v1", "alpha_stack_confluence_v1",
-        "quant_signal_pack_v1", "alpha_distillation_pack_v1",
-        "trend_retest_v1", "sats_5m_scalper_v1", "smc_playbook_scalper_v1",
-        "stealth_trail_bbp_v1", "human_trade_fingerprint_v1",
-        "luxy_ut_bot_forecast_v1", "momentum_cascade_lyro_v1",
-        "luxara_live_plan_qtm_v1", "luxara_break_bounce_v27_v1",
-        "vnedge_algo_ml_pro_v1", "context_scalper_v2",
-        "quantified_fee_wall_sniper_v1",
+        "funding_squeeze_continuation_v1",
     }

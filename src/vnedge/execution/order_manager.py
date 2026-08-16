@@ -20,14 +20,14 @@ Hard rules enforced here:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Iterable, Protocol
+from typing import Protocol
 
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
 from vnedge.execution.journal import DecisionJournal
-from vnedge.execution.order_state import ManagedOrder, OrderState, StateEvent
-from vnedge.execution.order_state import IllegalTransition
+from vnedge.execution.order_state import IllegalTransition, ManagedOrder, OrderState, StateEvent
 from vnedge.risk.risk_manager import (
     AccountState,
     MarketState,
@@ -139,7 +139,8 @@ class OrderManager:
                 continue  # can't reconstruct the intent — nothing safe to restore
             try:
                 intent = OrderIntent(**p["intent"])
-            except Exception:  # noqa: BLE001 — a malformed record must not break construction
+            except Exception as exc:  # noqa: BLE001 — quarantine bad replay records
+                logger.warning("skipping malformed replay intent for %s: %s", coid, exc)
                 continue
             order = ManagedOrder(
                 intent_key=p.get("intent_key", ""), client_order_id=coid,
@@ -156,7 +157,11 @@ class OrderManager:
 
     @property
     def has_unresolved_orders(self) -> bool:
-        return any(o.is_unresolved for o in self.orders.values())
+        # A degraded WAL replay means venue state may be missing even when no
+        # ManagedOrder could be reconstructed. Treat it as unresolved risk.
+        return self._journal.recovery_degraded or any(
+            o.is_unresolved for o in self.orders.values()
+        )
 
     async def submit(
         self,
@@ -199,6 +204,12 @@ class OrderManager:
         if not intent.reduce_only:
             if not self._journal.available:
                 return self._refuse(order, "decision journal unavailable — exits only")
+            if self._journal.recovery_degraded:
+                return self._refuse(
+                    order,
+                    "decision journal recovery degraded — reconcile venue and "
+                    "acknowledge recovery before creating new risk",
+                )
             if self.has_unresolved_orders:
                 return self._refuse(
                     order,

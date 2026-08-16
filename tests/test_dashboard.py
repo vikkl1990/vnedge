@@ -162,44 +162,13 @@ def test_side_endpoints_reject_orphan_lane(tmp_path):
     assert c.get("/history?token=t3st-token").status_code == 200
 
 
-def test_delta_5m_event_clock_endpoint_auth_gated_and_research_only(tmp_path):
+def test_removed_delta_event_clock_route_is_absent():
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})
-    report = tmp_path / "delta_5m.json"
-    report.write_text(
-        json.dumps(
-            {
-                "report_id": "delta_5m_event_clock_v1",
-                "summary": {"ready_now": 1, "seconds_to_next_decision": 0},
-                "rows": [
-                    {
-                        "symbol": "ETH/USD:USD",
-                        "route": "MAKER_ONLY",
-                        "direction": "UP",
-                        "paper_execution_ready": True,
-                    }
-                ],
-                "operator_answer": "Delta 5m paper route ready",
-                "can_trade": False,
-                "can_promote": False,
-            }
-        )
-    )
-    app = create_app(
-        provider,
-        token="t3st-token",
-        delta_5m_event_clock_path=report,
-    )
+    app = create_app(provider, token="t3st-token")
     c = TestClient(app)
 
-    assert c.get("/delta-5m-event-clock").status_code == 401
-    r = c.get("/delta-5m-event-clock?token=t3st-token")
-    assert r.status_code == 200
-    payload = r.json()
-    assert payload["summary"]["ready_now"] == 1
-    assert payload["rows"][0]["paper_execution_ready"] is True
-    assert payload["can_trade"] is False
-    assert payload["can_promote"] is False
+    assert c.get("/delta-5m-event-clock").status_code == 404
 
 
 def test_meta_and_fleet_endpoints_auth_gated(client):
@@ -254,13 +223,11 @@ def test_dashboard_shell_is_the_perps_desk(client):
         assert f'data-view="{view}"' in html
     # desk cockpit containers, wired to the snapshot in JS
     assert 'id="lanes"' in html                        # active-lanes blotter
-    assert 'id="tape"' in html                         # live signal tape
     assert 'id="watch"' in html                        # coverage strip
     assert 'id="eqChart"' in html                      # equity curve
     assert "Active Lanes" in html
-    assert "Live Signal Tape" in html
-    assert "Delta 5m Event Clock" in html
-    assert "/delta-5m-event-clock" in html
+    assert "Live Signal Tape" not in html
+    assert "Delta 5m Event Clock" not in html
     assert "Exchange Connections" in html
     assert "Safety Gates" in html
     assert "Paper Route Doctor" in html
@@ -327,6 +294,7 @@ def test_cost_model_route_auth_gated_and_real_numbers(client):
     )
 
 
+@pytest.mark.skip(reason="scanner/Pine dashboard surface retired")
 def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})
@@ -710,6 +678,7 @@ def test_pine_research_page_and_kb_are_auth_gated(tmp_path):
     assert executor_payload["can_promote"] is False
 
 
+@pytest.mark.skip(reason="scanner/Pine dashboard surface retired")
 def test_pine_research_missing_kb_falls_back_to_seed(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow", "equity": 500.0})
@@ -1319,7 +1288,6 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
         vibe_intelligence_path=vibe,
         lane_readiness_path=readiness,
         promotion_review_runbook_path=promotion_runbook,
-        realtime_scanner_path=scanner,
         lane_firing_causality_path=causality,
         paper_lane_activation_path=paper_activation,
         paper_route_doctor_path=paper_route_doctor,
@@ -1341,8 +1309,8 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert client.get("/vibe-intelligence").status_code == 401
     assert client.get("/lane-readiness").status_code == 401
     assert client.get("/promotion-review-runbook").status_code == 401
-    assert client.get("/realtime-scanner").status_code == 401
-    assert client.get("/lane-firing-causality").status_code == 401
+    assert client.get("/realtime-scanner").status_code == 404
+    assert client.get("/lane-firing-causality").status_code == 404
     assert client.get("/paper-lane-activation").status_code == 401
     assert client.get("/paper-route-doctor").status_code == 401
     assert client.get("/paper-lane-cadence").status_code == 401
@@ -1371,14 +1339,6 @@ def test_alpha_council_and_workbench_endpoints_are_auth_gated(tmp_path):
     assert promotion_payload["rows"][0]["primary_charge"] == "fee_drag"
     assert promotion_payload["can_trade"] is False
     assert promotion_payload["can_promote"] is False
-    scanner_payload = client.get("/realtime-scanner?token=t3st-token").json()
-    assert scanner_payload["summary"]["near_trigger"] == 1
-    assert scanner_payload["mode"] == "live_observation_not_replay"
-    assert scanner_payload["can_trade"] is False
-    causality_payload = client.get("/lane-firing-causality?token=t3st-token").json()
-    assert causality_payload["summary"]["paper_review_ready"] == 1
-    assert causality_payload["promotion_board"]["ready_for_review"][0]["strategy_id"] == "alpha"
-    assert causality_payload["can_promote"] is False
     paper_activation_payload = client.get("/paper-lane-activation?token=t3st-token").json()
     assert paper_activation_payload["summary"]["paper_online"] == 2
     assert paper_activation_payload["mode"] == "read_only_activation_truth"
@@ -1555,7 +1515,6 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         alpha_workbench_path=tmp_path / "missing_workbench.json",
         vibe_intelligence_path=tmp_path / "missing_vibe.json",
         lane_readiness_path=tmp_path / "missing_readiness.json",
-        realtime_scanner_path=tmp_path / "missing_scanner.json",
         lane_firing_causality_path=tmp_path / "missing_causality.json",
         paper_lane_activation_path=tmp_path / "missing_paper_activation.json",
     ))
@@ -1564,8 +1523,6 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     workbench = client.get("/alpha-workbench?token=t3st-token").json()
     vibe = client.get("/vibe-intelligence?token=t3st-token").json()
     readiness = client.get("/lane-readiness?token=t3st-token").json()
-    scanner = client.get("/realtime-scanner?token=t3st-token").json()
-    causality = client.get("/lane-firing-causality?token=t3st-token").json()
     paper_activation = client.get("/paper-lane-activation?token=t3st-token").json()
     assert council == {"summary": {}, "debates": [], "can_trade": False, "can_promote": False}
     assert workbench == {"summary": {}, "tasks": [], "can_trade": False, "can_promote": False}
@@ -1577,22 +1534,8 @@ def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
         "can_trade": False,
         "can_promote": False,
     }
-    assert scanner == {
-        "summary": {},
-        "rows": [],
-        "operator_answer": "real-time scanner report unavailable",
-        "mode": "live_observation_not_replay",
-        "can_trade": False,
-        "can_promote": False,
-    }
-    assert causality == {
-        "summary": {},
-        "promotion_board": {},
-        "rows": [],
-        "operator_answer": "lane firing causality report unavailable",
-        "can_trade": False,
-        "can_promote": False,
-    }
+    assert client.get("/realtime-scanner?token=t3st-token").status_code == 404
+    assert client.get("/lane-firing-causality?token=t3st-token").status_code == 404
     assert paper_activation == {
         "summary": {},
         "boards": {},
@@ -2126,8 +2069,6 @@ def test_identity_header_on_all_data_routes():
         "/alpha-council",
         "/alpha-workbench",
         "/lane-readiness",
-        "/realtime-scanner",
-        "/lane-firing-causality",
         "/paper-lane-activation",
         "/maker-quote-lifecycle",
         "/lane-survival",

@@ -21,20 +21,23 @@ bot, not a leverage casino, not a profit machine.
 | Leverage            | Default 5x, >10x requires explicit acknowledgment, absolute cap 30x   |
 | Position sizing     | Risk-based (% of equity to stop), never leverage-based                |
 | Deployment          | Linux VPS + Docker (dev on macOS)                                     |
-| Live trading        | **Disabled by default.** Two independent flags must be set.           |
+| Default runtime     | Public-data measurement only; no signal-producing strategy            |
+| Paper capital       | Empty roster; two explicit gates plus an eligible registry ID          |
+| Live trading        | **Not deployed.** Manual guarded entrypoint only                       |
 
-## Build order
+## Current product boundary
 
-1. **Foundation (this milestone)** — config layer, risk core, kill switch. Done first
-   because nothing else is allowed to exist without it.
-2. **Data layer** — candle/funding/OI ingestion via CCXT, Parquet historical store.
-3. **Backtester** — fee/slippage/funding-aware, walk-forward validation.
-4. **Strategies** — hybrid regime-filtered strategies; Freqtrade used for rapid research.
-5. **Paper trading** — live data, simulated broker, drift monitoring vs backtest.
-6. **Live execution** — only after the 10-point pre-live checklist passes; uses
-   production market data and a bounded mainnet drill, then smallest viable
-   capital on one venue. Testnet data is not accepted as scalper evidence.
-7. **Monitoring** — Streamlit dashboard, Telegram alerts, Prometheus optional.
+- `docker compose up` runs no-signal measurement lanes and the authenticated
+  dashboard. It has no live adapter.
+- `docker compose --profile research up research-loop` adds quality-gated
+  ingest and walk-forward evidence. Research cannot mutate the runtime roster.
+- Paper capital requires both `MULTI_LANE_CAPITAL_ENABLED=1` and an explicit
+  `MULTI_LANE_CAPITAL_STRATEGY`. Unknown, measurement-only, and killed IDs are
+  refused.
+- The manual live entrypoint remains fail-closed. Delta uses its native REST
+  adapter but cannot start live until a native private order/fill stream exists.
+
+See [the architecture flow](docs/ARCHITECTURE_FLOW.md).
 
 ## Exchange sequencing
 
@@ -59,13 +62,14 @@ strategy is evaluated on after-cost expected value.
 src/vnedge/
   config/    settings, exchange config, risk config (pydantic, env-driven)
   risk/      kill switch, pre-trade gateway, position sizer
-  exchange/  base interface + venue adapters        (next milestones)
+  exchange/  read-only account + public/private venue adapters
   data/      candle/funding/OI stores
   strategy/  regime filter + hybrid strategies
   backtest/  fee/slippage/funding-aware engine
   paper/     simulated broker
-  live/      order manager, reconciliation (disabled by default)
-  monitoring/ logging, alerts, dashboard
+  execution/ order manager, WAL, reconciliation, fill ledger
+  runtime/   measurement, paper/shadow, guarded live entrypoints
+  dashboard/ authenticated read-only operator UI
 tests/
 ```
 

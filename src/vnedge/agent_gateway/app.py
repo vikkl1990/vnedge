@@ -28,7 +28,6 @@ class AgentGatewayArtifacts:
     alpha_workbench_path: Path | None = None
     vibe_intelligence_path: Path | None = None
     lane_readiness_path: Path | None = None
-    realtime_scanner_path: Path | None = None
 
 
 class BacktestRequest(BaseModel):
@@ -283,7 +282,6 @@ def mount_agent_gateway(
                 "alpha-workbench",
                 "vibe-intelligence",
                 "lane-readiness",
-                "realtime-scanner",
                 "jobs",
                 "backtests",
                 "v2/tasks",
@@ -398,21 +396,6 @@ def mount_agent_gateway(
                 "summary": {},
                 "rows": [],
                 "operator_answer": "lane readiness report unavailable",
-                "can_trade": False,
-                "can_promote": False,
-            },
-        )
-
-    @router.get("/realtime-scanner")
-    async def realtime_scanner(request: Request) -> JSONResponse:
-        return _artifact_route(
-            request,
-            action="read_realtime_scanner",
-            path=artifacts.realtime_scanner_path,
-            fallback={
-                "summary": {},
-                "rows": [],
-                "mode": "live_observation_not_replay",
                 "can_trade": False,
                 "can_promote": False,
             },
