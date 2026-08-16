@@ -14,7 +14,7 @@ import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from statistics import median
@@ -533,7 +533,11 @@ class MarketPulseService:
         *,
         analyzer: BriefAnalyzer = bounded_observation_brief,
         model: str | None = None,
+        clock: Callable[[], datetime] | None = None,
+        stale_after: timedelta = timedelta(hours=2),
     ) -> None:
+        if stale_after <= timedelta(0):
+            raise ValueError("pulse stale_after must be positive")
         self.candle_root = Path(candle_root)
         self.gap_store = GapParquetStore(gap_root)
         self.analysis_store = HourAnalysisStore(analysis_path)
@@ -543,6 +547,8 @@ class MarketPulseService:
             if analyzer is bounded_observation_brief
             else "operator-configured"
         )
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self.stale_after = stale_after
 
     def _hours(self, exchange: str, symbol: str) -> list[PulseHour]:
         candles = CandleParquetStore(self.candle_root, exchange=exchange).read(symbol, "1h")
@@ -698,11 +704,18 @@ class MarketPulseService:
         latest = rows[-1] if rows else None
         gaps = self.gap_store.read(exchange, symbol)
         degraded = self._runtime_degraded(runtime)
+        now = _utc(self.clock(), label="pulse clock")
+        latest_close = (
+            datetime.fromisoformat(latest.close_time)
+            if latest is not None
+            else None
+        )
+        stale = latest_close is not None and now - latest_close > self.stale_after
         if (
             latest is not None and latest.data_quality == "gap"
         ) or any(not gap.recovered for gap in gaps):
             pulse_quality = "gap"
-        elif degraded:
+        elif degraded or stale:
             pulse_quality = "degraded"
         elif latest is None:
             pulse_quality = "unknown"
@@ -732,10 +745,24 @@ class MarketPulseService:
                     "recovered": True,
                 },
             )
+        if stale and latest_close is not None:
+            alerts.insert(
+                0,
+                {
+                    "kind": "stale",
+                    "at": _iso(latest_close),
+                    "severity": "warning",
+                    "message": (
+                        f"canonical candle age exceeded "
+                        f"{self.stale_after.total_seconds() / 3600:g}h"
+                    ),
+                    "recovered": False,
+                },
+            )
         return {
             "exchange": exchange,
             "symbol": symbol,
-            "as_of": _iso(datetime.now(UTC)),
+            "as_of": _iso(now),
             "status": (
                 "live"
                 if pulse_quality == "ok"

@@ -98,6 +98,21 @@ def test_gap_quality_and_runtime_degradation_are_never_hidden(tmp_path) -> None:
     assert any(alert["kind"] == "gap" for alert in payload["alerts"])
 
 
+def test_stale_canonical_hour_is_degraded_not_live(tmp_path) -> None:
+    pulse_service = service(tmp_path)
+    pulse_service.clock = lambda: START + timedelta(hours=30)
+
+    payload = pulse_service.pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={"data_degraded": False},
+    )
+
+    assert payload["status"] == "degraded"
+    assert payload["data_quality"] == "degraded"
+    assert payload["alerts"][0]["kind"] == "stale"
+
+
 def test_analysis_uses_fixed_context_is_cached_and_cannot_grant_orders(tmp_path) -> None:
     calls: list[dict] = []
 
