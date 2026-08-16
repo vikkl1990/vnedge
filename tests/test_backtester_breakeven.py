@@ -154,3 +154,13 @@ def test_trail_without_active_exit_is_rejected():
     import pytest
     with pytest.raises(ValueError, match="use_active_exit"):
         BacktestConfig(use_active_exit=False, trail_atr_mult=2.0)
+
+
+def test_gap_through_stop_fills_at_open_not_stop():
+    # A market stop can only fill at the venue's first price. If the bar opened
+    # BEYOND the stop, the fill is the (worse) open, not the stop level.
+    from vnedge.backtest.backtester import _gap_adjusted_stop
+    assert _gap_adjusted_stop("long", 95.0, 90.0) == 90.0    # gap down through long stop
+    assert _gap_adjusted_stop("long", 95.0, 100.0) == 95.0   # no gap -> stop
+    assert _gap_adjusted_stop("short", 105.0, 110.0) == 110.0  # gap up through short stop
+    assert _gap_adjusted_stop("short", 105.0, 100.0) == 105.0  # no gap -> stop

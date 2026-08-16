@@ -199,6 +199,20 @@ def _unrealized(pos: _OpenPosition, price: float) -> float:
     return direction * pos.remaining_quantity * (price - pos.entry_price)
 
 
+_STOP_REASONS = frozenset({"stop", "breakeven", "breakeven_stop", "tick_stop"})
+
+
+def _gap_adjusted_stop(side: str, stop: float, bar_open: float) -> float:
+    """Model a gap-THROUGH fill: a market stop can only fill at the venue's first
+    available price. If the bar OPENED beyond the stop (a gap down through a long
+    stop / up through a short stop), the realistic fill is the (worse) open, not
+    the stop level. Zero-lookahead: the stop was sealed on a PRIOR bar and the open
+    is this bar's first observable price. Slippage is applied on top by the caller."""
+    if side == "long":
+        return min(stop, bar_open)   # gap below → fills at open (worse)
+    return max(stop, bar_open)       # gap above → fills at open (worse)
+
+
 def _check_intrabar_exit(
     pos: _OpenPosition, high: float, low: float
 ) -> tuple[str, float] | None:
@@ -383,10 +397,14 @@ def run_backtest(
                     max_holding_hit=max_hold,
                 )
                 if decision is not None:
+                    exit_px = decision.exit_price
+                    if decision.reason in _STOP_REASONS:  # model gap-through fills
+                        exit_px = _gap_adjusted_stop(
+                            position.intent.side, exit_px, float(bar["open"]))
                     if decision.final:
-                        close_position(position, ts, decision.exit_price, decision.reason, j)
+                        close_position(position, ts, exit_px, decision.reason, j)
                     else:
-                        close_position(position, ts, decision.exit_price, decision.reason,
+                        close_position(position, ts, exit_px, decision.reason,
                                        j, close_qty=decision.quantity)
                         if position is not None:  # partial — position stays open
                             st.mark_accepted(decision)
@@ -405,7 +423,10 @@ def run_backtest(
                 # Legacy exit: single stop / take-profit (+ optional simple breakeven).
                 hit = _check_intrabar_exit(position, hi, lo)
                 if hit is not None:
-                    close_position(position, ts, hit[1], hit[0], j)
+                    reason, px = hit
+                    if reason in _STOP_REASONS:  # model gap-through fills
+                        px = _gap_adjusted_stop(position.intent.side, px, float(bar["open"]))
+                    close_position(position, ts, px, reason, j)
                 elif (exit_sig := strategy.exit_signal(
                         df, j, position.intent.side, position.entry_price)) is not None:
                     close_position(position, ts,
