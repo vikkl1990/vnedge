@@ -26,6 +26,7 @@ jobs:
           src/vnedge/data/candles.py
           src/vnedge/data/candle_bootstrap.py
           src/vnedge/data/gaps.py
+          src/vnedge/data/swings.py
           src/vnedge/data/vwap.py
           src/vnedge/exchange/tick_recorder.py
           src/vnedge/risk/risk_manager.py
@@ -45,6 +46,7 @@ jobs:
           src/vnedge/data/candles.py
           src/vnedge/data/candle_bootstrap.py
           src/vnedge/data/gaps.py
+          src/vnedge/data/swings.py
           src/vnedge/data/vwap.py
           src/vnedge/exchange/tick_recorder.py
           src/vnedge/risk/risk_manager.py

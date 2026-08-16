@@ -208,10 +208,13 @@ series = anchored_vwap_series(four_hour_candles, anchor=20)
 
 When a timestamp falls inside a candle, bar mode skips that partial candle and
 starts at the next complete bar. `confirmed_swing_anchors(candles, length=3)`
-implements the mechanical L-left/L-right swing rule. Each returned anchor has
-both its historical `anchor_time` and a later `confirmed_at` boundary. Use
-`anchor.is_confirmed(now)` before consumption; using it earlier introduces
-lookahead.
+is the backward-compatible symmetric rule. The canonical detector lives in
+`vnedge.data.swings` and accepts a frozen `SwingDetectConfig(left, right,
+strict)`. Strict mode rejects tied extrema; non-strict mode deterministically
+uses the earliest tied bar. Each anchor carries its historical `anchor_time`
+and a later `confirmed_at`, defined as the **close** of bar `i + right`. Use
+`anchor.is_confirmed(now)` before consumption; using the right bar's open or
+any earlier time introduces lookahead.
 
 `dual_avwap_bias` is measurement-only context:
 
@@ -222,6 +225,22 @@ lookahead.
 No AVWAP helper places orders or grants promotion. Any strategy using these
 measurements still goes through pre-registration, purged OOS validation,
 CostGate, and the normal mode ladder.
+
+Pulse pre-registers the 1h configuration as `left=3, right=3, strict=True`.
+For every closed hour it selects only the latest low/high anchors already
+confirmed at that hour, computes both AVWAPs from exact quote/base sums, and
+publishes the bias plus anchor/confirmation provenance. The forming hour may
+preview location against the last closed anchor pair; it never confirms a new
+swing.
+
+`WILLIAMS_FRACTAL_CONFIG` provides the classic strict `left=2, right=2`
+special case. Known integrity gaps are passed as explicit ineligible bars: any
+L/R window touching one is suppressed, and Pulse resets both active AVWAP
+anchors at the gap. It stays `n/a` until a fresh post-gap low/high pair is
+causally confirmed. Timestamp distance alone is not a gap because a quiet
+crypto bucket may legitimately contain no trades. ATR protrusion and polarity
+alternation remain optional research configurations; they are not silently
+enabled in the production measurement default.
 
 ## Storage
 

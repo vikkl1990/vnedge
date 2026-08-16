@@ -849,7 +849,10 @@ def create_app(
                 status_code=503,
                 headers=_identity(user),
             )
-        return JSONResponse(build_risk_payload(snapshot), headers=_identity(user))
+        return JSONResponse(
+            build_risk_payload({**snapshot, "build_sha": _build_sha()}),
+            headers=_identity(user),
+        )
 
     @app.get("/api/pulse/{symbol}")
     async def market_pulse(

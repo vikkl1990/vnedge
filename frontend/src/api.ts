@@ -118,8 +118,18 @@ export interface CorrectionLane {
   symbol: string;
   timeframe: string;
   capital: boolean;
+  venue_rtt_ms: number | null;
+  candle_status: string;
+  candle_age_ms: number | null;
+  decision_lag_ms: number | null;
+  arm_skips: number;
   last_signal_age_seconds: number | null;
+  last_signal_reason: string;
+  cost_profile: string;
+  round_trip_bps: number | null;
   health: "ok" | "degraded" | "unknown";
+  health_reason: string | null;
+  why_no_fire: string;
 }
 
 export interface LanesPayload {
@@ -136,6 +146,7 @@ export interface RiskSnapshot {
   runtime_mode: "measurement" | "shadow" | "paper" | "live_blocked" | string;
   runtime_label: string;
   capital: { enabled: boolean; roster_size: number };
+  build_sha: string;
   kill: { active: boolean; latched: boolean };
   feed: { status: "healthy" | "stale" | "gap" | "unknown"; label: string };
   live: {
@@ -156,7 +167,25 @@ export interface RiskSnapshot {
     recovery_error: string | null;
     entries_blocked: boolean;
   };
-  gateway: { last_reject_reasons: { reason: string; count: number }[] };
+  gateway: {
+    last_reject_reasons: { reason: string; count: number }[];
+    observed_reject_count: number;
+    window: string;
+  };
+  positions: { shadow_open: number; unresolved_orders: number };
+  breaker: { loss_streak: number; active: boolean; threshold: number };
+  reconciliation: {
+    status: string;
+    last_success_at: string | null;
+    last_success_age_seconds: number | null;
+    fail_count: number;
+    clean: boolean;
+  };
+  live_checklist: {
+    passed: number;
+    total: number;
+    items: { id: string; label: string; ok: boolean }[];
+  };
   streams: {
     exchange: string;
     public_feed: string;
@@ -226,14 +255,131 @@ export interface JournalRow {
   symbol?: string;
   side?: string;
   net_pnl_usd?: number;
+  net_after_this_fill_fee_usd?: number;
+  virtual_net_usd?: number;
+  fee_usd?: number;
+  fees_usd?: number;
   exit_reason?: string;
+  resolution?: string;
   [k: string]: unknown;
+}
+
+export interface JournalPayload {
+  generated_at: string;
+  summary: {
+    positions: number;
+    open_orders: number;
+    fills: number;
+    closed_trades: number;
+    actual_realized_pnl_usd: number;
+    fees_usd: number;
+    virtual_net_usd: number;
+    [k: string]: unknown;
+  };
+  closed_trades: JournalRow[];
+  events: Array<{
+    lane?: string;
+    ts?: string;
+    event?: string;
+    detail?: string;
+    [k: string]: unknown;
+  }>;
+  orders: Array<Record<string, unknown>>;
+  fills: Array<Record<string, unknown>>;
+}
+
+export interface MetaPayload {
+  build_sha: string;
+  host: string;
+  uptime_seconds: number;
+}
+
+export interface CostModelPayload {
+  taker_round_trip_cost_bps: number;
+  maker_first_cost_bps: number;
+  exchanges: Array<{
+    exchange: string;
+    label: string;
+    taker_round_trip_cost_bps: number;
+  }>;
+}
+
+export interface ResearchScorecard {
+  generated_at: string | null;
+  strategies: Array<{
+    strategy: string;
+    best_net_bps: number | null;
+    verdict: string | null;
+    profit_factor: number | null;
+    break_rate_pct: number | null;
+    samples: number;
+    venues: string[];
+  }>;
+  can_trade: false;
+  can_promote: false;
+}
+
+export interface MlStage {
+  key: string;
+  label: string;
+  done: boolean;
+  active?: boolean;
+  detail?: string;
+}
+
+export interface MlStatus {
+  generated_at?: string;
+  active_role?: string;
+  stage: string;
+  stages: MlStage[];
+  dataset: {
+    samples: number;
+    win_rate_pct?: number;
+    min_to_train: number;
+    progress_pct: number;
+    by_strategy: Record<string, number>;
+  };
+  foundation: {
+    feature_count?: number;
+    [k: string]: unknown;
+  };
+  gates: Record<string, unknown>;
+  model: Record<string, unknown> | null;
+  can_trade: false;
+  can_promote: false;
+  note?: string;
+}
+
+export interface AgenticResearchStatus {
+  os_id: string;
+  generated_at?: string;
+  mode?: string;
+  summary: {
+    operator_actions?: number;
+    critical_actions?: number;
+    warning_actions?: number;
+    agent_health_min?: number;
+    gateway_active_tasks?: number;
+    [k: string]: unknown;
+  };
+  source_status: Array<{
+    source?: string;
+    state?: string;
+    age_minutes?: number;
+    generated_at?: string;
+  }>;
+  operator_answer?: string;
+  can_trade: false;
+  can_promote: false;
+  live_orders_enabled: false;
 }
 
 export interface PulseHour {
   symbol: string;
   open_time: string;
+  open_time_utc: string;
   close_time: string;
+  close_time_utc: string;
   open: number;
   high: number;
   low: number;
@@ -250,12 +396,39 @@ export interface PulseHour {
   vs_session_vwap_bps: number | null;
   prior_hour_range_bps: number | null;
   dual_avwap_bias: string;
+  avwap_low: number | null;
+  avwap_high: number | null;
+  avwap_low_anchor_utc: string | null;
+  avwap_high_anchor_utc: string | null;
+  avwap_low_confirmed_at_utc: string | null;
+  avwap_high_confirmed_at_utc: string | null;
   session_active: boolean;
   session_label: string;
   data_quality: string;
   gap_minutes: number;
   stream_healthy: boolean;
   forming: boolean;
+  is_gap: boolean;
+}
+
+export interface PulseForming {
+  open_time: string;
+  open_time_utc: string;
+  mid: number | null;
+  range_bps: number | null;
+  body_bps: number | null;
+  volume: number | null;
+  volume_rank_24h: number | null;
+  vs_session_vwap_bps: number | null;
+  dual_avwap_bias: string;
+  dual_avwap_reason: string | null;
+  avwap_low: number | null;
+  avwap_high: number | null;
+  session_label: string;
+  session_active: boolean;
+  status: "forming" | "awaiting_trades";
+  data_quality: string;
+  [k: string]: unknown;
 }
 
 export interface PulseAlert {
@@ -270,17 +443,46 @@ export interface PulsePayload {
   exchange: string;
   symbol: string;
   as_of: string;
+  as_of_utc: string;
   status: string;
   data_quality: string;
-  forming: Record<string, unknown> | null;
+  forming: PulseForming;
   hours: PulseHour[];
+  fee_wall_bps: number;
+  session_vwap_series: Array<{ time: number; value: number }>;
+  avwap_series: Array<{ time: number; value: number }> | null;
+  dual_avwap_series: {
+    low: Array<{ time: number; value: number }>;
+    high: Array<{ time: number; value: number }>;
+  };
+  market: {
+    last: number | null;
+    mid: number | null;
+    feed_age_ms: number | null;
+    canonical_age_ms: number | null;
+    session_label: string;
+  };
   indicators: {
     session_vwap: number | null;
     vs_session_vwap_bps: number | null;
     dual_avwap_bias: string;
     avwap: number | null;
     avwap_label: string | null;
+    avwap_low: number | null;
+    avwap_high: number | null;
+    avwap_low_anchor_utc: string | null;
+    avwap_high_anchor_utc: string | null;
+    avwap_low_confirmed_at_utc: string | null;
+    avwap_high_confirmed_at_utc: string | null;
+    avwap_unavailable_reason: string | null;
   };
+  last_gap: {
+    kind: string;
+    start: string;
+    end: string;
+    recovered: boolean;
+    detail: string;
+  } | null;
   book: PriceBook | null;
   alerts: PulseAlert[];
   policy: string;

@@ -87,6 +87,66 @@ def _lane_health(lane: Mapping[str, Any], problems: Mapping[str, str]) -> str:
     return "ok" if feed.lower() in {"ok", "live"} else "degraded"
 
 
+def _number(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return round(number, 3)
+
+
+def _latency_value(lane: Mapping[str, Any], name: str) -> float | None:
+    latency = _mapping(lane.get("latency"))
+    metric = _mapping(latency.get(name))
+    return _number(metric.get("p95") if metric else latency.get(name))
+
+
+def _timeframe_health(lane: Mapping[str, Any]) -> tuple[str, float | None]:
+    timeframe = str(lane.get("timeframe") or "")
+    machine = _mapping(lane.get("time_machine"))
+    health = _mapping(machine.get("health"))
+    ages = _mapping(machine.get("age_ms"))
+    feed = str(
+        lane.get("feed")
+        or _mapping(lane.get("feed_health")).get("candles")
+        or "unknown"
+    )
+    status = str(health.get(timeframe) or feed or "unknown").lower()
+    age = _number(ages.get(timeframe))
+    if age is None:
+        age = _number(
+            lane.get("staleness_ms")
+            or _mapping(lane.get("feed_health")).get("last_update_ms")
+        )
+    return status, age
+
+
+def _skip_count(lane: Mapping[str, Any]) -> int:
+    skips = _mapping(lane.get("decision_skips"))
+    return sum(int(value or 0) for value in skips.values())
+
+
+def _last_signal_reason(
+    lane: Mapping[str, Any], *, eligibility: str, mode: str
+) -> str:
+    if eligibility == "KILLED":
+        return "strategy_killed"
+    if eligibility == "RESEARCH_ONLY" or mode == "measurement":
+        return "observe_only"
+    blocked = lane.get("arm_blocked")
+    if blocked:
+        if isinstance(blocked, Mapping):
+            return str(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
+        return str(blocked)
+    evaluation = _mapping(lane.get("last_eval"))
+    return str(
+        evaluation.get("reason")
+        or evaluation.get("signal_reason")
+        or lane.get("last_risk_reject")
+        or "no_signal_observed"
+    )
+
+
 def build_lanes_payload(
     snapshot: Mapping[str, Any], *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -111,6 +171,10 @@ def build_lanes_payload(
             and eligibility == "eligible"
             and bool(runtime.get("orders_allowed"))
         )
+        candle_status, candle_age_ms = _timeframe_health(lane)
+        plan = _mapping(lane.get("plan_overlay"))
+        health = _lane_health(lane, problems)
+        reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
         result.append(
             {
                 "lane_id": str(lane.get("lane_id") or strategy_id or "unknown"),
@@ -121,12 +185,31 @@ def build_lanes_payload(
                 "symbol": str(lane.get("symbol") or ""),
                 "timeframe": str(lane.get("timeframe") or ""),
                 "capital": capital,
+                "venue_rtt_ms": _number(lane.get("venue_rtt_ms"))
+                or _latency_value(lane, "venue_rtt_ms"),
+                "candle_status": candle_status,
+                "candle_age_ms": candle_age_ms,
+                "decision_lag_ms": _latency_value(lane, "decision_lag_ms"),
+                "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (
                     None
                     if eligibility == "RESEARCH_ONLY"
                     else _age_seconds(lane.get("last_fired_ts"), at)
                 ),
-                "health": _lane_health(lane, problems),
+                "last_signal_reason": reason,
+                "cost_profile": str(lane.get("cost_profile") or "unreported"),
+                "round_trip_bps": _number(
+                    plan.get("round_trip_bps") or lane.get("round_trip_bps")
+                ),
+                "health": health,
+                "health_reason": problems.get(str(lane.get("lane_id") or "")),
+                "why_no_fire": (
+                    "measurement lane emits no OrderIntent by design"
+                    if mode == "measurement"
+                    else "strategy is killed and forced off"
+                    if eligibility == "KILLED"
+                    else reason
+                ),
             }
         )
 
@@ -220,8 +303,42 @@ def _gateway(snapshot: Mapping[str, Any], lanes: list[Mapping[str, Any]]) -> dic
     return {
         "last_reject_reasons": [
             {"reason": reason, "count": count} for reason, count in counts.most_common(10)
-        ]
+        ],
+        "observed_reject_count": len(reasons),
+        "window": "current_snapshot",
     }
+
+
+def _reconciliation(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _mapping(
+        snapshot.get("reconciliation")
+        or snapshot.get("recon")
+        or _mapping(snapshot.get("runtime_control")).get("reconciliation")
+    )
+    last_success = raw.get("last_success_at") or raw.get("last_success_ts")
+    return {
+        "status": str(raw.get("status") or "not_reported"),
+        "last_success_at": str(last_success) if last_success else None,
+        "last_success_age_seconds": _number(raw.get("last_success_age_seconds")),
+        "fail_count": int(raw.get("fail_count") or raw.get("failures") or 0),
+        "clean": bool(raw.get("clean")) if "clean" in raw else False,
+    }
+
+
+def _live_checklist(
+    snapshot: Mapping[str, Any], *, journal: Mapping[str, Any], recon: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    runtime = _mapping(snapshot.get("runtime_control"))
+    live = _mapping(snapshot.get("live_gates"))
+    return [
+        {"id": "kill_clear", "label": "kill clear", "ok": not bool(snapshot.get("kill_switch_active"))},
+        {"id": "risk_frozen", "label": "risk frozen", "ok": bool(runtime.get("risk_frozen") or live.get("risk_frozen"))},
+        {"id": "recon_clean", "label": "recon clean", "ok": bool(recon.get("clean"))},
+        {"id": "journal_writable", "label": "journal writable", "ok": bool(journal.get("available")) and not bool(journal.get("entries_blocked"))},
+        {"id": "live_flags", "label": "three live flags", "ok": bool(live.get("three_live_flags"))},
+        {"id": "trade_keys", "label": "trade-only keys", "ok": bool(live.get("trade_keys"))},
+        {"id": "ladder", "label": "ladder attestation", "ok": bool(live.get("ladder_attestation"))},
+    ]
 
 
 def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -229,6 +346,9 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     lanes = _rows(snapshot)
     runtime = _mapping(snapshot.get("runtime_control"))
     feed_status, feed_label = _feed_status(lanes)
+    journal = _journal(snapshot, lanes)
+    recon = _reconciliation(snapshot)
+    checklist = _live_checklist(snapshot, journal=journal, recon=recon)
     capital_size = int(runtime.get("capital_roster_size") or 0)
     live_enabled = bool(snapshot.get("live_trading_enabled"))
     if live_enabled:
@@ -269,6 +389,7 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "runtime_mode": runtime_mode,
         "runtime_label": str(snapshot.get("mode") or "unknown"),
         "capital": {"enabled": capital_size > 0, "roster_size": capital_size},
+        "build_sha": str(snapshot.get("build_sha") or "dev"),
         "kill": {
             "active": bool(snapshot.get("kill_switch_active")),
             "latched": bool(snapshot.get("kill_switch_active")),
@@ -280,8 +401,38 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "delta_private_status": "not_implemented",
         },
         "daily_halt": _daily_halt(snapshot, lanes),
-        "journal": _journal(snapshot, lanes),
+        "journal": journal,
         "gateway": _gateway(snapshot, lanes),
+        "positions": {
+            "shadow_open": sum(
+                len(row.get("positions") or [])
+                for row in lanes
+                if isinstance(row.get("positions"), list)
+                and any(
+                    label in str(row.get("mode") or "").lower()
+                    for label in ("shadow", "measurement")
+                )
+            ),
+            "unresolved_orders": sum(
+                1
+                for row in lanes
+                for order in (row.get("open_orders") or [])
+                if isinstance(order, Mapping)
+                and str(order.get("state") or "").lower()
+                in {"timeout_unknown", "unresolved", "pending_unknown"}
+            ),
+        },
+        "breaker": {
+            "loss_streak": int(snapshot.get("consecutive_losses") or 0),
+            "active": int(snapshot.get("consecutive_losses") or 0) >= 3,
+            "threshold": 3,
+        },
+        "reconciliation": recon,
+        "live_checklist": {
+            "passed": sum(bool(item["ok"]) for item in checklist),
+            "total": len(checklist),
+            "items": checklist,
+        },
         "streams": streams,
         "read_only": True,
         "can_trade": False,

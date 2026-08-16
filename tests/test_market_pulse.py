@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -71,7 +72,123 @@ def test_pulse_metrics_are_closed_hour_measurements_only(tmp_path) -> None:
     assert pulse["hours"][-1]["forming"] is False
     assert pulse["hours"][-1]["volume_rank_24h"] == 1.0
     assert pulse["forming"]["open"] == 125.5
+    assert pulse["forming"]["status"] == "awaiting_trades"
+    assert pulse["forming"]["dual_avwap_bias"] == "n/a"
+    assert pulse["forming"]["dual_avwap_reason"] == "no_confirmed_swing_pair"
     assert pulse["book"]["mid"] == 125.5
+    assert pulse["market"]["last"] == 125.5
+    assert pulse["market"]["mid"] == 125.5
+    assert pulse["market"]["session_label"] in {
+        "asia",
+        "europe",
+        "us_overlap",
+        "us",
+        "off_session",
+    }
+    assert pulse["indicators"]["avwap_unavailable_reason"] == (
+        "no confirmed swing pair"
+    )
+    assert pulse["as_of_utc"] == pulse["as_of"]
+    assert pulse["fee_wall_bps"] > 0
+    assert len(pulse["session_vwap_series"]) == 24
+    assert pulse["avwap_series"] is None
+    assert pulse["hours"][-1]["open_time_utc"] == pulse["hours"][-1]["open_time"]
+    assert pulse["hours"][-1]["is_gap"] is False
+
+
+def test_single_symbol_runtime_quote_never_leaks_into_other_market_strip_row(
+    tmp_path,
+) -> None:
+    payload = service(tmp_path).pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={
+            "symbol": "ETH/USDT:USDT",
+            "price": {"bid": 99.0, "ask": 101.0, "mid": 100.0},
+            "feed_health": {"last_update_ms": 5.0},
+        },
+    )
+
+    assert payload["book"] is None
+    assert payload["market"]["mid"] is None
+    assert payload["market"]["feed_age_ms"] is None
+
+
+def test_pulse_dual_avwap_uses_only_latest_confirmed_swing_pair(tmp_path) -> None:
+    lows = ["95", "94", "93", "85", "92", "93", "94", "95", "96", "97"]
+    highs = ["115", "116", "117", "118", "119", "130", "120", "119", "118", "117"]
+    rows = tuple(
+        replace(candle(index), low=D(low), high=D(high))
+        for index, (low, high) in enumerate(zip(lows, highs))
+    )
+    CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)
+    pulse_service = MarketPulseService(
+        tmp_path / "candles",
+        tmp_path / "gaps",
+        tmp_path / "analysis.sqlite",
+        clock=lambda: rows[-1].close_time,
+    )
+
+    payload = pulse_service.pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={
+            "symbol": "BTCUSDT",
+            "price": {"bid": 110.9, "ask": 111.1, "mid": 111.0},
+        },
+    )
+
+    assert payload["hours"][7]["dual_avwap_bias"] == "n/a"
+    latest = payload["hours"][-1]
+    assert latest["dual_avwap_bias"] == "strong_long"
+    assert latest["avwap_low_anchor_utc"] == "2026-08-15T03:00:00Z"
+    assert latest["avwap_high_anchor_utc"] == "2026-08-15T05:00:00Z"
+    assert latest["avwap_low_confirmed_at_utc"] == "2026-08-15T07:00:00Z"
+    assert latest["avwap_high_confirmed_at_utc"] == "2026-08-15T09:00:00Z"
+    assert latest["avwap_low"] == pytest.approx(106.25)
+    assert latest["avwap_high"] == pytest.approx(107.25)
+    assert payload["forming"]["dual_avwap_bias"] == "strong_long"
+    assert payload["forming"]["dual_avwap_reason"] is None
+    assert len(payload["dual_avwap_series"]["low"]) == 4
+    assert len(payload["dual_avwap_series"]["high"]) == 2
+
+
+def test_known_gap_resets_dual_avwap_and_blocks_cross_gap_anchors(tmp_path) -> None:
+    lows = ["95", "94", "93", "85", "92", "93", "94", "95", "96", "97"]
+    highs = ["115", "116", "117", "118", "119", "130", "120", "119", "118", "117"]
+    rows = tuple(
+        replace(candle(index), low=D(low), high=D(high))
+        for index, (low, high) in enumerate(zip(lows, highs))
+    )
+    CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)
+    GapParquetStore(tmp_path / "gaps").upsert(
+        (
+            GapRecord(
+                "BTCUSDT",
+                "binanceusdm",
+                GapKind.STREAM_STALE,
+                rows[8].open_time,
+                rows[8].close_time,
+                rows[8].close_time,
+                "coverage unknown inside swing window",
+            ),
+        )
+    )
+    pulse_service = MarketPulseService(
+        tmp_path / "candles",
+        tmp_path / "gaps",
+        tmp_path / "analysis.sqlite",
+        clock=lambda: rows[-1].close_time,
+    )
+
+    payload = pulse_service.pulse("binanceusdm", "BTCUSDT")
+
+    assert payload["hours"][7]["avwap_low"] is not None
+    assert payload["hours"][8]["data_quality"] == "gap"
+    assert payload["hours"][8]["dual_avwap_bias"] == "n/a"
+    assert payload["hours"][9]["dual_avwap_bias"] == "n/a"
+    assert payload["hours"][9]["avwap_low_anchor_utc"] is None
+    assert payload["hours"][9]["avwap_high_anchor_utc"] is None
 
 
 def test_gap_quality_and_runtime_degradation_are_never_hidden(tmp_path) -> None:
@@ -95,6 +212,7 @@ def test_gap_quality_and_runtime_degradation_are_never_hidden(tmp_path) -> None:
     assert payload["data_quality"] == "gap"
     affected = next(row for row in payload["hours"] if row["open_time"] == "2026-08-16T00:00:00Z")
     assert affected["data_quality"] == "gap"
+    assert affected["is_gap"] is True
     assert any(alert["kind"] == "gap" for alert in payload["alerts"])
 
 

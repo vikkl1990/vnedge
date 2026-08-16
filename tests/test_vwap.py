@@ -236,6 +236,11 @@ def test_confirmed_swing_anchors_carry_lookahead_boundary() -> None:
         ("111", "100", "110", "strong_long"),
         ("99", "100", "110", "strong_short"),
         ("105", "100", "110", "between"),
+        ("110", "100", "110", "between"),
+        ("105", "110", "100", "between"),
+        ("111", "110", "100", "strong_long"),
+        ("99", "110", "100", "strong_short"),
+        ("0", "100", "110", "unavailable"),
         ("100", None, "110", "unavailable"),
     ],
 )

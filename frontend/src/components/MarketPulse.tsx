@@ -5,10 +5,12 @@ import {
   LineSeries,
   LineStyle,
   createChart,
+  createSeriesMarkers,
   type CandlestickData,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type LineData,
   type Time,
   type UTCTimestamp,
@@ -16,7 +18,7 @@ import {
 } from "lightweight-charts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PulseHour } from "../api";
-import { useHourAnalysis, usePulse } from "../queries";
+import { useHourAnalysis, usePulse, useRiskSnapshot } from "../queries";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
@@ -28,6 +30,13 @@ const signed = (value: number | null | undefined, digits = 1) =>
   typeof value === "number" && Number.isFinite(value)
     ? `${value > 0 ? "+" : ""}${value.toFixed(digits)}`
     : "—";
+
+const ageSecMs = (milliseconds: number) => {
+  const seconds = Math.max(0, milliseconds / 1_000);
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  if (seconds < 5_400) return `${(seconds / 60).toFixed(1)}m`;
+  return `${(seconds / 3_600).toFixed(1)}h`;
+};
 
 const utcHour = (iso: string) =>
   new Intl.DateTimeFormat("en-GB", {
@@ -70,6 +79,8 @@ type VwapPoint = LineData<UTCTimestamp> | WhitespaceData<UTCTimestamp>;
 function chartPoints(hours: PulseHour[]): {
   candles: CandlePoint[];
   vwap: VwapPoint[];
+  avwapLow: VwapPoint[];
+  avwapHigh: VwapPoint[];
   signature: string;
 } {
   const byTime = new Map<number, PulseHour>();
@@ -98,12 +109,16 @@ function chartPoints(hours: PulseHour[]): {
 
   const candles: CandlePoint[] = [];
   const vwap: VwapPoint[] = [];
+  const avwapLow: VwapPoint[] = [];
+  const avwapHigh: VwapPoint[] = [];
   for (const rawTime of timeline) {
     const time = rawTime as UTCTimestamp;
     const hour = byTime.get(rawTime);
     if (!hour) {
       candles.push({ time });
       vwap.push({ time });
+      avwapLow.push({ time });
+      avwapHigh.push({ time });
       continue;
     }
     const degraded = hour.data_quality !== "ok";
@@ -122,10 +137,22 @@ function chartPoints(hours: PulseHour[]): {
         ? { time }
         : { time, value: hour.session_vwap },
     );
+    avwapLow.push(
+      hour.avwap_low == null || !Number.isFinite(hour.avwap_low)
+        ? { time }
+        : { time, value: hour.avwap_low },
+    );
+    avwapHigh.push(
+      hour.avwap_high == null || !Number.isFinite(hour.avwap_high)
+        ? { time }
+        : { time, value: hour.avwap_high },
+    );
   }
   return {
     candles,
     vwap,
+    avwapLow,
+    avwapHigh,
     signature: hours
       .map((hour) => [
         hour.symbol,
@@ -135,6 +162,10 @@ function chartPoints(hours: PulseHour[]): {
         hour.low,
         hour.close,
         hour.session_vwap,
+        hour.avwap_low,
+        hour.avwap_high,
+        hour.avwap_low_anchor_utc,
+        hour.avwap_high_anchor_utc,
         hour.data_quality,
       ].join(":"))
       .join("|"),
@@ -184,15 +215,26 @@ function CandleChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const lowAvwapRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const highAvwapRef = useRef<ISeriesApi<"Line"> | null>(null);
   const avwapRef = useRef<IPriceLine | null>(null);
+  const markerRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const historySignatureRef = useRef("");
   const formingTimeRef = useRef<UTCTimestamp | null>(null);
   const fittedRef = useRef(false);
   const [rendererError, setRendererError] = useState<string | null>(null);
+  const [crosshair, setCrosshair] = useState<{
+    time: Time;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+  } | null>(null);
   const points = useMemo(() => chartPoints(hours), [hours]);
   const livePoint = useMemo(() => formingPoint(forming, asOf), [forming, asOf]);
   const hasData = hours.length > 0 || livePoint !== null;
   const hasDegradedHours = hours.some((hour) => hour.data_quality !== "ok");
+  const hasDualAvwap = hours.some((hour) => hour.avwap_low != null || hour.avwap_high != null);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -254,10 +296,50 @@ function CandleChart({
         lastValueVisible: true,
         title: "session VWAP",
       });
+      const lowAvwap = chart.addSeries(LineSeries, {
+        color: "#58A6FF",
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: "AVWAP L",
+      });
+      const highAvwap = chart.addSeries(LineSeries, {
+        color: "#BC8CFF",
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: "AVWAP H",
+      });
       container.dataset.chartState = "ready";
       chartRef.current = chart;
       candleRef.current = candles;
       vwapRef.current = vwap;
+      lowAvwapRef.current = lowAvwap;
+      highAvwapRef.current = highAvwap;
+      markerRef.current = createSeriesMarkers(candles, []);
+      chart.subscribeCrosshairMove((param) => {
+        const value = param.seriesData.get(candles);
+        if (
+          param.time != null
+          && value
+          && "open" in value
+          && "high" in value
+          && "low" in value
+          && "close" in value
+        ) {
+          setCrosshair({
+            time: param.time,
+            open: Number(value.open),
+            high: Number(value.high),
+            low: Number(value.low),
+            close: Number(value.close),
+          });
+        } else {
+          setCrosshair(null);
+        }
+      });
 
       const observer = new ResizeObserver(([entry]) => {
         chart.applyOptions({ width: Math.floor(entry.contentRect.width) });
@@ -269,7 +351,10 @@ function CandleChart({
         chartRef.current = null;
         candleRef.current = null;
         vwapRef.current = null;
+        lowAvwapRef.current = null;
+        highAvwapRef.current = null;
         avwapRef.current = null;
+        markerRef.current = null;
         historySignatureRef.current = "";
         formingTimeRef.current = null;
         fittedRef.current = false;
@@ -279,13 +364,15 @@ function CandleChart({
       setRendererError(error instanceof Error ? error.message : "unknown chart error");
       return undefined;
     }
-  }, []);
+  }, []); // history markers are re-created when the chart mounts for a symbol
 
   useEffect(() => {
     const chart = chartRef.current;
     const candles = candleRef.current;
     const vwap = vwapRef.current;
-    if (!chart || !candles || !vwap) return;
+    const lowAvwap = lowAvwapRef.current;
+    const highAvwap = highAvwapRef.current;
+    if (!chart || !candles || !vwap || !lowAvwap || !highAvwap) return;
 
     const historyChanged = historySignatureRef.current !== points.signature;
     const formingRolled = (
@@ -297,6 +384,8 @@ function CandleChart({
     if (historyChanged || formingRolled || formingCleared) {
       candles.setData(points.candles);
       vwap.setData(points.vwap);
+      lowAvwap.setData(points.avwapLow);
+      highAvwap.setData(points.avwapHigh);
       historySignatureRef.current = points.signature;
       if (!fittedRef.current && points.candles.length > 0) {
         chart.timeScale().fitContent();
@@ -306,6 +395,22 @@ function CandleChart({
     if (livePoint) candles.update(livePoint);
     formingTimeRef.current = livePoint?.time ?? null;
   }, [livePoint, points]);
+
+  useEffect(() => {
+    markerRef.current?.setMarkers(
+      hours.flatMap((hour) => {
+        const time = toUnixHour(hour.open_time);
+        if (time === null || hour.data_quality === "ok") return [];
+        return [{
+          time,
+          position: "aboveBar" as const,
+          color: "#F85149",
+          shape: "circle" as const,
+          text: "GAP",
+        }];
+      }),
+    );
+  }, [hours]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -356,9 +461,18 @@ function CandleChart({
       )}
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-3 rounded-md border border-line bg-bg/90 px-2.5 py-1.5 font-mono text-[10px] shadow-lg">
         <span className="flex items-center gap-1.5 text-warn"><span className="h-0.5 w-4 bg-warn" />SESSION VWAP</span>
+        {hasDualAvwap && <span className="flex items-center gap-1.5 text-info"><span className="h-0.5 w-4 bg-info" />AVWAP L</span>}
+        {hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
         {livePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
         {hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
       </div>
+      {crosshair && (
+        <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md border border-line bg-bg/95 px-3 py-2 font-mono text-[10px] shadow-lg">
+          <div className="mb-1 text-brand">{utcTimeLabel(crosshair.time)} UTC</div>
+          <div className="grid grid-cols-4 gap-2 text-dim"><span>O {fmt(crosshair.open, 2)}</span><span>H {fmt(crosshair.high, 2)}</span><span>L {fmt(crosshair.low, 2)}</span><span>C {fmt(crosshair.close, 2)}</span></div>
+          <div className="mt-1 text-faint">range {fmt((crosshair.high - crosshair.low) / crosshair.open * 10_000)} bps · body {fmt(Math.abs(crosshair.close - crosshair.open) / crosshair.open * 10_000)} bps</div>
+        </div>
+      )}
       {selected && (
         <div className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-md border border-line bg-bg/90 px-2 py-1 font-mono text-[10px] text-dim">
           selected {fullUtcHour(selected)} UTC
@@ -381,7 +495,12 @@ function Metric({ label, value, note }: { label: string; value: string; note?: s
 export function MarketPulse() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [selected, setSelected] = useState<string | null>(null);
-  const pulse = usePulse(symbol);
+  const btcPulse = usePulse("BTCUSDT");
+  const ethPulse = usePulse("ETHUSDT");
+  const solPulse = usePulse("SOLUSDT");
+  const risk = useRiskSnapshot();
+  const pulse = symbol === "ETHUSDT" ? ethPulse : symbol === "SOLUSDT" ? solPulse : btcPulse;
+  const marketQueries = [btcPulse, ethPulse, solPulse];
   const hours = pulse.data?.hours ?? [];
   const latest = hours[hours.length - 1];
 
@@ -399,6 +518,43 @@ export function MarketPulse() {
   const quality = pulse.data?.data_quality ?? "unknown";
   const forming = pulse.data?.forming;
   const book = pulse.data?.book;
+  const formingRange = forming?.range_bps as number | undefined;
+  const formingRangeVsMedian = forming?.range_vs_median_24h as number | undefined;
+  const formingVolumeRank = forming?.volume_rank_24h as number | undefined;
+  const formingVolumeVsMedian = forming?.volume_vs_median_24h as number | undefined;
+  const formingActive = forming?.status === "forming";
+  const dualAvwapNote = forming?.dual_avwap_reason
+    ?? pulse.data?.indicators.avwap_unavailable_reason
+    ?? (
+      pulse.data?.indicators.avwap_low_anchor_utc
+      && pulse.data?.indicators.avwap_high_anchor_utc
+        ? `L ${fullUtcHour(pulse.data.indicators.avwap_low_anchor_utc)} · H ${fullUtcHour(pulse.data.indicators.avwap_high_anchor_utc)} UTC`
+        : undefined
+    );
+  const events = [
+    ...(pulse.data?.alerts ?? []),
+    ...((risk.data?.gateway.last_reject_reasons ?? []).map((item) => ({
+      kind: "cost_or_risk_reject",
+      at: pulse.data?.as_of ?? new Date().toISOString(),
+      severity: "warning" as const,
+      message: `${item.reason} · ${item.count} observed in current snapshot`,
+      recovered: true,
+    }))),
+    ...(risk.data?.kill.active ? [{
+      kind: "kill",
+      at: pulse.data?.as_of ?? new Date().toISOString(),
+      severity: "critical" as const,
+      message: "Kill switch is active and latched.",
+      recovered: false,
+    }] : []),
+    ...(risk.data?.daily_halt.active ? [{
+      kind: "daily_halt",
+      at: pulse.data?.as_of ?? new Date().toISOString(),
+      severity: "critical" as const,
+      message: "Daily loss halt is active.",
+      recovered: false,
+    }] : []),
+  ];
 
   return (
     <div className="flex flex-col gap-4">
@@ -429,6 +585,29 @@ export function MarketPulse() {
         <div className="rounded-xl border border-short/40 bg-short/5 p-4 text-sm text-short">Pulse API unavailable. Canonical 1h data may still be warming.</div>
       )}
 
+      <section className="grid gap-3 md:grid-cols-3" aria-label="All-symbol market strip">
+        {SYMBOLS.map((item, index) => {
+          const data = marketQueries[index].data;
+          const itemForming = data?.forming;
+          const price = data?.market.mid ?? data?.market.last;
+          const active = item === symbol;
+          const itemQuality = data?.data_quality ?? "unknown";
+          const feedAge = data?.market.feed_age_ms ?? data?.market.canonical_age_ms;
+          return (
+            <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`rounded-xl border p-4 text-left transition ${active ? "border-brand/60 bg-brand/10" : "border-line bg-panel/80 hover:border-line2"}`}>
+              <div className="flex items-center justify-between"><span className="font-mono text-sm font-semibold">{item.replace("USDT", "")}</span><TerminalBadge tone={itemQuality === "ok" ? "good" : itemQuality === "unknown" ? "neutral" : "bad"}>{itemQuality}</TerminalBadge></div>
+              <div className="mt-3 font-mono text-xl tabular-nums">{price?.toLocaleString() ?? "—"}</div>
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-dim">
+                <span>1h range</span><span className="text-right text-txt">{fmt(itemForming?.range_bps as number | undefined)} bps</span>
+                <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
+                <span>dual AVWAP</span><span className="text-right text-txt">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
+                <span>feed age</span><span className="text-right text-txt">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
+              </div>
+            </button>
+          );
+        })}
+      </section>
+
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,.7fr)] gap-4">
         <TerminalPanel title="1h market structure" meta={`${hours.length} closed hours · ${symbol}`}>
           <CandleChart
@@ -446,15 +625,17 @@ export function MarketPulse() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="text-[11px] font-mono text-faint">LIVE MID</div>
-                <div className="text-3xl font-mono tabular-nums">{book?.mid?.toLocaleString() ?? "—"}</div>
+                <div className="text-3xl font-mono tabular-nums">{(forming?.mid as number | null | undefined)?.toLocaleString() ?? book?.mid?.toLocaleString() ?? "—"}</div>
               </div>
-              <TerminalBadge tone={forming ? "info" : "neutral"}>{forming ? "in progress" : "awaiting trades"}</TerminalBadge>
+              <TerminalBadge tone={formingActive ? "info" : "neutral"}>{formingActive ? "forming" : "awaiting trades"}</TerminalBadge>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <Metric label="Range" value={`${fmt(forming?.range_bps as number | undefined)} bps`} />
-              <Metric label="Volume / 20h" value={`${fmt(forming?.volume_vs_median_20h as number | undefined, 2)}×`} />
-              <Metric label="vs session VWAP" value={`${signed(pulse.data?.indicators.vs_session_vwap_bps)} bps`} />
-              <Metric label="Dual AVWAP" value={pulse.data?.indicators.dual_avwap_bias ?? "—"} />
+              <Metric label="Range" value={`${fmt(formingRange)} bps`} note={formingRangeVsMedian == null ? "24h median unavailable" : `${fmt(formingRangeVsMedian, 2)}× 24h median`} />
+              <Metric label="Volume" value={formingVolumeRank == null ? "rank —" : `${Math.round(formingVolumeRank * 100)}th pct`} note={formingVolumeVsMedian == null ? "24h median unavailable" : `${fmt(formingVolumeVsMedian, 2)}× 24h median`} />
+              <Metric label="vs session VWAP" value={`${signed((forming?.vs_session_vwap_bps as number | undefined) ?? pulse.data?.indicators.vs_session_vwap_bps)} bps`} />
+              <Metric label="Dual AVWAP" value={forming?.dual_avwap_bias ?? pulse.data?.indicators.dual_avwap_bias ?? "n/a"} note={dualAvwapNote ?? undefined} />
+              <Metric label="Session" value={(forming?.session_label as string | undefined) ?? pulse.data?.market.session_label ?? "—"} note={((forming?.session_active as boolean | undefined) ?? pulse.data?.market.session_label === "us_overlap") ? "active overlap" : "off overlap"} />
+              <Metric label="Quality" value={quality} note={pulse.data?.last_gap ? `${pulse.data.last_gap.kind} · ${fullUtcHour(pulse.data.last_gap.start)} UTC` : "no recorded gap in window"} />
             </div>
           </TerminalPanel>
 
@@ -514,6 +695,7 @@ export function MarketPulse() {
                 key={hour.open_time}
                 onClick={() => setSelected(hour.open_time)}
                 className={`min-w-[112px] rounded-lg border p-3 text-left transition ${active ? "border-brand bg-brand/10" : "border-line bg-inset hover:border-line2"}`}
+                style={hour.is_gap ? { backgroundImage: "repeating-linear-gradient(135deg, transparent, transparent 7px, rgba(248,81,73,.08) 7px, rgba(248,81,73,.08) 14px)" } : undefined}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[11px] text-dim">{utcHour(hour.open_time)} UTC</span>
@@ -530,7 +712,7 @@ export function MarketPulse() {
 
       <TerminalPanel title="Notifications" meta="hour closes · volume · integrity">
         <div className="divide-y divide-line/70">
-          {(pulse.data?.alerts ?? []).slice(0, 10).map((alert, index) => (
+          {events.slice(0, 12).map((alert, index) => (
             <div key={`${alert.at}-${index}`} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
               <span className={`mt-1 h-2 w-2 rounded-full ${alert.severity === "critical" ? "bg-short" : alert.severity === "warning" ? "bg-warn" : "bg-info"}`} />
               <div className="min-w-0 flex-1">
@@ -539,7 +721,7 @@ export function MarketPulse() {
               </div>
             </div>
           ))}
-          {!pulse.data?.alerts.length && <div className="py-4 text-[12px] text-dim">No pulse events yet.</div>}
+          {!events.length && <div className="py-4 text-[12px] text-dim">No pulse events yet.</div>}
         </div>
       </TerminalPanel>
     </div>

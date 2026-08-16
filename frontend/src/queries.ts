@@ -6,11 +6,16 @@ import { useQuery } from "@tanstack/react-query";
 import {
   apiGet,
   type HourBrief,
-  type JournalRow,
+  type CostModelPayload,
+  type JournalPayload,
   type LanesPayload,
   type PulsePayload,
   type RiskSnapshot,
+  type ResearchScorecard,
   type Snapshot,
+  type MetaPayload,
+  type MlStatus,
+  type AgenticResearchStatus,
   type WhoAmI,
 } from "./api";
 
@@ -51,11 +56,48 @@ export function useJournal(limit = 50) {
     queryKey: ["journal", limit],
     // the route is /trade-journal (not /journal), and it returns a projection
     // object — the closed-trade rows live under `closed_trades`.
-    queryFn: async () => {
-      const r = await apiGet<{ closed_trades?: JournalRow[] }>(`/trade-journal?limit=${limit}`);
-      return r.closed_trades ?? [];
-    },
+    queryFn: () => apiGet<JournalPayload>(`/trade-journal?limit=${limit}`),
     refetchInterval: 20_000,
+  });
+}
+
+export function useMeta() {
+  return useQuery({
+    queryKey: ["meta"],
+    queryFn: () => apiGet<MetaPayload>("/meta"),
+    staleTime: 60_000,
+  });
+}
+
+export function useCostModel() {
+  return useQuery({
+    queryKey: ["cost-model"],
+    queryFn: () => apiGet<CostModelPayload>("/cost-model"),
+    staleTime: 60_000,
+  });
+}
+
+export function useResearchScorecard() {
+  return useQuery({
+    queryKey: ["scorecard"],
+    queryFn: () => apiGet<ResearchScorecard>("/scorecard"),
+    staleTime: 60_000,
+  });
+}
+
+export function useMlStatus() {
+  return useQuery({
+    queryKey: ["ml-status"],
+    queryFn: () => apiGet<MlStatus>("/ml-status"),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useAgenticResearchStatus() {
+  return useQuery({
+    queryKey: ["agentic-research-os"],
+    queryFn: () => apiGet<AgenticResearchStatus>("/agentic-research-os"),
+    refetchInterval: 60_000,
   });
 }
 

@@ -40,7 +40,7 @@ flowchart TB
     Measure --> Snapshot["Coalesced health / lane / risk snapshot"]
     CanonicalLake --> PulseService["MarketPulseService"]
     Snapshot --> PulseService
-    PulseService --> Dashboard["Read-only React /app<br/>Pulse · Lanes · Risk · Journal · Research"]
+    PulseService --> Dashboard["Read-only React /app<br/>Pulse · Desk · Risk · Journal · Research · Promote · System"]
     Snapshot --> Dashboard
 
     Roster -. "only with two explicit paper gates + approval" .-> Strategy["Optional capital strategy"]
@@ -64,6 +64,33 @@ flowchart TB
 The default path ends at measurement and the dashboard. It cannot produce an
 `OrderIntent`: `measurement_only_v1` returns no signal, the capital allowlist
 is empty, and Compose contains no live-order service.
+
+## Control-system hierarchy
+
+```mermaid
+flowchart TB
+    Control["L0 Control<br/>mode · live lock · kill · capital roster · human promotion"]
+    Measure["L1 Data / measurement<br/>public feed · candles · gaps · VWAP · swings · dual AVWAP"]
+    Lanes["L2 Runtime lanes<br/>venue · symbol · timeframe · eligibility · mode · health"]
+    Evidence["L3 Evidence only<br/>research · ML meta-labels · agent task governor"]
+    Gates["L4 Hard gates<br/>data quality · CostGate · halt · arm · RiskGateway"]
+    Orders["L5 Guarded order spine<br/>WAL · adapter · private truth · ledger · reconciliation"]
+    Glass["Read-only glass<br/>no trade or promotion controls"]
+
+    Control --> Measure --> Lanes --> Evidence
+    Evidence -. "scores / ranks; never submits" .-> Gates
+    Lanes --> Glass
+    Control --> Glass
+    Evidence --> Glass
+    Gates --> Orders
+    Orders --> Glass
+```
+
+Operational priority in the glass is runtime lanes, risk/feed truth, and the
+journal before promotion evidence, research, ML, or agent work. ML is a
+meta-label gate over rule outcomes, not an autonomous strategy. Agentic and
+Darwinian components govern research tasks and artifacts only. Neither layer
+can write the capital registry, emit an order, or bypass the gateway.
 
 ## Runtime profiles and authority
 
@@ -166,10 +193,28 @@ The local React `/app` cockpit now has:
 - lane eligibility (`KILLED`, `RESEARCH_ONLY`, eligible/unknown);
 - journal recovery, daily halt, stream health, and Delta-private visibility;
 - Market Pulse with Lightweight Charts, closed 1h candles, server VWAP,
-  optional AVWAP price line, a transient forming bar, UTC labels, and true
+  causal dual AVWAP lines, a transient forming bar, UTC labels, and true
   whitespace gaps;
+- a Desk view containing the runtime lane roster only; research/catalog rows
+  are never unioned into an implied active-strategy list;
+- a Promote view that exposes the human checklist, empty capital roster,
+  sealed `KILLED` rows, and sample buckets without any mutation control;
+- a System view that distinguishes `OK`, `STALE`, and `MISSING` snapshot,
+  scorecard, ML, and agent artifacts and shows the Delta-private blocker;
+- subordinate ML and agent-governor cards under Research, explicitly labelled
+  as evidence-only and incapable of trade or promotion;
 - bounded, cached hour briefs that cannot emit signals, orders, or promotion;
 - no order or mutation controls.
+
+The navigation order is the authority order:
+
+```text
+Pulse → Desk → Risk → Journal → Research → Promote → System
+```
+
+Pulse is the default. The classic dashboard is reachable only as an explicit
+legacy command-palette fallback; it is still served at `/`, so presentation
+logic is not yet physically single-sourced.
 
 Authentication is only **PARTIALLY COMPLETE**. The server can exchange a root
 token for a 15-minute JWT, but the React client still reads `?token=` and sends
@@ -187,12 +232,11 @@ Local deploy protections are **SHIPPED**:
   live flag, capital roster, and strategy eligibility;
 - the Docker image includes the production React build.
 
-The current VM remains an **EXTERNAL BLOCKER**, not a verified success. This
-workspace has no usable SSH identity for the host, and the observed IP endpoint
-uses an untrusted self-signed certificate. Therefore the deployed SHA, token
-rotation, container health, roster, and dashboard pixel state are unknown.
-Do not mark deployment complete until the fleet policy passes on-host and the
-public endpoint uses a trusted DNS certificate.
+VM state is runtime evidence, not a property of this working tree. Do not mark
+a deployment complete until the deployed SHA, container health, capital
+roster, and fleet policy pass on-host. The IP endpoint still uses an untrusted
+self-signed certificate; production browser access remains blocked on a
+trusted DNS certificate even when the guarded application deployment passes.
 
 ## Completed items from the earlier audit
 
@@ -205,6 +249,8 @@ public endpoint uses a trusted DNS certificate.
 | React frontend baked into Docker | **SHIPPED** |
 | Honest status, lanes, and Risk UI | **SHIPPED locally** |
 | Market Pulse chart and hour strip | **SHIPPED locally** |
+| React authority hierarchy (Desk/Promote/System) | **SHIPPED locally** |
+| ML and agent evidence subordinate to Research | **SHIPPED locally** |
 | Canonical candles, gaps, VWAP/AVWAP libraries | **SHIPPED as libraries** |
 | License for the public repository | **SHIPPED locally** — MIT |
 | CI visibility beyond the safety allowlist | **PARTIAL** — full-package Ruff/mypy report debt but are non-blocking |
@@ -236,9 +282,10 @@ public endpoint uses a trusted DNS certificate.
 1. **Wire canonical ingest into the default runtime.** Feed trades and
    heartbeats into `GapAwareCandlePipeline`, persist closed bars, propagate
    `data_degraded`, and make Pulse non-empty on a clean deployment.
-2. **Wire AVWAP history into Pulse.** The math exists, but the service currently
-   reports `avwap=null` and `dual_avwap_bias=unavailable`; add explicit anchor
-   provenance and `confirmed_at` to the API before drawing a series.
+2. ~~**Wire AVWAP history into Pulse.**~~ Complete: deterministic 3-left/3-right
+   closed-hour anchors feed dual AVWAP series, bias, and explicit anchor plus
+   `confirmed_at` provenance. Forming-hour bias is preview-only and cannot
+   confirm an anchor.
 3. **Unify the cockpit.** Make React `/app` the documented production root,
    retain classic only as an explicit legacy fallback, then remove duplicated
    presentation logic.

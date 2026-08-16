@@ -22,6 +22,9 @@ from typing import Any
 
 from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import GapParquetStore, GapRecord
+from vnedge.data.swings import SwingAnchor, SwingDetectConfig, SwingKind, detect_swings
+from vnedge.data.vwap import dual_avwap_bias
+from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,7 @@ _BANNED_LANGUAGE = re.compile(
     r"\b(?:buy|sell|long|short|enter|exit|target|stop|leverage|guarantee(?:d|s)?)\b",
     re.IGNORECASE,
 )
+PULSE_1H_SWING_CONFIG = SwingDetectConfig(left=3, right=3, strict=True)
 
 
 def _utc(value: datetime, *, label: str) -> datetime:
@@ -118,6 +122,12 @@ class PulseHour:
     vs_session_vwap_bps: float | None
     prior_hour_range_bps: float | None
     dual_avwap_bias: str
+    avwap_low: float | None
+    avwap_high: float | None
+    avwap_low_anchor_utc: str | None
+    avwap_high_anchor_utc: str | None
+    avwap_low_confirmed_at_utc: str | None
+    avwap_high_confirmed_at_utc: str | None
     session_active: bool
     session_label: str
     data_quality: str
@@ -126,7 +136,15 @@ class PulseHour:
     forming: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Stable Pulse API aliases. Keep the original keys for existing clients
+        # while making UTC and integrity semantics explicit for new consumers.
+        payload["open_time_utc"] = self.open_time
+        payload["close_time_utc"] = self.close_time
+        payload["is_gap"] = self.data_quality == "gap"
+        if payload["dual_avwap_bias"] == "unavailable":
+            payload["dual_avwap_bias"] = "n/a"
+        return payload
 
     def analysis_inputs(self, context_hours: Sequence[PulseHour]) -> dict[str, Any]:
         """Fixed server-owned JSON supplied to a narrative adapter."""
@@ -553,13 +571,22 @@ class MarketPulseService:
     def _hours(self, exchange: str, symbol: str) -> list[PulseHour]:
         candles = CandleParquetStore(self.candle_root, exchange=exchange).read(symbol, "1h")
         gaps = self.gap_store.read(exchange, symbol)
+        gap_minutes_by_candle = [_gap_minutes(candle, gaps) for candle in candles]
+        dual_context = self._dual_avwap_context(
+            candles,
+            eligible=[minutes == 0 for minutes in gap_minutes_by_candle],
+        )
         output: list[PulseHour] = []
         session_date = None
         session_quote = Decimal(0)
         session_volume = Decimal(0)
         volumes: list[float] = []
         ranges: list[float] = []
-        for candle in candles:
+        for candle, dual, gap_minutes in zip(
+            candles,
+            dual_context,
+            gap_minutes_by_candle,
+        ):
             if candle.open_time.date() != session_date:
                 session_date = candle.open_time.date()
                 session_quote = Decimal(0)
@@ -593,7 +620,6 @@ class MarketPulseService:
                 if session_vwap is not None
                 else None
             )
-            gap_minutes = _gap_minutes(candle, gaps)
             output.append(
                 PulseHour(
                     symbol=symbol,
@@ -614,7 +640,13 @@ class MarketPulseService:
                     volume_rank_24h=volume_rank,
                     vs_session_vwap_bps=vwap_distance,
                     prior_hour_range_bps=ranges[-1] if ranges else None,
-                    dual_avwap_bias="unavailable",
+                    dual_avwap_bias=dual["bias"],
+                    avwap_low=dual["low_value"],
+                    avwap_high=dual["high_value"],
+                    avwap_low_anchor_utc=dual["low_anchor"],
+                    avwap_high_anchor_utc=dual["high_anchor"],
+                    avwap_low_confirmed_at_utc=dual["low_confirmed_at"],
+                    avwap_high_confirmed_at_utc=dual["high_confirmed_at"],
                     session_active=12 <= candle.open_time.hour < 17,
                     session_label=_session_label(candle.open_time.hour),
                     data_quality="gap" if gap_minutes > 0 else "ok",
@@ -624,6 +656,71 @@ class MarketPulseService:
             )
             volumes.append(current_volume)
             ranges.append(range_bps)
+        return output
+
+    @staticmethod
+    def _dual_avwap_context(
+        candles: Sequence[Candle],
+        *,
+        eligible: Sequence[bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build causal dual-AVWAP state, failing closed at known gaps."""
+        usable = tuple(eligible) if eligible is not None else (True,) * len(candles)
+        if len(usable) != len(candles):
+            raise ValueError("dual AVWAP eligibility must match candle count")
+        anchors = detect_swings(
+            candles,
+            PULSE_1H_SWING_CONFIG,
+            eligible=usable,
+        )
+        prefix_quote = [Decimal(0)]
+        prefix_volume = [Decimal(0)]
+        for candle in candles:
+            prefix_quote.append(prefix_quote[-1] + candle.quote_volume)
+            prefix_volume.append(prefix_volume[-1] + candle.volume)
+
+        def value(anchor: SwingAnchor | None, end: int) -> Decimal | None:
+            if anchor is None:
+                return None
+            quote = prefix_quote[end + 1] - prefix_quote[anchor.index]
+            volume = prefix_volume[end + 1] - prefix_volume[anchor.index]
+            return quote / volume if volume > 0 else None
+
+        low_anchor: SwingAnchor | None = None
+        high_anchor: SwingAnchor | None = None
+        anchor_index = 0
+        output: list[dict[str, Any]] = []
+        for index, candle in enumerate(candles):
+            if not usable[index]:
+                low_anchor = None
+                high_anchor = None
+            while (
+                anchor_index < len(anchors)
+                and anchors[anchor_index].confirmed_at <= candle.close_time
+            ):
+                anchor = anchors[anchor_index]
+                if anchor.kind == SwingKind.LOW:
+                    low_anchor = anchor
+                else:
+                    high_anchor = anchor
+                anchor_index += 1
+            low_value = value(low_anchor, index)
+            high_value = value(high_anchor, index)
+            output.append(
+                {
+                    "bias": dual_avwap_bias(candle.close, low_value, high_value),
+                    "low_value": _number(low_value),
+                    "high_value": _number(high_value),
+                    "low_anchor": _iso(low_anchor.anchor_time) if low_anchor else None,
+                    "high_anchor": _iso(high_anchor.anchor_time) if high_anchor else None,
+                    "low_confirmed_at": (
+                        _iso(low_anchor.confirmed_at) if low_anchor else None
+                    ),
+                    "high_confirmed_at": (
+                        _iso(high_anchor.confirmed_at) if high_anchor else None
+                    ),
+                }
+            )
         return output
 
     @staticmethod
@@ -645,11 +742,21 @@ class MarketPulseService:
         return dict(forming)
 
     @staticmethod
+    def _symbol_runtime(runtime: Mapping[str, Any] | None, symbol: str) -> bool:
+        """Return whether the single runtime quote belongs to this Pulse symbol."""
+        if not runtime or not runtime.get("symbol"):
+            return True
+        runtime_symbol = str(runtime["symbol"]).upper()
+        base = symbol.upper().removesuffix("USDT")
+        return runtime_symbol.startswith(base)
+
+    @staticmethod
     def _forming_metrics(
         forming: dict[str, Any] | None,
         closed: Sequence[PulseHour],
         *,
-        degraded: bool,
+        quality: str,
+        now: datetime,
     ) -> dict[str, Any] | None:
         if forming is None:
             return None
@@ -661,16 +768,33 @@ class MarketPulseService:
             close = float(forming["close"])
             volume = float(forming.get("volume") or 0.0)
         except (KeyError, TypeError, ValueError):
-            enriched["data_quality"] = "degraded" if degraded else "ok"
+            enriched["data_quality"] = quality
             return enriched
         enriched["range_bps"] = (high - low) / open_price * 10_000 if open_price > 0 else 0.0
         enriched["close_vs_open_bps"] = (
             (close - open_price) / open_price * 10_000 if open_price > 0 else 0.0
         )
-        trailing = [hour.volume for hour in closed[-20:]]
+        enriched["body_bps"] = (
+            abs(close - open_price) / open_price * 10_000 if open_price > 0 else 0.0
+        )
+        trailing = [hour.volume for hour in closed[-24:]]
         volume_median = median(trailing) if trailing else None
         enriched["volume_vs_median_20h"] = (
             volume / volume_median if volume_median is not None and volume_median > 0 else None
+        )
+        enriched["volume_vs_median_24h"] = enriched["volume_vs_median_20h"]
+        enriched["volume_rank_24h"] = (
+            sum(value <= volume for value in [*trailing[-23:], volume])
+            / len([*trailing[-23:], volume])
+            if trailing
+            else None
+        )
+        ranges = [hour.range_bps for hour in closed[-24:]]
+        range_median = median(ranges) if ranges else None
+        enriched["range_vs_median_24h"] = (
+            enriched["range_bps"] / range_median
+            if range_median is not None and range_median > 0
+            else None
         )
         session_vwap = closed[-1].session_vwap if closed else None
         enriched["vs_session_vwap_bps"] = (
@@ -678,8 +802,70 @@ class MarketPulseService:
             if session_vwap is not None and session_vwap > 0
             else None
         )
-        enriched["data_quality"] = "degraded" if degraded else "ok"
+        enriched["session_label"] = _session_label(now.hour)
+        enriched["session_active"] = 12 <= now.hour < 17
+        enriched["data_quality"] = quality
         return enriched
+
+    @staticmethod
+    def _forming_contract(
+        forming: dict[str, Any] | None,
+        *,
+        now: datetime,
+        mid: float | None,
+        quality: str,
+        latest: PulseHour | None,
+    ) -> dict[str, Any]:
+        current = dict(forming or {})
+        current.setdefault(
+            "open_time",
+            _iso(now.replace(minute=0, second=0, microsecond=0)),
+        )
+        raw_open = current["open_time"]
+        current["open_time_utc"] = (
+            _iso(raw_open) if isinstance(raw_open, datetime) else str(raw_open)
+        )
+        current["mid"] = mid
+        current.setdefault("range_bps", None)
+        current.setdefault("body_bps", None)
+        current.setdefault("volume", None)
+        current.setdefault("volume_rank_24h", None)
+        session_vwap = latest.session_vwap if latest is not None else None
+        current.setdefault(
+            "vs_session_vwap_bps",
+            (
+                (mid - session_vwap) / session_vwap * 10_000
+                if mid is not None and session_vwap is not None and session_vwap > 0
+                else None
+            ),
+        )
+        preview_price = mid if mid is not None else _number(current.get("close"))
+        preview_bias = dual_avwap_bias(
+            preview_price if preview_price is not None else 0,
+            latest.avwap_low if latest is not None else None,
+            latest.avwap_high if latest is not None else None,
+        )
+        current["dual_avwap_bias"] = (
+            "n/a" if preview_bias == "unavailable" else preview_bias
+        )
+        current["dual_avwap_reason"] = (
+            "no_confirmed_swing_pair"
+            if latest is None or latest.avwap_low is None or latest.avwap_high is None
+            else "price_unavailable"
+            if preview_price is None
+            else None
+        )
+        current["avwap_low"] = latest.avwap_low if latest is not None else None
+        current["avwap_high"] = latest.avwap_high if latest is not None else None
+        current.setdefault("session_label", _session_label(now.hour))
+        current.setdefault("session_active", 12 <= now.hour < 17)
+        current["data_quality"] = quality
+        current["status"] = (
+            "forming"
+            if all(current.get(key) is not None for key in ("open", "high", "low", "close"))
+            else "awaiting_trades"
+        )
+        return current
 
     def hours(self, exchange: str, symbol: str, *, limit: int = 48) -> dict[str, Any]:
         limit = max(1, min(limit, 168))
@@ -745,6 +931,23 @@ class MarketPulseService:
                     "recovered": True,
                 },
             )
+            if (
+                latest.volume_rank_24h is not None
+                and latest.volume_rank_24h >= 0.9
+            ):
+                alerts.insert(
+                    1,
+                    {
+                        "kind": "volume_spike",
+                        "at": latest.close_time,
+                        "severity": "warning",
+                        "message": (
+                            f"{symbol} closed-hour volume ranked "
+                            f"{latest.volume_rank_24h * 100:.0f}th percentile of 24h"
+                        ),
+                        "recovered": True,
+                    },
+                )
         if stale and latest_close is not None:
             alerts.insert(
                 0,
@@ -759,30 +962,124 @@ class MarketPulseService:
                     "recovered": False,
                 },
             )
+        forming_metrics = self._forming_metrics(
+            self._forming(runtime, symbol),
+            rows,
+            quality=pulse_quality,
+            now=now,
+        )
+        runtime_matches = self._symbol_runtime(runtime, symbol)
+        feed = runtime.get("feed_health") if runtime and runtime_matches else None
+        feed_age_ms = (
+            _number(feed.get("last_update_ms"))
+            if isinstance(feed, Mapping)
+            else None
+        )
+        latest_gap = gaps[-1] if gaps else None
+        book = runtime.get("price") if runtime and runtime_matches else None
+        mid = _number(_mapping(book).get("mid"))
+        forming = self._forming_contract(
+            forming_metrics,
+            now=now,
+            mid=mid,
+            quality=pulse_quality,
+            latest=latest,
+        )
+        fee_wall = DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile(
+            exchange
+        ).taker_round_trip_cost_bps
         return {
             "exchange": exchange,
             "symbol": symbol,
             "as_of": _iso(now),
+            "as_of_utc": _iso(now),
             "status": (
                 "live"
                 if pulse_quality == "ok"
                 else "warming" if pulse_quality == "unknown" else "degraded"
             ),
             "data_quality": pulse_quality,
-            "forming": self._forming_metrics(
-                self._forming(runtime, symbol),
-                rows,
-                degraded=degraded,
-            ),
+            "forming": forming,
             "hours": [hour.to_dict() for hour in rows],
+            "fee_wall_bps": round(fee_wall, 2),
+            "session_vwap_series": [
+                {
+                    "time": int(datetime.fromisoformat(hour.open_time).timestamp()),
+                    "value": hour.session_vwap,
+                }
+                for hour in rows
+                if hour.session_vwap is not None
+            ],
+            "avwap_series": None,
+            "dual_avwap_series": {
+                "low": [
+                    {
+                        "time": int(datetime.fromisoformat(hour.open_time).timestamp()),
+                        "value": hour.avwap_low,
+                    }
+                    for hour in rows
+                    if hour.avwap_low is not None
+                ],
+                "high": [
+                    {
+                        "time": int(datetime.fromisoformat(hour.open_time).timestamp()),
+                        "value": hour.avwap_high,
+                    }
+                    for hour in rows
+                    if hour.avwap_high is not None
+                ],
+            },
+            "market": {
+                "last": latest.close if latest else None,
+                "mid": mid,
+                "feed_age_ms": feed_age_ms,
+                "canonical_age_ms": (
+                    round(max(0.0, (now - latest_close).total_seconds() * 1000.0), 1)
+                    if latest_close is not None
+                    else None
+                ),
+                "session_label": _session_label(now.hour),
+            },
             "indicators": {
                 "session_vwap": latest.session_vwap if latest else None,
                 "vs_session_vwap_bps": latest.vs_session_vwap_bps if latest else None,
-                "dual_avwap_bias": latest.dual_avwap_bias if latest else "unavailable",
+                "dual_avwap_bias": (
+                    "n/a"
+                    if latest is None or latest.dual_avwap_bias == "unavailable"
+                    else latest.dual_avwap_bias
+                ),
                 "avwap": None,
                 "avwap_label": None,
+                "avwap_low": latest.avwap_low if latest else None,
+                "avwap_high": latest.avwap_high if latest else None,
+                "avwap_low_anchor_utc": latest.avwap_low_anchor_utc if latest else None,
+                "avwap_high_anchor_utc": latest.avwap_high_anchor_utc if latest else None,
+                "avwap_low_confirmed_at_utc": (
+                    latest.avwap_low_confirmed_at_utc if latest else None
+                ),
+                "avwap_high_confirmed_at_utc": (
+                    latest.avwap_high_confirmed_at_utc if latest else None
+                ),
+                "avwap_unavailable_reason": (
+                    "no confirmed swing pair"
+                    if latest is None
+                    or latest.avwap_low is None
+                    or latest.avwap_high is None
+                    else None
+                ),
             },
-            "book": runtime.get("price") if runtime else None,
+            "last_gap": (
+                {
+                    "kind": latest_gap.kind.value,
+                    "start": _iso(latest_gap.start),
+                    "end": _iso(latest_gap.end),
+                    "recovered": latest_gap.recovered,
+                    "detail": latest_gap.detail or "coverage unproven",
+                }
+                if latest_gap is not None
+                else None
+            ),
+            "book": book,
             "alerts": alerts,
             "policy": OBSERVATION_DISCLAIMER,
             "read_only": True,

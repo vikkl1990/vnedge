@@ -20,6 +20,12 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from vnedge.data.candles import Candle
 
+from vnedge.data.swings import SwingAnchor as _SwingAnchor
+from vnedge.data.swings import confirmed_swing_anchors as _confirmed_swing_anchors
+
+SwingAnchor = _SwingAnchor
+confirmed_swing_anchors = _confirmed_swing_anchors
+
 ZERO = Decimal(0)
 BPS = Decimal(10_000)
 DecimalLike = Decimal | int | float | str
@@ -356,22 +362,6 @@ class AnchoredVWAP:
         return self._running.trade_count
 
 
-@dataclass(frozen=True, slots=True)
-class SwingAnchor:
-    """Mechanical swing anchor plus the first time it is knowable."""
-
-    kind: Literal["swing_low", "swing_high"]
-    bar_index: int
-    anchor_time: datetime
-    confirmed_at: datetime
-    price: Decimal
-    length: int
-
-    def is_confirmed(self, at: datetime) -> bool:
-        """Return whether this mechanical anchor is knowable at ``at``."""
-        return _utc(at, label="swing confirmation time") >= self.confirmed_at
-
-
 def anchored_vwap_series(
     candles: Sequence[Candle],
     anchor: int | datetime,
@@ -384,65 +374,6 @@ def anchored_vwap_series(
     else:
         running = AnchoredVWAP(anchor)
     return tuple(running.on_candle(candle) for candle in candles)
-
-
-def confirmed_swing_anchors(
-    candles: Sequence[Candle],
-    *,
-    length: int = 3,
-) -> tuple[SwingAnchor, ...]:
-    """Find unique L-left/L-right swing extrema in a closed candle series.
-
-    A swing at index ``i`` is unavailable to research logic until bar ``i+L``
-    closes. ``confirmed_at`` carries that boundary so callers cannot silently
-    act on the anchor with future knowledge.
-    """
-    if length < 1:
-        raise ValueError("swing length must be >= 1")
-    previous_open: datetime | None = None
-    symbol: str | None = None
-    timeframe: str | None = None
-    for candle in candles:
-        if not candle.is_closed:
-            raise ValueError("swing anchors require closed candles")
-        if symbol is None:
-            symbol, timeframe = candle.symbol, candle.timeframe
-        elif candle.symbol != symbol or candle.timeframe != timeframe:
-            raise ValueError("swing candle series must share symbol and timeframe")
-        if previous_open is not None and candle.open_time <= previous_open:
-            raise ValueError("swing candle series must be strictly ordered")
-        previous_open = candle.open_time
-
-    anchors = []
-    for index in range(length, len(candles) - length):
-        window = candles[index - length : index + length + 1]
-        candidate = candles[index]
-        lows = [candle.low for candle in window]
-        highs = [candle.high for candle in window]
-        confirmed_at = candles[index + length].close_time
-        if candidate.low == min(lows) and lows.count(candidate.low) == 1:
-            anchors.append(
-                SwingAnchor(
-                    "swing_low",
-                    index,
-                    candidate.open_time,
-                    confirmed_at,
-                    candidate.low,
-                    length,
-                )
-            )
-        if candidate.high == max(highs) and highs.count(candidate.high) == 1:
-            anchors.append(
-                SwingAnchor(
-                    "swing_high",
-                    index,
-                    candidate.open_time,
-                    confirmed_at,
-                    candidate.high,
-                    length,
-                )
-            )
-    return tuple(anchors)
 
 
 DualAVWAPBias = Literal["strong_long", "strong_short", "between", "unavailable"]

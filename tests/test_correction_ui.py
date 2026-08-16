@@ -43,6 +43,14 @@ def snapshot() -> dict:
                 "timeframe": "1h",
                 "feed": "ok",
                 "gapped_candles": 1,
+                "time_machine": {
+                    "health": {"1h": "ok"},
+                    "age_ms": {"1h": 4_200.0},
+                },
+                "latency": {"decision_lag_ms": {"p95": 4.5}},
+                "decision_skips": {"forming_1h": 2},
+                "cost_profile": "delta_swing",
+                "plan_overlay": {"round_trip_bps": 13.0},
                 "journal": {"available": True, "recovery_degraded": True},
                 "trial_scorecard": {
                     "criteria": [
@@ -78,6 +86,16 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["eligibility"] == "RESEARCH_ONLY"
     assert measurement["mode"] == "measurement"
     assert measurement["last_signal_age_seconds"] is None
+    assert measurement["candle_status"] == "ok"
+    assert measurement["candle_age_ms"] == 4200.0
+    assert measurement["decision_lag_ms"] == 4.5
+    assert measurement["arm_skips"] == 2
+    assert measurement["last_signal_reason"] == "observe_only"
+    assert measurement["cost_profile"] == "delta_swing"
+    assert measurement["round_trip_bps"] == 13.0
+    assert measurement["why_no_fire"] == (
+        "measurement lane emits no OrderIntent by design"
+    )
     assert killed["eligibility"] == "KILLED"
     assert killed["mode"] == "off"
     assert killed["capital"] is False
@@ -100,6 +118,15 @@ def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:
     assert payload["gateway"]["last_reject_reasons"] == [
         {"reason": "capital approval missing", "count": 1}
     ]
+    assert payload["gateway"]["window"] == "current_snapshot"
+    assert payload["positions"] == {"shadow_open": 0, "unresolved_orders": 0}
+    assert payload["breaker"] == {
+        "loss_streak": 0,
+        "active": False,
+        "threshold": 3,
+    }
+    assert payload["live_checklist"]["total"] == 7
+    assert payload["live_checklist"]["passed"] == 1
     delta = next(row for row in payload["streams"] if row["exchange"] == "delta_india")
     assert delta["private_stream"] == "not_implemented"
     assert payload["can_trade"] is False
