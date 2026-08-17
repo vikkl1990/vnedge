@@ -652,6 +652,8 @@ export function MarketPulse() {
         {SYMBOLS.map((item, index) => {
           const data = marketQueries[index].data;
           const itemForming = data?.forming;
+          const itemHours = data?.hours ?? [];
+          const latestClosedHour = itemHours[itemHours.length - 1];
           const price = data?.market.mid ?? data?.market.last;
           const active = item === symbol;
           const itemQuality = data?.data_quality ?? "unknown";
@@ -661,7 +663,7 @@ export function MarketPulse() {
               <div className="flex items-center justify-between"><span className="font-mono text-sm font-semibold">{item.replace("USDT", "")}</span><TerminalBadge tone={itemQuality === "ok" ? "good" : itemQuality === "unknown" ? "neutral" : "bad"}>{itemQuality}</TerminalBadge></div>
               <div className="mt-3 font-mono text-xl tabular-nums">{price?.toLocaleString() ?? "—"}</div>
               <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-dim">
-                <span>1h range</span><span className="text-right text-txt">{fmt(itemForming?.range_bps as number | undefined)} bps</span>
+                <span>1h range</span><span className="text-right text-txt">{fmt(latestClosedHour?.range_bps)} bps</span>
                 <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
                 <span>dual AVWAP</span><span className="text-right text-txt">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
                 <span>regime 1h</span><span className="text-right text-txt">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
