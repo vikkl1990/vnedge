@@ -844,13 +844,34 @@ class MarketPulseService:
         candle_health = feed.get("candles") if isinstance(feed, Mapping) else None
         return bool(candle_health) and str(candle_health).lower() not in {"ok", "live"}
 
-    @staticmethod
-    def _forming(runtime: Mapping[str, Any] | None, symbol: str) -> dict[str, Any] | None:
+    @classmethod
+    def _forming(
+        cls,
+        runtime: Mapping[str, Any] | None,
+        symbol: str,
+    ) -> dict[str, Any] | None:
         pulse = runtime.get("pulse") if runtime else None
         forming = pulse.get("forming") if isinstance(pulse, Mapping) else None
-        if not isinstance(forming, Mapping) or str(forming.get("symbol") or symbol) != symbol:
+        if isinstance(forming, Mapping) and str(forming.get("symbol") or symbol) == symbol:
+            return dict(forming)
+
+        # The multi-lane snapshot publishes the primary lane's canonical
+        # forming candle under Time Machine. Pulse is not a runtime producer in
+        # that topology, so consume the read-only 1h awareness record directly.
+        if not runtime or not cls._symbol_runtime(runtime, symbol):
             return None
-        return dict(forming)
+        time_machine = runtime.get("time_machine")
+        time_machine_forming = (
+            time_machine.get("forming") if isinstance(time_machine, Mapping) else None
+        )
+        hour = (
+            time_machine_forming.get("1h")
+            if isinstance(time_machine_forming, Mapping)
+            else None
+        )
+        if not isinstance(hour, Mapping):
+            return None
+        return {**dict(hour), "symbol": symbol}
 
     @staticmethod
     def _symbol_runtime(runtime: Mapping[str, Any] | None, symbol: str) -> bool:

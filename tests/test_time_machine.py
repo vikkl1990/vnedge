@@ -92,4 +92,6 @@ def test_snapshot_dict_shape():
     tm.on_kline_update("BTC", "1m", _k(BASE, 100, 101, 99, 100, 5, BASE + timedelta(seconds=30)), False)
     d = tm.snapshot_dict("BTC")
     assert "1m" in d["forming"] and 0 <= d["forming"]["1m"]["progress"] < 1
+    assert d["forming"]["1m"]["open_time"] == BASE.isoformat()
+    assert d["forming"]["1m"]["volume"] == 5
     assert d["health"]["1m"] == "ok"

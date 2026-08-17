@@ -15,9 +15,10 @@ fully unit-testable.
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Callable, Literal
+from typing import Literal
 
 TF = Literal["1m", "5m", "15m", "1h", "4h"]
 
@@ -221,10 +222,12 @@ class TimeMachine:
         """Mark stale TFs (no update in > stall_threshold_mult × tf) + emit stall."""
         for (symbol, tf), last in list(self._last_update.items()):
             dur = _TF_SECONDS[tf]
-            if now - last > timedelta(seconds=dur * self.config.stall_threshold_mult):
-                if self._health.get((symbol, tf)) != "stale":
-                    self._health[(symbol, tf)] = "stale"
-                    self._emit("stall", symbol, tf)
+            if (
+                now - last > timedelta(seconds=dur * self.config.stall_threshold_mult)
+                and self._health.get((symbol, tf)) != "stale"
+            ):
+                self._health[(symbol, tf)] = "stale"
+                self._emit("stall", symbol, tf)
 
     # --- queries -----------------------------------------------------------------
     def health_of(self, symbol: str, tf: TF) -> Health:
@@ -281,8 +284,16 @@ class TimeMachine:
         out = {
             "as_of": st.as_of.isoformat() if st.as_of.tzinfo else None,
             "forming": {
-                tf: {"progress": round(c.forming_progress, 3), "open": c.open,
-                     "high": c.high, "low": c.low, "close": c.close}
+                tf: {
+                    "open_time": c.open_time.isoformat(),
+                    "close_time": c.close_time.isoformat(),
+                    "progress": round(c.forming_progress, 3),
+                    "open": c.open,
+                    "high": c.high,
+                    "low": c.low,
+                    "close": c.close,
+                    "volume": c.volume,
+                }
                 for tf, c in st.forming.items()
             },
             "last_closed": {

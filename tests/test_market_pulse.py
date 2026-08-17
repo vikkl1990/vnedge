@@ -104,6 +104,38 @@ def test_pulse_metrics_are_closed_hour_measurements_only(tmp_path) -> None:
     )
 
 
+def test_pulse_uses_read_only_time_machine_forming_hour(tmp_path) -> None:
+    pulse_service = service(tmp_path)
+    pulse_service.clock = lambda: START + timedelta(hours=26, minutes=15)
+
+    pulse = pulse_service.pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={
+            "symbol": "BTC/USDT:USDT",
+            "price": {"bid": 125.4, "ask": 125.6, "mid": 125.5},
+            "time_machine": {
+                "forming": {
+                    "1h": {
+                        "open_time": "2026-08-16T02:00:00+00:00",
+                        "open": 125.0,
+                        "high": 126.0,
+                        "low": 124.0,
+                        "close": 125.5,
+                        "volume": 40.0,
+                        "progress": 0.25,
+                    }
+                }
+            },
+        },
+    )
+
+    assert pulse["forming"]["status"] == "forming"
+    assert pulse["forming"]["range_bps"] == pytest.approx(160.0)
+    assert pulse["forming"]["volume"] == 40.0
+    assert pulse["forming"]["volume_rank_24h"] == 1.0
+
+
 def test_pulse_exposes_closed_1h_and_4h_regime_measurements(tmp_path) -> None:
     rows = tuple(candle(hour, volume="100") for hour in range(180))
     CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)

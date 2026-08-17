@@ -594,6 +594,11 @@ export function MarketPulse() {
     );
   const priorDayProfile = pulse.data?.volume_profile.prior_day;
   const profileReason = priorDayProfile?.reason?.replace(/_/g, " ");
+  const qualityNote = pulse.data?.last_gap
+    ? pulse.data.last_gap.recovered
+      ? `last gap recovered · ${fullUtcHour(pulse.data.last_gap.start)} UTC`
+      : `active ${pulse.data.last_gap.kind.replace(/_/g, " ")} · ${fullUtcHour(pulse.data.last_gap.start)} UTC`
+    : "no recorded gap in window";
   const events = [
     ...(pulse.data?.alerts ?? []),
     ...((risk.data?.gateway.last_reject_reasons ?? []).map((item) => ({
@@ -708,7 +713,7 @@ export function MarketPulse() {
               <Metric label="Prior-day POC" value={priorDayProfile?.poc?.toLocaleString() ?? "unavailable"} note={priorDayProfile?.available ? `${signed(priorDayProfile.vs_poc_bps)} bps · trade-derived` : profileReason} />
               <Metric label="VAL / VAH" value={priorDayProfile?.available ? `${priorDayProfile.value_area_low?.toLocaleString()} – ${priorDayProfile.value_area_high?.toLocaleString()}` : "unavailable"} note={priorDayProfile?.available ? `${priorDayProfile.location.replace(/_/g, " ")} · ${((priorDayProfile.va_volume_pct ?? 0) * 100).toFixed(1)}% volume` : profileReason} />
               <Metric label="Session" value={(forming?.session_label as string | undefined) ?? pulse.data?.market.session_label ?? "—"} note={((forming?.session_active as boolean | undefined) ?? pulse.data?.market.session_label === "us_overlap") ? "active overlap" : "off overlap"} />
-              <Metric label="Quality" value={quality} note={pulse.data?.last_gap ? `${pulse.data.last_gap.kind} · ${fullUtcHour(pulse.data.last_gap.start)} UTC` : "no recorded gap in window"} />
+              <Metric label="Quality" value={quality} note={qualityNote} />
             </div>
           </TerminalPanel>
 
