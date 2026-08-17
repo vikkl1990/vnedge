@@ -11,6 +11,8 @@ except the explicit ``annotate`` helper.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from vnedge.runtime import latency_thresholds as LT
 
 # arm-gate bands -> UI bands (ok/degraded/blocked/unknown)
@@ -70,7 +72,7 @@ def _verdict_tone(v) -> str:
 
 
 def lane_bands(lane: dict) -> dict:
-    tf = lane.get("timeframe")
+    tf = str(lane.get("timeframe") or "")
     tm = lane.get("time_machine") or {}
     age = (tm.get("age_ms") or {}).get(tf)
     lat = lane.get("latency") or {}
@@ -96,6 +98,61 @@ def lane_bands(lane: dict) -> dict:
     }
 
 
+def timeframe_health(lane: Mapping[str, object]) -> tuple[str, float | None]:
+    """Return decision-timeframe transport state from the canonical snapshot."""
+    timeframe = str(lane.get("timeframe") or "")
+    machine = lane.get("time_machine")
+    machine = machine if isinstance(machine, Mapping) else {}
+    health = machine.get("health")
+    health = health if isinstance(health, Mapping) else {}
+    ages = machine.get("age_ms")
+    ages = ages if isinstance(ages, Mapping) else {}
+    feed_health = lane.get("feed_health")
+    feed_health = feed_health if isinstance(feed_health, Mapping) else {}
+    status = str(
+        health.get(timeframe)
+        or lane.get("feed")
+        or feed_health.get("candles")
+        or "unknown"
+    ).lower()
+    raw_age = ages.get(timeframe)
+    if raw_age is None:
+        raw_age = lane.get("staleness_ms") or feed_health.get("last_update_ms")
+    try:
+        age = round(float(str(raw_age)), 3) if raw_age is not None else None
+    except (TypeError, ValueError):
+        age = None
+    return status, age
+
+
+def lane_health(lane: Mapping[str, object], *, has_problem: bool = False) -> str:
+    """Canonical per-lane health used by every dashboard projection."""
+    if lane.get("arm_blocked") or lane.get("gapped_candles"):
+        return "blocked"
+    if has_problem or lane.get("degraded"):
+        return "degraded"
+
+    feed_health = lane.get("feed_health")
+    feed_health = feed_health if isinstance(feed_health, Mapping) else {}
+    feed = str(lane.get("feed") or feed_health.get("candles") or "").lower()
+    if feed and feed not in {"ok", "live"}:
+        return "degraded" if "warm" in feed else "blocked"
+
+    supplied = lane.get("bands")
+    bands = supplied if isinstance(supplied, Mapping) else lane_bands(dict(lane))
+    values = [
+        str(bands.get(name) or "unknown")
+        for name in ("age", "bar_close_lag", "decision_lag", "dd")
+    ]
+    if "blocked" in values:
+        return "blocked"
+    if "degraded" in values:
+        return "degraded"
+    if feed in {"ok", "live"} or "ok" in values:
+        return "ok"
+    return "unknown"
+
+
 def compute_chips(snap: dict) -> dict:
     """The five safe-to-arm chips (SYSTEM/FEED/CANDLE/DECISION/RISK). UNKNOWN never
     fakes OK. SYSTEM is the kill-dominant rollup of the rest."""
@@ -103,26 +160,30 @@ def compute_chips(snap: dict) -> dict:
     kill = bool(snap.get("kill_switch_active"))
 
     candle, c_label = "unknown", "no telemetry"
-    for l in lanes:
-        tm = l.get("time_machine") or {}
+    for lane in lanes:
+        tm = lane.get("time_machine") or {}
         health = tm.get("health")
         if not health:
             continue
         if candle == "unknown":
             candle, c_label = "ok", "ok"
-        h = health.get(l.get("timeframe"))
+        h = health.get(lane.get("timeframe"))
         if h and h != "ok":
             candle, c_label = _worse(candle, "blocked"), f"decision-TF {h}"
-        if l.get("arm_blocked"):          # CURRENT arm-gate state, not cumulative
+        if lane.get("arm_blocked"):       # CURRENT arm-gate state, not cumulative
             candle, c_label = _worse(candle, "blocked"), "arms blocked"
         a1 = (tm.get("age_ms") or {}).get("1m")
         if a1 is not None and a1 > LT.TM_AGE_SOFT_P99_MS.get("1m", 1e18) and candle == "ok":
             candle, c_label = "degraded", "1m age soft"
 
     decision, d_label = "unknown", "no telemetry"
-    skips = any(l.get("arm_blocked") for l in lanes)   # CURRENT block, not cumulative
-    lat_vals = [(l.get("latency") or {}).get("decision_lag_ms", {}).get("p95")
-                for l in lanes if isinstance(l.get("latency"), dict)]
+    # CURRENT block, not cumulative.
+    skips = any(lane.get("arm_blocked") for lane in lanes)
+    lat_vals = [
+        (lane.get("latency") or {}).get("decision_lag_ms", {}).get("p95")
+        for lane in lanes
+        if isinstance(lane.get("latency"), dict)
+    ]
     lat_vals = [v for v in lat_vals if isinstance(v, (int, float))]
     bar_vals = []
     for lane in lanes:
@@ -159,8 +220,8 @@ def compute_chips(snap: dict) -> dict:
             feed, f_label = "degraded", "warming"
         else:
             feed, f_label = "blocked", cand[:12]
-    for l in lanes:
-        f = str(l.get("feed") or "").lower()
+    for lane in lanes:
+        f = str(lane.get("feed") or "").lower()
         if f and "ok" not in f and "live" not in f:
             base = "ok" if feed == "unknown" else feed
             feed = _worse(base, "degraded" if "warm" in f else "blocked")
@@ -199,8 +260,8 @@ def annotate(snap: dict) -> dict:
     snap["chips"] = compute_chips(snap)
     lanes = snap.get("lanes")
     if isinstance(lanes, list):
-        for l in lanes:
-            l["bands"] = lane_bands(l)
+        for lane in lanes:
+            lane["bands"] = lane_bands(lane)
     else:
         # single-lane: expose the synthesized lane's bands top-level for the client
         rows = lane_rows(snap)

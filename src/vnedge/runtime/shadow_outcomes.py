@@ -43,8 +43,8 @@ nothing, and trade nothing.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import pandas as pd
 
@@ -144,10 +144,10 @@ class ShadowOutcomeTracker:
         self.journal = journal
         self.fill_model = fill_model or FillModel()
         self.max_holding_bars = max_holding_bars
-        # ATR-chandelier trail on the virtual stop — mirrors the paper/live
-        # ActiveExitState exactly (same _better_stop ratchet, fed the same
-        # canonical ATR), so a shadow lane predicts its paper/live twin instead
-        # of running the legacy fixed-stop exit. 0.0 = off (unchanged behaviour).
+        # ATR-chandelier trail uses the same tighten-only primitive as paper/live.
+        # TP ladders are observation-only in this single-outcome tracker; such a
+        # lane is marked non-trade-compatible below rather than pretending full
+        # ActiveExitState parity.
         self.trail_atr_mult = float(trail_atr_mult)
         # Maker route: entries fill only on a touch within maker_fill_ttl_bars,
         # and pay the maker fee. Off => the all-taker default, byte-for-byte.
@@ -165,6 +165,8 @@ class ShadowOutcomeTracker:
         self._gross_win_usd = 0.0
         self._gross_loss_usd = 0.0
         self._unfilled = 0  # maker limits that never got a touch (missed trades)
+        self._semantic_gap = False
+        self._recent_outcomes: list[dict] = []
         self._resolutions: dict[str, int] = {"stop": 0, "target": 0, "timeout": 0}
         self._load()
 
@@ -182,6 +184,7 @@ class ShadowOutcomeTracker:
                 if key is None or key in self._resolved_keys:
                     continue
                 self._resolved_keys.add(key)
+                self._remember_outcome(payload)
                 self._accumulate(
                     str(payload.get("resolution", "")),
                     float(payload.get("virtual_net_usd", 0.0)),
@@ -198,6 +201,7 @@ class ShadowOutcomeTracker:
                 continue
             pending = self._parse_intent(key, payload)
             if pending is not None:
+                self._semantic_gap = self._semantic_gap or bool(pending.take_profit_levels)
                 self._pending[key] = pending
 
     def _parse_intent(self, key: str, payload: dict) -> _PendingIntent | None:
@@ -264,6 +268,7 @@ class ShadowOutcomeTracker:
             mfe_price=entry_price,  # starts at entry; updated each active bar
             filled=not self.maker_route,  # maker entries wait for a touch
         )
+        self._semantic_gap = self._semantic_gap or bool(take_profit_levels)
 
     @property
     def has_pending(self) -> bool:
@@ -305,9 +310,7 @@ class ShadowOutcomeTracker:
                     continue
                 pending.filled = True  # touched -> fills this bar as the fill bar
             pending.bars_held += 1  # fill bar counts as 0, like run_backtest
-            # Track max-favourable excursion for the TP-ladder journal. This is
-            # pure observation — it never feeds _check_exit, so the exit and P&L
-            # are byte-identical to before.
+            # Track max-favourable excursion for the observation-only ladder.
             if pending.side == "long":
                 pending.mfe_price = max(pending.mfe_price, high)
             else:
@@ -440,6 +443,19 @@ class ShadowOutcomeTracker:
             "tp_reached": tp_reached,
             "mfe_price": round(pending.mfe_price, 8),
         })
+        self._remember_outcome(
+            {
+                "intent_key": outcome.intent_key,
+                "resolution": outcome.resolution,
+                "bars_held": outcome.bars_held,
+                "virtual_net_usd": outcome.virtual_net_usd,
+                "side": outcome.side,
+                "entry_price": outcome.entry_price,
+                "exit_price": outcome.exit_price,
+                "fees_usd": outcome.fees_usd,
+                "bar_ts": outcome.resolved_bar_ts,
+            }
+        )
         logger.info(
             "shadow outcome: %s %s -> %s after %d bars, %s virtual %+0.2f USD",
             pending.side, pending.intent_key, resolution,
@@ -478,6 +494,10 @@ class ShadowOutcomeTracker:
             self._gross_loss_usd += -net
         self._resolutions[resolution] = self._resolutions.get(resolution, 0) + 1
 
+    def _remember_outcome(self, payload: dict) -> None:
+        self._recent_outcomes.append(dict(payload))
+        del self._recent_outcomes[:-10]
+
     # --- reporting ----------------------------------------------------------------
     def stats(self) -> dict:
         """Per-lane virtual performance for session_stats / the dashboard."""
@@ -485,7 +505,13 @@ class ShadowOutcomeTracker:
             pf = round(self._gross_win_usd / self._gross_loss_usd, 3)
         else:
             pf = None  # no losing virtual trades yet — PF undefined, not infinite
-        status = "SHADOW_PROBATION" if self._trades > 0 and self._net_usd < 0 else "OBSERVE"
+        status = (
+            "EXIT_SEMANTIC_GAP"
+            if self._semantic_gap
+            else "SHADOW_PROBATION"
+            if self._trades > 0 and self._net_usd < 0
+            else "OBSERVE"
+        )
         return {
             "virtual_trades": self._trades,
             "wins": self._wins,
@@ -493,9 +519,20 @@ class ShadowOutcomeTracker:
             "net_usd": round(self._net_usd, 4),
             "profit_factor": pf,
             "open_intents": len(self._pending),
+            "pending_shadow_intents": len(self._pending),
+            "shadow_outcomes_recent": list(self._recent_outcomes),
+            "virtual_net_usd": round(self._net_usd, 4),
+            "bars_since_signal": (
+                max(max(0, pending.bars_held + 1) for pending in self._pending.values())
+                if self._pending
+                else None
+            ),
             "resolutions": dict(self._resolutions),
             "status": status,
-            "trade_compatible": status != "SHADOW_PROBATION",
+            "trade_compatible": status == "OBSERVE",
+            "exit_semantics": (
+                "ladder_observation_only" if self._semantic_gap else "single_exit_parity"
+            ),
             # Maker-route transparency: the routing, the same trades priced
             # all-taker, and the maker limits that never filled (missed trades).
             "route": "maker" if self.maker_route else "taker",

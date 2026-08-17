@@ -39,6 +39,21 @@ KILLED: frozenset[str] = frozenset({FundingMeanReversion.strategy_id})
 # and paper evidence in the same change.
 CAPITAL_APPROVED: frozenset[str] = frozenset()
 
+# Separate, non-capital permission for strategies allowed to emit virtual
+# intents in a SHADOW lane.  This is intentionally narrower than
+# ``RESEARCH_ONLY``: being research-only does not automatically grant a live
+# public-data observation process.  Killed strategies can never enter it.
+SHADOW_OBSERVE: frozenset[str] = frozenset({StructureBos1H.strategy_id})
+
+
+def is_shadow_observe_eligible(strategy_id: str) -> bool:
+    """True only for an explicitly allowlisted, registered, non-killed strategy."""
+    return (
+        strategy_id in STRATEGIES
+        and strategy_id in SHADOW_OBSERVE
+        and strategy_id not in KILLED
+    )
+
 
 def is_capital_eligible(strategy_id: str) -> bool:
     """True only for a registered strategy with explicit capital approval."""

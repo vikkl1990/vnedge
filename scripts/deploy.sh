@@ -116,14 +116,11 @@ fi
 # Recreate from the already-built image. --no-build guarantees no build spike
 # here; Compose still only recreates services whose config/image changed.
 #
-# WAVED recreate (2026-08-02): a src change rebuilds the ONE shared image and
-# re-tags it for every service, so `docker compose up -d` recreates all ~60
-# containers AT ONCE. On this VM that spiked load to 300+ and starved both sshd
-# and the dashboard — wedging the box three times in a day (twice needing a
-# console reboot). So bring services up in small WAVES: the serving container
-# first (so /health is back fast), then the rest in batches of DEPLOY_WAVE_SIZE
-# with a pause between, bounding how many recreate concurrently. Compose still
-# only recreates what actually changed; the waving just caps the load spike.
+# WAVED recreate (retained from the former large fleet): a source change rebuilds
+# the shared image and can recreate every app service together. The current
+# default topology is intentionally small, but keeping the dashboard runtime
+# first and batching the remaining services avoids a future topology change
+# silently reintroducing the old load spike.
 # On a daemon race (name-in-use mid-recreate — took the fleet down 2026-07-31),
 # self-heal once with down --remove-orphans, then fall back to a plain up.
 recreate_in_waves() {

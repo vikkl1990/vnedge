@@ -22,9 +22,7 @@ from enum import Enum
 from pydantic import BaseModel
 
 from vnedge.plan.cost_model import (
-    DEFAULT_MAKER_FEE_BPS,
-    DEFAULT_SLIP_BPS,
-    DEFAULT_TAKER_FEE_BPS,
+    COST_PROFILES,
 )
 from vnedge.risk.fee_model import FeeModelPrediction
 
@@ -45,45 +43,6 @@ class CostProfile(str, Enum):
     SCALP = "scalp"  # aggressive HF (Binance USDT-M)
     SWING = "swing"  # fallback / slower holds
     DELTA_SCALP = "delta_scalp"  # Delta India HF (adds 18% GST on fees)
-
-
-class _ProfileParams(BaseModel):
-    model_config = {"frozen": True}
-    maker_fee_bps: Decimal  # per side
-    taker_fee_bps: Decimal  # per side
-    taker_slip_bps: Decimal  # spread cross + impact per taker leg
-    maker_adverse_bps: Decimal  # adverse selection suffered on a posted (maker) leg
-    fee_gst_mult: Decimal  # India GST on the exchange fee (1.0 = none)
-
-
-_M = _dec(DEFAULT_MAKER_FEE_BPS)
-_T = _dec(DEFAULT_TAKER_FEE_BPS)
-_S = _dec(DEFAULT_SLIP_BPS)
-
-_PROFILES: dict[CostProfile, _ProfileParams] = {
-    CostProfile.SCALP: _ProfileParams(
-        maker_fee_bps=_M,
-        taker_fee_bps=_T,
-        taker_slip_bps=_S,
-        maker_adverse_bps=Decimal("1.0"),
-        fee_gst_mult=Decimal("1.0"),
-    ),
-    CostProfile.SWING: _ProfileParams(
-        maker_fee_bps=_M,
-        taker_fee_bps=_T,
-        taker_slip_bps=_S,
-        maker_adverse_bps=Decimal("1.0"),
-        fee_gst_mult=Decimal("1.0"),
-    ),
-    # Delta India: thinner books (higher slip) + 18% GST on the fee itself.
-    CostProfile.DELTA_SCALP: _ProfileParams(
-        maker_fee_bps=_M,
-        taker_fee_bps=_T,
-        taker_slip_bps=Decimal("3.0"),
-        maker_adverse_bps=Decimal("1.5"),
-        fee_gst_mult=Decimal("1.18"),
-    ),
-}
 
 
 class CostEstimate(BaseModel):
@@ -165,22 +124,27 @@ class CostGate:
         available_room_bps: object | None = None,
         fee_model_prediction: FeeModelPrediction | None = None,
     ) -> CostGateResult:
-        p = _PROFILES[self.profile]
+        p = COST_PROFILES[self.profile.value]
         edge = _dec(signal_edge_bps)
         is_maker = urgency in _MAKER
 
         # --- Fees: round trip. Entry per urgency; exit pessimistic (taker close). ---
-        entry_fee = p.maker_fee_bps if is_maker else p.taker_fee_bps
-        exit_fee = p.taker_fee_bps
-        fee_bps = (entry_fee + exit_fee) * p.fee_gst_mult
+        maker_fee = _dec(p.maker_fee_bps)
+        taker_fee = _dec(p.taker_fee_bps)
+        entry_fee = maker_fee if is_maker else taker_fee
+        exit_fee = taker_fee
+        fee_bps = (entry_fee + exit_fee) * _dec(p.fee_gst_mult)
 
         # --- Slippage / adverse selection, round trip. ---
         aggressive = urgency == "aggressive"
-        exit_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal(1))
+        taker_slip = _dec(p.default_slip_exit_bps)
+        exit_slip = taker_slip * (Decimal("1.5") if aggressive else Decimal(1))
         if is_maker:
-            slippage_bps = p.maker_adverse_bps + exit_slip  # post entry, cross exit
+            slippage_bps = _dec(p.maker_adverse_bps) + exit_slip
         else:
-            entry_slip = p.taker_slip_bps * (Decimal("1.5") if aggressive else Decimal(1))
+            entry_slip = _dec(p.default_slip_entry_bps) * (
+                Decimal("1.5") if aggressive else Decimal(1)
+            )
             slippage_bps = entry_slip + exit_slip  # cross both legs
 
         # Only a capital-safe prediction can bind. An account-verified fee

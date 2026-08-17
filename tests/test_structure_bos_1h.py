@@ -135,6 +135,13 @@ def test_preregistration_is_frozen_and_non_capital() -> None:
     assert PARAMS.min_bars == 50
     assert PARAMS.cost_edge_reward_r == Decimal("1.5")
     assert PARAMS.min_room_cost_multiple == Decimal("1.5")
+    assert PARAMS.regime_filter_enabled is True
+    assert PARAMS.blocked_regime_labels == (
+        "low_liquidity",
+        "mean_reversion",
+        "sideways",
+        "unavailable",
+    )
     assert STRATEGY_SPEC["capital_eligible"] is False
     assert STRATEGY_SPEC["tradeable"] is False
     assert StructureBos1h is StructureBos1H

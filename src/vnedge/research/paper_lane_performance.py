@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from vnedge.performance import profit_factor
+
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
 DEFAULT_OUT = Path("research/live_research/paper_lane_performance_latest.json")
 DEFAULT_FEED = Path("research/live_research/paper_lane_performance_feed.jsonl")
@@ -124,11 +126,13 @@ def render_report(payload: Mapping[str, Any], *, limit: int = 40) -> str:
         ),
     ]
     for row in list(payload.get("rows", []))[:limit]:
+        raw_pf = row.get("profit_factor")
+        pf_text = f"{float(raw_pf):5.2f}" if raw_pf is not None else "  n/a"
         lines.append(
             f"  {row.get('state', ''):<28} {row.get('lane_id', ''):<38} "
             f"{row.get('closed_trades', 0):>3} trades "
             f"net ${row.get('net_pnl_usd', 0.0):>8.2f} "
-            f"PF {row.get('profit_factor', 0.0):>5.2f} "
+            f"PF {pf_text} "
             f"{row.get('next_action', '')}"
         )
     lines.append("read-only: can_trade=false can_promote=false")
@@ -192,7 +196,10 @@ def _lane_row(
             latest_ts = ts
         kind = str(record.get("kind") or "")
         counters[kind] += 1
-        payload = record.get("payload") if isinstance(record.get("payload"), Mapping) else {}
+        raw_payload = record.get("payload")
+        payload: Mapping[str, Any] = (
+            raw_payload if isinstance(raw_payload, Mapping) else {}
+        )
         if kind in {"lane_eval", "paper_lane_heartbeat"}:
             exchange = str(payload.get("exchange") or exchange)
             symbol = str(payload.get("symbol") or symbol)
@@ -215,7 +222,10 @@ def _lane_row(
         elif kind == "paper_lane_heartbeat":
             latest_why = str(payload.get("why_no_trade") or payload.get("reason") or latest_why)
         elif kind == "order_intent":
-            intent = payload.get("intent") if isinstance(payload.get("intent"), Mapping) else {}
+            raw_intent = payload.get("intent")
+            intent: Mapping[str, Any] = (
+                raw_intent if isinstance(raw_intent, Mapping) else {}
+            )
             symbol = str(intent.get("symbol") or symbol)
             strategy_id = str(intent.get("strategy_id") or strategy_id)
         elif kind == "live_paper_report":
@@ -336,7 +346,7 @@ def _state(
     *,
     closed_trades: int,
     net_pnl_usd: float,
-    profit_factor: float,
+    profit_factor: float | None,
     ledger_ok: bool,
     journal_events: int,
     age_hours: float | None,
@@ -369,6 +379,7 @@ def _state(
     if (
         closed_trades >= config.min_closed_trades
         and net_pnl_usd > config.min_net_pnl_usd
+        and profit_factor is not None
         and profit_factor >= config.min_profit_factor
     ):
         return (
@@ -396,14 +407,18 @@ def _state(
 
 
 def _sample_blockers(
-    closed_trades: int, profit_factor: float, config: PaperLanePerformanceConfig
+    closed_trades: int,
+    profit_factor: float | None,
+    config: PaperLanePerformanceConfig,
 ) -> list[str]:
     blockers: list[str] = []
     if closed_trades < config.min_closed_trades:
         blockers.append(
             f"needs {config.min_closed_trades - closed_trades} more closed trade(s)"
         )
-    if profit_factor < config.min_profit_factor:
+    if profit_factor is None:
+        blockers.append("PF undefined: no losing closed trades")
+    elif profit_factor < config.min_profit_factor:
         blockers.append(
             f"PF {profit_factor:.2f} below {config.min_profit_factor:.2f}"
         )
@@ -545,7 +560,10 @@ def _iter_jsonl(path: Path, *, max_bytes: int) -> Iterable[dict[str, Any]]:
 
 
 def _record_ts(record: Mapping[str, Any]) -> str:
-    payload = record.get("payload") if isinstance(record.get("payload"), Mapping) else {}
+    raw_payload = record.get("payload")
+    payload: Mapping[str, Any] = (
+        raw_payload if isinstance(raw_payload, Mapping) else {}
+    )
     for key in ("ts", "bar_ts", "resolved_bar_ts"):
         if record.get(key):
             return str(record[key])
@@ -571,7 +589,7 @@ def _parse_dt(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _float(value: object, default: float = 0.0) -> float:
+def _float(value: Any, default: float = 0.0) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -581,12 +599,9 @@ def _float(value: object, default: float = 0.0) -> float:
     return parsed
 
 
-def _profit_factor(gross_profit: float, gross_loss: float) -> float:
-    if gross_loss > 0:
-        return round(gross_profit / gross_loss, 6)
-    if gross_profit > 0:
-        return 999.0
-    return 0.0
+def _profit_factor(gross_profit: float, gross_loss: float) -> float | None:
+    value = profit_factor(gross_profit, gross_loss)
+    return round(value, 6) if value is not None else None
 
 
 def _closed_trade_stats(fills: list[dict[str, Any]]) -> _ClosedTradeStats:

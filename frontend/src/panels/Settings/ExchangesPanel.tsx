@@ -66,7 +66,7 @@ export function ExchangesPanel({ secretsReady }: { secretsReady: boolean }) {
             <dl className="mt-4 space-y-2 text-[11px]">
               <div className="flex justify-between gap-3"><dt className="text-dim">Purpose</dt><dd className="font-mono uppercase">{item.purpose}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-dim">Key</dt><dd className="font-mono">{item.api_key_hint || "not stored"}</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-dim">Last check</dt><dd className="font-mono text-right">{item.last_verified_at ? new Date(item.last_verified_at).toLocaleString() : "never"}</dd></div>
+              <div className="flex justify-between gap-3"><dt className="text-dim">Last check</dt><dd className="font-mono text-right">{item.last_verified_at ? `${new Date(item.last_verified_at).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC` : "never"}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-dim">Private stream</dt><dd className="font-mono">{item.private_stream}</dd></div>
               <div className="flex justify-between gap-3"><dt className="text-dim">Live authority</dt><dd className="font-mono text-short">none</dd></div>
             </dl>

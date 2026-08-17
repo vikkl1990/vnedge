@@ -36,11 +36,17 @@ from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
 from vnedge.runtime.market_replay import MarketReplay, quote_from_price
-from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
+from vnedge.runtime.active_exit import (
+    ActiveExitDecision,
+    ActiveExitState,
+    ExitEngine,
+    ExitEngineConfig,
+)
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +96,14 @@ class PaperRunner:
         self.sizing_skips = self.shadow_approved = self.shadow_rejected = 0
         self.recon_mismatches = 0
         self._reconciliation_fail_closed = False
+        self._exit_config = ExitEngineConfig(
+            trail_atr_mult=config.trail_atr_mult,
+            trail_atr_window=config.trail_atr_window,
+            max_holding_bars=config.max_holding_bars,
+            tick_stops_enabled=config.tick_stops_enabled,
+            allow_partial_tp=config.allow_partial_tp,
+            fee_aware_breakeven_bps=config.fee_aware_breakeven_bps,
+        )
 
     # --- Helpers -----------------------------------------------------------------
     def _set_quote(self, price: float) -> None:
@@ -173,7 +187,8 @@ class PaperRunner:
         plan: _TradePlan,
         *,
         bar: pd.Series,
-        max_holding_hit: bool,
+        bars_held: int,
+        atr: float = 0.0,
     ) -> ActiveExitDecision | None:
         positions = {p.symbol: p for p in self.exchange.get_positions()}
         pos = positions.get(self.config.symbol)
@@ -186,14 +201,15 @@ class PaperRunner:
                 active_stop_price=plan.exit_state.current_stop,
                 breakeven_armed=plan.exit_state.breakeven_armed,
             )
-        return plan.exit_state.resolve_bar(
+        return ExitEngine(plan.exit_state, self._exit_config).on_bar(
             high=float(bar["high"]),
             low=float(bar["low"]),
             close=float(bar["close"]),
             position_quantity=abs(pos.quantity),
             min_qty=self.config.limits.min_qty,
             qty_step=self.config.limits.qty_step,
-            max_holding_hit=max_holding_hit,
+            bars_held=bars_held,
+            atr=atr,
         )
 
     def _strategy_exit_decision(
@@ -210,19 +226,13 @@ class PaperRunner:
         exit_sig = self.strategy.exit_signal(df, index, plan.signal.side, entry)
         if exit_sig is None:
             return None
-        return ActiveExitDecision(
+        return ExitEngine(plan.exit_state, self._exit_config).on_strategy_exit(
             reason=exit_sig.reason,
-            exit_price=(
+            price=(
                 float(exit_sig.exit_price)
                 if exit_sig.exit_price is not None
                 else float(bar["close"])
             ),
-            quantity=None,
-            final=True,
-            active_stop_price=plan.exit_state.current_stop,
-            breakeven_armed=plan.exit_state.breakeven_armed,
-            tp_reached=plan.exit_state.tp_reached(),
-            mfe_price=plan.exit_state.mfe_price,
         )
 
     def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
@@ -260,6 +270,11 @@ class PaperRunner:
     async def run(self) -> RunReport:
         cfg = self.config
         df = self.strategy.prepare(self.candles).reset_index(drop=True)
+        trail_atr = (
+            _atr_indicator(self.candles, cfg.trail_atr_window).reset_index(drop=True)
+            if cfg.trail_atr_mult > 0.0
+            else None
+        )
         n = len(df)
         start = max(self.strategy.warmup_bars, 1)
 
@@ -286,15 +301,15 @@ class PaperRunner:
                         self.strategy.strategy_id, cfg.symbol, intent.side, ts
                     )
                     if cfg.mode is RunnerMode.SHADOW:
-                        decision = self.gateway.evaluate(
+                        risk_decision = self.gateway.evaluate(
                             intent, self.tracker.account_state(), market, now=ts,
                         )
                         self.journal.append("shadow_intent", {
-                            "intent_key": key, "approved": decision.approved,
-                            "explanation": decision.explanation,
+                            "intent_key": key, "approved": risk_decision.approved,
+                            "explanation": risk_decision.explanation,
                             "signal_reason": pending_signal.reason,
                         })
-                        if decision.approved:
+                        if risk_decision.approved:
                             self.shadow_approved += 1
                         else:
                             self.shadow_rejected += 1
@@ -307,7 +322,10 @@ class PaperRunner:
                             self.risk_rejects += 1
                         else:
                             self.orders_submitted += 1
-                            exit_state = ActiveExitState.from_signal(pending_signal)
+                            exit_state = ExitEngine.from_signal(
+                                pending_signal,
+                                config=self._exit_config,
+                            ).state
                             new_plan = _TradePlan(pending_signal, order, j, exit_state)
                             self._seed_plan_from_venue(new_plan)
                             if order.state is OrderState.TIMEOUT_UNKNOWN:
@@ -318,36 +336,40 @@ class PaperRunner:
 
             # 3) exit management (paper mode) — stop first, always
             if plan is not None:
-                decision = self._active_exit_decision(
+                exit_decision = self._active_exit_decision(
                     plan,
                     bar=bar,
-                    max_holding_hit=False,
+                    bars_held=j - plan.entry_bar,
+                    atr=(
+                        float(trail_atr.iloc[j])
+                        if trail_atr is not None and trail_atr.iloc[j] == trail_atr.iloc[j]
+                        else 0.0
+                    ),
                 )
-                if decision is None:
-                    decision = self._strategy_exit_decision(
+                if exit_decision is None:
+                    exit_decision = self._strategy_exit_decision(
                         plan, df=df, index=j, bar=bar
                     )
-                if decision is None:
-                    decision = self._active_exit_decision(
-                        plan,
-                        bar=bar,
-                        max_holding_hit=j - plan.entry_bar >= cfg.max_holding_bars,
-                    )
-                if decision is not None:
-                    if decision.reason == "flat_position":
+                if exit_decision is not None:
+                    if exit_decision.reason == "flat_position":
                         plan = None
                     else:
-                        self._set_quote(decision.exit_price)  # fill at trigger level
-                        order = await self._submit_exit(
+                        self._set_quote(exit_decision.exit_price)  # fill at trigger level
+                        exit_order = await self._submit_exit(
                             plan,
                             ts,
-                            decision.reason,
-                            quantity=decision.quantity,
-                            final=decision.final,
+                            exit_decision.reason,
+                            quantity=exit_decision.quantity,
+                            final=exit_decision.final,
                         )
-                        if order is not None and order.state in _EXIT_ACCEPTED_STATES:
-                            plan.exit_state.mark_accepted(decision)
-                            if decision.final:
+                        if (
+                            exit_order is not None
+                            and exit_order.state in _EXIT_ACCEPTED_STATES
+                        ):
+                            ExitEngine(plan.exit_state, self._exit_config).mark_fill(
+                                exit_decision
+                            )
+                            if exit_decision.final:
                                 plan = None
 
             # 4) mark to close; new signal only when flat and nothing parked

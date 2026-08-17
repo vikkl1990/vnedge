@@ -1,8 +1,8 @@
 # Deploying VNEDGE
 
 VNEDGE now deploys as a measurement-first, no-live-order stack. Docker Compose
-contains only the measurement dashboard runtime, an optional research loop, and
-the TLS proxy.
+contains the measurement dashboard runtime, the public-trade Pulse recorder,
+an optional research loop, and the TLS proxy.
 
 ## Required configuration
 
@@ -13,10 +13,11 @@ cp .env.example .env
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
-Copy the generated value into `DASHBOARD_TOKEN`. Leave the capital controls at
-their safe defaults:
+Copy the generated value into `DASHBOARD_TOKEN` in `.env`. Leave the capital
+controls at their safe defaults:
 
 ```dotenv
+DASHBOARD_TOKEN=<generated value>
 MULTI_LANE_CAPITAL_ENABLED=0
 MULTI_LANE_CAPITAL_STRATEGY=
 ```
@@ -29,13 +30,14 @@ runtime.
 ```bash
 export VNEDGE_BUILD_SHA="$(git rev-parse --short HEAD)"
 docker compose config -q
-docker compose up -d --build multi-lane-shadow dashboard-tls
+docker compose up -d --build multi-lane-shadow pulse-recorder dashboard-tls
 docker compose ps
 docker compose logs -f multi-lane-shadow
 ```
 
-The default service builds SHADOW measurement lanes and exposes the read-only
-dashboard. It does not submit venue orders.
+The default services build SHADOW measurement lanes, record public trades for
+the canonical Pulse candle lake, and expose the dashboard. They do not submit
+venue orders.
 
 Both application and edge health are explicit:
 
@@ -61,6 +63,29 @@ paper trial, or absence from the killed set is not permission. Supplying the
 paper-capital environment gates therefore fails closed until a strategy is
 promoted through a reviewed code change containing its pre-registered OOS and
 paper evidence.
+
+## Optional SHADOW_OBSERVE drill
+
+`structure_bos_1h` may be run on public, closed 1h bars as a virtual-only
+observation lane. This is a separate permission from capital approval: it may
+journal a `shadow_intent` and resolve a `shadow_outcome`, but it cannot submit
+an order. Keep capital disabled and set both observe gates:
+
+```dotenv
+MULTI_LANE_CAPITAL_ENABLED=0
+MULTI_LANE_CAPITAL_STRATEGY=
+MULTI_LANE_SHADOW_OBSERVE_ENABLED=1
+MULTI_LANE_SHADOW_OBSERVE_STRATEGY=structure_bos_1h
+MULTI_LANE_SHADOW_OBSERVE_EXCHANGE=binanceusdm
+MULTI_LANE_SHADOW_OBSERVE_SYMBOL=BTC/USDT:USDT
+MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME=1h
+```
+
+After recreation, `/state.runtime_control` must report
+`shadow_observe_lanes: 1`, `paper_lanes: 0`, `orders_allowed: false`, and
+`live_orders_allowed: false`. The Desk banner must say
+`SHADOW_OBSERVE · virtual only`. A bad, killed, missing, or wrong-timeframe
+strategy fails process startup.
 
 ## Dashboard access
 

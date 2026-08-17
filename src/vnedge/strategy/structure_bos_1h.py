@@ -78,6 +78,13 @@ class StructureBosParams:
     min_net_edge_bps: Decimal = Decimal(4)
     min_room_cost_multiple: Decimal = Decimal("1.5")
     entry_urgency: Literal["taker"] = "taker"
+    regime_filter_enabled: bool = True
+    blocked_regime_labels: tuple[str, ...] = (
+        "low_liquidity",
+        "mean_reversion",
+        "sideways",
+        "unavailable",
+    )
     mtf: MTFParams = MTF_PARAMS
 
     def __post_init__(self) -> None:
@@ -274,6 +281,7 @@ def _regime_permission(
     side: Side,
     context: StructureContext,
     *,
+    params: StructureBosParams,
     symbol: str,
     as_of: datetime,
 ) -> tuple[bool, str, dict[str, str]]:
@@ -288,12 +296,9 @@ def _regime_permission(
         "regime_1h": "not_supplied",
         "regime_4h": "not_supplied",
     }
-    blocked_labels = {
-        RegimeLabel.LOW_LIQUIDITY,
-        RegimeLabel.MEAN_REVERSION,
-        RegimeLabel.SIDEWAYS,
-        RegimeLabel.UNAVAILABLE,
-    }
+    if not params.regime_filter_enabled:
+        return True, "regime_filter_disabled", diagnostics
+    blocked_labels = {RegimeLabel(value) for value in params.blocked_regime_labels}
     opposing = RegimeLabel.TRENDING_DOWN if side == Side.LONG else RegimeLabel.TRENDING_UP
     for expected_tf, regime in (("1h", context.regime_1h), ("4h", context.regime_4h)):
         if regime is None:
@@ -707,6 +712,7 @@ class StructureBos1H(BaseStrategy):
             min_net_edge_bps=self.params.min_net_edge_bps,
             min_room_cost_multiple=self.params.min_room_cost_multiple,
         )
+        self.last_evaluation: StructureBosEvaluation | None = None
 
     def on_closed_candle(
         self,
@@ -739,6 +745,7 @@ class StructureBos1H(BaseStrategy):
             regime_ok, regime_reason, diagnostics = _regime_permission(
                 intent.side,
                 context,
+                params=self.params,
                 symbol=symbol,
                 as_of=intent.ts,
             )
@@ -965,6 +972,7 @@ class StructureBos1H(BaseStrategy):
 
     def signal(self, df: pd.DataFrame, index: int) -> BacktestSignalIntent | None:
         evaluation = self.evaluate(df, index)
+        self.last_evaluation = evaluation
         if not evaluation.accepted or evaluation.candidate is None:
             return None
         intent = evaluation.candidate

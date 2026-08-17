@@ -96,11 +96,17 @@ class _LadderOnce(BaseStrategy):
     one position's full active-exit lifecycle."""
     strategy_id = "ladder_once_test"
     warmup_bars = 1
-    def __init__(self): self._fired = False
+    def __init__(self):
+        self._fired = False
+
     def prepare(self, candles):
-        c = candles.copy(); c["atr"] = 2.0; return c
+        c = candles.copy()
+        c["atr"] = 2.0
+        return c
+
     def signal(self, df, i):
-        if self._fired: return None
+        if self._fired:
+            return None
         self._fired = True
         e = float(df.iloc[i]["close"])
         return SignalIntent(side="long", stop_price=e*0.98,
@@ -154,6 +160,13 @@ def test_trail_without_active_exit_is_rejected():
     import pytest
     with pytest.raises(ValueError, match="use_active_exit"):
         BacktestConfig(use_active_exit=False, trail_atr_mult=2.0)
+
+
+def test_promotion_contract_rejects_legacy_exit_path():
+    import pytest
+
+    with pytest.raises(ValueError, match="promotion_contract"):
+        BacktestConfig(use_active_exit=False, promotion_contract=True)
 
 
 def test_gap_through_stop_fills_at_open_not_stop():

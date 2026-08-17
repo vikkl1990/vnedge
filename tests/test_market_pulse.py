@@ -136,6 +136,38 @@ def test_pulse_uses_read_only_time_machine_forming_hour(tmp_path) -> None:
     assert pulse["forming"]["volume_rank_24h"] == 1.0
 
 
+def test_forming_hour_is_never_attached_without_exact_symbol_ownership(tmp_path) -> None:
+    pulse_service = service(tmp_path)
+    pulse_service.clock = lambda: START + timedelta(hours=26, minutes=15)
+    forming = {
+        "1h": {
+            "open_time": "2026-08-16T02:00:00+00:00",
+            "open": 125.0,
+            "high": 126.0,
+            "low": 124.0,
+            "close": 125.5,
+            "volume": 40.0,
+        }
+    }
+
+    wrong_symbol = pulse_service.pulse(
+        "binanceusdm",
+        "ETHUSDT",
+        runtime={
+            "symbol": "BTC/USDT:USDT",
+            "time_machine": {"forming": forming},
+        },
+    )
+    missing_symbol = pulse_service.pulse(
+        "binanceusdm",
+        "BTCUSDT",
+        runtime={"time_machine": {"forming": forming}},
+    )
+
+    assert wrong_symbol["forming"]["status"] == "awaiting_trades"
+    assert missing_symbol["forming"]["status"] == "awaiting_trades"
+
+
 def test_pulse_exposes_closed_1h_and_4h_regime_measurements(tmp_path) -> None:
     rows = tuple(candle(hour, volume="100") for hour in range(180))
     CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)

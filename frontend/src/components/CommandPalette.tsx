@@ -38,6 +38,7 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        if (document.querySelector('[data-modal-lock="true"]')) return;
         toggle();
       } else if (e.key === "Escape") {
         setOpen(false);

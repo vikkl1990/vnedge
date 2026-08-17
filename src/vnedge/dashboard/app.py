@@ -885,13 +885,6 @@ def create_app(
             headers={"Cache-Control": "no-store, must-revalidate"},
         )
 
-    async def pine_research_page() -> FileResponse:
-        # Separate static research page. Data remains token-gated below.
-        return FileResponse(
-            _STATIC_DIR / "pine_research.html",
-            headers={"Cache-Control": "no-store"},
-        )
-
     @app.get("/quantified-strategy-lab")
     async def quantified_strategy_lab_page() -> FileResponse:
         return FileResponse(
@@ -1349,6 +1342,7 @@ def create_app(
             _read_json_payload(
                 agentic_research_os_file,
                 {
+                    "artifact_available": False,
                     "os_id": "agentic_research_os_v2",
                     "summary": {},
                     "agent_scorecards": [],
@@ -1467,7 +1461,8 @@ def create_app(
             _read_json_payload(
                 ml_pipeline_status_file,
                 {
-                    "stage": "COLLECTING_LABELS",
+                    "artifact_available": False,
+                    "stage": "UNAVAILABLE",
                     "stages": [],
                     "dataset": {"samples": 0, "min_to_train": 200, "progress_pct": 0.0, "by_strategy": {}},
                     "foundation": {},

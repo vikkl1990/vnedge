@@ -29,21 +29,8 @@ dev = [
     "mypy>=1.10",
     "httpx>=0.27",
 ]
-quant-research = [
-    "duckdb>=1.0",
-    "polars>=1.0",
-    "optuna>=3.6",
+online-ml = [
     "river>=0.21",
-    "numba>=0.60",
-    "ruptures>=1.1",
-    "evidently>=0.4",
-    "statsmodels>=0.14",
-    "arch>=7.0",
-    "skfolio>=0.8",
-]
-foundation-forecast = [
-    "torch>=2.0",
-    "huggingface_hub>=0.33",
 ]
 
 [build-system]

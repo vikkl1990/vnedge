@@ -29,6 +29,7 @@ from vnedge.dashboard.trade_journal import (
     _project_journals,
     _trade_net,
 )
+from vnedge.performance import profit_factor
 
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
 DEFAULT_OUT = Path("research/live_research/paper_trade_exit_autopsy_latest.json")
@@ -194,8 +195,14 @@ def _lane_metadata(
             if value and not row.get(dest):
                 row[dest] = value
     for lane, record in journal_rows:
-        payload = record.get("payload") if isinstance(record.get("payload"), Mapping) else {}
-        intent = payload.get("intent") if isinstance(payload.get("intent"), Mapping) else {}
+        raw_payload = record.get("payload")
+        payload: Mapping[str, Any] = (
+            raw_payload if isinstance(raw_payload, Mapping) else {}
+        )
+        raw_intent = payload.get("intent")
+        intent: Mapping[str, Any] = (
+            raw_intent if isinstance(raw_intent, Mapping) else {}
+        )
         row = meta[str(lane)]
         row["last_journal_kind"] = str(record.get("kind") or row.get("last_journal_kind") or "")
         for src, dest in (
@@ -234,10 +241,12 @@ def _lane_autopsy(
     wins = sum(1 for value in nets if value > 0)
     net = sum(nets)
     fee_total = sum(fees)
-    net_bps = [_net_bps(row) for row in trades]
-    net_bps = [value for value in net_bps if value is not None]
-    fee_bps = [_fee_bps(row) for row in trades]
-    fee_bps = [value for value in fee_bps if value is not None]
+    net_bps = [
+        value for row in trades if (value := _net_bps(row)) is not None
+    ]
+    fee_bps = [
+        value for row in trades if (value := _fee_bps(row)) is not None
+    ]
     captured_bps = [
         _float(row.get("captured_bps"))
         for row in trades
@@ -285,9 +294,9 @@ def _lane_autopsy(
         "resolution_counts": dict(sorted(resolutions.items())),
         "exit_family_counts": dict(sorted(exit_families.items())),
         "tp_reached_counts": dict(sorted(tp_counts.items())),
-        "take_profit_rate": _rate(resolutions, {"take_profit", "target"}, closed),
-        "stop_rate": _rate(resolutions, {"stop", "tick_stop"}, closed),
-        "timeout_rate": _rate(resolutions, {"max_holding", "timeout"}, closed),
+        "take_profit_rate": _rate(exit_families, {"take_profit"}, closed),
+        "stop_rate": _rate(exit_families, {"stop"}, closed),
+        "timeout_rate": _rate(exit_families, {"timeout"}, closed),
         "strategy_exit_count": len(strategy_exit_trades),
         "strategy_exit_rate": round(len(strategy_exit_trades) / closed, 4) if closed else 0.0,
         "strategy_exit_net_pnl_usd": round(strategy_exit_net, 6),
@@ -529,23 +538,27 @@ def _exit_family(resolution: str) -> str:
     resolution = str(resolution or "").strip()
     if not resolution:
         return "missing"
-    if resolution in {"stop", "tick_stop"}:
+    if resolution in {"stop", "tick_stop", "breakeven", "breakeven_stop"}:
         return "stop"
-    if resolution in {"take_profit", "target"}:
+    if (
+        resolution in {"take_profit", "target"}
+        or resolution.startswith("tp")
+        and resolution.endswith(("_partial", "_final"))
+    ):
         return "take_profit"
-    if resolution in {"max_holding", "timeout"}:
+    if resolution in {"max_holding", "max_holding_bars", "time_stop", "timeout"}:
         return "timeout"
     if resolution.startswith(STRATEGY_EXIT_PREFIX):
         return "strategy_exit"
     return "other"
 
 
-def _profit_factor(gross_profit: float, gross_loss: float, wins: int, closed: int) -> float:
-    if closed <= 0:
-        return 0.0
-    if gross_loss <= 1e-12:
-        return 999.0 if wins > 0 else 0.0
-    return round(gross_profit / gross_loss, 4)
+def _profit_factor(
+    gross_profit: float, gross_loss: float, wins: int, closed: int
+) -> float | None:
+    del wins, closed  # sample disclosure is handled independently from PF
+    value = profit_factor(gross_profit, gross_loss)
+    return round(value, 4) if value is not None else None
 
 
 def _avg(values: list[float]) -> float:
@@ -559,6 +572,7 @@ def _rate(counts: Counter[str], names: set[str], total: int) -> float:
 
 
 def _slim_trade(trade: Mapping[str, Any]) -> dict[str, Any]:
+    net_bps = _net_bps(trade)
     return {
         "ts": trade.get("ts", ""),
         "symbol": trade.get("symbol", ""),
@@ -569,7 +583,7 @@ def _slim_trade(trade: Mapping[str, Any]) -> dict[str, Any]:
         "exit_price": trade.get("exit_price"),
         "net_pnl_usd": round(_trade_net(dict(trade)), 6),
         "fee_usd": round(_trade_fee(trade), 6),
-        "net_bps": round(_net_bps(trade), 4) if _net_bps(trade) is not None else None,
+        "net_bps": round(net_bps, 4) if net_bps is not None else None,
         "tp_reached": int(_float(trade.get("tp_reached"))),
         "hold_seconds": trade.get("hold_seconds"),
     }

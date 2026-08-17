@@ -30,6 +30,7 @@ from vnedge.ml.validation import (
     deflated_sharpe_ratio,
     probability_of_backtest_overfitting,
 )
+from vnedge.performance import profit_factor
 
 _MIN_TRAIN_ROWS = 200  # the trainer's hard floor — every CPCV train fold needs this
 
@@ -89,9 +90,7 @@ def _profit_factor(returns: np.ndarray) -> float | None:
         return None
     wins = float(r[r > 0].sum())
     losses = float(-r[r < 0].sum())
-    if losses <= 0.0:
-        return None  # undefined (no losers) — never inf
-    return wins / losses
+    return profit_factor(wins, losses)
 
 
 def _sharpe(returns: np.ndarray) -> float:

@@ -43,6 +43,23 @@ _DEFAULT_REST_QUOTE_POLL_SECONDS = 2.0
 _VALIDATED_CCXT_PRO_FEEDS = {"binanceusdm", "bybit"}
 
 
+def _advance_forming(
+    current: list | None, update: list
+) -> tuple[list, list | None]:
+    """Apply one OHLCV update without regressing on reconnect replays.
+
+    Returns ``(forming, newly_closed)``. Once a newer interval has been seen,
+    an exchange replay of an older row cannot replace it or close it again.
+    """
+    if current is None:
+        return update, None
+    if update[0] < current[0]:
+        return current, None
+    if update[0] > current[0]:
+        return update, current
+    return update, None
+
+
 def _data_quality(
     last_event_at: datetime | None,
     healthy: bool,
@@ -172,15 +189,11 @@ class LiveMarketFeed:
                 rows = await self._ex.watch_ohlcv(self.symbol, self.timeframe)
                 self._mark_ok()
                 for row in rows:
-                    if self._forming is None:
-                        self._forming = row
-                    elif row[0] > self._forming[0]:
+                    self._forming, newly_closed = _advance_forming(self._forming, row)
+                    if newly_closed is not None:
                         # a newer interval started: the forming candle is closed
-                        await self.closed_candles.put(self._forming)
+                        await self.closed_candles.put(newly_closed)
                         self.candles_closed += 1
-                        self._forming = row
-                    else:
-                        self._forming = row  # same interval, updated values
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — reconnect with backoff

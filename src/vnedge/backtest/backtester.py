@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from vnedge.backtest.fee_model import FeeModel
 from vnedge.backtest.slippage_model import SlippageModel
-from vnedge.runtime.active_exit import ActiveExitState
+from vnedge.runtime.active_exit import ExitEngine, ExitEngineConfig
 from vnedge.config.risk_config import RiskConfig
 from vnedge.risk.position_sizer import SymbolLimits, size_position
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
@@ -91,6 +91,10 @@ class BacktestConfig(BaseModel):
     # read from a strategy column (those are named inconsistently: `atr`,
     # `atr_margin`, …). Keeps trailing identical across every scanner.
     trail_atr_window: int = Field(default=14, ge=1)
+    allow_partial_tp: bool = True
+    fee_aware_breakeven_bps: float = Field(default=8.0, ge=0.0)
+    # A promotion evidence run may never opt back into the legacy exit branch.
+    promotion_contract: bool = False
 
     @model_validator(mode="after")
     def _trail_requires_active_exit(self) -> "BacktestConfig":
@@ -101,6 +105,11 @@ class BacktestConfig(BaseModel):
             raise ValueError(
                 "trail_atr_mult>0 requires use_active_exit=True — the legacy exit "
                 "ignores the trail, so this would judge on an exit the lane won't run"
+            )
+        if self.promotion_contract and not self.use_active_exit:
+            raise ValueError(
+                "promotion_contract requires use_active_exit=True — legacy exits "
+                "are not eligible for promotion evidence"
             )
         return self
 
@@ -142,7 +151,7 @@ class _OpenPosition:
     stop_armed: bool = False         # True once breakeven/profit-lock moved it
     remaining_quantity: float = 0.0  # shrinks as TP-ladder partials close
     original_quantity: float = 0.0
-    exit_state: object | None = None  # ActiveExitState when use_active_exit
+    exit_engine: ExitEngine | None = None
 
     def __post_init__(self) -> None:
         self.best_price = self.worst_price = self.entry_price
@@ -370,9 +379,18 @@ def run_backtest(
                     entry_ts=ts, entry_bar=j, entry_fee_usd=fee,
                 )
                 if config.use_active_exit:
-                    position.exit_state = ActiveExitState.from_signal(
-                        pending, entry_price=fill, quantity=sizing.quantity,
-                        trail_atr_mult=config.trail_atr_mult,
+                    position.exit_engine = ExitEngine.from_signal(
+                        pending,
+                        entry_price=fill,
+                        quantity=sizing.quantity,
+                        config=ExitEngineConfig(
+                            trail_atr_mult=config.trail_atr_mult,
+                            trail_atr_window=config.trail_atr_window,
+                            max_holding_bars=config.max_holding_bars,
+                            tick_stops_enabled=False,
+                            allow_partial_tp=config.allow_partial_tp,
+                            fee_aware_breakeven_bps=config.fee_aware_breakeven_bps,
+                        ),
                     )
                 factory_entries_today += 1
             else:
@@ -385,16 +403,21 @@ def run_backtest(
         if position is not None:
             hi, lo, cl = float(bar["high"]), float(bar["low"]), float(bar["close"])
             position.track_excursion(hi, lo)
-            if config.use_active_exit and position.exit_state is not None:
+            if config.use_active_exit and position.exit_engine is not None:
                 # RUNTIME-PARITY exit: drive the SAME ActiveExitState paper/live use —
                 # TP-ladder partials, fee-aware breakeven, per-bar ATR trail.
-                st: ActiveExitState = position.exit_state
-                max_hold = j - position.entry_bar >= config.max_holding_bars
-                decision = st.resolve_bar(
-                    high=hi, low=lo, close=cl,
+                engine = position.exit_engine
+                a = trail_atr[j] if trail_atr is not None else 0.0
+                atr_value = float(a) if a == a else 0.0
+                decision = engine.on_bar(
+                    high=hi,
+                    low=lo,
+                    close=cl,
                     position_quantity=position.remaining_quantity,
-                    min_qty=config.limits.min_qty, qty_step=config.limits.qty_step,
-                    max_holding_hit=max_hold,
+                    min_qty=config.limits.min_qty,
+                    qty_step=config.limits.qty_step,
+                    bars_held=j - position.entry_bar,
+                    atr=atr_value,
                 )
                 if decision is not None:
                     exit_px = decision.exit_price
@@ -407,18 +430,26 @@ def run_backtest(
                         close_position(position, ts, exit_px, decision.reason,
                                        j, close_qty=decision.quantity)
                         if position is not None:  # partial — position stays open
-                            st.mark_accepted(decision)
+                            engine.mark_fill(decision)
                 elif (exit_sig := strategy.exit_signal(
                         df, j, position.intent.side, position.entry_price)) is not None:
-                    close_position(position, ts,
-                                   float(exit_sig.exit_price) if exit_sig.exit_price is not None else cl,
-                                   exit_sig.reason, j)
+                    strategy_decision = engine.on_strategy_exit(
+                        reason=exit_sig.reason,
+                        price=(
+                            float(exit_sig.exit_price)
+                            if exit_sig.exit_price is not None
+                            else cl
+                        ),
+                    )
+                    close_position(
+                        position,
+                        ts,
+                        strategy_decision.exit_price,
+                        strategy_decision.reason,
+                        j,
+                    )
                 elif should_force_flatten(ts.to_pydatetime(), config.daily_factory):
                     close_position(position, ts, cl, "daily_factory_close", j)
-                elif trail_atr is not None:
-                    # trail the stop for LATER bars off the canonical ATR (no lookahead)
-                    a = trail_atr[j]
-                    st.trail_stop(float(a) if a == a else 0.0)  # a==a drops NaN warmup
             else:
                 # Legacy exit: single stop / take-profit (+ optional simple breakeven).
                 hit = _check_intrabar_exit(position, hi, lo)
@@ -454,7 +485,7 @@ def run_backtest(
             elif allowed:
                 pending = strategy.signal(df, j)
             else:
-                protection_blocked.append((ts, block_reason))
+                protection_blocked.append((ts, block_reason or "protection_blocked"))
 
         # 5) Mark equity at bar close.
         mark = equity + (_unrealized(position, float(bar["close"])) if position else 0.0)

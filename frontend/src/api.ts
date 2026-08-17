@@ -2,15 +2,21 @@
 // token is submitted once in an Authorization header and exchanged for a
 // short-lived HttpOnly cookie; all later HTTP/WebSocket calls use that cookie.
 
-export async function hasBrowserSession(): Promise<boolean> {
+export interface BrowserSession {
+  expires_at: string | null;
+}
+
+export async function hasBrowserSession(): Promise<BrowserSession | null> {
   const response = await fetch("/whoami", {
     credentials: "same-origin",
     cache: "no-store",
   });
-  return response.ok;
+  if (!response.ok) return null;
+  const body = await response.json() as { expires_at?: string | null };
+  return { expires_at: body.expires_at ?? null };
 }
 
-export async function establishBrowserSession(rootToken: string): Promise<void> {
+export async function establishBrowserSession(rootToken: string): Promise<BrowserSession> {
   const token = rootToken.trim();
   if (!token) throw new ApiError(401, "token is required");
   const response = await fetch("/auth/session", {
@@ -20,34 +26,81 @@ export async function establishBrowserSession(rootToken: string): Promise<void> 
     cache: "no-store",
   });
   if (!response.ok) throw new ApiError(response.status, "authentication failed");
+  const body = await response.json() as { expires_at?: string | null };
+  return { expires_at: body.expires_at ?? null };
 }
 
 const SESSION_REFRESH_MS = 8 * 60 * 1000;
+const SESSION_EXPIRY_SKEW_MS = 60 * 1000;
+const MIN_SESSION_REFRESH_MS = 5 * 1000;
 
-async function refreshBrowserSession(): Promise<void> {
+async function refreshBrowserSession(): Promise<BrowserSession> {
   const csrf = cookie("vnedge_csrf");
-  if (!csrf) return;
+  if (!csrf) {
+    window.dispatchEvent(new Event("vnedge-auth-expired"));
+    throw new ApiError(401, "session CSRF state is unavailable");
+  }
   const response = await fetch("/auth/session/refresh", {
     method: "POST",
     credentials: "same-origin",
     headers: { "X-VNEDGE-CSRF": csrf },
     cache: "no-store",
   });
-  if (response.status === 401) return;
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent(new Event("vnedge-auth-expired"));
+    throw new ApiError(response.status, "session expired — authenticate again");
+  }
   if (!response.ok) throw new ApiError(response.status, "session refresh failed");
+  const body = await response.json() as { expires_at?: string | null };
+  return { expires_at: body.expires_at ?? null };
 }
 
-export function keepBrowserSessionAlive(): () => void {
-  const refresh = () => {
-    if (document.visibilityState === "visible") {
-      void refreshBrowserSession().catch(() => undefined);
-    }
+function refreshDelay(expiresAt: string | null): number {
+  if (!expiresAt) return SESSION_REFRESH_MS;
+  const expiry = Date.parse(expiresAt);
+  if (!Number.isFinite(expiry)) return SESSION_REFRESH_MS;
+  return Math.max(
+    MIN_SESSION_REFRESH_MS,
+    Math.min(SESSION_REFRESH_MS, expiry - Date.now() - SESSION_EXPIRY_SKEW_MS),
+  );
+}
+
+export function keepBrowserSessionAlive(
+  initialExpiresAt: string | null,
+  onRefresh: (session: BrowserSession) => void,
+): () => void {
+  let stopped = false;
+  let expiresAt = initialExpiresAt;
+  let timer = 0;
+  const schedule = (delay = refreshDelay(expiresAt)) => {
+    window.clearTimeout(timer);
+    if (!stopped) timer = window.setTimeout(() => void refresh(), delay);
   };
-  const timer = window.setInterval(refresh, SESSION_REFRESH_MS);
-  window.addEventListener("focus", refresh);
+  const refresh = async () => {
+    if (stopped) return;
+    if (document.visibilityState !== "visible") {
+      schedule(30_000);
+      return;
+    }
+    try {
+      const session = await refreshBrowserSession();
+      expiresAt = session.expires_at;
+      onRefresh(session);
+    } catch (error) {
+      if (!(error instanceof ApiError) || (error.status !== 401 && error.status !== 403)) {
+        schedule(30_000);
+      }
+      return;
+    }
+    schedule();
+  };
+  const focus = () => schedule(MIN_SESSION_REFRESH_MS);
+  schedule();
+  window.addEventListener("focus", focus);
   return () => {
-    window.clearInterval(timer);
-    window.removeEventListener("focus", refresh);
+    stopped = true;
+    window.clearTimeout(timer);
+    window.removeEventListener("focus", focus);
   };
 }
 
@@ -241,6 +294,7 @@ export interface CorrectionLane {
   strategy_id: string;
   eligibility: "eligible" | "KILLED" | "RESEARCH_ONLY" | "unknown";
   mode: "shadow" | "paper" | "measurement" | "off";
+  observation_class: "shadow_observe" | "measurement" | null;
   exchange: string;
   symbol: string;
   timeframe: string;
@@ -258,6 +312,16 @@ export interface CorrectionLane {
   health: "ok" | "degraded" | "unknown";
   health_reason: string | null;
   why_no_fire: string;
+  last_reject_reason: string | null;
+  shadow_perf: {
+    pending_shadow_intents?: number;
+    shadow_outcomes_recent?: Record<string, unknown>[];
+    virtual_net_usd?: number;
+    wins?: number;
+    losses?: number;
+    profit_factor?: number | null;
+    bars_since_signal?: number | null;
+  } | null;
 }
 
 export interface LanesPayload {
@@ -265,6 +329,7 @@ export interface LanesPayload {
   capital_roster_size: number;
   measurement_only: boolean;
   banner: string | null;
+  shadow_observe_lanes: number;
   read_only: true;
   can_promote: false;
   can_trade: false;
@@ -485,6 +550,7 @@ export interface MlStage {
 }
 
 export interface MlStatus {
+  artifact_available?: boolean;
   generated_at?: string;
   active_role?: string;
   stage: string;
@@ -528,6 +594,7 @@ export interface MlStatus {
 }
 
 export interface AgenticResearchStatus {
+  artifact_available?: boolean;
   os_id: string;
   generated_at?: string;
   mode?: string;

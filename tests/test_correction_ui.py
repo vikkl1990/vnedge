@@ -96,10 +96,60 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["cost_profile"] == "delta_swing"
     assert measurement["round_trip_bps"] == 13.0
     assert measurement["why_no_fire"] == ("measurement lane emits no OrderIntent by design")
+    assert measurement["health"] == "blocked"  # canonical gap band, not feed-only OK
     assert killed["eligibility"] == "KILLED"
     assert killed["mode"] == "off"
     assert killed["capital"] is False
     assert killed["last_signal_age_seconds"] == 720.0
+
+
+def test_lane_projection_uses_server_health_bands() -> None:
+    snap = snapshot()
+    lane = snap["lanes"][0]
+    lane["gapped_candles"] = 0
+    lane["bands"] = {
+        "age": "ok",
+        "bar_close_lag": "blocked",
+        "decision_lag": "ok",
+        "dd": "ok",
+    }
+
+    projected = build_lanes_payload(snap, now=NOW)["lanes"][0]
+
+    assert projected["health"] == "blocked"
+
+
+def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
+    snap = snapshot()
+    snap["lanes"] = [
+        {
+            "lane_id": "shadow_observe_binanceusdm_btc",
+            "exchange": "binanceusdm",
+            "strategy_id": "structure_bos_1h",
+            "mode": "shadow (live data)",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1h",
+            "feed": "ok",
+            "last_fired_ts": (NOW - timedelta(hours=2)).isoformat(),
+            "shadow_perf": {
+                "pending_shadow_intents": 1,
+                "virtual_net_usd": 3.5,
+                "wins": 1,
+                "losses": 0,
+            },
+            "last_reject_reason": "no causal BoS candidate",
+        }
+    ]
+    payload = build_lanes_payload(snap, now=NOW)
+    lane = payload["lanes"][0]
+    assert payload["banner"] == "SHADOW_OBSERVE · virtual only — no capital strategies."
+    assert payload["shadow_observe_lanes"] == 1
+    assert lane["mode"] == "shadow"
+    assert lane["observation_class"] == "shadow_observe"
+    assert lane["capital"] is False
+    assert lane["last_signal_age_seconds"] == 7200.0
+    assert lane["shadow_perf"]["virtual_net_usd"] == 3.5
+    assert lane["last_reject_reason"] == "no causal BoS candidate"
 
 
 def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:

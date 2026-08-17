@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 
 from vnedge.backtest.backtester import BacktestResult
 from vnedge.data.schemas import TIMEFRAME_MS
+from vnedge.performance import profit_factor
 
 _MS_PER_YEAR = 365 * 86_400_000
 
@@ -25,7 +26,7 @@ class BacktestMetrics:
     max_drawdown_pct: float
     sharpe: float
     sortino: float
-    profit_factor: float
+    profit_factor: float | None
     win_rate_pct: float
     avg_win_usd: float
     avg_loss_usd: float
@@ -41,10 +42,11 @@ class BacktestMetrics:
 
     @property
     def summary(self) -> str:
+        pf = f"{self.profit_factor:.2f}" if self.profit_factor is not None else "undefined"
         return (
             f"{self.num_trades} trades | net ${self.net_profit_usd:+.2f} "
             f"({self.return_pct:+.2f}%) | maxDD {self.max_drawdown_pct:.2f}% | "
-            f"Sharpe {self.sharpe:.2f} | PF {self.profit_factor:.2f} | "
+            f"Sharpe {self.sharpe:.2f} | PF {pf} | "
             f"win {self.win_rate_pct:.1f}% | fees ${self.total_fees_usd:.2f} | "
             f"funding ${self.total_funding_usd:+.2f}"
         )
@@ -76,10 +78,7 @@ def compute_metrics(result: BacktestResult) -> BacktestMetrics:
     losses = [p for p in pnls if p <= 0]
     gross_wins = sum(wins)
     gross_losses = -sum(losses)
-    if gross_losses > 0:
-        profit_factor = gross_wins / gross_losses
-    else:
-        profit_factor = math.inf if gross_wins > 0 else 0.0
+    pf = profit_factor(gross_wins, gross_losses)
 
     exit_reasons: dict[str, int] = {}
     for t in trades:
@@ -93,7 +92,7 @@ def compute_metrics(result: BacktestResult) -> BacktestMetrics:
         max_drawdown_pct=max_dd,
         sharpe=_annualized_ratio(returns, bars_per_year, downside_only=False),
         sortino=_annualized_ratio(returns, bars_per_year, downside_only=True),
-        profit_factor=profit_factor,
+        profit_factor=pf,
         win_rate_pct=(len(wins) / len(trades) * 100.0) if trades else 0.0,
         avg_win_usd=(gross_wins / len(wins)) if wins else 0.0,
         avg_loss_usd=(-gross_losses / len(losses)) if losses else 0.0,

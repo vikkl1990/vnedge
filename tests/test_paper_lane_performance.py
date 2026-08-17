@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.research.paper_lane_performance import (
+    STATE_PAPER_ACTIVE_PROFITABLE,
     STATE_PAPER_ONLINE_NO_TRADES,
-    STATE_PAPER_PROMOTION_CANDIDATE,
     PaperLanePerformanceConfig,
     build_paper_lane_performance,
 )
@@ -126,13 +126,14 @@ def test_paper_performance_scores_hash_chained_positive_lane(tmp_path):
     )
 
     row = payload["rows"][0]
-    assert row["state"] == STATE_PAPER_PROMOTION_CANDIDATE
+    assert row["state"] == STATE_PAPER_ACTIVE_PROFITABLE
     assert row["live_evals"] == 1
     assert row["live_signals"] == 1
     assert row["paper_order_intents"] == 1
     assert row["fills"] == 2
     assert row["closed_trades"] == 1
-    assert row["profit_factor"] == 999.0
+    assert row["profit_factor"] is None
+    assert any("PF undefined" in blocker for blocker in row["blockers"])
     assert row["realized_pnl_usd"] == 3.0
     assert row["fees_usd"] == 0.2
     assert row["net_pnl_usd"] == 2.8
@@ -141,7 +142,7 @@ def test_paper_performance_scores_hash_chained_positive_lane(tmp_path):
     assert row["open_fill_count"] == 0
     assert row["unpaired_closing_fills"] == 0
     assert row["journal_drift_flags"] == []
-    assert payload["summary"]["promotion_candidates"] == 1
+    assert payload["summary"]["promotion_candidates"] == 0
     assert payload["summary"]["net_pnl_usd"] == 2.8
     assert payload["summary"]["closed_net_pnl_usd"] == 2.8
 

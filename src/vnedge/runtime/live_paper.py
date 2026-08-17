@@ -50,7 +50,12 @@ from vnedge.risk.position_sizer import size_position
 from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import MarketState, OrderIntent, PreTradeRiskGateway
 from vnedge.runtime import latency_thresholds as LT
-from vnedge.runtime.active_exit import ActiveExitDecision, ActiveExitState
+from vnedge.runtime.active_exit import (
+    ActiveExitDecision,
+    ActiveExitState,
+    ExitEngine,
+    ExitEngineConfig,
+)
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
@@ -272,6 +277,7 @@ class LivePaperSession:
             else None
         )
         self.last_eval: dict | None = None
+        self.last_reject_reason: str | None = None
         # chronological trade narrative for the dashboard journal panel:
         # fired signals, gateway verdicts, submissions, fills, exits
         from collections import deque
@@ -887,10 +893,28 @@ class LivePaperSession:
         return _LivePlan(
             signal=sig,
             entry_bar_ts=pd.Timestamp(entry_bar_ts),
-            exit_state=ActiveExitState.from_signal(
-                sig, trail_atr_mult=self.config.trail_atr_mult
-            ),
+            exit_state=ExitEngine.from_signal(
+                sig,
+                config=self._current_exit_config(),
+            ).state,
         )
+
+    def _current_exit_config(self) -> ExitEngineConfig:
+        config = self.config
+        return ExitEngineConfig(
+            trail_atr_mult=config.trail_atr_mult,
+            trail_atr_window=config.trail_atr_window,
+            max_holding_bars=config.max_holding_bars,
+            tick_stops_enabled=config.tick_stops_enabled,
+            allow_partial_tp=config.allow_partial_tp,
+            fee_aware_breakeven_bps=config.fee_aware_breakeven_bps,
+        )
+
+    def _exit_engine(self, plan: _LivePlan | None = None) -> ExitEngine:
+        active = plan or self._plan
+        if active is None or active.exit_state is None:
+            raise RuntimeError("exit engine requested without an active plan")
+        return ExitEngine(active.exit_state, self._current_exit_config())
 
     def _trail_atr(self) -> float:
         """Canonical ATR for the trail — the SAME indicator+window the backtester
@@ -954,6 +978,7 @@ class LivePaperSession:
         )
         if not sizing.approved:
             self.sizing_skips += 1
+            self.last_reject_reason = f"sizing: {', '.join(sizing.reasons)}"
             self._log_trade_event("sizing_skip", f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140], now)
             return
         # Maker-edge strategies post a passive resting limit at the near touch
@@ -1017,6 +1042,9 @@ class LivePaperSession:
                 )
             else:
                 self.shadow_rejected += 1
+                self.last_reject_reason = (
+                    f"gateway: {', '.join(decision.failed_checks)}"
+                )
                 self._log_trade_event(
                     "shadow_rejected",
                     f"{sig.side} — failed: {', '.join(decision.failed_checks)}"[:140],
@@ -1174,39 +1202,38 @@ class LivePaperSession:
         under. Counted statelessly from the persisted ``entry_bar_ts`` against
         the (untrimmed, resume-seeded) candle history, so it survives restarts.
         """
-        cap = self.config.max_holding_bars
-        if cap <= 0 or self._plan is None:
-            return False
+        return self._bars_held(bar) >= self.config.max_holding_bars
+
+    def _bars_held(self, bar: pd.Series) -> int:
+        if self._plan is None:
+            return 0
         entry_ts = self._plan.entry_bar_ts
         current_ts = pd.Timestamp(bar["timestamp"])
-        held = int(
+        return int(
             (
                 (self.candles["timestamp"] > entry_ts)
                 & (self.candles["timestamp"] <= current_ts)
             ).sum()
         )
-        return held >= cap
 
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
             return
         sig = self._plan.signal
-        decision = self._plan.exit_state.resolve_bar(
+        engine = self._exit_engine()
+        decision = engine.on_bar(
             high=float(bar["high"]),
             low=float(bar["low"]),
             close=float(bar["close"]),
             position_quantity=self._current_position_quantity(),
             min_qty=self.config.limits.min_qty,
             qty_step=self.config.limits.qty_step,
-            max_holding_hit=self._max_holding_hit(bar),
+            bars_held=self._bars_held(bar),
+            atr=self._trail_atr(),
         )
         if decision is None:
             decision = self._strategy_exit_decision(bar)
         if decision is None:
-            # No exit this bar — trail the stop for LATER bars off the canonical
-            # ATR (this bar's favorable extreme is already in the exit state; the
-            # tightened stop applies next bar, so no intrabar lookahead).
-            self._plan.exit_state.trail_stop(self._trail_atr())
             return
         levels = list(sig.take_profit_levels)
         order = await self._submit_exit(
@@ -1220,7 +1247,7 @@ class LivePaperSession:
         if order is None:
             return
         if order.state in _EXIT_ACCEPTED_STATES and self._plan is not None:
-            self._plan.exit_state.mark_accepted(decision)
+            engine.mark_fill(decision)
         self.journal.append("live_paper_exit", {
             "reason": decision.reason,
             "state": order.state.value,
@@ -1249,19 +1276,13 @@ class LivePaperSession:
         exit_sig = self.strategy.exit_signal(df, index, sig.side, entry)
         if exit_sig is None:
             return None
-        return ActiveExitDecision(
+        return self._exit_engine().on_strategy_exit(
             reason=exit_sig.reason,
-            exit_price=(
+            price=(
                 float(exit_sig.exit_price)
                 if exit_sig.exit_price is not None
                 else float(bar["close"])
             ),
-            quantity=None,
-            final=True,
-            active_stop_price=self._plan.exit_state.current_stop,
-            breakeven_armed=self._plan.exit_state.breakeven_armed,
-            tp_reached=self._plan.exit_state.tp_reached(),
-            mfe_price=self._plan.exit_state.mfe_price,
         )
 
     async def _submit_exit(
@@ -1410,14 +1431,23 @@ class LivePaperSession:
         sig = self._plan.signal
         entry_bar_ts = self._plan.entry_bar_ts
         bid, ask = self.feed.quote
-        stop_price = self._plan.exit_state.current_stop
-        breached = bid <= stop_price if sig.side == "long" else ask >= stop_price
-        if not breached:
+        decision = self._exit_engine().on_tick(
+            bid=bid,
+            ask=ask,
+            position_quantity=self._current_position_quantity(),
+        )
+        if decision is None:
             return
+        stop_price = decision.active_stop_price
         self._sync_quote()  # exit must fill at the breach quote, not the last bar's
         # key_ts = entry bar: one tick-stop intent per plan, minted once —
         # never re-derived from the (wall-clock) breach time
-        order = await self._submit_exit("tick_stop", int(entry_bar_ts.value), now)
+        order = await self._submit_exit(
+            decision.reason,
+            int(entry_bar_ts.value),
+            now,
+            decision=decision,
+        )
         if order is None:
             return
         if order.state in _EXIT_ACCEPTED_STATES:
@@ -1689,6 +1719,11 @@ class LivePaperSession:
         'no signal for days' from a mystery into a measurement (how far from
         each threshold every bar actually was)."""
         row = df.iloc[index]
+        if sig is None and not skip_reason:
+            evaluation = getattr(self.strategy, "last_evaluation", None)
+            if evaluation is not None and not bool(getattr(evaluation, "accepted", False)):
+                skip_reason = str(getattr(evaluation, "reason", "no signal"))
+                self.last_reject_reason = skip_reason
         features = {}
         for col in self._EVAL_FEATURES:
             if col in df.columns:
@@ -1874,6 +1909,7 @@ class LivePaperSession:
                 "trial_scorecard": self._trial_scorecard(),
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
+                "last_reject_reason": self.last_reject_reason,
                 "shadow_perf": self.shadow_outcomes.stats()
                 if self.shadow_outcomes is not None else None,
                 "trade_log": list(self.trade_log),

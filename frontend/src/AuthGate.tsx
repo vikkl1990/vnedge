@@ -10,31 +10,42 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
 
   useEffect(() => {
     void hasBrowserSession()
-      .then((ok) => setStatus(ok ? "ready" : "required"))
+      .then((session) => {
+        setExpiresAt(session?.expires_at ?? null);
+        setStatus(session ? "ready" : "required");
+      })
       .catch(() => {
         setError("Dashboard unavailable — check the secure connection and try again.");
         setStatus("required");
       });
-    const expired = () => setStatus("required");
+    const expired = () => {
+      setExpiresAt(null);
+      setError("Session expired or was invalidated. Authenticate again.");
+      setStatus("required");
+    };
     window.addEventListener("vnedge-auth-expired", expired);
     return () => window.removeEventListener("vnedge-auth-expired", expired);
   }, []);
 
   useEffect(() => {
     if (status !== "ready") return;
-    return keepBrowserSessionAlive();
-  }, [status]);
+    return keepBrowserSessionAlive(expiresAt, (session) => {
+      setExpiresAt(session.expires_at);
+    });
+  }, [expiresAt, status]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSubmitting(true);
     setError("");
     try {
-      await establishBrowserSession(token);
+      const session = await establishBrowserSession(token);
       setToken("");
+      setExpiresAt(session.expires_at);
       setStatus("ready");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "authentication failed");

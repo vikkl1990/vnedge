@@ -5,7 +5,7 @@ from vnedge.plan import (
     AISpec, CostModel, CostSpec, EntrySpec, ProfitSpec, RiskSpec, Target,
     TradePlan, plan_gate,
 )
-from vnedge.plan.cost_model import COST_PROFILES, CostModelConfig
+from vnedge.plan.cost_model import COST_PROFILES
 
 
 def test_profiles_registered():
@@ -24,15 +24,13 @@ def test_gate_multiple_is_profile_specific():
     assert CostModel.for_profile("delta_scalp").config.gate_safety_mult == 3.5
 
 
-def test_delta_scalp_waives_exit_fee_within_30m():
+def test_delta_scalp_does_not_assume_unverified_close_waiver():
     cm = CostModel.for_profile("delta_scalp")
-    # taker 5 (entry) + 5 (exit) + 1.5 + 1.5 + 2 safety = 15 at full fee
     full = cm.round_trip_bps()
-    within = cm.round_trip_bps(hold_minutes=10)     # exit fee -> 0
-    beyond = cm.round_trip_bps(hold_minutes=45)     # past the window -> full
-    assert within == full - 5.0                     # one taker fee waived
-    assert beyond == full                            # discount only when KNOWN short
-    # conservative default: no hold given -> full fee, never assume the discount
+    within = cm.round_trip_bps(hold_minutes=10)
+    beyond = cm.round_trip_bps(hold_minutes=45)
+    assert within == full
+    assert beyond == full
     assert cm.round_trip_bps() == full
 
 

@@ -1,6 +1,6 @@
 # Dashboard auth — per-user tokens, roles, expiry
 
-The read-only dashboard (docs/DESIGN.md §6) authenticates every data route
+The measurement dashboard authenticates every data route
 (`/state`, `/history`, `/research`, `/alpha-council`, `/alpha-workbench`) and
 the snapshot WebSocket (`/ws`). The static shell page (`/`) stays public — it
 contains no data.
@@ -79,15 +79,14 @@ request and buy nothing against a 32-byte random token).
 | `auditor`  | `view`, `view_audit` (read the operator-action trail; **no** control) |
 | `operator` | `view`, `view_audit`, `promote`, `flip_live_gate`, `kill_switch`  |
 
-**Every current route is read-only** — the dashboard exposes zero control
-routes, structurally, so `view` is all any role needs today. The map exists so
-a future privileged surface (e.g. the v2 kill-switch button in DESIGN.md §6)
-enforces server-side via `_require_permission(<perm>)` — a viewer gets `403` —
-without another auth migration. `has_permission(role, perm)` is the primitive;
-`GET /whoami` returns the caller's `name`, `role`, and `permissions` so a
-frontend can hide controls it can't use (defense in depth; the server still
-enforces). Grant `viewer` by default; `auditor` to review the audit trail;
-`operator` only to those allowed to operate controls later.
+Market, runtime, risk, journal, research, and promotion-evidence routes are
+read-only. The Settings API is the sole mutation surface: an operator may store
+scoped profile/connection configuration and encrypted credentials. It cannot
+place orders, change the capital roster, promote a strategy, clear a kill
+switch, or enable live trading. Browser mutations additionally require the
+session CSRF cookie/header pair. A viewer receives `403` from these routes.
+`GET /whoami` returns the caller's identity and permissions so the frontend can
+hide unavailable controls; the server remains authoritative.
 
 ## Health & readiness probes
 
@@ -158,5 +157,6 @@ Rotating the legacy `DASHBOARD_TOKEN` is the same dance: set the new value in
   rule; there is no runtime mutation surface for auth.
 - Tokens are secrets: keep them in `.env` (gitignored) like every other
   secret in this repo; never commit them.
-- The dashboard remains read-only regardless of role; this change adds
-  identity and lifecycle to tokens, not capabilities.
+- Operational market and trading surfaces remain read-only. Only the scoped
+  Settings API mutates state, with operator authorization, CSRF validation,
+  encryption-at-rest for secrets, and an append-only operator audit record.

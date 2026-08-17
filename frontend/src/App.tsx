@@ -6,7 +6,10 @@ import {
   Header,
   JournalPanel,
   DeskPanel,
+  BookPanel,
   LiveBlockedBanner,
+  MarketPanel,
+  PositionsPanel,
   PromotePanel,
   ResearchPanel,
   RiskPanel,
@@ -69,7 +72,13 @@ export default function App() {
       </div>
 
       {tab === "pulse" && <MarketPulse />}
-      {tab === "desk" && <DeskPanel />}
+      {tab === "desk" && (
+        <div className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-2"><BookPanel /><MarketPanel /></div>
+          <DeskPanel />
+          <PositionsPanel />
+        </div>
+      )}
       {tab === "risk" && <RiskPanel />}
       {tab === "journal" && <JournalPanel />}
       {tab === "research" && <ResearchPanel />}

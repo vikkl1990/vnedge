@@ -10,9 +10,24 @@ from vnedge.exchange.live_feed import (
     DeltaWsFeed,
     LiveMarketFeed,
     RestPollingMarketFeed,
+    _advance_forming,
     create_market_feed,
     supports_ccxt_pro_feed,
 )
+
+
+def test_forming_updates_are_monotonic_across_reconnect_replays() -> None:
+    current = [2_000, 10.0, 12.0, 9.0, 11.0, 5.0]
+    stale = [1_000, 8.0, 20.0, 1.0, 19.0, 99.0]
+    same = [2_000, 10.0, 13.0, 9.0, 12.0, 7.0]
+    newer = [3_000, 12.0, 14.0, 11.0, 13.0, 2.0]
+
+    forming, closed = _advance_forming(current, stale)
+    assert forming is current and closed is None
+    forming, closed = _advance_forming(forming, same)
+    assert forming is same and closed is None
+    forming, closed = _advance_forming(forming, newer)
+    assert forming is newer and closed is same
 
 
 @pytest.mark.network

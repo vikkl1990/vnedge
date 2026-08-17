@@ -76,6 +76,9 @@ class LiveTraderRunConfig:
     max_holding_bars: int = 48
     trail_atr_mult: float = 0.0
     trail_atr_window: int = 14
+    tick_stops_enabled: bool = True
+    allow_partial_tp: bool = False
+    fee_aware_breakeven_bps: float = 8.0
 
 
 def _credentials_present() -> bool:
@@ -296,6 +299,9 @@ async def run_live_trader(
         max_holding_bars=config.max_holding_bars,
         trail_atr_mult=config.trail_atr_mult,
         trail_atr_window=config.trail_atr_window,
+        tick_stops_enabled=config.tick_stops_enabled,
+        allow_partial_tp=config.allow_partial_tp,
+        fee_aware_breakeven_bps=config.fee_aware_breakeven_bps,
         fill_ledger=fill_ledger,
         private_stream_health=health, require_private_stream=True,
     )

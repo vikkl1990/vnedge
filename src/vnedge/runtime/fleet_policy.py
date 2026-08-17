@@ -17,7 +17,10 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from vnedge.strategy.strategy_registry import capital_denial_reason
+from vnedge.strategy.strategy_registry import (
+    capital_denial_reason,
+    is_shadow_observe_eligible,
+)
 
 _CAPITAL_MODES = frozenset({"paper", "live_small", "live_full"})
 
@@ -87,10 +90,23 @@ def audit_runtime_snapshot(
 
     lanes = _lane_rows(snapshot)
     for lane in lanes:
+        lane_id = str(lane.get("lane_id") or "").strip() or None
+        observation_class = str(lane.get("observation_class") or "").strip().lower()
+        strategy_id = str(lane.get("strategy_id") or "").strip()
+        if (
+            observation_class == "shadow_observe"
+            or (lane_id or "").startswith("shadow_observe_")
+        ) and not is_shadow_observe_eligible(strategy_id):
+            findings.append(
+                FleetFinding(
+                    "critical",
+                    "shadow_observe_strategy_denied",
+                    f"shadow-observe lane uses {strategy_id or '<missing>'}",
+                    lane_id,
+                )
+            )
         if not _capital_mode(lane.get("mode")):
             continue
-        strategy_id = str(lane.get("strategy_id") or "").strip()
-        lane_id = str(lane.get("lane_id") or "").strip() or None
         reason = capital_denial_reason(strategy_id)
         if reason is not None:
             findings.append(

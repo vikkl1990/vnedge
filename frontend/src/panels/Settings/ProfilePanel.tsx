@@ -10,12 +10,13 @@ export function ProfilePanel() {
   const [timezone, setTimezone] = useState("UTC");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (!profile.data) return;
+    if (!profile.data || dirty) return;
     setDisplayName(profile.data.display_name);
     setTimezone(profile.data.timezone);
-  }, [profile.data]);
+  }, [profile.data, dirty]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -27,6 +28,7 @@ export function ProfilePanel() {
         timezone,
       });
       queryClient.setQueryData(["settings-profile"], updated);
+      setDirty(false);
       setMessage("Profile saved and audited.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Profile save failed.");
@@ -48,11 +50,11 @@ export function ProfilePanel() {
         </label>
         <label className="text-[11px] text-dim">
           Display name
-          <input required maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="mt-1 w-full rounded-md border border-line bg-inset px-3 py-2 text-txt" />
+          <input required maxLength={80} value={displayName} onChange={(event) => { setDisplayName(event.target.value); setDirty(true); }} className="mt-1 w-full rounded-md border border-line bg-inset px-3 py-2 text-txt" />
         </label>
         <label className="text-[11px] text-dim">
           Timezone
-          <select value={timezone} onChange={(event) => setTimezone(event.target.value)} className="mt-1 w-full rounded-md border border-line bg-inset px-3 py-2 text-txt">
+          <select value={timezone} onChange={(event) => { setTimezone(event.target.value); setDirty(true); }} className="mt-1 w-full rounded-md border border-line bg-inset px-3 py-2 text-txt">
             <option value="UTC">UTC</option>
             <option value="Asia/Kolkata">Asia/Kolkata</option>
             <option value="America/New_York">America/New_York</option>

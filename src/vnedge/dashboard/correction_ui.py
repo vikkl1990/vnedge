@@ -13,10 +13,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from vnedge.dashboard.health_bands import lane_health, timeframe_health
 from vnedge.strategy.strategy_registry import (
     KILLED,
     RESEARCH_ONLY,
     is_capital_eligible,
+    is_shadow_observe_eligible,
 )
 
 LIVE_BLOCKED_MESSAGE = (
@@ -40,6 +42,8 @@ def _mode(raw: object, strategy_id: str, *, killed: bool) -> str:
     if killed:
         return "off"
     text = str(raw or "").lower()
+    if "shadow" in text and is_shadow_observe_eligible(strategy_id):
+        return "shadow"
     if strategy_id in RESEARCH_ONLY:
         return "measurement"
     if "paper" in text:
@@ -75,18 +79,6 @@ def _age_seconds(value: object, now: datetime) -> float | None:
     return round(max(0.0, (now - parsed.astimezone(UTC)).total_seconds()), 1)
 
 
-def _lane_health(lane: Mapping[str, Any], problems: Mapping[str, str]) -> str:
-    lane_id = str(lane.get("lane_id") or "")
-    if lane_id in problems:
-        return "degraded"
-    if lane.get("degraded") or lane.get("arm_blocked"):
-        return "degraded"
-    feed = str(lane.get("feed") or _mapping(lane.get("feed_health")).get("candles") or "")
-    if not feed:
-        return "unknown"
-    return "ok" if feed.lower() in {"ok", "live"} else "degraded"
-
-
 def _number(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
@@ -108,26 +100,6 @@ def _latency_value_with_alias(
     return value if value is not None else _latency_value(lane, alias)
 
 
-def _timeframe_health(lane: Mapping[str, Any]) -> tuple[str, float | None]:
-    timeframe = str(lane.get("timeframe") or "")
-    machine = _mapping(lane.get("time_machine"))
-    health = _mapping(machine.get("health"))
-    ages = _mapping(machine.get("age_ms"))
-    feed = str(
-        lane.get("feed")
-        or _mapping(lane.get("feed_health")).get("candles")
-        or "unknown"
-    )
-    status = str(health.get(timeframe) or feed or "unknown").lower()
-    age = _number(ages.get(timeframe))
-    if age is None:
-        age = _number(
-            lane.get("staleness_ms")
-            or _mapping(lane.get("feed_health")).get("last_update_ms")
-        )
-    return status, age
-
-
 def _skip_count(lane: Mapping[str, Any]) -> int:
     skips = _mapping(lane.get("decision_skips"))
     return sum(int(value or 0) for value in skips.values())
@@ -138,7 +110,7 @@ def _last_signal_reason(
 ) -> str:
     if eligibility == "KILLED":
         return "strategy_killed"
-    if eligibility == "RESEARCH_ONLY" or mode == "measurement":
+    if mode == "measurement":
         return "observe_only"
     blocked = lane.get("arm_blocked")
     if blocked:
@@ -173,14 +145,22 @@ def build_lanes_payload(
         mode = _mode(
             lane.get("mode"), strategy_id, killed=eligibility == "KILLED"
         )
+        observation_class = (
+            "shadow_observe"
+            if mode == "shadow" and is_shadow_observe_eligible(strategy_id)
+            else "measurement"
+            if mode == "measurement"
+            else None
+        )
         capital = (
             mode == "paper"
             and eligibility == "eligible"
             and bool(runtime.get("orders_allowed"))
         )
-        candle_status, candle_age_ms = _timeframe_health(lane)
+        candle_status, candle_age_ms = timeframe_health(lane)
         plan = _mapping(lane.get("plan_overlay"))
-        health = _lane_health(lane, problems)
+        lane_id = str(lane.get("lane_id") or "")
+        health = lane_health(lane, has_problem=lane_id in problems)
         reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
         result.append(
             {
@@ -188,6 +168,7 @@ def build_lanes_payload(
                 "strategy_id": strategy_id or "unknown",
                 "eligibility": eligibility,
                 "mode": mode,
+                "observation_class": observation_class,
                 "exchange": str(lane.get("exchange") or lane.get("lane_exchange") or ""),
                 "symbol": str(lane.get("symbol") or ""),
                 "timeframe": str(lane.get("timeframe") or ""),
@@ -203,7 +184,7 @@ def build_lanes_payload(
                 "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (
                     None
-                    if eligibility == "RESEARCH_ONLY"
+                    if mode == "measurement"
                     else _age_seconds(lane.get("last_fired_ts"), at)
                 ),
                 "last_signal_reason": reason,
@@ -213,6 +194,12 @@ def build_lanes_payload(
                 ),
                 "health": health,
                 "health_reason": problems.get(str(lane.get("lane_id") or "")),
+                "shadow_perf": lane.get("shadow_perf") if mode == "shadow" else None,
+                "last_reject_reason": (
+                    str(lane.get("last_reject_reason"))
+                    if lane.get("last_reject_reason")
+                    else None
+                ),
                 "why_no_fire": (
                     "measurement lane emits no OrderIntent by design"
                     if mode == "measurement"
@@ -224,13 +211,21 @@ def build_lanes_payload(
         )
 
     capital_count = sum(bool(row["capital"]) for row in result)
+    observe_count = sum(
+        row["observation_class"] == "shadow_observe" for row in result
+    )
     return {
         "lanes": result,
         "capital_roster_size": capital_count,
         "measurement_only": capital_count == 0,
         "banner": (
-            "No capital strategies — measurement only." if capital_count == 0 else None
+            "SHADOW_OBSERVE · virtual only — no capital strategies."
+            if capital_count == 0 and observe_count
+            else "No capital strategies — measurement only."
+            if capital_count == 0
+            else None
         ),
+        "shadow_observe_lanes": observe_count,
         "read_only": True,
         "can_promote": False,
         "can_trade": False,

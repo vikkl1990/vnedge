@@ -22,6 +22,46 @@ def test_measurement_only_fleet_is_safe() -> None:
     assert report.findings == ()
 
 
+def test_allowed_shadow_observe_lane_is_safe_and_non_capital() -> None:
+    report = audit_runtime_snapshot(
+        {
+            "live_trading_enabled": False,
+            "runtime_control": {
+                "capital_roster_size": 0,
+                "orders_allowed": False,
+                "live_orders_allowed": False,
+            },
+            "lanes": [
+                {
+                    "lane_id": "shadow_observe_binanceusdm_btc_usdt_usdt",
+                    "observation_class": "shadow_observe",
+                    "mode": "shadow (live data)",
+                    "strategy_id": "structure_bos_1h",
+                }
+            ],
+        }
+    )
+    assert report.safe
+    assert report.findings == ()
+
+
+def test_shadow_observe_claim_with_non_allowlisted_strategy_is_critical() -> None:
+    report = audit_runtime_snapshot(
+        {
+            "lanes": [
+                {
+                    "lane_id": "shadow_observe_bad",
+                    "observation_class": "shadow_observe",
+                    "mode": "shadow",
+                    "strategy_id": "funding_mean_reversion_v1",
+                }
+            ]
+        }
+    )
+    assert not report.safe
+    assert report.findings[0].code == "shadow_observe_strategy_denied"
+
+
 def test_killed_or_unapproved_capital_lane_is_critical() -> None:
     report = audit_runtime_snapshot(
         {

@@ -21,7 +21,11 @@ from typing import Any, cast
 
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
 from vnedge.runtime.runner_config import RunnerMode
-from vnedge.strategy.strategy_registry import get_strategy_class, is_capital_eligible
+from vnedge.strategy.strategy_registry import (
+    get_strategy_class,
+    is_capital_eligible,
+    is_shadow_observe_eligible,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -113,8 +117,115 @@ def build_capital_lane_specs(
     ]
 
 
+def _positive_float(environ: Mapping[str, str], name: str, default: str) -> float:
+    raw = str(environ.get(name, default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive number") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return value
+
+
+def _nonnegative_float(environ: Mapping[str, str], name: str, default: str) -> float:
+    raw = str(environ.get(name, default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative number") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative number")
+    return value
+
+
+def build_shadow_observe_lane_specs(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Build one explicitly enabled, virtual-outcome-only strategy lane."""
+    strategy_id = environ.get("MULTI_LANE_SHADOW_OBSERVE_STRATEGY", "").strip()
+    enabled = _truthy(environ, "MULTI_LANE_SHADOW_OBSERVE_ENABLED")
+    if not enabled and not strategy_id:
+        return []
+    if enabled != bool(strategy_id):
+        raise ValueError(
+            "shadow observe requires both MULTI_LANE_SHADOW_OBSERVE_ENABLED=1 "
+            "and MULTI_LANE_SHADOW_OBSERVE_STRATEGY"
+        )
+    get_strategy_class(strategy_id)
+    if not is_shadow_observe_eligible(strategy_id):
+        raise ValueError(f"strategy {strategy_id!r} is not shadow-observe eligible")
+
+    exchange = environ.get(
+        "MULTI_LANE_SHADOW_OBSERVE_EXCHANGE", "binanceusdm"
+    ).strip()
+    configured_symbol = environ.get(
+        "MULTI_LANE_SHADOW_OBSERVE_SYMBOL", "BTC/USDT:USDT"
+    ).strip()
+    timeframe = environ.get("MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME", "1h").strip()
+    if not exchange or not configured_symbol:
+        raise ValueError("shadow observe exchange and symbol cannot be empty")
+    if strategy_id == "structure_bos_1h" and timeframe != "1h":
+        raise ValueError("structure_bos_1h shadow observe requires timeframe 1h")
+    symbol = _venue_symbol(exchange, configured_symbol)
+    return [
+        LaneSpec(
+            lane_id=f"shadow_observe_{_slug(exchange)}_{_slug(symbol)}",
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_id=strategy_id,
+            mode=RunnerMode.SHADOW,
+            starting_equity=_positive_float(
+                environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
+            ),
+            daily_loss_usd=_positive_float(
+                environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10"
+            ),
+            trail_atr_mult=_nonnegative_float(
+                environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0"
+            ),
+            is_primary=False,
+        )
+    ]
+
+
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
-    return build_lane_specs_from_env(environ) + build_capital_lane_specs(environ)
+    return (
+        build_lane_specs_from_env(environ)
+        + build_capital_lane_specs(environ)
+        + build_shadow_observe_lane_specs(environ)
+    )
+
+
+def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
+    """Publish permission truth independently from lane display labels."""
+    paper_lanes = sum(spec.mode is RunnerMode.PAPER for spec in specs)
+    observe = [
+        spec
+        for spec in specs
+        if spec.mode is RunnerMode.SHADOW
+        and is_shadow_observe_eligible(spec.strategy_id)
+    ]
+    measurement_lanes = sum(
+        spec.strategy_id == "measurement_only_v1" for spec in specs
+    )
+    return {
+        "lane_set_hash": lane_specs_fingerprint(specs),
+        "configured_lanes": len(specs),
+        "capital_roster_size": paper_lanes,
+        "paper_lanes": paper_lanes,
+        "shadow_observe_enabled": bool(observe),
+        "shadow_observe_strategy": observe[0].strategy_id if observe else None,
+        "shadow_observe_lanes": len(observe),
+        "measurement_lanes": measurement_lanes,
+        "measurement_only_pct": round(100 * measurement_lanes / len(specs), 1),
+        "mode_ladder": (
+            "measurement/shadow-observe; optional explicit paper; no live adapter"
+        ),
+        "orders_allowed": paper_lanes > 0,
+        "live_orders_allowed": False,
+    }
 
 
 def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
@@ -138,20 +249,14 @@ async def main() -> int:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
     lanes = desired_lane_specs()
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
-    capital_lanes = sum(spec.mode is RunnerMode.PAPER for spec in lanes)
+    runtime_control = build_runtime_control(lanes)
+    capital_lanes = int(runtime_control["paper_lanes"])
+    observe_lanes = int(runtime_control["shadow_observe_lanes"])
     provider = MultiLaneProvider(
         primary_lane_id=primary,
         lane_specs=lanes,
         journal_dir=journal_dir,
-        runtime_control={
-            "lane_set_hash": lane_specs_fingerprint(lanes),
-            "configured_lanes": len(lanes),
-            "capital_roster_size": capital_lanes,
-            "measurement_only_pct": round(100 * (len(lanes) - capital_lanes) / len(lanes), 1),
-            "mode_ladder": "measurement/shadow; optional explicit paper; no live adapter",
-            "orders_allowed": capital_lanes > 0,
-            "live_orders_allowed": False,
-        },
+        runtime_control=runtime_control,
     )
 
     server_task: asyncio.Task | None = None
@@ -182,8 +287,10 @@ async def main() -> int:
         server_task = asyncio.create_task(server.serve())
 
     logger.info(
-        "configured %d measurement lanes and %d paper-capital lanes; primary=%s",
-        len(lanes) - capital_lanes,
+        "configured %d measurement, %d shadow-observe, and %d paper-capital lanes; "
+        "primary=%s",
+        len(lanes) - capital_lanes - observe_lanes,
+        observe_lanes,
         capital_lanes,
         primary,
     )

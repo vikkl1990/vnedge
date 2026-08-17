@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Publish a read-only operator runbook from promotion red-team evidence."
     )
     parser.add_argument("--feed", default=str(DEFAULT_EXPERIMENT_FEED))
-    parser.add_argument("--burn-registry", default="research/live_research/data_burn_registry.jsonl")
+    parser.add_argument("--burn-registry", default="research/judgments/burn_registry.jsonl")
     parser.add_argument("--paper-trials", default="research/paper_trials")
     parser.add_argument("--red-team-out", default=str(DEFAULT_RED_TEAM_OUT))
     parser.add_argument("--out", default=str(DEFAULT_OUT))

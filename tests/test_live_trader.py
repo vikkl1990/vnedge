@@ -114,6 +114,19 @@ def wire(settings, feed, adapter, accounts, tmp_path, strategy, **session_kw):
     ), om
 
 
+def test_live_session_rejects_partial_tp_policy(tmp_path):
+    with pytest.raises(RuntimeError, match="partial TP"):
+        wire(
+            live_settings(),
+            FakeFeed([]),
+            FakeLiveAdapter(),
+            FakeAccounts(),
+            tmp_path,
+            OneShotLong(),
+            allow_partial_tp=True,
+        )
+
+
 class OneShotLong(BaseStrategy):
     strategy_id = "oneshot"
     warmup_bars = 2
@@ -544,6 +557,31 @@ async def test_a1_no_hit_holds_and_does_not_exit(tmp_path):
     assert session._plan is sig and session.orders_submitted == 0   # still holding
 
 
+async def test_live_tick_stop_uses_shared_exit_engine(tmp_path):
+    accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
+    feed = FakeFeed([], quote=(94.9, 95.0))
+    session, om = wire(
+        live_settings(),
+        feed,
+        FakeLiveAdapter(),
+        accounts,
+        tmp_path,
+        OneShotLong(),
+        tick_stops_enabled=True,
+    )
+    signal = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
+    session._plan = signal
+    session._entry_bar_ts = pd.Timestamp(BASE, unit="ms", tz="UTC")
+    session._open_exit_state(signal, 0.01)
+
+    await session._check_tick_stop(datetime.now(UTC))
+
+    reduce_only = [order for order in om.orders.values() if order.intent.reduce_only]
+    assert len(reduce_only) == 1
+    assert "tick_stop" in reduce_only[0].intent_key
+    assert session._plan is None
+
+
 def test_a1_trailing_tightens_stop(tmp_path):
     session, _ = wire(live_settings(), FakeFeed([]), FakeLiveAdapter(), FakeAccounts(),
                       tmp_path, OneShotLong(), trail_atr_mult=2.0, trail_atr_window=2)
@@ -660,7 +698,10 @@ async def test_l1inc2_accepted_entry_is_chained_and_deduped(tmp_path):
     await session.run(max_bars=1)
     assert ledger.records == 1                       # the accepted entry was chained
     assert verify_chain(tmp_path / "fills.jsonl").ok  # tamper-evident chain intact
-    rec = [__import__("json").loads(l) for l in (tmp_path / "fills.jsonl").read_text().splitlines()][0]
+    rec = [
+        __import__("json").loads(line)
+        for line in (tmp_path / "fills.jsonl").read_text().splitlines()
+    ][0]
     assert rec["kind"] == "entry" and rec["side"] == "buy"
     assert rec["fee_usd"] is None                    # honest: not faked pending the fill stream
     session._ledger_sweep(datetime.now(UTC))         # a second sweep must NOT double-record

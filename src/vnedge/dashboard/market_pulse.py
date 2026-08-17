@@ -852,7 +852,10 @@ class MarketPulseService:
     ) -> dict[str, Any] | None:
         pulse = runtime.get("pulse") if runtime else None
         forming = pulse.get("forming") if isinstance(pulse, Mapping) else None
-        if isinstance(forming, Mapping) and str(forming.get("symbol") or symbol) == symbol:
+        if (
+            isinstance(forming, Mapping)
+            and cls._same_symbol(forming.get("symbol"), symbol)
+        ):
             return dict(forming)
 
         # The multi-lane snapshot publishes the primary lane's canonical
@@ -876,11 +879,24 @@ class MarketPulseService:
     @staticmethod
     def _symbol_runtime(runtime: Mapping[str, Any] | None, symbol: str) -> bool:
         """Return whether the single runtime quote belongs to this Pulse symbol."""
-        if not runtime or not runtime.get("symbol"):
+        if not runtime:
+            return False
+        if MarketPulseService._same_symbol(runtime.get("symbol"), symbol):
             return True
-        runtime_symbol = str(runtime["symbol"]).upper()
-        base = symbol.upper().removesuffix("USDT")
-        return runtime_symbol.startswith(base)
+        pulse = runtime.get("pulse")
+        forming = pulse.get("forming") if isinstance(pulse, Mapping) else None
+        return isinstance(forming, Mapping) and MarketPulseService._same_symbol(
+            forming.get("symbol"), symbol
+        )
+
+    @staticmethod
+    def _same_symbol(candidate: object, symbol: str) -> bool:
+        """Compare venue-formatted symbols without guessing a missing owner."""
+        if not candidate:
+            return False
+        normalized = str(candidate).upper().replace("/", "").replace(":", "")
+        requested = symbol.upper().replace("/", "").replace(":", "")
+        return normalized in {requested, f"{requested}USDT"}
 
     @staticmethod
     def _forming_metrics(

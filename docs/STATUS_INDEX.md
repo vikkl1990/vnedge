@@ -15,6 +15,7 @@ These describe the current measurement-first system:
 - `CANDLE_PIPELINE.md`, `MARKET_PULSE.md`, `CONTEXT_DATA_BACKFILL.md`
 - `AGENT_GATEWAY.md`, `RESEARCH_AGENTS.md`, `AI_SANDBOX.md`
 - `strategy_contract.md`, `PROMOTION_REVIEW_RUNBOOK.md`
+- `EXIT_ENGINE.md`
 
 “Active” means the document describes a supported component. It does not mean
 any strategy is capital-approved. `CAPITAL_APPROVED` is currently empty and
@@ -35,6 +36,9 @@ PINE  FREQTRADE  LUXALGO  OCTOBOT  IAF  GITHUB  PUBLIC_BOT
 They may explain hypotheses or historical results but cannot populate a paper
 or live roster. Promotion requires a reviewed code change adding the exact ID
 to `CAPITAL_APPROVED` with pre-registered OOS and paper evidence.
+
+`PATH_HOLD_POLICY.md` and its pure policy module are also explicitly
+research-only and are not wired into a registered strategy.
 
 ## Historical and post-mortem documents
 

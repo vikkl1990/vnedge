@@ -6,12 +6,15 @@ the exit that fits that shape: a WIDER initial stop (give noise room), a chandel
 TRAIL that arms after a delay (lets winners run, ratchets the stop up behind the
 MFE), and a hard TIME CAP (the edge decays by 30-60min). Realized net = the exit's
 gross move − a fixed round-trip cost. STOP wins ties. Deterministic.
+
+This remains a tick-research simulator, not a deployable exit contract. Results
+are not promotion-eligible until the hypothesis is expressed through
+``ExitEngineConfig`` / ``ActiveExitState`` and re-run out of sample.
 """
 
 from __future__ import annotations
 
 import statistics as st
-from decimal import Decimal
 from typing import Optional, Sequence
 
 from pydantic import BaseModel
@@ -36,6 +39,8 @@ class TrailingExitReport(BaseModel):
     avg_win_bps: float
     avg_loss_bps: float
     verdict: str
+    promotion_eligible: bool = False
+    exit_contract: str = "tick_research_only"
 
 
 def trailing_exit_backtest(

@@ -1,9 +1,9 @@
-"""Frozen scalper parameter registry.
+"""Frozen historical scalper-research parameter registry.
 
-This is the single map of the scalper research surface: horizons/TFs,
-family-specific thresholds, exchange cost assumptions, route gates, and exit
-policies. It is intentionally declarative. Research modules may consume it;
-execution may not mutate it at runtime.
+These fee assumptions reproduce the killed replay experiments and are not an
+active tariff source. Active plan, gate, paper, and live defaults come from
+``vnedge.plan.cost_model``. Research modules may consume this frozen evidence;
+execution may not use or mutate it at runtime.
 """
 
 from __future__ import annotations

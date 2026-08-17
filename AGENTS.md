@@ -5,8 +5,9 @@ profit, always. Nothing here is financial advice.
 
 ## Locked decisions (2026-07-02)
 
-- Exchanges: Binance Futures (dev/validation, testnet first), Delta Exchange
-  India (first live candidate), Bybit (third). Jurisdiction: India.
+- Exchanges: Binance Futures, Bybit, and Delta Exchange India provide public
+  measurement feeds. No live venue is currently enabled; any future live
+  candidate requires production-endpoint evidence and the full checklist.
 - Hybrid framework: Freqtrade/FreqAI for strategy research; custom
   CCXT/asyncio stack (this repo) for execution.
 - Capital design point: < $1,000. Daily loss halt: fixed USD, default $20.
@@ -226,10 +227,11 @@ rules) live in docs/DESIGN.md — follow them when building those modules.
    upgrade), and prepare() re-runs per bar (fine at 1m+, optimize later).
    REMAINING before live trading: live ExecutionAdapter (real orders,
    testnet first), pre-live checklist, a strategy that passes gates.
-7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (read-only FastAPI app:
-   GET /state + 1-2Hz snapshot WS, bearer token mandatory, zero control
-   routes — tested; vanilla single-page UI; demo replay via
-   `python -m vnedge.dashboard.demo`, preview config in .Codex/launch.json)
+7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (measurement-first FastAPI
+   app: read-only market/risk/research surfaces plus an operator-scoped,
+   CSRF-protected Settings API with no order/promotion/live-enable authority;
+   HttpOnly browser sessions; demo replay via
+   `python -m vnedge.dashboard.demo`)
 8. ~~Strategy research round 2~~ ✅ ran 2026-07-02, all six combos REJECTED:
    - Trend on 4h (±low-vol floor): mostly UNTESTABLE — <5 in-sample trades
      per train window, so selection can't even run. 4h trend at this horizon

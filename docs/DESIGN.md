@@ -93,19 +93,20 @@ pydantic model so no override can exceed global hard caps.
 
 ## 6. Monitoring dashboard (milestone 7)
 
-Read-only, out of the execution path, boring on purpose. No NATS, no bridge
-daemons — a small FastAPI app.
+Measurement-first and out of the execution path. No NATS or bridge daemons — a
+small FastAPI app. Market/risk/research surfaces are read-only; the separately
+scoped Settings API may mutate encrypted operator configuration but has no
+order, promotion, kill-clear, or live-enable authority.
 
 - **Data model: coalesced state snapshots, not event streams.** One snapshot
   object (mode, equity, daily PnL, drawdown, open positions, working orders,
   feed health, kill-switch state, last reconciliation result) pushed over a
   WebSocket at ~1Hz and served at GET /state. Snapshots are complete, so
   reconnects need no replay and bursts can never firehose the browser.
-- **Security:** binds to 127.0.0.1 only (VPS access via SSH tunnel); bearer
-  token even on localhost. v1 exposes ZERO control actions. When a kill-switch
-  button is added (v2), it is a separate authenticated endpoint that requires
-  a confirmation phrase and writes to the audit journal — same rigor as any
-  order path.
+- **Security:** binds to 127.0.0.1 only (VPS access via SSH tunnel); bearer or
+  HttpOnly session authentication even on localhost. Settings writes require
+  operator scope plus CSRF and are audit-logged. There is no order, promotion,
+  kill-clear, or live-enable route.
 - **Isolation:** the snapshot is built by the bot's medium loop and handed to
   the UI server as an immutable object; a slow or dead browser can never
   block trading. Failed WebSocket sends deregister the client immediately.

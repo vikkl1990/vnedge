@@ -8,8 +8,16 @@ from vnedge.research.paper_trade_exit_autopsy import (
     DRIVER_STRATEGY_EXIT_HEALTHY,
     DRIVER_TP_CAPTURE_WEAK,
     PaperTradeExitAutopsyConfig,
+    _exit_family,
     build_paper_trade_exit_autopsy,
 )
+
+
+def test_exit_family_covers_canonical_active_exit_reasons() -> None:
+    assert _exit_family("breakeven_stop") == "stop"
+    assert _exit_family("tp1_partial") == "take_profit"
+    assert _exit_family("tp3_final") == "take_profit"
+    assert _exit_family("max_holding") == "timeout"
 
 
 def _write_jsonl(path, rows):

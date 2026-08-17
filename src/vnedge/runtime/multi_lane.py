@@ -59,6 +59,7 @@ from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuat
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.strategy_registry import is_capital_eligible
+from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -292,6 +293,18 @@ class MultiLaneProvider:
                 # virtual performance of a shadow lane's approved intents
                 # (resolved with backtester semantics; observability only)
                 "shadow_perf": self._lanes[lid].get("session", {}).get("shadow_perf"),
+                "last_reject_reason": self._lanes[lid].get("session", {}).get(
+                    "last_reject_reason"
+                ),
+                "observation_class": (
+                    "shadow_observe"
+                    if self._specs_by_id.get(lid) is not None
+                    and self._specs_by_id[lid].lane_id.startswith("shadow_observe_")
+                    else "measurement"
+                    if self._specs_by_id.get(lid) is not None
+                    and self._specs_by_id[lid].strategy_id == "measurement_only_v1"
+                    else None
+                ),
                 # latest strategy evaluation (features + thresholds) so the
                 # lane matrix can explain WHY a lane is waiting/near trigger
                 "last_eval": self._lanes[lid].get("session", {}).get("last_eval"),
@@ -559,6 +572,12 @@ def _build_single_strategy(
         return LiveFundingMR(seed_funding, feed, **params)
     if strategy_id == "measurement_only_v1":
         return MeasurementOnly(seed_funding, **params)
+    if strategy_id == StructureBos1H.strategy_id:
+        if params:
+            raise ValueError(
+                "structure_bos_1h parameters are frozen; configure a new strategy ID"
+            )
+        return StructureBos1H(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -595,13 +614,13 @@ def _build_signal_arbiter_strategy(
 
     for index, child in enumerate(children):
         if not isinstance(child, dict):
-            raise ValueError("signal_arbiter_v1 child entries must be objects")
+            raise TypeError("signal_arbiter_v1 child entries must be objects")
         child_strategy_id = str(child.get("strategy_id", ""))
         if not child_strategy_id:
             raise ValueError("signal_arbiter_v1 child missing strategy_id")
         child_params = child.get("params", {})
         if not isinstance(child_params, dict):
-            raise ValueError("signal_arbiter_v1 child params must be an object")
+            raise TypeError("signal_arbiter_v1 child params must be an object")
 
         strategies.append(
             _build_single_strategy(
@@ -620,7 +639,7 @@ def _build_signal_arbiter_strategy(
 
     arbiter_params = params.get("arbiter", {})
     if not isinstance(arbiter_params, dict):
-        raise ValueError("signal_arbiter_v1 arbiter config must be an object")
+        raise TypeError("signal_arbiter_v1 arbiter config must be an object")
     return CompositeSignalStrategy(
         strategies,
         SignalArbiter(ArbiterConfig(**arbiter_params)),
@@ -997,7 +1016,7 @@ class MultiLaneShadowRunner:
         )
         runtimes: list[_LaneRuntime] = []
         for spec, result in zip(self.specs, results, strict=True):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.error(
                     "lane %s (%s %s) failed to build: %s",
                     spec.lane_id, spec.exchange, spec.symbol, result,
@@ -1048,9 +1067,9 @@ class MultiLaneShadowRunner:
             raise
         except Exception as exc:
             logger.exception(
-                "lane %s (%s %s) stopped with error: %s",
+                "lane %s (%s %s) stopped with error",
                 runtime.spec.lane_id, runtime.spec.exchange,
-                runtime.spec.symbol, exc,
+                runtime.spec.symbol,
             )
             self.provider.publish_error(
                 runtime.spec.lane_id, runtime.spec.exchange,

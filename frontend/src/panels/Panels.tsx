@@ -5,11 +5,16 @@
 import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
-import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, LaneRow, PlanOverlay, Position, RegimeReading, Snapshot, TrialScorecard } from "../api";
+import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
 const signed = (n: unknown) => (typeof n === "number" && n < 0 ? "text-short" : "text-long");
+const priceText = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const maximumFractionDigits = value >= 1_000 ? 2 : value >= 1 ? 4 : 8;
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(value);
+};
 
 const ageSec = (s: unknown) => {
   if (s === null || s === undefined || s === "") return "—";
@@ -29,8 +34,10 @@ export function Header() {
     return () => window.clearInterval(timer);
   }, []);
   const posture = risk.data;
+  const riskUnknown = !posture;
+  const riskUnavailable = risk.isError || (!risk.isLoading && riskUnknown);
   const role = who.data?.role ?? "…";
-  const feedTone = posture?.feed.status === "healthy" ? "good" : posture?.feed.status === "stale" ? "warn" : posture?.feed.status === "gap" ? "bad" : "neutral";
+  const feedTone = riskUnknown ? "bad" : posture.feed.status === "healthy" ? "good" : posture.feed.status === "stale" ? "warn" : posture.feed.status === "gap" ? "bad" : "neutral";
   const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
   const feeWall = costs.data?.taker_round_trip_cost_bps;
   const sha = meta.data?.build_sha ?? posture?.build_sha;
@@ -42,7 +49,7 @@ export function Header() {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[15px] font-semibold">VNEDGE</span>
-              <TerminalBadge tone="info">{posture?.runtime_mode ?? "syncing"}</TerminalBadge>
+              <TerminalBadge tone={riskUnavailable ? "bad" : "info"}>{riskUnavailable ? "UNKNOWN" : posture?.runtime_mode ?? "syncing"}</TerminalBadge>
               <span className="hidden sm:inline text-[11px] font-mono text-dim">BTC · ETH · SOL</span>
             </div>
             <div className="text-[11px] font-mono text-dim">mode: {posture?.runtime_label ?? "…"}</div>
@@ -50,8 +57,8 @@ export function Header() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="text-[11px] font-mono text-dim">{time} UTC</span>
-          <TerminalBadge tone={posture?.capital.enabled ? "bad" : "neutral"}>capital {posture?.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
-          <TerminalBadge tone={posture?.kill.active ? "bad" : "neutral"}>kill {posture?.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
+          <TerminalBadge tone={riskUnknown || posture?.capital.enabled ? "bad" : "neutral"}>capital {riskUnknown ? "UNKNOWN" : posture.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
+          <TerminalBadge tone={riskUnknown || posture?.kill.active ? "bad" : "neutral"}>kill {riskUnknown ? "UNKNOWN" : posture.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
           <TerminalBadge tone={feedTone}>{`● feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
           <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
           <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
@@ -63,7 +70,21 @@ export function Header() {
 }
 
 export function LiveBlockedBanner() {
-  const { data } = useRiskSnapshot();
+  const { data, isLoading, isError } = useRiskSnapshot();
+  if (isLoading && !data) {
+    return (
+      <div className="rounded-lg border border-warn/50 bg-warn/10 px-4 py-3 text-[12px] text-warn" role="status">
+        <strong>Live status syncing.</strong> Treat live as blocked until risk telemetry arrives.
+      </div>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <div className="rounded-lg border border-short/50 bg-short/10 px-4 py-3 text-[12px] text-short" role="alert">
+        <strong>Live status unknown.</strong> Risk backend is unreachable; live must be treated as blocked.
+      </div>
+    );
+  }
   if (!data?.live.blocked) return null;
   return (
     <div className="rounded-lg border border-short/50 bg-short/10 px-4 py-3 text-[12px] text-short" role="status">
@@ -72,119 +93,14 @@ export function LiveBlockedBanner() {
   );
 }
 
-// ---- health helpers (mirror the classic strip; UNKNOWN never fakes OK) -------
+// Health bands are server policy truth. Missing bands stay UNKNOWN; the client
+// must not independently reinterpret latency or cumulative arm-skip counters.
 type Band = "ok" | "degraded" | "blocked" | "unknown";
-const TM_AGE_SOFT: Record<string, number> = { "1m": 1500, "5m": 3000, "15m": 5000, "1h": 8000, "4h": 15000 };
 const BAND_TONE: Record<Band, string> = { ok: "good", degraded: "warn", blocked: "bad", unknown: "neutral" };
-const RANK: Record<Band, number> = { blocked: 3, degraded: 2, ok: 1, unknown: 0 };
-const worse = (a: Band, b: Band): Band => (RANK[a] >= RANK[b] ? a : b);
-const skipCount = (o?: Record<string, number> | null) =>
-  o ? Object.values(o).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
 
-function laneRows(s?: Snapshot): LaneRow[] {
-  if (!s) return [];
-  if (Array.isArray(s.lanes) && s.lanes.length) return s.lanes;
-  if (s.time_machine) {
-    const sess = (s.session ?? {}) as Record<string, unknown>;
-    return [
-      {
-        strategy_id: s.strategy_id as string | undefined,
-        symbol: s.symbol,
-        timeframe: (sess.timeframe as string) ?? Object.keys(s.time_machine.health ?? {})[0] ?? "1h",
-        mode: s.mode,
-        cost_profile: (s.cost_profile as string) ?? (sess.cost_profile as string),
-        feed: s.feed_health?.candles,
-        time_machine: s.time_machine,
-        latency: s.latency ?? null,
-        decision_skips: s.decision_skips ?? ((sess.decision_skips as Record<string, number>) ?? null),
-        regime: s.regime ?? ((sess.regime as RegimeReading) ?? null),
-        plan_overlay: s.plan_overlay ?? ((sess.plan_overlay as PlanOverlay) ?? null),
-        equity: s.equity,
-        peak_equity: s.peak_equity as number | undefined,
-        drawdown_pct: (sess.drawdown_pct as number) ?? null,
-        dd_limit_pct: (sess.dd_limit_pct as number) ?? null,
-        trial_scorecard: (sess.trial_scorecard as TrialScorecard) ?? null,
-        bands: (s.lane_bands as LaneRow["bands"]) ?? null,
-      },
-    ];
-  }
-  return [];
-}
-
-function computeChips(s?: Snapshot): Record<string, { band: Band; label: string }> {
-  const lanes = laneRows(s);
-  const kill = !!s?.kill_switch_active;
-  // CANDLE
-  let candle: Band = "unknown";
-  let cLabel = "no telemetry";
-  for (const l of lanes) {
-    const tm = l.time_machine;
-    if (!tm?.health) continue;
-    if (candle === "unknown") { candle = "ok"; cLabel = "ok"; }
-    const h = tm.health[l.timeframe ?? ""];
-    if (h && h !== "ok") { candle = worse(candle, "blocked"); cLabel = `decision-TF ${h}`; }
-    if (skipCount(l.decision_skips) > 0) { candle = worse(candle, "blocked"); cLabel = "arms blocked"; }
-    const a1 = tm.age_ms?.["1m"];
-    if (a1 != null && a1 > TM_AGE_SOFT["1m"] && candle === "ok") { candle = "degraded"; cLabel = "1m age soft"; }
-  }
-  // DECISION
-  let decision: Band = "unknown";
-  let dLabel = "no telemetry";
-  let skips = false, haveLat = false, latSoft = false, latHard = false;
-  let haveBarLat = false, barLatSoft = false, barLatHard = false;
-  for (const l of lanes) {
-    if (skipCount(l.decision_skips) > 0) skips = true;
-    const p95 = l.latency?.decision_lag_ms?.p95;
-    if (typeof p95 === "number") {
-      haveLat = true;
-      if (p95 > 50) latSoft = true;
-      if (p95 > 200) latHard = true;
-    }
-    const barP95 = (l.latency?.bar_close_processing_ms ?? l.latency?.feed_lag_ms)?.p95;
-    if (typeof barP95 === "number") {
-      haveBarLat = true;
-      if (barP95 > 500) barLatSoft = true;
-      if (barP95 > 2000) barLatHard = true;
-    }
-  }
-  if (skips) { decision = "blocked"; dLabel = "new arms blocked"; }
-  else if (barLatHard) { decision = "blocked"; dLabel = "bar close lag"; }
-  else if (latHard) { decision = "blocked"; dLabel = "compute lag"; }
-  else if (haveLat || haveBarLat) {
-    decision = barLatSoft || latSoft ? "degraded" : "ok";
-    dLabel = barLatSoft ? "bar close lag" : latSoft ? "compute lag" : "ok";
-  }
-  // FEED
-  let feed: Band = "unknown";
-  let fLabel = "—";
-  const cand = String(s?.feed_health?.candles ?? "").toLowerCase();
-  if (cand) {
-    if (cand.includes("ok") || cand.includes("live")) { feed = "ok"; fLabel = "live"; }
-    else if (cand.includes("warm")) { feed = "degraded"; fLabel = "warming"; }
-    else { feed = "blocked"; fLabel = cand.slice(0, 12); }
-  }
-  // RISK
-  let risk: Band = s ? "ok" : "unknown";
-  let rLabel = s ? "ok" : "no telemetry";
-  const rs = String(s?.risk_status ?? "ok").toLowerCase();
-  const streak = Number(s?.consecutive_losses) || 0;
-  if (kill) { risk = "blocked"; rLabel = "kill tripped"; }
-  else if (rs && rs !== "ok") { risk = "blocked"; rLabel = rs.slice(0, 14); }
-  else if (streak >= 3) { risk = "degraded"; rLabel = `${streak} loss streak`; }
-  // SYSTEM
-  let system: Band = "unknown";
-  let sLabel = "no telemetry";
-  if (kill) { system = "blocked"; sLabel = "kill tripped"; }
-  else if (s) {
-    const components = [candle, decision, feed, risk];
-    system = "ok";
-    for (const x of components) {
-      system = x === "unknown" ? worse(system, "degraded") : worse(system, x);
-    }
-    sLabel = system === "ok" ? "nominal" : system === "degraded" ? "partial telemetry" : "blocked";
-  }
-  return { SYSTEM: { band: system, label: sLabel }, FEED: { band: feed, label: fLabel }, CANDLE: { band: candle, label: cLabel }, DECISION: { band: decision, label: dLabel }, RISK: { band: risk, label: rLabel } };
-}
+const UNKNOWN_CHIPS: Record<string, { band: Band; label: string }> = Object.fromEntries(
+  ["SYSTEM", "FEED", "CANDLE", "DECISION", "RISK"].map((name) => [name, { band: "unknown" as const, label: "no telemetry" }]),
+);
 
 const BAND_BORDER: Record<Band, string> = {
   ok: "border-l-long",
@@ -195,10 +111,9 @@ const BAND_BORDER: Record<Band, string> = {
 
 export function StatusStrip() {
   const { data } = useSnapshot();
-  // prefer server-computed chips (health_bands.py) — one source for both cockpits;
-  // fall back to the client computation only if the snapshot predates them.
+  // health_bands.py is the only policy source for both cockpits.
   const server = data?.chips as Record<string, { band: Band; label: string }> | undefined;
-  const chips = server && Object.keys(server).length ? server : computeChips(data);
+  const chips = server && Object.keys(server).length ? server : UNKNOWN_CHIPS;
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
       {Object.entries(chips).map(([name, c]) => (
@@ -226,15 +141,16 @@ export function DeskPanel() {
         <TerminalBadge tone={r.eligibility === "eligible" ? "info" : r.eligibility === "KILLED" ? "bad" : r.eligibility === "RESEARCH_ONLY" ? "warn" : "neutral"}>{r.eligibility}</TerminalBadge>
       ),
     },
-    { key: "mode", header: "Mode", render: (r) => <TerminalBadge tone={r.mode === "paper" ? "warn" : "neutral"}>{r.mode}</TerminalBadge> },
+    { key: "mode", header: "Mode", render: (r) => <TerminalBadge tone={r.mode === "paper" ? "warn" : r.observation_class === "shadow_observe" ? "info" : "neutral"}>{r.observation_class === "shadow_observe" ? "SHADOW_OBSERVE" : r.mode}</TerminalBadge> },
     { key: "market", header: "Symbol / TF", render: (r) => <span className="whitespace-nowrap font-mono">{r.symbol || "—"} · {r.timeframe || "—"}</span> },
     { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
     { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
     { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
     { key: "close-lag", header: "Close p95", align: "right", render: (r) => r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms` },
     { key: "lag", header: "Decision p95", align: "right", render: (r) => r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms` },
-    { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString() },
-    { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.last_signal_reason}</span></span> },
+    { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString("en-US") },
+    { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.last_reject_reason ?? r.last_signal_reason}</span></span> },
+    { key: "virtual", header: "Virtual outcome", render: (r) => r.observation_class !== "shadow_observe" ? "—" : <span className="block min-w-[130px] font-mono">{usd(r.shadow_perf?.virtual_net_usd)}<span className="block text-[10px] text-dim">{r.shadow_perf?.wins ?? 0}W / {r.shadow_perf?.losses ?? 0}L · {r.shadow_perf?.pending_shadow_intents ?? 0} pending</span></span> },
     { key: "cost", header: "Cost profile", render: (r) => <span className="whitespace-nowrap font-mono">{r.cost_profile} · {r.round_trip_bps == null ? "RT —" : `${r.round_trip_bps.toFixed(1)} bps RT`}</span> },
     { key: "health", header: "Health", render: (r) => <TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "bad" : "neutral"}>{r.health}</TerminalBadge> },
   ];
@@ -307,6 +223,7 @@ export function BookPanel() {
   const { data, isLoading, isError } = useSnapshot();
   return (
     <TerminalPanel title="Book" meta={isLoading ? "loading…" : isError ? "error" : "live · 5s"}>
+      {isError && <div className="mb-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Account snapshot unavailable. Equity and PnL are unknown.</div>}
       <div className="flex items-end gap-10 flex-wrap">
         <Kpi label="Equity" value={usd(data?.equity)} />
         <Kpi label="Realized" value={usd(data?.realized_pnl)} tone={signed(data?.realized_pnl)} />
@@ -318,7 +235,31 @@ export function BookPanel() {
 }
 
 export function RiskPanel() {
-  const { data } = useRiskSnapshot();
+  const { data, isLoading, isError, error } = useRiskSnapshot();
+  if (isLoading && !data) {
+    return (
+      <TerminalPanel title="Risk" meta="loading risk telemetry…">
+        <div className="rounded-lg border border-warn/40 bg-warn/5 p-5 font-mono text-sm text-warn">
+          Risk state is loading. Capital, kill, halt, journal, and reconciliation are unknown.
+        </div>
+      </TerminalPanel>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <TerminalPanel title="Risk" meta="backend unreachable · fail visible">
+        <div className="rounded-lg border border-short/50 bg-short/10 p-5 text-short" role="alert">
+          <strong>Risk telemetry unavailable.</strong>
+          <div className="mt-2 text-[12px] text-dim">
+            Kill, daily halt, journal health, unresolved orders, reconciliation, and live gates are UNKNOWN. Treat new risk and live operation as blocked.
+          </div>
+          <div className="mt-3 font-mono text-[10px] text-faint">
+            {error instanceof Error ? error.message : "risk snapshot request failed"}
+          </div>
+        </div>
+      </TerminalPanel>
+    );
+  }
   const journalBlocked = data?.journal.entries_blocked;
   return (
     <TerminalPanel title="Risk" meta="kill · halt · journal · gateway · streams">
@@ -440,12 +381,14 @@ export function ResearchPanel() {
 function IntelligencePanel() {
   const ml = useMlStatus();
   const agents = useAgenticResearchStatus();
-  const dataset = ml.data?.dataset;
-  const summary = agents.data?.summary;
-  const gateRows = Object.entries(ml.data?.gates ?? {}).slice(0, 6);
-  const locked = !ml.data?.can_promote && !ml.data?.can_trade;
+  const mlAvailable = !ml.isError && ml.data?.artifact_available !== false;
+  const agentAvailable = !agents.isError && agents.data?.artifact_available !== false;
+  const dataset = mlAvailable ? ml.data?.dataset : undefined;
+  const summary = agentAvailable ? agents.data?.summary : undefined;
+  const gateRows = mlAvailable ? Object.entries(ml.data?.gates ?? {}).slice(0, 6) : [];
+  const locked = mlAvailable && !ml.data?.can_promote && !ml.data?.can_trade;
   const gateValue = (value: unknown) => {
-    if (typeof value === "number") return value.toLocaleString();
+    if (typeof value === "number") return value.toLocaleString("en-US");
     if (typeof value === "string" || typeof value === "boolean") return String(value);
     try { return JSON.stringify(value); } catch { return "unreported"; }
   };
@@ -458,16 +401,17 @@ function IntelligencePanel() {
               <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Meta-label pipeline</div>
               <div className="mt-1 text-[11px] text-dim">Scores rule outcomes after enough labels; it is not a free trader.</div>
             </div>
-            <TerminalBadge tone={locked ? "warn" : "bad"}>{locked ? "gates locked" : "authority mismatch"}</TerminalBadge>
+            <TerminalBadge tone={!mlAvailable ? "bad" : locked ? "warn" : "bad"}>{!mlAvailable ? "status unavailable" : locked ? "gates locked" : "authority mismatch"}</TerminalBadge>
           </div>
+          {!mlAvailable && <div className="mt-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">ML status artifact unavailable. No stage, label count, or gate state is being asserted.</div>}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div><div className="text-[10px] font-mono text-faint">STAGE</div><div className="mt-1 text-[12px] font-mono">{ml.data?.stage ?? "unavailable"}</div></div>
+            <div><div className="text-[10px] font-mono text-faint">STAGE</div><div className="mt-1 text-[12px] font-mono">{mlAvailable ? ml.data?.stage ?? "unavailable" : "unavailable"}</div></div>
             <div><div className="text-[10px] font-mono text-faint">LABELS</div><div className="mt-1 text-[12px] font-mono">{dataset ? `${dataset.samples}/${dataset.min_to_train}` : "—"}</div></div>
             <div><div className="text-[10px] font-mono text-faint">WIN RATE</div><div className="mt-1 text-[12px] font-mono">{dataset?.win_rate_pct == null ? "—" : `${dataset.win_rate_pct.toFixed(1)}%`}</div></div>
-            <div><div className="text-[10px] font-mono text-faint">FEATURES</div><div className="mt-1 text-[12px] font-mono">{ml.data?.foundation.feature_count ?? "—"}</div></div>
+            <div><div className="text-[10px] font-mono text-faint">FEATURES</div><div className="mt-1 text-[12px] font-mono">{mlAvailable ? ml.data?.foundation.feature_count ?? "—" : "—"}</div></div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {(ml.data?.stages ?? []).map((stage) => (
+            {(mlAvailable ? ml.data?.stages ?? [] : []).map((stage) => (
               <TerminalBadge key={stage.key} tone={stage.done ? "neutral" : stage.active ? "info" : "warn"}>
                 {stage.label} · {stage.done ? "done" : stage.active ? "active" : "locked"}
               </TerminalBadge>
@@ -476,9 +420,9 @@ function IntelligencePanel() {
           <div className="mt-4 rounded-md border border-line px-3 py-3 text-[11px] text-dim">
             <div className="flex items-center justify-between gap-3">
               <span><strong className="text-txt">River shadow</strong> · delayed after-cost labels · drift alerts only</span>
-              <TerminalBadge tone={ml.data?.online_shadow?.active ? "info" : "neutral"}>{ml.data?.online_shadow?.active ? "shadow active" : "not configured"}</TerminalBadge>
+              <TerminalBadge tone={mlAvailable && ml.data?.online_shadow?.active ? "info" : "neutral"}>{!mlAvailable ? "unavailable" : ml.data?.online_shadow?.active ? "shadow active" : "not configured"}</TerminalBadge>
             </div>
-            <div className="mt-1 font-mono text-[10px] text-faint">{ml.data?.online_shadow?.installed ? "optional library installed" : "optional library not installed"} · {ml.data?.online_shadow?.drift_supervisor?.configured_streams ?? 0} drift streams · non-binding · cannot trade</div>
+            <div className="mt-1 font-mono text-[10px] text-faint">{!mlAvailable ? "status artifact unavailable" : `${ml.data?.online_shadow?.installed ? "optional library installed" : "optional library not installed"} · ${ml.data?.online_shadow?.drift_supervisor?.configured_streams ?? 0} drift streams`} · non-binding · cannot trade</div>
           </div>
           <div className="mt-4 border-t border-line pt-3">
             <div className="font-mono text-[10px] uppercase text-faint">Pre-registered gates</div>
@@ -496,17 +440,18 @@ function IntelligencePanel() {
             </div>
             <TerminalBadge tone="neutral">research only</TerminalBadge>
           </div>
+          {!agentAvailable && <div className="mt-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Agent governor artifact unavailable. Zero actions or tasks is not being asserted.</div>}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div><div className="text-[10px] font-mono text-faint">ACTIONS</div><div className="mt-1 text-[12px] font-mono">{summary?.operator_actions ?? 0}</div></div>
-            <div><div className="text-[10px] font-mono text-faint">CRITICAL</div><div className="mt-1 text-[12px] font-mono text-short">{summary?.critical_actions ?? 0}</div></div>
-            <div><div className="text-[10px] font-mono text-faint">ACTIVE TASKS</div><div className="mt-1 text-[12px] font-mono">{summary?.gateway_active_tasks ?? 0}</div></div>
+            <div><div className="text-[10px] font-mono text-faint">ACTIONS</div><div className="mt-1 text-[12px] font-mono">{summary?.operator_actions ?? "—"}</div></div>
+            <div><div className="text-[10px] font-mono text-faint">CRITICAL</div><div className="mt-1 text-[12px] font-mono text-short">{summary?.critical_actions ?? "—"}</div></div>
+            <div><div className="text-[10px] font-mono text-faint">ACTIVE TASKS</div><div className="mt-1 text-[12px] font-mono">{summary?.gateway_active_tasks ?? "—"}</div></div>
             <div><div className="text-[10px] font-mono text-faint">MIN HEALTH</div><div className="mt-1 text-[12px] font-mono">{summary?.agent_health_min == null ? "—" : `${summary.agent_health_min.toFixed(0)}/100`}</div></div>
           </div>
           <div className="mt-4 rounded-md border border-line px-3 py-3 text-[11px] text-dim">
             {agents.data?.operator_answer ?? (agents.isError ? "Agent status endpoint unavailable." : "Agent artifact not populated.")}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            {(agents.data?.source_status ?? []).map((source) => (
+            {(agentAvailable ? agents.data?.source_status ?? [] : []).map((source) => (
               <TerminalBadge key={source.source} tone={source.state === "OK" ? "neutral" : source.state === "STALE" ? "warn" : "bad"}>
                 {source.source ?? "source"} · {source.state ?? "unknown"}
               </TerminalBadge>
@@ -626,7 +571,7 @@ export function SystemPanel() {
 }
 
 export function PositionsPanel() {
-  const { data } = useSnapshot();
+  const { data, isLoading, isError } = useSnapshot();
   const rows = (data?.positions as Position[] | undefined) ?? [];
   const cols: Column<Position>[] = [
     { key: "sym", header: "Symbol", render: (r) => <span className="font-mono">{r.symbol ?? "—"}</span> },
@@ -640,8 +585,9 @@ export function PositionsPanel() {
     },
   ];
   return (
-    <TerminalPanel title="Positions" meta={`${rows.length} open`}>
-      <DenseTable columns={cols} rows={rows} empty="flat — no open positions" />
+    <TerminalPanel title="Positions" meta={isLoading ? "loading…" : isError ? "unknown" : `${rows.length} open`}>
+      {isError && <div className="mb-3 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Position snapshot unavailable. Flat state is not being asserted.</div>}
+      <DenseTable columns={cols} rows={rows} empty={isLoading ? "loading positions…" : isError ? "positions unknown" : "flat — no open positions"} />
     </TerminalPanel>
   );
 }
@@ -649,16 +595,16 @@ export function PositionsPanel() {
 const num = (n: unknown, d = 2) => (typeof n === "number" ? n.toFixed(d) : "—");
 
 export function MarketPanel() {
-  const { data } = useSnapshot();
+  const { data, isLoading, isError } = useSnapshot();
   const p = data?.price ?? null;
   const fr = data?.funding_rate;
   return (
-    <TerminalPanel title="Market" meta={(data?.symbol as string) ?? "—"}>
+    <TerminalPanel title="Market" meta={isLoading ? "loading…" : isError ? "unknown" : (data?.symbol as string) ?? "—"}>
       {p ? (
         <div className="flex items-end gap-10 flex-wrap">
-          <Kpi label="Mid" value={typeof p.mid === "number" ? p.mid.toLocaleString() : "—"} />
-          <Kpi label="Bid" value={typeof p.bid === "number" ? p.bid.toLocaleString() : "—"} />
-          <Kpi label="Ask" value={typeof p.ask === "number" ? p.ask.toLocaleString() : "—"} />
+          <Kpi label="Mid" value={priceText(p.mid)} />
+          <Kpi label="Bid" value={priceText(p.bid)} />
+          <Kpi label="Ask" value={priceText(p.ask)} />
           <Kpi label="Spread" value={`${num(p.spread_bps, 1)} bps`} />
           <Kpi
             label="Funding"
@@ -667,7 +613,7 @@ export function MarketPanel() {
           />
         </div>
       ) : (
-        <div className="text-[12px] font-mono text-dim">no live quote (warming / no book)</div>
+        <div className={`text-[12px] font-mono ${isError ? "text-short" : "text-dim"}`} role={isError ? "alert" : undefined}>{isError ? "market snapshot unavailable — quote unknown" : isLoading ? "loading live quote…" : "no live quote (warming / no book)"}</div>
       )}
     </TerminalPanel>
   );

@@ -22,6 +22,8 @@ class CostModelConfig:
     default_slip_entry_bps: float = DEFAULT_SLIP_BPS
     default_slip_exit_bps: float = DEFAULT_SLIP_BPS
     safety_buffer_bps: float = 3.0
+    maker_adverse_bps: float = 1.0
+    fee_gst_mult: float = 1.0
     funding_accrual: bool = True
     # lane profile: the platform runs swing + scalp families on the SAME contract
     # but with venue/hold-window-true costs. profile names the world; the fields
@@ -37,16 +39,17 @@ class CostModelConfig:
 # Named cost worlds. One CostModel per lane profile — no private fee assumptions.
 _SWING = CostModelConfig(profile="swing", gate_safety_mult=2.0)
 _SCALP = CostModelConfig(
-    profile="scalp", default_slip_entry_bps=1.5, default_slip_exit_bps=1.5,
+    profile="scalp", default_slip_entry_bps=2.0, default_slip_exit_bps=2.0,
     safety_buffer_bps=2.0, gate_safety_mult=3.0,
 )
-# delta_scalp: Delta India's 30-minute close discount waives the exit fee when a
-# position is held < 30m. Fee/slip left at scalp defaults until venue_specs
-# supplies Delta's exact schedule; the free-exit WINDOW is the modelled edge.
+# delta_scalp defaults to full tariff + India GST + thinner-book slippage. The
+# Scalper Offer is account/symbol/consent/hold dependent and is therefore not
+# assumed by this generic profile; only an account-verified schedule may apply
+# the close-leg waiver through the hybrid fee model.
 _DELTA_SCALP = CostModelConfig(
-    profile="delta_scalp", default_slip_entry_bps=1.5, default_slip_exit_bps=1.5,
+    profile="delta_scalp", default_slip_entry_bps=3.0, default_slip_exit_bps=3.0,
     safety_buffer_bps=2.0, gate_safety_mult=3.5,
-    free_exit_within_minutes=30.0, free_exit_fee_bps=0.0,
+    maker_adverse_bps=1.5, fee_gst_mult=1.18,
 )
 COST_PROFILES: dict[str, CostModelConfig] = {
     "swing": _SWING, "scalp": _SCALP, "delta_scalp": _DELTA_SCALP,
@@ -58,7 +61,7 @@ class CostModel:
         self.config = config or CostModelConfig()
 
     @classmethod
-    def for_profile(cls, profile: str) -> "CostModel":
+    def for_profile(cls, profile: str) -> CostModel:
         """CostModel for a named lane profile (swing / scalp / delta_scalp)."""
         try:
             return cls(COST_PROFILES[profile])
@@ -93,8 +96,8 @@ class CostModel:
                 and hold_minutes < c.free_exit_within_minutes):
             fee_out = c.free_exit_fee_bps
         funding = funding_bps if c.funding_accrual else 0.0
-        rt = (self.fee_bps(maker=maker_entry) + fee_out
-              + c.default_slip_entry_bps + c.default_slip_exit_bps + funding)
+        fees = (self.fee_bps(maker=maker_entry) + fee_out) * c.fee_gst_mult
+        rt = fees + c.default_slip_entry_bps + c.default_slip_exit_bps + funding
         if include_safety:
             rt += c.safety_buffer_bps
         return rt

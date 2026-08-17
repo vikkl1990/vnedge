@@ -31,6 +31,12 @@ const signed = (value: number | null | undefined, digits = 1) =>
     ? `${value > 0 ? "+" : ""}${value.toFixed(digits)}`
     : "—";
 
+const priceText = (value: number | null | undefined) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const maximumFractionDigits = value >= 1_000 ? 2 : value >= 1 ? 4 : 8;
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(value);
+};
+
 const ageSecMs = (milliseconds: number) => {
   const seconds = Math.max(0, milliseconds / 1_000);
   if (seconds < 90) return `${Math.round(seconds)}s`;
@@ -241,7 +247,19 @@ function CandleChart({
   } | null>(null);
   const points = useMemo(() => chartPoints(hours), [hours]);
   const livePoint = useMemo(() => formingPoint(forming, asOf), [forming, asOf]);
-  const hasData = hours.length > 0 || livePoint !== null;
+  const latestHistoryTime = points.candles.length
+    ? points.candles[points.candles.length - 1].time
+    : null;
+  const formingWithheld = (
+    livePoint !== null
+    && latestHistoryTime !== null
+    && livePoint.time <= latestHistoryTime
+  );
+  // lightweight-charts requires update.time >= the last series time. The
+  // runtime forming clock can briefly trail canonical storage at an hour
+  // boundary, so withhold that point instead of letting the chart throw.
+  const chartLivePoint = formingWithheld ? null : livePoint;
+  const hasData = hours.length > 0 || chartLivePoint !== null;
   const hasDegradedHours = hours.some((hour) => hour.data_quality !== "ok");
   const hasDualAvwap = hours.some((hour) => hour.avwap_low != null || hour.avwap_high != null);
 
@@ -387,26 +405,32 @@ function CandleChart({
     if (!chart || !candles || !vwap || !lowAvwap || !highAvwap) return;
 
     const historyChanged = historySignatureRef.current !== points.signature;
-    const formingRolled = (
-      formingTimeRef.current !== null
-      && livePoint !== null
-      && formingTimeRef.current !== livePoint.time
-    );
-    const formingCleared = formingTimeRef.current !== null && livePoint === null;
-    if (historyChanged || formingRolled || formingCleared) {
-      candles.setData(points.candles);
-      vwap.setData(points.vwap);
-      lowAvwap.setData(points.avwapLow);
-      highAvwap.setData(points.avwapHigh);
-      historySignatureRef.current = points.signature;
-      if (!fittedRef.current && points.candles.length > 0) {
-        chart.timeScale().fitContent();
-        fittedRef.current = true;
+    try {
+      const formingRolled = (
+        formingTimeRef.current !== null
+        && chartLivePoint !== null
+        && formingTimeRef.current !== chartLivePoint.time
+      );
+      const formingCleared = formingTimeRef.current !== null && chartLivePoint === null;
+      if (historyChanged || formingRolled || formingCleared) {
+        candles.setData(points.candles);
+        vwap.setData(points.vwap);
+        lowAvwap.setData(points.avwapLow);
+        highAvwap.setData(points.avwapHigh);
+        historySignatureRef.current = points.signature;
+        if (!fittedRef.current && points.candles.length > 0) {
+          chart.timeScale().fitContent();
+          fittedRef.current = true;
+        }
       }
+      if (chartLivePoint) candles.update(chartLivePoint);
+      formingTimeRef.current = chartLivePoint?.time ?? null;
+      setRendererError(null);
+    } catch (error) {
+      formingTimeRef.current = null;
+      setRendererError(error instanceof Error ? error.message : "unknown chart update error");
     }
-    if (livePoint) candles.update(livePoint);
-    formingTimeRef.current = livePoint?.time ?? null;
-  }, [livePoint, points]);
+  }, [chartLivePoint, points]);
 
   useEffect(() => {
     markerRef.current?.setMarkers(
@@ -506,7 +530,7 @@ function CandleChart({
         ref={containerRef}
         className="h-[360px] w-full"
         role="img"
-        aria-label={`${hours.length} closed one-hour candlesticks with session VWAP${livePoint ? " and one forming hour" : ""}. Times are UTC.`}
+        aria-label={`${hours.length} closed one-hour candlesticks with session VWAP${chartLivePoint ? " and one forming hour" : ""}. Times are UTC.`}
       />
       {rendererError && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-inset px-6 text-center font-mono text-xs text-short">
@@ -524,7 +548,8 @@ function CandleChart({
         {hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
         {typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc) && <span className="flex items-center gap-1.5 text-[#F0883E]"><span className="h-0.5 w-4 bg-[#F0883E]" />PRIOR-DAY POC</span>}
         {typeof priorDayVah === "number" && typeof priorDayVal === "number" && <span className="flex items-center gap-1.5 text-dim"><span className="h-px w-4 border-t border-dotted border-dim" />VAH / VAL</span>}
-        {livePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
+        {chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
+        {formingWithheld && <span className="text-warn">STALE FORMING POINT WITHHELD</span>}
         {hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
       </div>
       {crosshair && (
@@ -666,7 +691,7 @@ export function MarketPulse() {
           return (
             <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`rounded-xl border p-4 text-left transition ${active ? "border-brand/60 bg-brand/10" : "border-line bg-panel/80 hover:border-line2"}`}>
               <div className="flex items-center justify-between"><span className="font-mono text-sm font-semibold">{item.replace("USDT", "")}</span><TerminalBadge tone={itemQuality === "ok" ? "good" : itemQuality === "unknown" ? "neutral" : "bad"}>{itemQuality}</TerminalBadge></div>
-              <div className="mt-3 font-mono text-xl tabular-nums">{price?.toLocaleString() ?? "—"}</div>
+              <div className="mt-3 font-mono text-xl tabular-nums">{priceText(price)}</div>
               <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-dim">
                 <span>1h range</span><span className="text-right text-txt">{fmt(latestClosedHour?.range_bps)} bps</span>
                 <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
@@ -700,7 +725,7 @@ export function MarketPulse() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="text-[11px] font-mono text-faint">LIVE MID</div>
-                <div className="text-3xl font-mono tabular-nums">{(forming?.mid as number | null | undefined)?.toLocaleString() ?? book?.mid?.toLocaleString() ?? "—"}</div>
+                <div className="text-3xl font-mono tabular-nums">{priceText((forming?.mid as number | null | undefined) ?? book?.mid)}</div>
               </div>
               <TerminalBadge tone={formingActive ? "info" : "neutral"}>{formingActive ? "forming" : "awaiting trades"}</TerminalBadge>
             </div>
@@ -710,8 +735,8 @@ export function MarketPulse() {
               <Metric label="vs session VWAP" value={`${signed((forming?.vs_session_vwap_bps as number | undefined) ?? pulse.data?.indicators.vs_session_vwap_bps)} bps`} />
               <Metric label="Dual AVWAP" value={forming?.dual_avwap_bias ?? pulse.data?.indicators.dual_avwap_bias ?? "n/a"} note={dualAvwapNote ?? undefined} />
               <Metric label="Regime 1h / 4h" value={`${pulse.data?.regime?.["1h"].label.replace(/_/g, " ") ?? "unavailable"} / ${pulse.data?.regime?.["4h"].label.replace(/_/g, " ") ?? "unavailable"}`} note="closed bars · measurement only" />
-              <Metric label="Prior-day POC" value={priorDayProfile?.poc?.toLocaleString() ?? "unavailable"} note={priorDayProfile?.available ? `${signed(priorDayProfile.vs_poc_bps)} bps · trade-derived` : profileReason} />
-              <Metric label="VAL / VAH" value={priorDayProfile?.available ? `${priorDayProfile.value_area_low?.toLocaleString()} – ${priorDayProfile.value_area_high?.toLocaleString()}` : "unavailable"} note={priorDayProfile?.available ? `${priorDayProfile.location.replace(/_/g, " ")} · ${((priorDayProfile.va_volume_pct ?? 0) * 100).toFixed(1)}% volume` : profileReason} />
+              <Metric label="Prior-day POC" value={priorDayProfile?.poc == null ? "unavailable" : priceText(priorDayProfile.poc)} note={priorDayProfile?.available ? `${signed(priorDayProfile.vs_poc_bps)} bps · trade-derived` : profileReason} />
+              <Metric label="VAL / VAH" value={priorDayProfile?.available ? `${priceText(priorDayProfile.value_area_low)} – ${priceText(priorDayProfile.value_area_high)}` : "unavailable"} note={priorDayProfile?.available ? `${priorDayProfile.location.replace(/_/g, " ")} · ${((priorDayProfile.va_volume_pct ?? 0) * 100).toFixed(1)}% volume` : profileReason} />
               <Metric label="Session" value={(forming?.session_label as string | undefined) ?? pulse.data?.market.session_label ?? "—"} note={((forming?.session_active as boolean | undefined) ?? pulse.data?.market.session_label === "us_overlap") ? "active overlap" : "off overlap"} />
               <Metric label="Quality" value={quality} note={qualityNote} />
             </div>

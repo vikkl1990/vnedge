@@ -1512,6 +1512,29 @@ def test_agentic_research_os_endpoint_is_dashboard_gated(tmp_path):
     assert payload["live_orders_enabled"] is False
 
 
+def test_missing_intelligence_artifacts_are_reported_as_unavailable(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            agentic_research_os_path=tmp_path / "missing_agentic.json",
+            ml_pipeline_status_path=tmp_path / "missing_ml.json",
+        )
+    )
+
+    agentic = client.get("/agentic-research-os?token=t3st-token").json()
+    ml = client.get("/ml-status?token=t3st-token").json()
+
+    assert agentic["artifact_available"] is False
+    assert agentic["summary"] == {}
+    assert ml["artifact_available"] is False
+    assert ml["stage"] == "UNAVAILABLE"
+    assert ml["can_trade"] is False
+    assert ml["can_promote"] is False
+
+
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
     provider = SnapshotProvider()
     provider.publish({"mode": "shadow"})

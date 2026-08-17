@@ -4,8 +4,10 @@ from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.strategy_registry import (
     CAPITAL_APPROVED,
     RESEARCH_ONLY,
+    SHADOW_OBSERVE,
     capital_denial_reason,
     is_capital_eligible,
+    is_shadow_observe_eligible,
 )
 
 
@@ -37,6 +39,14 @@ def test_capital_permission_requires_an_explicit_promotion():
     # permission revoked (see docs/EDGE_INVESTIGATION_POSTMORTEM_20260816).
     assert not is_capital_eligible("funding_mean_reversion_v1")
     assert not is_capital_eligible("unknown_or_removed_scanner")
+
+
+def test_shadow_observe_is_a_separate_narrow_permission():
+    assert SHADOW_OBSERVE == {"structure_bos_1h"}
+    assert is_shadow_observe_eligible("structure_bos_1h")
+    assert not is_capital_eligible("structure_bos_1h")
+    assert not is_shadow_observe_eligible("funding_mean_reversion_v1")
+    assert not is_shadow_observe_eligible("unknown_or_removed_scanner")
 
 
 def test_paper_lane_for_research_only_is_downgraded_to_shadow():

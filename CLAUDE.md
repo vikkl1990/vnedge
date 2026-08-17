@@ -68,17 +68,12 @@ IS +$1,343 vs OOS −$18.50 = classic overfit, caught by the IS/OOS
 collapse gate. ML judgment round deferred until an exploratory config
 shows promise; do not judge on the untouched window before then.
 
-## Paper trial: funding_mean_reversion_v1 on BTC (APPROVED 2026-07-03)
+## Historical paper trial: funding_mean_reversion_v1 on BTC (KILLED 2026-08-16)
 
-Human approval received ("approved for paper: funding_mean_reversion_v1 BTC
-only"). Manifest + locked pass/fail criteria:
-research/paper_trials/funding_mr_btc_v1_20260703.yaml. Run with:
-  python -m vnedge.runtime.paper_trial research/paper_trials/funding_mr_btc_v1_20260703.yaml --hours 24
-(repeat daily or run long sessions; add --dashboard with DASHBOARD_TOKEN set).
-Params frozen (0.85/1.5), $500 equity, $10 daily loss, 14-30 days, >=10
-trades, <=6% DD. NO parameter changes mid-trial. NO live orders (manifest
-validation refuses live_orders_enabled). Reports append to
-research/paper_trials/<id>.reports.jsonl with commit attribution.
+The earlier human paper approval has been revoked after the forward-paper
+post-mortem. The strategy is KILLED, the capital allowlist is empty, and its
+trial entrypoint refuses it before network startup. Retain the manifest and
+reports as evidence only; do not run or reactivate it.
 
 ## XRP trend judgment (2026-07-10, pre-registered, verdict stands)
 
@@ -282,10 +277,11 @@ more this one matters.
    upgrade), and prepare() re-runs per bar (fine at 1m+, optimize later).
    REMAINING before live trading: mainnet execution drill CLEARED on the
    chosen venue (adapter + checklist built), a strategy that passes gates.
-7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (read-only FastAPI app:
-   GET /state + 1-2Hz snapshot WS, bearer token mandatory, zero control
-   routes — tested; vanilla single-page UI; demo replay via
-   `python -m vnedge.dashboard.demo`, preview config in .claude/launch.json)
+7b. ~~Monitoring dashboard per DESIGN.md §6~~ ✅ (measurement-first FastAPI
+   app: read-only market/risk/research surfaces plus an operator-scoped,
+   CSRF-protected Settings API with no order/promotion/live-enable authority;
+   HttpOnly browser sessions; demo replay via
+   `python -m vnedge.dashboard.demo`)
 8. ~~Strategy research round 2~~ ✅ ran 2026-07-02, all six combos REJECTED:
    - Trend on 4h (±low-vol floor): mostly UNTESTABLE — <5 in-sample trades
      per train window, so selection can't even run. 4h trend at this horizon

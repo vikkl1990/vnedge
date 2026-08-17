@@ -198,6 +198,9 @@ def test_tp_ladder_records_max_reached_without_changing_exit(tmp_path):
     payload = [r for r in journal.read_all() if r["kind"] == "shadow_outcome"][0]["payload"]
     assert payload["tp_reached"] == 2
     assert payload["take_profit_levels"] == [102.0, 105.0, 110.0]
+    assert tracker.stats()["status"] == "EXIT_SEMANTIC_GAP"
+    assert tracker.stats()["trade_compatible"] is False
+    assert tracker.stats()["exit_semantics"] == "ladder_observation_only"
 
 
 def test_tp_ladder_short_side_and_empty_default(tmp_path):
@@ -360,6 +363,10 @@ def test_stats_aggregate_wins_net_and_profit_factor(tmp_path):
     assert stats["open_intents"] == 1
     assert stats["profit_factor"] is None  # no losses yet — undefined, not inf
     assert stats["resolutions"]["target"] == 2
+    assert stats["pending_shadow_intents"] == 1
+    assert len(stats["shadow_outcomes_recent"]) == 2
+    assert stats["shadow_outcomes_recent"][-1]["resolution"] == "target"
+    assert stats["virtual_net_usd"] == stats["net_usd"]
     assert stats["status"] == "OBSERVE"
     assert stats["trade_compatible"] is True
 
@@ -494,6 +501,32 @@ async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
     assert provider.snapshots[-1]["session"]["shadow_perf"] == stats
     events = [e["event"] for e in session.trade_log]
     assert events.count("shadow_outcome") == 2
+    # SHADOW returns before OrderManager.submit: no broker order and no fill.
+    assert session.om.orders == {}
+    assert session.exchange.get_fills() == []
+
+
+async def test_kill_file_rejects_shadow_intent_and_tracks_no_virtual_trade(tmp_path):
+    (tmp_path / "KILL").touch()
+    session = build_session(
+        tmp_path,
+        FakeFeed([[BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]]),
+    )
+
+    await session.run(max_bars=1)
+
+    intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    assert intents
+    assert all(record["payload"]["approved"] is False for record in intents)
+    assert all(
+        any("kill_switch" in reason for reason in record["payload"]["failed_checks"])
+        for record in intents
+    )
+    assert session.shadow_outcomes.stats()["pending_shadow_intents"] == 0
+    assert session.last_reject_reason is not None
+    assert "kill_switch" in session.last_reject_reason
+    assert session.om.orders == {}
+    assert session.exchange.get_fills() == []
 
 
 async def test_restart_replays_history_and_never_double_resolves(tmp_path):
@@ -505,8 +538,11 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
     assert session1.shadow_outcomes.stats() == {
         "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
         "profit_factor": None, "open_intents": 2,
+        "pending_shadow_intents": 2, "shadow_outcomes_recent": [],
+        "virtual_net_usd": 0.0, "bars_since_signal": 1,
         "resolutions": {"stop": 0, "target": 0, "timeout": 0},
         "status": "OBSERVE", "trade_compatible": True,
+        "exit_semantics": "single_exit_parity",
         "route": "taker", "net_taker_usd": 0.0, "maker_unfilled": 0,
     }
 

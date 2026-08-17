@@ -34,6 +34,8 @@ class RunnerConfig(BaseModel):
     # and runtime together, or the two diverge.
     trail_atr_mult: float = Field(default=0.0, ge=0.0)
     trail_atr_window: int = Field(default=14, ge=1)
+    allow_partial_tp: bool = True
+    fee_aware_breakeven_bps: float = Field(default=8.0, ge=0.0)
     # LEGACY ALIAS (PR #92) — maps into protections.cooldown_bars_after_stop
     # via effective_protections(). Semantics were refined when the protections
     # state machine landed: the cooldown now arms on STOP exits only (a winner

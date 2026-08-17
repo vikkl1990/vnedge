@@ -1,7 +1,5 @@
 """Metrics math on constructed results with known values."""
 
-import math
-
 import pandas as pd
 import pytest
 
@@ -54,9 +52,9 @@ def test_max_drawdown():
     assert m.max_drawdown_pct == pytest.approx(20.0)
 
 
-def test_no_losses_gives_infinite_profit_factor():
+def test_no_losses_gives_undefined_profit_factor():
     result = make_result([500.0, 520.0], [make_trade(20.0)])
-    assert math.isinf(compute_metrics(result).profit_factor)
+    assert compute_metrics(result).profit_factor is None
 
 
 def test_no_trades_is_all_zeros():
@@ -64,7 +62,7 @@ def test_no_trades_is_all_zeros():
     m = compute_metrics(result)
     assert m.num_trades == 0
     assert m.win_rate_pct == 0.0
-    assert m.profit_factor == 0.0
+    assert m.profit_factor is None
     assert m.sharpe == 0.0
 
 
