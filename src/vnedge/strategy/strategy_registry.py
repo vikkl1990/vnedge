@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
+from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.measurement_only import MeasurementOnly
@@ -14,6 +15,7 @@ from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
     MeasurementOnly.strategy_id: MeasurementOnly,
+    FeeWallMomentumObserver.strategy_id: FeeWallMomentumObserver,
     CryptoTrendAtrMargin.strategy_id: CryptoTrendAtrMargin,
     TrendContinuation.strategy_id: TrendContinuation,
     FundingMeanReversion.strategy_id: FundingMeanReversion,
@@ -27,7 +29,11 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
 # though they use the same feed/DQ/Time-Machine/snapshot machinery as an
 # executable lane. Promotion requires a separate reviewed allowlist change.
 RESEARCH_ONLY: frozenset[str] = frozenset(
-    {MeasurementOnly.strategy_id, StructureBos1H.strategy_id}
+    {
+        MeasurementOnly.strategy_id,
+        StructureBos1H.strategy_id,
+        FeeWallMomentumObserver.strategy_id,
+    }
 )
 
 # Failed forward paper; retained only so historical evidence can be replayed.
@@ -43,7 +49,9 @@ CAPITAL_APPROVED: frozenset[str] = frozenset()
 # intents in a SHADOW lane.  This is intentionally narrower than
 # ``RESEARCH_ONLY``: being research-only does not automatically grant a live
 # public-data observation process.  Killed strategies can never enter it.
-SHADOW_OBSERVE: frozenset[str] = frozenset({StructureBos1H.strategy_id})
+SHADOW_OBSERVE: frozenset[str] = frozenset(
+    {StructureBos1H.strategy_id, FeeWallMomentumObserver.strategy_id}
+)
 
 
 def is_shadow_observe_eligible(strategy_id: str) -> bool:

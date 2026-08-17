@@ -87,6 +87,23 @@ After recreation, `/state.runtime_control` must report
 `SHADOW_OBSERVE · virtual only`. A bad, killed, missing, or wrong-timeframe
 strategy fails process startup.
 
+For the automatic BTC/ETH fee-wall measurement drill, keep the same capital
+gates off and use two virtual-only 5-minute lanes:
+
+```dotenv
+MULTI_LANE_CAPITAL_ENABLED=0
+MULTI_LANE_CAPITAL_STRATEGY=
+MULTI_LANE_SHADOW_OBSERVE_ENABLED=1
+MULTI_LANE_SHADOW_OBSERVE_STRATEGY=fee_wall_momentum_observer_v1
+MULTI_LANE_SHADOW_OBSERVE_EXCHANGE=binanceusdm
+MULTI_LANE_SHADOW_OBSERVE_SYMBOLS=BTC/USDT:USDT,ETH/USDT:USDT
+MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME=5m
+```
+
+This journals virtual crossing intents and their frozen SL/TP outcomes. It does
+not place paper or live orders; `/state.runtime_control` must continue to show
+`paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
+
 ## Dashboard access
 
 Prefer an SSH tunnel to the loopback-bound application port:

@@ -159,15 +159,28 @@ def build_shadow_observe_lane_specs(
     exchange = environ.get(
         "MULTI_LANE_SHADOW_OBSERVE_EXCHANGE", "binanceusdm"
     ).strip()
-    configured_symbol = environ.get(
-        "MULTI_LANE_SHADOW_OBSERVE_SYMBOL", "BTC/USDT:USDT"
-    ).strip()
+    configured_symbols = _csv(
+        environ.get("MULTI_LANE_SHADOW_OBSERVE_SYMBOLS", "").strip()
+        or environ.get("MULTI_LANE_SHADOW_OBSERVE_SYMBOL", "BTC/USDT:USDT")
+    )
     timeframe = environ.get("MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME", "1h").strip()
-    if not exchange or not configured_symbol:
-        raise ValueError("shadow observe exchange and symbol cannot be empty")
+    if not exchange or not configured_symbols:
+        raise ValueError("shadow observe exchange and symbols cannot be empty")
     if strategy_id == "structure_bos_1h" and timeframe != "1h":
         raise ValueError("structure_bos_1h shadow observe requires timeframe 1h")
-    symbol = _venue_symbol(exchange, configured_symbol)
+    if strategy_id == "fee_wall_momentum_observer_v1" and timeframe != "5m":
+        raise ValueError(
+            "fee_wall_momentum_observer_v1 shadow observe requires timeframe 5m"
+        )
+    starting_equity = _positive_float(
+        environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
+    )
+    daily_loss_usd = _positive_float(
+        environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10"
+    )
+    trail_atr_mult = _nonnegative_float(
+        environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0"
+    )
     return [
         LaneSpec(
             lane_id=f"shadow_observe_{_slug(exchange)}_{_slug(symbol)}",
@@ -176,16 +189,14 @@ def build_shadow_observe_lane_specs(
             timeframe=timeframe,
             strategy_id=strategy_id,
             mode=RunnerMode.SHADOW,
-            starting_equity=_positive_float(
-                environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
-            ),
-            daily_loss_usd=_positive_float(
-                environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10"
-            ),
-            trail_atr_mult=_nonnegative_float(
-                environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0"
-            ),
+            starting_equity=starting_equity,
+            daily_loss_usd=daily_loss_usd,
+            trail_atr_mult=trail_atr_mult,
             is_primary=False,
+        )
+        for symbol in (
+            _venue_symbol(exchange, configured_symbol)
+            for configured_symbol in configured_symbols
         )
     ]
 

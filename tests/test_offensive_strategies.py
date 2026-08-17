@@ -190,4 +190,5 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "trend_continuation_v1", "funding_mean_reversion_v1",
         "volatility_expansion_breakout_v1", "panic_reversal_v1",
         "funding_squeeze_continuation_v1", "structure_bos_1h",
+        "fee_wall_momentum_observer_v1",
     }

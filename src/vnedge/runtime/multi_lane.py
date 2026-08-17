@@ -55,6 +55,7 @@ from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
+from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
@@ -578,6 +579,13 @@ def _build_single_strategy(
                 "structure_bos_1h parameters are frozen; configure a new strategy ID"
             )
         return StructureBos1H(seed_funding)
+    if strategy_id == FeeWallMomentumObserver.strategy_id:
+        if params:
+            raise ValueError(
+                "fee_wall_momentum_observer_v1 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return FeeWallMomentumObserver(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)

@@ -17,7 +17,11 @@ def _spec(strategy_id, mode):
 
 
 def test_measurement_runtime_is_explicitly_non_capital():
-    assert RESEARCH_ONLY == {"measurement_only_v1", "structure_bos_1h"}
+    assert RESEARCH_ONLY == {
+        "measurement_only_v1",
+        "structure_bos_1h",
+        "fee_wall_momentum_observer_v1",
+    }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
 
@@ -35,6 +39,9 @@ def test_capital_permission_requires_an_explicit_promotion():
     assert capital_denial_reason("structure_bos_1h") == (
         "strategy is research/measurement only"
     )
+    assert capital_denial_reason("fee_wall_momentum_observer_v1") == (
+        "strategy is research/measurement only"
+    )
     # funding_mr FAILED forward paper (2026-08-14) -> post-mortem KILLED, capital
     # permission revoked (see docs/EDGE_INVESTIGATION_POSTMORTEM_20260816).
     assert not is_capital_eligible("funding_mean_reversion_v1")
@@ -42,8 +49,13 @@ def test_capital_permission_requires_an_explicit_promotion():
 
 
 def test_shadow_observe_is_a_separate_narrow_permission():
-    assert SHADOW_OBSERVE == {"structure_bos_1h"}
+    assert SHADOW_OBSERVE == {
+        "structure_bos_1h",
+        "fee_wall_momentum_observer_v1",
+    }
     assert is_shadow_observe_eligible("structure_bos_1h")
+    assert is_shadow_observe_eligible("fee_wall_momentum_observer_v1")
+    assert not is_capital_eligible("fee_wall_momentum_observer_v1")
     assert not is_capital_eligible("structure_bos_1h")
     assert not is_shadow_observe_eligible("funding_mean_reversion_v1")
     assert not is_shadow_observe_eligible("unknown_or_removed_scanner")
