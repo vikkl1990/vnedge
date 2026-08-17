@@ -31,6 +31,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.middleware.base import RequestResponseEndpoint
 
 from vnedge.agent_gateway.app import (
     AgentGatewayArtifacts,
@@ -559,6 +560,17 @@ def create_app(
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
     ws_connections: dict[str, int] = {}  # user name -> live socket count (never tokens)
+
+    @app.middleware("http")
+    async def spa_shell_cache_policy(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        """Never cache the React shell; hashed assets retain static caching."""
+        response = await call_next(request)
+        if request.url.path.rstrip("/") == "/app":
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
 
     @app.get("/health")
     @app.get("/healthz")

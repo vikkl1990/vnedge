@@ -7,11 +7,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from vnedge.agent_gateway.jobs import DONE_STATUS, create_backtest_job, update_job
 from vnedge.config.risk_config import RiskConfig
 from vnedge.dashboard.app import SnapshotProvider, create_app
 from vnedge.dashboard.auth import DashboardUser, TokenStore, parse_users_env
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
-from vnedge.agent_gateway.jobs import DONE_STATUS, create_backtest_job, update_job
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
@@ -34,6 +34,22 @@ def client():
 def test_empty_token_refused_at_construction():
     with pytest.raises(ValueError, match="no token, no dashboard"):
         create_app(SnapshotProvider(), token="")
+
+
+def test_react_spa_shell_is_never_cached(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>VNEDGE</title>")
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(
+        create_app(provider, token="t3st-token", v2_dist_path=dist)
+    )
+
+    response = client.get("/app/")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, must-revalidate"
 
 
 def test_state_requires_token(client):
