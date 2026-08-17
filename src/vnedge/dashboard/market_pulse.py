@@ -94,7 +94,9 @@ def _gap_minutes(candle: Candle, gaps: Sequence[GapRecord]) -> float:
             min(candle.close_time, gap.end),
         )
         for gap in gaps
-        if gap.start < candle.close_time and gap.end > candle.open_time
+        if not gap.recovered
+        and gap.start < candle.close_time
+        and gap.end > candle.open_time
     )
     merged: list[tuple[datetime, datetime]] = []
     for start, end in intervals:
@@ -628,7 +630,10 @@ class MarketPulseService:
                 profile_exchange, symbol, day_start, day_end, bin_size
             )
             if profile is None:
-                if any(gap.start < day_end and gap.end > day_start for gap in gaps):
+                if any(
+                    not gap.recovered and gap.start < day_end and gap.end > day_start
+                    for gap in gaps
+                ):
                     return {**unavailable, "reason": "known_trade_coverage_gap"}
                 profile_exchange = exchange
                 profile = self.profile_store.read(
@@ -1024,6 +1029,7 @@ class MarketPulseService:
         if candles_1h and any(
             gap.start < candles_1h[-1].close_time
             and gap.end > candles_1h[0].open_time
+            and not gap.recovered
             for gap in gaps
         ):
             quality = "gap"

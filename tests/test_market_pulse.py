@@ -337,6 +337,32 @@ def test_gap_quality_and_runtime_degradation_are_never_hidden(tmp_path) -> None:
     assert any(alert["kind"] == "gap" for alert in payload["alerts"])
 
 
+def test_recovered_gap_remains_audit_only_and_does_not_poison_hours(tmp_path) -> None:
+    pulse_service = service(tmp_path)
+    pulse_service.clock = lambda: START + timedelta(hours=26)
+    gap = GapRecord(
+        "BTCUSDT",
+        "binanceusdm",
+        GapKind.STORAGE_HOLE,
+        START + timedelta(hours=24, minutes=10),
+        START + timedelta(hours=24, minutes=20),
+        START + timedelta(hours=24, minutes=20),
+        "exact trades restored and canonical candles rebuilt",
+        recovered=True,
+    )
+    GapParquetStore(tmp_path / "gaps").upsert((gap,))
+
+    payload = pulse_service.pulse("binanceusdm", "BTCUSDT")
+
+    affected = next(row for row in payload["hours"] if row["open_time"] == "2026-08-16T00:00:00Z")
+    assert payload["data_quality"] == "ok"
+    assert affected["data_quality"] == "ok"
+    assert affected["is_gap"] is False
+    assert affected["gap_minutes"] == 0
+    assert payload["last_gap"]["recovered"] is True
+    assert any(alert["kind"] == "gap" and alert["recovered"] for alert in payload["alerts"])
+
+
 def test_stale_canonical_hour_is_degraded_not_live(tmp_path) -> None:
     pulse_service = service(tmp_path)
     pulse_service.clock = lambda: START + timedelta(hours=30)

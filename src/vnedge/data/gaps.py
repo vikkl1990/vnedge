@@ -563,6 +563,7 @@ def candles_without_gaps(
         for candle in candles
         if not any(
             gap.symbol == candle.symbol
+            and not gap.recovered
             and gap.start < candle.close_time
             and gap.end > candle.open_time
             for gap in gap_list
@@ -579,7 +580,7 @@ def coverage_fraction(start: datetime, end: datetime, gaps: Iterable[GapRecord])
     intervals = sorted(
         (max(start, gap.start), min(end, gap.end))
         for gap in gaps
-        if gap.end > start and gap.start < end
+        if not gap.recovered and gap.end > start and gap.start < end
     )
     merged: list[tuple[datetime, datetime]] = []
     for interval_start, interval_end in intervals:

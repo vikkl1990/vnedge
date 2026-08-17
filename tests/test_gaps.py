@@ -275,6 +275,22 @@ def test_research_gap_filter_and_coverage_do_not_forward_fill() -> None:
     assert coverage_fraction(START, START + timedelta(hours=4), gaps) == D("0.5")
 
 
+def test_recovered_gaps_do_not_remove_rebuilt_research_candles() -> None:
+    bars = tuple(candle(hour) for hour in range(4))
+    recovered = GapRecord(
+        "BTCUSDT",
+        "binanceusdm",
+        GapKind.STORAGE_HOLE,
+        START + timedelta(hours=1),
+        START + timedelta(hours=3),
+        START + timedelta(hours=4),
+        recovered=True,
+    )
+
+    assert candles_without_gaps(bars, (recovered,)) == bars
+    assert coverage_fraction(START, START + timedelta(hours=4), (recovered,)) == D("1")
+
+
 def test_storage_inventory_emits_explicit_day_holes() -> None:
     holes = storage_holes_from_days(
         "binanceusdm",
