@@ -230,7 +230,16 @@ def build_lanes_payload(
                 "unrealized_pnl_usd": _number(lane.get("unrealized_pnl")),
                 "open_positions": _position_count(lane),
                 "funnel": dict(_mapping(lane.get("funnel"))),
-                "sizing_profile": dict(sizing) if sizing else None,
+                # Measurement lanes have a nominal tracker balance because the
+                # shared runtime owns one, but that is not an actionable purse
+                # or sizing contract.  Exposing it here made the cockpit imply
+                # that every measurement row could size a trade.  Only paper
+                # and explicit shadow-observe lanes may publish sizing truth.
+                "sizing_profile": (
+                    dict(sizing)
+                    if sizing and (mode == "paper" or observation_class == "shadow_observe")
+                    else None
+                ),
                 "active_plan": (
                     dict(_mapping(lane.get("active_plan")))
                     if lane.get("active_plan")
@@ -444,15 +453,13 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         runtime_mode = str(snapshot.get("mode") or "live_blocked").split()[0]
     elif capital_size > 0:
         runtime_mode = "paper"
+    elif int(portfolio["shadow_lane_count"]) > 0:
+        # SHADOW_OBSERVE is intentionally RESEARCH_ONLY, but it is still an
+        # active virtual decision path.  Calling the fleet "measurement" here
+        # hid the very scanners/operators were trying to verify.
+        runtime_mode = "shadow"
     elif any("shadow" in str(lane.get("mode") or "").lower() for lane in lanes):
-        active_strategies = [
-            str(lane.get("strategy_id") or "")
-            for lane in lanes
-            if str(lane.get("strategy_id") or "") not in KILLED
-        ]
-        runtime_mode = "measurement" if active_strategies and all(
-            strategy_id in RESEARCH_ONLY for strategy_id in active_strategies
-        ) else "shadow"
+        runtime_mode = "measurement"
     else:
         runtime_mode = "measurement"
 

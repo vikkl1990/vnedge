@@ -155,6 +155,62 @@ def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     assert lane["last_reject_reason"] == "no causal BoS candidate"
 
 
+def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() -> None:
+    snap = snapshot()
+    sizing = {
+        "starting_equity_usd": 500.0,
+        "fixed_margin_usd": 100.0,
+        "max_leverage": 30,
+    }
+    snap["lanes"][0]["sizing_profile"] = sizing
+    snap["lanes"].append(
+        {
+            "lane_id": "shadow_observe_binanceusdm_btc",
+            "exchange": "binanceusdm",
+            "strategy_id": "structure_bos_1h",
+            "mode": "shadow (live data)",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1h",
+            "feed": "ok",
+            "equity": 500.0,
+            "sizing_profile": sizing,
+        }
+    )
+
+    payload = build_lanes_payload(snap, now=NOW)
+    measurement = next(
+        row for row in payload["lanes"] if row["observation_class"] == "measurement"
+    )
+    observer = next(
+        row for row in payload["lanes"] if row["observation_class"] == "shadow_observe"
+    )
+
+    assert measurement["sizing_profile"] is None
+    assert observer["sizing_profile"] == sizing
+    assert payload["portfolio"]["measurement_nominal_usd"] == 0.0
+    assert payload["portfolio"]["shadow_purse_usd"] == 500.0
+
+
+def test_risk_mode_reports_active_shadow_observer() -> None:
+    snap = snapshot()
+    snap["lanes"].append(
+        {
+            "lane_id": "shadow_observe_binanceusdm_btc",
+            "exchange": "binanceusdm",
+            "strategy_id": "structure_bos_1h",
+            "mode": "shadow (live data)",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1h",
+            "feed": "ok",
+        }
+    )
+
+    payload = build_risk_payload(snap)
+
+    assert payload["runtime_mode"] == "shadow"
+    assert payload["capital"] == {"enabled": False, "roster_size": 0}
+
+
 def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:
     payload = build_risk_payload(snapshot())
 
