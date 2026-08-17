@@ -175,6 +175,7 @@ export interface WhoAmI {
   name: string | null;
   role: string | null;
   permissions: string[];
+  expires_at?: string | null;
 }
 
 export interface SettingsSecurity {
@@ -213,6 +214,16 @@ export interface Position {
   side?: string;
   quantity?: number;
   entry_price?: number;
+  mark_price?: number;
+  notional_usd?: number;
+  margin_usd?: number;
+  effective_leverage?: number;
+  liquidation_price?: number;
+  stop_price?: number;
+  take_profit_price?: number;
+  age_seconds?: number;
+  mfe_usd?: number;
+  mae_usd?: number;
   unrealized_pnl_usd?: number;
   [k: string]: unknown;
 }
@@ -304,13 +315,22 @@ export interface CorrectionLane {
   candle_age_ms: number | null;
   bar_close_processing_ms: number | null;
   decision_lag_ms: number | null;
+  latency_samples: { bar_close: number; decision: number; required: number };
   arm_skips: number;
   last_signal_age_seconds: number | null;
   last_signal_reason: string;
   cost_profile: string;
   round_trip_bps: number | null;
-  health: "ok" | "degraded" | "unknown";
+  health: "ok" | "degraded" | "blocked" | "unknown";
   health_reason: string | null;
+  equity_usd: number | null;
+  realized_pnl_usd: number | null;
+  unrealized_pnl_usd: number | null;
+  open_positions: number;
+  funnel: Record<string, number>;
+  sizing_profile: SizingProfile | null;
+  active_plan: Record<string, unknown> | null;
+  last_eval: Record<string, unknown> | null;
   why_no_fire: string;
   last_reject_reason: string | null;
   shadow_perf: {
@@ -330,9 +350,33 @@ export interface LanesPayload {
   measurement_only: boolean;
   banner: string | null;
   shadow_observe_lanes: number;
+  portfolio: PortfolioScope;
   read_only: true;
   can_promote: false;
   can_trade: false;
+}
+
+export interface PortfolioScope {
+  shadow_purse_usd: number;
+  paper_purse_usd: number;
+  measurement_nominal_usd: number;
+  shadow_lane_count: number;
+  paper_lane_count: number;
+  measurement_lane_count: number;
+  shadow_open_positions: number;
+  shadow_pending_intents: number;
+}
+
+export interface SizingProfile {
+  starting_equity_usd?: number;
+  fixed_margin_usd?: number | null;
+  max_leverage?: number;
+  max_effective_account_leverage?: number;
+  max_symbol_exposure_usd?: number;
+  max_total_exposure_usd?: number;
+  max_open_positions?: number;
+  daily_loss_halt_enabled?: boolean;
+  profile?: string;
 }
 
 export interface RiskSnapshot {
@@ -365,7 +409,9 @@ export interface RiskSnapshot {
     observed_reject_count: number;
     window: string;
   };
-  positions: { shadow_open: number; unresolved_orders: number };
+  positions: { shadow_open: number; shadow_pending_intents: number; unresolved_orders: number };
+  portfolio: PortfolioScope;
+  sizing_profiles: Array<SizingProfile & { lane_id: string; symbol: string }>;
   breaker: { loss_streak: number; active: boolean; threshold: number };
   reconciliation: {
     status: string;
@@ -485,6 +531,12 @@ export interface MetaPayload {
   build_sha: string;
   host: string;
   uptime_seconds: number;
+  process_id?: number;
+  python?: string;
+  cpu_count?: number | null;
+  load_average?: { "1m": number | null; "5m": number | null; "15m": number | null };
+  disk?: { total_bytes: number; used_bytes: number; free_bytes: number; used_pct: number };
+  transport?: { scheme: string; secure: boolean; forwarded_proto: string | null };
 }
 
 export interface CostModelPayload {

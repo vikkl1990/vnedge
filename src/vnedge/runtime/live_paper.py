@@ -1912,6 +1912,55 @@ class LivePaperSession:
                 "last_reject_reason": self.last_reject_reason,
                 "shadow_perf": self.shadow_outcomes.stats()
                 if self.shadow_outcomes is not None else None,
+                # Read-only operating contract for the cockpit.  This exposes
+                # the purse/margin/leverage truth operators configured without
+                # creating a second sizing implementation in the UI.
+                "sizing_profile": {
+                    "starting_equity_usd": self.config.starting_equity_usd,
+                    "fixed_margin_usd": self.config.risk.fixed_margin_usd,
+                    "max_leverage": self.config.risk.max_leverage_per_position,
+                    "max_effective_account_leverage": (
+                        self.config.risk.max_effective_account_leverage
+                    ),
+                    "max_symbol_exposure_usd": (
+                        self.config.risk.max_exposure_per_symbol_usd
+                    ),
+                    "max_total_exposure_usd": (
+                        self.config.risk.max_total_exposure_usd
+                    ),
+                    "max_open_positions": self.config.risk.max_open_positions,
+                    "daily_loss_halt_enabled": (
+                        self.config.risk.daily_loss_halt_enabled
+                    ),
+                    "profile": (
+                        "fixed_margin_shadow"
+                        if self.config.risk.fixed_margin_usd is not None
+                        else "risk_based"
+                    ),
+                },
+                "active_plan": (
+                    {
+                        "side": self._plan.signal.side,
+                        "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
+                        "entry_price": self._plan.exit_state.entry_price,
+                        "stop_price": self._plan.exit_state.current_stop,
+                        "initial_stop_price": (
+                            self._plan.exit_state.initial_stop_price
+                        ),
+                        "take_profit_price": (
+                            self._plan.exit_state.take_profit_price
+                        ),
+                        "take_profit_levels": list(
+                            self._plan.exit_state.take_profit_levels
+                        ),
+                        "mfe_price": self._plan.exit_state.mfe_price,
+                        "breakeven_armed": (
+                            self._plan.exit_state.breakeven_armed
+                        ),
+                    }
+                    if self._plan is not None
+                    else None
+                ),
                 "trade_log": list(self.trade_log),
                 "fill_ledger": {
                     "records": self.fill_ledger.records,

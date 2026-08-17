@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from vnedge.dashboard.health_bands import lane_health, timeframe_health
+from vnedge.runtime.latency_thresholds import LATENCY_GATE_MIN_SAMPLES
 from vnedge.strategy.strategy_registry import (
     KILLED,
     RESEARCH_ONLY,
@@ -100,6 +101,27 @@ def _latency_value_with_alias(
     return value if value is not None else _latency_value(lane, alias)
 
 
+def _latency_samples(lane: Mapping[str, Any], name: str, alias: str | None = None) -> int:
+    latency = _mapping(lane.get("latency"))
+    metric = _mapping(latency.get(name))
+    if not metric and alias:
+        metric = _mapping(latency.get(alias))
+    try:
+        return int(metric.get("n") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _position_count(lane: Mapping[str, Any]) -> int:
+    positions = lane.get("positions")
+    if isinstance(positions, list):
+        return len(positions)
+    try:
+        return max(0, int(positions or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _skip_count(lane: Mapping[str, Any]) -> int:
     skips = _mapping(lane.get("decision_skips"))
     return sum(int(value or 0) for value in skips.values())
@@ -159,6 +181,7 @@ def build_lanes_payload(
         )
         candle_status, candle_age_ms = timeframe_health(lane)
         plan = _mapping(lane.get("plan_overlay"))
+        sizing = _mapping(lane.get("sizing_profile"))
         lane_id = str(lane.get("lane_id") or "")
         health = lane_health(lane, has_problem=lane_id in problems)
         reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
@@ -181,6 +204,13 @@ def build_lanes_payload(
                     lane, "bar_close_processing_ms", "feed_lag_ms"
                 ),
                 "decision_lag_ms": _latency_value(lane, "decision_lag_ms"),
+                "latency_samples": {
+                    "bar_close": _latency_samples(
+                        lane, "bar_close_processing_ms", "feed_lag_ms"
+                    ),
+                    "decision": _latency_samples(lane, "decision_lag_ms"),
+                    "required": LATENCY_GATE_MIN_SAMPLES,
+                },
                 "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (
                     None
@@ -195,6 +225,22 @@ def build_lanes_payload(
                 "health": health,
                 "health_reason": problems.get(str(lane.get("lane_id") or "")),
                 "shadow_perf": lane.get("shadow_perf") if mode == "shadow" else None,
+                "equity_usd": _number(lane.get("equity")),
+                "realized_pnl_usd": _number(lane.get("realized_pnl")),
+                "unrealized_pnl_usd": _number(lane.get("unrealized_pnl")),
+                "open_positions": _position_count(lane),
+                "funnel": dict(_mapping(lane.get("funnel"))),
+                "sizing_profile": dict(sizing) if sizing else None,
+                "active_plan": (
+                    dict(_mapping(lane.get("active_plan")))
+                    if lane.get("active_plan")
+                    else None
+                ),
+                "last_eval": (
+                    dict(_mapping(lane.get("last_eval")))
+                    if lane.get("last_eval")
+                    else None
+                ),
                 "last_reject_reason": (
                     str(lane.get("last_reject_reason"))
                     if lane.get("last_reject_reason")
@@ -214,6 +260,40 @@ def build_lanes_payload(
     observe_count = sum(
         row["observation_class"] == "shadow_observe" for row in result
     )
+    shadow_rows = [
+        row for row in result if row["observation_class"] == "shadow_observe"
+    ]
+    measurement_rows = [
+        row for row in result if row["observation_class"] == "measurement"
+    ]
+    paper_rows = [row for row in result if row["mode"] == "paper"]
+
+    def purse(rows: list[dict[str, Any]]) -> float:
+        total = 0.0
+        for row in rows:
+            sizing = _mapping(row.get("sizing_profile"))
+            value = sizing.get("starting_equity_usd")
+            if value is None:
+                value = row.get("equity_usd")
+            try:
+                total += float(value or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return round(total, 2)
+
+    portfolio = {
+        "shadow_purse_usd": purse(shadow_rows),
+        "paper_purse_usd": purse(paper_rows),
+        "measurement_nominal_usd": purse(measurement_rows),
+        "shadow_lane_count": len(shadow_rows),
+        "paper_lane_count": len(paper_rows),
+        "measurement_lane_count": len(measurement_rows),
+        "shadow_open_positions": sum(row["open_positions"] for row in shadow_rows),
+        "shadow_pending_intents": sum(
+            int(_mapping(row.get("shadow_perf")).get("pending_shadow_intents") or 0)
+            for row in shadow_rows
+        ),
+    }
     return {
         "lanes": result,
         "capital_roster_size": capital_count,
@@ -226,6 +306,7 @@ def build_lanes_payload(
             else None
         ),
         "shadow_observe_lanes": observe_count,
+        "portfolio": portfolio,
         "read_only": True,
         "can_promote": False,
         "can_trade": False,
@@ -354,6 +435,9 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     journal = _journal(snapshot, lanes)
     recon = _reconciliation(snapshot)
     checklist = _live_checklist(snapshot, journal=journal, recon=recon)
+    lane_projection = build_lanes_payload(snapshot)
+    projected_lanes = lane_projection["lanes"]
+    portfolio = lane_projection["portfolio"]
     capital_size = int(runtime.get("capital_roster_size") or 0)
     live_enabled = bool(snapshot.get("live_trading_enabled"))
     if live_enabled:
@@ -409,15 +493,8 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "journal": journal,
         "gateway": _gateway(snapshot, lanes),
         "positions": {
-            "shadow_open": sum(
-                len(row.get("positions") or [])
-                for row in lanes
-                if isinstance(row.get("positions"), list)
-                and any(
-                    label in str(row.get("mode") or "").lower()
-                    for label in ("shadow", "measurement")
-                )
-            ),
+            "shadow_open": int(portfolio["shadow_open_positions"]),
+            "shadow_pending_intents": int(portfolio["shadow_pending_intents"]),
             "unresolved_orders": sum(
                 1
                 for row in lanes
@@ -427,6 +504,16 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                 in {"timeout_unknown", "unresolved", "pending_unknown"}
             ),
         },
+        "portfolio": portfolio,
+        "sizing_profiles": [
+            {
+                "lane_id": row["lane_id"],
+                "symbol": row["symbol"],
+                **dict(_mapping(row.get("sizing_profile"))),
+            }
+            for row in projected_lanes
+            if row.get("sizing_profile")
+        ],
         "breaker": {
             "loss_streak": int(snapshot.get("consecutive_losses") or 0),
             "active": int(snapshot.get("consecutive_losses") or 0) >= 3,

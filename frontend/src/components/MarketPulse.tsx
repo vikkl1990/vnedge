@@ -18,7 +18,7 @@ import {
 } from "lightweight-charts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PulseHour } from "../api";
-import { useHourAnalysis, usePulse, useRiskSnapshot } from "../queries";
+import { useHourAnalysis, useLanes, usePulse, useRiskSnapshot } from "../queries";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
@@ -585,10 +585,13 @@ export function MarketPulse() {
   const ethPulse = usePulse("ETHUSDT");
   const solPulse = usePulse("SOLUSDT");
   const risk = useRiskSnapshot();
+  const lanes = useLanes();
   const pulse = symbol === "ETHUSDT" ? ethPulse : symbol === "SOLUSDT" ? solPulse : btcPulse;
   const marketQueries = [btcPulse, ethPulse, solPulse];
   const hours = pulse.data?.hours ?? [];
   const latest = hours[hours.length - 1];
+  const scannerLanes = (lanes.data?.lanes ?? []).filter((lane) => lane.observation_class === "shadow_observe");
+  const selectedScanner = scannerLanes.filter((lane) => lane.symbol.replace(/[^A-Z]/gi, "").startsWith(symbol.replace("USDT", "")));
 
   useEffect(() => {
     if (!selected || !hours.some((hour) => hour.open_time === selected)) {
@@ -677,6 +680,22 @@ export function MarketPulse() {
       {pulse.isError && (
         <div className="rounded-xl border border-short/40 bg-short/5 p-4 text-sm text-short">Pulse API unavailable. Canonical 1h data may still be warming.</div>
       )}
+
+      <section className="rounded-xl border border-line bg-panel/80 p-4" aria-label="Scanner observer status">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">Scanner observer</div><div className="mt-1 text-[11px] text-dim">5m fee-wall momentum · virtual intents only · never order authority</div></div>
+          <div className="flex gap-2"><TerminalBadge tone={scannerLanes.length ? "info" : "neutral"}>{scannerLanes.length} active</TerminalBadge><TerminalBadge tone="neutral">{lanes.data?.portfolio.shadow_pending_intents ?? 0} pending</TerminalBadge><TerminalBadge tone="info">{lanes.data ? `$${lanes.data.portfolio.shadow_purse_usd.toFixed(0)} purse` : "purse —"}</TerminalBadge></div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          {(selectedScanner.length ? selectedScanner : scannerLanes).map((lane) => (
+            <div key={lane.lane_id} className="rounded-lg border border-line bg-inset px-3 py-3">
+              <div className="flex items-center justify-between gap-3"><span className="font-mono text-[11px] text-txt">{lane.symbol} · {lane.timeframe}</span><TerminalBadge tone={lane.health === "ok" ? "good" : lane.health === "blocked" ? "bad" : "warn"}>{lane.health}</TerminalBadge></div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px]"><span className="text-faint">last signal</span><span className="text-right">{lane.last_signal_age_seconds == null ? "not observed" : `${Math.round(lane.last_signal_age_seconds / 60)}m ago`}</span><span className="text-faint">virtual outcome</span><span className="text-right">{lane.shadow_perf?.virtual_net_usd == null ? "—" : `$${lane.shadow_perf.virtual_net_usd.toFixed(2)}`} · {lane.shadow_perf?.wins ?? 0}W/{lane.shadow_perf?.losses ?? 0}L</span><span className="text-faint">sizing</span><span className="text-right">${lane.sizing_profile?.fixed_margin_usd ?? "—"} margin · ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span><span className="text-faint">why waiting</span><span className="text-right break-words">{lane.last_reject_reason ?? lane.last_signal_reason}</span></div>
+            </div>
+          ))}
+          {!scannerLanes.length && <div className="text-[11px] text-dim">No shadow scanner lane is reported. Market measurement remains available, but scanner coverage is absent.</div>}
+        </div>
+      </section>
 
       <section className="grid gap-3 md:grid-cols-3" aria-label="All-symbol market strip">
         {SYMBOLS.map((item, index) => {

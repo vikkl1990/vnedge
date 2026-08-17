@@ -28,6 +28,7 @@ export function Header() {
   const risk = useRiskSnapshot();
   const meta = useMeta();
   const costs = useCostModel();
+  const lanes = useLanes();
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 1_000);
@@ -41,8 +42,11 @@ export function Header() {
   const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
   const feeWall = costs.data?.taker_round_trip_cost_bps;
   const sha = meta.data?.build_sha ?? posture?.build_sha;
+  const shadowPurse = lanes.data?.portfolio.shadow_purse_usd;
+  const margin = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.fixed_margin_usd;
+  const leverage = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.max_leverage;
   return (
-    <header className="sticky top-0 z-30 -mx-2 rounded-xl border border-line bg-bg/95 px-4 py-3 shadow-xl shadow-black/20 backdrop-blur">
+    <header className="relative z-10 -mx-2 rounded-xl border border-line bg-bg/95 px-4 py-3 shadow-xl shadow-black/20 backdrop-blur">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">VN</div>
@@ -60,6 +64,7 @@ export function Header() {
           <TerminalBadge tone={riskUnknown || posture?.capital.enabled ? "bad" : "neutral"}>capital {riskUnknown ? "UNKNOWN" : posture.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
           <TerminalBadge tone={riskUnknown || posture?.kill.active ? "bad" : "neutral"}>kill {riskUnknown ? "UNKNOWN" : posture.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
           <TerminalBadge tone={feedTone}>{`● feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
+          <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
           <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
           <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
           <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
@@ -146,18 +151,33 @@ export function DeskPanel() {
     { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
     { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
     { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
-    { key: "close-lag", header: "Close p95", align: "right", render: (r) => r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms` },
-    { key: "lag", header: "Decision p95", align: "right", render: (r) => r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms` },
+    { key: "close-lag", header: "Close p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} samples`}>{r.latency_samples.bar_close < r.latency_samples.required ? `warming ${r.latency_samples.bar_close}/${r.latency_samples.required}` : r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms`}</span> },
+    { key: "lag", header: "Decision p95", align: "right", render: (r) => <span title={`${r.latency_samples.decision}/${r.latency_samples.required} samples`}>{r.latency_samples.decision < r.latency_samples.required ? `warming ${r.latency_samples.decision}/${r.latency_samples.required}` : r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms`}</span> },
     { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString("en-US") },
     { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.last_reject_reason ?? r.last_signal_reason}</span></span> },
     { key: "virtual", header: "Virtual outcome", render: (r) => r.observation_class !== "shadow_observe" ? "—" : <span className="block min-w-[130px] font-mono">{usd(r.shadow_perf?.virtual_net_usd)}<span className="block text-[10px] text-dim">{r.shadow_perf?.wins ?? 0}W / {r.shadow_perf?.losses ?? 0}L · {r.shadow_perf?.pending_shadow_intents ?? 0} pending</span></span> },
     { key: "cost", header: "Cost profile", render: (r) => <span className="whitespace-nowrap font-mono">{r.cost_profile} · {r.round_trip_bps == null ? "RT —" : `${r.round_trip_bps.toFixed(1)} bps RT`}</span> },
-    { key: "health", header: "Health", render: (r) => <TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "bad" : "neutral"}>{r.health}</TerminalBadge> },
+    { key: "health", header: "Health", render: (r) => <TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "warn" : r.health === "blocked" ? "bad" : "neutral"}>{r.health}</TerminalBadge> },
   ];
   return (
     <TerminalPanel title="Desk · runtime lanes" meta={`${lanes.length} active · policy truth · read only`}>
       {data?.banner && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[12px] text-warn">{data.banner}</div>}
-      {lanes.length ? <DenseTable columns={cols} rows={lanes} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
+      {lanes.length ? <DenseTable columns={cols} rows={lanes} rowKey={(lane) => lane.lane_id} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {lanes.map((lane) => (
+          <details key={`${lane.lane_id}-detail`} className="rounded-lg border border-line bg-inset px-3 py-3">
+            <summary className="cursor-pointer list-none text-[11px] font-mono"><span className="text-txt">{lane.symbol} · {lane.timeframe}</span><span className="float-right text-dim">inspect lane ▾</span></summary>
+            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
+              <span className="text-faint">virtual purse</span><span className="text-right font-mono">{usd(lane.sizing_profile?.starting_equity_usd ?? lane.equity_usd)}</span>
+              <span className="text-faint">margin / leverage</span><span className="text-right font-mono">{usd(lane.sizing_profile?.fixed_margin_usd)} / ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>
+              <span className="text-faint">bars / evaluations</span><span className="text-right font-mono">{lane.funnel.bars ?? 0} / {lane.funnel.evals ?? 0}</span>
+              <span className="text-faint">signals / approved</span><span className="text-right font-mono">{lane.funnel.signals ?? 0} / {lane.funnel.shadow_approved ?? 0}</span>
+              <span className="text-faint">positions / pending</span><span className="text-right font-mono">{lane.open_positions} / {lane.shadow_perf?.pending_shadow_intents ?? 0}</span>
+              <span className="text-faint">last evaluation</span><span className="text-right font-mono break-all">{String(lane.last_eval?.reason ?? lane.last_signal_reason)}</span>
+            </div>
+          </details>
+        ))}
+      </div>
       <div className="mt-4 rounded-lg border border-line bg-inset px-3 py-3">
         <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Why no fire</div>
         <div className="mt-2 grid gap-1 text-[11px] text-dim md:grid-cols-2">
@@ -196,6 +216,7 @@ export function HealthPanel() {
   ];
   return (
     <TerminalPanel title="Lane health" meta={lh?.summary ?? "—"}>
+      {lh?.totals && <div className="mb-4 flex flex-wrap gap-2">{Object.entries(lh.totals).map(([label, count]) => <TerminalBadge key={label} tone={label === "OK" ? "good" : count > 0 ? (HEALTH_TONE[label] ?? "warn") as never : "neutral"}>{label} {count}</TerminalBadge>)}</div>}
       {!lh ? (
         <div className="text-faint text-[12px] p-2">No lane-health audit.</div>
       ) : problems.length === 0 ? (
@@ -220,16 +241,20 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: stri
 }
 
 export function BookPanel() {
-  const { data, isLoading, isError } = useSnapshot();
+  const { data: snapshot, isLoading, isError } = useSnapshot();
+  const lanes = useLanes();
+  const scope = lanes.data?.portfolio;
+  const shadowNet = (lanes.data?.lanes ?? []).reduce((sum, lane) => sum + (lane.shadow_perf?.virtual_net_usd ?? 0), 0);
   return (
-    <TerminalPanel title="Book" meta={isLoading ? "loading…" : isError ? "error" : "live · 5s"}>
+    <TerminalPanel title="Book · scoped capital" meta={isLoading ? "loading…" : isError ? "error" : "virtual vs nominal kept separate · 5s"}>
       {isError && <div className="mb-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Account snapshot unavailable. Equity and PnL are unknown.</div>}
       <div className="flex items-end gap-10 flex-wrap">
-        <Kpi label="Equity" value={usd(data?.equity)} />
-        <Kpi label="Realized" value={usd(data?.realized_pnl)} tone={signed(data?.realized_pnl)} />
-        <Kpi label="Unrealized" value={usd(data?.unrealized_pnl)} tone={signed(data?.unrealized_pnl)} />
-        <Kpi label="Peak" value={usd(data?.peak_equity)} />
+        <Kpi label="Shadow purse" value={usd(scope?.shadow_purse_usd)} />
+        <Kpi label="Shadow net" value={usd(shadowNet)} tone={signed(shadowNet)} />
+        <Kpi label="Paper purse" value={usd(scope?.paper_purse_usd)} />
+        <Kpi label="Measurement nominal" value={usd(scope?.measurement_nominal_usd)} />
       </div>
+      <div className="mt-4 text-[10px] text-faint">Primary-lane snapshot equity {usd(snapshot?.equity)} is diagnostic only and is no longer presented as the scanner purse.</div>
     </TerminalPanel>
   );
 }
@@ -276,12 +301,19 @@ export function RiskPanel() {
         <TerminalBadge tone="bad">Delta private: {data?.live.delta_private_status ?? "unknown"}</TerminalBadge>
       </div>
       <div className="grid grid-cols-2 gap-3 my-5 md:grid-cols-3 xl:grid-cols-6">
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Daily loss used" value={usd(data?.daily_halt.used_usd)} /></div>
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Daily limit" value={usd(data?.daily_halt.limit_usd)} /></div>
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="% peak equity" value={data?.daily_halt.used_pct_of_peak_equity == null ? "—" : `${data.daily_halt.used_pct_of_peak_equity.toFixed(2)}%`} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow purse" value={usd(data.portfolio.shadow_purse_usd)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Pending intents" value={String(data.positions.shadow_pending_intents)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Daily loss used" value={usd(data.daily_halt.used_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open shadow" value={String(data?.positions.shadow_open ?? 0)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Loss streak" value={`${data?.breaker.loss_streak ?? 0}/${data?.breaker.threshold ?? 3}`} tone={data?.breaker.active ? "text-short" : ""} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Unresolved" value={String(data?.positions.unresolved_orders ?? 0)} tone={(data?.positions.unresolved_orders ?? 0) > 0 ? "text-short" : ""} /></div>
+      </div>
+      <div className="mb-4 rounded-lg border border-line bg-inset p-3">
+        <div className="mb-3 font-mono text-[10px] uppercase text-faint">Sizing and exposure contracts</div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {data.sizing_profiles.map((profile) => <div key={profile.lane_id} className="rounded-md border border-line px-3 py-2 text-[10px]"><div className="font-mono text-txt">{profile.symbol}</div><div className="mt-1 text-dim">{usd(profile.starting_equity_usd)} purse · {usd(profile.fixed_margin_usd)} margin · ≤{profile.max_leverage ?? "—"}x · notional cap {usd(profile.max_total_exposure_usd)}</div></div>)}
+          {!data.sizing_profiles.length && <div className="text-[11px] text-dim">Sizing telemetry not reported.</div>}
+        </div>
       </div>
       <div className="grid gap-3 xl:grid-cols-3">
         <div className="rounded-lg border border-line bg-inset p-3">
@@ -473,6 +505,14 @@ export function PromotePanel() {
   const evidence = scorecard.data?.strategies ?? [];
   const sampleQualified = evidence.filter((row) => row.sample_qualified).length;
   const undersampled = evidence.filter((row) => !row.sample_qualified).length;
+  const evidenceCols: Column<(typeof evidence)[number]>[] = [
+    { key: "strategy", header: "Candidate", render: (row) => <span className="font-mono">{row.strategy}</span> },
+    { key: "n", header: "n", align: "right", render: (row) => `${row.samples}/${row.min_samples}` },
+    { key: "oos", header: "OOS net", align: "right", render: (row) => row.oos_net_bps == null ? "—" : `${row.oos_net_bps.toFixed(2)} bps` },
+    { key: "dsr", header: "DSR", align: "right", render: (row) => row.deflated_sharpe == null ? "—" : row.deflated_sharpe.toFixed(3) },
+    { key: "blocker", header: "Promotion blocker", render: (row) => <span className="text-dim">{!row.sample_qualified ? "minimum sample evidence absent" : !row.deflated_sharpe_pass ? "deflated Sharpe gate failed" : (row.oos_net_bps ?? 0) <= 0 ? "after-cost OOS net ≤ 0" : "human review + live checklist still required"}</span> },
+    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.sample_qualified && row.deflated_sharpe_pass && (row.oos_net_bps ?? 0) > 0 ? "warn" : "bad"}>{row.sample_qualified && row.deflated_sharpe_pass && (row.oos_net_bps ?? 0) > 0 ? "review only" : "blocked"}</TerminalBadge> },
+  ];
   return (
     <div className="space-y-4">
       <TerminalPanel title="Promote" meta="human ladder · no mutation controls">
@@ -501,6 +541,10 @@ export function PromotePanel() {
               {!runtime.length && <div className="text-[11px] text-dim">Runtime roster unavailable.</div>}
             </div>
           </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-line bg-inset p-4">
+          <div className="mb-3 font-mono text-[10px] uppercase text-faint">Evidence-to-promotion blockers</div>
+          <DenseTable columns={evidenceCols} rows={evidence.slice(0, 20)} rowKey={(row) => row.strategy} empty="No scorecard evidence is available." />
         </div>
       </TerminalPanel>
     </div>
@@ -543,11 +587,13 @@ export function SystemPanel() {
   return (
     <div className="space-y-4">
       <TerminalPanel title="System" meta="freshness · feed · build · bad list">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Build" value={meta.data?.build_sha?.slice(0, 8) ?? "—"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Host" value={meta.data?.host ?? "—"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Uptime" value={ageSec(meta.data?.uptime_seconds)} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Non-OK artifacts" value={String(staleCount)} tone={staleCount ? "text-short" : ""} /></div>
+          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Disk used" value={meta.data?.disk ? `${meta.data.disk.used_pct.toFixed(1)}%` : "—"} tone={(meta.data?.disk?.used_pct ?? 0) > 85 ? "text-short" : ""} /></div>
+          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Load 1m / CPU" value={meta.data?.load_average?.["1m"] == null ? "—" : `${meta.data.load_average["1m"].toFixed(2)} / ${meta.data.cpu_count ?? "—"}`} /></div>
         </div>
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           <div className="rounded-lg border border-line bg-inset p-4">
@@ -560,6 +606,8 @@ export function SystemPanel() {
               <div className="flex justify-between gap-3"><span className="text-dim">public feed</span><TerminalBadge tone={risk.data?.feed.status === "healthy" ? "good" : "bad"}>{risk.data?.feed.label ?? "unknown"}</TerminalBadge></div>
               {(risk.data?.streams ?? []).map((stream) => <div key={stream.exchange} className="flex justify-between gap-3"><span className="font-mono">{stream.exchange}</span><span className="text-dim">public {stream.public_feed} · private {stream.private_stream}</span></div>)}
               <div className="flex justify-between gap-3 border-t border-line pt-2"><span className="text-dim">Delta private</span><TerminalBadge tone={risk.data?.live.delta_private_status === "connected" ? "good" : "bad"}>{risk.data?.live.delta_private_status ?? "unknown"}</TerminalBadge></div>
+              <div className="flex justify-between gap-3"><span className="text-dim">browser transport</span><TerminalBadge tone={meta.data?.transport?.secure ? "good" : "bad"}>{meta.data?.transport?.secure ? "HTTPS" : "NOT SECURE"}</TerminalBadge></div>
+              <div className="flex justify-between gap-3"><span className="text-dim">runtime</span><span className="font-mono text-dim">pid {meta.data?.process_id ?? "—"} · py {meta.data?.python ?? "—"}</span></div>
             </div>
           </div>
         </div>
@@ -577,17 +625,25 @@ export function PositionsPanel() {
     { key: "sym", header: "Symbol", render: (r) => <span className="font-mono">{r.symbol ?? "—"}</span> },
     { key: "side", header: "Side", render: (r) => r.side ?? "—" },
     { key: "qty", header: "Qty", align: "right", render: (r) => (typeof r.quantity === "number" ? r.quantity : "—") },
+    { key: "entry", header: "Entry", align: "right", render: (r) => priceText(r.entry_price) },
+    { key: "mark", header: "Mark", align: "right", render: (r) => priceText(r.mark_price) },
+    { key: "notional", header: "Notional", align: "right", render: (r) => usd(r.notional_usd) },
+    { key: "margin", header: "Margin / Lev", align: "right", render: (r) => <span>{usd(r.margin_usd)} · {typeof r.effective_leverage === "number" ? `${r.effective_leverage.toFixed(1)}x` : "—"}</span> },
+    { key: "risk", header: "SL / TP / Liq", render: (r) => <span className="whitespace-nowrap font-mono text-[10px]">{priceText(r.stop_price)} / {priceText(r.take_profit_price)} / {priceText(r.liquidation_price)}</span> },
     {
       key: "upnl",
       header: "uPnL",
       align: "right",
       render: (r) => <span className={signed(r.unrealized_pnl_usd)}>{usd(r.unrealized_pnl_usd)}</span>,
     },
+    { key: "excursion", header: "MFE / MAE", align: "right", render: (r) => `${usd(r.mfe_usd)} / ${usd(r.mae_usd)}` },
+    { key: "age", header: "Age", align: "right", render: (r) => ageSec(r.age_seconds) },
   ];
   return (
     <TerminalPanel title="Positions" meta={isLoading ? "loading…" : isError ? "unknown" : `${rows.length} open`}>
       {isError && <div className="mb-3 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Position snapshot unavailable. Flat state is not being asserted.</div>}
-      <DenseTable columns={cols} rows={rows} empty={isLoading ? "loading positions…" : isError ? "positions unknown" : "flat — no open positions"} />
+      <DenseTable columns={cols} rows={rows} rowKey={(row, index) => `${row.symbol ?? "position"}-${index}`} empty={isLoading ? "loading positions…" : isError ? "positions unknown" : "flat — no open positions"} />
+      {!rows.length && !isLoading && !isError && <div className="mt-3 text-[10px] text-faint">Shadow intents and virtual outcomes are shown in Desk; this table is reserved for venue/paper positions.</div>}
     </TerminalPanel>
   );
 }
@@ -646,9 +702,11 @@ export function FeedPanel() {
 
 export function JournalPanel() {
   const { data, isLoading } = useJournal(50);
+  const [view, setView] = useState<"all" | "decisions" | "trades">("all");
   const rows = data?.closed_trades ?? [];
   const summary = data?.summary;
   const decisionEvents = (data?.events ?? []).filter((row) => /reject|block|refus|risk|skip/i.test(`${row.event ?? ""} ${row.detail ?? ""}`));
+  const visibleEvents = view === "decisions" ? decisionEvents : (data?.events ?? []);
   const decisionTimes = (data?.events ?? []).map((row) => row.ts).filter((value): value is string => Boolean(value)).sort();
   const lastDecisionTs = decisionTimes[decisionTimes.length - 1];
   const cols: Column<JournalRow>[] = [
@@ -673,11 +731,15 @@ export function JournalPanel() {
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow net" value={usd(summary?.virtual_net_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={String(summary?.open_orders ?? 0)} /></div>
       </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
+        {(["all", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
+        <span className="ml-auto text-[10px] font-mono text-faint">append-only · generated {data?.generated_at ? ageSec((Date.now() - Date.parse(data.generated_at)) / 1000) : "—"} ago</span>
+      </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
         <div className="rounded-lg border border-line bg-inset p-3">
-          <div className="mb-2 font-mono text-[10px] uppercase text-faint">Decision rejects / arm blocks</div>
-          {decisionEvents.slice(0, 8).map((event, index) => <div key={`${event.ts}-${index}`} className="border-t border-line/60 py-2 first:border-0 text-[11px]"><span className="font-mono text-txt">{event.event ?? "decision"}</span><span className="ml-2 text-dim">{event.detail ?? "no detail"}</span></div>)}
-          {!decisionEvents.length && <div className="text-[11px] text-dim">No decision reject or arm-block records in the current journal window.</div>}
+          <div className="mb-2 font-mono text-[10px] uppercase text-faint">{view === "decisions" ? "Decision rejects / arm blocks" : "Recent event stream"}</div>
+          {visibleEvents.slice(0, 12).map((event, index) => <div key={`${event.ts}-${index}`} className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 border-t border-line/60 py-2 first:border-0 text-[11px]"><span className="font-mono text-faint">{event.ts ? new Date(event.ts).toLocaleTimeString("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</span><span><span className="font-mono text-txt">{event.event ?? "decision"}</span><span className="ml-2 text-dim break-words">{event.detail ?? "no detail"}</span></span></div>)}
+          {!visibleEvents.length && <div className="text-[11px] text-dim">No matching event records in the current journal window.</div>}
         </div>
         <div className="rounded-lg border border-line bg-inset p-3">
           <div className="font-mono text-[10px] uppercase text-faint">Decision log freshness</div>
@@ -686,7 +748,7 @@ export function JournalPanel() {
           <div className="mt-2 text-[10px] text-faint">An empty journal is explicit; it is not evidence of a healthy decision path.</div>
         </div>
       </div>
-      <div className="mt-4"><DenseTable columns={cols} rows={rows} empty="no closed trades yet · waiting for append-only evidence" /></div>
+      {(view === "all" || view === "trades") && <div className="mt-4"><DenseTable columns={cols} rows={rows} empty="no closed trades yet · waiting for append-only evidence" /></div>}
     </TerminalPanel>
   );
 }

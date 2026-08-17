@@ -7,7 +7,7 @@ def _lane(**kw):
     d = {
         "timeframe": "1h",
         "time_machine": {"health": {"1h": "ok"}, "age_ms": {"1h": 400}},
-        "latency": {"decision_lag_ms": {"p95": 25}},
+        "latency": {"decision_lag_ms": {"p95": 25, "n": 20}},
         "decision_skips": {},
     }
     d.update(kw)
@@ -80,8 +80,8 @@ def test_lane_bands_verdict_tone():
 def test_bar_close_latency_has_its_own_band_and_degrades_decision_chip():
     lane = _lane(
         latency={
-            "bar_close_processing_ms": {"p95": 750},
-            "decision_lag_ms": {"p95": 25},
+            "bar_close_processing_ms": {"p95": 750, "n": 20},
+            "decision_lag_ms": {"p95": 25, "n": 20},
         }
     )
     assert lane_bands(lane)["bar_close_lag"] == "degraded"
@@ -92,8 +92,8 @@ def test_bar_close_latency_has_its_own_band_and_degrades_decision_chip():
 def test_hard_bar_close_latency_blocks_decision_chip():
     lane = _lane(
         latency={
-            "bar_close_processing_ms": {"p95": 2_500},
-            "decision_lag_ms": {"p95": 25},
+            "bar_close_processing_ms": {"p95": 2_500, "n": 20},
+            "decision_lag_ms": {"p95": 25, "n": 20},
         }
     )
     chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
@@ -104,3 +104,13 @@ def test_annotate_attaches_chips_and_per_lane_bands():
     snap = {"lanes": [_lane(drawdown_pct=7.35, dd_limit_pct=6.0)], "feed_health": {"candles": "ok"}}
     annotate(snap)
     assert "chips" in snap and snap["lanes"][0]["bands"]["dd"] == "blocked"
+
+
+def test_latency_is_warming_until_runtime_minimum_samples() -> None:
+    lane = _lane(latency={
+        "bar_close_processing_ms": {"p95": 2_500, "n": 2},
+        "decision_lag_ms": {"p95": 25, "n": 2},
+    })
+    assert lane_bands(lane)["bar_close_lag"] == "unknown"
+    chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
+    assert chips["DECISION"] == {"band": "unknown", "label": "warming 2/20"}

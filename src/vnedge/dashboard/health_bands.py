@@ -71,17 +71,50 @@ def _verdict_tone(v) -> str:
     return {"PASS": "ok", "FAIL": "blocked", "PENDING": "degraded"}.get(v, "unknown")
 
 
+def _mature_p95(latency: object, name: str, alias: str | None = None) -> float | None:
+    """Return p95 only after the runtime's own minimum sample count is met.
+
+    A p95 built from one or two bars is not operational evidence.  The arm
+    gate already waits for ``LATENCY_GATE_MIN_SAMPLES``; the dashboard must use
+    the same maturity rule or it can show a scary lag state the runtime itself
+    correctly treats as warm-up.
+    """
+    if not isinstance(latency, Mapping):
+        return None
+    raw = latency.get(name)
+    if not isinstance(raw, Mapping) and alias:
+        raw = latency.get(alias)
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        samples = int(raw.get("n") or 0)
+        value = float(raw.get("p95"))
+    except (TypeError, ValueError):
+        return None
+    return value if samples >= LT.LATENCY_GATE_MIN_SAMPLES else None
+
+
+def _latency_samples(latency: object) -> list[int]:
+    if not isinstance(latency, Mapping):
+        return []
+    samples: list[int] = []
+    for name in ("bar_close_processing_ms", "feed_lag_ms", "decision_lag_ms"):
+        metric = latency.get(name)
+        if isinstance(metric, Mapping):
+            try:
+                samples.append(int(metric.get("n") or 0))
+            except (TypeError, ValueError):
+                pass
+    return samples
+
+
 def lane_bands(lane: dict) -> dict:
     tf = str(lane.get("timeframe") or "")
     tm = lane.get("time_machine") or {}
     age = (tm.get("age_ms") or {}).get(tf)
     lat = lane.get("latency") or {}
-    p95 = (lat.get("decision_lag_ms") or {}).get("p95") if isinstance(lat, dict) else None
-    bar_p95 = None
-    if isinstance(lat, dict):
-        bar_p95 = (
-            lat.get("bar_close_processing_ms") or lat.get("feed_lag_ms") or {}
-        ).get("p95")
+    p95 = _mature_p95(lat, "decision_lag_ms")
+    bar_p95 = _mature_p95(lat, "bar_close_processing_ms", "feed_lag_ms")
     dlag = LT.classify_p99(
         p95, LT.DECISION_COMPUTE_SOFT_P99_MS, LT.DECISION_COMPUTE_HARD_P99_MS
     )
@@ -179,22 +212,18 @@ def compute_chips(snap: dict) -> dict:
     decision, d_label = "unknown", "no telemetry"
     # CURRENT block, not cumulative.
     skips = any(lane.get("arm_blocked") for lane in lanes)
-    lat_vals = [
-        (lane.get("latency") or {}).get("decision_lag_ms", {}).get("p95")
-        for lane in lanes
-        if isinstance(lane.get("latency"), dict)
-    ]
-    lat_vals = [v for v in lat_vals if isinstance(v, (int, float))]
-    bar_vals = []
+    lat_vals: list[float] = []
+    bar_vals: list[float] = []
+    sample_counts: list[int] = []
     for lane in lanes:
         lat = lane.get("latency")
-        if not isinstance(lat, dict):
-            continue
-        value = (
-            lat.get("bar_close_processing_ms") or lat.get("feed_lag_ms") or {}
-        ).get("p95")
-        if isinstance(value, (int, float)):
-            bar_vals.append(value)
+        decision_value = _mature_p95(lat, "decision_lag_ms")
+        bar_value = _mature_p95(lat, "bar_close_processing_ms", "feed_lag_ms")
+        if decision_value is not None:
+            lat_vals.append(decision_value)
+        if bar_value is not None:
+            bar_vals.append(bar_value)
+        sample_counts.extend(_latency_samples(lat))
     if skips:
         decision, d_label = "blocked", "new arms blocked"
     elif any(v > LT.CLOSED_BAR_LAG_HARD_P99_MS for v in bar_vals):
@@ -210,6 +239,9 @@ def compute_chips(snap: dict) -> dict:
             decision, d_label = "degraded", "compute lag"
         else:
             decision, d_label = "ok", "ok"
+    elif sample_counts:
+        decision = "unknown"
+        d_label = f"warming {max(sample_counts)}/{LT.LATENCY_GATE_MIN_SAMPLES}"
 
     feed, f_label = "unknown", "—"
     cand = str((snap.get("feed_health") or {}).get("candles") or "").lower()

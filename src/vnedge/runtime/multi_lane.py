@@ -294,6 +294,12 @@ class MultiLaneProvider:
                 # virtual performance of a shadow lane's approved intents
                 # (resolved with backtester semantics; observability only)
                 "shadow_perf": self._lanes[lid].get("session", {}).get("shadow_perf"),
+                "sizing_profile": self._lanes[lid].get("session", {}).get(
+                    "sizing_profile"
+                ),
+                "active_plan": self._lanes[lid].get("session", {}).get(
+                    "active_plan"
+                ),
                 "last_reject_reason": self._lanes[lid].get("session", {}).get(
                     "last_reject_reason"
                 ),

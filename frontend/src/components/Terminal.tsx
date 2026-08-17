@@ -15,7 +15,7 @@ export function TerminalPanel({
 }) {
   return (
     <section className="rounded-xl border border-line bg-panel/70 overflow-hidden">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-line">
+      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-line flex-wrap">
         <h2 className="text-[13px] font-semibold tracking-wide text-txt">{title}</h2>
         {meta ? <span className="text-[11px] font-mono text-dim">{meta}</span> : null}
       </header>
@@ -54,10 +54,12 @@ export function DenseTable<T>({
   columns,
   rows,
   empty = "no rows",
+  rowKey,
 }: {
   columns: Column<T>[];
   rows: T[];
   empty?: string;
+  rowKey?: (row: T, index: number) => string;
 }) {
   if (!rows.length) return <div className="text-[12px] font-mono text-dim py-2">{empty}</div>;
   return (
@@ -82,7 +84,7 @@ export function DenseTable<T>({
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-t border-line/60">
+            <tr key={rowKey?.(row, i) ?? i} className="border-t border-line/60 hover:bg-white/[0.02]">
               {columns.map((c) => (
                 <td
                   key={c.key}

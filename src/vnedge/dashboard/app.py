@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import time
 from collections import Counter
@@ -2135,11 +2136,30 @@ def create_app(
         """Build provenance: deployed git sha (baked at image build), host, and
         dashboard-process uptime. Read-only."""
         _authorized(request)
+        disk = shutil.disk_usage(Path.cwd())
+        load = os.getloadavg() if hasattr(os, "getloadavg") else (None, None, None)
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        secure = request.url.scheme == "https" or forwarded_proto == "https"
         return JSONResponse(
             {
                 "build_sha": _build_sha(),
                 "host": os.environ.get("VNEDGE_HOST") or socket.gethostname(),
                 "uptime_seconds": int(max(0.0, time.time() - _APP_START)),
+                "process_id": os.getpid(),
+                "python": os.sys.version.split()[0],
+                "cpu_count": os.cpu_count(),
+                "load_average": {"1m": load[0], "5m": load[1], "15m": load[2]},
+                "disk": {
+                    "total_bytes": disk.total,
+                    "used_bytes": disk.used,
+                    "free_bytes": disk.free,
+                    "used_pct": round(100.0 * disk.used / disk.total, 2),
+                },
+                "transport": {
+                    "scheme": request.url.scheme,
+                    "secure": secure,
+                    "forwarded_proto": forwarded_proto,
+                },
             }
         )
 

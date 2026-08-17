@@ -48,8 +48,8 @@ def snapshot() -> dict:
                     "age_ms": {"1h": 4_200.0},
                 },
                 "latency": {
-                    "bar_close_processing_ms": {"p95": 120.0},
-                    "decision_lag_ms": {"p95": 4.5},
+                    "bar_close_processing_ms": {"p95": 120.0, "n": 20},
+                    "decision_lag_ms": {"p95": 4.5, "n": 20},
                 },
                 "decision_skips": {"forming_1h": 2},
                 "cost_profile": "delta_swing",
@@ -91,6 +91,9 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["candle_age_ms"] == 4200.0
     assert measurement["bar_close_processing_ms"] == 120.0
     assert measurement["decision_lag_ms"] == 4.5
+    assert measurement["latency_samples"] == {
+        "bar_close": 20, "decision": 20, "required": 20
+    }
     assert measurement["arm_skips"] == 2
     assert measurement["last_signal_reason"] == "observe_only"
     assert measurement["cost_profile"] == "delta_swing"
@@ -169,7 +172,11 @@ def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:
         {"reason": "capital approval missing", "count": 1}
     ]
     assert payload["gateway"]["window"] == "current_snapshot"
-    assert payload["positions"] == {"shadow_open": 0, "unresolved_orders": 0}
+    assert payload["positions"] == {
+        "shadow_open": 0,
+        "shadow_pending_intents": 0,
+        "unresolved_orders": 0,
+    }
     assert payload["breaker"] == {
         "loss_streak": 0,
         "active": False,
