@@ -33,6 +33,7 @@ from ccxt.base.errors import NetworkError, NotSupported
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.dashboard.health_bands import annotate
 from vnedge.data.ccxt_client import CcxtPublicClient
+from vnedge.data.gaps import GapParquetStore
 from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
 from vnedge.exchange.live_feed import LiveMarketFeed, RestPollingMarketFeed
@@ -936,6 +937,9 @@ async def build_lane(
         fill_ledger=FillLedger(journal_dir / f"{spec.lane_id}.fills.jsonl"),
         funnel_store=LaneFunnelStore(
             journal_dir / f"{spec.lane_id}.funnel.json", spec.lane_id),
+        gap_store=GapParquetStore(
+            Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
+        ),
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,

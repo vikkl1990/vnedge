@@ -693,9 +693,6 @@ def create_app(
         csrf = secrets.token_urlsafe(32)
         response = JSONResponse(
             {
-                # Kept for non-browser/API compatibility. The React app never
-                # stores this value and immediately removes the root token URL.
-                "token": session.token,
                 "expires_at": session.expires_at.isoformat(),
                 "name": user.name,
                 "role": user.role,
@@ -1019,9 +1016,10 @@ def create_app(
         """Exchange the (long-lived) root token for a short-lived session JWT.
 
         Authenticates the presented token exactly like any data route, then mints
-        a JWT carrying the same identity/role. The browser uses the JWT after
-        this, so the root secret stops travelling on every request. Read-only:
-        this grants no new capability — the session's role equals the token's."""
+        a JWT carrying the same identity/role. The JWT is set only as an
+        HttpOnly cookie, so browser JavaScript and URLs never receive it. The
+        root secret stops travelling after this request. Read-only: this grants
+        no new capability — the session's role equals the token's."""
         return _issue_session_response(_authorized(request))
 
     @app.post("/auth/session/refresh")
@@ -2497,10 +2495,7 @@ def create_app(
     @app.websocket("/api/pulse/stream")
     async def market_pulse_stream(websocket: WebSocket) -> None:
         """Five-second coalesced pulse stream; never forwards individual ticks."""
-        candidate = (
-            websocket.cookies.get(_SESSION_COOKIE, "")
-            or websocket.query_params.get("token", "")
-        )
+        candidate = websocket.cookies.get(_SESSION_COOKIE, "")
         result = issuer.verify(candidate) or store.authenticate(candidate)
         if not result.authorized:
             await websocket.close(
@@ -2533,10 +2528,7 @@ def create_app(
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
-        candidate = (
-            websocket.cookies.get(_SESSION_COOKIE, "")
-            or websocket.query_params.get("token", "")
-        )
+        candidate = websocket.cookies.get(_SESSION_COOKIE, "")
         result = issuer.verify(candidate) or store.authenticate(candidate)
         if not result.authorized:
             await websocket.close(

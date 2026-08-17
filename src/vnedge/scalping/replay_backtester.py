@@ -41,6 +41,11 @@ import pandas as pd
 from vnedge.scalping.features import IncrementalFeatureEngine, ScalperFeatures
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
 from vnedge.scalping.parameter_registry import ExitPolicy
+from vnedge.scalping.queue_position import (
+    QueueModelConfig,
+    QueuePositionModel,
+    QueueSide,
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,9 @@ class ReplayTrade:
     gross_bps: float
     fees_bps: float
     adverse_bps: float        # worst adverse mid excursion while open (MAE), <= 0
+    filled_quantity: float
+    entry_notional_usd: float
+    fill_fraction: float
 
     @property
     def net_bps(self) -> float:
@@ -89,6 +97,8 @@ class ReplayResult:
     quotes_placed: int = 0
     missed_fills: int = 0
     open_quotes_at_end: int = 0
+    queue_fill_events: int = 0
+    partial_fill_events: int = 0
     notional_usd: float = 100.0
 
     @property
@@ -101,7 +111,10 @@ class ReplayResult:
 
     @property
     def net_usd(self) -> float:
-        return sum(t.net_bps / 10_000.0 * self.notional_usd for t in self.trades)
+        return sum(
+            trade.net_bps / 10_000.0 * trade.entry_notional_usd
+            for trade in self.trades
+        )
 
     @property
     def summary(self) -> str:
@@ -183,14 +196,15 @@ def load_tick_events(
 
 @dataclass
 class _Resting:
+    order_id: str
     side: str
     limit_price: float
     placed_ms: int
     ttl_ms: int
     stop_bps: float
     target_bps: float
-    queue_ahead: float = 0.0      # size resting at our price when we joined (queue model)
-    queue_consumed: float = 0.0   # same-side taker volume that has cleared ahead of us
+    planned_quantity: float
+    filled_quantity: float = 0.0
 
 
 @dataclass
@@ -201,19 +215,23 @@ class _Open:
     entry_mid: float
     stop_price: float
     target_price: float
+    quantity: float
+    planned_quantity: float
     worst_adverse_bps: float = 0.0
     best_favorable_bps: float = 0.0
 
 
 class TickReplayBacktester:
-    def __init__(self, fees: ReplayFees = ReplayFees(), notional_usd: float = 100.0,
+    def __init__(self, fees: ReplayFees | None = None, notional_usd: float = 100.0,
                  *, queue_aware: bool = False,
+                 queue_config: QueueModelConfig | None = None,
                  exit_policy: ExitPolicy | None = None) -> None:
-        self.fees = fees
+        self.fees = fees or ReplayFees()
         self.notional_usd = notional_usd
         # queue_aware=True uses the FIFO queue model (needs the touch depth the
         # L2 recorder banks); default False keeps the strict trade-through model.
         self.queue_aware = queue_aware
+        self.queue_config = queue_config or QueueModelConfig()
         self.exit_policy = exit_policy
 
     def run(self, events, scalper: QuotingScalper) -> ReplayResult:
@@ -222,13 +240,26 @@ class TickReplayBacktester:
         top: TopOfBook | None = None
         resting: _Resting | None = None
         position: _Open | None = None
+        queue = (
+            QueuePositionModel(self.queue_config)
+            if self.queue_aware
+            else None
+        )
+        quote_sequence = 0
 
         for ts_ms, kind, obj in events:
             if self._expired(resting, ts_ms):
-                result.missed_fills += 1
+                if resting is not None:
+                    if queue is not None:
+                        queue.cancel(resting.order_id)
+                    if resting.filled_quantity <= 1e-12:
+                        result.missed_fills += 1
                 resting = None
             if kind == "book":
                 top = obj
+                if queue is not None:
+                    queue.on_book_level(QueueSide.BID, top.bid, top.bid_size)
+                    queue.on_book_level(QueueSide.ASK, top.ask, top.ask_size)
                 feats = engine.on_book(top)
                 # adverse-selection tracking on the live position
                 if position is not None:
@@ -242,49 +273,67 @@ class TickReplayBacktester:
                     # exit checks on book move (taker out)
                     if self._check_exit(position, top, ts_ms, result):
                         position = None
+                        if resting is not None and queue is not None:
+                            queue.cancel(resting.order_id)
+                            resting = None
                 # place a new quote only when flat and nothing resting
                 if position is None and resting is None:
                     q = scalper.quote(feats, top)
                     if q is not None:
                         limit = top.bid if q.side == "buy" else top.ask
-                        queue_ahead = 0.0
-                        if self.queue_aware:
-                            queue_ahead = top.bid_size if q.side == "buy" else top.ask_size
-                        resting = _Resting(q.side, limit, ts_ms, q.ttl_ms,
-                                           q.stop_bps, q.target_bps, queue_ahead=queue_ahead)
+                        quote_sequence += 1
+                        quantity = self.notional_usd / limit
+                        resting = _Resting(
+                            order_id=f"replay-q-{quote_sequence}",
+                            side=q.side,
+                            limit_price=limit,
+                            placed_ms=ts_ms,
+                            ttl_ms=q.ttl_ms,
+                            stop_bps=q.stop_bps,
+                            target_bps=q.target_bps,
+                            planned_quantity=quantity,
+                        )
+                        if queue is not None:
+                            queue.insert(
+                                resting.order_id,
+                                QueueSide.BID if q.side == "buy" else QueueSide.ASK,
+                                limit,
+                                quantity,
+                                ts_ms,
+                            )
                         result.quotes_placed += 1
             else:  # trade
                 engine.on_trade(obj)
-                # Conservative maker fill: the taker must trade STRICTLY
-                # THROUGH our resting price (price < our bid / > our ask), so
-                # the whole level cleared and we definitely filled — touch
-                # (<=) would assume front-of-queue. And the fill trade must
-                # post-date our quote (ts_ms > placed_ms): a same-instant
-                # trade was already in flight before our order joined the
-                # queue. Both guards keep the engine honest about fills.
-                if (resting is not None and position is None
-                        and ts_ms > resting.placed_ms):
+                # A trade must post-date placement. The default model requires
+                # a strict trade-through; queue-aware replay instead consumes
+                # exact-price displayed size ahead and supports partial fills.
+                if resting is not None and ts_ms > resting.placed_ms:
                     if self.queue_aware:
-                        # FIFO queue model: same-side taker volume at OR through
-                        # our price first clears the size that was resting ahead
-                        # of us at placement; we fill only once that queue is
-                        # exhausted. More realistic than trade-through (and can
-                        # be harsher: if the queue never clears before the price
-                        # leaves or the TTL, we simply never fill).
-                        qualifies = (
-                            resting.side == "buy" and obj.taker_side == "sell"
-                            and obj.price <= resting.limit_price
-                        ) or (
-                            resting.side == "sell" and obj.taker_side == "buy"
-                            and obj.price >= resting.limit_price
+                        assert queue is not None
+                        fills = queue.on_trade(
+                            price=obj.price,
+                            size=obj.quantity,
+                            aggressor_buy=obj.taker_side == "buy",
+                            ts_ms=ts_ms,
                         )
-                        if qualifies:
-                            resting.queue_consumed += obj.quantity
-                            if (resting.queue_consumed >= resting.queue_ahead
-                                    and top is not None):
-                                position = self._open(resting, top, ts_ms)
+                        own_fills = [
+                            fill for fill in fills if fill.order_id == resting.order_id
+                        ]
+                        if own_fills and top is not None:
+                            quantity = sum(fill.quantity for fill in own_fills)
+                            resting.filled_quantity += quantity
+                            result.queue_fill_events += len(own_fills)
+                            result.partial_fill_events += sum(
+                                1 for fill in own_fills if not fill.complete
+                            )
+                            if position is None:
+                                position = self._open(resting, top, ts_ms, quantity)
+                            else:
+                                self._add_fill(position, top, quantity)
+                            if own_fills[-1].complete:
+                                queue.cancel(resting.order_id)
                                 resting = None
-                    else:
+                    elif position is None:
                         filled = (
                             resting.side == "buy" and obj.taker_side == "sell"
                             and obj.price < resting.limit_price
@@ -293,12 +342,20 @@ class TickReplayBacktester:
                             and obj.price > resting.limit_price
                         )
                         if filled and top is not None:
-                            position = self._open(resting, top, ts_ms)
+                            position = self._open(
+                                resting,
+                                top,
+                                ts_ms,
+                                resting.planned_quantity,
+                            )
                             resting = None
 
         if resting is not None:
+            if queue is not None:
+                queue.cancel(resting.order_id)
             if self._expired(resting, ts_ms):
-                result.missed_fills += 1
+                if resting.filled_quantity <= 1e-12:
+                    result.missed_fills += 1
             else:
                 result.open_quotes_at_end += 1
 
@@ -312,7 +369,13 @@ class TickReplayBacktester:
     def _expired(resting: _Resting | None, ts_ms: int) -> bool:
         return resting is not None and ts_ms - resting.placed_ms >= resting.ttl_ms
 
-    def _open(self, resting: _Resting, top: TopOfBook, ts_ms: int) -> _Open:
+    def _open(
+        self,
+        resting: _Resting,
+        top: TopOfBook,
+        ts_ms: int,
+        quantity: float,
+    ) -> _Open:
         entry = resting.limit_price
         if resting.side == "buy":
             stop = entry * (1 - resting.stop_bps / 10_000.0)
@@ -320,7 +383,25 @@ class TickReplayBacktester:
         else:
             stop = entry * (1 + resting.stop_bps / 10_000.0)
             target = entry * (1 - resting.target_bps / 10_000.0)
-        return _Open(resting.side, entry, ts_ms, top.mid_price, stop, target)
+        return _Open(
+            resting.side,
+            entry,
+            ts_ms,
+            top.mid_price,
+            stop,
+            target,
+            quantity,
+            resting.planned_quantity,
+        )
+
+    @staticmethod
+    def _add_fill(position: _Open, top: TopOfBook, quantity: float) -> None:
+        """Aggregate another same-price partial fill into the open exposure."""
+        combined = position.quantity + quantity
+        position.entry_mid = (
+            position.entry_mid * position.quantity + top.mid_price * quantity
+        ) / combined
+        position.quantity = combined
 
     def _check_exit(self, pos: _Open, top: TopOfBook, ts_ms: int,
                     result: ReplayResult) -> bool:
@@ -388,6 +469,9 @@ class TickReplayBacktester:
             exit_price=exit_px, exit_reason=reason,
             gross_bps=gross_bps, fees_bps=fees_bps,
             adverse_bps=pos.worst_adverse_bps,
+            filled_quantity=pos.quantity,
+            entry_notional_usd=pos.entry_price * pos.quantity,
+            fill_fraction=min(1.0, pos.quantity / pos.planned_quantity),
         ))
 
 

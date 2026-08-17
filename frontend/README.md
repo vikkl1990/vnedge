@@ -19,10 +19,11 @@ npm --prefix frontend run build      # -> frontend/dist
 ```
 `create_app` mounts `frontend/dist` at **`/app`** *only when the build exists*
 — so a production image without the build simply has no `/app` route (never a
-500), and `/` is unaffected. Open `/app/?token=<DASHBOARD_TOKEN>`.
+500), and `/` is unaffected. Open `/app/`; the sign-in gate exchanges the root
+token for a short-lived HttpOnly cookie without putting credentials in the URL
+or browser storage.
 
-## Production (follow-up, not in this change)
-`frontend/` is intentionally **not** in the Docker image inputs, so the running
-image is unchanged and `/app` is absent in prod until a Node build stage is
-added to the Dockerfile (must be built + verified on the VM, where Docker runs —
-the dev Mac has no Docker).
+## Production
+The Docker build includes the compiled React distribution. Build and verify the
+assets before deployment; production access requires HTTPS when the default
+`DASHBOARD_COOKIE_SECURE=true` is retained.

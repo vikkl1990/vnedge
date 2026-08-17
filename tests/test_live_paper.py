@@ -6,12 +6,13 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
+from vnedge.data.gaps import GapKind, GapParquetStore
 from vnedge.data.schemas import normalize_candles
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
-from vnedge.paper.paper_reconciliation import ReconciliationReport
 from vnedge.paper.paper_broker import PaperBroker
+from vnedge.paper.paper_reconciliation import ReconciliationReport
 from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
@@ -228,9 +229,60 @@ async def test_feed_gap_heals_when_backfill_succeeds(tmp_path):
     session._gap_fill = fake_fill
     await session._guard_candle_continuity(_bar(last + 3 * _HR_MS), datetime.now(UTC))
     assert session.gap_fills == 1
-    assert session._degraded_reason is None
+    assert session._degraded_reason == "feed_gap:recovery_warmup"
     # the two missing bars were spliced in, so the series is contiguous again
     assert int(session.candles["timestamp"].iloc[-1].value // 1_000_000) == last + 2 * _HR_MS
+    assert session._append_candle(_bar(last + 3 * _HR_MS))
+    await session._guard_candle_continuity(
+        _bar(last + 4 * _HR_MS), datetime.now(UTC)
+    )
+    assert session._degraded_reason is None
+
+
+async def test_partial_gap_backfill_stays_blocked_and_is_persisted(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.gap_store = GapParquetStore(tmp_path / "gaps")
+    session.candles = _hourly(5)
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+
+    async def partial_fill(since_ms, until_ms):
+        return [_bar(since_ms)]  # two bars are missing; only one came back
+
+    session._gap_fill = partial_fill
+    assert await session._guard_candle_continuity(
+        _bar(last + 3 * _HR_MS), datetime.now(UTC)
+    )
+    assert session._degraded_reason == "feed_gap:2_bars_unfilled"
+    assert session._market_state().data_quality == "gap"
+    records = session.gap_store.read("fake", SYM)
+    assert {record.kind for record in records} == {
+        GapKind.STORAGE_HOLE,
+        GapKind.BACKFILL_FAIL,
+    }
+
+
+async def test_future_and_out_of_order_candles_are_withheld(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.gap_store = GapParquetStore(tmp_path / "gaps")
+    session.candles = _hourly(5)
+    now = datetime.now(UTC)
+    future_open_ms = int((now + timedelta(minutes=1)).timestamp() * 1000)
+
+    assert not await session._guard_candle_continuity(_bar(future_open_ms), now)
+    assert session._degraded_reason == "future_candle:clock_skew"
+    assert GapKind.CLOCK_SKEW in {
+        record.kind for record in session.gap_store.read("fake", SYM)
+    }
+
+    session._clear_degraded("test reset")
+    last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
+    assert not await session._guard_candle_continuity(
+        _bar(last - _HR_MS), datetime.now(UTC)
+    )
+    assert session._degraded_reason == "out_of_order_candle"
+    assert GapKind.OUT_OF_ORDER in {
+        record.kind for record in session.gap_store.read("fake", SYM)
+    }
 
 
 def test_degraded_recoverable_semantics(tmp_path):
@@ -245,6 +297,15 @@ def test_degraded_recoverable_semantics(tmp_path):
     assert session._degraded_reason == "feed_gap:unfilled"
     session._clear_degraded("resync")
     assert session._degraded_reason is None
+
+
+def test_degraded_reason_reaches_gateway_market_state(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session._enter_degraded("feed_gap:unfilled", recoverable=False)
+    market = session._market_state()
+    assert market.data_degraded is True
+    assert market.data_quality == "gap"
+    assert market.data_quality_reason == "feed_gap:unfilled"
 
 
 async def test_degraded_lane_blocks_new_entries(tmp_path):

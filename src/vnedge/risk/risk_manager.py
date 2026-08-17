@@ -98,6 +98,17 @@ class MarketState:
     # cannot be proven. This is intentionally separate from venue health: a
     # venue can be operational while our local websocket has a sequence gap.
     data_degraded: bool = False
+    # Explicit quality keeps the rejection explainable. ``quiet`` is healthy
+    # transport with no trades; every other non-OK state fails closed for
+    # entries. ``data_degraded`` remains for backward-compatible callers.
+    data_quality: str = "ok"
+    data_quality_reason: str = ""
+
+    def __post_init__(self) -> None:
+        quality = self.data_quality.strip().lower()
+        if quality not in {"ok", "quiet", "degraded", "gap", "stale"}:
+            raise ValueError(f"invalid data_quality {self.data_quality!r}")
+        object.__setattr__(self, "data_quality", quality)
 
 
 @dataclass(frozen=True)
@@ -159,10 +170,18 @@ class PreTradeRiskGateway:
 
         # --- Always-on checks (apply to entries AND exits) -------------------
         check_exit_warning("exchange_health", market.exchange_healthy, "exchange unhealthy/degraded")
+        integrity_ok = (
+            not market.data_degraded and market.data_quality in {"ok", "quiet"}
+        )
+        integrity_detail = market.data_quality_reason.strip() or (
+            f"data_quality={market.data_quality}"
+            if market.data_quality not in {"ok", "quiet"}
+            else "public stream continuity is unproven"
+        )
         check_exit_warning(
             "data_integrity",
-            not market.data_degraded,
-            "public stream continuity is unproven",
+            integrity_ok,
+            integrity_detail,
         )
 
         staleness = (now - market.last_update).total_seconds()

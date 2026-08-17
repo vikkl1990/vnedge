@@ -50,8 +50,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
+from typing import Any
+
+from vnedge.exchange.heartbeat import (
+    HeartbeatConfig,
+    HeartbeatStatus,
+    ReconnectBackoff,
+    WsHeartbeat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +70,6 @@ DELTA_INDIA_WS_URL = "wss://socket.india.delta.exchange"
 DEFAULT_CHANNELS = ("l2_orderbook", "all_trades", "funding_rate", "v2/ticker")
 
 _MAX_CONSECUTIVE_ERRORS = 5
-_BACKOFF_SECONDS = 2.0
 
 
 def delta_native_symbol(symbol: str) -> str:
@@ -88,10 +97,12 @@ class DeltaPublicWsClient:
         channels: tuple[str, ...] = DEFAULT_CHANNELS,
         candle_timeframes: tuple[str, ...] = (),
         url: str = DELTA_INDIA_WS_URL,
-        connect: Callable[..., object] | None = None,
+        connect: Callable[..., Any] | None = None,
         on_book: Callable[[str, list, list, dict], None] | None = None,
         on_trade: Callable[[str, dict], None] | None = None,
         on_candle: Callable[[str, str, list], None] | None = None,
+        heartbeat: HeartbeatConfig | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.symbols = [delta_native_symbol(s) for s in symbols]
         self.channels = tuple(channels) + tuple(
@@ -103,6 +114,20 @@ class DeltaPublicWsClient:
         self.on_trade = on_trade
         # on_candle(symbol, timeframe, [ts_ms, o, h, l, c, v]) — CLOSED candles only
         self.on_candle = on_candle
+        self.heartbeat_config = heartbeat or HeartbeatConfig(
+            ping_interval_s=20.0,
+            pong_timeout_s=20.0,
+            transport_silence_s=45.0,
+            data_silence_s=60.0,
+            use_ws_control_ping=False,  # websockets handles RFC ping/pong
+            use_app_ping=False,  # Delta sends heartbeats after enable_heartbeat
+        )
+        self._monotonic = monotonic
+        self._heartbeat = WsHeartbeat(
+            self.heartbeat_config,
+            started_at=self._monotonic(),
+        )
+        self._backoff = ReconnectBackoff()
 
         # live per-symbol state (native symbol -> value)
         self.best_bid: dict[str, float] = {}
@@ -116,6 +141,7 @@ class DeltaPublicWsClient:
         self.last_closed_candle: dict[tuple[str, str], list] = {}
 
         self.last_event_at: datetime | None = None
+        self.last_transport_at: datetime | None = None
         self.healthy: bool = False
         self._consecutive_errors = 0
         self._closed = False
@@ -149,23 +175,39 @@ class DeltaPublicWsClient:
         while not self._closed:
             try:
                 async with connect(self.url) as ws:
+                    self._heartbeat.reset(self._monotonic())
                     await ws.send(json.dumps(self._subscribe_msg()))
                     # server drops idle sockets after ~60s; heartbeat keeps it up
-                    try:
+                    with suppress(Exception):  # heartbeat is best effort
                         await ws.send(json.dumps({"type": "enable_heartbeat"}))
-                    except Exception:  # noqa: BLE001 - heartbeat is best effort
-                        pass
-                    async for raw in ws:
+                    iterator = ws.__aiter__()
+                    while not self._closed:
+                        try:
+                            raw = await asyncio.wait_for(
+                                anext(iterator),
+                                timeout=self.heartbeat_config.transport_silence_s,
+                            )
+                        except StopAsyncIteration:
+                            break
                         self._handle_raw(raw)
+                        if self.heartbeat_status() == HeartbeatStatus.DATA_STALE:
+                            raise ConnectionError("delta websocket market data silent")
+                if not self._closed:
+                    self.healthy = False
+                    self._mark_error(ConnectionError("delta websocket stream ended"))
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                self.healthy = False
+                self._mark_error(TimeoutError("delta websocket transport silent"))
             except Exception as exc:  # noqa: BLE001 - reconnect on any stream error
+                self.healthy = False
                 self._mark_error(exc)
             # normal stream-end or error: reconnect with bounded backoff so we
             # never hot-loop when the socket closes cleanly.
             if self._closed:
                 break
-            await asyncio.sleep(_BACKOFF_SECONDS)
+            await asyncio.sleep(self._backoff.next_delay())
 
     # -- message handling --------------------------------------------------
     def _handle_raw(self, raw: str | bytes) -> None:
@@ -174,6 +216,7 @@ class DeltaPublicWsClient:
         except (ValueError, TypeError):
             return
         if isinstance(msg, dict):
+            self._touch_transport()
             self._handle(msg)
 
     def _handle(self, msg: dict) -> None:
@@ -189,7 +232,9 @@ class DeltaPublicWsClient:
             self._handle_ticker(sym, msg)
         elif isinstance(mtype, str) and mtype.startswith("candlestick_"):
             self._handle_candle(sym, mtype, msg)
-        # subscriptions / heartbeat / errors and unknown types are ignored
+        elif mtype in {"heartbeat", "pong"}:
+            self._touch_transport(pong=True)
+        # subscriptions / errors and unknown types carry transport liveness only
 
     def _handle_book(self, sym: str | None, msg: dict) -> None:
         if not sym:
@@ -282,10 +327,8 @@ class DeltaPublicWsClient:
             return
         mp = msg.get("mark_price")
         if mp is not None:
-            try:
+            with suppress(TypeError, ValueError):
                 self.mark_price[sym] = float(mp)
-            except (TypeError, ValueError):
-                pass
         # ticker sometimes carries funding_rate too; prefer the dedicated channel
         self._touch()
 
@@ -301,9 +344,24 @@ class DeltaPublicWsClient:
         return None
 
     def _touch(self) -> None:
-        self.last_event_at = self._now()
+        now = self._now()
+        self.last_event_at = now
+        self.last_transport_at = now
+        self._heartbeat.on_market_message(self._monotonic())
         self._consecutive_errors = 0
+        self._backoff.reset()
         self.healthy = True
+
+    def _touch_transport(self, *, pong: bool = False) -> None:
+        self.last_transport_at = self._now()
+        now = self._monotonic()
+        if pong:
+            self._heartbeat.on_pong(now)
+        else:
+            self._heartbeat.on_transport_message(now)
+
+    def heartbeat_status(self) -> HeartbeatStatus:
+        return self._heartbeat.tick(self._monotonic())
 
     def _mark_error(self, exc: Exception) -> None:
         self._consecutive_errors += 1
@@ -329,6 +387,3 @@ def _default_connect(url: str):
     # ping_interval keeps the protocol-level connection alive; Delta also has an
     # app-level heartbeat we enable after subscribe.
     return websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2**22)
-
-
-ConnectFactory = Callable[[str], Awaitable[object]]

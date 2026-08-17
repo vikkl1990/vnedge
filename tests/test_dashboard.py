@@ -249,8 +249,9 @@ def test_dashboard_shell_is_the_perps_desk(client):
     # honest safety posture stays visible
     assert "no live orders" in html
     assert "SHADOW" in html
-    # reads the read-only websocket stream (backend contract unchanged)
-    assert "/ws?token=" in html
+    # reads the read-only websocket stream via the HttpOnly session cookie
+    assert "/ws?token=" not in html
+    assert '"/ws"' in html
     assert "new WebSocket" in html
     assert 'id="profile"' in html                      # account menu
     # the old lab surface is gone
@@ -977,7 +978,13 @@ def test_websocket_requires_token(client):
 
 
 def test_websocket_pushes_snapshot(client):
-    with client.websocket_connect("/ws?token=t3st-token") as ws:
+    assert client.post(
+        "/auth/session", headers={"Authorization": "Bearer t3st-token"}
+    ).status_code == 200
+    session = client.cookies.get("vnedge_session")
+    with client.websocket_connect(
+        "/ws", headers={"Cookie": f"vnedge_session={session}"}
+    ) as ws:
         assert ws.receive_json()["equity"] == 500.0
 
 
@@ -2088,7 +2095,13 @@ def test_back_compat_shared_token_is_operator_identity(client):
 
 def test_websocket_multi_user_snapshot_carries_connection_count():
     client = _multi_user_client()
-    with client.websocket_connect("/ws?token=tok-alice") as ws:
+    assert client.post(
+        "/auth/session", headers={"Authorization": "Bearer tok-alice"}
+    ).status_code == 200
+    session = client.cookies.get("vnedge_session")
+    with client.websocket_connect(
+        "/ws", headers={"Cookie": f"vnedge_session={session}"}
+    ) as ws:
         payload = ws.receive_json()
         assert payload["equity"] == 500.0
         assert payload["dashboard_connections"] == 1
@@ -2096,6 +2109,8 @@ def test_websocket_multi_user_snapshot_carries_connection_count():
 
 def test_websocket_expired_token_rejected():
     client = _multi_user_client()
+    # Query credentials are intentionally rejected on WebSockets because URLs
+    # leak through history, proxy logs, and diagnostics.
     with pytest.raises(Exception):
         with client.websocket_connect("/ws?token=tok-carl") as ws:
             ws.receive_json()

@@ -1337,36 +1337,45 @@
 <script>
 (async function(){
   var reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
-  // Exchange the root URL token once for a short-lived session. Keep only that
-  // session in page memory; the root token is removed from the address bar and
-  // neither credential is written to localStorage.
-  var token = "";
-  try{
-    var urlTok = new URLSearchParams(location.search).get("token") || "";
-    try{ localStorage.removeItem("vnedge_token"); }catch(e){}
-    var authHeaders=urlTok?{"Authorization":"Bearer "+urlTok}:{};
-    var sessionRes=await fetch("/auth/session",{method:"POST",headers:authHeaders,credentials:"same-origin",cache:"no-store"});
-    if(sessionRes.ok){ token=(await sessionRes.json()).token||""; }
-    if(urlTok){
-      var cleanUrl=new URL(location.href); cleanUrl.searchParams.delete("token");
-      history.replaceState({},"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);
-    }
-  }catch(e){}
+  // Authenticate without ever placing a credential in the URL or storage.
+  // The root token is sent once in a header; the server returns an HttpOnly
+  // session cookie used automatically by fetch and WebSocket.
+  async function ensureSession(){
+    try{
+      var who=await fetch("/whoami",{credentials:"same-origin",cache:"no-store"});
+      if(who.ok)return true;
+    }catch(e){}
+    return new Promise(function(resolve){
+      var wrap=document.createElement("div"); wrap.id="authGate";
+      wrap.style.cssText="position:fixed;inset:0;z-index:500;background:#080d12;display:grid;place-items:center;padding:24px";
+      var form=document.createElement("form");
+      form.style.cssText="width:min(420px,100%);border:1px solid #26313d;border-radius:10px;background:#111820;padding:28px;color:#dce6f0;font:13px var(--sans)";
+      var title=document.createElement("h2"); title.textContent="VNEDGE secure session"; title.style.margin="0 0 8px";
+      var note=document.createElement("p"); note.textContent="Enter the dashboard token. It is sent once in a request header and never appears in the URL."; note.style.cssText="color:#8c99a8;line-height:1.5;margin:0 0 18px";
+      var input=document.createElement("input"); input.type="password"; input.autocomplete="current-password"; input.required=true; input.placeholder="Dashboard token";
+      input.style.cssText="box-sizing:border-box;width:100%;padding:11px;border:1px solid #344252;border-radius:6px;background:#080d12;color:#dce6f0;font:13px var(--mono)";
+      var error=document.createElement("p"); error.style.cssText="min-height:18px;color:#ff5b5b;margin:10px 0 0";
+      var button=document.createElement("button"); button.type="submit"; button.textContent="Start secure session";
+      button.style.cssText="width:100%;margin-top:10px;padding:11px;border:1px solid #3d8bfd;border-radius:6px;background:#10243a;color:#58a6ff;font:600 13px var(--mono);cursor:pointer";
+      form.append(title,note,input,error,button); wrap.appendChild(form); document.body.appendChild(wrap); input.focus();
+      form.addEventListener("submit",async function(ev){
+        ev.preventDefault(); button.disabled=true; error.textContent="";
+        try{
+          var response=await fetch("/auth/session",{method:"POST",headers:{"Authorization":"Bearer "+input.value},credentials:"same-origin",cache:"no-store"});
+          input.value="";
+          if(!response.ok)throw new Error("Authentication failed ("+response.status+")");
+          wrap.remove(); resolve(true);
+        }catch(err){ error.textContent=String(err&&err.message||err); button.disabled=false; input.focus(); }
+      });
+    });
+  }
+  await ensureSession();
   // favicon (suppresses the /favicon.ico 404; the VN mark in amber)
   try{
     var fav=document.createElement("link"); fav.rel="icon";
     fav.href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%230A0E15'/%3E%3Cpath d='M9 13 L18 36 L26 13 M26 36 L26 13 M39 36 L39 13' fill='none' stroke='%23A06618' stroke-width='4.6' stroke-linejoin='round' stroke-linecap='round'/%3E%3Cpath d='M26 13 L39 36' stroke='%23F6A93B' stroke-width='5.4' stroke-linecap='round'/%3E%3C/svg%3E";
     document.head.appendChild(fav);
   }catch(e){}
-  // No token anywhere → show a clear prompt instead of a silent, blank desk.
-  if(!token){
-    try{
-      var tb=document.createElement("div");
-      tb.style.cssText="position:fixed;top:0;left:0;right:0;z-index:300;background:linear-gradient(90deg,#2a1c08,#1a1206);color:#F6A93B;padding:13px 20px;font:600 13px/1.4 var(--sans);text-align:center;border-bottom:1px solid rgba(246,169,59,.45)";
-      tb.innerHTML="Authenticated session required — open the dashboard with a valid one-time <b>?token=…</b> URL.";
-      document.body.appendChild(tb);
-    }catch(e){}
-  }
   function $(id){return document.getElementById(id);}
   function text(id,v){var e=$(id); if(e)e.textContent=v;}
   function fin(v){return typeof v==="number"&&isFinite(v);}
@@ -2857,7 +2866,7 @@
     var b=(m&&m.build_sha)?String(m.build_sha).slice(0,10):"--";
     text("aboutBuild",b); text("footBuild",b); text("topBuild",b);
   }
-  var pollStats={}, wsHealth={state:token?"connecting":"token missing",lastOpen:0,lastMessage:0,failures:0,error:""};
+  var pollStats={}, wsHealth={state:"connecting",lastOpen:0,lastMessage:0,failures:0,error:""};
   function endpointLabel(path){return String(path||"").split("?")[0].replace(/^\/+/,"").replace(/-/g," ")||"state";}
   function payloadStamp(d){
     if(!d||typeof d!=="object")return null;
@@ -2910,10 +2919,6 @@
       return '<div class="healthrow"><div><b><span class="healthdot '+tone+'"></span>'+safe(endpointLabel(st.path))+'</b><small>last poll '+pollAge+' · ok '+num(st.ok)+'</small></div>'+
         '<div>'+lifeChip(st.lastStatus,tone)+'</div><div><b>'+num(st.fail)+'</b><small>poll failures</small></div><div><b>'+safe(src)+'</b><small>artifact freshness</small></div><div><small>'+safe(st.error||"latest payload accepted")+'</small></div></div>';
     }).join('');
-    if(!token){
-      el.innerHTML=metrics+'<div class="note"><b>Token missing:</b> append <span class="num">?token=...</span> so the dashboard can poll read-only endpoints.</div>';
-      return;
-    }
     el.innerHTML=metrics+head+wsRow+body+'<div class="fblocker"><b>Operator answer:</b> this panel turns a frozen or stale cockpit into visible evidence: endpoint status, browser poll failures, and payload freshness.</div>';
   }
   function renderExternalRepoSynthesis(d){
@@ -2987,10 +2992,9 @@
   /* ---- WebSocket to the read-only /state stream ---- */
   var backoff=1000;
   function connect(){
-    if(!token) return;   // no token → don't spam failed auth; the banner explains
     var proto=location.protocol==="https:"?"wss:":"ws:";
     var ws;
-    try{ ws=new WebSocket(proto+"//"+location.host+"/ws?token="+encodeURIComponent(token)); }
+    try{ ws=new WebSocket(proto+"//"+location.host+"/ws"); }
     catch(e){ setTimeout(connect,backoff); return; }
     ws.onopen=function(){backoff=1000;wsHealth.state="open";wsHealth.lastOpen=Date.now();wsHealth.error="";renderDashboardHealth();};
     ws.onmessage=function(e){ try{ wsHealth.lastMessage=Date.now();render(JSON.parse(e.data));renderDashboardHealth(); }catch(err){wsHealth.error=String(err);renderDashboardHealth();} };
@@ -3040,8 +3044,7 @@
   }
   function pollSessionRegime(){ poll("/session-regime", renderSessionRegime); }
   function poll(path,cb){
-    if(!token){recordPoll(path,"skipped",null,"token missing");return;}   // no token → skip (banner already shown)
-    fetch(path+(path.indexOf("?")<0?"?":"&")+"token="+encodeURIComponent(token),{cache:"no-store"})
+    fetch(path,{cache:"no-store",credentials:"same-origin"})
       .then(function(r){
         if(!r.ok){recordPoll(path,"http_error",null,"HTTP "+r.status);return null;}
         return r.json();

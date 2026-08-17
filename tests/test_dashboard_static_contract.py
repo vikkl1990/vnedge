@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "src/vnedge/dashboard/static/index.html"
 QUANTIFIED = ROOT / "src/vnedge/dashboard/static/quantified_strategy_lab.html"
@@ -223,6 +222,18 @@ def test_nav_links_to_the_quantified_strategy_lab_page():
     assert 'href="/quantified-strategy-lab"' in html
     assert "quantified-strategy-lab?token=" not in html
     assert 'localStorage.setItem("vnedge_token"' not in html
+
+
+def test_browser_surfaces_never_put_credentials_in_urls_or_storage():
+    index = _index()
+    quantified = _quantified()
+    for html in (index, quantified):
+        assert "?token=" not in html
+        assert 'searchParams.get("token")' not in html
+        assert "tokenFromUrl" not in html
+        assert "vnedge_dashboard_token" not in html
+    assert 'new WebSocket(proto+"//"+location.host+"/ws")' in index
+    assert 'fetch("/whoami"' in quantified
 
 
 def test_quantified_lab_page_renders_complete_blueprint_proof_matrix():

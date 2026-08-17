@@ -1,27 +1,25 @@
-// Browser auth bootstrap: exchange the one-time URL/root token for a short
-// HttpOnly cookie, then remove it from the address bar. Subsequent data and
-// WebSocket calls rely on the cookie; no credential enters React state/cache.
+// Browser authentication never places a credential in the URL. The root
+// token is submitted once in an Authorization header and exchanged for a
+// short-lived HttpOnly cookie; all later HTTP/WebSocket calls use that cookie.
 
-export function getToken(): string {
-  return new URLSearchParams(window.location.search).get("token") ?? "";
+export async function hasBrowserSession(): Promise<boolean> {
+  const response = await fetch("/whoami", {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  return response.ok;
 }
 
-export async function establishBrowserSession(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-  try {
-    const response = await fetch("/auth/session", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-    if (!response.ok) throw new ApiError(response.status, "session exchange failed");
-  } finally {
-    const clean = new URL(window.location.href);
-    clean.searchParams.delete("token");
-    window.history.replaceState({}, "", `${clean.pathname}${clean.search}${clean.hash}`);
-  }
+export async function establishBrowserSession(rootToken: string): Promise<void> {
+  const token = rootToken.trim();
+  if (!token) throw new ApiError(401, "token is required");
+  const response = await fetch("/auth/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new ApiError(response.status, "authentication failed");
 }
 
 const SESSION_REFRESH_MS = 8 * 60 * 1000;
@@ -79,7 +77,10 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: "same-origin",
     cache: "no-store",
   });
-  if (res.status === 401) throw new ApiError(401, "unauthorized — start a new session");
+  if (res.status === 401) {
+    window.dispatchEvent(new Event("vnedge-auth-expired"));
+    throw new ApiError(401, "unauthorized — start a new session");
+  }
   if (!res.ok) {
     let message = `request failed (${res.status})`;
     try {

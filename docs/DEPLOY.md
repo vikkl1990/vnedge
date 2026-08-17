@@ -70,9 +70,11 @@ Prefer an SSH tunnel to the loopback-bound application port:
 ssh -N -L 8080:127.0.0.1:8080 user@host
 ```
 
-Then open `http://127.0.0.1:8080/?token=<DASHBOARD_TOKEN>`. The optional Caddy
-service can expose TLS on port 8765; configure `DASHBOARD_ALLOWLIST` before
-making it internet-reachable.
+Then open `http://127.0.0.1:8080/app/` and enter `DASHBOARD_TOKEN` on the sign-in
+screen. The URL remains non-secret. For direct HTTP tunnel access set
+`DASHBOARD_COOKIE_SECURE=false`; keep the production default `true` for HTTPS.
+The optional Caddy service can expose TLS on port 8765; configure
+`DASHBOARD_ALLOWLIST` before making it internet-reachable.
 
 The IP-based `:8765` configuration uses a self-signed certificate and is not a
 production-trusted browser endpoint. Verify it with the explicit public

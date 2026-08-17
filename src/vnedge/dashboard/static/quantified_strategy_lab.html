@@ -345,22 +345,13 @@
   </div>
 
   <script>
-    const tokenFromUrl = new URLSearchParams(location.search).get("token") || "";
-    let token = "";
-    try { localStorage.removeItem("vnedge_dashboard_token"); } catch {}
-
     async function establishSession(){
-      const headers = tokenFromUrl ? {Authorization: "Bearer " + tokenFromUrl} : {};
-      const response = await fetch("/auth/session", {
-        method: "POST", headers, credentials: "same-origin", cache: "no-store",
+      const response = await fetch("/whoami", {
+        credentials: "same-origin", cache: "no-store",
       });
-      if (!response.ok) throw new Error("authentication failed " + response.status);
-      token = (await response.json()).token || "";
-      if (tokenFromUrl) {
-        const clean = new URL(location.href);
-        clean.searchParams.delete("token");
-        history.replaceState({}, "", clean.pathname + clean.search + clean.hash);
-      }
+      if (response.ok) return;
+      location.assign("/app/");
+      throw new Error("authentication required");
     }
 
     let payload = null;
@@ -578,35 +569,36 @@
 
     async function load(){
       document.getElementById("status").textContent = "LOADING";
-      if (!token) await establishSession();
-      const url = "/quantified-strategy-lab/kb" + (token ? "?token=" + encodeURIComponent(token) : "");
-      const factoryUrl = "/quantified-strategy-lab/port-factory" + (token ? "?token=" + encodeURIComponent(token) : "");
-      const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
-      const arbiterUrl = "/quantified-strategy-lab/proof-arbiter" + (token ? "?token=" + encodeURIComponent(token) : "");
-      const proofUrl = "/quantified-strategy-lab/pullback-proof" + (token ? "?token=" + encodeURIComponent(token) : "");
-      const res = await fetch(url, {cache:"no-store"});
+      await establishSession();
+      const url = "/quantified-strategy-lab/kb";
+      const factoryUrl = "/quantified-strategy-lab/port-factory";
+      const blueprintProofUrl = "/quantified-strategy-lab/blueprint-proof";
+      const arbiterUrl = "/quantified-strategy-lab/proof-arbiter";
+      const proofUrl = "/quantified-strategy-lab/pullback-proof";
+      const options = {cache:"no-store", credentials:"same-origin"};
+      const res = await fetch(url, options);
       if (!res.ok) throw new Error("request failed " + res.status);
       payload = await res.json();
       try {
-        const factoryRes = await fetch(factoryUrl, {cache:"no-store"});
+        const factoryRes = await fetch(factoryUrl, options);
         factory = factoryRes.ok ? await factoryRes.json() : null;
       } catch {
         factory = null;
       }
       try {
-        const blueprintProofRes = await fetch(blueprintProofUrl, {cache:"no-store"});
+        const blueprintProofRes = await fetch(blueprintProofUrl, options);
         blueprintProof = blueprintProofRes.ok ? await blueprintProofRes.json() : null;
       } catch {
         blueprintProof = null;
       }
       try {
-        const arbiterRes = await fetch(arbiterUrl, {cache:"no-store"});
+        const arbiterRes = await fetch(arbiterUrl, options);
         proofArbiter = arbiterRes.ok ? await arbiterRes.json() : null;
       } catch {
         proofArbiter = null;
       }
       try {
-        const proofRes = await fetch(proofUrl, {cache:"no-store"});
+        const proofRes = await fetch(proofUrl, options);
         pullbackProof = proofRes.ok ? await proofRes.json() : null;
       } catch {
         pullbackProof = null;

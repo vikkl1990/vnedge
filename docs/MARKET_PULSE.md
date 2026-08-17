@@ -53,10 +53,12 @@ never silently interpolated.
 - `GET /api/pulse/{symbol}?exchange=binanceusdm&n=48`
 - `GET /api/pulse/{symbol}/hours?exchange=binanceusdm&n=48`
 - `GET /api/pulse/{symbol}/hours/{open_time}/analysis?exchange=binanceusdm`
-- `WS /api/pulse/stream?token=...&symbol=BTCUSDT&exchange=binanceusdm`
+- `WS /api/pulse/stream?symbol=BTCUSDT&exchange=binanceusdm`
 
-All routes use dashboard authentication. The WebSocket sends a coalesced pulse
-every five seconds, not individual trades. API payloads declare `read_only`,
+All routes use dashboard authentication. Browser clients first establish the
+HttpOnly session cookie through `POST /auth/session`; no credential belongs in
+the WebSocket URL. The stream sends a coalesced pulse every five seconds, not
+individual trades. API payloads declare `read_only`,
 `can_trade=false`, `can_promote=false`, and `live_orders_enabled=false`.
 
 ## Brief safety boundary

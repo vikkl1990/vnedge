@@ -197,7 +197,8 @@ async def main() -> None:
             report = await runner.run()
             print("demo replay pass finished:", report.summary)
 
-    print(f"VNEDGE dashboard: http://{HOST}:{PORT}/?token={TOKEN}")
+    print(f"VNEDGE dashboard: http://{HOST}:{PORT}/")
+    print(f"Dashboard token (enter on the sign-in screen): {TOKEN}")
     await asyncio.gather(server.serve(), replay_forever())
 
 

@@ -216,10 +216,12 @@ Pulse is the default. The classic dashboard is reachable only as an explicit
 legacy command-palette fallback; it is still served at `/`, so presentation
 logic is not yet physically single-sourced.
 
-Authentication is only **PARTIALLY COMPLETE**. The server can exchange a root
-token for a 15-minute JWT, but the React client still reads `?token=` and sends
-that value on every request. There is no HttpOnly cookie login flow yet, and
-the classic dashboard remains a second primary surface at `/`.
+Browser authentication is **COOKIE-BASED**. The operator enters the root token
+on the `/app/` sign-in screen; it travels once in an authorization header and
+is exchanged for a rotating 15-minute JWT held only in a Secure, HttpOnly,
+SameSite cookie. Neither browser surface reads credentials from URLs or browser
+storage, and WebSockets accept only the session cookie. The classic dashboard
+remains a second primary surface at `/`.
 
 ## Deployment truth
 
@@ -264,16 +266,12 @@ trusted DNS certificate even when the guarded application deployment passes.
    `PrivateStreamEventApplier`; update the fill ledger; reconcile REST on
    reconnect; fail closed on stale sequence/freshness. Delta live must continue
    to raise until this is complete and tested.
-2. **Finish cookie authentication.** Add a login exchange that sets an
-   `HttpOnly; Secure; SameSite=Strict` short-lived cookie, authenticate HTTP
-   from the cookie, define a safe WebSocket session mechanism, strip tokens
-   from browser URLs/history, and remove frontend query-token propagation.
-3. **Establish deployment truth.** Restore SSH access, rotate the exposed root
+2. **Establish deployment truth.** Restore SSH access, rotate the exposed root
    token, deploy one reviewed SHA, run `/healthz`, `/ready`, and fleet-policy
    checks on-host, then perform a live pixel pass.
-4. **Replace self-signed IP TLS.** Use a DNS name with ACME renewal before HSTS;
+3. **Replace self-signed IP TLS.** Use a DNS name with ACME renewal before HSTS;
    do not train operators to bypass certificate warnings.
-5. **Add non-mocked live boot coverage.** Exercise the real factory wiring up
+4. **Add non-mocked live boot coverage.** Exercise the real factory wiring up
    to the deliberate no-network gate boundary, especially Delta adapter,
    account provider, symbol mapping, and private-stream refusal.
 

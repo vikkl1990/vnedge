@@ -386,3 +386,44 @@ def test_queue_aware_default_off_preserves_trade_through():
         trade(T0 + 10, 99.99, 1.0, "sell"),         # trade-through fills default model
     ]
     assert TickReplayBacktester().run(events, AlwaysBuy()).filled == 1
+
+
+def test_queue_aware_partial_fill_creates_only_partial_exposure():
+    # $100 notional at a $100 bid requests 1 contract. After the one-contract
+    # queue ahead clears, only 0.4 contracts remain in the print for our order.
+    events = [
+        book(T0, 100.0, 1.0, 100.1, 5.0),
+        trade(T0 + 10, 100.0, 1.4, "sell"),
+        book(T0 + 20, 100.6, 5.0, 100.7, 5.0),
+    ]
+    res = TickReplayBacktester(
+        ReplayFees(slippage_bps=0), queue_aware=True
+    ).run(events, AlwaysBuy(target_bps=40.0))
+
+    assert res.filled == 1
+    assert res.queue_fill_events == 1
+    assert res.partial_fill_events == 1
+    assert res.trades[0].filled_quantity == pytest.approx(0.4)
+    assert res.trades[0].fill_fraction == pytest.approx(0.4)
+    assert res.trades[0].entry_notional_usd == pytest.approx(40.0)
+
+
+def test_queue_aware_pessimistic_front_join_delays_fill():
+    events = [
+        book(T0, 100.0, 2.0, 100.1, 5.0),
+        book(T0 + 5, 100.0, 5.0, 100.1, 5.0),  # three new contracts ahead
+        trade(T0 + 10, 100.0, 3.0, "sell"),
+    ]
+    res = TickReplayBacktester(queue_aware=True).run(events, AlwaysBuy())
+    assert res.filled == 0
+    assert res.queue_fill_events == 0
+
+
+def test_trade_through_fill_count_is_not_lower_than_queue_model() -> None:
+    events = [
+        book(T0, 100.0, 50.0, 100.1, 5.0),
+        trade(T0 + 10, 99.99, 1.0, "sell"),
+    ]
+    optimistic = TickReplayBacktester().run(events, AlwaysBuy())
+    queue = TickReplayBacktester(queue_aware=True).run(events, AlwaysBuy())
+    assert optimistic.filled >= queue.filled

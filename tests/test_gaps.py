@@ -9,11 +9,14 @@ import pytest
 
 from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import (
+    DataQuality,
     GapAwareCandlePipeline,
     GapKind,
     GapParquetStore,
     GapRecord,
     IdentifiedTrade,
+    RecoveryConfig,
+    RecoveryPhase,
     StreamIntegrityGuard,
     candles_without_gaps,
     coverage_fraction,
@@ -97,6 +100,7 @@ def test_healthy_heartbeats_make_quiet_market_not_a_gap() -> None:
     assert guard.entries_blocked  # not warm before the first healthy message
     assert guard.on_message(START + timedelta(seconds=9))
     assert not guard.entries_blocked
+    assert guard.quality == DataQuality.QUIET
     assert not guard.check_stale(START + timedelta(seconds=18))
     assert guard.active_gaps == ()
 
@@ -123,6 +127,7 @@ def test_stale_stream_freezes_close_until_backfill_and_warm_message(tmp_path) ->
         stale_after=timedelta(seconds=10),
         candle_store=candle_store,
         gap_store=gap_store,
+        recovery=RecoveryConfig(probe_good_msgs=2),
     )
     pipeline.on_trade(trade("t1", 0), received_at=START, sequence_id=1)
     assert pipeline.advance_time(START + timedelta(seconds=20)) == ()
@@ -143,8 +148,9 @@ def test_stale_stream_freezes_close_until_backfill_and_warm_message(tmp_path) ->
     assert pipeline.entries_blocked  # continuity proven, but feed not warm yet
 
     pipeline.on_heartbeat(START + timedelta(seconds=21))
-    assert not pipeline.entries_blocked
+    assert pipeline.entries_blocked  # recovery needs two consecutive healthy messages
     pipeline.on_heartbeat(START + timedelta(seconds=30))
+    assert not pipeline.entries_blocked
     pipeline.on_heartbeat(START + timedelta(seconds=40))
     pipeline.on_heartbeat(START + timedelta(seconds=50))
     pipeline.on_heartbeat(START + timedelta(seconds=59))
@@ -152,6 +158,150 @@ def test_stale_stream_freezes_close_until_backfill_and_warm_message(tmp_path) ->
     assert len(closed) == 1 and closed[0].is_closed
     records = gap_store.read("binanceusdm", "BTCUSDT")
     assert len(records) == 1 and records[0].recovered
+
+
+def test_sequence_recovery_requires_resync_and_full_message_probe(tmp_path) -> None:
+    store = GapParquetStore(tmp_path / "gaps")
+    guard = StreamIntegrityGuard(
+        "bybit",
+        "BTCUSDT",
+        stale_after=timedelta(seconds=10),
+        monitoring_started_at=START,
+        store=store,
+    )
+    assert guard.on_message(START, event_time=START, sequence_id=100)
+    assert not guard.on_message(
+        START + timedelta(seconds=1),
+        event_time=START + timedelta(seconds=1),
+        sequence_id=102,
+    )
+
+    guard.begin_recovery(RecoveryPhase.RESYNCING)
+    assert guard.recover(
+        START + timedelta(seconds=2),
+        continuity_proven=True,
+        detail="snapshot sequence applied",
+    )
+    assert guard.quality == DataQuality.DEGRADED
+    for index in range(1, 50):
+        assert not guard.on_message(
+            START + timedelta(seconds=2 + index),
+            event_time=START + timedelta(seconds=2 + index),
+            sequence_id=index,
+        )
+    assert guard.on_message(
+        START + timedelta(seconds=52),
+        event_time=START + timedelta(seconds=52),
+        sequence_id=50,
+    )
+    assert guard.quality == DataQuality.OK
+    assert not guard.entries_blocked
+    assert guard.active_gaps == ()
+    assert all(record.recovered for record in store.read("bybit", "BTCUSDT"))
+
+
+def test_backfill_retry_exhaustion_stays_gap() -> None:
+    guard = StreamIntegrityGuard(
+        "delta_india",
+        "BTCUSD",
+        stale_after=timedelta(seconds=5),
+        monitoring_started_at=START,
+        recovery=RecoveryConfig(max_backfill_retries=3),
+    )
+    guard.record_late_trade(
+        START,
+        START + timedelta(seconds=1),
+        "decision-timeframe storage hole",
+    )
+
+    for attempt in range(1, 4):
+        assert not guard.recover(
+            START + timedelta(seconds=6 + attempt),
+            continuity_proven=False,
+            detail=f"REST attempt {attempt} failed",
+        )
+    assert guard.backfill_attempts == 3
+    assert guard.recovery_phase == RecoveryPhase.BACKFILLING
+    assert guard.recovery_reason == "backfill_exhausted"
+    assert guard.quality == DataQuality.GAP
+    assert guard.entries_blocked
+
+
+def test_two_clean_closed_bars_can_complete_probe() -> None:
+    guard = StreamIntegrityGuard(
+        "binanceusdm",
+        "BTCUSDT",
+        stale_after=timedelta(seconds=30),
+        monitoring_started_at=START,
+    )
+    guard.record_late_trade(START, START + timedelta(seconds=1), "out of order")
+    assert guard.recover(
+        START + timedelta(seconds=2),
+        continuity_proven=True,
+        detail="bad event dropped; storage inventory clean",
+    )
+    assert not guard.on_good_closed_bar(START + timedelta(minutes=1))
+    assert guard.on_good_closed_bar(START + timedelta(minutes=2))
+    assert guard.quality == DataQuality.OK
+
+
+def test_live_recovery_waits_for_operator_ack_after_probe() -> None:
+    guard = StreamIntegrityGuard(
+        "delta_india",
+        "BTCUSD",
+        stale_after=timedelta(seconds=30),
+        monitoring_started_at=START,
+        recovery=RecoveryConfig(
+            probe_good_msgs=2,
+            require_operator_ack_live=True,
+        ),
+    )
+    guard.record_late_trade(START, START + timedelta(seconds=1), "bad tick dropped")
+    assert guard.recover(
+        START + timedelta(seconds=2),
+        continuity_proven=True,
+        detail="resync complete",
+    )
+    assert not guard.on_message(START + timedelta(seconds=3), sequence_id=1)
+    assert not guard.on_message(START + timedelta(seconds=4), sequence_id=2)
+    assert guard.recovery_phase == RecoveryPhase.AWAITING_ACK
+    assert guard.recovery_reason == "await_operator_ack"
+    assert guard.quality == DataQuality.DEGRADED
+    assert guard.entries_blocked
+
+    assert guard.operator_ack(
+        START + timedelta(seconds=5),
+        note="venue snapshot and decision-TF inventory verified",
+    )
+    assert guard.quality == DataQuality.QUIET
+    assert not guard.entries_blocked
+
+
+def test_bad_event_during_probe_resets_consecutive_evidence() -> None:
+    guard = StreamIntegrityGuard(
+        "bybit",
+        "BTCUSDT",
+        stale_after=timedelta(seconds=30),
+        monitoring_started_at=START,
+        recovery=RecoveryConfig(probe_good_msgs=3),
+    )
+    guard.on_message(START, event_time=START, sequence_id=10)
+    assert not guard.on_message(
+        START + timedelta(seconds=1),
+        event_time=START + timedelta(seconds=1),
+        sequence_id=12,
+    )
+    assert guard.recover(START + timedelta(seconds=2), continuity_proven=True)
+    assert not guard.on_message(START + timedelta(seconds=3), sequence_id=1)
+    assert not guard.on_message(START + timedelta(seconds=4), sequence_id=3)
+    assert guard.recovery_phase == RecoveryPhase.NONE
+
+    assert guard.recover(START + timedelta(seconds=5), continuity_proven=True)
+    assert not guard.on_message(START + timedelta(seconds=6), sequence_id=1)
+    assert not guard.on_message(START + timedelta(seconds=7), sequence_id=2)
+    assert guard.entries_blocked
+    assert guard.on_message(START + timedelta(seconds=8), sequence_id=3)
+    assert not guard.entries_blocked
 
 
 def test_sequence_break_blocks_entries_and_withholds_trade() -> None:
@@ -172,6 +322,55 @@ def test_sequence_break_blocks_entries_and_withholds_trade() -> None:
     assert pipeline.data_degraded and pipeline.entries_blocked
     assert {record.kind for record in pipeline.guard.active_gaps} == {GapKind.SEQ_BREAK}
     assert pipeline.pipeline.forming().trade_count == 1  # type: ignore[union-attr]
+
+
+def test_event_time_lag_future_skew_and_out_of_order_fail_closed() -> None:
+    late = StreamIntegrityGuard(
+        "binanceusdm",
+        "BTCUSDT",
+        stale_after=timedelta(seconds=30),
+        max_event_age=timedelta(seconds=5),
+        monitoring_started_at=START,
+    )
+    assert not late.on_message(
+        START + timedelta(seconds=10),
+        event_time=START,
+        sequence_id=1,
+    )
+    assert late.quality == DataQuality.GAP
+    assert {record.kind for record in late.active_gaps} == {GapKind.LATE_TRADE}
+
+    future = StreamIntegrityGuard(
+        "bybit",
+        "BTCUSDT",
+        stale_after=timedelta(seconds=30),
+        max_clock_skew=timedelta(seconds=2),
+        monitoring_started_at=START,
+    )
+    assert not future.on_message(
+        START + timedelta(seconds=1),
+        event_time=START + timedelta(seconds=4),
+        sequence_id=1,
+    )
+    assert {record.kind for record in future.active_gaps} == {GapKind.CLOCK_SKEW}
+
+    ooo = StreamIntegrityGuard(
+        "delta_india",
+        "BTCUSD",
+        stale_after=timedelta(seconds=30),
+        monitoring_started_at=START,
+    )
+    assert ooo.on_message(
+        START + timedelta(seconds=2),
+        event_time=START + timedelta(seconds=2),
+        sequence_id=1,
+    )
+    assert not ooo.on_message(
+        START + timedelta(seconds=3),
+        event_time=START + timedelta(seconds=1),
+        sequence_id=2,
+    )
+    assert {record.kind for record in ooo.active_gaps} == {GapKind.OUT_OF_ORDER}
 
 
 def test_failed_backfill_remains_blocked_and_is_audited(tmp_path) -> None:

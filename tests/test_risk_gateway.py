@@ -162,6 +162,27 @@ def test_data_integrity_gap_blocks_entries_but_not_reduce_only_exits(gateway):
     assert any("data_integrity" in warning for warning in exit_decision.warning_checks)
 
 
+@pytest.mark.parametrize("quality", ["degraded", "gap", "stale"])
+def test_explicit_non_ok_data_quality_blocks_entries(gateway, quality):
+    market = healthy_market(
+        data_quality=quality,
+        data_quality_reason="sequence 10422 -> 10440",
+    )
+    decision = gateway.evaluate(entry_intent(), healthy_account(), market, now=NOW)
+
+    assert not decision.approved
+    assert any(
+        "data_integrity" in failure and "sequence 10422 -> 10440" in failure
+        for failure in decision.failed_checks
+    )
+
+
+def test_quiet_but_healthy_transport_does_not_block_entry(gateway):
+    market = healthy_market(data_quality="quiet")
+    decision = gateway.evaluate(entry_intent(), healthy_account(), market, now=NOW)
+    assert decision.approved, decision.explanation
+
+
 def test_symbol_mismatch_still_blocks_reduce_only_exit(gateway):
     market = healthy_market(symbol="ETH/USDT:USDT")
     decision = gateway.evaluate(

@@ -2,9 +2,10 @@
 
 The long-lived bearer token (DASHBOARD_TOKEN / DASHBOARD_USERS) is the *root*
 credential. Presenting it to ``POST /auth/session`` mints a **short-lived JWT**
-carrying only ``{name, role, exp}``. The browser then uses that JWT, so the
-long-lived secret stops travelling on every request and a leaked session
-expires on its own. No email/password/OAuth — the root token IS the account
+carrying only identity, role, expiry, and a rotation nonce. The JWT is returned
+only as an HttpOnly cookie, so neither browser JavaScript nor the URL can read
+it. The long-lived secret therefore stops travelling after sign-in and a leaked
+session expires on its own. No email/password/OAuth — the root token IS the account
 (the legacy token maps to the ``operator`` role, i.e. the first user is admin).
 
 Deliberately hand-rolled HS256 (no new dependency — consistent with the repo's
@@ -27,6 +28,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -61,7 +63,11 @@ class SessionIssuer:
         self.ttl_seconds = ttl_seconds
 
     @classmethod
-    def from_env(cls, env: dict | None = None, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> "SessionIssuer":
+    def from_env(
+        cls,
+        env: dict | None = None,
+        ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    ) -> SessionIssuer:
         source = os.environ if env is None else env
         configured = (source.get("DASHBOARD_JWT_SECRET") or "").strip()
         secret = configured.encode("utf-8") if configured else os.urandom(32)
@@ -78,6 +84,7 @@ class SessionIssuer:
             "role": role,
             "iat": int(moment.timestamp()),
             "exp": int(expires_at.timestamp()),
+            "jti": secrets.token_urlsafe(12),
         }
         signing_input = f"{_b64url(json.dumps(_HEADER).encode())}.{_b64url(json.dumps(payload).encode())}".encode()
         token = f"{signing_input.decode()}.{self._sign(signing_input)}"

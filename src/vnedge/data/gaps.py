@@ -65,9 +65,49 @@ def _exclusive_lock(path: Path) -> Iterator[None]:
 class GapKind(str, Enum):
     STREAM_STALE = "stream_stale"
     SEQ_BREAK = "seq_break"
+    OUT_OF_ORDER = "out_of_order"
+    CLOCK_SKEW = "clock_skew"
     BACKFILL_FAIL = "backfill_fail"
     STORAGE_HOLE = "storage_hole"
     LATE_TRADE = "late_trade"
+
+
+class DataQuality(str, Enum):
+    """Operator-facing quality state; only OK/QUIET may arm new risk."""
+
+    OK = "ok"
+    QUIET = "quiet"
+    DEGRADED = "degraded"
+    GAP = "gap"
+    STALE = "stale"
+
+
+class RecoveryPhase(str, Enum):
+    """Explicit path from a tripped integrity guard back to healthy."""
+
+    NONE = "none"
+    RESYNCING = "resyncing"
+    BACKFILLING = "backfilling"
+    PROBING = "probing"
+    AWAITING_ACK = "awaiting_ack"
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryConfig:
+    """Pre-registered proof required before a gap may be cleared."""
+
+    probe_good_msgs: int = 50
+    probe_good_closed_bars: int = 2
+    max_backfill_retries: int = 3
+    require_operator_ack_live: bool = False
+
+    def __post_init__(self) -> None:
+        if self.probe_good_msgs < 1:
+            raise ValueError("probe_good_msgs must be positive")
+        if self.probe_good_closed_bars < 1:
+            raise ValueError("probe_good_closed_bars must be positive")
+        if self.max_backfill_retries < 1:
+            raise ValueError("max_backfill_retries must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,14 +295,24 @@ class StreamIntegrityGuard:
         stale_after: timedelta,
         monitoring_started_at: datetime,
         store: GapParquetStore | None = None,
+        max_event_age: timedelta | None = None,
+        max_clock_skew: timedelta = timedelta(seconds=5),
+        recovery: RecoveryConfig | None = None,
     ) -> None:
         if stale_after <= timedelta(0):
             raise ValueError("stale_after must be positive")
+        if max_event_age is not None and max_event_age <= timedelta(0):
+            raise ValueError("max_event_age must be positive")
+        if max_clock_skew < timedelta(0):
+            raise ValueError("max_clock_skew must be non-negative")
         self.exchange = exchange.strip()
         self.symbol = symbol.strip()
         if not self.exchange or not self.symbol:
             raise ValueError("guard exchange and symbol must not be empty")
         self.stale_after = stale_after
+        self.max_event_age = max_event_age or stale_after
+        self.max_clock_skew = max_clock_skew
+        self.recovery = recovery or RecoveryConfig()
         self.store = store
         started = _utc(monitoring_started_at, label="monitoring_started_at")
         self._last_message_at: datetime = started
@@ -271,6 +321,14 @@ class StreamIntegrityGuard:
         self._active: dict[str, GapRecord] = {}
         self._data_degraded = False
         self._warm = False
+        self._quiet = False
+        self._recovery_phase = RecoveryPhase.NONE
+        self._recovery_reason = ""
+        self._healthy_recovery_messages = 0
+        self._healthy_recovery_bars = 0
+        self._backfill_attempts = 0
+        self._operator_acked = False
+        self._recovery_detail = ""
 
     def _persist(self, record: GapRecord) -> None:
         if self.store is not None:
@@ -286,7 +344,19 @@ class StreamIntegrityGuard:
     ) -> GapRecord:
         for record in self._active.values():
             if record.kind == kind:
+                # A repeated failure of the same kind still invalidates an
+                # in-progress probe. Recovery evidence must be consecutive.
+                self._data_degraded = True
+                self._warm = False
+                self._quiet = False
+                self._recovery_phase = RecoveryPhase.NONE
+                self._recovery_reason = detail
+                self._healthy_recovery_messages = 0
+                self._healthy_recovery_bars = 0
+                self._operator_acked = False
+                self._recovery_detail = ""
                 return record
+        was_healthy = not self._data_degraded
         record = GapRecord(
             self.symbol,
             self.exchange,
@@ -299,6 +369,15 @@ class StreamIntegrityGuard:
         self._active[record.gap_id] = record
         self._data_degraded = True
         self._warm = False
+        self._quiet = False
+        self._recovery_phase = RecoveryPhase.NONE
+        self._recovery_reason = detail
+        self._healthy_recovery_messages = 0
+        self._healthy_recovery_bars = 0
+        self._operator_acked = False
+        self._recovery_detail = ""
+        if was_healthy:
+            self._backfill_attempts = 0
         self._persist(record)
         logger.error(
             "exchange data degraded: exchange=%s symbol=%s kind=%s detail=%s",
@@ -322,7 +401,9 @@ class StreamIntegrityGuard:
         event_time = (
             _utc(event_time, label="message event_time") if event_time is not None else None
         )
+        message_valid = True
         if received_at - self._last_message_at > self.stale_after:
+            message_valid = False
             self._open_gap(
                 GapKind.STREAM_STALE,
                 self._last_message_at,
@@ -330,11 +411,42 @@ class StreamIntegrityGuard:
                 received_at,
                 f"message interval exceeded {self.stale_after.total_seconds():g}s",
             )
+        if event_time is not None:
+            event_age = received_at - event_time
+            if event_age > self.max_event_age:
+                message_valid = False
+                self._open_gap(
+                    GapKind.LATE_TRADE,
+                    event_time,
+                    received_at,
+                    received_at,
+                    f"event age {event_age.total_seconds():.3f}s exceeds "
+                    f"{self.max_event_age.total_seconds():g}s",
+                )
+            elif event_age < -self.max_clock_skew:
+                message_valid = False
+                self._open_gap(
+                    GapKind.CLOCK_SKEW,
+                    received_at,
+                    event_time,
+                    received_at,
+                    f"event is {-event_age.total_seconds():.3f}s in the future",
+                )
+            if self._last_event_time is not None and event_time < self._last_event_time:
+                message_valid = False
+                self._open_gap(
+                    GapKind.OUT_OF_ORDER,
+                    event_time,
+                    self._last_event_time,
+                    received_at,
+                    "event timestamp moved backward",
+                )
         if (
             sequence_id is not None
             and self._last_sequence is not None
             and sequence_id != self._last_sequence + 1
         ):
+            message_valid = False
             start = self._last_event_time or self._last_message_at
             self._open_gap(
                 GapKind.SEQ_BREAK,
@@ -350,9 +462,18 @@ class StreamIntegrityGuard:
             self._last_event_time = event_time
         if sequence_id is not None:
             self._last_sequence = sequence_id
-        if not self._data_degraded:
+        if self._recovery_phase in {
+            RecoveryPhase.PROBING,
+            RecoveryPhase.AWAITING_ACK,
+        }:
+            if message_valid:
+                self._quiet = event_time is None
+                self._healthy_recovery_messages += 1
+                self._try_complete_recovery(received_at)
+        elif not self._data_degraded:
+            self._quiet = event_time is None
             self._warm = True
-        return not self._data_degraded
+        return not self.entries_blocked
 
     def check_stale(self, now: datetime) -> bool:
         now = _utc(now, label="stale check time")
@@ -392,6 +513,7 @@ class StreamIntegrityGuard:
     def recover(self, at: datetime, *, continuity_proven: bool, detail: str = "") -> bool:
         at = _utc(at, label="recovery time")
         if not continuity_proven:
+            self._backfill_attempts += 1
             start = min(
                 (record.start for record in self._active.values()),
                 default=self._last_event_time or self._last_message_at,
@@ -403,22 +525,100 @@ class StreamIntegrityGuard:
                 at,
                 detail or "backfill did not prove continuity",
             )
+            self._recovery_phase = RecoveryPhase.BACKFILLING
+            self._recovery_reason = (
+                "backfill_exhausted"
+                if self._backfill_attempts >= self.recovery.max_backfill_retries
+                else "backfill_failed"
+            )
             return False
+        if not self._active and not self._data_degraded:
+            return True
+        self._recovery_phase = RecoveryPhase.PROBING
+        self._recovery_reason = "probing"
+        self._recovery_detail = detail
+        self._data_degraded = True
+        self._warm = False
+        self._quiet = False
+        self._healthy_recovery_messages = 0
+        self._healthy_recovery_bars = 0
+        self._last_message_at = at
+        self._last_sequence = None
+        return True
+
+    def begin_recovery(self, phase: RecoveryPhase) -> None:
+        """Expose resync/backfill work as an entry-blocking state."""
+        if phase not in {RecoveryPhase.RESYNCING, RecoveryPhase.BACKFILLING}:
+            raise ValueError("recovery may only begin in resyncing or backfilling")
+        if not self._active:
+            raise RuntimeError("cannot begin recovery without an active gap")
+        self._recovery_phase = phase
+        self._recovery_reason = phase.value
+        self._warm = False
+
+    def on_good_closed_bar(self, at: datetime) -> bool:
+        """Count a causally closed probe bar without altering stored candles."""
+        at = _utc(at, label="probe bar time")
+        if self._recovery_phase not in {
+            RecoveryPhase.PROBING,
+            RecoveryPhase.AWAITING_ACK,
+        }:
+            return not self.entries_blocked
+        self._healthy_recovery_bars += 1
+        self._try_complete_recovery(at)
+        return not self.entries_blocked
+
+    def operator_ack(self, at: datetime, *, note: str) -> bool:
+        """Acknowledge a proven recovery; acknowledgement never proves continuity."""
+        at = _utc(at, label="operator acknowledgement time")
+        note = note.strip()
+        if not note:
+            raise ValueError("operator acknowledgement requires a note")
+        if not self._active:
+            return False
+        self._operator_acked = True
+        self._recovery_detail = "; ".join(
+            part for part in (self._recovery_detail, f"operator_ack={note}") if part
+        )
+        self._try_complete_recovery(at)
+        return not self.entries_blocked
+
+    def _probe_passed(self) -> bool:
+        return (
+            self._healthy_recovery_messages >= self.recovery.probe_good_msgs
+            or self._healthy_recovery_bars >= self.recovery.probe_good_closed_bars
+        )
+
+    def _try_complete_recovery(self, at: datetime) -> None:
+        if not self._probe_passed():
+            self._recovery_reason = (
+                f"probing messages={self._healthy_recovery_messages}/"
+                f"{self.recovery.probe_good_msgs} bars={self._healthy_recovery_bars}/"
+                f"{self.recovery.probe_good_closed_bars}"
+            )
+            return
+        if self.recovery.require_operator_ack_live and not self._operator_acked:
+            self._recovery_phase = RecoveryPhase.AWAITING_ACK
+            self._recovery_reason = "await_operator_ack"
+            return
         for gap_id, record in tuple(self._active.items()):
             recovered = replace(
                 record,
-                end=max(record.end, at),
-                detail="; ".join(part for part in (record.detail, detail) if part),
+                detail="; ".join(
+                    part for part in (record.detail, self._recovery_detail) if part
+                ),
                 recovered=True,
             )
             self._persist(recovered)
             self._active[gap_id] = recovered
         self._active.clear()
         self._data_degraded = False
-        self._warm = False
-        self._last_message_at = at
-        self._last_sequence = None
-        return True
+        self._warm = True
+        self._recovery_phase = RecoveryPhase.NONE
+        self._recovery_reason = "recovered"
+        self._healthy_recovery_messages = 0
+        self._healthy_recovery_bars = 0
+        self._backfill_attempts = 0
 
     @property
     def data_degraded(self) -> bool:
@@ -430,7 +630,39 @@ class StreamIntegrityGuard:
 
     @property
     def entries_blocked(self) -> bool:
-        return self._data_degraded or not self._warm
+        return (
+            self._data_degraded
+            or not self._warm
+            or self._recovery_phase != RecoveryPhase.NONE
+        )
+
+    @property
+    def quality(self) -> DataQuality:
+        if self._recovery_phase in {
+            RecoveryPhase.RESYNCING,
+            RecoveryPhase.PROBING,
+            RecoveryPhase.AWAITING_ACK,
+        }:
+            return DataQuality.DEGRADED
+        if self._data_degraded:
+            if any(record.kind == GapKind.STREAM_STALE for record in self._active.values()):
+                return DataQuality.STALE
+            return DataQuality.GAP
+        if not self._warm:
+            return DataQuality.DEGRADED
+        return DataQuality.QUIET if self._quiet else DataQuality.OK
+
+    @property
+    def recovery_phase(self) -> RecoveryPhase:
+        return self._recovery_phase
+
+    @property
+    def recovery_reason(self) -> str:
+        return self._recovery_reason
+
+    @property
+    def backfill_attempts(self) -> int:
+        return self._backfill_attempts
 
     @property
     def exits_allowed(self) -> bool:
@@ -454,6 +686,7 @@ class GapAwareCandlePipeline:
         candle_store: CandleParquetStore | None = None,
         gap_store: GapParquetStore | None = None,
         quarantine: JsonlTradeQuarantine | None = None,
+        recovery: RecoveryConfig | None = None,
     ) -> None:
         self.pipeline = CandlePipeline(
             symbol,
@@ -466,6 +699,7 @@ class GapAwareCandlePipeline:
             stale_after=stale_after,
             monitoring_started_at=monitoring_started_at,
             store=gap_store,
+            recovery=recovery,
         )
         self._forming_bucket: datetime | None = None
         self._forming_trades: dict[str, IdentifiedTrade] = {}
@@ -521,6 +755,14 @@ class GapAwareCandlePipeline:
         continuity_proven: bool,
         detail: str = "",
     ) -> bool:
+        if self.guard.active_gaps:
+            resync_kinds = {GapKind.SEQ_BREAK, GapKind.STREAM_STALE}
+            phase = (
+                RecoveryPhase.RESYNCING
+                if any(record.kind in resync_kinds for record in self.guard.active_gaps)
+                else RecoveryPhase.BACKFILLING
+            )
+            self.guard.begin_recovery(phase)
         if not continuity_proven:
             return self.guard.recover(at, continuity_proven=False, detail=detail)
         try:
@@ -539,6 +781,12 @@ class GapAwareCandlePipeline:
         self._forming_trades = {trade.trade_id: trade for trade in current}
         return self.guard.recover(at, continuity_proven=True, detail=detail)
 
+    def on_recovery_closed_bar(self, at: datetime) -> bool:
+        return self.guard.on_good_closed_bar(at)
+
+    def acknowledge_recovery(self, at: datetime, *, note: str) -> bool:
+        return self.guard.operator_ack(at, note=note)
+
     @property
     def entries_blocked(self) -> bool:
         return self.guard.entries_blocked
@@ -546,6 +794,10 @@ class GapAwareCandlePipeline:
     @property
     def data_degraded(self) -> bool:
         return self.guard.data_degraded
+
+    @property
+    def data_quality(self) -> DataQuality:
+        return self.guard.quality
 
     @property
     def exits_allowed(self) -> bool:

@@ -64,31 +64,38 @@ def _client():
     )
 
 
-def test_session_endpoint_mints_a_working_jwt():
+def test_session_endpoint_mints_a_working_cookie_without_exposing_jwt():
     client = _client()
     assert client.post("/auth/session").status_code == 401  # needs the root token
-    r = client.post("/auth/session?token=ot")
+    r = client.post("/auth/session", headers={"Authorization": "Bearer ot"})
     body = r.json()
     assert r.status_code == 200 and body["role"] == "operator"
-    jwt = body["token"]
-    # the JWT now authenticates a data route, and /whoami reflects the role
-    who = client.get(f"/whoami?token={jwt}").json()
+    assert "token" not in body
+    assert client.cookies.get("vnedge_session")
+    session_cookie = r.headers.get("set-cookie", "").lower()
+    assert "httponly" in session_cookie
+    assert "secure" in session_cookie
+    assert "samesite=strict" in session_cookie
+    # The HttpOnly cookie authenticates data routes without a URL credential.
+    who = client.get("/whoami").json()
     assert who["role"] == "operator" and who["name"] == "op1"
-    assert client.get(f"/state?token={jwt}").status_code == 200
+    assert client.get("/state").status_code == 200
 
 
 def test_session_preserves_not_escalates_role():
     client = _client()
-    jwt = client.post("/auth/session?token=vt").json()["token"]  # viewer root
-    who = client.get(f"/whoami?token={jwt}").json()
+    issued = client.post("/auth/session", headers={"Authorization": "Bearer vt"})
+    assert issued.status_code == 200 and "token" not in issued.json()
+    who = client.get("/whoami").json()
     assert who["role"] == "viewer"  # session role == token role, never elevated
 
 
 def test_browser_session_refreshes_with_cookie_and_csrf():
     client = _client()
-    issued = client.post("/auth/session?token=ot")
+    issued = client.post("/auth/session", headers={"Authorization": "Bearer ot"})
     assert issued.status_code == 200
     csrf = client.cookies.get("vnedge_csrf")
+    session_before = client.cookies.get("vnedge_session")
     assert csrf
 
     refreshed = client.post(
@@ -98,13 +105,17 @@ def test_browser_session_refreshes_with_cookie_and_csrf():
 
     assert refreshed.status_code == 200
     assert refreshed.json()["role"] == "operator"
-    assert client.cookies.get("vnedge_session") == refreshed.json()["token"]
+    assert "token" not in refreshed.json()
+    assert client.cookies.get("vnedge_session")
+    assert client.cookies.get("vnedge_session") != session_before
     assert client.get("/whoami").json()["name"] == "op1"
 
 
 def test_browser_session_refresh_requires_csrf():
     client = _client()
-    assert client.post("/auth/session?token=ot").status_code == 200
+    assert client.post(
+        "/auth/session", headers={"Authorization": "Bearer ot"}
+    ).status_code == 200
 
     response = client.post("/auth/session/refresh")
 

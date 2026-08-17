@@ -162,6 +162,27 @@ def test_rest_polling_latest_closed_row_uses_only_closed_candles():
     assert RestPollingMarketFeed._latest_closed_row(rows, now_ms, step_ms) == rows[1]
 
 
+def test_feed_market_state_fails_closed_on_application_data_silence():
+    feed = RestPollingMarketFeed.__new__(RestPollingMarketFeed)
+    feed.symbol = "BTC/USDT:USDT"
+    feed.quote = (100.0, 100.1)
+    feed.slippage_est_bps = 2.0
+    feed.funding_rate = 0.0
+    feed.healthy = True
+    feed.data_silence_seconds = 60.0
+    feed.last_event_at = datetime.now(UTC) - timedelta(seconds=61)
+
+    stale = feed.market_state()
+    assert stale.data_degraded is True
+    assert stale.data_quality == "stale"
+    assert "silent" in stale.data_quality_reason
+
+    feed.last_event_at = datetime.now(UTC)
+    healthy = feed.market_state()
+    assert healthy.data_degraded is False
+    assert healthy.data_quality == "ok"
+
+
 class _HistExchange:
     """Fake ccxt exchange: settled funding history support."""
     has = {"fetchFundingRateHistory": True}

@@ -101,8 +101,16 @@ Two **unauthenticated** probes (they reveal only process state, never data):
 
 ## Behavior
 
-- Tokens are accepted via `Authorization: Bearer <token>` header or the
-  `?token=` query parameter (the WebSocket uses the query parameter).
+- Open `/app/` with no credential in the URL. If no session exists, the UI
+  prompts for the root token and submits it once in an
+  `Authorization: Bearer <token>` header to `POST /auth/session`.
+- The session JWT is returned only in a `Secure`, `HttpOnly`, `SameSite=Strict`
+  cookie. It is never present in JSON, browser storage, or WebSocket URLs.
+- Browser HTTP requests and both WebSocket streams authenticate with that
+  same-origin cookie. WebSockets reject query-string credentials.
+- HTTP `?token=` remains a deprecated compatibility path for old API clients.
+  Do not use it in browsers: URLs leak into history, proxy logs, referrers, and
+  screenshots. New automation must use the bearer header.
 - Every stored token is compared with a constant-time comparison, and every
   token is checked on every attempt (no early exit), so timing does not
   reveal which entry matched.
@@ -132,8 +140,9 @@ Zero-downtime, because old and new tokens can coexist:
 3. Restart the service (env is read at startup):
    `docker compose up -d multi-lane-shadow` on the VPS, or restart the local
    session.
-4. Update the person's bookmark/tunnel URL to the new token; confirm access
-   (the `X-Dashboard-User` header shows which entry matched).
+4. Open the unchanged `/app/` bookmark, enter the new token on the sign-in
+   screen, and confirm access (the `X-Dashboard-User` header shows which entry
+   matched). The token is never part of the bookmark.
 5. Remove the old entry (or let its expiry lapse) and restart again.
 
 To revoke a user immediately: delete their entry (or set an expiry in the

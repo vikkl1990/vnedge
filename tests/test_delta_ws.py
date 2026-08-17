@@ -8,6 +8,7 @@ import asyncio
 import json
 
 from vnedge.exchange.delta_ws import DeltaPublicWsClient, delta_native_symbol
+from vnedge.exchange.heartbeat import HeartbeatConfig, HeartbeatStatus
 
 
 def test_native_symbol_conversion():
@@ -109,6 +110,59 @@ def test_handle_ignores_unknown_and_malformed():
     # empty book: no top-of-book, but the event still counts as liveness
     assert "BTCUSD" not in client.best_bid
     assert client.quote("BTCUSD") is None
+
+
+def test_heartbeat_is_transport_liveness_not_market_liveness():
+    clock = [0.0]
+    client = DeltaPublicWsClient(
+        ["BTCUSD"],
+        heartbeat=HeartbeatConfig(
+            ping_interval_s=5,
+            pong_timeout_s=2,
+            transport_silence_s=10,
+            data_silence_s=5,
+            use_ws_control_ping=False,
+        ),
+        monotonic=lambda: clock[0],
+    )
+    clock[0] = 4.0
+    client._handle({"type": "heartbeat"})
+    assert client.last_transport_at is not None
+    assert client.last_event_at is None
+
+    clock[0] = 6.0
+    assert client.heartbeat_status() == HeartbeatStatus.DATA_STALE
+
+
+def test_delta_market_data_and_transport_silence_are_separate():
+    clock = [0.0]
+    client = DeltaPublicWsClient(
+        ["BTCUSD"],
+        heartbeat=HeartbeatConfig(
+            ping_interval_s=5,
+            pong_timeout_s=2,
+            transport_silence_s=10,
+            data_silence_s=5,
+            use_ws_control_ping=False,
+        ),
+        monotonic=lambda: clock[0],
+    )
+    clock[0] = 1.0
+    client._handle(
+        {
+            "type": "l2_orderbook",
+            "symbol": "BTCUSD",
+            "buy": [{"limit_price": "100", "size": 1}],
+            "sell": [{"limit_price": "101", "size": 1}],
+        }
+    )
+    clock[0] = 5.0
+    client._handle({"type": "heartbeat"})
+    clock[0] = 7.0
+    assert client.heartbeat_status() == HeartbeatStatus.DATA_STALE
+
+    clock[0] = 16.0
+    assert client.heartbeat_status() == HeartbeatStatus.TRANSPORT_STALE
 
 
 def _candle_msg(start_us, close, *, volume=10.0, resolution="1h"):

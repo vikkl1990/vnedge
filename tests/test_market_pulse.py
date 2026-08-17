@@ -638,8 +638,13 @@ def test_pulse_websocket_is_token_gated_and_coalesced(tmp_path) -> None:
     client = TestClient(
         create_app(provider, token="secret", market_pulse_service=service(tmp_path))
     )
+    assert client.post(
+        "/auth/session", headers={"Authorization": "Bearer secret"}
+    ).status_code == 200
+    session = client.cookies.get("vnedge_session")
     with client.websocket_connect(
-        "/api/pulse/stream?token=secret&symbol=BTCUSDT&exchange=binanceusdm"
+        "/api/pulse/stream?symbol=BTCUSDT&exchange=binanceusdm",
+        headers={"Cookie": f"vnedge_session={session}"},
     ) as websocket:
         payload = websocket.receive_json()
     assert payload["symbol"] == "BTCUSDT"

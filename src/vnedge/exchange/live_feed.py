@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from vnedge.data.ccxt_client import create_ccxt_async_exchange
 from vnedge.data.schemas import TIMEFRAME_MS
+from vnedge.exchange.heartbeat import HeartbeatStatus
 from vnedge.risk.risk_manager import MarketState
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,21 @@ _DEFAULT_REST_QUOTE_POLL_SECONDS = 2.0
 _VALIDATED_CCXT_PRO_FEEDS = {"binanceusdm", "bybit"}
 
 
+def _data_quality(
+    last_event_at: datetime | None,
+    healthy: bool,
+    silence_limit_s: float,
+) -> tuple[bool, str, str]:
+    if last_event_at is None:
+        return True, "stale", "market stream has not produced an event"
+    age = (datetime.now(UTC) - last_event_at).total_seconds()
+    if age > silence_limit_s:
+        return True, "stale", f"market stream silent for {age:.1f}s"
+    if not healthy:
+        return True, "degraded", "market transport unhealthy"
+    return False, "ok", ""
+
+
 class LiveMarketFeed:
     def __init__(
         self,
@@ -50,6 +67,7 @@ class LiveMarketFeed:
         timeframe: str = "1m",
         slippage_est_bps: float = 2.0,
         funding_refresh_seconds: float = 900.0,
+        data_silence_seconds: float = 60.0,
     ) -> None:
         import ccxt.pro as ccxtpro  # heavy import kept local
 
@@ -62,6 +80,9 @@ class LiveMarketFeed:
         self.timeframe = timeframe
         self.slippage_est_bps = slippage_est_bps
         self.funding_refresh_seconds = funding_refresh_seconds
+        if data_silence_seconds <= 0:
+            raise ValueError("data_silence_seconds must be positive")
+        self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote: tuple[float, float] | None = None  # (bid, ask)
@@ -118,6 +139,11 @@ class LiveMarketFeed:
             spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10_000.0
         else:
             spread_bps = float("inf")  # no quote yet -> gateway rejects on spread
+        degraded, quality, reason = _data_quality(
+            self.last_event_at,
+            self.healthy,
+            self.data_silence_seconds,
+        )
         return MarketState(
             symbol=self.symbol,
             last_update=self.last_event_at or datetime(1970, 1, 1, tzinfo=UTC),
@@ -125,6 +151,9 @@ class LiveMarketFeed:
             estimated_slippage_bps=self.slippage_est_bps,
             funding_rate=self.funding_rate,
             exchange_healthy=self.healthy,
+            data_degraded=degraded,
+            data_quality=quality,
+            data_quality_reason=reason,
         )
 
     @property
@@ -274,6 +303,7 @@ class RestPollingMarketFeed:
         candle_poll_seconds: float = _DEFAULT_REST_CANDLE_POLL_SECONDS,
         quote_poll_seconds: float = _DEFAULT_REST_QUOTE_POLL_SECONDS,
         funding_refresh_seconds: float = 900.0,
+        data_silence_seconds: float = 60.0,
     ) -> None:
         if timeframe not in TIMEFRAME_MS:
             raise ValueError(f"unsupported timeframe for REST polling feed: {timeframe}")
@@ -286,6 +316,9 @@ class RestPollingMarketFeed:
         self.candle_poll_seconds = candle_poll_seconds
         self.quote_poll_seconds = quote_poll_seconds
         self.funding_refresh_seconds = funding_refresh_seconds
+        if data_silence_seconds <= 0:
+            raise ValueError("data_silence_seconds must be positive")
+        self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote: tuple[float, float] | None = None
@@ -293,6 +326,7 @@ class RestPollingMarketFeed:
         self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)
         self.book_metrics: dict | None = None  # L2 metrics (native-ws subclasses)
         self.last_event_at: datetime | None = None
+        self.last_transport_at: datetime | None = None
         self.healthy: bool = False
         self.candles_closed = 0
         self._consecutive_errors = 0
@@ -335,6 +369,11 @@ class RestPollingMarketFeed:
             spread_bps = (ask - bid) / ((ask + bid) / 2.0) * 10_000.0
         else:
             spread_bps = float("inf")
+        degraded, quality, reason = _data_quality(
+            self.last_event_at,
+            self.healthy,
+            self.data_silence_seconds,
+        )
         return MarketState(
             symbol=self.symbol,
             last_update=self.last_event_at or datetime(1970, 1, 1, tzinfo=UTC),
@@ -342,6 +381,9 @@ class RestPollingMarketFeed:
             estimated_slippage_bps=self.slippage_est_bps,
             funding_rate=self.funding_rate,
             exchange_healthy=self.healthy,
+            data_degraded=degraded,
+            data_quality=quality,
+            data_quality_reason=reason,
         )
 
     async def _poll_candles(self) -> None:
@@ -528,12 +570,36 @@ class DeltaWsFeed(RestPollingMarketFeed):
                 # honest staleness/health: track the real stream, not this loop
                 if self._ws.last_event_at is not None:
                     self.last_event_at = self._ws.last_event_at
-                    self.healthy = self._ws.healthy
+                if self._ws.last_transport_at is not None:
+                    self.last_transport_at = self._ws.last_transport_at
+                status = self._ws.heartbeat_status()
+                self.healthy = self._ws.healthy and status not in {
+                    HeartbeatStatus.PONG_TIMEOUT,
+                    HeartbeatStatus.TRANSPORT_STALE,
+                    HeartbeatStatus.DATA_STALE,
+                }
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._mark_error("ws-sync", exc)
             await asyncio.sleep(0.5)
+
+    def market_state(self) -> MarketState:
+        state = super().market_state()
+        status = self._ws.heartbeat_status()
+        if status in {
+            HeartbeatStatus.PONG_TIMEOUT,
+            HeartbeatStatus.TRANSPORT_STALE,
+            HeartbeatStatus.DATA_STALE,
+        }:
+            return replace(
+                state,
+                exchange_healthy=False,
+                data_degraded=True,
+                data_quality="stale",
+                data_quality_reason=f"delta websocket {status.value}",
+            )
+        return state
 
 
 def supports_ccxt_pro_feed(exchange_id: str) -> bool:
