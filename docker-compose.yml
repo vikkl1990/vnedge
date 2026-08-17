@@ -39,6 +39,12 @@ services:
       MULTI_LANE_SHADOW_OBSERVE_EQUITY: "${MULTI_LANE_SHADOW_OBSERVE_EQUITY:-500}"
       MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD: "${MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD:-10}"
       MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT: "${MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT:-0}"
+      # Optional fixed isolated-margin sizing for PAPER/SHADOW only. The live
+      # runtime rejects this profile structurally. Leverage is capped at 30x
+      # and automatically reduced when required to preserve liquidation room.
+      MULTI_LANE_FIXED_MARGIN: "${MULTI_LANE_FIXED_MARGIN:-}"
+      MULTI_LANE_FIXED_MARGIN_LEVERAGE: "${MULTI_LANE_FIXED_MARGIN_LEVERAGE:-30}"
+      MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-1}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
       interval: 30s
