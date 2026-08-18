@@ -169,6 +169,14 @@ class SqueezeExpansionBreakout(BaseStrategy):
             last_fire = i
             fired_episode = episode_list[i]
 
+        # Extra causal columns for the trigger/exit-plane observer runner.
+        episode = compressed.ne(compressed.shift(1, fill_value=False)).cumsum()
+        pv = (close * volume).shift(1).rolling(288, min_periods=288).sum()
+        vv = volume.shift(1).rolling(288, min_periods=288).sum()
+        out["sqz_compressed"] = compressed.astype(float)
+        out["sqz_episode"] = episode.astype(float)
+        out["sqz_vol_ma"] = vol_ma
+        out["sqz_vwap24"] = pv.div(vv.where(vv > 0))
         out["sqz_range_rank"] = range_rank
         out["sqz_range_high"] = range_high
         out["sqz_range_low"] = range_low
