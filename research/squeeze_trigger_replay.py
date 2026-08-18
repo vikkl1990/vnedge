@@ -93,31 +93,50 @@ def fetch(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[tuple]
 
 
 def replay(symbol: str, bars: list[tuple], eval_start_ms: int) -> list[dict]:
+    from vnedge.execution.exit_engine import ExitConfig, ExitEngine
+    from vnedge.execution.trigger_engine import ArmState, TriggerConfig, TriggerEngine
+
     n = len(bars)
     highs = [b[2] for b in bars]
     lows = [b[3] for b in bars]
     closes = [b[4] for b in bars]
     vols = [b[5] for b in bars]
 
+    trigger = TriggerEngine(
+        config=TriggerConfig(
+            max_chase_bps=MAX_CHASE_BPS,
+            entry_slip_bps=ENTRY_SLIP_BPS,
+            break_buffer_bps=BREAK_BUFFER_BPS,
+            max_fires_per_day=MAX_FIRES_PER_DAY,
+            min_bars_between_fires=MIN_BARS_BETWEEN_FIRES,
+            cooldown_loss_bars=COOLDOWN_LOSS_BARS,
+            cooldown_win_bars=COOLDOWN_WIN_BARS,
+            confirm_close=CONFIRM_CLOSE,
+            atr_stop_mult=ATR_STOP_MULT,
+            vol_mult=VOL_MULT,
+        )
+    )
+    exits = ExitEngine(
+        config=ExitConfig(
+            no_progress_bars=NO_PROGRESS_BARS,
+            no_progress_min_r=NO_PROGRESS_MIN_R,
+            breakeven_arm_r=BREAKEVEN_ARM_R,
+            trail_arm_r=TRAIL_ARM_R,
+            trail_atr_mult=TRAIL_ATR_MULT,
+            absolute_max_bars=ABSOLUTE_MAX_BARS,
+            taker_bps=TAKER_BPS,
+        )
+    )
+
     trades: list[dict] = []
-    pos: dict | None = None
-    fired_episode: int | None = None
+    open_meta: dict | None = None
     episode_id = 0
     prev_compressed = False
-    last_fire_bar = -(10**9)
-    cooldown_until_bar = -(10**9)
-    fires_today = 0
-    today = None
     rank_window: list[float] = []
-
     pv_sum = v_sum = 0.0
 
     for i in range(n):
         ts = bars[i][0]
-        day = dt.datetime.fromtimestamp(ts / 1000, UTC).date()
-        if day != today:
-            today = day
-            fires_today = 0
 
         # ---- rolling 24h VWAP over prior bars (bias veto) ----
         if i >= 1:
@@ -157,127 +176,70 @@ def replay(symbol: str, bars: list[tuple], eval_start_ms: int) -> list[dict]:
         )
         vol_ma = statistics.mean(vols[i - VOL_LOOKBACK : i])
 
-        # ---- manage open position (exit plane) ----
-        if pos is not None:
-            side = pos["side"]
-            held = i - pos["entry_bar"]
-            favorable = (
-                (highs[i] - pos["entry"]) if side == "long" else (pos["entry"] - lows[i])
+        # ---- exit plane ----
+        if open_meta is not None:
+            decision = exits.on_bar(
+                high=highs[i], low=lows[i], close=closes[i], atr=atr, bar_index=i
             )
-            pos["mfe"] = max(pos["mfe"], favorable)
-            pos["ext"] = max(pos["ext"], highs[i]) if side == "long" else min(pos["ext"], lows[i])
-            risk = pos["risk"]
-
-            def _close(price: float, reason: str) -> None:
+            if decision is not None:
+                held = i - open_meta["entry_bar"]
+                side = open_meta["side"]
                 gross = (
-                    (price / pos["entry"] - 1) if side == "long" else (1 - price / pos["entry"])
+                    (decision.price / open_meta["entry"] - 1)
+                    if side == "long"
+                    else (1 - decision.price / open_meta["entry"])
                 ) * 1e4
-                fee = TAKER_BPS + (0.0 if held <= SCALPER_FREE_CLOSE_BARS else TAKER_BPS)
+                fee = TAKER_BPS + (
+                    0.0 if held <= SCALPER_FREE_CLOSE_BARS else TAKER_BPS
+                )
                 trades.append(
                     {
                         "symbol": symbol,
                         "side": side,
-                        "entry_ts": bars[pos["entry_bar"]][0],
+                        "entry_ts": bars[open_meta["entry_bar"]][0],
                         "exit_ts": ts,
-                        "entry": pos["entry"],
-                        "exit": price,
-                        "reason": reason,
+                        "entry": open_meta["entry"],
+                        "exit": decision.price,
+                        "reason": decision.reason,
                         "held_bars": held,
                         "net_bps": gross - fee,
                     }
                 )
-
-            stop = pos["stop"]
-            stop_hit = lows[i] <= stop if side == "long" else highs[i] >= stop
-            if stop_hit:
-                _close(stop, "stop")
-                cooldown_until_bar = i + COOLDOWN_LOSS_BARS
-                pos = None
-                continue
-            back_inside = (
-                closes[i] < pos["box_edge"] if side == "long" else closes[i] > pos["box_edge"]
-            )
-            if held >= 1 and back_inside:
-                _close(closes[i], "failed_breakout")
-                cooldown_until_bar = i + COOLDOWN_LOSS_BARS
-                pos = None
-                continue
-            if held >= NO_PROGRESS_BARS and pos["mfe"] < NO_PROGRESS_MIN_R * risk:
-                _close(closes[i], "no_progress")
-                cooldown_until_bar = i + COOLDOWN_LOSS_BARS
-                pos = None
-                continue
-            if held >= ABSOLUTE_MAX_BARS:
-                _close(closes[i], "time_4h")
-                cooldown_until_bar = i + COOLDOWN_WIN_BARS
-                pos = None
-                continue
-            if pos["mfe"] >= BREAKEVEN_ARM_R * risk:
-                be = (
-                    pos["entry"] * (1 + (TAKER_BPS + 1) / 1e4)
-                    if side == "long"
-                    else pos["entry"] * (1 - (TAKER_BPS + 1) / 1e4)
-                )
-                pos["stop"] = max(pos["stop"], be) if side == "long" else min(pos["stop"], be)
-            if pos["mfe"] >= TRAIL_ARM_R * risk:
-                trail = (
-                    pos["ext"] - TRAIL_ATR_MULT * atr
-                    if side == "long"
-                    else pos["ext"] + TRAIL_ATR_MULT * atr
-                )
-                pos["stop"] = max(pos["stop"], trail) if side == "long" else min(pos["stop"], trail)
+                trigger.notify_flat(i, won=decision.won)
+                open_meta = None
             continue
 
         # ---- trigger plane ----
-        if ts < eval_start_ms or not compressed or fired_episode == episode_id:
+        if ts < eval_start_ms:
             continue
-        if i < cooldown_until_bar or i - last_fire_bar < MIN_BARS_BETWEEN_FIRES:
-            continue
-        if fires_today >= MAX_FIRES_PER_DAY or vwap is None:
-            continue
-        buf = closes[i - 1] * BREAK_BUFFER_BPS / 1e4
-        long_level = box_high + buf
-        short_level = box_low - buf
-        volume_ok = vols[i] > VOL_MULT * vol_ma
-        side = None
-        confirmed_long = (
-            closes[i] > long_level if CONFIRM_CLOSE else highs[i] > long_level
+        fire = trigger.try_fire(
+            arm=ArmState(
+                episode_id=episode_id,
+                box_high=box_high,
+                box_low=box_low,
+                compressed=compressed,
+                atr=atr,
+                vol_ma=vol_ma,
+                prev_close=closes[i - 1],
+            ),
+            high=highs[i],
+            low=lows[i],
+            close=closes[i],
+            volume=vols[i],
+            vwap=vwap,
+            bar_index=i,
+            bar_ts_ms=ts,
         )
-        confirmed_short = (
-            closes[i] < short_level if CONFIRM_CLOSE else lows[i] < short_level
-        )
-        if confirmed_long and closes[i - 1] > vwap:
-            side, level, box_edge = "long", long_level, box_high
-        elif confirmed_short and closes[i - 1] < vwap:
-            side, level, box_edge = "short", short_level, box_low
-        if side is None or not volume_ok:
-            continue
-        chase = (
-            (closes[i] - level) / level if side == "long" else (level - closes[i]) / level
-        ) * 1e4
-        if chase > MAX_CHASE_BPS:
-            fired_episode = episode_id  # move already gone; burn the arm
-            continue
-        entry = (
-            level * (1 + ENTRY_SLIP_BPS / 1e4)
-            if side == "long"
-            else level * (1 - ENTRY_SLIP_BPS / 1e4)
-        )
-        risk = ATR_STOP_MULT * atr
-        stop = level - risk if side == "long" else level + risk
-        pos = {
-            "side": side,
-            "entry": entry,
-            "entry_bar": i,
-            "stop": stop,
-            "risk": risk,
-            "box_edge": box_edge,
-            "mfe": 0.0,
-            "ext": entry,
-        }
-        fired_episode = episode_id
-        last_fire_bar = i
-        fires_today += 1
+        if fire is not None:
+            exits.open_from_fire(
+                side=fire.side,
+                entry=fire.entry,
+                stop=fire.stop,
+                risk=fire.risk,
+                box_edge=fire.box_edge,
+                entry_bar=i,
+            )
+            open_meta = {"side": fire.side, "entry": fire.entry, "entry_bar": i}
 
     return trades
 
