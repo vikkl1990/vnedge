@@ -22,7 +22,11 @@ from vnedge.research.causality_analyzer import analyze_strategy, synthetic_marke
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.strategy_registry import STRATEGIES
 
-CANDLES, FUNDING = synthetic_market()
+# Size the corpus from the registry's largest warmup so long-warmup
+# strategies (e.g. squeeze_expansion_breakout_v2 at ~2065 bars of 5m rank
+# history) still get real bars past warmup in the back half.
+_MAX_WARMUP = max(cls.warmup_bars for cls in STRATEGIES.values())
+CANDLES, FUNDING = synthetic_market(n_bars=max(456, _MAX_WARMUP + 220))
 
 
 @pytest.mark.parametrize("strategy_id", sorted(STRATEGIES))
@@ -36,7 +40,7 @@ def test_registered_strategy_is_truncation_invariant(strategy_id: str) -> None:
 
 
 def test_synthetic_market_is_deterministic_and_canonical() -> None:
-    candles2, funding2 = synthetic_market()
+    candles2, funding2 = synthetic_market(n_bars=max(456, _MAX_WARMUP + 220))
     pd.testing.assert_frame_equal(CANDLES, candles2)
     pd.testing.assert_frame_equal(FUNDING, funding2)
     assert list(CANDLES.columns) == ["timestamp", "open", "high", "low", "close", "volume"]

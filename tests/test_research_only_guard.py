@@ -21,6 +21,7 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "measurement_only_v1",
         "structure_bos_1h",
         "fee_wall_momentum_observer_v1",
+        "squeeze_expansion_breakout_v2",
     }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
@@ -52,7 +53,9 @@ def test_shadow_observe_is_a_separate_narrow_permission():
     assert SHADOW_OBSERVE == {
         "structure_bos_1h",
         "fee_wall_momentum_observer_v1",
+        "squeeze_expansion_breakout_v2",
     }
+    assert is_shadow_observe_eligible("squeeze_expansion_breakout_v2")
     assert is_shadow_observe_eligible("structure_bos_1h")
     assert is_shadow_observe_eligible("fee_wall_momentum_observer_v1")
     assert not is_capital_eligible("fee_wall_momentum_observer_v1")

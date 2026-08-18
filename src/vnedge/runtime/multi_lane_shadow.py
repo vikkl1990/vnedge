@@ -172,6 +172,10 @@ def build_shadow_observe_lane_specs(
         raise ValueError(
             "fee_wall_momentum_observer_v1 shadow observe requires timeframe 5m"
         )
+    if strategy_id == "squeeze_expansion_breakout_v2" and timeframe != "5m":
+        raise ValueError(
+            "squeeze_expansion_breakout_v2 shadow observe requires timeframe 5m"
+        )
     starting_equity = _positive_float(
         environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
     )

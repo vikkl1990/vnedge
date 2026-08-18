@@ -9,6 +9,7 @@ from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
@@ -23,6 +24,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     PanicReversal.strategy_id: PanicReversal,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
     StructureBos1H.strategy_id: StructureBos1H,
+    SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout,
 }
 
 # Observation and pre-registered candidates are deliberately non-capital even
@@ -33,6 +35,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         MeasurementOnly.strategy_id,
         StructureBos1H.strategy_id,
         FeeWallMomentumObserver.strategy_id,
+        SqueezeExpansionBreakout.strategy_id,
     }
 )
 
@@ -50,7 +53,11 @@ CAPITAL_APPROVED: frozenset[str] = frozenset()
 # ``RESEARCH_ONLY``: being research-only does not automatically grant a live
 # public-data observation process.  Killed strategies can never enter it.
 SHADOW_OBSERVE: frozenset[str] = frozenset(
-    {StructureBos1H.strategy_id, FeeWallMomentumObserver.strategy_id}
+    {
+        StructureBos1H.strategy_id,
+        FeeWallMomentumObserver.strategy_id,
+        SqueezeExpansionBreakout.strategy_id,
+    }
 )
 
 
