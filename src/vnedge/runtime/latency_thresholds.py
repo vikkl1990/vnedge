@@ -15,11 +15,18 @@ Semantics:
 This module is pure data + classification. It does NOT read snapshots, place
 orders, or import runtime state; callers pass measured samples in.
 """
+
 from __future__ import annotations
 
 # --- forming-state age (ms): now - last exchange update for a TF -------------
 TM_AGE_SOFT_P99_MS: dict[str, int] = {"1m": 1500, "5m": 3000, "15m": 5000, "1h": 8000, "4h": 15000}
-TM_AGE_HARD_LAST_MS: dict[str, int] = {"1m": 5000, "5m": 12000, "15m": 30000, "1h": 90000, "4h": 300000}
+TM_AGE_HARD_LAST_MS: dict[str, int] = {
+    "1m": 5000,
+    "5m": 12000,
+    "15m": 30000,
+    "1h": 90000,
+    "4h": 300000,
+}
 TM_AGE_HARD_P99_MS: dict[str, int] = {"1m": 3000}
 
 # --- closed-bar decision path (ms) -------------------------------------------
@@ -30,6 +37,14 @@ DECISION_COMPUTE_HARD_P99_MS = 200
 # A p95 arm gate needs at least 20 observations (one 5% tail sample). Before
 # then the metric is visible but statistically immature and cannot halt arms.
 LATENCY_GATE_MIN_SAMPLES = 20
+# A rolling p95 deliberately remembers bad history, but it must not leave a
+# recovered stream arm-blocked for most of a trading day.  A HARD gate clears
+# only after this many distinct, newly recorded observations are all inside a
+# conservative recovery budget.  History remains SOFT/degraded until the p95
+# itself cools below HARD.
+LATENCY_RECOVERY_CONSECUTIVE_SAMPLES = 5
+CLOSED_BAR_LAG_RECOVERY_MS = 1500
+DECISION_COMPUTE_RECOVERY_MS = 100
 
 # --- snapshot / UI path (ms) — observability, never gates arms ---------------
 SNAPSHOT_AGE_SOFT_P99_MS = 3000
@@ -77,6 +92,104 @@ def classify_p99(value_ms: float | None, soft_ms: float, hard_ms: float) -> Band
     if value_ms > soft_ms:
         return "soft"
     return "ok"
+
+
+def recovery_tail_count(stats: object, recovery_ms: float) -> int:
+    """Count consecutive healthy observations at the end of ``stats.recent``."""
+    if not isinstance(stats, dict):
+        return 0
+    recent = stats.get("recent")
+    if not isinstance(recent, list):
+        return 0
+    count = 0
+    for raw in reversed(recent):
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            break
+        if value > recovery_ms:
+            break
+        count += 1
+    return count
+
+
+def latency_recovery_state(
+    stats: object,
+    *,
+    soft_ms: float,
+    hard_ms: float,
+    recovery_ms: float,
+) -> dict[str, object]:
+    """Return the raw/effective band and bounded recovery proof.
+
+    The gate trips from the mature rolling p95.  If that p95 is still HARD,
+    five fresh samples under ``recovery_ms`` downgrade the *operational* band
+    to SOFT.  This restores new-arm evaluation while keeping the old tail
+    visible as degraded telemetry.  Any later sample over the recovery budget
+    resets the proof and makes the HARD p95 block again.
+    """
+    if not isinstance(stats, dict):
+        return {
+            "state": "unknown",
+            "raw_band": "unknown",
+            "effective_band": "unknown",
+            "healthy_samples": 0,
+            "required_samples": LATENCY_RECOVERY_CONSECUTIVE_SAMPLES,
+            "recovery_threshold_ms": recovery_ms,
+        }
+    try:
+        samples = int(stats.get("n") or 0)
+        p95 = float(stats.get("p95"))
+    except (TypeError, ValueError):
+        samples, p95 = 0, 0.0
+    if samples < LATENCY_GATE_MIN_SAMPLES:
+        return {
+            "state": "warming",
+            "raw_band": "unknown",
+            "effective_band": "unknown",
+            "healthy_samples": 0,
+            "required_samples": LATENCY_RECOVERY_CONSECUTIVE_SAMPLES,
+            "recovery_threshold_ms": recovery_ms,
+        }
+    raw_band = classify_p99(p95, soft_ms, hard_ms)
+    healthy = recovery_tail_count(stats, recovery_ms) if raw_band == "hard" else 0
+    recovered = raw_band == "hard" and healthy >= LATENCY_RECOVERY_CONSECUTIVE_SAMPLES
+    effective_band = "soft" if recovered else raw_band
+    state = (
+        "recovered"
+        if recovered
+        else "recovering"
+        if raw_band == "hard" and healthy > 0
+        else "blocked"
+        if raw_band == "hard"
+        else "nominal"
+    )
+    return {
+        "state": state,
+        "raw_band": raw_band,
+        "effective_band": effective_band,
+        "healthy_samples": healthy,
+        "required_samples": LATENCY_RECOVERY_CONSECUTIVE_SAMPLES,
+        "recovery_threshold_ms": recovery_ms,
+    }
+
+
+def classify_latency_stats(
+    stats: object,
+    *,
+    soft_ms: float,
+    hard_ms: float,
+    recovery_ms: float,
+) -> Band:
+    """Recovery-aware band shared by the arm gate and both dashboards."""
+    return str(
+        latency_recovery_state(
+            stats,
+            soft_ms=soft_ms,
+            hard_ms=hard_ms,
+            recovery_ms=recovery_ms,
+        )["effective_band"]
+    )
 
 
 def blocks_new_arms(band: Band) -> bool:

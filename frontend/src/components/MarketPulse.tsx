@@ -687,12 +687,13 @@ export function MarketPulse() {
           <div className="flex gap-2"><TerminalBadge tone={scannerLanes.length ? "info" : "neutral"}>{scannerLanes.length} active</TerminalBadge><TerminalBadge tone="neutral">{lanes.data?.portfolio.shadow_pending_intents ?? 0} pending</TerminalBadge><TerminalBadge tone="info">{lanes.data ? `$${lanes.data.portfolio.shadow_purse_usd.toFixed(0)} purse` : "purse —"}</TerminalBadge></div>
         </div>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
-          {(selectedScanner.length ? selectedScanner : scannerLanes).map((lane) => (
-            <div key={lane.lane_id} className="rounded-lg border border-line bg-inset px-3 py-3">
+          {(selectedScanner.length ? selectedScanner : scannerLanes).map((lane) => {
+            const recovery = Object.values(lane.latency_recovery ?? {}).find((state) => state.state === "recovering" || state.state === "recovered");
+            return <div key={lane.lane_id} className="rounded-lg border border-line bg-inset px-3 py-3">
               <div className="flex items-center justify-between gap-3"><span className="font-mono text-[11px] text-txt">{lane.symbol} · {lane.timeframe}</span><TerminalBadge tone={lane.health === "ok" ? "good" : lane.health === "blocked" ? "bad" : "warn"}>{lane.health}</TerminalBadge></div>
-              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px]"><span className="text-faint">last signal</span><span className="text-right">{lane.last_signal_age_seconds == null ? "not observed" : `${Math.round(lane.last_signal_age_seconds / 60)}m ago`}</span><span className="text-faint">virtual outcome</span><span className="text-right">{lane.shadow_perf?.virtual_net_usd == null ? "—" : `$${lane.shadow_perf.virtual_net_usd.toFixed(2)}`} · {lane.shadow_perf?.wins ?? 0}W/{lane.shadow_perf?.losses ?? 0}L</span><span className="text-faint">sizing</span><span className="text-right">${lane.sizing_profile?.fixed_margin_usd ?? "—"} margin · ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span><span className="text-faint">why waiting</span><span className="text-right break-words">{lane.last_reject_reason ?? lane.last_signal_reason}</span></div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px]"><span className="text-faint">last signal</span><span className="text-right">{lane.last_signal_age_seconds == null ? "not observed" : `${Math.round(lane.last_signal_age_seconds / 60)}m ago`}</span><span className="text-faint">virtual outcome</span><span className="text-right">{lane.shadow_perf?.virtual_net_usd == null ? "—" : `$${lane.shadow_perf.virtual_net_usd.toFixed(2)}`} · {lane.shadow_perf?.wins ?? 0}W/{lane.shadow_perf?.losses ?? 0}L</span><span className="text-faint">sizing</span><span className="text-right">${lane.sizing_profile?.fixed_margin_usd ?? "—"} margin · ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>{recovery && <><span className="text-faint">recovery</span><span className="text-right">{recovery.state} · {recovery.healthy_samples ?? 0}/{recovery.required_samples ?? 0}</span></>}<span className="text-faint">why waiting</span><span className="text-right break-words">{lane.current_waiting_reason}</span></div>
             </div>
-          ))}
+          })}
           {!scannerLanes.length && <div className="text-[11px] text-dim">No shadow scanner lane is reported. Market measurement remains available, but scanner coverage is absent.</div>}
         </div>
       </section>

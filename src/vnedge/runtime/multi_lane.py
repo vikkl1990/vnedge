@@ -239,6 +239,7 @@ class MultiLaneProvider:
         primary_session = primary.get("session") or {}
         out.setdefault("time_machine", primary_session.get("time_machine"))
         out.setdefault("latency", primary_session.get("latency"))
+        out.setdefault("latency_recovery", primary_session.get("latency_recovery"))
         try:
             ts = primary.get("ts")
             age_ms = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds() * 1000.0 if ts else None
@@ -322,6 +323,9 @@ class MultiLaneProvider:
                 # pipeline latency: bar_close_processing_ms (close -> dequeue)
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
+                "latency_recovery": self._lanes[lid].get("session", {}).get(
+                    "latency_recovery"
+                ),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),

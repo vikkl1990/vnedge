@@ -50,7 +50,22 @@ def test_single_sample():
     t = LatencyTracker()
     t.record("decision_lag_ms", 7.5)
     s = t.stats("decision_lag_ms")
-    assert s == {"last": 7.5, "p50": 7.5, "p95": 7.5, "max": 7.5, "n": 1}
+    assert s == {
+        "last": 7.5,
+        "p50": 7.5,
+        "p95": 7.5,
+        "max": 7.5,
+        "n": 1,
+        "recent": [7.5],
+    }
+
+
+def test_stats_exposes_only_five_newest_samples_in_order():
+    tracker = LatencyTracker()
+    for value in range(8):
+        tracker.record("x", float(value))
+
+    assert tracker.stats("x")["recent"] == [3.0, 4.0, 5.0, 6.0, 7.0]
 
 
 def test_rolling_window_evicts_old():

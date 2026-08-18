@@ -47,7 +47,9 @@ def lane_rows(snap: dict) -> list[dict]:
         "mode": snap.get("mode"),
         "time_machine": tm,
         "latency": snap.get("latency"),
+        "latency_recovery": sess.get("latency_recovery") or snap.get("latency_recovery"),
         "decision_skips": snap.get("decision_skips"),
+        "arm_blocked": sess.get("arm_blocked") or snap.get("arm_blocked"),
         "drawdown_pct": sess.get("drawdown_pct"),
         "dd_limit_pct": sess.get("dd_limit_pct"),
         "trial_scorecard": sess.get("trial_scorecard"),
@@ -71,27 +73,15 @@ def _verdict_tone(v) -> str:
     return {"PASS": "ok", "FAIL": "blocked", "PENDING": "degraded"}.get(v, "unknown")
 
 
-def _mature_p95(latency: object, name: str, alias: str | None = None) -> float | None:
-    """Return p95 only after the runtime's own minimum sample count is met.
-
-    A p95 built from one or two bars is not operational evidence.  The arm
-    gate already waits for ``LATENCY_GATE_MIN_SAMPLES``; the dashboard must use
-    the same maturity rule or it can show a scary lag state the runtime itself
-    correctly treats as warm-up.
-    """
+def _latency_metric(
+    latency: object, name: str, alias: str | None = None
+) -> Mapping[str, object] | None:
     if not isinstance(latency, Mapping):
         return None
     raw = latency.get(name)
     if not isinstance(raw, Mapping) and alias:
         raw = latency.get(alias)
-    if not isinstance(raw, Mapping):
-        return None
-    try:
-        samples = int(raw.get("n") or 0)
-        value = float(raw.get("p95"))
-    except (TypeError, ValueError):
-        return None
-    return value if samples >= LT.LATENCY_GATE_MIN_SAMPLES else None
+    return raw if isinstance(raw, Mapping) else None
 
 
 def _latency_samples(latency: object) -> list[int]:
@@ -113,13 +103,19 @@ def lane_bands(lane: dict) -> dict:
     tm = lane.get("time_machine") or {}
     age = (tm.get("age_ms") or {}).get(tf)
     lat = lane.get("latency") or {}
-    p95 = _mature_p95(lat, "decision_lag_ms")
-    bar_p95 = _mature_p95(lat, "bar_close_processing_ms", "feed_lag_ms")
-    dlag = LT.classify_p99(
-        p95, LT.DECISION_COMPUTE_SOFT_P99_MS, LT.DECISION_COMPUTE_HARD_P99_MS
+    decision_stats = _latency_metric(lat, "decision_lag_ms")
+    bar_stats = _latency_metric(lat, "bar_close_processing_ms", "feed_lag_ms")
+    dlag = LT.classify_latency_stats(
+        decision_stats,
+        soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
+        hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
+        recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
     )
-    blag = LT.classify_p99(
-        bar_p95, LT.CLOSED_BAR_LAG_SOFT_P99_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS
+    blag = LT.classify_latency_stats(
+        bar_stats,
+        soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
+        hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
+        recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
     )
     sc = lane.get("trial_scorecard") or {}
     return {
@@ -212,30 +208,25 @@ def compute_chips(snap: dict) -> dict:
     decision, d_label = "unknown", "no telemetry"
     # CURRENT block, not cumulative.
     skips = any(lane.get("arm_blocked") for lane in lanes)
-    lat_vals: list[float] = []
-    bar_vals: list[float] = []
+    decision_bands: list[str] = []
+    bar_bands: list[str] = []
     sample_counts: list[int] = []
     for lane in lanes:
         lat = lane.get("latency")
-        decision_value = _mature_p95(lat, "decision_lag_ms")
-        bar_value = _mature_p95(lat, "bar_close_processing_ms", "feed_lag_ms")
-        if decision_value is not None:
-            lat_vals.append(decision_value)
-        if bar_value is not None:
-            bar_vals.append(bar_value)
+        bands = lane.get("bands") if isinstance(lane.get("bands"), Mapping) else lane_bands(lane)
+        decision_bands.append(str(bands.get("decision_lag") or "unknown"))
+        bar_bands.append(str(bands.get("bar_close_lag") or "unknown"))
         sample_counts.extend(_latency_samples(lat))
     if skips:
         decision, d_label = "blocked", "new arms blocked"
-    elif any(v > LT.CLOSED_BAR_LAG_HARD_P99_MS for v in bar_vals):
+    elif "blocked" in bar_bands:
         decision, d_label = "blocked", "bar close lag"
-    elif any(v > LT.DECISION_COMPUTE_HARD_P99_MS for v in lat_vals):
+    elif "blocked" in decision_bands:
         decision, d_label = "blocked", "compute lag"
-    elif lat_vals or bar_vals:
-        bar_soft = any(v > LT.CLOSED_BAR_LAG_SOFT_P99_MS for v in bar_vals)
-        compute_soft = any(v > LT.DECISION_COMPUTE_SOFT_P99_MS for v in lat_vals)
-        if bar_soft:
+    elif any(b != "unknown" for b in decision_bands + bar_bands):
+        if "degraded" in bar_bands:
             decision, d_label = "degraded", "bar close lag"
-        elif compute_soft:
+        elif "degraded" in decision_bands:
             decision, d_label = "degraded", "compute lag"
         else:
             decision, d_label = "ok", "ok"

@@ -148,6 +148,33 @@ def _last_signal_reason(
     )
 
 
+def _current_waiting_reason(lane: Mapping[str, Any], fallback: str) -> str:
+    """Current operational reason, distinct from historical last rejection."""
+    blocked = lane.get("arm_blocked")
+    if blocked:
+        if isinstance(blocked, Mapping):
+            return str(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
+        return str(blocked)
+    recovery = _mapping(lane.get("latency_recovery"))
+    states = [
+        _mapping(value)
+        for value in recovery.values()
+        if isinstance(value, Mapping)
+    ]
+    recovering = next(
+        (state for state in states if state.get("state") == "recovering"), None
+    )
+    if recovering:
+        return (
+            "latency_recovering_"
+            f"{int(recovering.get('healthy_samples') or 0)}/"
+            f"{int(recovering.get('required_samples') or 0)}"
+        )
+    if any(state.get("state") == "recovered" for state in states):
+        return "latency_recovered_p95_cooling"
+    return fallback
+
+
 def build_lanes_payload(
     snapshot: Mapping[str, Any], *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -185,6 +212,7 @@ def build_lanes_payload(
         lane_id = str(lane.get("lane_id") or "")
         health = lane_health(lane, has_problem=lane_id in problems)
         reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
+        waiting_reason = _current_waiting_reason(lane, reason)
         result.append(
             {
                 "lane_id": str(lane.get("lane_id") or strategy_id or "unknown"),
@@ -211,6 +239,7 @@ def build_lanes_payload(
                     "decision": _latency_samples(lane, "decision_lag_ms"),
                     "required": LATENCY_GATE_MIN_SAMPLES,
                 },
+                "latency_recovery": dict(_mapping(lane.get("latency_recovery"))),
                 "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (
                     None
@@ -218,6 +247,7 @@ def build_lanes_payload(
                     else _age_seconds(lane.get("last_fired_ts"), at)
                 ),
                 "last_signal_reason": reason,
+                "current_waiting_reason": waiting_reason,
                 "cost_profile": str(lane.get("cost_profile") or "unreported"),
                 "round_trip_bps": _number(
                     plan.get("round_trip_bps") or lane.get("round_trip_bps")
@@ -260,7 +290,7 @@ def build_lanes_payload(
                     if mode == "measurement"
                     else "strategy is killed and forced off"
                     if eligibility == "KILLED"
-                    else reason
+                    else waiting_reason
                 ),
             }
         )

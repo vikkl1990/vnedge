@@ -202,5 +202,6 @@ def build_snapshot(
         "snapshot_age_ms": 0.0,
         "time_machine": (session_stats or {}).get("time_machine"),
         "latency": (session_stats or {}).get("latency"),
+        "latency_recovery": (session_stats or {}).get("latency_recovery"),
     }
     return annotate(_snap)   # attach server-computed chips + per-lane bands

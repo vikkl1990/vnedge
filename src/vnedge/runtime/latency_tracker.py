@@ -121,7 +121,13 @@ class LatencyTracker:
         return {BAR_CLOSE_PROCESSING_MS: lag_ms, CLOCK_SKEW_MS: skew_ms}
 
     def stats(self, name: str) -> dict | None:
-        """`{last, p50, p95, max, n}` for one metric, or None if no samples."""
+        """Summary plus a short ordered recovery tail for one metric.
+
+        ``recent`` contains the five newest *recorded* samples.  Consumers use
+        it to prove that a previously hard rolling percentile has recovered;
+        unlike polling a snapshot, it cannot manufacture consecutive healthy
+        observations without new bars actually reaching the decision loop.
+        """
         series = self._series.get(name)
         if not series:
             return None
@@ -132,6 +138,7 @@ class LatencyTracker:
             "p95": round(_percentile(vals, 0.95), 2),
             "max": round(vals[-1], 2),
             "n": len(vals),
+            "recent": [round(value, 2) for value in list(series)[-5:]],
         }
 
     def snapshot(self) -> dict:

@@ -251,9 +251,20 @@ export interface TimeMachine {
   forming?: Record<string, { progress?: number }>;
 }
 export interface LatencyStat {
+  last?: number;
   p50?: number;
   p95?: number;
+  max?: number;
   n?: number;
+  recent?: number[];
+}
+export interface LatencyRecoveryState {
+  state?: "unknown" | "warming" | "nominal" | "blocked" | "recovering" | "recovered";
+  raw_band?: string;
+  effective_band?: string;
+  healthy_samples?: number;
+  required_samples?: number;
+  recovery_threshold_ms?: number;
 }
 export interface RegimeReading {
   label?: string;
@@ -289,6 +300,7 @@ export interface LaneRow {
   feed?: string;
   time_machine?: TimeMachine | null;
   latency?: Record<string, LatencyStat> | null;
+  latency_recovery?: Record<string, LatencyRecoveryState> | null;
   decision_skips?: Record<string, number> | null;
   regime?: RegimeReading | null;
   plan_overlay?: PlanOverlay | null;
@@ -316,9 +328,11 @@ export interface CorrectionLane {
   bar_close_processing_ms: number | null;
   decision_lag_ms: number | null;
   latency_samples: { bar_close: number; decision: number; required: number };
+  latency_recovery: Record<string, LatencyRecoveryState>;
   arm_skips: number;
   last_signal_age_seconds: number | null;
   last_signal_reason: string;
+  current_waiting_reason: string;
   cost_profile: string;
   round_trip_bps: number | null;
   health: "ok" | "degraded" | "blocked" | "unknown";

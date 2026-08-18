@@ -122,6 +122,29 @@ def test_lane_projection_uses_server_health_bands() -> None:
     assert projected["health"] == "blocked"
 
 
+def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject() -> None:
+    snap = snapshot()
+    lane = snap["lanes"][0]
+    lane["gapped_candles"] = 0
+    lane["last_reject_reason"] = "candle_path:bar_close_lag_hard"
+    lane["latency_recovery"] = {
+        "bar_close_processing_ms": {
+            "state": "recovered",
+            "raw_band": "hard",
+            "effective_band": "soft",
+            "healthy_samples": 5,
+            "required_samples": 5,
+            "recovery_threshold_ms": 1500,
+        }
+    }
+
+    projected = build_lanes_payload(snap, now=NOW)["lanes"][0]
+
+    assert projected["last_reject_reason"] == "candle_path:bar_close_lag_hard"
+    assert projected["current_waiting_reason"] == "latency_recovered_p95_cooling"
+    assert projected["latency_recovery"]["bar_close_processing_ms"]["state"] == "recovered"
+
+
 def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     snap = snapshot()
     snap["lanes"] = [

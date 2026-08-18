@@ -139,3 +139,43 @@ def test_gate_blocks_hard_decision_compute_lag():
         latency.record("decision_lag_ms", LT.DECISION_COMPUTE_HARD_P99_MS + 1)
 
     assert _gate(_Stub(tm, latency=latency), BASE) == "decision_compute_hard"
+
+
+def test_gate_self_recovers_after_five_fresh_healthy_bar_closes():
+    tm = TimeMachine(["BTC/USDT"], ["1h"])
+    tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
+    latency = LatencyTracker()
+    for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+    for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+
+    stats = latency.stats(BAR_CLOSE_PROCESSING_MS)
+    assert stats["p95"] > LT.CLOSED_BAR_LAG_HARD_P99_MS
+    assert _gate(_Stub(tm, latency=latency), BASE) is None
+
+
+def test_gate_stays_blocked_until_recovery_proof_is_complete():
+    tm = TimeMachine(["BTC/USDT"], ["1h"])
+    tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
+    latency = LatencyTracker()
+    for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+    for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES - 1):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+
+    assert _gate(_Stub(tm, latency=latency), BASE) == "bar_close_lag_hard"
+
+
+def test_gate_reblocks_immediately_when_recovery_relapses():
+    tm = TimeMachine(["BTC/USDT"], ["1h"])
+    tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
+    latency = LatencyTracker()
+    for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+    for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+    assert _gate(_Stub(tm, latency=latency), BASE) is None
+
+    latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS + 1)
+    assert _gate(_Stub(tm, latency=latency), BASE) == "bar_close_lag_hard"

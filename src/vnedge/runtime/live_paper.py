@@ -617,28 +617,22 @@ class LivePaperSession:
             bar_stats = latency.stats(BAR_CLOSE_PROCESSING_MS) or latency.stats(
                 "feed_lag_ms"
             )
-            bar_p95 = bar_stats.get("p95") if bar_stats else None
-            if (
-                (bar_stats or {}).get("n", 0) >= LT.LATENCY_GATE_MIN_SAMPLES
-                and LT.blocks_new_arms(
-                    LT.classify_p99(
-                        bar_p95,
-                        LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-                        LT.CLOSED_BAR_LAG_HARD_P99_MS,
-                    )
+            if LT.blocks_new_arms(
+                LT.classify_latency_stats(
+                    bar_stats,
+                    soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
+                    hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
+                    recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
                 )
             ):
                 return "bar_close_lag_hard"
             decision_stats = latency.stats(DECISION_LAG_MS)
-            decision_p95 = decision_stats.get("p95") if decision_stats else None
-            if (
-                (decision_stats or {}).get("n", 0) >= LT.LATENCY_GATE_MIN_SAMPLES
-                and LT.blocks_new_arms(
-                    LT.classify_p99(
-                        decision_p95,
-                        LT.DECISION_COMPUTE_SOFT_P99_MS,
-                        LT.DECISION_COMPUTE_HARD_P99_MS,
-                    )
+            if LT.blocks_new_arms(
+                LT.classify_latency_stats(
+                    decision_stats,
+                    soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
+                    hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
+                    recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
                 )
             ):
                 return "decision_compute_hard"
@@ -661,6 +655,26 @@ class LivePaperSession:
             logger.error("time machine arm check failed — blocking entry: %s", exc)
             return "tm_error"
         return None
+
+    def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
+        """Operator-visible proof behind automatic latency recovery."""
+        bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats(
+            "feed_lag_ms"
+        )
+        return {
+            "bar_close_processing_ms": LT.latency_recovery_state(
+                bar_stats,
+                soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
+                hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
+                recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
+            ),
+            "decision_lag_ms": LT.latency_recovery_state(
+                self.latency.stats(DECISION_LAG_MS),
+                soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
+                hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
+                recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
+            ),
+        }
 
     def _record_overlays(self, df: pd.DataFrame, idx: int, sig: SignalIntent | None) -> None:
         """OBSERVE-ONLY (D-lite): record what regime_v0 and the cost-aware plan
@@ -839,6 +853,7 @@ class LivePaperSession:
             "feed_staleness_seconds": float(self.feed.staleness_seconds()),
             # candle->signal pipeline latency (offline trail for the dashboard)
             "latency": self.latency.snapshot(),
+            "latency_recovery": self._latency_recovery_snapshot(),
             "last_bar_ts": last_bar_ts,
             "last_eval": self.last_eval,
             "trial_id": (self.trial_meta or {}).get("trial_id"),
@@ -1724,6 +1739,8 @@ class LivePaperSession:
             if evaluation is not None and not bool(getattr(evaluation, "accepted", False)):
                 skip_reason = str(getattr(evaluation, "reason", "no signal"))
                 self.last_reject_reason = skip_reason
+        elif sig is None and skip_reason and not backfill:
+            self.last_reject_reason = skip_reason
         features = {}
         for col in self._EVAL_FEATURES:
             if col in df.columns:
@@ -1886,6 +1903,9 @@ class LivePaperSession:
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}.
                 # feed_lag_ms remains a compatibility alias for the former.
                 "latency": self.latency.snapshot(),
+                # Bounded self-recovery proof. Historical p95 remains visible;
+                # only fresh, distinct samples can release a stale HARD tail.
+                "latency_recovery": self._latency_recovery_snapshot(),
                 # multi-TF forming+closed awareness (read-only; null if TF unsupported)
                 "time_machine": self._tm_snapshot(),
                 # candle-path arm-gate: cumulative skips (metric) + the CURRENT

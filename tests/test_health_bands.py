@@ -100,6 +100,24 @@ def test_hard_bar_close_latency_blocks_decision_chip():
     assert chips["DECISION"] == {"band": "blocked", "label": "bar close lag"}
 
 
+def test_recovered_hard_tail_is_degraded_not_blocked():
+    lane = _lane(
+        latency={
+            "bar_close_processing_ms": {
+                "p95": 2_500,
+                "n": 25,
+                "recent": [900, 800, 700, 750, 650],
+            },
+            "decision_lag_ms": {"p95": 25, "n": 25, "recent": [25] * 5},
+        },
+        arm_blocked=None,
+    )
+
+    assert lane_bands(lane)["bar_close_lag"] == "degraded"
+    chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
+    assert chips["DECISION"] == {"band": "degraded", "label": "bar close lag"}
+
+
 def test_annotate_attaches_chips_and_per_lane_bands():
     snap = {"lanes": [_lane(drawdown_pct=7.35, dd_limit_pct=6.0)], "feed_health": {"candles": "ok"}}
     annotate(snap)
@@ -107,10 +125,12 @@ def test_annotate_attaches_chips_and_per_lane_bands():
 
 
 def test_latency_is_warming_until_runtime_minimum_samples() -> None:
-    lane = _lane(latency={
-        "bar_close_processing_ms": {"p95": 2_500, "n": 2},
-        "decision_lag_ms": {"p95": 25, "n": 2},
-    })
+    lane = _lane(
+        latency={
+            "bar_close_processing_ms": {"p95": 2_500, "n": 2},
+            "decision_lag_ms": {"p95": 25, "n": 2},
+        }
+    )
     assert lane_bands(lane)["bar_close_lag"] == "unknown"
     chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
     assert chips["DECISION"] == {"band": "unknown", "label": "warming 2/20"}
