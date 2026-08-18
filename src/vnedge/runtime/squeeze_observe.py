@@ -117,10 +117,14 @@ class SqueezeObserveRunner:
         fee_bps = TAKER_BPS + (0.0 if held <= SCALPER_FREE_CLOSE_BARS else TAKER_BPS)
         net_bps = gross_bps - fee_bps
         self.outcomes += 1
+        entry_bar_ts = meta.get("bar_ts")
         self.journal.append("shadow_outcome", {
             "intent_key": meta.get("intent_key"),
             "resolution": decision.reason,
             "side": side,
+            # entry bar is carried on the outcome so a reader can reconcile
+            # arm -> fire -> exit without re-joining against the intent record
+            "entry_bar_ts": entry_bar_ts.isoformat() if entry_bar_ts else None,
             "entry_price": entry,
             "exit_price": decision.price,
             "bars_held": held,
