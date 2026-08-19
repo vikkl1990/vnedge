@@ -185,10 +185,16 @@ def test_reject_codes_are_recorded_for_every_refusal() -> None:
     assert engine.try_fire(arm=arm, close=99.5, **common) is None
     assert engine.last_reject is RejectCode.NO_BREAK
 
-    # thin volume
+    # thin volume ON A REAL BREAK (structure is asked first, so this is
+    # attributable: the box broke and the volume was not there)
     assert engine.try_fire(arm=arm, close=100.5,
                            **{**common, "volume": 1.0}) is None
     assert engine.last_reject is RejectCode.VOLUME
+
+    # a quiet bar with thin volume counts as no_break, not volume
+    assert engine.try_fire(arm=arm, close=99.5,
+                           **{**common, "volume": 1.0}) is None
+    assert engine.last_reject is RejectCode.NO_BREAK
 
     # wrong side of VWAP for a long
     assert engine.try_fire(arm=arm, close=100.5,
@@ -202,8 +208,8 @@ def test_reject_codes_are_recorded_for_every_refusal() -> None:
     assert engine.last_reject is RejectCode.NOT_COMPRESSED
 
     # every refusal was counted exactly once
-    assert sum(engine.reject_counts.values()) == 4
-    assert engine.reject_counts["no_break"] == 1
+    assert sum(engine.reject_counts.values()) == 5
+    assert engine.reject_counts["no_break"] == 2
 
 
 def test_chase_burn_is_its_own_reject_code() -> None:

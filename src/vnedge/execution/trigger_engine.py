@@ -176,15 +176,23 @@ class TriggerEngine:
         if vwap is None or vwap <= 0:
             self._reject(RejectCode.NO_VWAP)
             return None
-        if volume <= c.vol_mult * arm.vol_ma:
-            self._reject(RejectCode.VOLUME)
-            return None
 
+        # Gate ORDER is the reject taxonomy's meaning: the structural question
+        # ("did the box even break?") is asked before the confirmation
+        # questions, so a count of `volume` means "a real break with thin
+        # volume" rather than "a quiet bar that also had low volume".
         buffer = arm.prev_close * c.break_buffer_bps / 10_000.0
         long_level = arm.box_high + buffer
         short_level = arm.box_low - buffer
         confirmed_long = close > long_level if c.confirm_close else high > long_level
         confirmed_short = close < short_level if c.confirm_close else low < short_level
+        if not (confirmed_long or confirmed_short):
+            self._reject(RejectCode.NO_BREAK)
+            return None
+
+        if volume <= c.vol_mult * arm.vol_ma:
+            self._reject(RejectCode.VOLUME)
+            return None
 
         side: Side | None = None
         if confirmed_long and arm.prev_close > vwap:
@@ -192,8 +200,7 @@ class TriggerEngine:
         elif confirmed_short and arm.prev_close < vwap:
             side, level, box_edge = "short", short_level, arm.box_low
         if side is None:
-            broke = confirmed_long or confirmed_short
-            self._reject(RejectCode.VWAP_SIDE if broke else RejectCode.NO_BREAK)
+            self._reject(RejectCode.VWAP_SIDE)
             return None
 
         chase_bps = (
