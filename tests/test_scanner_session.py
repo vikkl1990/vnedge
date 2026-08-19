@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import numpy as np
 import pytest
 
@@ -169,3 +170,97 @@ def test_arm_source_observes_every_bar_even_while_positioned() -> None:
     session.run(bars)
     # every bar past the feature warmup reaches the source
     assert counter.seen == len(bars) - (session.config.atr_period + 1)
+
+
+def test_reject_codes_are_recorded_for_every_refusal() -> None:
+    from vnedge.execution.trigger_engine import ArmState, RejectCode, TriggerEngine
+
+    engine = TriggerEngine()
+    arm = ArmState(episode_id=1, box_high=100.0, box_low=99.0, compressed=True,
+                   atr=0.5, vol_ma=10.0, prev_close=99.5)
+    common = dict(high=101.0, low=98.9, volume=50.0, vwap=99.0,
+                  bar_index=100, bar_ts_ms=1_787_000_000_000)
+
+    # no break: close inside the box
+    assert engine.try_fire(arm=arm, close=99.5, **common) is None
+    assert engine.last_reject is RejectCode.NO_BREAK
+
+    # thin volume
+    assert engine.try_fire(arm=arm, close=100.5,
+                           **{**common, "volume": 1.0}) is None
+    assert engine.last_reject is RejectCode.VOLUME
+
+    # wrong side of VWAP for a long
+    assert engine.try_fire(arm=arm, close=100.5,
+                           **{**common, "vwap": 200.0}) is None
+    assert engine.last_reject is RejectCode.VWAP_SIDE
+
+    # not compressed
+    loose = ArmState(episode_id=2, box_high=100.0, box_low=99.0, compressed=False,
+                     atr=0.5, vol_ma=10.0, prev_close=99.5)
+    assert engine.try_fire(arm=loose, close=100.5, **common) is None
+    assert engine.last_reject is RejectCode.NOT_COMPRESSED
+
+    # every refusal was counted exactly once
+    assert sum(engine.reject_counts.values()) == 4
+    assert engine.reject_counts["no_break"] == 1
+
+
+def test_chase_burn_is_its_own_reject_code() -> None:
+    from vnedge.execution.trigger_engine import ArmState, RejectCode, TriggerEngine
+
+    engine = TriggerEngine()
+    arm = ArmState(episode_id=7, box_high=100.0, box_low=99.0, compressed=True,
+                   atr=0.5, vol_ma=10.0, prev_close=99.5)
+    assert engine.try_fire(arm=arm, high=104.0, low=99.9, close=103.0, volume=50.0,
+                           vwap=99.0, bar_index=100,
+                           bar_ts_ms=1_787_000_000_000) is None
+    assert engine.last_reject is RejectCode.CHASE_BURN
+    assert engine.fired_episode == 7
+
+
+def test_a_successful_fire_clears_the_reject_state() -> None:
+    from vnedge.execution.trigger_engine import ArmState, TriggerEngine
+
+    engine = TriggerEngine()
+    arm = ArmState(episode_id=1, box_high=100.0, box_low=99.0, compressed=True,
+                   atr=0.5, vol_ma=10.0, prev_close=99.5)
+    fire = engine.try_fire(arm=arm, high=100.6, low=99.9, close=100.1, volume=50.0,
+                           vwap=99.0, bar_index=100, bar_ts_ms=1_787_000_000_000)
+    assert fire is not None
+    assert engine.last_reject is None
+
+
+def test_daily_returns_zero_fill_idle_days() -> None:
+    from vnedge.runtime.scanner_session import ScannerTrade, daily_returns_bps
+
+    def _trade(day: int, net: float) -> ScannerTrade:
+        ts = int(dt.datetime(2026, 8, day, 12, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+        return ScannerTrade(symbol="T", arm="coil", side="long", entry_index=0,
+                            exit_index=1, entry_ts_ms=ts, exit_ts_ms=ts + 300_000,
+                            entry_price=1.0, exit_price=1.0, reason="stop",
+                            held_bars=1, net_bps=net, gross_bps=net, fee_bps=0.0,
+                            chase_bps=0.0)
+
+    series = daily_returns_bps([_trade(1, 10.0), _trade(4, -4.0)])
+    # 1 Aug and 4 Aug traded; 2 and 3 must appear as zeros, not be dropped
+    assert series == [10.0, 0.0, 0.0, -4.0]
+
+
+def test_summarize_reports_drawdown_and_never_claims_a_single_config_dsr() -> None:
+    from vnedge.runtime.scanner_session import ScannerTrade, summarize
+
+    def _trade(day: int, net: float) -> ScannerTrade:
+        ts = int(dt.datetime(2026, 8, day, 12, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+        return ScannerTrade(symbol="T", arm="coil", side="long", entry_index=0,
+                            exit_index=1, entry_ts_ms=ts, exit_ts_ms=ts + 300_000,
+                            entry_price=1.0, exit_price=1.0, reason="stop",
+                            held_bars=1, net_bps=net, gross_bps=net, fee_bps=0.0,
+                            chase_bps=0.0)
+
+    trades = [_trade(d, v) for d, v in enumerate([20.0, -30.0, 15.0, -5.0, 25.0], start=1)]
+    report = summarize(trades, 3000.0)
+    assert report["max_dd_usd"] < 0  # a real peak-to-trough happened
+    # DSR is deliberately absent: it cannot be computed from one config
+    assert "dsr" not in report
+    assert report["psr"] == report["psr"] or len(trades) < 8

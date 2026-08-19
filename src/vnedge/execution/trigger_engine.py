@@ -22,11 +22,36 @@ can never widen risk.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from enum import Enum
 from typing import Literal
 
 Side = Literal["long", "short"]
+
+
+class RejectCode(str, Enum):
+    """Why a bar with an arm did not produce a fire.
+
+    The coverage analysis attributes missed events to GATED (armed but the
+    trigger refused); without these codes that bucket is unauditable, so
+    every refusal path sets exactly one.
+    """
+
+    IN_POSITION = "in_position"
+    NOT_COMPRESSED = "not_compressed"
+    BAD_FEATURES = "bad_features"
+    EPISODE_BURNED = "episode"
+    COOLDOWN = "cooldown"
+    SPACING = "spacing"
+    BUDGET = "budget"
+    NO_VWAP = "no_vwap"
+    VOLUME = "volume"
+    NO_BREAK = "no_break"
+    VWAP_SIDE = "vwap_side"
+    CHASE_BURN = "chase_burn"
+    BAD_STOP = "bad_stop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,12 +117,19 @@ class TriggerEngine:
     cooldown_until_bar: int = -(10**9)
     fires_today: int = 0
     today: date | None = None
+    last_reject: RejectCode | None = None
+    reject_counts: Counter = field(default_factory=Counter)
 
     def _roll_day(self, bar_ts_ms: int) -> None:
         day = datetime.fromtimestamp(bar_ts_ms / 1000, tz=timezone.utc).date()
         if day != self.today:
             self.today = day
             self.fires_today = 0
+
+    def _reject(self, code: RejectCode) -> None:
+        """Record the single reason this bar produced no fire."""
+        self.last_reject = code
+        self.reject_counts[code.value] += 1
 
     def notify_flat(self, bar_index: int, *, won: bool) -> None:
         """Caller reports the position closed; start the cooldown."""
@@ -119,21 +151,33 @@ class TriggerEngine:
     ) -> FireDecision | None:
         self._roll_day(bar_ts_ms)
         c = self.config
+        self.last_reject = None
         if self.position_open:
+            self._reject(RejectCode.IN_POSITION)
             return None
-        if not arm.compressed or arm.atr <= 0 or arm.prev_close <= 0:
+        if not arm.compressed:
+            self._reject(RejectCode.NOT_COMPRESSED)
+            return None
+        if arm.atr <= 0 or arm.prev_close <= 0:
+            self._reject(RejectCode.BAD_FEATURES)
             return None
         if self.fired_episode == arm.episode_id:
+            self._reject(RejectCode.EPISODE_BURNED)
             return None
         if bar_index < self.cooldown_until_bar:
+            self._reject(RejectCode.COOLDOWN)
             return None
         if bar_index - self.last_fire_bar < c.min_bars_between_fires:
+            self._reject(RejectCode.SPACING)
             return None
         if self.fires_today >= c.max_fires_per_day:
+            self._reject(RejectCode.BUDGET)
             return None
         if vwap is None or vwap <= 0:
+            self._reject(RejectCode.NO_VWAP)
             return None
         if volume <= c.vol_mult * arm.vol_ma:
+            self._reject(RejectCode.VOLUME)
             return None
 
         buffer = arm.prev_close * c.break_buffer_bps / 10_000.0
@@ -148,6 +192,8 @@ class TriggerEngine:
         elif confirmed_short and arm.prev_close < vwap:
             side, level, box_edge = "short", short_level, arm.box_low
         if side is None:
+            broke = confirmed_long or confirmed_short
+            self._reject(RejectCode.VWAP_SIDE if broke else RejectCode.NO_BREAK)
             return None
 
         chase_bps = (
@@ -156,6 +202,7 @@ class TriggerEngine:
         if chase_bps > c.max_chase_bps:
             # Move already gone: burn the arm so this episode never fires.
             self.fired_episode = arm.episode_id
+            self._reject(RejectCode.CHASE_BURN)
             return None
 
         if side == "long":
@@ -165,6 +212,7 @@ class TriggerEngine:
             entry = level * (1.0 - c.entry_slip_bps / 10_000.0)
             stop = level + c.atr_stop_mult * arm.atr
         if stop <= 0:
+            self._reject(RejectCode.BAD_STOP)
             return None
 
         self.position_open = True

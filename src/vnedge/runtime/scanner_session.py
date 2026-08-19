@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import statistics
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from vnedge.execution.exit_engine import ExitConfig, ExitEngine
@@ -198,15 +198,54 @@ class ScannerSession:
             self.on_close(trade)
 
 
+def daily_returns_bps(trades: Sequence[ScannerTrade]) -> list[float]:
+    """Per-UTC-day net bps, zero-filled across the span the trades cover.
+
+    Zero-filling matters: a strategy that trades on 20 of 90 days has 70 days
+    of zero return, and omitting them inflates every risk-adjusted statistic.
+    """
+    if not trades:
+        return []
+    buckets: dict[dt.date, float] = {}
+    for trade in trades:
+        day = trade.entry_time.date()
+        buckets[day] = buckets.get(day, 0.0) + trade.net_bps
+    first, last = min(buckets), max(buckets)
+    span = (last - first).days + 1
+    return [buckets.get(first + dt.timedelta(days=k), 0.0) for k in range(span)]
+
+
 def summarize(trades: Sequence[ScannerTrade], notional_usd: float = 3000.0) -> dict:
-    """Standard scorecard so every caller reports the same numbers."""
+    """Standard scorecard so every caller reports the same numbers.
+
+    PSR is included because it is computable from one configuration.  DSR is
+    NOT: deflating for multiple testing needs the dispersion of Sharpes across
+    every config that was tried, which a single book cannot know.  Use
+    :func:`family_metrics` for that -- asking one config for its own deflated
+    Sharpe is the mistake that makes a searched result look pre-registered.
+    """
     if not trades:
         return {"n": 0, "wins": 0, "pf": 0.0, "net_bps": 0.0, "net_usd": 0.0,
-                "held_bars": 0}
+                "held_bars": 0, "max_dd_usd": 0.0, "psr": float("nan")}
     wins = [t for t in trades if t.net_bps > 0]
     gross_win = sum(t.net_bps for t in wins)
     gross_loss = -sum(t.net_bps for t in trades if t.net_bps <= 0)
     net = sum(t.net_bps for t in trades)
+
+    equity = peak = 0.0
+    max_dd = 0.0
+    for trade in sorted(trades, key=lambda t: t.entry_ts_ms):
+        equity += trade.net_bps * notional_usd / 1e4
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity - peak)
+
+    daily = daily_returns_bps(trades)
+    psr = float("nan")
+    if len(daily) >= 8:
+        from vnedge.ml.validation import probabilistic_sharpe_ratio
+
+        psr = float(probabilistic_sharpe_ratio(daily))
+
     return {
         "n": len(trades),
         "wins": len(wins),
@@ -214,4 +253,66 @@ def summarize(trades: Sequence[ScannerTrade], notional_usd: float = 3000.0) -> d
         "net_bps": net,
         "net_usd": net * notional_usd / 1e4,
         "held_bars": sum(t.held_bars for t in trades),
+        "max_dd_usd": max_dd,
+        "psr": psr,
+    }
+
+
+def family_metrics(
+    configs: Mapping[str, Sequence[ScannerTrade]],
+    *,
+    n_blocks: int = 10,
+    n_trials: float | None = None,
+) -> dict:
+    """Multiple-testing statistics across a FAMILY of configurations.
+
+    Both statistics here are family-level by construction:
+
+    * PBO asks how often the in-sample winner lands below the out-of-sample
+      median -- meaningless for a single config;
+    * DSR deflates each config's Sharpe by the dispersion of Sharpes across
+      the search, so it needs every variant that was tried.
+
+    ``n_trials`` should be the HONEST total number of configurations explored
+    (often far larger than ``len(configs)``, because discarded sweeps count).
+    It defaults to the number of configs supplied, which is a floor, not a
+    truth -- understating it flatters every DSR.
+    """
+    import numpy as np
+
+    from vnedge.ml.validation import (
+        deflated_sharpe_ratio,
+        effective_number_of_trials,
+        probability_of_backtest_overfitting,
+    )
+
+    series = {name: daily_returns_bps(t) for name, t in configs.items() if t}
+    if len(series) < 2:
+        return {"pbo": float("nan"), "dsr": {}, "effective_trials": float("nan")}
+    width = min(len(v) for v in series.values())
+    matrix = np.column_stack([v[-width:] for v in series.values()])
+
+    sharpes = [
+        float(np.mean(v) / np.std(v, ddof=1)) if np.std(v, ddof=1) > 0 else 0.0
+        for v in (np.asarray(s[-width:], dtype=float) for s in series.values())
+    ]
+    trials = float(n_trials if n_trials is not None else len(series))
+    dsr = {}
+    if len(sharpes) >= 2:
+        for name, values in series.items():
+            dsr[name] = float(
+                deflated_sharpe_ratio(
+                    values[-width:], n_trials=trials, trial_sharpes=sharpes
+                )
+            )
+    pbo = (
+        float(probability_of_backtest_overfitting(matrix, n_blocks=n_blocks))
+        if width >= n_blocks * 2
+        else float("nan")
+    )
+    return {
+        "pbo": pbo,
+        "dsr": dsr,
+        "effective_trials": float(effective_number_of_trials(matrix)),
+        "nominal_trials": trials,
     }
