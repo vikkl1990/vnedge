@@ -681,3 +681,52 @@ def test_pulse_websocket_is_token_gated_and_coalesced(tmp_path) -> None:
         payload = websocket.receive_json()
     assert payload["symbol"] == "BTCUSDT"
     assert payload["can_trade"] is False
+
+
+def test_missing_hour_is_flagged_without_any_gap_record() -> None:
+    """The 2026-08-19 live defect: BTC/ETH/SOL each lost 17 Aug 15:00 while
+    the cockpit reported data_quality 'ok'.  Nothing writes GapRecords in the
+    deployed topology, so contiguity must be derived from the sequence."""
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from vnedge.data.candles import Candle
+    from vnedge.dashboard.market_pulse import _missing_before_minutes
+
+    base = datetime(2026, 8, 17, 13, 0, tzinfo=UTC)
+
+    def candle(offset_hours: int) -> Candle:
+        open_time = base + timedelta(hours=offset_hours)
+        return Candle(
+            symbol="BTCUSDT", timeframe="1h", open_time=open_time,
+            close_time=open_time + timedelta(hours=1),
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+            close=Decimal("100"), volume=Decimal("10"),
+            quote_volume=Decimal("1000"), trade_count=3,
+        )
+
+    # 13:00, 14:00, [15:00 MISSING], 16:00
+    missing = _missing_before_minutes([candle(0), candle(1), candle(3)])
+    assert missing == [0.0, 0.0, 60.0]
+    # the first bar has no predecessor and must not be reported as a hole
+    assert missing[0] == 0.0
+
+
+def test_contiguous_hours_report_no_missing_minutes() -> None:
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from vnedge.data.candles import Candle
+    from vnedge.dashboard.market_pulse import _missing_before_minutes
+
+    base = datetime(2026, 8, 17, 13, 0, tzinfo=UTC)
+    candles = [
+        Candle(symbol="BTCUSDT", timeframe="1h",
+               open_time=base + timedelta(hours=k),
+               close_time=base + timedelta(hours=k + 1),
+               open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
+               close=Decimal("100"), volume=Decimal("10"),
+               quote_volume=Decimal("1000"), trade_count=3)
+        for k in range(5)
+    ]
+    assert _missing_before_minutes(candles) == [0.0] * 5

@@ -86,6 +86,20 @@ def _iso(value: datetime) -> str:
     return _utc(value, label="timestamp").isoformat().replace("+00:00", "Z")
 
 
+def _missing_before_minutes(candles: Sequence[Candle]) -> list[float]:
+    """Minutes of tape missing immediately before each bar.
+
+    Derived purely from the stored sequence: bar i is discontinuous when its
+    ``open_time`` is later than bar i-1's ``close_time``.  The first bar has no
+    predecessor and is reported as 0.0 rather than guessed.
+    """
+    out = [0.0]
+    for previous, current in zip(candles, candles[1:]):
+        delta = (current.open_time - previous.close_time).total_seconds()
+        out.append(max(0.0, delta / 60.0))
+    return out
+
+
 def _gap_minutes(candle: Candle, gaps: Sequence[GapRecord]) -> float:
     """Union overlapping gap intervals so one minute is never double-counted."""
     intervals = sorted(
@@ -152,6 +166,11 @@ class PulseHour:
     gap_minutes: float
     stream_healthy: bool
     forming: bool = False
+    # Minutes of tape missing immediately BEFORE this bar, derived from the
+    # candle sequence itself. Independent of the gap store, which has no
+    # producer in the deployed topology -- without this a hole renders as a
+    # contiguous strip and data_quality can only ever say "ok".
+    missing_before_minutes: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -682,7 +701,13 @@ class MarketPulseService:
     def _hours(self, exchange: str, symbol: str) -> list[PulseHour]:
         candles = CandleParquetStore(self.candle_root, exchange=exchange).read(symbol, "1h")
         gaps = self.gap_store.read(exchange, symbol)
-        gap_minutes_by_candle = [_gap_minutes(candle, gaps) for candle in candles]
+        store_gap_minutes = [_gap_minutes(candle, gaps) for candle in candles]
+        # A hole is a hole whether or not anyone recorded a GapRecord: compare
+        # each bar's open_time against the previous bar's close_time.
+        missing_before = _missing_before_minutes(candles)
+        gap_minutes_by_candle = [
+            max(store, missing) for store, missing in zip(store_gap_minutes, missing_before)
+        ]
         dual_context = self._dual_avwap_context(
             candles,
             eligible=[minutes == 0 for minutes in gap_minutes_by_candle],
@@ -693,12 +718,15 @@ class MarketPulseService:
         session_volume = Decimal(0)
         volumes: list[float] = []
         ranges: list[float] = []
-        for candle, dual, gap_minutes in zip(
+        for candle, dual, gap_minutes, missing_minutes in zip(
             candles,
             dual_context,
             gap_minutes_by_candle,
+            missing_before,
         ):
-            if candle.open_time.date() != session_date:
+            # A session VWAP that accumulates across missing tape is a wrong
+            # number presented confidently; restart it instead.
+            if candle.open_time.date() != session_date or missing_minutes > 0:
                 session_date = candle.open_time.date()
                 session_quote = Decimal(0)
                 session_volume = Decimal(0)
@@ -763,6 +791,7 @@ class MarketPulseService:
                     data_quality="gap" if gap_minutes > 0 else "ok",
                     gap_minutes=gap_minutes,
                     stream_healthy=gap_minutes == 0,
+                    missing_before_minutes=missing_minutes,
                 )
             )
             volumes.append(current_volume)
