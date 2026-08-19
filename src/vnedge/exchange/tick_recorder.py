@@ -34,6 +34,7 @@ from typing import Any
 
 import pandas as pd
 
+from vnedge.data.lake_health import LakeHealthMonitor
 from vnedge.data.candles import CandleParquetStore, CandlePipeline
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,19 @@ class TickRecorder:
         # rejects 5/10/20 — only {1,50,200,1000}); we slice to `levels` on write.
         self._book_limit = 50 if levels <= 50 else 200
         self.trades_only = trades_only
+        # Lake health is checked on a cycle, not assumed: an unchecked lake
+        # reports UNKNOWN rather than healthy (2026-08-19 audit -- three
+        # symbols silently lost an hour while the cockpit said "ok").
+        self.lake_health = (
+            LakeHealthMonitor(
+                exchange=exchange_id,
+                symbols=[_canonical_symbol(sym) for sym in symbols],
+                candle_root=Path(candle_root),
+                gap_root=Path(candle_root).parent / "gaps",
+            )
+            if candle_root is not None
+            else None
+        )
         self.candle_sink = (
             CanonicalCandleSink(exchange_id, symbols, candle_root)
             if candle_root is not None
@@ -384,6 +398,8 @@ class TickRecorder:
                 tasks.append(asyncio.create_task(self._watch_book(symbol, clock)))
         if self.candle_sink is not None:
             tasks.append(asyncio.create_task(self._advance_candles()))
+        if self.lake_health is not None:
+            tasks.append(asyncio.create_task(self.lake_health.run()))
         logger.info("tick recorder: %s %s -> %s", self.exchange_id, self.symbols, self.root)
         try:
             await asyncio.gather(*tasks)
