@@ -23,6 +23,7 @@ import urllib.error
 from pathlib import Path
 
 from research.squeeze_trigger_replay import fetch
+from vnedge.research.trial_ledger import TrialLedger, window_key
 from vnedge.runtime.scanner_session import ScannerSession, summarize
 from vnedge.strategy.arm_sources import (
     CoilArmSource,
@@ -62,6 +63,9 @@ def run_window(tapes: dict[str, list[tuple]], mode: str, start_ms: int) -> list:
 
 
 def report(args: argparse.Namespace, tapes: dict[str, list[tuple]], end_ms: int) -> None:
+    import statistics
+
+    ledger = None if args.no_record else TrialLedger.open()
     windows = [("24h", 1), ("48h", 2), ("7d", 7), ("30d", 30), (f"{args.days}d", args.days)]
     seen: set[int] = set()
     for label, days in windows:
@@ -69,16 +73,37 @@ def report(args: argparse.Namespace, tapes: dict[str, list[tuple]], end_ms: int)
             continue
         seen.add(days)
         start = end_ms - days * 86_400_000
-        print(f"\n== {label}")
-        print(f"   {'arm':<10}{'n':>5}{'wins':>6}{'PF':>7}{'net bps':>10}{'net $':>10}")
+        key = window_key(start_ms=start, end_ms=end_ms, symbols=list(tapes))
+        print(f"\n== {label}   [{key}]")
+        print(f"   {'arm':<10}{'n':>5}{'wins':>6}{'PF':>7}{'net bps':>10}"
+              f"{'net $':>10}{'maxDD $':>10}{'PSR':>8}")
         for mode in args.modes.split(","):
-            trades = run_window(tapes, mode.strip(), start)
+            arm = mode.strip()
+            trades = run_window(tapes, arm, start)
             s = summarize(trades, args.notional)
             pf = "inf" if s["pf"] == float("inf") else f"{s['pf']:.2f}"
             print(
-                f"   {mode.strip():<10}{s['n']:>5}{s['wins']:>6}{pf:>7}"
+                f"   {arm:<10}{s['n']:>5}{s['wins']:>6}{pf:>7}"
                 f"{s['net_bps']:>+10.0f}{s['net_usd']:>+10.2f}"
+                f"{s['max_dd_usd']:>10.2f}{s['psr']:>8.3f}"
             )
+            if ledger is not None:
+                from vnedge.runtime.scanner_session import daily_returns_bps
+
+                daily = daily_returns_bps(trades)
+                sharpe = None
+                if len(daily) >= 8 and statistics.pstdev(daily) > 0:
+                    sharpe = statistics.fmean(daily) / statistics.stdev(daily)
+                # every scored configuration is charged, winners and rejects alike
+                ledger.record(
+                    arm=arm, window=key, symbols=list(tapes), sharpe=sharpe,
+                    params={"days": days, "notional": args.notional},
+                    metrics={k: v for k, v in s.items() if isinstance(v, (int, float))},
+                )
+        if ledger is not None:
+            info = ledger.summary(key)
+            print(f"   trials recorded on this window: {info['trials']}"
+                  f"  ({', '.join(f'{k}={v}' for k, v in sorted(info['by_arm'].items()))})")
 
 
 def journal(args: argparse.Namespace, tapes: dict[str, list[tuple]]) -> None:
@@ -164,6 +189,8 @@ def main() -> None:
     parser.add_argument("--from", dest="start", default="2026-08-17")
     parser.add_argument("--to", dest="end", default="2026-08-19")
     parser.add_argument("--out", default=None)
+    parser.add_argument("--no-record", action="store_true",
+                        help="skip the trial ledger (exploration that must not be charged)")
     args = parser.parse_args()
 
     now = int(dt.datetime.now(UTC).timestamp() * 1000)
