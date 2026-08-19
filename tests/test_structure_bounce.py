@@ -169,3 +169,35 @@ def test_side_hint_makes_the_trigger_anchor_on_the_zone() -> None:
     assert fire.side == "long"
     assert fire.level == pytest.approx(99.0)          # the defended edge
     assert fire.stop == pytest.approx(99.0 - 1.7 * 0.5)  # below the zone
+
+
+def test_resting_limit_fill_bar_is_managed() -> None:
+    """The bar that fills a resting limit must still be checked against the stop.
+
+    It traded THROUGH the limit by construction, so it is the bar most likely
+    to carry price on to the stop.  Skipping it hands the position a free bar
+    exactly where it is most exposed.
+    """
+    from vnedge.execution.exit_engine import ExitConfig, ExitEngine
+    from vnedge.execution.trigger_engine import ArmState, TriggerConfig, TriggerEngine
+    from vnedge.runtime.scanner_session import ScannerSession
+
+    session = ScannerSession(
+        symbol="T", arm_source=StructureBounceArmSource(),
+        exits=ExitEngine(config=ExitConfig(failed_breakout=False)),
+        trigger=TriggerEngine(config=TriggerConfig()),
+    )
+    # a long resting at 100 with its stop at 99
+    session._pending = {
+        "side": "long", "entry": 100.0, "stop": 99.0, "risk": 1.0,
+        "box_edge": 100.0, "expires": 99, "chase_bps": 0.0,
+        "reason": "test", "arm": "structure_bounce",
+    }
+    # this bar touches the limit AND collapses through the stop
+    bars = [_bar(i, 100, 100.5, 99.5, 100) for i in range(5)]
+    bars[4] = _bar(4, 100.2, 100.3, 98.0, 98.2)
+    session._try_fill(bars, 4, atr=0.5)
+
+    assert session._open is None, "the filling bar must not survive its own stop"
+    assert session.trades and session.trades[-1].reason == "stop"
+    assert session.trades[-1].exit_price == 99.0

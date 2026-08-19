@@ -154,7 +154,7 @@ class ScannerSession:
             self._manage(bars, i, atr)
             return
         if self._pending is not None:
-            self._try_fill(bars, i)
+            self._try_fill(bars, i, atr)
             return
         if start_ms is not None and bars[i][0] < start_ms:
             return
@@ -190,7 +190,7 @@ class ScannerSession:
         if self.on_fire is not None:
             self.on_fire({"symbol": self.symbol, **self._open})
 
-    def _try_fill(self, bars: Sequence[Bar], i: int) -> None:
+    def _try_fill(self, bars: Sequence[Bar], i: int, atr: float) -> None:
         """Fill a resting limit when this bar trades to it, else let it expire."""
         assert self._pending is not None
         p = self._pending
@@ -210,6 +210,11 @@ class ScannerSession:
             }
             if self.on_fire is not None:
                 self.on_fire({"symbol": self.symbol, **self._open})
+            # The filling bar must still be managed. It traded THROUGH the
+            # limit by construction, so it is the bar most likely to carry
+            # price on to the stop; skipping it grants a free bar exactly
+            # where the position is most exposed.
+            self._manage(bars, i, atr)
             return
         if p["expires"] is not None and i >= p["expires"]:
             self._pending = None
