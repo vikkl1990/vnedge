@@ -42,6 +42,13 @@ class ExitConfig:
     # exits and -4977 bps on the structure-bounce arm. Profiles that enter at
     # a level turn it off and let the stop do its job.
     failed_breakout: bool = True
+    # Scale-out ladder: ((R multiple, fraction), ...). Empty keeps the
+    # single-exit behaviour every existing arm was measured under.
+    tp_ladder: tuple[tuple[float, float], ...] = ()
+    # Move the stop to breakeven once the first rung fills.
+    breakeven_after_tp1: bool = True
+    # Hard age cap in bars; None defers to ``absolute_max_bars``.
+    max_age_bars: int | None = None
 
     def __post_init__(self) -> None:
         if self.no_progress_bars < 1 or self.no_progress_min_r <= 0:
@@ -52,6 +59,16 @@ class ExitConfig:
             raise ValueError("trail/backstop settings are invalid")
         if self.taker_bps < 0 or self.be_fee_buffer_bps < 0:
             raise ValueError("fee settings are invalid")
+        if self.max_age_bars is not None and self.max_age_bars < 1:
+            raise ValueError("max_age_bars must be positive when set")
+        if self.tp_ladder:
+            rungs = [r for r, _ in self.tp_ladder]
+            if any(r <= 0 for r in rungs) or rungs != sorted(rungs):
+                raise ValueError("tp ladder R multiples must ascend and be positive")
+            if any(f <= 0 for _, f in self.tp_ladder):
+                raise ValueError("tp ladder fractions must be positive")
+            if sum(f for _, f in self.tp_ladder) > 1.0 + 1e-9:
+                raise ValueError("tp ladder fractions cannot exceed the position")
 
 
 @dataclass
@@ -64,6 +81,12 @@ class ExitPosition:
     entry_bar: int
     mfe: float = 0.0
     extreme: float = 0.0
+    remaining: float = 1.0
+    # Favourable price delta already banked by filled rungs, weighted by the
+    # fraction each one closed. Kept in price terms so the blended exit price
+    # handed back to the caller needs no special-casing downstream.
+    realized: float = 0.0
+    rungs_filled: int = 0
 
     def __post_init__(self) -> None:
         if self.extreme == 0.0:
@@ -122,31 +145,60 @@ class ExitEngine:
         p.mfe = max(p.mfe, favorable)
         p.extreme = max(p.extreme, high) if side == "long" else min(p.extreme, low)
 
-        # 1) hard SL first (pessimistic within-bar ordering)
+        # 1) hard SL first (pessimistic within-bar ordering): a bar that
+        # touches both a rung and the stop is booked as the stop, matching the
+        # stop-wins-ties convention used everywhere else.
         stop_hit = low <= p.stop if side == "long" else high >= p.stop
         if stop_hit:
-            price = p.stop
-            won = (price > p.entry) if side == "long" else (price < p.entry)
             self.clear()
-            return ExitDecision(reason="stop", price=price, won=won)
+            return self._close(p, p.stop, reason="stop")
+
+        # 1b) scale-out rungs
+        if c.tp_ladder:
+            for level_r, fraction in c.tp_ladder[p.rungs_filled :]:
+                target = (
+                    p.entry + level_r * p.risk
+                    if side == "long"
+                    else p.entry - level_r * p.risk
+                )
+                reached = high >= target if side == "long" else low <= target
+                if not reached:
+                    break
+                take = min(fraction, p.remaining)
+                p.realized += take * (
+                    (target - p.entry) if side == "long" else (p.entry - target)
+                )
+                p.remaining -= take
+                p.rungs_filled += 1
+                if p.rungs_filled == 1 and c.breakeven_after_tp1:
+                    pad = (c.taker_bps + c.be_fee_buffer_bps) / 10_000.0
+                    be = p.entry * (1 + pad) if side == "long" else p.entry * (1 - pad)
+                    p.stop = max(p.stop, be) if side == "long" else min(p.stop, be)
+                if p.remaining <= 1e-9:
+                    self.clear()
+                    return self._close(p, target, reason="tp_ladder")
+
+        # 1c) hard age cap
+        if c.max_age_bars is not None and held >= c.max_age_bars:
+            self.clear()
+            return self._close(p, close, reason="max_age")
 
         # 2) failed breakout: close back inside the box (from the bar after entry)
         if c.failed_breakout and held >= 1:
             back_inside = close < p.box_edge if side == "long" else close > p.box_edge
             if back_inside:
                 self.clear()
-                return ExitDecision(reason="failed_breakout", price=close, won=False)
+                return self._close(p, close, reason="failed_breakout")
 
         # 3) no progress
         if held >= c.no_progress_bars and p.mfe < c.no_progress_min_r * p.risk:
             self.clear()
-            return ExitDecision(reason="no_progress", price=close, won=False)
+            return self._close(p, close, reason="no_progress")
 
         # 4) absolute backstop
         if held >= c.absolute_max_bars:
-            won = (close > p.entry) if side == "long" else (close < p.entry)
             self.clear()
-            return ExitDecision(reason="time_4h", price=close, won=won)
+            return self._close(p, close, reason="time_4h")
 
         # 5) ratchets (no exit this bar)
         if p.mfe >= c.breakeven_arm_r * p.risk:
@@ -169,8 +221,19 @@ class ExitEngine:
             return None
         stop_hit = price <= p.stop if p.side == "long" else price >= p.stop
         if stop_hit:
-            stop = p.stop
-            won = (stop > p.entry) if p.side == "long" else (stop < p.entry)
             self.clear()
-            return ExitDecision(reason="stop_tick", price=stop, won=won)
+            return self._close(p, p.stop, reason="stop_tick")
         return None
+
+    @staticmethod
+    def _close(p: ExitPosition, price: float, *, reason: str) -> ExitDecision:
+        """Blend banked rungs with the final leg into one effective exit price.
+
+        Callers price a trade from a single exit level, so a scaled-out
+        position reports the price that reproduces its true weighted PnL --
+        no downstream code needs to know a ladder was used.
+        """
+        final = (price - p.entry) if p.side == "long" else (p.entry - price)
+        total = p.realized + p.remaining * final
+        effective = p.entry + total if p.side == "long" else p.entry - total
+        return ExitDecision(reason=reason, price=effective, won=total > 0)

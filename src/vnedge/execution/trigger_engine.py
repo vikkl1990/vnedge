@@ -68,6 +68,26 @@ class TriggerConfig:
     confirm_close: bool = True
     atr_stop_mult: float = 1.7
     vol_mult: float = 1.3
+    # Percentage band clamping the ATR stop distance. Production paths size
+    # stops as a fraction of price (0.55-0.95%) rather than off a 5m ATR,
+    # which on BTC is ~3x wider. 0.0 disables either bound.
+    stop_pct_floor: float = 0.0
+    stop_pct_cap: float = 0.0
+    # "atr": distance = atr_stop_mult * ATR (clamped by the pct band).
+    # "zone": distance = zone edge + zone_buffer_pct, capped at the tighter of
+    # zone_stop_atr_cap * ATR and zone_stop_pct_cap * price -- the production
+    # construction, which is much tighter than an ATR stop.
+    stop_mode: str = "atr"
+    zone_buffer_pct: float = 0.001
+    zone_stop_atr_cap: float = 2.0
+    zone_stop_pct_cap: float = 0.005
+    # "close": pay the market at confirmation.  "retest_limit": rest a limit
+    # AT the level and fill only if price comes back to it within
+    # retest_expiry_bars.  The second is a maker entry and a better price, paid
+    # for with unfilled setups -- never a retroactive fill on the bar that
+    # already traded through it.
+    entry_mode: str = "close"
+    retest_expiry_bars: int = 6
 
     def __post_init__(self) -> None:
         if self.max_chase_bps <= 0 or self.entry_slip_bps < 0:
@@ -76,8 +96,39 @@ class TriggerConfig:
             raise ValueError("budget settings are invalid")
         if self.cooldown_loss_bars < 0 or self.cooldown_win_bars < 0:
             raise ValueError("cooldowns cannot be negative")
-        if self.atr_stop_mult <= 0 or self.vol_mult <= 0:
-            raise ValueError("stop/volume multipliers must be positive")
+        if self.atr_stop_mult <= 0:
+            raise ValueError("stop multiplier must be positive")
+        if self.vol_mult < 0:
+            raise ValueError("volume multiplier cannot be negative")
+        if self.stop_mode not in ("atr", "zone"):
+            raise ValueError("stop_mode must be 'atr' or 'zone'")
+        if self.entry_mode not in ("close", "retest_limit"):
+            raise ValueError("entry_mode must be 'close' or 'retest_limit'")
+        if self.retest_expiry_bars < 1:
+            raise ValueError("retest_expiry_bars must be positive")
+        if self.stop_pct_floor < 0 or self.stop_pct_cap < 0:
+            raise ValueError("stop percentage bounds cannot be negative")
+        if self.stop_pct_cap and self.stop_pct_floor > self.stop_pct_cap:
+            raise ValueError("stop_pct_floor cannot exceed stop_pct_cap")
+
+    def stop_distance(
+        self, *, atr: float, level: float, zone_depth: float | None = None
+    ) -> float:
+        """Stop distance under the configured construction.
+
+        ``zone_depth`` is how far the stop sits beyond the entry level once the
+        zone is cleared; it is only consulted in zone mode.
+        """
+        if self.stop_mode == "zone":
+            distance = (zone_depth or 0.0) + self.zone_buffer_pct * level
+            cap = min(self.zone_stop_atr_cap * atr, self.zone_stop_pct_cap * level)
+            return min(distance, cap) if cap > 0 else distance
+        distance = self.atr_stop_mult * atr
+        if self.stop_pct_floor:
+            distance = max(distance, self.stop_pct_floor * level)
+        if self.stop_pct_cap:
+            distance = min(distance, self.stop_pct_cap * level)
+        return distance
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +162,11 @@ class FireDecision:
     episode_id: int
     chase_bps: float
     reason: str
+    # A pending decision is a resting limit, not a position: the caller fills
+    # it only when a LATER bar trades to ``entry``, and drops it at
+    # ``expires_bar``.
+    pending: bool = False
+    expires_bar: int | None = None
 
 
 @dataclass
@@ -137,6 +193,11 @@ class TriggerEngine:
         """Record the single reason this bar produced no fire."""
         self.last_reject = code
         self.reject_counts[code.value] += 1
+
+    def notify_cancelled(self, bar_index: int) -> None:
+        """Caller reports a resting limit expired unfilled; release the lock."""
+        self.position_open = False
+        self.last_fire_bar = bar_index
 
     def notify_flat(self, bar_index: int, *, won: bool) -> None:
         """Caller reports the position closed; start the cooldown."""
@@ -197,7 +258,7 @@ class TriggerEngine:
             self._reject(RejectCode.NO_BREAK)
             return None
 
-        if volume <= c.vol_mult * arm.vol_ma:
+        if c.vol_mult > 0 and volume <= c.vol_mult * arm.vol_ma:
             self._reject(RejectCode.VOLUME)
             return None
 
@@ -212,12 +273,11 @@ class TriggerEngine:
                 self.fired_episode = arm.episode_id
                 self._reject(RejectCode.CHASE_BURN)
                 return None
-            entry = close
-            stop = (
-                level - c.atr_stop_mult * arm.atr
-                if side == "long"
-                else level + c.atr_stop_mult * arm.atr
-            )
+            depth = abs(arm.box_high - arm.box_low)
+            distance = c.stop_distance(atr=arm.atr, level=level, zone_depth=depth)
+            pending = c.entry_mode == "retest_limit"
+            entry = level if pending else close
+            stop = level - distance if side == "long" else level + distance
             if stop <= 0:
                 self._reject(RejectCode.BAD_STOP)
                 return None
@@ -227,10 +287,12 @@ class TriggerEngine:
             self.fires_today += 1
             return FireDecision(
                 side=side, level=level, box_edge=box_edge, entry=entry, stop=stop,
-                risk=c.atr_stop_mult * arm.atr, episode_id=arm.episode_id,
-                chase_bps=chase_bps,
+                risk=distance, episode_id=arm.episode_id,
+                chase_bps=chase_bps, pending=pending,
+                expires_bar=bar_index + c.retest_expiry_bars if pending else None,
                 reason=(f"bounce_fire side={side} chase={chase_bps:.1f}bps "
-                        f"episode={arm.episode_id} zone_anchored_stop virtual_only"),
+                        f"episode={arm.episode_id} zone_anchored_stop "
+                        f"entry={c.entry_mode} virtual_only"),
             )
 
         side: Side | None = None
@@ -251,12 +313,13 @@ class TriggerEngine:
             self._reject(RejectCode.CHASE_BURN)
             return None
 
+        distance = c.stop_distance(atr=arm.atr, level=level)
         if side == "long":
             entry = level * (1.0 + c.entry_slip_bps / 10_000.0)
-            stop = level - c.atr_stop_mult * arm.atr
+            stop = level - distance
         else:
             entry = level * (1.0 - c.entry_slip_bps / 10_000.0)
-            stop = level + c.atr_stop_mult * arm.atr
+            stop = level + distance
         if stop <= 0:
             self._reject(RejectCode.BAD_STOP)
             return None
@@ -271,7 +334,7 @@ class TriggerEngine:
             box_edge=box_edge,
             entry=entry,
             stop=stop,
-            risk=c.atr_stop_mult * arm.atr,
+            risk=distance,
             episode_id=arm.episode_id,
             chase_bps=chase_bps,
             reason=(

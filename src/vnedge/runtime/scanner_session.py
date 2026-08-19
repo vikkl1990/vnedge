@@ -35,10 +35,18 @@ class SessionCosts:
 
     taker_bps: float = 5.9
     free_close_within_bars: int = 6  # 30 min on 5m bars; 0 disables the offer
+    # Entry leg when it rests as a limit and is filled passively. None keeps
+    # every entry taker, which is what all prior measurements assumed.
+    maker_bps: float | None = None
 
-    def round_trip_bps(self, held_bars: int) -> float:
+    def round_trip_bps(self, held_bars: int, *, maker_entry: bool = False) -> float:
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
-        return self.taker_bps + exit_leg
+        entry_leg = (
+            self.maker_bps
+            if maker_entry and self.maker_bps is not None
+            else self.taker_bps
+        )
+        return entry_leg + exit_leg
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +98,7 @@ class ScannerSession:
 
     trades: list[ScannerTrade] = field(default_factory=list, repr=False)
     _open: dict | None = field(default=None, repr=False)
+    _pending: dict | None = field(default=None, repr=False)
     _pv: float = field(default=0.0, repr=False)
     _vv: float = field(default=0.0, repr=False)
 
@@ -144,6 +153,9 @@ class ScannerSession:
         if self._open is not None:
             self._manage(bars, i, atr)
             return
+        if self._pending is not None:
+            self._try_fill(bars, i)
+            return
         if start_ms is not None and bars[i][0] < start_ms:
             return
         if arm is None:
@@ -153,6 +165,18 @@ class ScannerSession:
             volume=bars[i][5], vwap=vwap, bar_index=i, bar_ts_ms=bars[i][0],
         )
         if fire is None:
+            return
+        if fire.pending:
+            # A resting limit is not a position: it fills only if a LATER bar
+            # trades to it, so the bar that produced the signal can never fill
+            # it retroactively.
+            self._pending = {
+                "side": fire.side, "entry": fire.entry, "stop": fire.stop,
+                "risk": fire.risk, "box_edge": fire.box_edge,
+                "expires": fire.expires_bar, "chase_bps": fire.chase_bps,
+                "reason": fire.reason,
+                "arm": getattr(self.arm_source, "last_armed", None) or self.arm_source.name,
+            }
             return
         self.exits.open_from_fire(
             side=fire.side, entry=fire.entry, stop=fire.stop, risk=fire.risk,
@@ -165,6 +189,31 @@ class ScannerSession:
         }
         if self.on_fire is not None:
             self.on_fire({"symbol": self.symbol, **self._open})
+
+    def _try_fill(self, bars: Sequence[Bar], i: int) -> None:
+        """Fill a resting limit when this bar trades to it, else let it expire."""
+        assert self._pending is not None
+        p = self._pending
+        touched = (
+            bars[i][3] <= p["entry"] if p["side"] == "long" else bars[i][2] >= p["entry"]
+        )
+        if touched:
+            self._pending = None
+            self.exits.open_from_fire(
+                side=p["side"], entry=p["entry"], stop=p["stop"], risk=p["risk"],
+                box_edge=p["box_edge"], entry_bar=i,
+            )
+            self._open = {
+                "side": p["side"], "entry": p["entry"], "bar": i, "ts": bars[i][0],
+                "arm": p["arm"], "chase_bps": p["chase_bps"], "reason": p["reason"],
+                "stop": p["stop"], "maker": True,
+            }
+            if self.on_fire is not None:
+                self.on_fire({"symbol": self.symbol, **self._open})
+            return
+        if p["expires"] is not None and i >= p["expires"]:
+            self._pending = None
+            self.trigger.notify_cancelled(i)
 
     def _manage(self, bars: Sequence[Bar], i: int, atr: float) -> None:
         assert self._open is not None
@@ -181,7 +230,7 @@ class ScannerSession:
             if side == "long"
             else (1 - decision.price / opened["entry"])
         ) * 1e4
-        fee = self.costs.round_trip_bps(held)
+        fee = self.costs.round_trip_bps(held, maker_entry=opened.get("maker", False))
         trade = ScannerTrade(
             symbol=self.symbol, arm=opened["arm"], side=side,
             entry_index=opened["bar"], exit_index=i,
