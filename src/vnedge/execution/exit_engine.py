@@ -36,6 +36,12 @@ class ExitConfig:
     absolute_max_bars: int = 48
     taker_bps: float = 5.9
     be_fee_buffer_bps: float = 1.0
+    # Breakout entries sit BEYOND the box, so "closed back inside" is a clean
+    # invalidation. Bounce entries sit AT the zone, where the same test fires
+    # within a bar or two and pre-empts the ATR stop -- measured at 43% of
+    # exits and -4977 bps on the structure-bounce arm. Profiles that enter at
+    # a level turn it off and let the stop do its job.
+    failed_breakout: bool = True
 
     def __post_init__(self) -> None:
         if self.no_progress_bars < 1 or self.no_progress_min_r <= 0:
@@ -125,7 +131,7 @@ class ExitEngine:
             return ExitDecision(reason="stop", price=price, won=won)
 
         # 2) failed breakout: close back inside the box (from the bar after entry)
-        if held >= 1:
+        if c.failed_breakout and held >= 1:
             back_inside = close < p.box_edge if side == "long" else close > p.box_edge
             if back_inside:
                 self.clear()

@@ -176,3 +176,181 @@ class CompositeArmSource:
                 armed, winner = state, source.name
         self.last_armed = winner
         return armed
+
+
+@dataclass
+class StructureBounceArmSource:
+    """Sequence-based bounce off the nearest structure zone.
+
+    A port of the Structure Bounce scanner.  Unlike the breakout arms, this one
+    decides its own direction (support rejection -> long, resistance rejection
+    -> short) and sets ``side_hint`` so the trigger anchors on the zone edge
+    being defended rather than a level being broken.
+
+    All four events must occur, in order, for an arm to be produced:
+
+    1. APPROACH   a bar within the last ``sequence_bars`` traded into the zone
+                  (or within ``approach_pct`` of the level);
+    2. REJECTION  that bar left a wick beyond ``wick_frac`` of its range and
+                  closed back on the favourable side;
+    3. VOLUME     the rejection bar or the current bar carried volume;
+    4. CONFIRM    the current bar closes in the signal direction, and -- when
+                  the rejection was earlier -- back across the level.
+
+    Confidence is scored additively (wick quality, volume, level strength,
+    touch count, confluence) and gated by ``min_confidence``.  The score is a
+    *filter*, not a size input: nothing downstream reads it.
+
+    The structure map is rebuilt every ``rebuild_every`` bars rather than every
+    bar.  Structure does not change bar to bar, and the liquidity detector is
+    O(swings^2); rebuilding each bar makes a 90-day replay impractical.
+    """
+
+    name: str = "structure_bounce"
+    sequence_bars: int = 5
+    approach_pct: float = 0.5
+    wick_frac: float = 0.30
+    volume_strong: float = 1.5
+    volume_ok: float = 1.2
+    min_confidence: int = 50
+    rebuild_every: int = 12
+    map_bars: int = 300
+    _map: object | None = field(default=None, repr=False)
+    _map_index: int = field(default=-10**9, repr=False)
+    _episode: int = field(default=0, repr=False)
+    last_confidence: int = field(default=0, repr=False)
+    last_reason: str = field(default="", repr=False)
+
+    @property
+    def warmup_bars(self) -> int:
+        return self.map_bars + 2
+
+    def _refresh_map(self, ctx: BarContext) -> None:
+        from vnedge.strategy.structure_map import build_structure_map
+
+        window = ctx.bars[max(0, ctx.index - self.map_bars) : ctx.index + 1]
+        if len(window) < 20:
+            self._map = None
+            return
+        atrs = [ctx.atr] * len(window)  # one ATR source, consistently applied
+        self._map = build_structure_map(window, atrs, atr=ctx.atr)
+        self._map_index = ctx.index
+
+    def observe(self, ctx: BarContext) -> ArmState | None:
+        if ctx.index < self.warmup_bars or ctx.atr <= 0 or ctx.vol_ma <= 0:
+            return None
+        if ctx.index - self._map_index >= self.rebuild_every:
+            self._refresh_map(ctx)
+        structure = self._map
+        if structure is None:
+            return None
+
+        bars = ctx.bars
+        current = bars[ctx.index]
+        c_open, c_high, c_low, c_close = current[1], current[2], current[3], current[4]
+        if c_high <= c_low:
+            return None
+
+        side: str | None = None
+        level = None
+        rejection_offset = 0
+        score = 0
+
+        for offset in range(0, min(self.sequence_bars, ctx.index)):
+            bar = bars[ctx.index - offset]
+            b_open, b_high, b_low, b_close = bar[1], bar[2], bar[3], bar[4]
+            span = b_high - b_low
+            if span <= 0 or b_close <= 0:
+                continue
+
+            support = structure.nearest_support
+            if side is None and support is not None:
+                in_zone = support.contains(b_low)
+                near = abs((b_low - support.price) / b_close * 100) < self.approach_pct
+                if in_zone or near:
+                    wick = min(b_open, b_close) - b_low
+                    if wick > span * self.wick_frac and b_close > b_low + span * 0.45:
+                        side, level, rejection_offset = "long", support, offset
+                        score += 30
+                        if wick > ctx.atr * 0.5:
+                            score += 15
+                        elif wick > ctx.atr * 0.3:
+                            score += 10
+                        if in_zone:
+                            score += 5
+
+            resistance = structure.nearest_resistance
+            if side is None and resistance is not None:
+                in_zone = resistance.contains(b_high)
+                near = abs((resistance.price - b_high) / b_close * 100) < self.approach_pct
+                if in_zone or near:
+                    wick = b_high - max(b_open, b_close)
+                    if wick > span * self.wick_frac and b_close < b_low + span * 0.55:
+                        side, level, rejection_offset = "short", resistance, offset
+                        score += 30
+                        if wick > ctx.atr * 0.5:
+                            score += 15
+                        elif wick > ctx.atr * 0.3:
+                            score += 10
+                        if in_zone:
+                            score += 5
+            if side is not None:
+                break
+
+        if side is None or level is None:
+            return None
+
+        rejection = bars[ctx.index - rejection_offset]
+        best_volume = max(rejection[5], current[5]) / ctx.vol_ma
+        if best_volume > self.volume_strong:
+            score += 15
+        elif best_volume > self.volume_ok:
+            score += 10
+        elif best_volume > 0.9:
+            score += 5
+        else:
+            score -= 5
+
+        if rejection_offset == 0:
+            if side == "long" and c_close <= c_open:
+                return None
+            if side == "short" and c_close >= c_open:
+                return None
+        else:
+            if side == "long" and (c_close <= c_open or c_close < level.price):
+                return None
+            if side == "short" and (c_close >= c_open or c_close > level.price):
+                return None
+            score += 5
+
+        score += min(level.strength // 5, 15)
+        if level.touch_count >= 3:
+            score += 10
+        confluence = [
+            other for other in structure.levels
+            if other is not level and abs(other.price - level.price) / c_close < 0.003
+        ]
+        if confluence:
+            score += 10
+
+        confidence = max(0, min(score, 100))
+        self.last_confidence = confidence
+        if confidence < self.min_confidence:
+            return None
+
+        self._episode += 1
+        self.last_reason = (
+            f"structure_bounce {side} {level.level_type} conf={confidence} "
+            f"strength={level.strength} touches={level.touch_count} "
+            f"vol={best_volume:.1f}x confluence={len(confluence)}"
+        )
+        return ArmState(
+            episode_id=self._episode,
+            box_high=level.zone_high,
+            box_low=level.zone_low,
+            compressed=True,
+            atr=ctx.atr,
+            vol_ma=ctx.vol_ma,
+            prev_close=ctx.prev_close,
+            side_hint=side,
+        )

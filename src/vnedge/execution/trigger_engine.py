@@ -91,6 +91,13 @@ class ArmState:
     atr: float
     vol_ma: float
     prev_close: float
+    # Breakout arms leave this None and let the trigger derive the side from
+    # which edge broke. Bounce/reversal arms set it: the setup itself decides
+    # direction, and `level` becomes the zone edge being defended rather than
+    # a level being broken through. Chase is then measured from that edge --
+    # "how far past my level am I paying?" -- which is the right question for
+    # both entry styles.
+    side_hint: Side | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,13 +193,45 @@ class TriggerEngine:
         short_level = arm.box_low - buffer
         confirmed_long = close > long_level if c.confirm_close else high > long_level
         confirmed_short = close < short_level if c.confirm_close else low < short_level
-        if not (confirmed_long or confirmed_short):
+        if arm.side_hint is None and not (confirmed_long or confirmed_short):
             self._reject(RejectCode.NO_BREAK)
             return None
 
         if volume <= c.vol_mult * arm.vol_ma:
             self._reject(RejectCode.VOLUME)
             return None
+
+        if arm.side_hint is not None:
+            side = arm.side_hint
+            if side == "long":
+                level, box_edge = arm.box_low, arm.box_low
+            else:
+                level, box_edge = arm.box_high, arm.box_high
+            chase_bps = abs(close - level) / level * 10_000.0
+            if chase_bps > c.max_chase_bps:
+                self.fired_episode = arm.episode_id
+                self._reject(RejectCode.CHASE_BURN)
+                return None
+            entry = close
+            stop = (
+                level - c.atr_stop_mult * arm.atr
+                if side == "long"
+                else level + c.atr_stop_mult * arm.atr
+            )
+            if stop <= 0:
+                self._reject(RejectCode.BAD_STOP)
+                return None
+            self.position_open = True
+            self.fired_episode = arm.episode_id
+            self.last_fire_bar = bar_index
+            self.fires_today += 1
+            return FireDecision(
+                side=side, level=level, box_edge=box_edge, entry=entry, stop=stop,
+                risk=c.atr_stop_mult * arm.atr, episode_id=arm.episode_id,
+                chase_bps=chase_bps,
+                reason=(f"bounce_fire side={side} chase={chase_bps:.1f}bps "
+                        f"episode={arm.episode_id} zone_anchored_stop virtual_only"),
+            )
 
         side: Side | None = None
         if confirmed_long and arm.prev_close > vwap:
