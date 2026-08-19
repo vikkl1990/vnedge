@@ -85,8 +85,13 @@ class StructureMap:
                        nearest_resistance=resistance)
 
 
+#: How many trailing bars ``find_swings`` scans for pivots. Callers size their
+#: warmup from this: structure older than the scan window can never be seen.
+SWING_SCAN_BARS = 100
+
+
 def find_swings(
-    bars: Sequence[Bar], lookback: int = 100
+    bars: Sequence[Bar], lookback: int = SWING_SCAN_BARS
 ) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
     """3-bar pivots. A pivot at i is only knowable once bar i+1 has closed."""
     n = min(lookback, len(bars) - 2)

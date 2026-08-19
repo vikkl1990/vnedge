@@ -20,7 +20,15 @@ from vnedge.runtime.scanner_session import daily_returns_bps, summarize
 from vnedge.strategy.bounce_lanes import LANES, MAKER_LANE, TAKER_LANE, maker_lane_at
 
 UTC = dt.timezone.utc
-WARMUP_DAYS = 12
+#: Head-room on top of the lane's own warmup, so the requested window is fully
+#: tradeable rather than silently starting late.
+WARMUP_SLACK_DAYS = 3
+
+
+def warmup_days(lane) -> float:
+    """Days of history the lane needs before its first tradeable bar."""
+    bars = lane.arm_source().warmup_bars
+    return bars * 5 / 1440 + WARMUP_SLACK_DAYS
 
 
 def run_lane(lane, tapes: dict[str, list[tuple]], start_ms: int) -> list:
@@ -55,12 +63,16 @@ def main() -> None:
 
     now = int(dt.datetime.now(UTC).timestamp() * 1000)
     end_ms = now - now % 300_000
-    warm = end_ms - (args.days + WARMUP_DAYS) * 86_400_000
+    warm_days = max(warmup_days(lane) for lane in LANES)
+    warm = end_ms - int((args.days + warm_days) * 86_400_000)
     start_ms = end_ms - args.days * 86_400_000
     tapes = {s.strip(): fetch(s.strip(), "5m", warm, end_ms)
              for s in args.symbols.split(",")}
 
     print(f"\nBOUNCE LANES  {args.days}d  {', '.join(tapes)}  ${args.notional:.0f} notional")
+    print(f"  window {dt.datetime.fromtimestamp(start_ms/1000, UTC):%d %b %H:%M} -> "
+          f"{dt.datetime.fromtimestamp(end_ms/1000, UTC):%d %b %H:%M} UTC"
+          f"   (+{warm_days:.1f}d warmup, fully tradeable)")
     print(f"\n  {'lane':<30}{'n':>5}{'WR':>6}{'PF':>7}{'net bps':>9}"
           f"{'gr/tr':>8}{'fee/tr':>7}{'net $':>9}{'maxDD':>9}{'PSR':>7}")
 

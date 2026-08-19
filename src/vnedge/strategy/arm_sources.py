@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, Sequence
 
 from vnedge.execution.trigger_engine import ArmState
+from vnedge.strategy.structure_map import SWING_SCAN_BARS
 
 # bars are (open_time_ms, open, high, low, close, volume)
 Bar = tuple[int, float, float, float, float, float]
@@ -242,7 +243,12 @@ class StructureBounceArmSource:
 
     @property
     def warmup_bars(self) -> int:
-        return self.map_bars + 2
+        # find_swings scans the last SWING_SCAN_BARS map bars, so the map is
+        # only meaningful once that many COMPLETED higher-timeframe buckets
+        # exist. Reporting map_bars + 2 (the base-timeframe figure) understates
+        # a 4h map by ~17 days and lets a caller size a window it cannot fill.
+        needed = min(self.map_bars, SWING_SCAN_BARS)
+        return needed * max(1, self.map_timeframe_mult) + 2
 
     @staticmethod
     def _resample(bars: Sequence[Bar], mult: int, *, bucket_ms: int) -> list[Bar]:
