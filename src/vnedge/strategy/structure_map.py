@@ -24,7 +24,7 @@ membership is a band test.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from statistics import fmean, pstdev
 
 # bars are (open_time_ms, open, high, low, close, volume)
@@ -64,6 +64,25 @@ class StructureMap:
     vwap_lower_1: float
     vwap_upper_2: float
     vwap_lower_2: float
+
+    def without(self, level_types: Sequence[str]) -> "StructureMap":
+        """Drop level types, re-deriving the nearest support/resistance.
+
+        Filtering the tuple alone would leave ``nearest_support`` pointing at a
+        level the caller just excluded, so the pointers are rebuilt here.
+        """
+        blocked = set(level_types)
+        kept = tuple(lv for lv in self.levels if lv.level_type not in blocked)
+        support = self.nearest_support
+        resistance = self.nearest_resistance
+        if support is not None and support.level_type in blocked:
+            below = [lv for lv in kept if lv.price <= support.price]
+            support = max(below, key=lambda lv: lv.price) if below else None
+        if resistance is not None and resistance.level_type in blocked:
+            above = [lv for lv in kept if lv.price >= resistance.price]
+            resistance = min(above, key=lambda lv: lv.price) if above else None
+        return replace(self, levels=kept, nearest_support=support,
+                       nearest_resistance=resistance)
 
 
 def find_swings(

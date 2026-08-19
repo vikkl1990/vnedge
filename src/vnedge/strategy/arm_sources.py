@@ -215,6 +215,25 @@ class StructureBounceArmSource:
     min_confidence: int = 50
     rebuild_every: int = 12
     map_bars: int = 300
+    # Structure is read on a HIGHER timeframe than the trigger: 1 keeps the
+    # map on the base bars, 12 builds a 1h map from 5m bars, 48 a 4h map.
+    # Only COMPLETED higher-timeframe buckets are used, so a forming HTF bar
+    # can never contribute a level.
+    map_timeframe_mult: int = 1
+    # HTF bias alignment: +15 when the higher-timeframe trend agrees with the
+    # bounce direction. Optionally a hard gate -- a support bounce inside a
+    # 4h downtrend is the classic "catching the knife" failure the score alone
+    # only discourages.
+    htf_bias_bonus: int = 15
+    htf_bias_penalty: int = 0
+    require_htf_align: bool = False
+    htf_ema_bars: int = 20
+    # VWAP bands are a statistical envelope, not a structural level: they move
+    # with every bar and nothing defends them. Measured at -8.7 bps gross per
+    # trade against +6.9 for real S/R and liquidity, so they are excluded by
+    # default and the setting exists only to reproduce the original port.
+    exclude_level_types: tuple[str, ...] = ("vwap_band",)
+    _htf: list = field(default_factory=list, repr=False)
     _map: object | None = field(default=None, repr=False)
     _map_index: int = field(default=-10**9, repr=False)
     _episode: int = field(default=0, repr=False)
@@ -225,16 +244,79 @@ class StructureBounceArmSource:
     def warmup_bars(self) -> int:
         return self.map_bars + 2
 
+    @staticmethod
+    def _resample(bars: Sequence[Bar], mult: int, *, bucket_ms: int) -> list[Bar]:
+        """Aggregate base bars into completed higher-timeframe bars.
+
+        The final bucket is dropped unless it is full, so a forming HTF bar
+        never contributes structure.
+        """
+        if mult <= 1:
+            return list(bars)
+        grouped: dict[int, list[Bar]] = {}
+        for bar in bars:
+            grouped.setdefault(bar[0] // bucket_ms, []).append(bar)
+        out: list[Bar] = []
+        for key in sorted(grouped):
+            chunk = grouped[key]
+            if len(chunk) < mult:
+                continue  # incomplete bucket -- not yet knowable
+            out.append((
+                chunk[0][0], chunk[0][1],
+                max(b[2] for b in chunk), min(b[3] for b in chunk),
+                chunk[-1][4], sum(b[5] for b in chunk),
+            ))
+        return out
+
     def _refresh_map(self, ctx: BarContext) -> None:
         from vnedge.strategy.structure_map import build_structure_map
 
-        window = ctx.bars[max(0, ctx.index - self.map_bars) : ctx.index + 1]
+        mult = max(1, self.map_timeframe_mult)
+        span = self.map_bars * mult
+        window = ctx.bars[max(0, ctx.index - span) : ctx.index + 1]
+        if mult > 1:
+            base_ms = (
+                ctx.bars[1][0] - ctx.bars[0][0] if len(ctx.bars) > 1 else 300_000
+            )
+            window = self._resample(window, mult, bucket_ms=base_ms * mult)
         if len(window) < 20:
             self._map = None
+            self._map_index = ctx.index
             return
-        atrs = [ctx.atr] * len(window)  # one ATR source, consistently applied
-        self._map = build_structure_map(window, atrs, atr=ctx.atr)
+        # ATR is scaled to the map's timeframe so zone widths match the bars
+        # the pivots came from (the original mixes these and builds zones ~4x
+        # too narrow whenever the confirm ATR is missing).
+        map_atr = ctx.atr * (mult ** 0.5)
+        built = build_structure_map(window, [map_atr] * len(window), atr=map_atr)
+        if self.exclude_level_types:
+            built = built.without(self.exclude_level_types)
+        self._map = built
+        self._htf = list(window)
         self._map_index = ctx.index
+
+    def htf_bias(self) -> str:
+        """Higher-timeframe trend from COMPLETED map bars: up / down / flat.
+
+        Close vs EMA plus EMA slope -- both must agree, so a chopping HTF
+        reports flat rather than flipping bias every rebuild.
+        """
+        bars = self._htf
+        n = self.htf_ema_bars
+        if len(bars) < n + 3:
+            return "flat"
+        k = 2.0 / (n + 1.0)
+        ema = bars[0][4]
+        series = []
+        for bar in bars:
+            ema += k * (bar[4] - ema)
+            series.append(ema)
+        close = bars[-1][4]
+        slope = series[-1] - series[-4]
+        if close > series[-1] and slope > 0:
+            return "up"
+        if close < series[-1] and slope < 0:
+            return "down"
+        return "flat"
 
     def observe(self, ctx: BarContext) -> ArmState | None:
         if ctx.index < self.warmup_bars or ctx.atr <= 0 or ctx.vol_ma <= 0:
@@ -323,6 +405,16 @@ class StructureBounceArmSource:
                 return None
             score += 5
 
+        bias = self.htf_bias()
+        aligned = (bias == "up" and side == "long") or (bias == "down" and side == "short")
+        opposed = (bias == "down" and side == "long") or (bias == "up" and side == "short")
+        if self.require_htf_align and opposed:
+            return None
+        if aligned:
+            score += self.htf_bias_bonus
+        elif opposed:
+            score -= self.htf_bias_penalty
+
         score += min(level.strength // 5, 15)
         if level.touch_count >= 3:
             score += 10
@@ -342,7 +434,7 @@ class StructureBounceArmSource:
         self.last_reason = (
             f"structure_bounce {side} {level.level_type} conf={confidence} "
             f"strength={level.strength} touches={level.touch_count} "
-            f"vol={best_volume:.1f}x confluence={len(confluence)}"
+            f"vol={best_volume:.1f}x confluence={len(confluence)} htf={bias}"
         )
         return ArmState(
             episode_id=self._episode,

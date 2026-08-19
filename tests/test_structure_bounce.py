@@ -108,7 +108,9 @@ def _ctx(bars, i, atr=0.5, vol_ma=100.0):
 def _bounce_tape():
     """Support cluster at ~98.5, then a rejection wick and a confirming close."""
     bars = _flat(320, price=100.0)
-    for idx in (60, 120, 200):
+    # inside find_swings' 100-bar scan window: touches outside it are invisible,
+    # and the arm then falls through to a VWAP band instead of real structure.
+    for idx in (240, 265, 290):
         bars[idx] = _bar(idx, 100, 100.1, 98.5, 100)
     # rejection: long lower wick into the zone, closes back up, heavy volume
     bars[310] = _bar(310, 100.0, 100.1, 98.4, 99.9, 400.0)
