@@ -172,7 +172,7 @@ class ScannerSession:
             # it retroactively.
             self._pending = {
                 "side": fire.side, "entry": fire.entry, "stop": fire.stop,
-                "risk": fire.risk, "box_edge": fire.box_edge,
+                "risk": fire.risk, "box_edge": fire.box_edge, "level": fire.level,
                 "expires": fire.expires_bar, "chase_bps": fire.chase_bps,
                 "reason": fire.reason,
                 "arm": getattr(self.arm_source, "last_armed", None) or self.arm_source.name,
@@ -186,6 +186,10 @@ class ScannerSession:
             "side": fire.side, "entry": fire.entry, "bar": i, "ts": bars[i][0],
             "arm": getattr(self.arm_source, "last_armed", None) or self.arm_source.name,
             "chase_bps": fire.chase_bps, "reason": fire.reason, "stop": fire.stop,
+            # the level the decision was anchored to -- NOT recoverable from
+            # entry and stop, because a crossing entry sits beyond the level
+            # while the stop is measured from it
+            "level": fire.level,
         }
         if self.on_fire is not None:
             self.on_fire({"symbol": self.symbol, **self._open})
@@ -206,7 +210,7 @@ class ScannerSession:
             self._open = {
                 "side": p["side"], "entry": p["entry"], "bar": i, "ts": bars[i][0],
                 "arm": p["arm"], "chase_bps": p["chase_bps"], "reason": p["reason"],
-                "stop": p["stop"], "maker": True,
+                "stop": p["stop"], "level": p["level"], "maker": True,
             }
             if self.on_fire is not None:
                 self.on_fire({"symbol": self.symbol, **self._open})

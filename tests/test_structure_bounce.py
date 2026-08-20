@@ -190,7 +190,7 @@ def test_resting_limit_fill_bar_is_managed() -> None:
     # a long resting at 100 with its stop at 99
     session._pending = {
         "side": "long", "entry": 100.0, "stop": 99.0, "risk": 1.0,
-        "box_edge": 100.0, "expires": 99, "chase_bps": 0.0,
+        "box_edge": 100.0, "level": 100.0, "expires": 99, "chase_bps": 0.0,
         "reason": "test", "arm": "structure_bounce",
     }
     # this bar touches the limit AND collapses through the stop
