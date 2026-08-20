@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,6 +74,11 @@ _DECIMAL_FIELDS = (
     "vwap",
 )
 _STORAGE_QUANTUM = Decimal("0.000000000000000001")
+#: Must match the Parquet column type, decimal128(38, 18): 38 total digits of
+#: which 18 are fractional. The default decimal context precision of 28 is too
+#: narrow to quantize ordinary quote volumes and must never be relied on here.
+_STORAGE_PRECISION = 38
+_STORAGE_SCALE = 18
 
 
 def _utc(value: datetime) -> datetime:
@@ -514,9 +519,28 @@ class CandleParquetStore:
 
     @staticmethod
     def _storage_decimal(value: Decimal | None) -> Decimal | None:
+        """Quantize to the storage scale under a context wide enough to hold it.
+
+        ``quantize`` needs (integer digits + 18) digits of precision, while the
+        default decimal context allows 28 -- so any value from 10^10 upward
+        (an ordinary BTC quote_volume) raised InvalidOperation and crashed the
+        writer mid-flush.  The Parquet column is decimal128(38, 18), so the
+        context is widened to that same 38 and values that genuinely do not fit
+        the column are rejected with a message naming the value, rather than
+        surfacing as a bare InvalidOperation from deep in the write path.
+        """
         if value is None:
             return None
-        return value.quantize(_STORAGE_QUANTUM, rounding=ROUND_HALF_EVEN)
+        with localcontext() as ctx:
+            ctx.prec = _STORAGE_PRECISION
+            try:
+                quantized = value.quantize(_STORAGE_QUANTUM, rounding=ROUND_HALF_EVEN)
+            except InvalidOperation as exc:  # genuinely out of column range
+                raise ValueError(
+                    f"value {value} does not fit decimal128"
+                    f"({_STORAGE_PRECISION}, {_STORAGE_SCALE})"
+                ) from exc
+        return quantized
 
     @classmethod
     def _frame(cls, candles: Sequence[Candle]) -> pd.DataFrame:

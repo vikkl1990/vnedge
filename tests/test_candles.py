@@ -344,3 +344,33 @@ def test_parquet_partition_lock_preserves_concurrent_writers(tmp_path) -> None:
     assert [row.open_time for row in rows] == [row.open_time for row in candles]
     assert len(rows) == len(candles)
     assert store.partition_path(candles[0]).with_suffix(".parquet.lock").exists()
+
+
+def test_storage_decimal_handles_ordinary_quote_volumes() -> None:
+    """Values from 1e10 up crashed the writer: quantize needs prec > 28.
+
+    An hour of BTC quote volume is tens of billions, so this was not an edge
+    case -- it took the recorder down mid-flush with a bare InvalidOperation.
+    """
+    from decimal import Decimal
+
+    from vnedge.data.candles import CandleParquetStore
+
+    for raw in ("12345678901.5", "1234567890123.45", "99999999999999999.123456789"):
+        stored = CandleParquetStore._storage_decimal(Decimal(raw))
+        assert stored == Decimal(raw), raw
+        assert -stored.as_tuple().exponent == 18, raw
+    assert CandleParquetStore._storage_decimal(None) is None
+
+
+def test_storage_decimal_rejects_values_the_column_cannot_hold() -> None:
+    """Out-of-range must name the value, not surface as a bare InvalidOperation."""
+    from decimal import Decimal
+
+    import pytest
+
+    from vnedge.data.candles import CandleParquetStore
+
+    too_big = Decimal("1" + "0" * 30)  # 31 int digits + 18 scale > 38
+    with pytest.raises(ValueError, match="does not fit decimal128"):
+        CandleParquetStore._storage_decimal(too_big)

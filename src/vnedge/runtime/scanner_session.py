@@ -95,6 +95,9 @@ class ScannerSession:
     config: SessionConfig = field(default_factory=SessionConfig)
     on_fire: Callable[[dict], None] | None = None
     on_close: Callable[[ScannerTrade], None] | None = None
+    #: Fires when a resting limit is PLACED (not filled). The bar-level fill
+    #: model is an assumption; this hook is what lets an L2 replay check it.
+    on_pending: Callable[[dict], None] | None = None
 
     trades: list[ScannerTrade] = field(default_factory=list, repr=False)
     _open: dict | None = field(default=None, repr=False)
@@ -177,6 +180,13 @@ class ScannerSession:
                 "reason": fire.reason,
                 "arm": getattr(self.arm_source, "last_armed", None) or self.arm_source.name,
             }
+            if self.on_pending is not None:
+                self.on_pending({
+                    "symbol": self.symbol, "placed_bar": i, "placed_ts_ms": bars[i][0],
+                    "expires_ts_ms": bars[i][0] + (fire.expires_bar - i) * 300_000
+                    if fire.expires_bar is not None else None,
+                    **self._pending,
+                })
             return
         self.exits.open_from_fire(
             side=fire.side, entry=fire.entry, stop=fire.stop, risk=fire.risk,

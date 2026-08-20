@@ -101,6 +101,45 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
 
+
+  # L2 order-book recorder. Separate from pulse-recorder, which is
+  # deliberately --trades-only for Market Pulse. Book recording died on
+  # 2026-08-02 12:46 UTC and nothing restarted it because no service owned it;
+  # the whole point of this entry is that the L2 lake now has an owner with a
+  # restart policy and a healthcheck that fails when book files go stale.
+  book-recorder:
+    build: .
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - vnedge.exchange.tick_recorder
+      - --exchange
+      - binanceusdm
+      - --symbols
+      - BTC/USDT:USDT,ETH/USDT:USDT
+      - --data-root
+      - data
+    volumes:
+      - ./data:/app/data
+    # The 50-level ladder is far heavier than the trade stream; 600m (the
+    # pulse-recorder budget) is not enough for it.
+    mem_limit: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import pathlib,time,sys;
+          files=list(pathlib.Path('data/ticks/exchange=binanceusdm').glob('symbol=*/stream=book/*/*.parquet'));
+          sys.exit(0 if files and time.time()-max(p.stat().st_mtime for p in files)<300 else 1)
+      interval: 60s
+      timeout: 10s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
   research-loop:
     profiles: ["research"]
     build: .
