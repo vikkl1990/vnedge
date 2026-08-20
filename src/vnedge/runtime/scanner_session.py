@@ -77,10 +77,15 @@ class SessionCosts:
             hold_minutes = held_bars * self.bar_minutes
             free_minutes = self.free_close_within_bars * self.bar_minutes
             maker_exit = hold_minutes <= free_minutes and free_minutes > 0
+            # include_safety=False: the safety buffer is a PRE-TRADE gate
+            # margin ("only take this if the edge clears cost by X"), not a
+            # charge the venue bills. Deducting it from realized PnL would
+            # invent a cost and understate every book by that margin.
             return self.cost_model.round_trip_bps(
                 maker_entry=maker_entry,
                 maker_exit=maker_exit,
                 hold_minutes=hold_minutes if free_minutes else None,
+                include_safety=False,
             )
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
         entry_leg = (

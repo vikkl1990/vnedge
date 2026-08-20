@@ -21,7 +21,7 @@ def test_session_costs_agree_with_the_canonical_model() -> None:
     for held_bars in (12, 24, 60):
         hold_minutes = held_bars * 5.0
         assert costs.round_trip_bps(held_bars) == pytest.approx(
-            model.round_trip_bps(hold_minutes=hold_minutes)
+            model.round_trip_bps(hold_minutes=hold_minutes, include_safety=False)
         ), held_bars
 
 
@@ -31,16 +31,25 @@ def test_the_hardcoded_5_9_is_the_delta_taker_leg() -> None:
     assert model.fee_bps() * model.config.fee_gst_mult == pytest.approx(5.9)
 
 
-def test_canonical_costs_exceed_fee_only_costs() -> None:
-    """Fee-only omits slippage and the safety buffer -- it flatters every result.
+def test_the_safety_buffer_is_a_gate_margin_not_a_realized_cost() -> None:
+    """Charging it to realized PnL would invent a cost the venue never bills."""
+    model = CostModel.for_profile("delta_scalp")
+    costs = SessionCosts.from_profile("delta_scalp")
+    gate = model.round_trip_bps(hold_minutes=300)
+    realized = costs.round_trip_bps(60)
+    assert gate - realized == pytest.approx(model.config.safety_buffer_bps)
 
-    This is not a rounding difference: on delta_scalp it is 8 bps of round
-    trip, which is comparable to the entire edge of everything measured so far.
+
+def test_canonical_costs_exceed_fee_only_costs() -> None:
+    """Fee-only omits SLIPPAGE -- it flatters every result.
+
+    On delta_scalp that is 6 bps of round trip, comparable to the entire edge
+    of everything measured so far.
     """
     legacy = SessionCosts()
     canonical = SessionCosts.from_profile("delta_scalp")
     for held_bars in (12, 60):
-        assert canonical.round_trip_bps(held_bars) > legacy.round_trip_bps(held_bars) + 5
+        assert canonical.round_trip_bps(held_bars) > legacy.round_trip_bps(held_bars) + 4
 
 
 def test_a_maker_entry_is_cheaper_but_not_free() -> None:
