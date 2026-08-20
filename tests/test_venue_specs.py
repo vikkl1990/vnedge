@@ -25,8 +25,18 @@ def test_bybit_taker_fee_is_5_5_bps():
 
 def test_non_bybit_venues_keep_binance_taker():
     assert venue_taker_bps("binanceusdm") == 5.0
-    assert venue_taker_bps("delta_india") == 5.0
     assert venue_taker_bps("something_new") == 5.0
+
+
+def test_delta_is_not_billed_at_the_binance_rate():
+    """Delta used to fall through to this default and was 18% too cheap.
+
+    The venue bills 0.05% taker PLUS 18% India GST, verified against
+    delta.exchange/fees on 2026-08-20. The pre-tax rate matches Binance's,
+    which is why the fall-through looked correct for so long.
+    """
+    assert venue_taker_bps("delta_india", include_tax=False) == 5.0
+    assert venue_taker_bps("delta_india") == pytest.approx(5.9)
 
 
 def test_venue_fill_model_wires_the_right_taker():
