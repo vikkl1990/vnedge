@@ -200,7 +200,7 @@ class _Buffer:
 class TickRecorder:
     def __init__(self, exchange_id: str, symbols: list[str], root: Path,
                  *, levels: int = 10, candle_root: Path | None = None,
-                 trades_only: bool = False) -> None:
+                 trades_only: bool = False, books_only: bool = False) -> None:
         import ccxt.pro as ccxtpro
 
         if not hasattr(ccxtpro, exchange_id):
@@ -217,7 +217,14 @@ class TickRecorder:
         # depth-stream limit BOTH Binance USDT-M and Bybit swaps accept (Bybit
         # rejects 5/10/20 — only {1,50,200,1000}); we slice to `levels` on write.
         self._book_limit = 50 if levels <= 50 else 200
+        if trades_only and books_only:
+            raise ValueError("trades_only and books_only are mutually exclusive")
         self.trades_only = trades_only
+        # A books-only recorder can run ALONGSIDE a trades-only one without the
+        # two writing the same stream: without this, a second recorder added for
+        # L2 also subscribes to trades and duplicate shards land in the same
+        # partition, double-counting volume for anything that reads them.
+        self.books_only = books_only
         # Lake health is checked on a cycle, not assumed: an unchecked lake
         # reports UNKNOWN rather than healthy (2026-08-19 audit -- three
         # symbols silently lost an hour while the cockpit said "ok").
@@ -387,15 +394,31 @@ class TickRecorder:
                 logger.warning("%s book error: %s", symbol, exc)
                 await asyncio.sleep(_BACKOFF)
 
+    def streams_for(self, symbol: str) -> tuple[str, ...]:
+        """Which streams this recorder owns for a symbol.
+
+        Kept separate from ``run`` so the ownership rule is checkable without
+        standing up an exchange connection -- two recorders writing the same
+        stream is a data-corruption bug, not a runtime one.
+        """
+        streams = []
+        if not self.books_only:
+            streams.append("trades")
+        if not self.trades_only:
+            streams.append("book")
+        return tuple(streams)
+
     async def run(self, clock=None) -> None:
         import time as _t
 
         clock = clock or _t.monotonic
         tasks = []
         for symbol in self.symbols:
-            tasks.append(asyncio.create_task(self._watch_trades(symbol, clock)))
-            if not self.trades_only:
-                tasks.append(asyncio.create_task(self._watch_book(symbol, clock)))
+            for stream in self.streams_for(symbol):
+                watcher = (
+                    self._watch_trades if stream == "trades" else self._watch_book
+                )
+                tasks.append(asyncio.create_task(watcher(symbol, clock)))
         if self.candle_sink is not None:
             tasks.append(asyncio.create_task(self._advance_candles()))
         if self.lake_health is not None:
@@ -508,6 +531,20 @@ class DeltaTickRecorder:
     def _all_buffers(self):
         return (*self._trade_bufs.values(), *self._book_bufs.values())
 
+    def streams_for(self, symbol: str) -> tuple[str, ...]:
+        """Which streams this recorder owns for a symbol.
+
+        Kept separate from ``run`` so the ownership rule is checkable without
+        standing up an exchange connection -- two recorders writing the same
+        stream is a data-corruption bug, not a runtime one.
+        """
+        streams = []
+        if not self.books_only:
+            streams.append("trades")
+        if not self.trades_only:
+            streams.append("book")
+        return tuple(streams)
+
     async def run(self, clock=None) -> None:
         import time as _t
 
@@ -548,6 +585,12 @@ def main(argv=None) -> int:
         action="store_true",
         help="record trades without the L2 book stream (sufficient for candles)",
     )
+    p.add_argument(
+        "--books-only",
+        action="store_true",
+        help="record the L2 book without the trade stream (use when a separate "
+             "recorder already owns trades for these symbols)",
+    )
     p.add_argument("--levels", type=int, default=10, help="L2 depth levels per side")
     args = p.parse_args(argv)
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -563,6 +606,7 @@ def main(argv=None) -> int:
             levels=args.levels,
             candle_root=Path(args.candle_root) if args.candle_root else None,
             trades_only=args.trades_only,
+            books_only=args.books_only,
         )
     asyncio.run(recorder.run())
     return 0

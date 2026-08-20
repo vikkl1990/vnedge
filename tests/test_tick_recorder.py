@@ -283,3 +283,40 @@ async def test_delta_recorder_writes_book_and_trade_shards(tmp_path):
     assert trades.loc[0, "price"] == 62698.0
     assert trades.loc[0, "amount"] == 3.0
     assert trades.loc[0, "side"] == "buy"  # buyer is the taker/aggressor
+
+
+def test_books_only_does_not_subscribe_to_trades() -> None:
+    """A books-only recorder must not write the trade stream.
+
+    Two recorders on the same symbols would otherwise both write
+    stream=trades, landing duplicate shards in one partition and
+    double-counting volume for every reader of that lake.
+    """
+    from vnedge.exchange.tick_recorder import TickRecorder
+
+    books = TickRecorder(exchange_id="binanceusdm", symbols=["BTC/USDT:USDT"],
+                         root="/tmp/x", books_only=True)
+    assert books.streams_for("BTC/USDT:USDT") == ("book",)
+
+    trades = TickRecorder(exchange_id="binanceusdm", symbols=["BTC/USDT:USDT"],
+                          root="/tmp/x", trades_only=True)
+    assert trades.streams_for("BTC/USDT:USDT") == ("trades",)
+
+    both = TickRecorder(exchange_id="binanceusdm", symbols=["BTC/USDT:USDT"],
+                        root="/tmp/x")
+    assert both.streams_for("BTC/USDT:USDT") == ("trades", "book")
+
+    # the pair actually deployed together must partition the streams cleanly
+    assert not set(books.streams_for("BTC/USDT:USDT")) & set(
+        trades.streams_for("BTC/USDT:USDT")
+    )
+
+
+def test_trades_only_and_books_only_are_mutually_exclusive() -> None:
+    import pytest
+
+    from vnedge.exchange.tick_recorder import TickRecorder
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        TickRecorder(exchange_id="binanceusdm", symbols=["BTC/USDT:USDT"],
+                     root="/tmp/x", trades_only=True, books_only=True)

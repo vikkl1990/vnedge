@@ -120,6 +120,7 @@ services:
       - BTC/USDT:USDT,ETH/USDT:USDT
       - --data-root
       - data
+      - --books-only
     volumes:
       - ./data:/app/data
     # The 50-level ladder is far heavier than the trade stream; 600m (the
