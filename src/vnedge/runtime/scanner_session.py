@@ -31,15 +31,57 @@ UTC = dt.timezone.utc
 
 @dataclass(frozen=True, slots=True)
 class SessionCosts:
-    """Venue economics.  Delta all-in taker, with the Scalper Offer."""
+    """Venue economics for a scanner session.
+
+    Two modes, and the difference matters:
+
+    * ``cost_model`` set -- costs come from ``vnedge.plan.cost_model``, the
+      canonical source, and therefore include slippage and the safety buffer
+      as well as fees. This is what a lane should use.
+    * ``cost_model`` None -- the legacy FEE-ONLY behaviour. It understates the
+      true cost by slip_in + slip_out + safety (8 bps on delta_scalp) and is
+      retained only so older measurements remain reproducible.
+
+    ``taker_bps`` defaults to 5.9 because that is Delta's all-in taker leg
+    (5.0 x 1.18 GST) -- the same figure ``delta_scalp`` computes. It was
+    hardcoded in three separate modules before this.
+    """
 
     taker_bps: float = 5.9
     free_close_within_bars: int = 6  # 30 min on 5m bars; 0 disables the offer
     # Entry leg when it rests as a limit and is filled passively. None keeps
     # every entry taker, which is what all prior measurements assumed.
     maker_bps: float | None = None
+    #: When set, every cost question is delegated here instead of to the
+    #: fields above, so a lane cannot hold a private fee assumption.
+    cost_model: object | None = None
+    bar_minutes: float = 5.0
+
+    @classmethod
+    def from_profile(cls, profile: str = "delta_scalp", *,
+                     free_close_within_bars: int = 6,
+                     bar_minutes: float = 5.0) -> SessionCosts:
+        """Costs from the canonical model, slippage and safety included."""
+        from vnedge.plan.cost_model import CostModel
+
+        model = CostModel.for_profile(profile)
+        return cls(
+            taker_bps=model.fee_bps() * model.config.fee_gst_mult,
+            maker_bps=model.fee_bps(maker=True) * model.config.fee_gst_mult,
+            free_close_within_bars=free_close_within_bars,
+            cost_model=model, bar_minutes=bar_minutes,
+        )
 
     def round_trip_bps(self, held_bars: int, *, maker_entry: bool = False) -> float:
+        if self.cost_model is not None:
+            hold_minutes = held_bars * self.bar_minutes
+            free_minutes = self.free_close_within_bars * self.bar_minutes
+            maker_exit = hold_minutes <= free_minutes and free_minutes > 0
+            return self.cost_model.round_trip_bps(
+                maker_entry=maker_entry,
+                maker_exit=maker_exit,
+                hold_minutes=hold_minutes if free_minutes else None,
+            )
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
         entry_leg = (
             self.maker_bps
