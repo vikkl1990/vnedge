@@ -295,6 +295,15 @@ class ProductionGate:
     #: round trip consumes 27% of the hour's range at the peak and 68% at
     #: the trough. The gate exists to stop paying the second price.
     allowed_hours: tuple[int, ...] | None = None
+    #: Require volatility to be AT LEAST this Bollinger-bandwidth percentile.
+    #: Note the tension with ``use_regime``, which blocks the top 8% as
+    #: "expansion": one gate refuses the widest conditions and this one demands
+    #: them. Volatility clusters strongly on our own data (hourly |return|
+    #: autocorrelation 0.24-0.27, realized range 0.42-0.55, GARCH persistence
+    #: 0.985 with a ~45h half-life), so conditional width is forecastable --
+    #: but a wide distribution only makes an after-cost edge POSSIBLE, it does
+    #: not create one, and adverse selection rises with it too.
+    min_bb_rank: float | None = None
     min_confidence: int = 65
     fee_cover_mult: float = 2.5
     round_trip_bps: float = 11.8
@@ -334,6 +343,10 @@ class ProductionGate:
 
         confidence = getattr(self.inner, "last_confidence", 0)
         reason = getattr(self.inner, "last_reason", "")
+
+        if self.min_bb_rank is not None and snapshot.bb_rank < self.min_bb_rank:
+            self._block("too_quiet")
+            return None
 
         if self.allowed_hours is not None:
             hour = datetime.fromtimestamp(
