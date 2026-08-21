@@ -69,14 +69,20 @@ class StreamingRegime:
     _adx: float = field(default=0.0, repr=False)
     _closes: deque = field(default_factory=lambda: deque(maxlen=20), repr=False)
     _ranks: deque = field(default_factory=lambda: deque(maxlen=288), repr=False)
+    #: Weekday-only bandwidth history. Weekends run 0.54-0.58x the weekday
+    #: median hourly range on 0.43-0.46x the volume (measured 2026-08-21), so a
+    #: percentile pooled across both is loosest exactly where liquidity is
+    #: worst. A caller that trades weekdays only must rank against weekdays.
+    _weekday_ranks: deque = field(default_factory=lambda: deque(maxlen=288), repr=False)
     _n: int = field(default=0, repr=False)
 
     def __post_init__(self) -> None:
         self._dx = deque(maxlen=self.adx_period)
         self._closes = deque(maxlen=self.bb_period)
         self._ranks = deque(maxlen=self.bb_rank_window)
+        self._weekday_ranks = deque(maxlen=self.bb_rank_window)
 
-    def update(self, bar, *, vol_ma: float) -> RegimeSnapshot:
+    def update(self, bar, *, vol_ma: float, weekday: bool = True) -> RegimeSnapshot:
         _, _, high, low, close, volume = bar
         n = self.adx_period
         if self._prev is not None:
@@ -111,10 +117,11 @@ class StreamingRegime:
             var = sum((c - mean) ** 2 for c in self._closes) / self.bb_period
             bandwidth = (4.0 * var**0.5) / mean if mean > 0 else 0.0
             self._ranks.append(bandwidth)
+            if weekday:
+                self._weekday_ranks.append(bandwidth)
+        pool = self._weekday_ranks if (weekday and self._weekday_ranks) else self._ranks
         rank = (
-            sum(1 for b in self._ranks if b <= bandwidth) / len(self._ranks)
-            if self._ranks
-            else 0.0
+            sum(1 for b in pool if b <= bandwidth) / len(pool) if pool else 0.0
         )
         atr_pct = (self._atr / n) / close if close > 0 and self._n >= n else 0.0
         vol_ratio = volume / vol_ma if vol_ma > 0 else 0.0
@@ -294,6 +301,10 @@ class ProductionGate:
     #: range is 66 bps at 14:00 UTC against 24 bps at 20:00, so a ~17.8 bps
     #: round trip consumes 27% of the hour's range at the peak and 68% at
     #: the trough. The gate exists to stop paying the second price.
+    #: Stand down Sat/Sun entirely. Separate from allowed_hours because the
+    #: weekend is a different liquidity regime, not merely a different hour:
+    #: range differs by weekday at p=1.5e-13 (BTC) / 1.4e-10 (ETH).
+    weekday_only: bool = False
     allowed_hours: tuple[int, ...] | None = None
     #: KNOWN DEFECT, measured 2026-08-21: this percentile is computed over a
     #: POOLED rolling window that mixes weekdays and weekends. Range differs by
@@ -342,7 +353,11 @@ class ProductionGate:
         self.blocked[reason] = self.blocked.get(reason, 0) + 1
 
     def observe(self, ctx: BarContext) -> ArmState | None:
-        snapshot = self.regime.update(ctx.bars[ctx.index], vol_ma=ctx.vol_ma)
+        stamp = datetime.fromtimestamp(ctx.bars[ctx.index][0] / 1000, tz=UTC)
+        is_weekday = stamp.weekday() < 5
+        snapshot = self.regime.update(
+            ctx.bars[ctx.index], vol_ma=ctx.vol_ma, weekday=is_weekday
+        )
         self.stoch_obv.update(ctx.bars[ctx.index])
         self.last_regime = snapshot
         arm = self.inner.observe(ctx)
@@ -355,14 +370,16 @@ class ProductionGate:
         confidence = getattr(self.inner, "last_confidence", 0)
         reason = getattr(self.inner, "last_reason", "")
 
+        if self.weekday_only and not is_weekday:
+            self._block("weekend")
+            return None
+
         if self.min_bb_rank is not None and snapshot.bb_rank < self.min_bb_rank:
             self._block("too_quiet")
             return None
 
         if self.allowed_hours is not None:
-            hour = datetime.fromtimestamp(
-                ctx.bars[ctx.index][0] / 1000, tz=UTC
-            ).hour
+            hour = stamp.hour
             if hour not in self.allowed_hours:
                 self._block("session_hour")
                 return None
