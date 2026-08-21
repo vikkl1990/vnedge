@@ -35,20 +35,18 @@ import statistics
 
 from research.squeeze_trigger_replay import (
     ATR_PERIOD,
-    BREAK_BUFFER_BPS,
     COMPRESSION_BARS,
     COMPRESSION_THRESHOLD,
     RANK_LOOKBACK,
-    SCALPER_FREE_CLOSE_BARS,
-    TAKER_BPS,
     VOL_LOOKBACK,
     VWAP_BARS,
     fetch,
 )
 from vnedge.execution.exit_engine import ExitConfig, ExitEngine
 from vnedge.execution.trigger_engine import ArmState, TriggerConfig, TriggerEngine
+from vnedge.runtime.scanner_session import SessionCosts
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 IGNITION_BODY_FRAC = 0.60
 IGNITION_VOL_MULT = 2.5
@@ -58,6 +56,7 @@ IGNITION_BOX_BARS = 24  # the level an ignition must clear (2h)
 def replay(symbol: str, bars: list[tuple], start_ms: int, mode: str) -> list[dict]:
     trigger = TriggerEngine(config=TriggerConfig())
     exits = ExitEngine(config=ExitConfig())
+    costs = SessionCosts.from_profile("delta_scalp")
     trades: list[dict] = []
     meta: dict | None = None
     episode = 0
@@ -115,7 +114,7 @@ def replay(symbol: str, bars: list[tuple], start_ms: int, mode: str) -> list[dic
                     if side == "long"
                     else (1 - decision.price / meta["entry"])
                 ) * 1e4
-                fee = TAKER_BPS + (0.0 if held <= SCALPER_FREE_CLOSE_BARS else TAKER_BPS)
+                fee = costs.round_trip_bps(held)
                 trades.append(
                     {
                         "arm": meta["arm"], "ts": bars[meta["bar"]][0], "side": side,
@@ -168,7 +167,6 @@ def replay(symbol: str, bars: list[tuple], start_ms: int, mode: str) -> list[dic
 def stats(trades: list[dict], notional: float) -> str:
     if not trades:
         return f"{0:>5}{'-':>7}{0.0:>10.0f}{0.0:>10.2f}"
-    wins = sum(1 for t in trades if t["net_bps"] > 0)
     gw = sum(t["net_bps"] for t in trades if t["net_bps"] > 0)
     gl = -sum(t["net_bps"] for t in trades if t["net_bps"] <= 0)
     pf = gw / gl if gl > 0 else float("inf")

@@ -132,6 +132,11 @@ class DeltaPublicWsClient:
         # live per-symbol state (native symbol -> value)
         self.best_bid: dict[str, float] = {}
         self.best_ask: dict[str, float] = {}
+        # Per-symbol provenance for quote-held scanner decisions. Delta book
+        # messages may expose either an explicit sequence or only a timestamp;
+        # retain both separately from local socket receipt time.
+        self.book_event_at: dict[str, datetime] = {}
+        self.book_sequence: dict[str, int | str] = {}
         self.funding_rate: dict[str, float] = {}
         self.mark_price: dict[str, float] = {}
         self.books: dict[str, tuple[list, list]] = {}
@@ -245,6 +250,17 @@ class DeltaPublicWsClient:
             self.best_bid[sym] = float(buy[0]["limit_price"])
         if sell:
             self.best_ask[sym] = float(sell[0]["limit_price"])
+        event_at = self._message_datetime(msg.get("timestamp"))
+        if event_at is not None:
+            self.book_event_at[sym] = event_at
+        sequence = (
+            msg.get("sequence_no")
+            or msg.get("sequence")
+            or msg.get("nonce")
+            or msg.get("timestamp")
+        )
+        if isinstance(sequence, (int, str)) and not isinstance(sequence, bool):
+            self.book_sequence[sym] = sequence
         self.books[sym] = (buy, sell)
         self._touch()
         if self.on_book is not None:
@@ -378,6 +394,29 @@ class DeltaPublicWsClient:
     @staticmethod
     def _now_ms() -> int:
         return int(datetime.now(UTC).timestamp() * 1000)
+
+    @staticmethod
+    def _message_datetime(raw: object) -> datetime | None:
+        """Normalize Delta's seconds/ms/us/ns timestamps to aware UTC."""
+        if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        absolute = abs(value)
+        if absolute >= 1e17:
+            value /= 1_000_000_000
+        elif absolute >= 1e14:
+            value /= 1_000_000
+        elif absolute >= 1e11:
+            value /= 1_000
+        try:
+            return datetime.fromtimestamp(value, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
 
 
 def _default_connect(url: str):

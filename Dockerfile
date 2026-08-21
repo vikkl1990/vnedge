@@ -21,6 +21,7 @@ COPY src ./src
 RUN pip install .
 
 COPY research ./research
+COPY config ./config
 # docs/ ships too: the dashboard's /runbooks route serves docs/RUNBOOKS.md at
 # runtime (without this the route 404s in-container — caught 2026-07-11).
 COPY docs ./docs

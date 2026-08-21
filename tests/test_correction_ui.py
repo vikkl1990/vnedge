@@ -147,6 +147,11 @@ def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject(
 
 def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     snap = snapshot()
+    snap["runtime_control"].update({
+        "shadow_observe_strategies": ["structure_bos_1h"],
+        "shadow_observe_timeframes": ["1h"],
+        "lane_set_hash": "abc123",
+    })
     snap["lanes"] = [
         {
             "lane_id": "shadow_observe_binanceusdm_btc",
@@ -170,6 +175,9 @@ def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     lane = payload["lanes"][0]
     assert payload["banner"] == "SHADOW_OBSERVE · virtual only — no capital strategies."
     assert payload["shadow_observe_lanes"] == 1
+    assert payload["shadow_observe_strategies"] == ["structure_bos_1h"]
+    assert payload["shadow_observe_timeframes"] == ["1h"]
+    assert payload["lane_set_hash"] == "abc123"
     assert lane["mode"] == "shadow"
     assert lane["observation_class"] == "shadow_observe"
     assert lane["capital"] is False

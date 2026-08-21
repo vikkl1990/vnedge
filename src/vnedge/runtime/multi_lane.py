@@ -59,6 +59,9 @@ from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
+from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
+from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
+from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.trend_continuation import TrendContinuation
@@ -596,6 +599,27 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return FeeWallMomentumObserver(seed_funding)
+    if strategy_id == SqueezeExpansionBreakout.strategy_id:
+        if params:
+            raise ValueError(
+                "squeeze_expansion_breakout_v2 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return SqueezeExpansionBreakout(seed_funding)
+    if strategy_id == SqueezeExpansionBreakoutV3.strategy_id:
+        if params:
+            raise ValueError(
+                "squeeze_expansion_breakout_v3 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return SqueezeExpansionBreakoutV3(seed_funding)
+    if strategy_id == RangeExpansionObserver.strategy_id:
+        if params:
+            raise ValueError(
+                "range_expansion_observer_v1 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return RangeExpansionObserver(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)

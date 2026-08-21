@@ -24,9 +24,10 @@ from dataclasses import dataclass, field
 
 from vnedge.execution.exit_engine import ExitConfig, ExitEngine
 from vnedge.execution.trigger_engine import TriggerConfig, TriggerEngine
+from vnedge.plan.cost_model import CostModel
 from vnedge.strategy.arm_sources import ArmSource, Bar, BarContext
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,22 +49,20 @@ class SessionCosts:
     """
 
     taker_bps: float = 5.9
-    free_close_within_bars: int = 6  # 30 min on 5m bars; 0 disables the offer
+    free_close_within_bars: int = 0  # legacy fee-only mode; never assumed on
     # Entry leg when it rests as a limit and is filled passively. None keeps
     # every entry taker, which is what all prior measurements assumed.
     maker_bps: float | None = None
     #: When set, every cost question is delegated here instead of to the
     #: fields above, so a lane cannot hold a private fee assumption.
-    cost_model: object | None = None
+    cost_model: CostModel | None = None
     bar_minutes: float = 5.0
 
     @classmethod
     def from_profile(cls, profile: str = "delta_scalp", *,
-                     free_close_within_bars: int = 6,
+                     free_close_within_bars: int = 0,
                      bar_minutes: float = 5.0) -> SessionCosts:
         """Costs from the canonical model, slippage and safety included."""
-        from vnedge.plan.cost_model import CostModel
-
         model = CostModel.for_profile(profile)
         return cls(
             taker_bps=model.fee_bps() * model.config.fee_gst_mult,
@@ -75,12 +74,13 @@ class SessionCosts:
     def round_trip_bps(self, held_bars: int, *, maker_entry: bool = False) -> float:
         if self.cost_model is not None:
             hold_minutes = held_bars * self.bar_minutes
-            free_minutes = self.free_close_within_bars * self.bar_minutes
-            maker_exit = hold_minutes <= free_minutes and free_minutes > 0
+            # The model itself owns any account-verified close waiver.  A free
+            # close is not equivalent to a maker exit, and converting it here
+            # silently applied a discount to the conservative delta profile.
             return self.cost_model.round_trip_bps(
                 maker_entry=maker_entry,
-                maker_exit=maker_exit,
-                hold_minutes=hold_minutes if free_minutes else None,
+                maker_exit=False,
+                hold_minutes=hold_minutes,
             )
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
         entry_leg = (

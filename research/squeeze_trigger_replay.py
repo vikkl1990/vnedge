@@ -18,8 +18,8 @@ Binance 5m bars (as a Delta price proxy):
   breakeven-plus-fees lock after +1R, chandelier trail (extreme - 1 ATR)
   after +2R, absolute 4h backstop.  No fixed take-profit: expansion capture
   keeps the right tail.
-- COST: Delta all-in taker 5.9 bps per leg; Scalper Offer models the closing
-  fee as zero when the hold is <= 30 minutes.
+- COST: the canonical conservative Delta profile: both tariff legs, GST,
+  slippage, and the safety buffer. No Scalper/DETO discount is assumed.
 
 Pessimistic conventions: stop checked before favorable exits inside a bar;
 entries pay 1 bp through the level.  This is smoke/reference evidence on seen
@@ -37,7 +37,7 @@ import json
 import statistics
 import urllib.request
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 # Frozen to the registered strategy params (strategy/squeeze_expansion_breakout.py)
 COMPRESSION_BARS = 48
@@ -63,7 +63,7 @@ TRAIL_ARM_R = 2.0
 TRAIL_ATR_MULT = 1.0
 ABSOLUTE_MAX_BARS = 48               # 4 h
 TAKER_BPS = 5.9
-SCALPER_FREE_CLOSE_BARS = 6          # 30 min
+SCALPER_FREE_CLOSE_BARS = 0          # compatibility export; unverified => disabled
 VWAP_BARS = 288                      # 24 h of 5m
 CONFIRM_CLOSE = True                 # bar-close confirmation beyond the level
                                      # (the tick plane's 3-10s hold, at bar scale)
@@ -95,6 +95,9 @@ def fetch(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[tuple]
 def replay(symbol: str, bars: list[tuple], eval_start_ms: int) -> list[dict]:
     from vnedge.execution.exit_engine import ExitConfig, ExitEngine
     from vnedge.execution.trigger_engine import ArmState, TriggerConfig, TriggerEngine
+    from vnedge.runtime.scanner_session import SessionCosts
+
+    costs = SessionCosts.from_profile("delta_scalp")
 
     n = len(bars)
     highs = [b[2] for b in bars]
@@ -189,9 +192,7 @@ def replay(symbol: str, bars: list[tuple], eval_start_ms: int) -> list[dict]:
                     if side == "long"
                     else (1 - decision.price / open_meta["entry"])
                 ) * 1e4
-                fee = TAKER_BPS + (
-                    0.0 if held <= SCALPER_FREE_CLOSE_BARS else TAKER_BPS
-                )
+                fee = costs.round_trip_bps(held)
                 trades.append(
                     {
                         "symbol": symbol,

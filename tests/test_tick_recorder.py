@@ -320,3 +320,21 @@ def test_trades_only_and_books_only_are_mutually_exclusive() -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         TickRecorder(exchange_id="binanceusdm", symbols=["BTC/USDT:USDT"],
                      root="/tmp/x", trades_only=True, books_only=True)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        DeltaTickRecorder(
+            ["BTC/USD:USD"], Path("/tmp/x"), trades_only=True, books_only=True
+        )
+
+
+def test_delta_stream_ownership_honours_split_recorder_flags(tmp_path) -> None:
+    books = DeltaTickRecorder(["BTC/USD:USD"], tmp_path, books_only=True)
+    trades = DeltaTickRecorder(["BTC/USD:USD"], tmp_path, trades_only=True)
+    both = DeltaTickRecorder(["BTC/USD:USD"], tmp_path)
+
+    assert books.streams_for("BTCUSD") == ("book",)
+    assert trades.streams_for("BTCUSD") == ("trades",)
+    assert both.streams_for("BTCUSD") == ("trades", "book")
+    assert not set(books.streams_for("BTCUSD")) & set(
+        trades.streams_for("BTCUSD")
+    )

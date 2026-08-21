@@ -81,9 +81,42 @@ MULTI_LANE_SHADOW_OBSERVE_SYMBOL=BTC/USDT:USDT
 MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME=1h
 ```
 
-After recreation, `/state.runtime_control` must report
-`shadow_observe_lanes: 1`, `paper_lanes: 0`, `orders_allowed: false`, and
-`live_orders_allowed: false`. The Desk banner must say
+Preferred multi-horizon observer deployment (replaces the singleton variables
+above; do not set both):
+
+```bash
+MULTI_LANE_SHADOW_OBSERVE_ENABLED=0
+MULTI_LANE_SHADOW_OBSERVE_STRATEGY=
+MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH=config/shadow-observers.v1.json
+```
+
+The checked-in v1 roster runs virtual-only squeeze acceptance at 5m and
+range-expansion + BoS observation at 1h for BTC and ETH. It does not add a
+paper lane, change `CAPITAL_APPROVED`, or enable live orders. Startup fails on
+unknown fields, wrong timeframes, duplicate stable lane IDs, or an ineligible
+strategy.
+
+Before switching from legacy lane IDs to the versioned roster, inspect stale
+artifacts without changing them:
+
+```bash
+python -m vnedge.runtime.orphan_lane_archive \
+  --journal-dir logs/paper_trials
+```
+
+After confirming the listed lane IDs are absent from the desired roster, rerun
+with `--apply`. Files are moved—not deleted—to
+`logs/paper_trials/archive/orphans/<UTC timestamp>/` with a recovery manifest.
+Stop `multi-lane-shadow` before applying the move, inspect the manifest, and
+only then recreate the service. A partial filesystem failure leaves a
+`status: failed` manifest listing every file already moved, so restoration is
+explicit and no evidence is silently lost.
+
+After recreation, a legacy singleton must report `shadow_observe_lanes: 1`;
+the checked-in versioned roster must report `shadow_observe_lanes: 6` and
+`shadow_observe_timeframes: ["1h", "5m"]`. Both must report
+`paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
+The Desk banner must say
 `SHADOW_OBSERVE · virtual only`. A bad, killed, missing, or wrong-timeframe
 strategy fails process startup.
 
@@ -103,6 +136,17 @@ MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME=5m
 This journals virtual crossing intents and their frozen SL/TP outcomes. It does
 not place paper or live orders; `/state.runtime_control` must continue to show
 `paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
+
+To run the v3 quote-acceptance candidate instead, change only the strategy id:
+
+```dotenv
+MULTI_LANE_SHADOW_OBSERVE_STRATEGY=squeeze_expansion_breakout_v3
+```
+
+V3 is still `RESEARCH_ONLY`. It journals current bid/ask acceptance and virtual
+outcomes, but does not create an `OrderIntent`. Its exploratory 1-minute proxy
+replay is available as `python -m research.squeeze_acceptance_replay`; that
+proxy is not tick-parity or promotion evidence.
 
 ## Dashboard access
 

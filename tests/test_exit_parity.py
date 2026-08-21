@@ -5,14 +5,14 @@ backtest/paper/shadow". Today they are two engines with two vocabularies:
 
     research  (execution.exit_engine, used by scanner_session / bounce_lanes)
               stop | failed_breakout | no_progress | time_4h | tp_ladder | max_age
-    runtime   (runtime.active_exit, used by paper_runner / shadow_outcomes)
+    legacy runtime (runtime.active_exit, used by generic paper/shadow lanes)
               stop | breakeven_stop | tp{n}_partial | tp{n}_final | take_profit
               | max_holding
 
-These tests do NOT assert the engines agree -- they do not, and silently
-changing the runtime engine to make them agree would alter shadow behaviour
-without evidence. They pin the divergences that change a book, so the gap is
-visible and cannot widen unnoticed.
+Scanner shadow lanes no longer cross this boundary: the canonical
+SqueezeObserveRunner uses execution.exit_engine directly. These tests keep
+the remaining generic-runtime divergence visible until each legacy strategy
+is migrated behind an explicit parity pack.
 """
 
 from __future__ import annotations

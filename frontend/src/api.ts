@@ -364,6 +364,9 @@ export interface LanesPayload {
   measurement_only: boolean;
   banner: string | null;
   shadow_observe_lanes: number;
+  shadow_observe_strategies: string[];
+  shadow_observe_timeframes: string[];
+  lane_set_hash: string | null;
   portfolio: PortfolioScope;
   read_only: true;
   can_promote: false;

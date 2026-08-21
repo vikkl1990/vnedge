@@ -18,11 +18,23 @@ def test_session_costs_agree_with_the_canonical_model() -> None:
     """A scanner session and the plan gate must charge the same trade alike."""
     model = CostModel.for_profile("delta_scalp")
     costs = SessionCosts.from_profile("delta_scalp")
-    for held_bars in (12, 24, 60):
+    for held_bars in (0, 1, 6, 7, 12, 24, 60):
         hold_minutes = held_bars * 5.0
         assert costs.round_trip_bps(held_bars) == pytest.approx(
             model.round_trip_bps(hold_minutes=hold_minutes)
         ), held_bars
+
+
+def test_unverified_scalper_offer_is_not_silently_recast_as_maker() -> None:
+    """A close-fee waiver is neither a maker exit nor a generic entitlement."""
+    model = CostModel.for_profile("delta_scalp")
+    costs = SessionCosts.from_profile(
+        "delta_scalp", free_close_within_bars=6
+    )
+    for held_bars in (1, 6, 7):
+        assert costs.round_trip_bps(held_bars) == pytest.approx(
+            model.round_trip_bps(hold_minutes=held_bars * 5.0)
+        )
 
 
 def test_the_hardcoded_5_9_is_the_delta_taker_leg() -> None:

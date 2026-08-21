@@ -29,6 +29,7 @@ export function Header() {
   const meta = useMeta();
   const costs = useCostModel();
   const lanes = useLanes();
+  const snapshot = useSnapshot();
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 1_000);
@@ -39,6 +40,8 @@ export function Header() {
   const riskUnavailable = risk.isError || (!risk.isLoading && riskUnknown);
   const role = who.data?.role ?? "…";
   const feedTone = riskUnknown ? "bad" : posture.feed.status === "healthy" ? "good" : posture.feed.status === "stale" ? "warn" : posture.feed.status === "gap" ? "bad" : "neutral";
+  const systemChip = snapshot.data?.chips?.SYSTEM;
+  const systemBand = (systemChip?.band ?? "unknown") as Band;
   const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
   const feeWall = costs.data?.taker_round_trip_cost_bps;
   const sha = meta.data?.build_sha ?? posture?.build_sha;
@@ -46,8 +49,8 @@ export function Header() {
   const margin = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.fixed_margin_usd;
   const leverage = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.max_leverage;
   return (
-    <header className="relative z-10 -mx-2 rounded-xl border border-line bg-bg/95 px-4 py-3 shadow-xl shadow-black/20 backdrop-blur">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
+    <header className="relative z-10 -mx-2 rounded-xl border border-line bg-bg/95 px-3 py-2.5 shadow-xl shadow-black/20 backdrop-blur sm:px-4 sm:py-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">VN</div>
           <div>
@@ -59,15 +62,28 @@ export function Header() {
             <div className="text-[11px] font-mono text-dim">mode: {posture?.runtime_label ?? "…"}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <span className="text-[11px] font-mono text-dim">{time} UTC</span>
+        <div className="flex items-center gap-1.5 flex-wrap justify-end">
+          <span className="hidden text-[11px] font-mono text-dim sm:inline">{time} UTC</span>
+          <TerminalBadge tone={BAND_TONE[systemBand] as never}>system {systemChip?.label ?? "unknown"}</TerminalBadge>
           <TerminalBadge tone={riskUnknown || posture?.capital.enabled ? "bad" : "neutral"}>capital {riskUnknown ? "UNKNOWN" : posture.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
           <TerminalBadge tone={riskUnknown || posture?.kill.active ? "bad" : "neutral"}>kill {riskUnknown ? "UNKNOWN" : posture.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
-          <TerminalBadge tone={feedTone}>{`● feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
-          <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
-          <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
-          <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
-          <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+          <TerminalBadge tone={feedTone}>{`● public feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
+          <span className="hidden items-center gap-1.5 xl:inline-flex">
+            <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
+            <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
+            <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
+            <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+          </span>
+          <details className="relative xl:hidden">
+            <summary className="cursor-pointer list-none rounded-md border border-line px-2 py-[2px] text-[11px] font-mono uppercase text-dim">more</summary>
+            <div className="absolute right-0 top-7 z-30 flex min-w-[260px] flex-col gap-2 rounded-lg border border-line bg-bg p-3 shadow-xl">
+              <span className="font-mono text-[10px] text-faint sm:hidden">{time} UTC</span>
+              <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
+              <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
+              <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
+              <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+            </div>
+          </details>
         </div>
       </div>
     </header>
@@ -286,12 +302,20 @@ export function RiskPanel() {
     );
   }
   const journalBlocked = data?.journal.entries_blocked;
+  const dailyRemaining = data.daily_halt.limit_usd == null
+    ? null
+    : Math.max(0, data.daily_halt.limit_usd - data.daily_halt.used_usd);
   return (
     <TerminalPanel title="Risk" meta="kill · halt · journal · gateway · streams">
       {journalBlocked && (
         <div className="mb-4 rounded-lg border border-short/50 bg-short/10 px-3 py-3 text-[12px] text-short">
           <strong>Journal degraded.</strong> New entries blocked until operator ack.
           {data?.journal.quarantine_path && <div className="mt-1 break-all font-mono text-[10px]">quarantine: {data.journal.quarantine_path}</div>}
+        </div>
+      )}
+      {data.breaker.active && (
+        <div className="mb-4 rounded-lg border border-short/50 bg-short/10 px-3 py-3 text-[12px] text-short" role="alert">
+          <strong>Consecutive-loss breaker active.</strong> New entries are blocked after {data.breaker.loss_streak} losses (threshold {data.breaker.threshold}); reduce-only exits remain available.
         </div>
       )}
       <div className="flex items-center gap-3 flex-wrap">
@@ -303,7 +327,7 @@ export function RiskPanel() {
       <div className="grid grid-cols-2 gap-3 my-5 md:grid-cols-3 xl:grid-cols-6">
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow purse" value={usd(data.portfolio.shadow_purse_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Pending intents" value={String(data.positions.shadow_pending_intents)} /></div>
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Daily loss used" value={usd(data.daily_halt.used_usd)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Daily loss used / left" value={`${usd(data.daily_halt.used_usd)} / ${dailyRemaining == null ? "—" : usd(dailyRemaining)}`} tone={data.daily_halt.active ? "text-short" : ""} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open shadow" value={String(data?.positions.shadow_open ?? 0)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Loss streak" value={`${data?.breaker.loss_streak ?? 0}/${data?.breaker.threshold ?? 3}`} tone={data?.breaker.active ? "text-short" : ""} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Unresolved" value={String(data?.positions.unresolved_orders ?? 0)} tone={(data?.positions.unresolved_orders ?? 0) > 0 ? "text-short" : ""} /></div>
@@ -551,10 +575,10 @@ export function PromotePanel() {
   );
 }
 
-type FreshnessRow = { name: string; age: string; state: "OK" | "STALE" | "MISSING"; sla: string };
+type FreshnessRow = { name: string; age: string; state: "OK" | "STALE" | "MISSING"; sla: string; required?: boolean };
 
 function generatedFreshness(name: string, generatedAt: string | null | undefined, slaSeconds: number): FreshnessRow {
-  if (!generatedAt) return { name, age: "not reported", state: "MISSING", sla: ageSec(slaSeconds) };
+  if (!generatedAt) return { name, age: "not configured", state: "MISSING", sla: ageSec(slaSeconds), required: false };
   const parsed = Date.parse(generatedAt);
   if (!Number.isFinite(parsed)) return { name, age: "invalid timestamp", state: "MISSING", sla: ageSec(slaSeconds) };
   const seconds = Math.max(0, (Date.now() - parsed) / 1000);
@@ -571,18 +595,19 @@ export function SystemPanel() {
   const snapshotAge = typeof snapshot.data?.snapshot_age_ms === "number" ? snapshot.data.snapshot_age_ms / 1000 : null;
   const freshness: FreshnessRow[] = [
     snapshotAge == null
-      ? { name: "runtime snapshot", age: "not reported", state: "MISSING", sla: "15s" }
-      : { name: "runtime snapshot", age: ageSec(snapshotAge), state: snapshotAge <= 15 ? "OK" : "STALE", sla: "15s" },
+      ? { name: "runtime snapshot", age: "not reported", state: "MISSING", sla: "15s", required: true }
+      : { name: "runtime snapshot", age: ageSec(snapshotAge), state: snapshotAge <= 15 ? "OK" : "STALE", sla: "15s", required: true },
     generatedFreshness("research scorecard", scorecard.data?.generated_at, 2 * 60 * 60),
     generatedFreshness("ML pipeline", ml.data?.generated_at, 2 * 60 * 60),
     generatedFreshness("agent governor", agents.data?.generated_at, 2 * 60 * 60),
   ];
-  const staleCount = freshness.filter((row) => row.state !== "OK").length;
+  const runtimeNonOk = freshness.filter((row) => row.required && row.state !== "OK").length;
+  const optionalUnavailable = freshness.filter((row) => !row.required && row.state !== "OK").length;
   const cols: Column<FreshnessRow>[] = [
     { key: "artifact", header: "Artifact", render: (row) => <span className="font-mono">{row.name}</span> },
     { key: "age", header: "Age", align: "right", render: (row) => row.age },
     { key: "sla", header: "SLA", align: "right", render: (row) => row.sla },
-    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.state === "OK" ? "good" : row.state === "STALE" ? "warn" : "bad"}>{row.state}</TerminalBadge> },
+    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.state === "OK" ? "good" : row.required ? (row.state === "STALE" ? "warn" : "bad") : "neutral"}>{row.state === "MISSING" && !row.required ? "NOT CONFIGURED" : row.state}</TerminalBadge> },
   ];
   return (
     <div className="space-y-4">
@@ -591,10 +616,11 @@ export function SystemPanel() {
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Build" value={meta.data?.build_sha?.slice(0, 8) ?? "—"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Host" value={meta.data?.host ?? "—"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Uptime" value={ageSec(meta.data?.uptime_seconds)} /></div>
-          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Non-OK artifacts" value={String(staleCount)} tone={staleCount ? "text-short" : ""} /></div>
+          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Runtime non-OK" value={String(runtimeNonOk)} tone={runtimeNonOk ? "text-short" : "text-long"} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Disk used" value={meta.data?.disk ? `${meta.data.disk.used_pct.toFixed(1)}%` : "—"} tone={(meta.data?.disk?.used_pct ?? 0) > 85 ? "text-short" : ""} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Load 1m / CPU" value={meta.data?.load_average?.["1m"] == null ? "—" : `${meta.data.load_average["1m"].toFixed(2)} / ${meta.data.cpu_count ?? "—"}`} /></div>
         </div>
+        <div className="mt-3 flex items-center gap-2 text-[10px] text-faint"><TerminalBadge tone={optionalUnavailable ? "neutral" : "good"}>{optionalUnavailable} optional unavailable</TerminalBadge><span>Research, ML, and agent artifacts never determine runtime health.</span></div>
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           <div className="rounded-lg border border-line bg-inset p-4">
             <div className="mb-3 font-mono text-[10px] uppercase text-faint">Artifact freshness</div>
@@ -705,6 +731,13 @@ export function JournalPanel() {
   const [view, setView] = useState<"all" | "decisions" | "trades">("all");
   const rows = data?.closed_trades ?? [];
   const summary = data?.summary;
+  const rowsNet = rows.reduce((total, row) => {
+    const value = row.net_pnl_usd ?? row.net_after_this_fill_fee_usd ?? row.virtual_net_usd;
+    return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  }, 0);
+  const summaryNet = summary?.actual_realized_pnl_usd;
+  const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
+  const reconciliationMismatch = reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
   const decisionEvents = (data?.events ?? []).filter((row) => /reject|block|refus|risk|skip/i.test(`${row.event ?? ""} ${row.detail ?? ""}`));
   const visibleEvents = view === "decisions" ? decisionEvents : (data?.events ?? []);
   const decisionTimes = (data?.events ?? []).map((row) => row.ts).filter((value): value is string => Boolean(value)).sort();
@@ -730,6 +763,10 @@ export function JournalPanel() {
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Fees" value={usd(summary?.fees_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow net" value={usd(summary?.virtual_net_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={String(summary?.open_orders ?? 0)} /></div>
+      </div>
+      <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${reconciliationMismatch ? "border-warn/50 bg-warn/5 text-warn" : "border-line bg-inset text-dim"}`}>
+        <span className="font-mono">Snapshot reconciliation:</span> visible rows {usd(rowsNet)} · summary {usd(summaryNet)}
+        {reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)} (window or accounting mismatch)` : " · matched"}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
         {(["all", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}

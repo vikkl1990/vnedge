@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -33,6 +34,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
 DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
+OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
+OBSERVER_ROSTER_VERSION = 1
+_OBSERVER_FIELDS = frozenset(
+    {
+        "strategy_id",
+        "exchange",
+        "symbols",
+        "timeframe",
+        "starting_equity",
+        "daily_loss_usd",
+        "trail_atr_mult",
+    }
+)
 
 
 def _truthy(environ: Mapping[str, str], name: str, default: str = "0") -> bool:
@@ -139,6 +153,158 @@ def _nonnegative_float(environ: Mapping[str, str], name: str, default: str) -> f
     return value
 
 
+def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
+    required = {
+        "structure_bos_1h": "1h",
+        "range_expansion_observer_v1": "1h",
+        "fee_wall_momentum_observer_v1": "5m",
+        "squeeze_expansion_breakout_v2": "5m",
+        "squeeze_expansion_breakout_v3": "5m",
+    }.get(strategy_id)
+    if required is not None and timeframe != required:
+        raise ValueError(
+            f"{strategy_id} shadow observe requires timeframe {required}"
+        )
+
+
+def _manifest_float(
+    value: object, *, field: str, minimum: float, allow_equal: bool = False
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise TypeError(f"observer {field} must be numeric")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"observer {field} must be numeric") from exc
+    valid = parsed >= minimum if allow_equal else parsed > minimum
+    if not valid or not math.isfinite(parsed):
+        relation = "non-negative" if minimum == 0 and allow_equal else "positive"
+        raise ValueError(f"observer {field} must be {relation}")
+    return parsed
+
+
+def _observer_lane_id(
+    strategy_id: str, exchange: str, symbol: str, timeframe: str
+) -> str:
+    return "_".join(
+        (
+            "shadow_observe",
+            _slug(strategy_id),
+            _slug(exchange),
+            _slug(symbol),
+            _slug(timeframe),
+        )
+    )
+
+
+def build_shadow_observe_roster_specs(
+    environ: Mapping[str, str] = os.environ,
+) -> list[LaneSpec]:
+    """Build a versioned multi-strategy observer roster.
+
+    The path itself is the explicit opt-in.  Legacy singleton variables remain
+    supported, but mixing both contracts fails closed so a migration cannot
+    silently duplicate an observer.
+    """
+    raw_path = str(environ.get(OBSERVER_ROSTER_PATH_ENV, "")).strip()
+    if not raw_path:
+        return []
+    if _truthy(environ, "MULTI_LANE_SHADOW_OBSERVE_ENABLED") or str(
+        environ.get("MULTI_LANE_SHADOW_OBSERVE_STRATEGY", "")
+    ).strip():
+        raise ValueError("observer roster path cannot be mixed with legacy shadow observe")
+    path = Path(raw_path)
+    try:
+        if path.stat().st_size > 1_000_000:
+            raise ValueError("observer roster exceeds 1 MB")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"observer roster unavailable: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"observer roster is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise TypeError("observer roster must be a JSON object")
+    unknown_top = set(payload) - {"version", "observers"}
+    if unknown_top:
+        raise ValueError(f"observer roster has unknown fields: {sorted(unknown_top)}")
+    if payload.get("version") != OBSERVER_ROSTER_VERSION:
+        raise ValueError(
+            f"observer roster version must be {OBSERVER_ROSTER_VERSION}"
+        )
+    rows = payload.get("observers")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("observer roster requires a non-empty observers list")
+
+    specs: list[LaneSpec] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise TypeError(f"observer roster row {index} must be an object")
+        unknown = set(row) - _OBSERVER_FIELDS
+        if unknown:
+            raise ValueError(
+                f"observer roster row {index} has unknown fields: {sorted(unknown)}"
+            )
+        strategy_id = str(row.get("strategy_id", "")).strip()
+        exchange = str(row.get("exchange", "")).strip()
+        timeframe = str(row.get("timeframe", "")).strip()
+        symbols = row.get("symbols")
+        if not strategy_id or not exchange or not timeframe:
+            raise ValueError(
+                f"observer roster row {index} requires strategy_id, exchange, timeframe"
+            )
+        if not isinstance(symbols, list) or not symbols or not all(
+            isinstance(symbol, str) and symbol.strip() for symbol in symbols
+        ):
+            raise ValueError(f"observer roster row {index} requires non-empty symbols")
+        get_strategy_class(strategy_id)
+        if not is_shadow_observe_eligible(strategy_id):
+            raise ValueError(f"strategy {strategy_id!r} is not shadow-observe eligible")
+        _observer_timeframe(strategy_id, timeframe)
+        starting_equity = _manifest_float(
+            row.get("starting_equity", 500), field="starting_equity", minimum=0
+        )
+        daily_loss_usd = _manifest_float(
+            row.get("daily_loss_usd", 10), field="daily_loss_usd", minimum=0
+        )
+        trail_atr_mult = _manifest_float(
+            row.get("trail_atr_mult", 0),
+            field="trail_atr_mult",
+            minimum=0,
+            allow_equal=True,
+        )
+        for configured_symbol in symbols:
+            symbol = _venue_symbol(exchange, configured_symbol.strip())
+            specs.append(
+                LaneSpec(
+                    lane_id=_observer_lane_id(
+                        strategy_id, exchange, symbol, timeframe
+                    ),
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    strategy_id=strategy_id,
+                    mode=RunnerMode.SHADOW,
+                    starting_equity=starting_equity,
+                    daily_loss_usd=daily_loss_usd,
+                    trail_atr_mult=trail_atr_mult,
+                    is_primary=False,
+                )
+            )
+    _require_unique_lane_ids(specs)
+    return specs
+
+
+def _require_unique_lane_ids(specs: list[LaneSpec]) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for spec in specs:
+        if spec.lane_id in seen:
+            duplicates.add(spec.lane_id)
+        seen.add(spec.lane_id)
+    if duplicates:
+        raise ValueError(f"duplicate lane ids: {sorted(duplicates)}")
+
+
 def build_shadow_observe_lane_specs(
     environ: Mapping[str, str] = os.environ,
 ) -> list[LaneSpec]:
@@ -166,16 +332,7 @@ def build_shadow_observe_lane_specs(
     timeframe = environ.get("MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME", "1h").strip()
     if not exchange or not configured_symbols:
         raise ValueError("shadow observe exchange and symbols cannot be empty")
-    if strategy_id == "structure_bos_1h" and timeframe != "1h":
-        raise ValueError("structure_bos_1h shadow observe requires timeframe 1h")
-    if strategy_id == "fee_wall_momentum_observer_v1" and timeframe != "5m":
-        raise ValueError(
-            "fee_wall_momentum_observer_v1 shadow observe requires timeframe 5m"
-        )
-    if strategy_id == "squeeze_expansion_breakout_v2" and timeframe != "5m":
-        raise ValueError(
-            "squeeze_expansion_breakout_v2 shadow observe requires timeframe 5m"
-        )
+    _observer_timeframe(strategy_id, timeframe)
     starting_equity = _positive_float(
         environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
     )
@@ -206,11 +363,14 @@ def build_shadow_observe_lane_specs(
 
 
 def desired_lane_specs(environ: Mapping[str, str] = os.environ) -> list[LaneSpec]:
-    return (
+    specs = (
         build_lane_specs_from_env(environ)
         + build_capital_lane_specs(environ)
         + build_shadow_observe_lane_specs(environ)
+        + build_shadow_observe_roster_specs(environ)
     )
+    _require_unique_lane_ids(specs)
+    return specs
 
 
 def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
@@ -231,7 +391,17 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
         "capital_roster_size": paper_lanes,
         "paper_lanes": paper_lanes,
         "shadow_observe_enabled": bool(observe),
-        "shadow_observe_strategy": observe[0].strategy_id if observe else None,
+        "shadow_observe_strategy": (
+            observe[0].strategy_id
+            if len({spec.strategy_id for spec in observe}) == 1 and observe
+            else "multiple" if observe else None
+        ),
+        "shadow_observe_strategies": sorted(
+            {spec.strategy_id for spec in observe}
+        ),
+        "shadow_observe_timeframes": sorted(
+            {spec.timeframe for spec in observe}
+        ),
         "shadow_observe_lanes": len(observe),
         "measurement_lanes": measurement_lanes,
         "measurement_only_pct": round(100 * measurement_lanes / len(specs), 1),
@@ -244,7 +414,7 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
 
 
 def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
-    payload = [
+    payload: list[dict[str, Any]] = [
         {
             "lane_id": spec.lane_id,
             "exchange": spec.exchange,
@@ -256,6 +426,7 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
         }
         for spec in specs
     ]
+    payload.sort(key=lambda item: str(item["lane_id"]))
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 

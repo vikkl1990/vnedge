@@ -25,11 +25,13 @@ strategy semantics that research models at bar granularity.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -70,15 +72,28 @@ from vnedge.runtime.latency_tracker import (
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
     VirtualOutcome,
     is_maker_route_strategy,
 )
+from vnedge.runtime.squeeze_acceptance_observe import (
+    SqueezeAcceptanceObserveRunner,
+)
+from vnedge.runtime.squeeze_observe import ScannerApproval, SqueezeObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
+
+
+def _append_equity_history(path: str | Path, now: datetime, equity: float) -> None:
+    """Append one equity sample without blocking the asyncio decision loop."""
+    with Path(path).open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps({"ts": now.isoformat(), "equity": round(equity, 4)}) + "\n"
+        )
 
 _EXIT_ACCEPTED_STATES = frozenset(
     {OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED, OrderState.FILLED}
@@ -247,6 +262,44 @@ class LivePaperSession:
         self._trail_atr_faults = 0     # ATR-compute faults that silently disabled the trail
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
+        # The first canonical scanner runtime. It deliberately exists only in
+        # SHADOW_OBSERVE: research-only strategies never acquire order
+        # authority, but their trigger/exit/cost lifecycle now uses the same
+        # engines and fee model as replay instead of the legacy fixed-TP
+        # SignalIntent path.
+        self.scanner_observer: (
+            SqueezeObserveRunner | SqueezeAcceptanceObserveRunner | None
+        ) = (
+            (
+                SqueezeAcceptanceObserveRunner(
+                    journal=journal,
+                    symbol=config.symbol,
+                    approve_fire=self._approve_scanner_fire,
+                    costs=SessionCosts.from_profile(
+                        self.cost_profile,
+                        bar_minutes=(self._tf_seconds or 300) / 60.0,
+                    ),
+                )
+                if strategy.strategy_id == "squeeze_expansion_breakout_v3"
+                else SqueezeObserveRunner(
+                journal=journal,
+                symbol=config.symbol,
+                approve_fire=self._approve_scanner_fire,
+                costs=SessionCosts.from_profile(
+                    self.cost_profile,
+                    bar_minutes=(self._tf_seconds or 300) / 60.0,
+                ),
+                )
+            )
+            if (
+                config.mode is RunnerMode.SHADOW
+                and strategy.strategy_id in {
+                    "squeeze_expansion_breakout_v2",
+                    "squeeze_expansion_breakout_v3",
+                }
+            )
+            else None
+        )
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
@@ -273,7 +326,7 @@ class LivePaperSession:
                 trail_atr_mult=config.trail_atr_mult,
                 strategy_exit=self._shadow_strategy_exit,
             )
-            if config.mode is RunnerMode.SHADOW
+            if config.mode is RunnerMode.SHADOW and self.scanner_observer is None
             else None
         )
         self.last_eval: dict | None = None
@@ -942,7 +995,7 @@ class LivePaperSession:
             self._trail_atr_faults += 1     # surfaced in the snapshot so a stuck trail is visible
             return 0.0
         value = float(series.iloc[-1])
-        return value if value == value else 0.0  # value==value drops NaN warmup
+        return value if math.isfinite(value) else 0.0
 
     def _shadow_strategy_exit(
         self,
@@ -984,6 +1037,24 @@ class LivePaperSession:
         return abs(pos.quantity) if pos is not None else 0.0
 
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
+        # A shadow intent is a real reservation in the virtual book even
+        # though it never reaches an exchange.  Treat it exactly like an open
+        # plan for entry concurrency: otherwise every later signal can stack a
+        # second notional on the same purse while PortfolioTracker still shows
+        # no position.  Keep this guard here (rather than only in ``run``) so a
+        # future/direct caller cannot bypass the single-book invariant.
+        if (
+            self.config.mode is RunnerMode.SHADOW
+            and self.shadow_outcomes is not None
+            and self.shadow_outcomes.has_pending
+        ):
+            self.last_reject_reason = "shadow_book: unresolved virtual position"
+            self._log_trade_event(
+                "shadow_entry_blocked",
+                f"{sig.side} — unresolved virtual position already reserves the purse"[:140],
+                now,
+            )
+            return
         bid, ask = self.feed.quote
         ref_price = ask if sig.side == "long" else bid
         sizing = size_position(
@@ -1094,6 +1165,94 @@ class LivePaperSession:
                 self._plan = plan
             elif order.state is OrderState.TIMEOUT_UNKNOWN:
                 self._parked_entries[order.client_order_id] = plan
+
+    def _approve_scanner_fire(
+        self, fire, bar_index: int, bar_ts: datetime
+    ) -> ScannerApproval:
+        """Run a scanner candidate through the normal sizing+risk boundary.
+
+        This returns data to the read-only scanner runner; it never calls
+        OrderManager and therefore cannot submit an order. The same central
+        gateway still decides whether the virtual intent is admissible.
+        """
+        if self.config.mode is not RunnerMode.SHADOW:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("scanner_shadow_only",),
+                explanation="canonical scanner runner has no paper/live authority",
+            )
+        if self.feed.quote is None:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("missing_quote",),
+                explanation="scanner fire has no executable reference quote",
+            )
+        cp_block = self._candle_path_arm_block(datetime.now(UTC))
+        factory_block = self._daily_factory_entry_block_reason(bar_ts)
+        protected, protection_reason = self.protections.entries_allowed(bar_index)
+        local_failure = (
+            f"candle_path:{cp_block}" if cp_block is not None
+            else factory_block
+            if factory_block is not None
+            else protection_reason
+            if not protected
+            else None
+        )
+        if local_failure is not None:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=(local_failure,),
+                explanation=local_failure,
+            )
+
+        bid, ask = self.feed.quote
+        ref_price = ask if fire.side == "long" else bid
+        sizing = size_position(
+            equity_usd=self.tracker.equity_usd(),
+            entry_price=ref_price,
+            stop_price=fire.stop,
+            side=fire.side,
+            config=self.config.risk,
+            limits=self.config.limits,
+        )
+        if not sizing.approved:
+            self.sizing_skips += 1
+            reasons = tuple(f"sizing:{reason}" for reason in sizing.reasons)
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=reasons,
+                explanation=", ".join(reasons),
+            )
+        leverage = max(sizing.required_leverage, 1.0)
+        intent = OrderIntent(
+            symbol=self.config.symbol,
+            side=fire.side,
+            quantity=sizing.quantity,
+            notional_usd=sizing.notional_usd,
+            leverage=leverage,
+            reduce_only=False,
+            strategy_id=self.strategy.strategy_id,
+            order_type="market",
+        )
+        decision = self.gateway.evaluate(
+            intent,
+            self.tracker.account_state(),
+            self._market_state(),
+            now=datetime.now(UTC),
+        )
+        return ScannerApproval(
+            approved=decision.approved,
+            intent=asdict(intent),
+            failed_checks=tuple(decision.failed_checks),
+            passed_checks=tuple(decision.passed_checks),
+            explanation=decision.explanation,
+            notional_usd=intent.notional_usd,
+            margin_usd=intent.notional_usd / leverage,
+        )
 
     async def _manage_pending_entry(self, now: datetime) -> None:
         """Resolve a resting maker entry: promote to a position once a quote has
@@ -1930,8 +2089,13 @@ class LivePaperSession:
                 "last_fired_ts": self.last_fired_ts,
                 "last_eval": self.last_eval,
                 "last_reject_reason": self.last_reject_reason,
-                "shadow_perf": self.shadow_outcomes.stats()
-                if self.shadow_outcomes is not None else None,
+                "shadow_perf": (
+                    self.scanner_observer.stats()
+                    if self.scanner_observer is not None
+                    else self.shadow_outcomes.stats()
+                    if self.shadow_outcomes is not None
+                    else None
+                ),
                 # Read-only operating contract for the cockpit.  This exposes
                 # the purse/margin/leverage truth operators configured without
                 # creating a second sizing implementation in the UI.
@@ -2005,33 +2169,19 @@ class LivePaperSession:
     # snapshot publish. Tests shrink it via instance override.
     _IDLE_TICK_SECONDS = 5.0
 
-    async def _shadow_prime(self) -> None:
-        """SHADOW lanes only: evaluate recent already-closed (seeded) bars
-        once at startup — the newest live (may submit a shadow intent), the
-        rest as backfill observability records.
+    def _shadow_prime(self) -> None:
+        """SHADOW lanes only: backfill observability from seeded bars.
 
         The live loop otherwise acts only on bars that close AFTER startup, so
-        a restart silently discards an already-armed condition while it waits
-        up to a full bar for the next close — with frequent restarts a slow-bar
-        strategy may never get a single decision opportunity, and the bars a
-        restart skipped left no record at all (the 2026-07-04 signal cluster
-        was part-missed exactly this way). Shadow lanes never fill, so
-        re-evaluating bars is safe: backfilled bars journal lane_eval records
-        ONLY — an intent is submitted solely for the newest bar. Deliberately
-        NOT done for paper/live modes, where re-entering on restart could
-        double a position.
+        the seeded interval still needs an audit trail.  Seeded bars are never
+        allowed to create a new intent, including the newest one: doing so
+        turns a process restart into a market decision and prices an old signal
+        at the current quote.  Existing unresolved intents are restored from
+        the journal by ``ShadowOutcomeTracker`` before this method runs.
         """
         if self.config.mode is not RunnerMode.SHADOW:
             return
         if len(self.candles) <= self.strategy.warmup_bars:
-            return
-        # let the live feed publish its first top-of-book so sizing has a
-        # real reference price (immediate when a quote is already present)
-        for _ in range(30):
-            if self.feed.quote is not None:
-                break
-            await asyncio.sleep(0.5)
-        if self.feed.quote is None:
             return
         df = self.strategy.prepare(self.candles)
         last = len(df) - 1
@@ -2042,18 +2192,25 @@ class LivePaperSession:
             self._record_eval(df, i, sig_i, backfill=True)
             backfill_fired += sig_i is not None
         sig = self.strategy.signal(df, last)
-        self._record_eval(df, last, sig)
+        self._record_eval(
+            df,
+            last,
+            sig,
+            backfill=True,
+            skip_reason=(
+                "shadow_prime: historical signal observed; no restart intent"
+                if sig is not None
+                else None
+            ),
+        )
         self._record_overlays(df, last, sig)   # populate regime/plan on startup, not next close
         logger.info(
             "shadow prime [%s %s]: %d seeded bars backfilled (%d would have "
             "fired), latest -> %s",
             self.strategy.strategy_id, self.config.symbol,
             max(0, last - first), backfill_fired,
-            f"{sig.side} intent" if sig is not None else "no signal",
+            f"{sig.side} historical signal (not submitted)" if sig is not None else "no signal",
         )
-        if sig is not None:
-            self.signals += 1
-            await self._submit_entry(sig, datetime.now(UTC))
 
     def _is_paper_observation_lane(self) -> bool:
         trial_id = str((self.trial_meta or {}).get("trial_id") or "")
@@ -2120,8 +2277,12 @@ class LivePaperSession:
             self._log_shadow_outcomes(
                 self.shadow_outcomes.replay(self._shadow_exit_df), started
             )
+        if self.scanner_observer is not None:
+            self.scanner_observer.restore(
+                self.strategy.prepare(self.candles).reset_index(drop=True)
+            )
 
-        await self._shadow_prime()
+        self._shadow_prime()
         await self._paper_observation_prime()
         self._record_runner_heartbeat("runner_started", started, force=True)
 
@@ -2132,11 +2293,67 @@ class LivePaperSession:
                 elapsed = (datetime.now(UTC) - started).total_seconds()
                 if elapsed >= deadline_seconds:
                     break
-            try:
-                raw = await asyncio.wait_for(
-                    self.feed.closed_candles.get(), timeout=self._IDLE_TICK_SECONDS
+            raw = None
+            quote_update = None
+            quote_queue = getattr(self.feed, "quote_updates", None)
+            acceptance_observer = (
+                self.scanner_observer
+                if isinstance(
+                    self.scanner_observer, SqueezeAcceptanceObserveRunner
                 )
-            except TimeoutError:
+                else None
+            )
+            if (
+                acceptance_observer is not None
+                and quote_queue is not None
+            ):
+                candle_task = asyncio.create_task(self.feed.closed_candles.get())
+                quote_task = asyncio.create_task(quote_queue.get())
+                done, pending = await asyncio.wait(
+                    {candle_task, quote_task},
+                    timeout=self._IDLE_TICK_SECONDS,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                if candle_task in done:
+                    raw = candle_task.result()
+                elif quote_task in done:
+                    quote_update = quote_task.result()
+            else:
+                try:
+                    raw = await asyncio.wait_for(
+                        self.feed.closed_candles.get(), timeout=self._IDLE_TICK_SECONDS
+                    )
+                except TimeoutError:
+                    pass
+
+            if quote_update is not None:
+                self._sync_quote()
+                if acceptance_observer is None:  # defensive type/runtime guard
+                    continue
+                before_candidates = acceptance_observer.candidates
+                before_approved = acceptance_observer.fires
+                before_rejected = acceptance_observer.rejected
+                acceptance_observer.on_quote(
+                    bid=quote_update.bid,
+                    ask=quote_update.ask,
+                    ts=quote_update.ts,
+                    received_ts=quote_update.received_ts,
+                    sequence=quote_update.sequence,
+                    source=quote_update.source,
+                    exchange_timestamped=quote_update.exchange_timestamped,
+                )
+                self.signals += acceptance_observer.candidates - before_candidates
+                self.shadow_approved += acceptance_observer.fires - before_approved
+                self.shadow_rejected += acceptance_observer.rejected - before_rejected
+                self._record_runner_heartbeat("quote_acceptance", quote_update.ts)
+                self._publish_snapshot()
+                continue
+
+            if raw is None:
                 # capital protection between bars: stops (and ONLY stops) are
                 # evaluated against the current quote on every idle tick
                 idle_now = datetime.now(UTC)
@@ -2194,7 +2411,61 @@ class LivePaperSession:
             await self._cancel_pending_entry_for_daily_factory(bar_clock, now)
             self._guard_orphaned_position()
 
+            # Canonical scanner lanes own their complete arm -> trigger ->
+            # exit -> cost lifecycle. They still pass sizing and the central
+            # gateway through ``_approve_scanner_fire``, but never create an
+            # OrderIntent submission. Running the observer here (once per
+            # forward closed bar) keeps replay and VM shadow semantics aligned.
+            if (
+                self.scanner_observer is not None
+                and len(self.candles) > prepared_warmup
+            ):
+                _dec_t0 = time.perf_counter()
+                scanner_df = self.strategy.prepare(self.candles)
+                scanner_idx = len(scanner_df) - 1
+                before_candidates = self.scanner_observer.candidates
+                before_approved = self.scanner_observer.fires
+                before_rejected = self.scanner_observer.rejected
+                fire = self.scanner_observer.on_prepared_bar(
+                    scanner_df, scanner_idx, bar_clock
+                )
+                self.signals += self.scanner_observer.candidates - before_candidates
+                self.shadow_approved += self.scanner_observer.fires - before_approved
+                self.shadow_rejected += self.scanner_observer.rejected - before_rejected
+                approval = self.scanner_observer.last_approval
+                scanner_sig = (
+                    SignalIntent(
+                        side=fire.side,
+                        stop_price=fire.stop,
+                        take_profit_price=None,
+                        reason=fire.reason,
+                    )
+                    if fire is not None and approval is not None and approval.approved
+                    else None
+                )
+                self._record_eval(
+                    scanner_df,
+                    scanner_idx,
+                    scanner_sig,
+                    skip_reason=(
+                        approval.explanation
+                        if fire is not None and approval is not None and not approval.approved
+                        else None
+                    ),
+                )
+                self._record_overlays(scanner_df, scanner_idx, scanner_sig)
+                self.latency.record(
+                    DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0
+                )
+
+            shadow_book_reserved = (
+                self.config.mode is RunnerMode.SHADOW
+                and self.shadow_outcomes is not None
+                and self.shadow_outcomes.has_pending
+            )
             if self._plan is None and self._pending_entry is None \
+                    and self.scanner_observer is None \
+                    and not shadow_book_reserved \
                     and self._degraded_reason is None \
                     and len(self.candles) > prepared_warmup:
                 # decision lag: candle in hand -> signal decided (prepare +
@@ -2274,13 +2545,12 @@ class LivePaperSession:
                 self.funnel_store.save_from(self)
             if self.equity_history_path is not None:
                 try:
-                    import json as _json
-
-                    with open(self.equity_history_path, "a", encoding="utf-8") as f:
-                        f.write(_json.dumps({
-                            "ts": now.isoformat(),
-                            "equity": round(self.tracker.equity_usd(), 4),
-                        }) + "\n")
+                    await asyncio.to_thread(
+                        _append_equity_history,
+                        self.equity_history_path,
+                        now,
+                        self.tracker.equity_usd(),
+                    )
                 except OSError as exc:
                     logger.warning("equity history write failed: %s", exc)
             self._publish_snapshot()

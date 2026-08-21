@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from vnedge.exchange.feed_registry import SharedFeedRegistry
+from vnedge.exchange.live_feed import QuoteUpdate, _publish_latest_quote
 from vnedge.risk.risk_manager import MarketState
 
 
@@ -25,6 +26,7 @@ class FakeFeed:
         self.feed_mode = "fake ws"
         self.slippage_est_bps = 2.0
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
         self.quote: tuple[float, float] | None = (100.0, 101.0)
         self.funding_rate = 0.0001
         self.funding_events = [(1_000, 0.0001)]
@@ -96,6 +98,76 @@ async def test_fan_out_delivers_every_candle_to_all_views():
 
     await a.stop()
     await b.stop()
+
+
+async def test_quote_fanout_delivers_latest_to_every_view() -> None:
+    registry, created = make_registry()
+    a = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
+    b = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
+    await a.start()
+    await b.start()
+
+    quote = QuoteUpdate(ts=datetime.now(UTC), bid=100.0, ask=100.1)
+    created[0].quote_updates.put_nowait(quote)
+    assert await asyncio.wait_for(a.quote_updates.get(), timeout=1.0) == quote
+    assert await asyncio.wait_for(b.quote_updates.get(), timeout=1.0) == quote
+
+    # Per-view queues are bounded and replace stale observations.
+    a._deliver_quote(QuoteUpdate(ts=datetime.now(UTC), bid=101.0, ask=101.1))
+    latest = QuoteUpdate(ts=datetime.now(UTC), bid=102.0, ask=102.1)
+    a._deliver_quote(latest)
+    assert a.quote_updates.qsize() == 1
+    assert a.quote_updates.get_nowait() == latest
+    await a.stop()
+    await b.stop()
+
+
+def test_quote_update_preserves_event_and_receive_clocks() -> None:
+    event_ts = datetime(2026, 8, 20, tzinfo=UTC)
+    received_ts = event_ts.replace(microsecond=500_000)
+    quote = QuoteUpdate(
+        ts=event_ts,
+        bid=100.0,
+        ask=100.1,
+        received_ts=received_ts,
+        sequence=77,
+        source="binanceusdm:watch_order_book",
+        exchange_timestamped=True,
+    )
+    assert quote.ingest_lag_seconds == 0.5
+    assert quote.sequence == 77
+    assert quote.exchange_timestamped is True
+
+
+def test_quote_update_rejects_naive_clocks() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        QuoteUpdate(
+            ts=datetime(2026, 8, 20),  # noqa: DTZ001 — deliberately invalid input
+            bid=100.0,
+            ask=100.1,
+        )
+
+
+def test_quote_publisher_marks_exchange_time_and_replaces_stale_item() -> None:
+    queue: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
+    event_ts = datetime(2026, 8, 20, tzinfo=UTC)
+    received_ts = event_ts.replace(microsecond=250_000)
+    _publish_latest_quote(queue, bid=99.9, ask=100.0)
+    published = _publish_latest_quote(
+        queue,
+        bid=100.0,
+        ask=100.1,
+        event_ts=event_ts,
+        received_ts=received_ts,
+        sequence=5,
+        source="test:book",
+    )
+    assert queue.qsize() == 1
+    assert queue.get_nowait() == published
+    assert published.ts == event_ts
+    assert published.received_ts == received_ts
+    assert published.ingest_lag_seconds == 0.25
+    assert published.exchange_timestamped is True
 
 
 async def test_refcounted_stop_only_last_release_stops_the_feed():

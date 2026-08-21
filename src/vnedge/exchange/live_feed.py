@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
+import math
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from vnedge.data.ccxt_client import create_ccxt_async_exchange
@@ -41,6 +42,101 @@ _BACKOFF_SECONDS = 2.0
 _DEFAULT_REST_CANDLE_POLL_SECONDS = 10.0
 _DEFAULT_REST_QUOTE_POLL_SECONDS = 2.0
 _VALIDATED_CCXT_PRO_FEEDS = {"binanceusdm", "bybit"}
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteUpdate:
+    """One executable top-of-book observation for shadow acceptance.
+
+    ``ts`` is the market-event clock used by causal acceptance.  Venues that
+    publish an event timestamp set ``exchange_timestamped=True``; otherwise
+    the publisher explicitly falls back to the local receipt clock.  Keeping
+    ``received_ts`` separately makes transport lag observable instead of
+    silently stretching a five-second acceptance hold.
+    """
+
+    ts: datetime
+    bid: float
+    ask: float
+    received_ts: datetime | None = None
+    sequence: int | str | None = None
+    source: str = "unknown"
+    exchange_timestamped: bool = False
+
+    def __post_init__(self) -> None:
+        if self.ts.tzinfo is None:
+            raise ValueError("quote event timestamp must be timezone-aware")
+        received = self.received_ts or self.ts
+        if received.tzinfo is None:
+            raise ValueError("quote receive timestamp must be timezone-aware")
+        if self.sequence is not None and (
+            isinstance(self.sequence, bool)
+            or not isinstance(self.sequence, (int, str))
+        ):
+            raise ValueError("quote sequence must be an integer, string, or None")
+        if not self.source.strip():
+            raise ValueError("quote source cannot be empty")
+        object.__setattr__(self, "received_ts", received)
+
+    @property
+    def ingest_lag_seconds(self) -> float:
+        received = self.received_ts or self.ts
+        return max(0.0, (received - self.ts).total_seconds())
+
+
+def _event_datetime(raw: object) -> datetime | None:
+    """Normalize common seconds/ms/us/ns venue timestamps to aware UTC."""
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    absolute = abs(value)
+    if absolute >= 1e17:  # nanoseconds
+        value /= 1_000_000_000
+    elif absolute >= 1e14:  # microseconds
+        value /= 1_000_000
+    elif absolute >= 1e11:  # milliseconds
+        value /= 1_000
+    try:
+        return datetime.fromtimestamp(value, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _publish_latest_quote(
+    queue: asyncio.Queue[QuoteUpdate], *, bid: float, ask: float,
+    event_ts: datetime | None = None,
+    received_ts: datetime | None = None,
+    sequence: int | str | None = None,
+    source: str = "unknown",
+) -> QuoteUpdate:
+    """Publish without backpressure; a slow consumer needs the latest quote."""
+    received = received_ts or datetime.now(UTC)
+    normalized_sequence = (
+        sequence
+        if isinstance(sequence, (int, str)) and not isinstance(sequence, bool)
+        else None
+    )
+    update = QuoteUpdate(
+        ts=event_ts or received,
+        bid=bid,
+        ask=ask,
+        received_ts=received,
+        sequence=normalized_sequence,
+        source=source,
+        exchange_timestamped=event_ts is not None,
+    )
+    if queue.full():
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:  # pragma: no cover - another task drained it
+            pass
+    queue.put_nowait(update)
+    return update
 
 
 def _advance_forming(
@@ -102,6 +198,7 @@ class LiveMarketFeed:
         self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
         self.quote: tuple[float, float] | None = None  # (bid, ask)
         self.funding_rate: float = 0.0
         # SETTLED funding prints [(ts_ms, rate), ...] refreshed with the rate.
@@ -213,6 +310,14 @@ class LiveMarketFeed:
                     ask = float(book["asks"][0][0])
                     if 0 < bid <= ask:
                         self.quote = (bid, ask)
+                        _publish_latest_quote(
+                            self.quote_updates,
+                            bid=bid,
+                            ask=ask,
+                            event_ts=_event_datetime(book.get("timestamp")),
+                            sequence=book.get("nonce"),
+                            source=f"{self.exchange_id}:watch_order_book",
+                        )
                         self._mark_ok()
             except asyncio.CancelledError:
                 raise
@@ -334,6 +439,7 @@ class RestPollingMarketFeed:
         self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
         self.quote: tuple[float, float] | None = None
         self.funding_rate: float = 0.0
         self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)
@@ -454,6 +560,14 @@ class RestPollingMarketFeed:
                     ask = float(book["asks"][0][0])
                     if 0 < bid <= ask:
                         self.quote = (bid, ask)
+                        _publish_latest_quote(
+                            self.quote_updates,
+                            bid=bid,
+                            ask=ask,
+                            event_ts=_event_datetime(book.get("timestamp")),
+                            sequence=book.get("nonce"),
+                            source=f"{self.exchange_id}:fetch_order_book",
+                        )
                         self._mark_ok()
             except asyncio.CancelledError:
                 raise
@@ -565,8 +679,16 @@ class DeltaWsFeed(RestPollingMarketFeed):
         while True:
             try:
                 quote = self._ws.quote(self._native_symbol)
-                if quote is not None:
+                if quote is not None and quote != self.quote:
                     self.quote = quote
+                    _publish_latest_quote(
+                        self.quote_updates,
+                        bid=quote[0],
+                        ask=quote[1],
+                        event_ts=self._ws.book_event_at.get(self._native_symbol),
+                        sequence=self._ws.book_sequence.get(self._native_symbol),
+                        source="delta_india:l2_orderbook",
+                    )
                 fr = self._ws.funding_rate.get(self._native_symbol)
                 if fr is not None:
                     self.funding_rate = fr
@@ -619,7 +741,7 @@ def supports_ccxt_pro_feed(exchange_id: str) -> bool:
     """Whether this CCXT id has the websocket methods our live feed needs."""
     try:
         import ccxt.pro as ccxtpro  # heavy import kept local
-    except Exception:  # pragma: no cover - import failure is environment-specific
+    except Exception:  # noqa: BLE001  # pragma: no cover - environment-specific
         return False
     return exchange_id in _VALIDATED_CCXT_PRO_FEEDS and hasattr(ccxtpro, exchange_id)
 

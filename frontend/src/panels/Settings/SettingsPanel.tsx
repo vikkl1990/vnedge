@@ -32,7 +32,7 @@ export function SettingsPanel() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-lg border border-line bg-inset p-3"><div className="text-[10px] text-faint">SHADOW PURSE</div><div className="mt-1 font-mono text-lg">${(lanes.data?.portfolio.shadow_purse_usd ?? 0).toFixed(2)}</div></div>
           <div className="rounded-lg border border-line bg-inset p-3"><div className="text-[10px] text-faint">CAPITAL ROSTER</div><div className="mt-1 font-mono text-lg">{risk.data?.capital.roster_size ?? 0} · OFF</div></div>
-          <div className="rounded-lg border border-line bg-inset p-3"><div className="text-[10px] text-faint">SCANNER LANES</div><div className="mt-1 font-mono text-lg">{lanes.data?.shadow_observe_lanes ?? 0} virtual</div></div>
+          <div className="rounded-lg border border-line bg-inset p-3"><div className="text-[10px] text-faint">SCANNER LANES</div><div className="mt-1 font-mono text-lg">{lanes.data?.shadow_observe_lanes ?? 0} virtual</div><div className="mt-1 font-mono text-[9px] text-faint">{lanes.data?.shadow_observe_timeframes?.join(" + ") || "not configured"} · roster {lanes.data?.lane_set_hash?.slice(0, 8) || "—"}</div></div>
           <div className="rounded-lg border border-line bg-inset p-3"><div className="text-[10px] text-faint">SESSION EXPIRES</div><div className="mt-1 font-mono text-[11px]">{who.data?.expires_at ? new Date(who.data.expires_at).toLocaleString() : "not reported"}</div></div>
         </div>
       </section>

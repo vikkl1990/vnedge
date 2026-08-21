@@ -21,6 +21,8 @@ jobs:
         run: >-
           python -m ruff check
           src/vnedge/execution/journal.py
+          src/vnedge/execution/trigger_engine.py
+          src/vnedge/execution/exit_engine.py
           src/vnedge/dashboard/correction_ui.py
           src/vnedge/dashboard/market_pulse.py
           src/vnedge/data/candles.py
@@ -29,18 +31,30 @@ jobs:
           src/vnedge/data/swings.py
           src/vnedge/data/vwap.py
           src/vnedge/exchange/tick_recorder.py
+          src/vnedge/exchange/live_feed.py
+          src/vnedge/exchange/feed_registry.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
           src/vnedge/runtime/fleet_policy.py
+          src/vnedge/runtime/scanner_session.py
+          src/vnedge/runtime/squeeze_observe.py
+          src/vnedge/runtime/expansion_acceptance.py
+          src/vnedge/runtime/squeeze_acceptance_observe.py
+          src/vnedge/runtime/live_paper.py
           src/vnedge/runtime/live_trader_main.py
           src/vnedge/runtime/multi_lane_shadow.py
           src/vnedge/research/continuous_research.py
           src/vnedge/strategy/measurement_only.py
+          src/vnedge/strategy/squeeze_expansion_breakout.py
+          src/vnedge/strategy/squeeze_expansion_breakout_v3.py
+          src/vnedge/strategy/range_expansion_observer.py
           src/vnedge/strategy/strategy_registry.py
       - name: Mypy safety/runtime ratchet
         run: >-
           python -m mypy --ignore-missing-imports
           src/vnedge/execution/journal.py
+          src/vnedge/execution/trigger_engine.py
+          src/vnedge/execution/exit_engine.py
           src/vnedge/dashboard/correction_ui.py
           src/vnedge/dashboard/market_pulse.py
           src/vnedge/data/candles.py
@@ -49,13 +63,22 @@ jobs:
           src/vnedge/data/swings.py
           src/vnedge/data/vwap.py
           src/vnedge/exchange/tick_recorder.py
+          src/vnedge/exchange/live_feed.py
+          src/vnedge/exchange/feed_registry.py
           src/vnedge/risk/risk_manager.py
           src/vnedge/exchange/readonly_account.py
           src/vnedge/runtime/fleet_policy.py
+          src/vnedge/runtime/scanner_session.py
+          src/vnedge/runtime/squeeze_observe.py
+          src/vnedge/runtime/expansion_acceptance.py
+          src/vnedge/runtime/squeeze_acceptance_observe.py
           src/vnedge/runtime/live_trader_main.py
           src/vnedge/runtime/multi_lane_shadow.py
           src/vnedge/research/continuous_research.py
           src/vnedge/strategy/measurement_only.py
+          src/vnedge/strategy/squeeze_expansion_breakout.py
+          src/vnedge/strategy/squeeze_expansion_breakout_v3.py
+          src/vnedge/strategy/range_expansion_observer.py
           src/vnedge/strategy/strategy_registry.py
       - name: Ruff full-package debt visibility
         continue-on-error: true

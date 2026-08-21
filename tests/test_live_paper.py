@@ -19,7 +19,10 @@ from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.squeeze_acceptance_observe import SqueezeAcceptanceObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
+from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 
 BASE = 1_750_000_000_000
 MIN = 60_000
@@ -144,6 +147,17 @@ def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PA
         trial_meta=trial_meta,
     )
     return session, exchange
+
+
+def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=SqueezeExpansionBreakoutV3(),
+        mode=RunnerMode.SHADOW,
+    )
+    assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
+    assert session.shadow_outcomes is None
 
 
 async def test_closed_candle_triggers_full_pipeline(tmp_path):
@@ -462,31 +476,59 @@ async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     report = await session.run(max_bars=1)
 
     assert report.mode == "shadow_live"
-    # startup prime (latest seeded bar) + one forward bar = two shadow intents
-    assert report.signals_generated == 2
-    assert report.shadow_approved == 2
+    # Seeded history is observability-only. Only the forward bar may create an
+    # intent; a restart is not a market event.
+    assert report.signals_generated == 1
+    assert report.shadow_approved == 1
     assert report.orders_submitted == 0
     assert report.fills == 0
     assert exchange.get_positions() == []
     records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(records) == 2
+    assert len(records) == 1
     assert all(r["payload"]["approved"] is True for r in records)
 
 
-async def test_shadow_prime_fires_on_startup_without_a_new_bar(tmp_path):
-    # no new candles arrive; the seeded latest bar is armed (AlwaysLong).
-    # a restart must NOT discard that — the startup prime journals it.
+async def test_shadow_prime_never_enters_from_seeded_history(tmp_path):
+    # No new candles arrive; the seeded latest bar is armed (AlwaysLong), but
+    # a restart must not turn that historical signal into a current entry.
     feed = FakeFeed([])
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
 
     report = await session.run(max_bars=0)
 
     records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(records) == 1          # primed off the seeded bar, zero new bars
-    assert report.shadow_approved == 1
+    assert records == []
+    assert report.shadow_approved == 0
     assert report.orders_submitted == 0
     assert report.fills == 0
     assert exchange.get_positions() == []
+
+
+async def test_shadow_book_blocks_overlapping_virtual_positions(tmp_path):
+    feed = FakeFeed(live_rows(n=2))
+    session, _ = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+
+    report = await session.run(max_bars=2)
+
+    # AlwaysLong fires on every forward bar, but the first unresolved virtual
+    # trade reserves the purse until its outcome is known.
+    records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    assert len(records) == 1
+    assert report.shadow_approved == 1
+    assert session.shadow_outcomes is not None
+    assert session.shadow_outcomes.has_pending
+
+
+def test_squeeze_shadow_uses_canonical_scanner_not_legacy_outcomes(tmp_path):
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=SqueezeExpansionBreakout(),
+        mode=RunnerMode.SHADOW,
+    )
+
+    assert session.scanner_observer is not None
+    assert session.shadow_outcomes is None
 
 
 async def test_paper_mode_is_not_primed_on_startup(tmp_path):
@@ -803,7 +845,8 @@ async def test_lane_eval_journaled_for_every_evaluated_bar(tmp_path):
 
 
 async def test_shadow_prime_backfills_observability_records(tmp_path):
-    # 5 seeded bars, warmup 2 -> bars 2,3 backfill + bar 4 live prime
+    # 5 seeded bars, warmup 2 -> every seeded evaluation is backfill. The
+    # newest seeded bar is not relabelled as a live decision on restart.
     feed = FakeFeed([])
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
     await session.run(max_bars=0)
@@ -811,14 +854,14 @@ async def test_shadow_prime_backfills_observability_records(tmp_path):
     evals = [r["payload"] for r in session.journal.read_all()
              if r["kind"] == "lane_eval"]
     assert len(evals) == 3
-    assert [e["backfill"] for e in evals] == [True, True, False]
+    assert [e["backfill"] for e in evals] == [True, True, True]
     assert all(e["fired"] for e in evals)     # AlwaysLong
-    # backfilled bars journal observations ONLY — a single intent, latest bar
+    # Backfilled bars journal observations only, including the latest seed.
     intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(intents) == 1
+    assert intents == []
     assert exchange.get_positions() == []
-    # last_eval reflects the latest (non-backfill) bar
-    assert session.last_eval is not None and session.last_eval["backfill"] is False
+    # Seed history must not masquerade as the lane's latest live evaluation.
+    assert session.last_eval is None
 
 
 async def test_fills_are_chained_into_the_ledger(tmp_path):
@@ -843,9 +886,9 @@ async def test_trade_log_narrates_signal_to_verdict(tmp_path):
     await session.run(max_bars=1)
 
     events = [e["event"] for e in session.trade_log]
-    # prime fires + live bar fires; each approved by the gateway in shadow
-    assert events.count("signal_fired") == 2
-    assert events.count("shadow_approved") == 2
+    # Only the forward live bar fires; seeded history is observability-only.
+    assert events.count("signal_fired") == 1
+    assert events.count("shadow_approved") == 1
     assert all("ts" in e and "detail" in e for e in session.trade_log)
 
 

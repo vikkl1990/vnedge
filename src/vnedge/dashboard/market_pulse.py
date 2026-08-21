@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -94,7 +95,7 @@ def _missing_before_minutes(candles: Sequence[Candle]) -> list[float]:
     predecessor and is reported as 0.0 rather than guessed.
     """
     out = [0.0]
-    for previous, current in zip(candles, candles[1:]):
+    for previous, current in pairwise(candles):
         delta = (current.open_time - previous.close_time).total_seconds()
         out.append(max(0.0, delta / 60.0))
     return out

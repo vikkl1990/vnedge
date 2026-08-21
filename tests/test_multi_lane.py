@@ -1,5 +1,7 @@
 """Measurement-first roster and remaining multi-lane primitives."""
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -9,12 +11,16 @@ from vnedge.runtime.multi_lane_shadow import (
     build_lane_specs_from_env,
     build_runtime_control,
     build_shadow_observe_lane_specs,
+    build_shadow_observe_roster_specs,
     desired_lane_specs,
     lane_specs_fingerprint,
 )
 from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.measurement_only import MeasurementOnly
+from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
+from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
+from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 
 
@@ -152,6 +158,186 @@ def test_fee_wall_lane_factory_uses_frozen_virtual_observer():
         )
 
 
+def test_squeeze_lane_factory_uses_canonical_scanner_strategy():
+    strategy = _build_single_strategy(
+        "squeeze_expansion_breakout_v2", {}, None, None
+    )
+    assert isinstance(strategy, SqueezeExpansionBreakout)
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "squeeze_expansion_breakout_v2", {"compression_bars": 24}, None, None
+        )
+
+
+def test_squeeze_v3_lane_factory_uses_quote_acceptance_strategy():
+    strategy = _build_single_strategy(
+        "squeeze_expansion_breakout_v3", {}, None, None
+    )
+    assert isinstance(strategy, SqueezeExpansionBreakoutV3)
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "squeeze_expansion_breakout_v3", {"arm_grace_bars": 4}, None, None
+        )
+
+
+def test_squeeze_v3_shadow_roster_requires_5m() -> None:
+    env = {
+        "MULTI_LANE_SHADOW_OBSERVE_ENABLED": "1",
+        "MULTI_LANE_SHADOW_OBSERVE_STRATEGY": "squeeze_expansion_breakout_v3",
+        "MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME": "5m",
+    }
+    specs = build_shadow_observe_lane_specs(env)
+    assert len(specs) == 1
+    assert specs[0].strategy_id == "squeeze_expansion_breakout_v3"
+    assert specs[0].timeframe == "5m"
+
+
+def test_range_expansion_lane_factory_and_roster_are_frozen() -> None:
+    strategy = _build_single_strategy(
+        "range_expansion_observer_v1", {}, None, None
+    )
+    assert isinstance(strategy, RangeExpansionObserver)
+    env = {
+        "MULTI_LANE_SHADOW_OBSERVE_ENABLED": "1",
+        "MULTI_LANE_SHADOW_OBSERVE_STRATEGY": "range_expansion_observer_v1",
+        "MULTI_LANE_SHADOW_OBSERVE_TIMEFRAME": "1h",
+    }
+    assert build_shadow_observe_lane_specs(env)[0].strategy_id == strategy.strategy_id
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "range_expansion_observer_v1", {"range_bars": 6}, None, None
+        )
+
+
+def _write_observer_roster(tmp_path, observers: list[dict]):
+    path = tmp_path / "observers.json"
+    path.write_text(
+        json.dumps({"version": 1, "observers": observers}), encoding="utf-8"
+    )
+    return path
+
+
+def test_versioned_roster_runs_5m_and_1h_observers_concurrently(tmp_path) -> None:
+    path = _write_observer_roster(
+        tmp_path,
+        [
+            {
+                "strategy_id": "squeeze_expansion_breakout_v3",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                "timeframe": "5m",
+                "starting_equity": 1000,
+                "daily_loss_usd": 20,
+            },
+            {
+                "strategy_id": "range_expansion_observer_v1",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                "timeframe": "1h",
+            },
+            {
+                "strategy_id": "structure_bos_1h",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                "timeframe": "1h",
+            },
+        ],
+    )
+    env = {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
+    specs = build_shadow_observe_roster_specs(env)
+
+    assert len(specs) == 6
+    assert len({spec.lane_id for spec in specs}) == 6
+    assert {spec.timeframe for spec in specs} == {"5m", "1h"}
+    assert {spec.strategy_id for spec in specs} == {
+        "squeeze_expansion_breakout_v3",
+        "range_expansion_observer_v1",
+        "structure_bos_1h",
+    }
+    assert all(spec.mode is RunnerMode.SHADOW for spec in specs)
+    control = build_runtime_control(specs)
+    assert control["shadow_observe_strategy"] == "multiple"
+    assert control["shadow_observe_timeframes"] == ["1h", "5m"]
+
+
+def test_checked_in_observer_roster_is_valid() -> None:
+    specs = build_shadow_observe_roster_specs(
+        {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
+    )
+    assert len(specs) == 6
+    assert all(not spec.is_primary for spec in specs)
+
+
+def test_observer_roster_cannot_mix_with_legacy_contract(tmp_path) -> None:
+    path = _write_observer_roster(
+        tmp_path,
+        [{
+            "strategy_id": "structure_bos_1h",
+            "exchange": "binanceusdm",
+            "symbols": ["BTC/USDT:USDT"],
+            "timeframe": "1h",
+        }],
+    )
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        build_shadow_observe_roster_specs(
+            {
+                "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path),
+                "MULTI_LANE_SHADOW_OBSERVE_ENABLED": "1",
+                "MULTI_LANE_SHADOW_OBSERVE_STRATEGY": "structure_bos_1h",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "observer, message",
+    [
+        (
+            {
+                "strategy_id": "squeeze_expansion_breakout_v3",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT"],
+                "timeframe": "1h",
+            },
+            "requires timeframe 5m",
+        ),
+        (
+            {
+                "strategy_id": "structure_bos_1h",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT"],
+                "timeframe": "1h",
+                "live": True,
+            },
+            "unknown fields",
+        ),
+    ],
+)
+def test_observer_roster_fails_closed_on_bad_contract(
+    tmp_path, observer, message
+) -> None:
+    path = _write_observer_roster(tmp_path, [observer])
+    with pytest.raises(ValueError, match=message):
+        build_shadow_observe_roster_specs(
+            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
+        )
+
+
+def test_observer_roster_rejects_duplicate_stable_lane_ids(tmp_path) -> None:
+    path = _write_observer_roster(
+        tmp_path,
+        [{
+            "strategy_id": "structure_bos_1h",
+            "exchange": "binanceusdm",
+            "symbols": ["BTC/USDT:USDT", "BTC/USDT:USDT"],
+            "timeframe": "1h",
+        }],
+    )
+    with pytest.raises(ValueError, match="duplicate lane ids"):
+        build_shadow_observe_roster_specs(
+            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
+        )
+
+
 @pytest.mark.parametrize(
     "env",
     [
@@ -205,6 +391,7 @@ def test_provider_and_fingerprint_are_stable():
     provider.publish_warming(specs[0].lane_id, specs[0].exchange, specs[0].symbol)
     assert provider.latest()["lanes"][0]["strategy_id"] == ""
     assert lane_specs_fingerprint(specs) == lane_specs_fingerprint(specs)
+    assert lane_specs_fingerprint(specs) == lane_specs_fingerprint(list(reversed(specs)))
     changed = [LaneSpec("other", "binanceusdm", "ETH/USDT:USDT")]
     assert lane_specs_fingerprint(specs) != lane_specs_fingerprint(changed)
 

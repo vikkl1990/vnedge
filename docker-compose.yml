@@ -39,6 +39,9 @@ services:
       MULTI_LANE_SHADOW_OBSERVE_EQUITY: "${MULTI_LANE_SHADOW_OBSERVE_EQUITY:-500}"
       MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD: "${MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD:-10}"
       MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT: "${MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT:-0}"
+      # Versioned multi-strategy replacement for the singleton fields above.
+      # Setting a path is the explicit opt-in; mixing both contracts fails startup.
+      MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH: "${MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH:-}"
       # Optional fixed isolated-margin sizing for PAPER/SHADOW only. The live
       # runtime rejects this profile structurally. Leverage is capped at 30x
       # and automatically reduced when required to preserve liquidation room.

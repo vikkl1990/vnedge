@@ -34,8 +34,8 @@ from typing import Any
 
 import pandas as pd
 
-from vnedge.data.lake_health import LakeHealthMonitor
 from vnedge.data.candles import CandleParquetStore, CandlePipeline
+from vnedge.data.lake_health import LakeHealthMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +459,9 @@ class DeltaTickRecorder:
         *,
         levels: int = 10,
         exchange_id: str = "delta_india",
+        candle_root: Path | None = None,
+        trades_only: bool = False,
+        books_only: bool = False,
         url: str | None = None,
         connect=None,
         clock=None,
@@ -471,12 +474,21 @@ class DeltaTickRecorder:
 
         if levels < 1:
             raise ValueError("levels must be >= 1")
+        if trades_only and books_only:
+            raise ValueError("trades_only and books_only are mutually exclusive")
         root = Path(root)
         self.exchange_id = exchange_id
         self.symbols = [delta_native_symbol(s) for s in symbols]
         self.root = root
         self.levels = levels
+        self.trades_only = trades_only
+        self.books_only = books_only
         self._clock = clock
+        self.candle_sink = (
+            CanonicalCandleSink(exchange_id, self.symbols, candle_root)
+            if candle_root is not None
+            else None
+        )
         self.trade_count = 0
         self.book_count = 0
         self._trade_bufs = {
@@ -485,9 +497,17 @@ class DeltaTickRecorder:
         self._book_bufs = {
             s: _Buffer(root, exchange_id, s, "book") for s in self.symbols
         }
+        channels = tuple(
+            channel
+            for channel, enabled in (
+                ("l2_orderbook", not trades_only),
+                ("all_trades", not books_only),
+            )
+            if enabled
+        )
         self._client = DeltaPublicWsClient(
             self.symbols,
-            channels=("l2_orderbook", "all_trades"),
+            channels=channels,
             url=url or DELTA_INDIA_WS_URL,
             connect=connect,
             on_book=self._on_book,
@@ -518,14 +538,23 @@ class DeltaTickRecorder:
         buf = self._trade_bufs.get(sym)
         if buf is None:
             return
-        buf.add(
-            {
-                "ts_ms": int(trade["ts_ms"]),
-                "price": float(trade["price"]),
-                "amount": float(trade["size"]),
-                "side": trade.get("side", ""),
-            }
-        )
+        row = {
+            "ts_ms": int(trade["ts_ms"]),
+            "price": float(trade["price"]),
+            "amount": float(trade["size"]),
+            "side": trade.get("side", ""),
+        }
+        if self.candle_sink is not None:
+            self.candle_sink.on_trade(
+                sym,
+                {
+                    "timestamp": row["ts_ms"],
+                    "price": row["price"],
+                    "amount": row["amount"],
+                    "side": row["side"],
+                },
+            )
+        buf.add(row)
         self.trade_count += 1
 
     def _all_buffers(self):
@@ -560,6 +589,8 @@ class DeltaTickRecorder:
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
+                if self.candle_sink is not None:
+                    self.candle_sink.advance_time(datetime.now(UTC))
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             now = clock()
@@ -596,7 +627,13 @@ def main(argv=None) -> int:
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     if args.exchange in _DELTA_NATIVE_IDS:
         recorder: DeltaTickRecorder | TickRecorder = DeltaTickRecorder(
-            symbols, Path(args.data_root), levels=args.levels, exchange_id=args.exchange
+            symbols,
+            Path(args.data_root),
+            levels=args.levels,
+            exchange_id=args.exchange,
+            candle_root=Path(args.candle_root) if args.candle_root else None,
+            trades_only=args.trades_only,
+            books_only=args.books_only,
         )
     else:
         recorder = TickRecorder(

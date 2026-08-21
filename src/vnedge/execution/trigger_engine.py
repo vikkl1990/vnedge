@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Literal
 
@@ -184,7 +184,7 @@ class TriggerEngine:
     reject_counts: Counter = field(default_factory=Counter)
 
     def _roll_day(self, bar_ts_ms: int) -> None:
-        day = datetime.fromtimestamp(bar_ts_ms / 1000, tz=timezone.utc).date()
+        day = datetime.fromtimestamp(bar_ts_ms / 1000, tz=UTC).date()
         if day != self.today:
             self.today = day
             self.fires_today = 0
@@ -263,8 +263,8 @@ class TriggerEngine:
             return None
 
         if arm.side_hint is not None:
-            side = arm.side_hint
-            if side == "long":
+            hinted_side = arm.side_hint
+            if hinted_side == "long":
                 level, box_edge = arm.box_low, arm.box_low
             else:
                 level, box_edge = arm.box_high, arm.box_high
@@ -277,7 +277,7 @@ class TriggerEngine:
             distance = c.stop_distance(atr=arm.atr, level=level, zone_depth=depth)
             pending = c.entry_mode == "retest_limit"
             entry = level if pending else close
-            stop = level - distance if side == "long" else level + distance
+            stop = level - distance if hinted_side == "long" else level + distance
             if stop <= 0:
                 self._reject(RejectCode.BAD_STOP)
                 return None
@@ -286,11 +286,11 @@ class TriggerEngine:
             self.last_fire_bar = bar_index
             self.fires_today += 1
             return FireDecision(
-                side=side, level=level, box_edge=box_edge, entry=entry, stop=stop,
+                side=hinted_side, level=level, box_edge=box_edge, entry=entry, stop=stop,
                 risk=distance, episode_id=arm.episode_id,
                 chase_bps=chase_bps, pending=pending,
                 expires_bar=bar_index + c.retest_expiry_bars if pending else None,
-                reason=(f"bounce_fire side={side} chase={chase_bps:.1f}bps "
+                reason=(f"bounce_fire side={hinted_side} chase={chase_bps:.1f}bps "
                         f"episode={arm.episode_id} zone_anchored_stop "
                         f"entry={c.entry_mode} virtual_only"),
             )

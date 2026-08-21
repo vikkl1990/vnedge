@@ -467,7 +467,7 @@ def build_session(tmp_path, feed, *, mode=RunnerMode.SHADOW, hist=None, provider
 
 
 async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
-    # bar 5 is quiet; bar 6 crashes through the 95 stop of every open intent
+    # bar 5 opens one virtual position; bar 6 crashes through its 95 stop.
     rows = [
         [BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0],
         [BASE + 6 * MIN, 100.0, 100.5, 94.0, 96.0, 5.0],
@@ -477,30 +477,29 @@ async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
     await session.run(max_bars=2)
 
     intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    # prime (bar 4) + bar 5 + bar 6 — each now carries stop/target/bar_ts
-    assert len(intents) == 3
+    # Seed history never creates an intent and the unresolved bar-5 position
+    # reserves the shadow purse while bar 6 is evaluated.
+    assert len(intents) == 1
     for record in intents:
         payload = record["payload"]
         assert {"stop_price", "take_profit_price", "bar_ts"} <= payload.keys()
-    # the prime + bar-5 intents fired off a 100.0 close: stop 95, target 110
+    # The bar-5 intent fired off a 100.0 close: stop 95, target 110.
     assert intents[0]["payload"]["stop_price"] == pytest.approx(95.0)
-    assert intents[1]["payload"]["take_profit_price"] == pytest.approx(110.0)
+    assert intents[0]["payload"]["take_profit_price"] == pytest.approx(110.0)
 
     outcomes = [r for r in session.journal.read_all() if r["kind"] == "shadow_outcome"]
-    # bar 6 stops the prime intent (bar 4) and the bar-5 intent; the bar-6
-    # intent fills next bar and stays open
-    assert len(outcomes) == 2
+    assert len(outcomes) == 1
     assert all(o["payload"]["resolution"] == "stop" for o in outcomes)
     stats = session.shadow_outcomes.stats()
-    assert stats["virtual_trades"] == 2 and stats["wins"] == 0
+    assert stats["virtual_trades"] == 1 and stats["wins"] == 0
     assert stats["net_usd"] < 0
     assert stats["status"] == "SHADOW_PROBATION"
     assert stats["trade_compatible"] is False
-    assert stats["open_intents"] == 1
+    assert stats["open_intents"] == 0
     # surfaced to the dashboard through session_stats
     assert provider.snapshots[-1]["session"]["shadow_perf"] == stats
     events = [e["event"] for e in session.trade_log]
-    assert events.count("shadow_outcome") == 2
+    assert events.count("shadow_outcome") == 1
     # SHADOW returns before OrderManager.submit: no broker order and no fill.
     assert session.om.orders == {}
     assert session.exchange.get_fills() == []
@@ -530,16 +529,16 @@ async def test_kill_file_rejects_shadow_intent_and_tracks_no_virtual_trade(tmp_p
 
 
 async def test_restart_replays_history_and_never_double_resolves(tmp_path):
-    # session 1: two intents journaled (prime bar 4 + live bar 5), none resolved
+    # Session 1: only the forward live bar may create an intent.
     session1 = build_session(
         tmp_path, FakeFeed([[BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]])
     )
     await session1.run(max_bars=1)
     assert session1.shadow_outcomes.stats() == {
         "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
-        "profit_factor": None, "open_intents": 2,
-        "pending_shadow_intents": 2, "shadow_outcomes_recent": [],
-        "virtual_net_usd": 0.0, "bars_since_signal": 1,
+        "profit_factor": None, "open_intents": 1,
+        "pending_shadow_intents": 1, "shadow_outcomes_recent": [],
+        "virtual_net_usd": 0.0, "bars_since_signal": 0,
         "resolutions": {"stop": 0, "target": 0, "timeout": 0},
         "status": "OBSERVE", "trade_compatible": True,
         "exit_semantics": "single_exit_parity",
@@ -558,7 +557,7 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
     )
     await session2.run(max_bars=1)
     outcomes = [r for r in session2.journal.read_all() if r["kind"] == "shadow_outcome"]
-    assert len(outcomes) == 2  # both stale intents resolved from seeded history
+    assert len(outcomes) == 1  # stale intent resolved from seeded history
     assert all(o["payload"]["resolution"] == "stop" for o in outcomes)
 
     # third start: nothing pending from those keys, nothing re-resolved

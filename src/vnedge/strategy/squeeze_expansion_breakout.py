@@ -31,11 +31,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import pandas as pd
 
+from vnedge.plan.cost_model import CostModel
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+
+_CONSERVATIVE_RT_COST_BPS: Final = CostModel.for_profile(
+    "delta_scalp"
+).round_trip_bps()
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +55,7 @@ class SqueezeExpansionParams:
     atr_period: int = 48
     atr_stop_mult: float = 1.7
     reward_r: float = 2.3
-    taker_cost_bps: float = 5.9
+    round_trip_cost_bps: float = _CONSERVATIVE_RT_COST_BPS
     min_edge_after_cost_bps: float = 20.0
     min_bars_between_signals: int = 18
     break_buffer_bps: float = 2.0
@@ -64,7 +69,7 @@ class SqueezeExpansionParams:
             raise ValueError("volume confirmation settings are invalid")
         if self.atr_period < 2 or self.atr_stop_mult <= 0 or self.reward_r <= 0:
             raise ValueError("stop geometry settings are invalid")
-        if self.taker_cost_bps < 0 or self.min_edge_after_cost_bps <= 0:
+        if self.round_trip_cost_bps < 0 or self.min_edge_after_cost_bps <= 0:
             raise ValueError("cost settings are invalid")
         if self.min_bars_between_signals < 1 or self.break_buffer_bps < 0:
             raise ValueError("spacing settings are invalid")
@@ -205,10 +210,10 @@ class SqueezeExpansionBreakout(BaseStrategy):
         risk = p.atr_stop_mult * atr
         risk_bps = risk / close * 10_000
         reward_bps = risk_bps * p.reward_r
-        if reward_bps - p.taker_cost_bps < p.min_edge_after_cost_bps:
+        if reward_bps - p.round_trip_cost_bps < p.min_edge_after_cost_bps:
             return None
 
-        side = "long" if fire_long else "short"
+        side: Literal["long", "short"] = "long" if fire_long else "short"
         if side == "long":
             stop = close - risk
             target = close + risk * p.reward_r
@@ -224,6 +229,6 @@ class SqueezeExpansionBreakout(BaseStrategy):
             reason=(
                 f"squeeze_expansion side={side} rank={rank:.2f} "
                 f"risk={risk_bps:.1f}bps reward={reward_bps:.1f}bps "
-                f"edge_after_cost={reward_bps - p.taker_cost_bps:.1f}bps virtual_only"
+                f"edge_after_cost={reward_bps - p.round_trip_cost_bps:.1f}bps virtual_only"
             ),
         )

@@ -35,6 +35,10 @@ class ExitConfig:
     trail_atr_mult: float = 1.0
     absolute_max_bars: int = 48
     taker_bps: float = 5.9
+    # Optional complete round-trip cost used by the breakeven ratchet.  Older
+    # registered profiles retain their one-leg ``taker_bps`` semantics; new
+    # profiles can prevent a gross breakeven stop from being a net loser.
+    breakeven_cost_bps: float | None = None
     be_fee_buffer_bps: float = 1.0
     # Breakout entries sit BEYOND the box, so "closed back inside" is a clean
     # invalidation. Bounce entries sit AT the zone, where the same test fires
@@ -59,6 +63,8 @@ class ExitConfig:
             raise ValueError("trail/backstop settings are invalid")
         if self.taker_bps < 0 or self.be_fee_buffer_bps < 0:
             raise ValueError("fee settings are invalid")
+        if self.breakeven_cost_bps is not None and self.breakeven_cost_bps < 0:
+            raise ValueError("breakeven_cost_bps cannot be negative")
         if self.max_age_bars is not None and self.max_age_bars < 1:
             raise ValueError("max_age_bars must be positive when set")
         if self.tp_ladder:
@@ -171,7 +177,12 @@ class ExitEngine:
                 p.remaining -= take
                 p.rungs_filled += 1
                 if p.rungs_filled == 1 and c.breakeven_after_tp1:
-                    pad = (c.taker_bps + c.be_fee_buffer_bps) / 10_000.0
+                    cost_bps = (
+                        c.breakeven_cost_bps
+                        if c.breakeven_cost_bps is not None
+                        else c.taker_bps
+                    )
+                    pad = (cost_bps + c.be_fee_buffer_bps) / 10_000.0
                     be = p.entry * (1 + pad) if side == "long" else p.entry * (1 - pad)
                     p.stop = max(p.stop, be) if side == "long" else min(p.stop, be)
                 if p.remaining <= 1e-9:
@@ -202,7 +213,12 @@ class ExitEngine:
 
         # 5) ratchets (no exit this bar)
         if p.mfe >= c.breakeven_arm_r * p.risk:
-            pad = (c.taker_bps + c.be_fee_buffer_bps) / 10_000.0
+            cost_bps = (
+                c.breakeven_cost_bps
+                if c.breakeven_cost_bps is not None
+                else c.taker_bps
+            )
+            pad = (cost_bps + c.be_fee_buffer_bps) / 10_000.0
             breakeven = p.entry * (1.0 + pad) if side == "long" else p.entry * (1.0 - pad)
             p.stop = max(p.stop, breakeven) if side == "long" else min(p.stop, breakeven)
         if p.mfe >= c.trail_arm_r * p.risk and atr > 0:

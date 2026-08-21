@@ -333,6 +333,8 @@ def build_lanes_payload(
             for row in shadow_rows
         ),
     }
+    observer_strategies = runtime.get("shadow_observe_strategies")
+    observer_timeframes = runtime.get("shadow_observe_timeframes")
     return {
         "lanes": result,
         "capital_roster_size": capital_count,
@@ -345,6 +347,19 @@ def build_lanes_payload(
             else None
         ),
         "shadow_observe_lanes": observe_count,
+        "shadow_observe_strategies": [
+            str(value)
+            for value in (
+                observer_strategies if isinstance(observer_strategies, list) else []
+            )
+        ],
+        "shadow_observe_timeframes": [
+            str(value)
+            for value in (
+                observer_timeframes if isinstance(observer_timeframes, list) else []
+            )
+        ],
+        "lane_set_hash": str(runtime.get("lane_set_hash") or "") or None,
         "portfolio": portfolio,
         "read_only": True,
         "can_promote": False,

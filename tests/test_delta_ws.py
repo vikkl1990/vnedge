@@ -243,6 +243,22 @@ def test_candlestick_malformed_messages_are_ignored():
     assert client._forming_candles == {}
 
 
+def test_book_retains_exchange_timestamp_and_sequence() -> None:
+    client = DeltaPublicWsClient(["BTCUSD"])
+    timestamp_us = 1_783_532_686_647_151
+    client._handle({
+        "type": "l2_orderbook",
+        "symbol": "BTCUSD",
+        "timestamp": timestamp_us,
+        "sequence_no": 42,
+        "buy": [{"limit_price": "100.0", "size": 1}],
+        "sell": [{"limit_price": "101.0", "size": 1}],
+    })
+    assert client.book_sequence["BTCUSD"] == 42
+    assert client.book_event_at["BTCUSD"].tzinfo is not None
+    assert int(client.book_event_at["BTCUSD"].timestamp() * 1_000_000) == timestamp_us
+
+
 class _FakeWs:
     """Minimal async websocket: records sends, replays canned frames, then ends."""
 

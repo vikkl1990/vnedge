@@ -28,6 +28,7 @@ from datetime import datetime
 
 from vnedge.exchange.live_feed import (
     LiveMarketFeed,
+    QuoteUpdate,
     RestPollingMarketFeed,
     create_market_feed,
 )
@@ -48,10 +49,11 @@ class SharedFeedView:
     proxies for the shared market state.
     """
 
-    def __init__(self, registry: "SharedFeedRegistry", entry: "_FeedEntry") -> None:
+    def __init__(self, registry: SharedFeedRegistry, entry: _FeedEntry) -> None:
         self._registry = registry
         self._entry = entry
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
         self.candles_closed = 0  # candles delivered to THIS view
         self._stopped = False
 
@@ -70,6 +72,14 @@ class SharedFeedView:
     def _deliver(self, row: list) -> None:
         self.closed_candles.put_nowait(row)
         self.candles_closed += 1
+
+    def _deliver_quote(self, quote: QuoteUpdate) -> None:
+        if self.quote_updates.full():
+            try:
+                self.quote_updates.get_nowait()
+            except asyncio.QueueEmpty:  # pragma: no cover
+                pass
+        self.quote_updates.put_nowait(quote)
 
     # --- shared read-through state --------------------------------------------------
     @property
@@ -141,7 +151,7 @@ class _FeedEntry:
         self.key = key
         self.feed = feed
         self.views: list[SharedFeedView] = []
-        self.fanout_task: asyncio.Task | None = None
+        self.fanout_tasks: list[asyncio.Task] = []
         self.started = False
         self.start_lock = asyncio.Lock()
 
@@ -183,9 +193,18 @@ class SharedFeedRegistry:
             if entry.started:
                 return
             await entry.feed.start()
-            entry.fanout_task = asyncio.create_task(
-                self._fan_out(entry), name=f"feed-fanout-{'-'.join(entry.key)}"
-            )
+            entry.fanout_tasks = [
+                asyncio.create_task(
+                    self._fan_out(entry), name=f"feed-fanout-{'-'.join(entry.key)}"
+                )
+            ]
+            if hasattr(entry.feed, "quote_updates"):
+                entry.fanout_tasks.append(
+                    asyncio.create_task(
+                        self._fan_out_quotes(entry),
+                        name=f"quote-fanout-{'-'.join(entry.key)}",
+                    )
+                )
             entry.started = True
 
     async def _fan_out(self, entry: _FeedEntry) -> None:
@@ -195,6 +214,13 @@ class SharedFeedRegistry:
             for view in list(entry.views):
                 view._deliver(row)
 
+    async def _fan_out_quotes(self, entry: _FeedEntry) -> None:
+        """Fan out the latest quote to every view without an unbounded queue."""
+        while True:
+            quote = await entry.feed.quote_updates.get()
+            for view in list(entry.views):
+                view._deliver_quote(quote)
+
     async def _release(self, entry: _FeedEntry, view: SharedFeedView) -> None:
         if view in entry.views:
             entry.views.remove(view)
@@ -202,10 +228,11 @@ class SharedFeedRegistry:
             return  # other lanes still consume this feed
         # last view released: tear the real feed down and forget the entry
         self._entries.pop(entry.key, None)
-        if entry.fanout_task is not None:
-            entry.fanout_task.cancel()
-            await asyncio.gather(entry.fanout_task, return_exceptions=True)
-            entry.fanout_task = None
+        if entry.fanout_tasks:
+            for task in entry.fanout_tasks:
+                task.cancel()
+            await asyncio.gather(*entry.fanout_tasks, return_exceptions=True)
+            entry.fanout_tasks = []
         entry.started = False
         await entry.feed.stop()
         logger.info("feed registry: stopped shared feed for %s (last view released)",

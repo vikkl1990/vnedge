@@ -69,13 +69,13 @@ export function DenseTable<T>({
       aria-label="Scrollable data table"
       tabIndex={0}
     >
-      <table className="w-full border-collapse text-[12px]">
+      <table className="w-full border-separate border-spacing-0 text-[12px]">
         <thead>
           <tr className="text-faint uppercase text-[10px]">
-            {columns.map((c) => (
+            {columns.map((c, columnIndex) => (
               <th
                 key={c.key}
-                className={`font-mono font-normal py-1.5 px-2 ${c.align === "right" ? "text-right" : "text-left"}`}
+                className={`sticky top-0 z-10 border-b border-line bg-inset font-mono font-normal py-1.5 px-2 ${columnIndex === 0 ? "left-0 z-20" : ""} ${c.align === "right" ? "text-right" : "text-left"}`}
               >
                 {c.header}
               </th>
@@ -85,10 +85,10 @@ export function DenseTable<T>({
         <tbody>
           {rows.map((row, i) => (
             <tr key={rowKey?.(row, i) ?? i} className="border-t border-line/60 hover:bg-white/[0.02]">
-              {columns.map((c) => (
+              {columns.map((c, columnIndex) => (
                 <td
                   key={c.key}
-                  className={`py-1.5 px-2 tabular-nums ${c.align === "right" ? "text-right" : "text-left"}`}
+                  className={`py-1.5 px-2 tabular-nums ${columnIndex === 0 ? "sticky left-0 z-[5] bg-panel shadow-[1px_0_0_0_rgba(48,54,61,.9)]" : ""} ${c.align === "right" ? "text-right" : "text-left"}`}
                 >
                   {c.render(row)}
                 </td>
