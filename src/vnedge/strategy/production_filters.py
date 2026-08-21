@@ -295,6 +295,17 @@ class ProductionGate:
     #: round trip consumes 27% of the hour's range at the peak and 68% at
     #: the trough. The gate exists to stop paying the second price.
     allowed_hours: tuple[int, ...] | None = None
+    #: KNOWN DEFECT, measured 2026-08-21: this percentile is computed over a
+    #: POOLED rolling window that mixes weekdays and weekends. Range differs by
+    #: weekday at p=1.5e-13 (BTC) / 1.4e-10 (ETH), and weekends run 0.54-0.58x
+    #: the weekday median hourly range on 0.43-0.46x the volume. A pooled p50
+    #: therefore admits weekend hours a weekday-only p50 would reject -- the
+    #: floor is loosest exactly where liquidity is worst and fills are hardest.
+    #: Any future use should stratify by weekday/weekend, or gate weekends out.
+    #: Left as-is rather than silently changed: the strategy that used this
+    #: failed its sealed run (docs/prereg/bounce_vol_band_20260821.md) and
+    #: refitting a closed experiment's gate is exactly what that verdict forbids.
+    #:
     #: Require volatility to be AT LEAST this Bollinger-bandwidth percentile.
     #: Note the tension with ``use_regime``, which blocks the top 8% as
     #: "expansion": one gate refuses the widest conditions and this one demands
