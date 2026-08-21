@@ -250,3 +250,48 @@ def test_disabling_a_layer_removes_its_blocks() -> None:
         gate.observe(_ctx(bars, i))
     assert "regime:low_liquidity" not in gate.blocked
     assert gate.passed > 0
+
+
+def test_the_hour_gate_blocks_rather_than_discounts() -> None:
+    """A confidence nudge still lets a marginal setup through in a dead hour.
+
+    Median hourly range is 2.4-2.75x higher at 14:00 UTC than in the overnight
+    trough, so a fixed round-trip cost consumes a far larger share of the move
+    there. The gate has to be a hard block for that to matter.
+    """
+    from vnedge.strategy.arm_sources import BarContext
+    from vnedge.strategy.production_filters import ProductionGate
+
+    class _AlwaysArms:
+        warmup_bars = 0
+        last_confidence = 100
+        last_reason = "structure_bounce long sr conf=100 confluence=2 htf=up"
+
+        def observe(self, ctx):
+            from vnedge.execution.trigger_engine import ArmState
+            return ArmState(episode_id=1, box_high=101.0, box_low=99.0,
+                            compressed=True, atr=1.0, vol_ma=100.0,
+                            prev_close=100.0, side_hint="long")
+
+    def _ctx_at(hour):
+        ts = 1_787_000_000_000
+        ts -= ts % 86_400_000
+        ts += hour * 3_600_000
+        bars = [(ts + i * 300_000, 100.0, 101.0, 99.0, 100.0, 200.0) for i in range(3)]
+        return BarContext(bars=bars, index=2, atr=1.0, vol_ma=100.0,
+                          vwap=100.0, prev_close=100.0)
+
+    gate = ProductionGate(inner=_AlwaysArms(), allowed_hours=(12, 13, 14, 15),
+                          use_regime=False, use_ev=False,
+                          use_counter_trend_block=False,
+                          use_confluence_required=False, use_fee_check=False,
+                          use_session=False, min_confidence=0)
+    assert gate.observe(_ctx_at(14)) is not None, "14:00 UTC must pass"
+    assert gate.observe(_ctx_at(4)) is None, "04:00 UTC must be blocked"
+    assert gate.blocked.get("session_hour") == 1
+
+    ungated = ProductionGate(inner=_AlwaysArms(), use_regime=False, use_ev=False,
+                             use_counter_trend_block=False,
+                             use_confluence_required=False, use_fee_check=False,
+                             use_session=False, min_confidence=0)
+    assert ungated.observe(_ctx_at(4)) is not None, "no gate trades every hour"
