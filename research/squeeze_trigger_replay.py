@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import time
 import statistics
 import urllib.request
 
@@ -69,7 +70,23 @@ CONFIRM_CLOSE = True                 # bar-close confirmation beyond the level
                                      # (the tick plane's 3-10s hold, at bar scale)
 
 
+#: Bar length in ms, needed to know when a kline has actually closed.
+_INTERVAL_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
+    "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000,
+    "6h": 21_600_000, "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000,
+}
+
+
 def fetch(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[tuple]:
+    """Closed klines only.
+
+    The venue returns the CURRENTLY FORMING bar as the last row whenever
+    ``end_ms`` reaches into the present, and its close/high/low are not final.
+    Handing that to a scanner breaks the same closed-bar discipline the live
+    feed enforces ("the next interval's first update proves the previous one
+    closed"), so it is dropped here rather than in each caller.
+    """
     out: list[tuple] = []
     cursor = start_ms
     while cursor < end_ms:
@@ -89,6 +106,10 @@ def fetch(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[tuple]
         if nxt <= cursor:
             break
         cursor = nxt
+    step = _INTERVAL_MS.get(interval)
+    if step:
+        now_ms = int(time.time() * 1000)
+        out = [row for row in out if row[0] + step <= now_ms]
     return out
 
 
