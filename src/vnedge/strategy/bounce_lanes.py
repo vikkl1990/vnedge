@@ -43,7 +43,9 @@ SHARED_TRIGGER = {
 }
 SHARED_EXIT = {
     "failed_breakout": False,
-    "no_progress_bars": 999,
+    # None, not 999: the runtime engine has no no-progress rule at all, and a
+    # sentinel that merely never fires still says the lane owns one.
+    "no_progress_bars": None,
     "absolute_max_bars": 288,
     "tp_ladder": ((1.5, 0.4), (2.5, 0.3), (4.0, 0.3)),
     "breakeven_after_tp1": True,

@@ -107,7 +107,7 @@ def test_failed_breakout_close_back_inside_box() -> None:
 
 
 def test_no_progress_time_stop() -> None:
-    eng = ExitEngine()
+    eng = ExitEngine(config=ExitConfig(no_progress_bars=4))
     _open_long(eng)
     decision = None
     for k in range(1, 6):
@@ -138,7 +138,10 @@ def test_trail_after_two_r_and_winning_stop_exit() -> None:
     trailed_stop = eng.pos.stop
     decision = eng.on_bar(high=60_360.0, low=trailed_stop - 1, close=trailed_stop - 1,
                           atr=60.0, bar_index=102)
-    assert decision is not None and decision.reason == "stop" and decision.won
+    assert decision is not None and decision.won
+    # the ratchet moved this stop, so it reports as a breakeven stop -- the same
+    # name runtime.active_exit uses, so exit histograms merge across surfaces
+    assert decision.reason == "breakeven_stop"
 
 
 def test_tick_protective_stop() -> None:

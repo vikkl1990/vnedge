@@ -77,10 +77,13 @@ class SessionCosts:
             # The model itself owns any account-verified close waiver.  A free
             # close is not equivalent to a maker exit, and converting it here
             # silently applied a discount to the conservative delta profile.
+            # The safety buffer is a PRE-TRADE gate margin, not a realized
+            # venue charge, so completed trades exclude it from booked PnL.
             return self.cost_model.round_trip_bps(
                 maker_entry=maker_entry,
                 maker_exit=False,
                 hold_minutes=hold_minutes,
+                include_safety=False,
             )
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
         entry_leg = (

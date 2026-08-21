@@ -32,13 +32,54 @@ from vnedge.risk.position_sizer import SymbolLimits
 _DEFAULT_TAKER_BPS = 5.0  # Binance USDT-M standard tier
 _TAKER_BPS_BY_EXCHANGE: dict[str, float] = {
     "bybit": 5.5,  # Bybit linear-perp standard taker = 0.055%
+    "delta_india": 5.0,  # Delta futures taker = 0.05% -- BEFORE GST, see below
+    "delta": 5.0,
+}
+#: India levies 18% GST on the trading fee itself, so a Delta lane's real cost
+#: is 5.0 x 1.18 = 5.9 bps per side. Delta previously fell through to the
+#: Binance default and was billed 5.0 flat, understating every Delta lane's
+#: fees by 18%. Verified against delta.exchange/fees (2026-08-20).
+_FEE_TAX_MULT_BY_EXCHANGE: dict[str, float] = {
+    "delta_india": 1.18,
+    "delta": 1.18,
 }
 _SLIPPAGE_BPS = 2.0  # venue-agnostic pessimistic paper slippage (unchanged)
 
+#: Delta's Scalper Offer waives the CLOSING leg's fee when a futures position is
+#: opened and closed inside a window that DEPENDS ON THE SYMBOL: 30 minutes for
+#: BTCUSD and ETHUSD, 15 minutes for every other future. It also requires KYC
+#: plus an explicit in-app opt-in and cannot be deactivated once taken, so no
+#: code path may assume it -- callers opt in deliberately.
+_SCALPER_WINDOW_MINUTES: dict[str, float] = {"BTCUSD": 30.0, "ETHUSD": 30.0}
+_SCALPER_DEFAULT_WINDOW_MINUTES = 15.0
 
-def venue_taker_bps(exchange: str) -> float:
-    """Standard taker fee (bps) for a venue, defaulting to the Binance tier."""
-    return _TAKER_BPS_BY_EXCHANGE.get(exchange.lower(), _DEFAULT_TAKER_BPS)
+
+def venue_fee_tax_mult(exchange: str) -> float:
+    """Tax multiplier applied to the fee itself (India GST on Delta)."""
+    return _FEE_TAX_MULT_BY_EXCHANGE.get(exchange.lower(), 1.0)
+
+
+def venue_taker_bps(exchange: str, *, include_tax: bool = True) -> float:
+    """All-in taker fee (bps) for a venue.
+
+    ``include_tax`` is on by default because the tax is a real cost the venue
+    bills; pass False only to inspect the pre-tax rate.
+    """
+    base = _TAKER_BPS_BY_EXCHANGE.get(exchange.lower(), _DEFAULT_TAKER_BPS)
+    return base * (venue_fee_tax_mult(exchange) if include_tax else 1.0)
+
+
+def scalper_offer_window_minutes(exchange: str, symbol: str) -> float | None:
+    """Free-closing-leg window, or None where the offer does not apply.
+
+    The window is 30 minutes for BTCUSD/ETHUSD and 15 for other futures --
+    modelling one flat 30-minute rule would hand every altcoin lane a discount
+    it does not get between 15 and 30 minutes.
+    """
+    if exchange.lower() not in ("delta", "delta_india"):
+        return None
+    base = symbol.split(":")[0].replace("/", "").upper()
+    return _SCALPER_WINDOW_MINUTES.get(base, _SCALPER_DEFAULT_WINDOW_MINUTES)
 
 
 def venue_fill_model(exchange: str) -> FillModel:
