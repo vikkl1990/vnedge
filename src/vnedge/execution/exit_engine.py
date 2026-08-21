@@ -28,7 +28,11 @@ Side = Literal["long", "short"]
 class ExitConfig:
     """Frozen exit-plane parameters."""
 
-    no_progress_bars: int = 4
+    # OFF by default: runtime.active_exit -- the engine that actually trades --
+    # has no no-progress rule, so a research book that closes on it predicts a
+    # book the shadow lane will never produce. Set an int to opt in for a
+    # research question, knowing the result is then not runtime-comparable.
+    no_progress_bars: int | None = None
     no_progress_min_r: float = 0.5
     breakeven_arm_r: float = 1.0
     trail_arm_r: float = 2.0
@@ -51,7 +55,9 @@ class ExitConfig:
     max_age_bars: int | None = None
 
     def __post_init__(self) -> None:
-        if self.no_progress_bars < 1 or self.no_progress_min_r <= 0:
+        if self.no_progress_bars is not None and self.no_progress_bars < 1:
+            raise ValueError("no-progress settings are invalid")
+        if self.no_progress_min_r <= 0:
             raise ValueError("no-progress settings are invalid")
         if self.breakeven_arm_r <= 0 or self.trail_arm_r <= self.breakeven_arm_r - 1e-9:
             raise ValueError("ratchet thresholds are invalid")
@@ -82,6 +88,7 @@ class ExitPosition:
     mfe: float = 0.0
     extreme: float = 0.0
     remaining: float = 1.0
+    breakeven_armed: bool = False
     # Favourable price delta already banked by filled rungs, weighted by the
     # fraction each one closed. Kept in price terms so the blended exit price
     # handed back to the caller needs no special-casing downstream.
@@ -150,8 +157,12 @@ class ExitEngine:
         # stop-wins-ties convention used everywhere else.
         stop_hit = low <= p.stop if side == "long" else high >= p.stop
         if stop_hit:
+            # runtime.active_exit distinguishes a stop that has ratcheted to
+            # breakeven from the original one; matching the name keeps exit
+            # histograms mergeable across research and shadow.
+            reason = "breakeven_stop" if p.breakeven_armed else "stop"
             self.clear()
-            return self._close(p, p.stop, reason="stop")
+            return self._close(p, p.stop, reason=reason)
 
         # 1b) scale-out rungs
         if c.tp_ladder:
@@ -173,7 +184,10 @@ class ExitEngine:
                 if p.rungs_filled == 1 and c.breakeven_after_tp1:
                     pad = (c.taker_bps + c.be_fee_buffer_bps) / 10_000.0
                     be = p.entry * (1 + pad) if side == "long" else p.entry * (1 - pad)
-                    p.stop = max(p.stop, be) if side == "long" else min(p.stop, be)
+                    tightened = max(p.stop, be) if side == "long" else min(p.stop, be)
+                    if tightened != p.stop:
+                        p.breakeven_armed = True
+                    p.stop = tightened
                 if p.remaining <= 1e-9:
                     self.clear()
                     return self._close(p, target, reason="tp_ladder")
@@ -190,21 +204,26 @@ class ExitEngine:
                 self.clear()
                 return self._close(p, close, reason="failed_breakout")
 
-        # 3) no progress
-        if held >= c.no_progress_bars and p.mfe < c.no_progress_min_r * p.risk:
+        # 3) no progress -- research-only, off unless explicitly requested
+        if (c.no_progress_bars is not None
+                and held >= c.no_progress_bars
+                and p.mfe < c.no_progress_min_r * p.risk):
             self.clear()
             return self._close(p, close, reason="no_progress")
 
         # 4) absolute backstop
         if held >= c.absolute_max_bars:
             self.clear()
-            return self._close(p, close, reason="time_4h")
+            return self._close(p, close, reason="max_holding")
 
         # 5) ratchets (no exit this bar)
         if p.mfe >= c.breakeven_arm_r * p.risk:
             pad = (c.taker_bps + c.be_fee_buffer_bps) / 10_000.0
             breakeven = p.entry * (1.0 + pad) if side == "long" else p.entry * (1.0 - pad)
-            p.stop = max(p.stop, breakeven) if side == "long" else min(p.stop, breakeven)
+            tightened = max(p.stop, breakeven) if side == "long" else min(p.stop, breakeven)
+            if tightened != p.stop:
+                p.breakeven_armed = True
+            p.stop = tightened
         if p.mfe >= c.trail_arm_r * p.risk and atr > 0:
             trail = (
                 p.extreme - c.trail_atr_mult * atr

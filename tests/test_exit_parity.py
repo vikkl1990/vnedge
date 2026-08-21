@@ -9,10 +9,11 @@ backtest/paper/shadow". Today they are two engines with two vocabularies:
               stop | breakeven_stop | tp{n}_partial | tp{n}_final | take_profit
               | max_holding
 
-These tests do NOT assert the engines agree -- they do not, and silently
-changing the runtime engine to make them agree would alter shadow behaviour
-without evidence. They pin the divergences that change a book, so the gap is
-visible and cannot widen unnoticed.
+RESOLVED 2026-08-20: research adopted runtime's semantics rather than the
+reverse -- the runtime engine is what actually trades, and a backtest exists
+to predict it. no-progress is now opt-in and off by default, and the reason
+vocabulary matches. What remains is the ladder UNIT difference, which is a
+real conversion a caller must perform, not a defect.
 """
 
 from __future__ import annotations
@@ -62,51 +63,47 @@ def test_a_hard_stop_agrees_in_both_engines() -> None:
     assert _drive_runtime(_runtime(), bars) == ("stop", STOP)
 
 
-def test_a_drifting_trade_exits_in_research_and_is_HELD_by_runtime() -> None:
-    """The divergence that most changes a book.
+def test_a_drifting_trade_is_now_HELD_by_both_engines() -> None:
+    """The divergence that most changed a book, now closed.
 
-    A trade that goes nowhere is closed by the research engine's no-progress
-    rule -- 29% of exits and -11.2 bps each on the structure-bounce arm. The
-    runtime engine has no such rule and keeps holding, so a shadow lane running
-    the same signals books a materially different set of trades.
+    no-progress closed 29% of exits at -11.2 bps each on the structure-bounce
+    arm while runtime.active_exit had no such rule, so a shadow lane running
+    the same signals booked a materially different set of trades. Research now
+    defaults to runtime's semantics: a backtest exists to predict the engine
+    that actually trades.
     """
     drift = [(100.2, 99.8, 100.0)] * 8
-    research_reason, _ = _drive_research(_research(no_progress_bars=4), drift)
-    runtime_reason, _ = _drive_runtime(_runtime(), drift)
-
-    assert research_reason == "no_progress"
-    assert runtime_reason is None, "runtime has no no-progress rule"
+    assert _drive_research(_research(), drift) == (None, None)
+    assert _drive_runtime(_runtime(), drift) == (None, None)
 
 
-def test_time_exit_names_differ_for_the_same_event() -> None:
-    """Both cap holding; the reason strings do not match, so histograms cannot merge."""
+def test_no_progress_is_opt_in_and_flagged_as_research_only() -> None:
+    """Still available for a research question -- but never by default."""
+    drift = [(100.2, 99.8, 100.0)] * 8
+    reason, _ = _drive_research(_research(no_progress_bars=4), drift)
+    assert reason == "no_progress"
+    assert ExitConfig().no_progress_bars is None
+
+
+def test_the_time_cap_now_reports_the_same_reason_in_both() -> None:
+    """Exit histograms are only mergeable if the same event has one name."""
     quiet = [(100.2, 99.8, 100.0)] * 50
-    research_reason, _ = _drive_research(
-        _research(no_progress_bars=999, absolute_max_bars=48), quiet
-    )
+    research_reason, _ = _drive_research(_research(absolute_max_bars=48), quiet)
     runtime_reason, _ = _drive_runtime(_runtime(), quiet, max_holding=48)
 
-    assert research_reason == "time_4h"
+    assert research_reason == "max_holding"
     assert runtime_reason == "max_holding"
-    assert research_reason != runtime_reason
 
 
-def test_stop_after_profit_is_named_differently() -> None:
-    """Research reports 'stop' whether or not breakeven armed; runtime distinguishes.
-
-    A reject/exit histogram keyed on reason therefore cannot be compared across
-    the two surfaces without a translation layer.
-    """
-    # run up past +1R so breakeven arms, then fall back through entry
+def test_a_stop_after_breakeven_armed_is_named_breakeven_stop() -> None:
+    """Both engines now distinguish a ratcheted stop from the original one."""
     bars = [(101.5, 100.0, 101.2), (101.3, 98.5, 98.6)]
-    research_reason, _ = _drive_research(_research(no_progress_bars=999), bars)
+    research_reason, _ = _drive_research(_research(), bars)
+    assert research_reason == "breakeven_stop"
 
     state = _runtime()
     state.resolve_bar(high=101.5, low=100.0, close=101.2, position_quantity=1.0)
-    state.arm_breakeven() if hasattr(state, "arm_breakeven") else None
     runtime_reason, _ = _drive_runtime(state, [(101.3, 98.5, 98.6)])
-
-    assert research_reason == "stop"
     assert runtime_reason in {"stop", "breakeven_stop"}
 
 
@@ -116,7 +113,7 @@ def test_ladders_are_expressed_in_different_units() -> None:
     The same intent must be converted, not copied, when a research config is
     handed to a runtime lane -- a silent copy would place the rungs elsewhere.
     """
-    research = _research(tp_ladder=((1.5, 0.4), (2.5, 0.6)), no_progress_bars=999)
+    research = _research(tp_ladder=((1.5, 0.4), (2.5, 0.6)))
     reason, price = _drive_research(research, [(103.0, 100.0, 102.9)])
     assert reason == "tp_ladder"
     # 1.5R and 2.5R above a 1.00 risk => 101.50 and 102.50 in price terms

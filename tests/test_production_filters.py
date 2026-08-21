@@ -69,7 +69,9 @@ def test_ratchet_and_ladder_compose_so_a_partial_cannot_end_negative() -> None:
     engine.on_bar(high=101.0, low=100.0, close=101.0, atr=1.0, bar_index=1)
     assert engine.pos is not None and engine.pos.stop > 100.0
     decision = engine.on_bar(high=100.5, low=98.0, close=98.5, atr=1.0, bar_index=2)
-    assert decision is not None and decision.reason == "stop"
+    # breakeven_after_tp1 is off, so the +1R ratchet armed this stop; either
+    # route now reports under runtime.active_exit's "breakeven_stop" name
+    assert decision is not None and decision.reason == "breakeven_stop"
     assert decision.price > 100.0 and decision.won
 
 
