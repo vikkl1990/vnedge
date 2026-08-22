@@ -41,9 +41,13 @@ DECISION_COMPUTE_HARD_P99_MS = 200
 # horizons receive the wider, still-bounded budget below.
 DECISION_COMPUTE_LIMITS_MS: dict[str, tuple[int, int, int]] = {
     # timeframe: (soft p95, hard p95, hard-gate recovery sample)
-    "15m": (500, 1000, 750),
-    "1h": (750, 2000, 1500),
-    "4h": (1500, 4000, 3000),
+    # At common 15m boundaries all scanner preparations intentionally run in
+    # workers at once.  The limits include that bounded queue contention while
+    # remaining tiny fractions of their decision horizons.
+    "5m": (100, 500, 350),
+    "15m": (500, 2500, 2000),
+    "1h": (1000, 4000, 3000),
+    "4h": (2000, 6000, 4500),
 }
 # A p95 arm gate needs at least 20 observations (one 5% tail sample). Before
 # then the metric is visible but statistically immature and cannot halt arms.
