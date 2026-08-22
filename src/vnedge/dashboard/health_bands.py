@@ -232,7 +232,7 @@ def compute_chips(snap: dict) -> dict:
             decision, d_label = "ok", "ok"
     elif sample_counts:
         decision = "unknown"
-        d_label = f"warming {max(sample_counts)}/{LT.LATENCY_GATE_MIN_SAMPLES}"
+        d_label = f"collecting {max(sample_counts)}/{LT.LATENCY_GATE_MIN_SAMPLES}"
 
     feed, f_label = "unknown", "—"
     cand = str((snap.get("feed_health") or {}).get("candles") or "").lower()

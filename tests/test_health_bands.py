@@ -124,7 +124,7 @@ def test_annotate_attaches_chips_and_per_lane_bands():
     assert "chips" in snap and snap["lanes"][0]["bands"]["dd"] == "blocked"
 
 
-def test_latency_is_warming_until_runtime_minimum_samples() -> None:
+def test_latency_is_collecting_until_runtime_minimum_samples() -> None:
     lane = _lane(
         latency={
             "bar_close_processing_ms": {"p95": 2_500, "n": 2},
@@ -133,4 +133,4 @@ def test_latency_is_warming_until_runtime_minimum_samples() -> None:
     )
     assert lane_bands(lane)["bar_close_lag"] == "unknown"
     chips = compute_chips({"lanes": [lane], "feed_health": {"candles": "ok"}})
-    assert chips["DECISION"] == {"band": "unknown", "label": "warming 2/20"}
+    assert chips["DECISION"] == {"band": "unknown", "label": "collecting 2/20"}
