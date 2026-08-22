@@ -1,7 +1,7 @@
-"""Faster lane warmup: bars-based lookback (A), candle cache + gap-fill (B),
-and an immediate 'warming up' placeholder (C). B is a strict speedup — any cache
-miss/shortfall/error falls back to a full fetch, so correctness never depends on
-the cache."""
+"""Incremental lane startup: strategy-sized history, cache range fill, and an
+immediate placeholder.  An overlapping cache fetches only its missing prefix,
+tail, or internal holes; an absent/corrupt/non-overlapping cache fetches the
+requested window.  Correctness never depends on synthetic candles."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
     _load_candle_cache,
+    _required_warmup_bars,
     _timeframe_ms,
     _warmup_bars,
     _warmup_candles,
@@ -45,6 +46,19 @@ def test_bars_based_lookback_is_per_timeframe():
     assert _warmup_bars({"MULTI_LANE_WARMUP_BARS": "x"}) == 500  # bad value -> default
 
 
+def test_strategy_warmup_expands_only_lanes_that_need_more_history():
+    squeeze = LaneSpec(
+        lane_id="squeeze",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        timeframe="5m",
+        strategy_id="squeeze_expansion_breakout_v3",
+    )
+    measurement = _spec()
+    assert _required_warmup_bars(squeeze, {}) == 2066
+    assert _required_warmup_bars(measurement, {}) == 500
+
+
 def test_first_run_full_fetches_and_writes_cache(tmp_path):
     cache = tmp_path / "lane-a.candles.parquet"
     rest = _FakeRest()
@@ -63,6 +77,37 @@ def test_second_run_fetches_only_the_gap(tmp_path):
     gap_since = rest.calls[0][0]
     assert gap_since > 10 * _TF  # started AFTER the cached window, not at `since`
     assert len(frame) >= 499
+
+
+def test_larger_strategy_window_fetches_only_missing_prefix(tmp_path):
+    cache = tmp_path / "lane-a.candles.parquet"
+    # The old lane retained the newest 500 bars of a 2,000-bar requested range.
+    asyncio.run(
+        _warmup_candles(
+            _FakeRest(), _spec(), cache, 1500 * _TF, 2000 * _TF
+        )
+    )
+
+    rest = _FakeRest()
+    frame = asyncio.run(_warmup_candles(rest, _spec(), cache, 0, 2000 * _TF))
+
+    assert rest.calls == [(0, 1500 * _TF)]
+    assert len(frame) == 2000
+
+
+def test_cache_internal_hole_fetches_only_that_missing_range(tmp_path):
+    cache = tmp_path / "lane-a.candles.parquet"
+    asyncio.run(_warmup_candles(_FakeRest(), _spec(), cache, 0, 10 * _TF))
+    cached = _load_candle_cache(cache)
+    assert cached is not None
+    cached = cached.drop(index=5).reset_index(drop=True)
+    cached.to_parquet(cache, index=False)
+
+    rest = _FakeRest()
+    frame = asyncio.run(_warmup_candles(rest, _spec(), cache, 0, 10 * _TF))
+
+    assert rest.calls == [(5 * _TF, 6 * _TF)]
+    assert len(frame) == 10
 
 
 def test_corrupt_cache_falls_back_to_full_fetch(tmp_path):

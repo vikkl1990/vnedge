@@ -21,6 +21,7 @@ make a closed-bar strategy evaluate early.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from math import isfinite
 
@@ -149,3 +150,61 @@ class LatencyTracker:
             if st is not None:
                 out[name] = st
         return out
+
+    def export_state(self) -> dict[str, object]:
+        """Return the bounded raw samples needed to resume after a restart.
+
+        Aggregated p95 values are deliberately insufficient for restoration:
+        the arm gate and recovery proof need the real ordered tail.  The state
+        contains no market, account, or order data and is safe to checkpoint as
+        telemetry alongside the other per-lane runtime artifacts.
+        """
+        return {
+            "version": 1,
+            "maxlen": self.maxlen,
+            "series": {name: list(values) for name, values in self._series.items()},
+        }
+
+    def restore_state(self, state: Mapping[str, object]) -> int:
+        """Replace this tracker with a validated checkpoint.
+
+        The current process owns ``maxlen``; a checkpoint cannot enlarge the
+        runtime window.  Any malformed or non-finite value rejects the entire
+        checkpoint so a partially corrupt file can never shape a safety gate.
+        Returns the number of restored samples.
+        """
+        if state.get("version") != 1:
+            raise ValueError("unsupported latency checkpoint version")
+        raw_series = state.get("series")
+        if not isinstance(raw_series, Mapping):
+            raise TypeError("latency checkpoint series must be a mapping")
+
+        restored: dict[str, deque[float]] = {}
+        count = 0
+        for raw_name, raw_values in raw_series.items():
+            if not isinstance(raw_name, str) or not raw_name:
+                raise ValueError("latency checkpoint metric name is invalid")
+            if not isinstance(raw_values, list):
+                raise TypeError(
+                    f"latency checkpoint metric {raw_name!r} must be a list"
+                )
+            values: list[float] = []
+            for raw_value in raw_values:
+                try:
+                    value = float(raw_value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"latency checkpoint metric {raw_name!r} is not numeric"
+                    ) from exc
+                if not isfinite(value):
+                    raise ValueError(
+                        f"latency checkpoint metric {raw_name!r} is non-finite"
+                    )
+                values.append(value)
+            bounded = values[-self.maxlen :]
+            if bounded:
+                restored[raw_name] = deque(bounded, maxlen=self.maxlen)
+                count += len(bounded)
+
+        self._series = restored
+        return count

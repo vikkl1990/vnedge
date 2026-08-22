@@ -185,6 +185,7 @@ class LivePaperSession:
         trial_meta=None,  # optional dict shown on the dashboard governance panel
         fill_ledger=None,  # optional FillLedger — hash-chained execution record
         funnel_store=None,  # optional LaneFunnelStore — resume counters on restart
+        latency_store=None,  # optional LaneLatencyStore — resume p95 samples
         gap_store: GapParquetStore | None = None,
     ) -> None:
         self.strategy = strategy
@@ -201,6 +202,7 @@ class LivePaperSession:
         self.equity_history_path = equity_history_path
         self.fill_ledger = fill_ledger
         self.funnel_store = funnel_store
+        self.latency_store = latency_store
         self.gap_store = gap_store
         # when this lane last fired a LIVE signal — lets the dashboard show
         # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
@@ -2631,6 +2633,8 @@ class LivePaperSession:
                 )
             if self.funnel_store is not None:
                 self.funnel_store.save_from(self)
+            if self.latency_store is not None:
+                self.latency_store.save_from(self.latency)
             if self.equity_history_path is not None:
                 try:
                     await asyncio.to_thread(

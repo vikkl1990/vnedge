@@ -25,6 +25,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 import pandas as pd
@@ -50,6 +51,7 @@ from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.funnel_store import LaneFunnelStore
+from vnedge.runtime.latency_store import LaneLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -819,6 +821,50 @@ def _warmup_bars(environ: Mapping[str, str] = os.environ) -> int:
         return 500
 
 
+_FIXED_STRATEGY_WARMUPS: dict[str, int] = {
+    MeasurementOnly.strategy_id: MeasurementOnly.warmup_bars,
+    FeeWallMomentumObserver.strategy_id: FeeWallMomentumObserver.warmup_bars,
+    SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout.warmup_bars,
+    SqueezeExpansionBreakoutV3.strategy_id: SqueezeExpansionBreakoutV3.warmup_bars,
+    RangeExpansionObserver.strategy_id: RangeExpansionObserver.warmup_bars,
+    StructureBos1H.strategy_id: StructureBos1H.warmup_bars,
+}
+
+
+def _strategy_warmup_requirement(spec: LaneSpec) -> int:
+    """Return the known causal feature requirement for one lane."""
+    required = int(_FIXED_STRATEGY_WARMUPS.get(spec.strategy_id, 0))
+    if spec.strategy_id != "signal_arbiter_v1":
+        return required
+    params = spec.strategy_params or {}
+    children = params.get("strategies") or params.get("children") or []
+    if not isinstance(children, list):
+        return required
+    return max(
+        [required]
+        + [
+            int(_FIXED_STRATEGY_WARMUPS.get(str(child.get("strategy_id")), 0))
+            for child in children
+            if isinstance(child, Mapping)
+        ]
+    )
+
+
+def _required_warmup_bars(
+    spec: LaneSpec, environ: Mapping[str, str] = os.environ
+) -> int:
+    """Return a lane-specific history target with one evaluable bar of room.
+
+    The old global 500-bar target was smaller than squeeze v3's frozen 2,065
+    bar feature window.  That lane therefore restarted with a healthy feed but
+    could not evaluate for another ~5.4 days.  Fixed strategies expose their
+    causal requirement as ``warmup_bars``; an arbiter inherits the largest
+    fixed child requirement.  Dynamic legacy strategies retain the conservative
+    operator baseline until their instance is built.
+    """
+    return max(_warmup_bars(environ), _strategy_warmup_requirement(spec) + 1)
+
+
 #: Retry policy for a lane's warmup build — transient venue network/rate-limit
 #: errors are common when the whole fleet warms up at once; a couple of backed-off
 #: retries recover them instead of dropping the lane for the whole session.
@@ -886,37 +932,67 @@ def _save_candle_cache(cache_path: Path, history) -> None:
 
 
 async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, until: int):
-    """Normalized warmup candles for [since, until], reusing the persisted window
-    and fetching only the gap since the last run. Any cache miss/shortfall/error
-    falls back to a full REST fetch (so this is strictly a speedup, never a
-    correctness change)."""
+    """Return ``[since, until]`` using the cache plus only missing ranges.
+
+    A normal restart fetches only the tail after the newest cached candle.  If
+    a strategy later requires a longer history (for example squeeze v3 needs
+    2,065 bars while the old cache held 500), fetch only the missing *prefix*
+    and merge it with the cache.  Internal holes are likewise fetched as
+    bounded ranges.  A non-overlapping or unreadable cache requires one full
+    requested-window fetch; no synthetic candles are ever invented.
+    """
     cached = _load_candle_cache(cache_path)
     if cached is not None:
-        last_ms = int(pd.Timestamp(cached["timestamp"].iloc[-1]).timestamp() * 1000)
-        if last_ms >= since:  # the cache reaches back far enough to be useful
-            frame = cached
-            next_open_ms = last_ms + _timeframe_ms(spec.timeframe)
+        cached = (
+            cached.drop_duplicates(subset="timestamp", keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        tf_ms = _timeframe_ms(spec.timeframe)
+        opens = [
+            int(pd.Timestamp(value).timestamp() * 1000)
+            for value in cached["timestamp"]
+        ]
+        first_ms, last_ms = opens[0], opens[-1]
+        if last_ms >= since and first_ms < until:  # requested window overlaps cache
+            missing: list[tuple[int, int]] = []
+            if first_ms > since:
+                missing.append((since, first_ms))
+            for previous, current in pairwise(opens):
+                next_open = previous + tf_ms
+                if current > next_open and next_open < until and current > since:
+                    missing.append((max(next_open, since), min(current, until)))
+            next_open_ms = last_ms + tf_ms
             if next_open_ms < until:
+                missing.append((max(next_open_ms, since), until))
+
+            frames = [cached]
+            for gap_since, gap_until in missing:
+                if gap_since >= gap_until:
+                    continue
                 gap = normalize_candles(
                     await rest.fetch_candles(
-                        spec.symbol,
-                        spec.timeframe,
-                        next_open_ms,
-                        until,
+                        spec.symbol, spec.timeframe, gap_since, gap_until
                     )
                 )
                 if not gap.empty:
-                    frame = (
-                        pd.concat([cached, gap], ignore_index=True)
-                        .drop_duplicates(subset="timestamp", keep="last")
-                        .sort_values("timestamp")
-                        .reset_index(drop=True)
-                    )
+                    frames.append(gap)
+            frame = (
+                pd.concat(frames, ignore_index=True)
+                .drop_duplicates(subset="timestamp", keep="last")
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
             cutoff = pd.to_datetime(since, unit="ms", utc=True)
             frame = frame[frame["timestamp"] >= cutoff].reset_index(drop=True)
             frame = _closed_validated_warmup(frame, spec, until)
             _save_candle_cache(cache_path, frame)
-            logger.info("lane %s warmup: cache + gap-fill (%d bars)", spec.lane_id, len(frame))
+            logger.info(
+                "lane %s warmup: cache + %d missing range(s) (%d bars)",
+                spec.lane_id,
+                len(missing),
+                len(frame),
+            )
             return frame
     history = normalize_candles(
         await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
@@ -952,19 +1028,30 @@ async def build_lane(
     spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
-    # (A) Bars-based warmup: fetch ~N bars for THIS timeframe, not a fixed 450h.
-    # 5m lanes were pulling ~5,400 candles (many REST pages); ~500 bars is one
-    # page and still covers the longest indicator window. Right-sizes per TF.
-    warmup_bars = _warmup_bars()
+    # (A) Bars-based warmup: the operator baseline or the strategy's causal
+    # feature requirement, whichever is larger.  The cache below fills only
+    # the missing prefix/tail, so increasing a requirement never discards and
+    # rebuilds the already persisted window.
+    warmup_bars = _required_warmup_bars(spec)
     tf_ms = _timeframe_ms(spec.timeframe)
     until = int(time.time() * 1000)
-    since = until - warmup_bars * tf_ms
+    # Anchor the requested prefix to a canonical close boundary.  Subtracting
+    # from an arbitrary wall-clock minute can otherwise shave one closed bar
+    # off both ends and leave ``requirement + 1`` still non-evaluable.
+    last_closed_boundary = (until // tf_ms) * tf_ms
+    since = last_closed_boundary - warmup_bars * tf_ms
     cache_path = journal_dir / f"{spec.lane_id}.candles.parquet"
     funding_history_unsupported = False
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
         # the gap since the last run; degrades to a full fetch on any cache miss.
         history = await _warmup_candles(rest, spec, cache_path, since, until)
+        strategy_requirement = _strategy_warmup_requirement(spec)
+        if len(history) <= strategy_requirement:
+            raise RuntimeError(
+                f"lane {spec.lane_id} warmup incomplete: {len(history)} bars; "
+                f"strategy requires more than {strategy_requirement}"
+            )
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
         except NotSupported:
@@ -1029,6 +1116,9 @@ async def build_lane(
         fill_ledger=FillLedger(journal_dir / f"{spec.lane_id}.fills.jsonl"),
         funnel_store=LaneFunnelStore(
             journal_dir / f"{spec.lane_id}.funnel.json", spec.lane_id),
+        latency_store=LaneLatencyStore(
+            journal_dir / f"{spec.lane_id}.latency.json", spec.lane_id
+        ),
         gap_store=GapParquetStore(
             Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
         ),
@@ -1051,6 +1141,7 @@ async def build_lane(
     # Resume the funnel counters so the live activity view doesn't reset to 0
     # on every deploy (display-only; never gates a trade).
     session.funnel_store.restore_into(session)
+    session.latency_store.restore_into(session.latency)
     logger.info("lane %s (%s %s %s %s) built; resumed=%s",
                 spec.lane_id, spec.exchange, spec.symbol, spec.strategy_id,
                 spec.mode.value, resumed)

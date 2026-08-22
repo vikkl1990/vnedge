@@ -102,6 +102,38 @@ def test_snapshot_multi_metric():
             assert not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
 
 
+def test_raw_state_resumes_only_missing_samples_and_keeps_order():
+    before = LatencyTracker(maxlen=20)
+    for value in range(12):
+        before.record("decision_lag_ms", float(value))
+
+    restarted = LatencyTracker(maxlen=20)
+    assert restarted.restore_state(before.export_state()) == 12
+    for value in range(12, 20):
+        restarted.record("decision_lag_ms", float(value))
+
+    stats = restarted.stats("decision_lag_ms")
+    assert stats["n"] == 20
+    assert stats["last"] == 19.0
+    assert stats["recent"] == [15.0, 16.0, 17.0, 18.0, 19.0]
+
+
+def test_restore_uses_current_bound_and_rejects_partial_corruption():
+    restarted = LatencyTracker(maxlen=3)
+    assert restarted.restore_state(
+        {"version": 1, "maxlen": 999, "series": {"x": [1, 2, 3, 4]}}
+    ) == 3
+    assert restarted.stats("x")["n"] == 3
+    assert restarted.stats("x")["last"] == 4.0
+
+    with pytest.raises(ValueError, match="non-finite"):
+        restarted.restore_state(
+            {"version": 1, "series": {"x": [1.0, float("nan")]}}
+        )
+    # Rejection is atomic: the prior valid tracker was not partially replaced.
+    assert restarted.stats("x")["n"] == 3
+
+
 def test_event_latency_separates_ingest_from_future_clock_skew():
     tracker = LatencyTracker()
     base = datetime(2026, 8, 16, 12, tzinfo=UTC)

@@ -42,6 +42,7 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.latency_store import LaneLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
@@ -201,6 +202,9 @@ def build_trial_session(
         alert_engine=alert_engine,
         equity_history_path=journal_dir / f"{manifest.trial_id}.equity.jsonl",
         fill_ledger=FillLedger(journal_dir / f"{manifest.trial_id}.fills.jsonl"),
+        latency_store=LaneLatencyStore(
+            journal_dir / f"{manifest.trial_id}.latency.json", manifest.trial_id
+        ),
         trial_meta={
             "trial_id": manifest.trial_id,
             "started": "2026-07-03",
@@ -223,6 +227,7 @@ def build_trial_session(
     if resumed:
         state = session.account_store.load() or {}
         session.restore_plan(state.get("plan"))
+    session.latency_store.restore_into(session.latency)
     journal.append("trial_session_start", {
         "trial_id": manifest.trial_id, "resumed": resumed,
         "balance_usd": exchange.balance_usd,
