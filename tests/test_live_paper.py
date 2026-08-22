@@ -1,6 +1,7 @@
 """Live paper session — deterministic tests via a fake feed."""
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -131,6 +132,23 @@ class ThinEdgeLong(AlwaysLong):
         )
 
 
+class SlowPrepareLong(AlwaysLong):
+    """Test double: synchronous pandas-style work that would block the loop."""
+
+    def prepare(self, candles):
+        time.sleep(0.05)
+        return super().prepare(candles)
+
+
+class CountingPrepareLong(AlwaysLong):
+    def __init__(self):
+        self.prepare_calls = 0
+
+    def prepare(self, candles):
+        self.prepare_calls += 1
+        return super().prepare(candles)
+
+
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
     strategy = AlwaysLong()
     strategy.min_score = 6.0
@@ -203,6 +221,38 @@ def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
     )
     assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
     assert session.shadow_outcomes is None
+
+
+async def test_strategy_prepare_yields_event_loop_to_peer_lanes(tmp_path):
+    """One slow lane must not delay another lane's closed-candle dequeue."""
+    session, _ = build_session(tmp_path, FakeFeed([]), strategy=SlowPrepareLong())
+
+    preparing = asyncio.create_task(session._prepare_strategy_for_bar())
+    await asyncio.sleep(0.005)
+
+    # If prepare ran inline, this assertion would execute only after the 50ms
+    # sleep and the task would already be done.
+    assert not preparing.done()
+    prepared = await preparing
+    assert len(prepared) == len(session.candles)
+
+
+async def test_shadow_outcome_reuses_scanner_frame_for_same_bar(tmp_path):
+    """A closed bar gets one feature build even when outcomes also consume it."""
+    strategy = CountingPrepareLong()
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed(live_rows(n=1)),
+        strategy=strategy,
+        mode=RunnerMode.SHADOW,
+    )
+    assert session.shadow_outcomes is not None
+
+    await session.run(max_bars=1)
+
+    # One startup shadow-prime build plus one build for the forward bar.  The
+    # outcome resolver reuses that second frame instead of preparing again.
+    assert strategy.prepare_calls == 2
 
 
 async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_path):

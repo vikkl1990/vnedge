@@ -2499,6 +2499,23 @@ class LivePaperSession:
     # snapshot publish. Tests shrink it via instance override.
     _IDLE_TICK_SECONDS = 5.0
 
+    async def _prepare_strategy_for_bar(self) -> pd.DataFrame:
+        """Prepare one closed-bar feature frame without blocking peer lanes.
+
+        Multi-lane shadow runs share a single asyncio event loop.  Strategy
+        preparation is CPU-bound pandas work, and running it inline lets the
+        first lane at a common close (especially a 15-minute boundary) delay
+        every lane queued behind it.  That queue delay is then correctly
+        observed as closed-bar lag, but it is self-inflicted rather than a
+        stale exchange candle.
+
+        Offload the synchronous strategy contract to the default worker pool.
+        A session cannot append another candle while awaiting this call, and
+        each lane owns its own candle frame and strategy instance, so the
+        objects passed to the worker remain session-local.
+        """
+        return await asyncio.to_thread(self.strategy.prepare, self.candles)
+
     def _shadow_prime(self) -> None:
         """SHADOW lanes only: backfill observability from seeded bars.
 
@@ -2751,6 +2768,12 @@ class LivePaperSession:
             await self._cancel_pending_entry_for_daily_factory(bar_clock, now)
             self._guard_orphaned_position()
 
+            # A strategy frame is expensive to construct and both the scanner
+            # lifecycle and shadow-outcome resolver need the identical view of
+            # this closed bar.  Cache it for this iteration so one lane never
+            # performs the same pandas feature build twice.
+            prepared_frame: pd.DataFrame | None = None
+
             # Canonical scanner lanes own their complete arm -> trigger ->
             # exit -> cost lifecycle. They still pass sizing and the central
             # gateway through ``_approve_scanner_fire``, but never create an
@@ -2761,7 +2784,8 @@ class LivePaperSession:
                 and len(self.candles) > prepared_warmup
             ):
                 _dec_t0 = time.perf_counter()
-                scanner_df = self.strategy.prepare(self.candles)
+                scanner_df = await self._prepare_strategy_for_bar()
+                prepared_frame = scanner_df
                 scanner_idx = len(scanner_df) - 1
                 before_candidates = self.scanner_observer.candidates
                 before_approved = self.scanner_observer.fires
@@ -2813,7 +2837,8 @@ class LivePaperSession:
                 # steps. Measured on every eval, blocked or not, so a slow
                 # strategy shows up even when it never fires.
                 _dec_t0 = time.perf_counter()
-                df = self.strategy.prepare(self.candles)
+                df = await self._prepare_strategy_for_bar()
+                prepared_frame = df
                 idx = len(df) - 1
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
@@ -2857,7 +2882,9 @@ class LivePaperSession:
                 # resolve earlier shadow intents against this closed bar; the
                 # intent journaled above (bar_ts == this bar) is untouched —
                 # its virtual fill is the NEXT bar, like the backtester
-                self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
+                if prepared_frame is None:
+                    prepared_frame = await self._prepare_strategy_for_bar()
+                self._shadow_exit_df = prepared_frame.reset_index(drop=True)
                 self._log_shadow_outcomes(
                     # feed the IDENTICAL canonical ATR the paper/live trail uses,
                     # so the shadow stop ratchets to the same value on the same bar
