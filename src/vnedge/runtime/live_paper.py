@@ -31,6 +31,7 @@ import math
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -79,6 +80,7 @@ from vnedge.runtime.shadow_outcomes import (
     VirtualOutcome,
     is_maker_route_strategy,
 )
+from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.runtime.squeeze_acceptance_observe import (
     SqueezeAcceptanceObserveRunner,
 )
@@ -187,6 +189,7 @@ class LivePaperSession:
         funnel_store=None,  # optional LaneFunnelStore — resume counters on restart
         latency_store=None,  # optional LaneLatencyStore — resume p95 samples
         gap_store: GapParquetStore | None = None,
+        shadow_portfolio: ShadowPortfolioGate | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -196,6 +199,19 @@ class LivePaperSession:
         self.om = order_manager
         self.exchange = exchange
         self.journal = journal
+        self._backfill_eval_keys: set[tuple[str, str, str, str]] = {
+            (
+                str(payload.get("strategy_id", "")),
+                str(payload.get("symbol", "")),
+                str(payload.get("timeframe", "")),
+                str(payload.get("bar_ts", "")),
+            )
+            for record in journal.read_all()
+            for payload in [record.get("payload")]
+            if record.get("kind") == "lane_eval"
+            and isinstance(payload, dict)
+            and bool(payload.get("backfill"))
+        }
         self.provider = snapshot_provider
         self.account_store = account_store
         self.alert_engine = alert_engine
@@ -204,6 +220,7 @@ class LivePaperSession:
         self.funnel_store = funnel_store
         self.latency_store = latency_store
         self.gap_store = gap_store
+        self.shadow_portfolio = shadow_portfolio
         # when this lane last fired a LIVE signal — lets the dashboard show
         # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
         self.last_fired_ts: str | None = None
@@ -328,6 +345,7 @@ class LivePaperSession:
                 # a shadow lane predicts its paper twin instead of the legacy
                 # fixed-stop exit. Fed the identical _trail_atr() per bar below.
                 trail_atr_mult=config.trail_atr_mult,
+                cost_model=self.cost_model,
                 strategy_exit=self._shadow_strategy_exit,
             )
             if config.mode is RunnerMode.SHADOW and self.scanner_observer is None
@@ -1169,6 +1187,30 @@ class LivePaperSession:
             decision_bar_ts,
         )
         if self.config.mode is RunnerMode.SHADOW:
+            if self.shadow_portfolio is not None:
+                shared = self.shadow_portfolio.evaluate_entry(
+                    lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
+                    symbol=self.config.symbol,
+                    side=sig.side,
+                    margin_usd=Decimal(str(intent.notional_usd / intent.leverage)),
+                    now=now,
+                )
+                if not shared.allowed:
+                    self.shadow_rejected += 1
+                    self.last_reject_reason = f"shadow_portfolio: {shared.reason}"
+                    self.journal.append("shadow_portfolio_rejected", {
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": self.config.symbol,
+                        "side": sig.side,
+                        "reason": shared.reason,
+                        "active_margin_usd": str(shared.active_margin_usd),
+                        "daily_net_usd": str(shared.daily_net_usd),
+                        "unresolved_intents": shared.unresolved_intents,
+                    })
+                    self._log_trade_event(
+                        "shadow_portfolio_rejected", self.last_reject_reason, now
+                    )
+                    return
             decision = self.gateway.evaluate(
                 intent, self.tracker.account_state(), self._market_state(), now=now
             )
@@ -1290,6 +1332,28 @@ class LivePaperSession:
 
         bid, ask = self.feed.quote
         ref_price = ask if fire.side == "long" else bid
+        risk_bps = abs(ref_price - float(fire.stop)) / ref_price * 10_000.0
+        features = getattr(self.strategy, "_features", None)
+        reward_r = float(getattr(getattr(features, "params", None), "reward_r", 2.0))
+        signal_edge_bps = risk_bps * reward_r
+        cost_decision = self.entry_cost_gate.evaluate(
+            signal_edge_bps=signal_edge_bps,
+            side=fire.side,
+            urgency="taker",
+            expected_holding_seconds=(
+                max(1, self.config.max_holding_bars) * (self._tf_seconds or 0)
+            ),
+            current_funding_rate=getattr(self.feed, "funding_rate", 0.0),
+            symbol=self.config.symbol,
+            available_room_bps=signal_edge_bps,
+        )
+        if not cost_decision.approved:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=(f"cost_gate:{cost_decision.reason}",),
+                explanation=cost_decision.reason or "cost gate rejected scanner candidate",
+            )
         sizing = size_position(
             equity_usd=self.tracker.equity_usd(),
             entry_price=ref_price,
@@ -1324,6 +1388,24 @@ class LivePaperSession:
             self._market_state(),
             now=datetime.now(UTC),
         )
+        if decision.approved and self.shadow_portfolio is not None:
+            shared = self.shadow_portfolio.evaluate_entry(
+                lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
+                symbol=self.config.symbol,
+                side=fire.side,
+                margin_usd=Decimal(str(intent.notional_usd / leverage)),
+                now=bar_ts,
+            )
+            if not shared.allowed:
+                return ScannerApproval(
+                    approved=False,
+                    intent=asdict(intent),
+                    failed_checks=(f"shadow_portfolio:{shared.reason}",),
+                    passed_checks=tuple(decision.passed_checks),
+                    explanation=shared.reason,
+                    notional_usd=intent.notional_usd,
+                    margin_usd=intent.notional_usd / leverage,
+                )
         return ScannerApproval(
             approved=decision.approved,
             intent=asdict(intent),
@@ -1972,6 +2054,15 @@ class LivePaperSession:
         values that drove it. This is the observability record that turns
         'no signal for days' from a mystery into a measurement (how far from
         each threshold every bar actually was)."""
+        bar_ts = df["timestamp"].iloc[index].isoformat()
+        eval_key = (
+            self.strategy.strategy_id,
+            self.config.symbol,
+            self.config.timeframe,
+            bar_ts,
+        )
+        if backfill and eval_key in self._backfill_eval_keys:
+            return
         row = df.iloc[index]
         if sig is None and not skip_reason:
             evaluation = getattr(self.strategy, "last_evaluation", None)
@@ -1987,7 +2078,7 @@ class LivePaperSession:
                 features[col] = None if math.isnan(val) else round(val, 6)
         thresholds = _extract_strategy_thresholds(self.strategy, self._EVAL_THRESHOLDS)
         record = {
-            "bar_ts": df["timestamp"].iloc[index].isoformat(),
+            "bar_ts": bar_ts,
             "strategy_id": self.strategy.strategy_id,
             "exchange": getattr(self.feed, "exchange_id", ""),
             "symbol": self.config.symbol,
@@ -2013,6 +2104,8 @@ class LivePaperSession:
                 _ts = df["timestamp"].iloc[index]
                 self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
         self.journal.append("lane_eval", record)
+        if backfill:
+            self._backfill_eval_keys.add(eval_key)
         if not backfill:
             self.last_eval = record
         if sig is not None and not backfill:

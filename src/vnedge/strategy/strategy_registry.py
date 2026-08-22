@@ -10,6 +10,7 @@ from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuat
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
+from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.structure_bos_1h import StructureBos1H
@@ -25,6 +26,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     VolatilityExpansionBreakout.strategy_id: VolatilityExpansionBreakout,
     PanicReversal.strategy_id: PanicReversal,
     RangeExpansionObserver.strategy_id: RangeExpansionObserver,
+    RangeExpansionObserverV2.strategy_id: RangeExpansionObserverV2,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
     StructureBos1H.strategy_id: StructureBos1H,
     SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout,
@@ -38,6 +40,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
     {
         MeasurementOnly.strategy_id,
         RangeExpansionObserver.strategy_id,
+        RangeExpansionObserverV2.strategy_id,
         StructureBos1H.strategy_id,
         FeeWallMomentumObserver.strategy_id,
         SqueezeExpansionBreakout.strategy_id,
@@ -62,6 +65,7 @@ SHADOW_OBSERVE: frozenset[str] = frozenset(
     {
         StructureBos1H.strategy_id,
         RangeExpansionObserver.strategy_id,
+        RangeExpansionObserverV2.strategy_id,
         FeeWallMomentumObserver.strategy_id,
         SqueezeExpansionBreakout.strategy_id,
         SqueezeExpansionBreakoutV3.strategy_id,

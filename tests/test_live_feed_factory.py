@@ -150,6 +150,8 @@ async def test_delta_rest_candle_fallback_only_when_ws_is_stale():
         assert fake.calls >= 1
         emitted = await asyncio.wait_for(feed.closed_candles.get(), timeout=1.0)
         assert emitted[0] == closed_ts
+        assert feed.forming_candle is not None
+        assert feed.forming_candle[0] == closed_ts + step_ms
 
         # repeat polls do not re-emit the same bar (monotonic guard)
         calls_before = fake.calls

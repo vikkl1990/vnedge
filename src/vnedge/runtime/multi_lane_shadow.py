@@ -157,6 +157,7 @@ def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
     required = {
         "structure_bos_1h": "1h",
         "range_expansion_observer_v1": "1h",
+        "range_expansion_observer_v2": "1h",
         "fee_wall_momentum_observer_v1": "5m",
         "squeeze_expansion_breakout_v2": "5m",
         "squeeze_expansion_breakout_v3": "5m",
@@ -403,6 +404,12 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
             {spec.timeframe for spec in observe}
         ),
         "shadow_observe_lanes": len(observe),
+        "shadow_shared_purse_usd": (
+            min(spec.starting_equity for spec in observe) if observe else 0.0
+        ),
+        "shadow_shared_daily_loss_usd": (
+            min(spec.daily_loss_usd for spec in observe) if observe else 0.0
+        ),
         "measurement_lanes": measurement_lanes,
         "measurement_only_pct": round(100 * measurement_lanes / len(specs), 1),
         "mode_ladder": (

@@ -339,6 +339,11 @@ class DeltaPublicWsClient:
         # candle and never re-close an interval; they only count as liveness.
         self._touch()
 
+    def forming_candle(self, symbol: str, timeframe: str) -> list | None:
+        """Return a defensive copy of the native forming candle for observability."""
+        row = self._forming_candles.get((symbol, timeframe))
+        return list(row) if row is not None else None
+
     def _handle_ticker(self, sym: str | None, msg: dict) -> None:
         if not sym:
             return

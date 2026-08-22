@@ -339,6 +339,18 @@ def test_missing_or_conflicting_htf_blocks_dataframe_signal() -> None:
     assert conflict_strategy.signal(conflict, _BREAK_INDEX) is None
 
 
+def test_live_price_only_mode_derives_causal_4h_without_inventing_avwap() -> None:
+    frame = _canonical_frame().drop(
+        columns=["quote_volume", "trade_count", "data_quality"]
+    )
+    strategy = StructureBos1H(allow_price_only_live=True)
+    prepared = strategy.prepare(frame)
+
+    assert prepared.loc[_BREAK_INDEX, "mtf_reason"] != "missing_series"
+    assert prepared.loc[_BREAK_INDEX, "mtf_reason"] != "invalid_series"
+    assert prepared.loc[_BREAK_INDEX, "dual_avwap_bias"] == "unavailable"
+
+
 def test_cost_gate_bridge_uses_frozen_edge_hypothesis() -> None:
     engine = StructureBos1H()
     raw = engine.on_closed_candle(

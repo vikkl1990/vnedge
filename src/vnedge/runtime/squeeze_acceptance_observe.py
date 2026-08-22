@@ -53,6 +53,15 @@ class SqueezeAcceptanceObserveRunner:
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.costs.cost_model is not None:
+            self.exits = ExitEngine(
+                config=ExitConfig(
+                    breakeven_cost_bps=self.costs.cost_model.round_trip_bps(
+                        include_safety=False
+                    ),
+                    be_fee_buffer_bps=PARAMS.breakeven_buffer_bps,
+                )
+            )
         read_all = getattr(self.journal, "read_all", None)
         if not callable(read_all):
             return

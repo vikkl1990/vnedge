@@ -20,6 +20,7 @@ def test_measurement_runtime_is_explicitly_non_capital():
     assert RESEARCH_ONLY == {
         "measurement_only_v1",
         "range_expansion_observer_v1",
+        "range_expansion_observer_v2",
         "structure_bos_1h",
         "fee_wall_momentum_observer_v1",
         "squeeze_expansion_breakout_v2",
@@ -55,6 +56,7 @@ def test_shadow_observe_is_a_separate_narrow_permission():
     assert SHADOW_OBSERVE == {
         "structure_bos_1h",
         "range_expansion_observer_v1",
+        "range_expansion_observer_v2",
         "fee_wall_momentum_observer_v1",
         "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",

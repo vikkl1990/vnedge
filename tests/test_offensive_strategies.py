@@ -193,4 +193,5 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "fee_wall_momentum_observer_v1", "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
         "range_expansion_observer_v1",
+        "range_expansion_observer_v2",
     }

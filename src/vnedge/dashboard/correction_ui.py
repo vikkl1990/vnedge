@@ -320,8 +320,10 @@ def build_lanes_payload(
                 continue
         return round(total, 2)
 
+    shared_purse = runtime.get("shadow_shared_purse_usd")
     portfolio = {
-        "shadow_purse_usd": purse(shadow_rows),
+        "shadow_purse_usd": round(float(shared_purse), 2)
+        if shared_purse is not None else purse(shadow_rows),
         "paper_purse_usd": purse(paper_rows),
         "measurement_nominal_usd": purse(measurement_rows),
         "shadow_lane_count": len(shadow_rows),

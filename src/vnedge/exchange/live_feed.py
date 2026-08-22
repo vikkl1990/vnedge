@@ -450,6 +450,7 @@ class RestPollingMarketFeed:
         self.candles_closed = 0
         self._consecutive_errors = 0
         self._last_emitted_candle_ts: int | None = None
+        self._forming: list | None = None
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -505,6 +506,11 @@ class RestPollingMarketFeed:
             data_quality_reason=reason,
         )
 
+    @property
+    def forming_candle(self) -> list | None:
+        """Read-only forming bar; never enters the closed-candle decision queue."""
+        return list(self._forming) if self._forming is not None else None
+
     async def _poll_candles(self) -> None:
         while True:
             await self._poll_candles_once()
@@ -519,6 +525,8 @@ class RestPollingMarketFeed:
             rows = await self._ex.fetch_ohlcv(
                 self.symbol, self.timeframe, since=since, limit=4
             )
+            forming = [row for row in rows if int(row[0]) + step_ms > now_ms]
+            self._forming = list(forming[-1]) if forming else None
             closed = self._latest_closed_row(rows, now_ms, step_ms)
             if closed is not None:
                 self._emit_closed(closed)
@@ -692,6 +700,11 @@ class DeltaWsFeed(RestPollingMarketFeed):
                 fr = self._ws.funding_rate.get(self._native_symbol)
                 if fr is not None:
                     self.funding_rate = fr
+                native_forming = self._ws.forming_candle(
+                    self._native_symbol, self.timeframe
+                )
+                if native_forming is not None:
+                    self._forming = native_forming
                 book = self._ws.books.get(self._native_symbol)
                 if book:
                     buy, sell = book

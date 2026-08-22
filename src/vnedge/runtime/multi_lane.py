@@ -25,6 +25,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
 
@@ -55,6 +56,7 @@ from vnedge.runtime.latency_store import LaneLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
@@ -63,6 +65,7 @@ from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuat
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
+from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.strategy_registry import is_capital_eligible
@@ -594,7 +597,7 @@ def _build_single_strategy(
             raise ValueError(
                 "structure_bos_1h parameters are frozen; configure a new strategy ID"
             )
-        return StructureBos1H(seed_funding)
+        return StructureBos1H(seed_funding, allow_price_only_live=True)
     if strategy_id == FeeWallMomentumObserver.strategy_id:
         if params:
             raise ValueError(
@@ -623,6 +626,13 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return RangeExpansionObserver(seed_funding)
+    if strategy_id == RangeExpansionObserverV2.strategy_id:
+        if params:
+            raise ValueError(
+                "range_expansion_observer_v2 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return RangeExpansionObserverV2(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -827,6 +837,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout.warmup_bars,
     SqueezeExpansionBreakoutV3.strategy_id: SqueezeExpansionBreakoutV3.warmup_bars,
     RangeExpansionObserver.strategy_id: RangeExpansionObserver.warmup_bars,
+    RangeExpansionObserverV2.strategy_id: RangeExpansionObserverV2.warmup_bars,
     StructureBos1H.strategy_id: StructureBos1H.warmup_bars,
 }
 
@@ -1025,7 +1036,10 @@ def _closed_validated_warmup(
 
 
 async def build_lane(
-    spec: LaneSpec, provider: MultiLaneProvider, journal_dir: Path
+    spec: LaneSpec,
+    provider: MultiLaneProvider,
+    journal_dir: Path,
+    shadow_portfolio: ShadowPortfolioGate | None = None,
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     # (A) Bars-based warmup: the operator baseline or the strategy's causal
@@ -1122,6 +1136,7 @@ async def build_lane(
         gap_store=GapParquetStore(
             Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
         ),
+        shadow_portfolio=shadow_portfolio,
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
@@ -1154,6 +1169,25 @@ class MultiLaneShadowRunner:
         self.specs = specs
         self.journal_dir = journal_dir
         self.provider = provider
+        observers = [
+            spec for spec in specs
+            if spec.mode is RunnerMode.SHADOW
+            and spec.strategy_id != "measurement_only_v1"
+        ]
+        shared_equity = min(
+            (Decimal(str(spec.starting_equity)) for spec in observers),
+            default=Decimal(1000),
+        )
+        shared_daily_loss = min(
+            (Decimal(str(spec.daily_loss_usd)) for spec in observers),
+            default=Decimal(20),
+        )
+        self.shadow_portfolio = ShadowPortfolioGate(
+            journal_dir=journal_dir,
+            lane_ids=(spec.lane_id for spec in observers),
+            equity_usd=shared_equity,
+            daily_loss_limit_usd=shared_daily_loss,
+        )
 
     async def run(self, *, deadline_seconds: float | None = None) -> None:
         # (C) Show the whole fleet immediately as "warming up" while it builds,
@@ -1168,7 +1202,12 @@ class MultiLaneShadowRunner:
         async def _build(spec: LaneSpec) -> _LaneRuntime:
             async with build_sem:
                 return await _retry_transient(
-                    lambda: build_lane(spec, self.provider, self.journal_dir),
+                    lambda: build_lane(
+                        spec,
+                        self.provider,
+                        self.journal_dir,
+                        self.shadow_portfolio,
+                    ),
                     retries=_LANE_BUILD_RETRIES,
                     backoff_s=_LANE_BUILD_BACKOFF_S,
                     label=spec.lane_id,

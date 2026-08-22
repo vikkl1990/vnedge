@@ -50,6 +50,7 @@ import pandas as pd
 
 from vnedge.execution.journal import DecisionJournal
 from vnedge.paper.fill_model import FillModel
+from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.active_exit import _better_stop
 from vnedge.strategy.base_strategy import StrategyExitIntent
 
@@ -140,9 +141,11 @@ class ShadowOutcomeTracker:
         maker_fill_ttl_bars: int = 1,
         trail_atr_mult: float = 0.0,
         strategy_exit: Callable[[str, float, pd.Series], StrategyExitIntent | None] | None = None,
+        cost_model: CostModel | None = None,
     ) -> None:
         self.journal = journal
         self.fill_model = fill_model or FillModel()
+        self.cost_model = cost_model
         self.max_holding_bars = max_holding_bars
         # ATR-chandelier trail uses the same tighten-only primitive as paper/live.
         # TP ladders are observation-only in this single-outcome tracker; such a
@@ -399,10 +402,26 @@ class ShadowOutcomeTracker:
         entry_fee = self.fill_model.fee_usd(pending.notional_usd, maker=self.maker_route)
         exit_fee = self.fill_model.fee_usd(exit_notional)
         fees = entry_fee + exit_fee
+        if self.cost_model is not None:
+            # Book realized venue fees + slippage, excluding the pre-trade
+            # safety buffer. This matches SessionCosts and avoids presenting a
+            # fee-only shadow curve as after-cost evidence.
+            realized_bps = self.cost_model.round_trip_bps(
+                maker_entry=self.maker_route,
+                maker_exit=False,
+                include_safety=False,
+            )
+            fees = pending.notional_usd * realized_bps / 10_000.0
         net = gross - fees
         # The all-taker equivalent on the SAME trade — the conservative figure
         # stays visible next to the maker number, never replaced by it.
         fees_taker = self.fill_model.fee_usd(pending.notional_usd) + exit_fee
+        if self.cost_model is not None:
+            fees_taker = pending.notional_usd * self.cost_model.round_trip_bps(
+                maker_entry=False,
+                maker_exit=False,
+                include_safety=False,
+            ) / 10_000.0
         net_taker = gross - fees_taker
         route = "maker" if self.maker_route else "taker"
         tp_reached = _tp_reached(pending.side, pending.mfe_price, pending.take_profit_levels)

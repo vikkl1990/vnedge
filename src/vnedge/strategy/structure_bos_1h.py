@@ -20,7 +20,7 @@ from typing import Literal
 
 import pandas as pd
 
-from vnedge.data.candles import Candle
+from vnedge.data.candles import Candle, aggregate_candle_series
 from vnedge.data.regime_context import RegimeContext, RegimeLabel
 from vnedge.data.structure import (
     StructureEvent,
@@ -380,6 +380,7 @@ def _closed_candles(
     expected_timeframe: Literal["1h", "4h"] = "1h",
     *,
     preserve_closed_flag: bool = False,
+    allow_price_only: bool = False,
 ) -> tuple[list[Candle], list[bool]] | None:
     """Translate the canonical lake frame, failing closed on missing fields."""
     required = {
@@ -388,11 +389,9 @@ def _closed_candles(
         "high",
         "low",
         "close",
-        "volume",
-        "quote_volume",
-        "trade_count",
-        "data_quality",
     }
+    if not allow_price_only:
+        required.update({"volume", "quote_volume", "trade_count", "data_quality"})
     if not required.issubset(df.columns):
         return None
 
@@ -407,13 +406,16 @@ def _closed_candles(
         if not all(_finite(value) and float(value) > 0 for value in prices):
             return None
 
-        volume = row.volume
-        quote_volume = row.quote_volume
-        trade_count = row.trade_count
+        volume = getattr(row, "volume", 0.0)
+        quote_volume = getattr(row, "quote_volume", 0.0)
+        trade_count = getattr(row, "trade_count", 0)
         if str(getattr(row, "timeframe", expected_timeframe)).strip().lower() != expected_timeframe:
             return None
         is_closed = bool(getattr(row, "is_closed", True))
-        quality_ok = str(row.data_quality).strip().lower() == "ok" and is_closed
+        quality_ok = (
+            str(getattr(row, "data_quality", "ok")).strip().lower() == "ok"
+            and is_closed
+        )
         exact_volume_ok = (
             _finite(volume)
             and _finite(quote_volume)
@@ -427,12 +429,16 @@ def _closed_candles(
                 or (float(volume) > 0 and float(quote_volume) > 0 and int(float(trade_count)) > 0)
             )
         )
-        row_eligible = quality_ok and exact_volume_ok
+        # Price-only live feeds may participate in causal swings/BoS while
+        # exact volume remains unavailable. AVWAP stays unavailable because
+        # the resulting Candle carries zero base/quote volume; no volume is
+        # synthesized and the strict research path remains unchanged.
+        row_eligible = quality_ok and (exact_volume_ok or allow_price_only)
         eligible.append(row_eligible)
 
-        base = float(volume) if row_eligible else 0.0
-        quote = float(quote_volume) if row_eligible else 0.0
-        count = int(float(trade_count)) if row_eligible else 0
+        base = float(volume) if row_eligible and exact_volume_ok else 0.0
+        quote = float(quote_volume) if row_eligible and exact_volume_ok else 0.0
+        count = int(float(trade_count)) if row_eligible and exact_volume_ok else 0
         taker_raw = getattr(row, "taker_buy_volume", 0.0)
         taker = float(taker_raw) if row_eligible and _finite(taker_raw) else 0.0
         if taker < 0 or taker > base:
@@ -487,6 +493,8 @@ def _add_structure_features(
     df: pd.DataFrame,
     config: SwingDetectConfig,
     p: StructureBosParams,
+    *,
+    allow_price_only: bool = False,
 ) -> pd.DataFrame:
     out = df.copy()
     for name, default in _FEATURE_DEFAULTS.items():
@@ -504,7 +512,7 @@ def _add_structure_features(
         ).max(axis=1)
         out["bos_atr"] = true_range.rolling(p.atr_period, min_periods=p.atr_period).mean()
 
-    built = _closed_candles(out)
+    built = _closed_candles(out, allow_price_only=allow_price_only)
     if built is None:
         return out
     bars, eligible = built
@@ -623,15 +631,18 @@ def _add_mtf_features(
     df: pd.DataFrame,
     htf_candles: pd.DataFrame | None,
     p: StructureBosParams,
+    *,
+    allow_price_only: bool = False,
 ) -> pd.DataFrame:
     out = df.copy()
     if htf_candles is None or htf_candles.empty:
         return out
-    ltf_built = _closed_candles(out)
+    ltf_built = _closed_candles(out, allow_price_only=allow_price_only)
     htf_built = _closed_candles(
         htf_candles,
         "4h",
         preserve_closed_flag=True,
+        allow_price_only=allow_price_only,
     )
     if ltf_built is None or htf_built is None:
         out["mtf_reason"] = "invalid_series"
@@ -677,6 +688,36 @@ def _add_mtf_features(
     return out
 
 
+def _derive_closed_4h(df: pd.DataFrame, *, allow_price_only: bool) -> pd.DataFrame | None:
+    built = _closed_candles(df, allow_price_only=allow_price_only)
+    if built is None:
+        return None
+    bars, eligible = built
+    usable = [bar for bar, ok in zip(bars, eligible, strict=True) if ok]
+    if not usable:
+        return None
+    symbol = usable[0].symbol
+    aggregated = aggregate_candle_series(symbol, "1h", "4h", usable)
+    if not aggregated:
+        return None
+    return pd.DataFrame(
+        {
+            "timestamp": [bar.open_time for bar in aggregated],
+            "symbol": [bar.symbol for bar in aggregated],
+            "timeframe": ["4h"] * len(aggregated),
+            "open": [float(bar.open) for bar in aggregated],
+            "high": [float(bar.high) for bar in aggregated],
+            "low": [float(bar.low) for bar in aggregated],
+            "close": [float(bar.close) for bar in aggregated],
+            "volume": [float(bar.volume) for bar in aggregated],
+            "quote_volume": [float(bar.quote_volume) for bar in aggregated],
+            "trade_count": [bar.trade_count for bar in aggregated],
+            "data_quality": ["ok"] * len(aggregated),
+            "is_closed": [True] * len(aggregated),
+        }
+    )
+
+
 class StructureBos1H(BaseStrategy):
     """S1 engine with raw research and CostGate-filtered backtest APIs."""
 
@@ -695,6 +736,7 @@ class StructureBos1H(BaseStrategy):
         *,
         htf_candles: pd.DataFrame | None = None,
         params: StructureBosParams | None = None,
+        allow_price_only_live: bool = False,
     ) -> None:
         selected = params or PARAMS
         if selected != PARAMS:
@@ -702,6 +744,7 @@ class StructureBos1H(BaseStrategy):
         self.params = selected
         self.funding = funding
         self.htf_candles = htf_candles
+        self.allow_price_only_live = allow_price_only_live
         self._swing_config = SwingDetectConfig(
             left=self.params.left,
             right=self.params.right,
@@ -842,8 +885,21 @@ class StructureBos1H(BaseStrategy):
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         funded = merge_funding(candles, self.funding)
-        structured = _add_structure_features(funded, self._swing_config, self.params)
-        return _add_mtf_features(structured, self.htf_candles, self.params)
+        structured = _add_structure_features(
+            funded,
+            self._swing_config,
+            self.params,
+            allow_price_only=self.allow_price_only_live,
+        )
+        htf = self.htf_candles
+        if htf is None and self.allow_price_only_live:
+            htf = _derive_closed_4h(funded, allow_price_only=True)
+        return _add_mtf_features(
+            structured,
+            htf,
+            self.params,
+            allow_price_only=self.allow_price_only_live,
+        )
 
     def _candidate(self, df: pd.DataFrame, index: int) -> BacktestSignalIntent | None:
         if index <= 0 or index >= len(df) or index + 1 < self.params.min_bars:
