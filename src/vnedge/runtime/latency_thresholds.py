@@ -34,6 +34,17 @@ CLOSED_BAR_LAG_SOFT_P99_MS = 500
 CLOSED_BAR_LAG_HARD_P99_MS = 2000
 DECISION_COMPUTE_SOFT_P99_MS = 50
 DECISION_COMPUTE_HARD_P99_MS = 200
+# Strategy compute budgets scale with the decision horizon.  Applying the 5m
+# scanner's 200ms hard ceiling to a causal 15m structure build made healthy
+# pandas work fail closed even though the candle itself arrived on time.  The
+# short-horizon default remains deliberately strict; only slower decision
+# horizons receive the wider, still-bounded budget below.
+DECISION_COMPUTE_LIMITS_MS: dict[str, tuple[int, int, int]] = {
+    # timeframe: (soft p95, hard p95, hard-gate recovery sample)
+    "15m": (500, 1000, 750),
+    "1h": (750, 2000, 1500),
+    "4h": (1500, 4000, 3000),
+}
 # A p95 arm gate needs at least 20 observations (one 5% tail sample). Before
 # then the metric is visible but statistically immature and cannot halt arms.
 LATENCY_GATE_MIN_SAMPLES = 20
@@ -58,6 +69,23 @@ HEAL_TIMEOUT_MS = 10000
 PERSIST_DEGRADE_MS = 60000
 
 Band = str  # "ok" | "soft" | "hard" | "unknown"
+
+
+def decision_compute_limits(timeframe: str) -> tuple[int, int, int]:
+    """Return SOFT/HARD/recovery decision budgets for ``timeframe``.
+
+    Unknown and short timeframes retain the conservative 50/200/100ms
+    defaults.  A missing configuration can therefore never silently widen a
+    new scanner's arm budget.
+    """
+    return DECISION_COMPUTE_LIMITS_MS.get(
+        str(timeframe or "").strip().lower(),
+        (
+            DECISION_COMPUTE_SOFT_P99_MS,
+            DECISION_COMPUTE_HARD_P99_MS,
+            DECISION_COMPUTE_RECOVERY_MS,
+        ),
+    )
 
 
 def classify_tm_age(tf: str, last_ms: float | None, p99_ms: float | None = None) -> Band:

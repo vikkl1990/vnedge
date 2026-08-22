@@ -836,6 +836,9 @@ class LivePaperSession:
         # immature samples remain visible to operators without halting arms.
         latency = getattr(self, "latency", None)
         if latency is not None:
+            decision_soft, decision_hard, decision_recovery = (
+                LT.decision_compute_limits(self.config.timeframe)
+            )
             bar_stats = latency.stats(BAR_CLOSE_PROCESSING_MS) or latency.stats(
                 "feed_lag_ms"
             )
@@ -852,9 +855,9 @@ class LivePaperSession:
             if LT.blocks_new_arms(
                 LT.classify_latency_stats(
                     decision_stats,
-                    soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
-                    hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
-                    recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
+                    soft_ms=decision_soft,
+                    hard_ms=decision_hard,
+                    recovery_ms=decision_recovery,
                 )
             ):
                 return "decision_compute_hard"
@@ -880,6 +883,9 @@ class LivePaperSession:
 
     def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
         """Operator-visible proof behind automatic latency recovery."""
+        decision_soft, decision_hard, decision_recovery = (
+            LT.decision_compute_limits(self.config.timeframe)
+        )
         bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats(
             "feed_lag_ms"
         )
@@ -892,9 +898,9 @@ class LivePaperSession:
             ),
             "decision_lag_ms": LT.latency_recovery_state(
                 self.latency.stats(DECISION_LAG_MS),
-                soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
-                hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
-                recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
+                soft_ms=decision_soft,
+                hard_ms=decision_hard,
+                recovery_ms=decision_recovery,
             ),
         }
 

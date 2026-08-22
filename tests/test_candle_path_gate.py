@@ -135,10 +135,25 @@ def test_gate_blocks_hard_decision_compute_lag():
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
     latency = LatencyTracker()
+    _, hard_ms, _ = LT.decision_compute_limits("1h")
     for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
-        latency.record("decision_lag_ms", LT.DECISION_COMPUTE_HARD_P99_MS + 1)
+        latency.record("decision_lag_ms", hard_ms + 1)
 
     assert _gate(_Stub(tm, latency=latency), BASE) == "decision_compute_hard"
+
+
+def test_gate_uses_decision_timeframe_compute_budget():
+    tm = TimeMachine(["BTC/USDT"], ["5m", "15m"])
+    for timeframe in ("5m", "15m"):
+        tm.on_kline_update("BTC/USDT", timeframe, _k(BASE), False)
+    latency = LatencyTracker()
+    # 600ms is unsafe for a 5m scanner but inside the explicitly bounded 15m
+    # structure budget. The candle-arrival metric remains independently gated.
+    for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
+        latency.record("decision_lag_ms", 600)
+
+    assert _gate(_Stub(tm, latency=latency, tf="5m"), BASE) == "decision_compute_hard"
+    assert _gate(_Stub(tm, latency=latency, tf="15m"), BASE) is None
 
 
 def test_gate_self_recovers_after_five_fresh_healthy_bar_closes():

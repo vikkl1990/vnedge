@@ -105,11 +105,12 @@ def lane_bands(lane: dict) -> dict:
     lat = lane.get("latency") or {}
     decision_stats = _latency_metric(lat, "decision_lag_ms")
     bar_stats = _latency_metric(lat, "bar_close_processing_ms", "feed_lag_ms")
+    decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(tf)
     dlag = LT.classify_latency_stats(
         decision_stats,
-        soft_ms=LT.DECISION_COMPUTE_SOFT_P99_MS,
-        hard_ms=LT.DECISION_COMPUTE_HARD_P99_MS,
-        recovery_ms=LT.DECISION_COMPUTE_RECOVERY_MS,
+        soft_ms=decision_soft,
+        hard_ms=decision_hard,
+        recovery_ms=decision_recovery,
     )
     blag = LT.classify_latency_stats(
         bar_stats,

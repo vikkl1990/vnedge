@@ -10,6 +10,13 @@ from vnedge.runtime.latency_tracker import (
     LatencyTracker,
     timeframe_to_seconds,
 )
+from vnedge.runtime.latency_thresholds import decision_compute_limits
+
+
+def test_decision_compute_limits_are_strict_by_default_and_scale_explicitly():
+    assert decision_compute_limits("5m") == (50, 200, 100)
+    assert decision_compute_limits("unknown") == (50, 200, 100)
+    assert decision_compute_limits("15M") == (500, 1000, 750)
 
 
 @pytest.mark.parametrize(
