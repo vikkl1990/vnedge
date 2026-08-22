@@ -22,8 +22,11 @@ Per-lane verdicts:
 - MISSING — desired but no journal file at all (never started / renamed).
 - ORPHAN  — journal file with no desired spec (left behind by a config
   change; consuming attention/disk while representing nothing).
+- UNDER_SAMPLED — shadow outcomes exist, but fewer than the registered
+  evidence minimum; report the result without pretending it is a verdict.
 - SHADOW_PROBATION — desired shadow lane is fresh/evaluating, but its
-  resolved virtual outcomes are net-negative; it is not paper/live compatible.
+  sufficiently sampled resolved outcomes are net-negative; it is not
+  paper/live compatible.
 
 The auditor is read-only and side-effect free. Exit-code contract for cron:
 ``python -m vnedge.runtime.lane_health`` returns 1 if any lane is MISSING or
@@ -53,6 +56,7 @@ if TYPE_CHECKING:
 VERDICT_MISSING = "MISSING"
 VERDICT_STALE = "STALE"
 VERDICT_SILENT = "SILENT"
+VERDICT_UNDER_SAMPLED = "UNDER_SAMPLED"
 VERDICT_PROBATION = "SHADOW_PROBATION"
 VERDICT_ORPHAN = "ORPHAN"
 VERDICT_OK = "OK"
@@ -143,6 +147,7 @@ class LaneHealthReport:
             for verdict in (
                 VERDICT_MISSING,
                 VERDICT_STALE,
+                VERDICT_UNDER_SAMPLED,
                 VERDICT_PROBATION,
                 VERDICT_SILENT,
                 VERDICT_ORPHAN,
@@ -153,6 +158,7 @@ class LaneHealthReport:
                 for verdict in (
                     VERDICT_MISSING,
                     VERDICT_STALE,
+                    VERDICT_UNDER_SAMPLED,
                     VERDICT_PROBATION,
                     VERDICT_SILENT,
                     VERDICT_ORPHAN,
@@ -214,7 +220,11 @@ def _round(value: float | None) -> float | None:
 
 
 def _total_key(verdict: str) -> str:
-    return "probation" if verdict == VERDICT_PROBATION else verdict.lower()
+    if verdict == VERDICT_PROBATION:
+        return "probation"
+    if verdict == VERDICT_UNDER_SAMPLED:
+        return "under_sampled"
+    return verdict.lower()
 
 
 def _timeframe_seconds(timeframe: str) -> float:
@@ -404,10 +414,11 @@ def audit_lanes(
         desired = desired_lane_specs(environ)
     try:
         shadow_probation_min_trades = int(
-            environ.get("LANE_HEALTH_SHADOW_PROBATION_MIN_TRADES", "1")
+            environ.get("LANE_HEALTH_SHADOW_PROBATION_MIN_TRADES", "30")
         )
     except ValueError:
-        shadow_probation_min_trades = 1
+        shadow_probation_min_trades = 30
+    shadow_probation_min_trades = max(1, shadow_probation_min_trades)
 
     rows: list[LaneHealthRow] = []
     desired_ids: set[str] = set()
@@ -438,6 +449,16 @@ def audit_lanes(
             detail = (
                 "journaling but no lane_eval in "
                 f"{_fmt_age(SILENT_EVAL_SECONDS)} — strategy loop not evaluating"
+            )
+        elif (
+            mode == "shadow"
+            and 0 < shadow_trades < shadow_probation_min_trades
+        ):
+            verdict = VERDICT_UNDER_SAMPLED
+            detail = (
+                f"shadow outcomes net ${shadow_net:+.2f} across "
+                f"{shadow_trades}/{shadow_probation_min_trades} required virtual "
+                "trade(s); evidence only, no compatibility verdict"
             )
         elif (
             mode == "shadow"
@@ -496,6 +517,9 @@ def audit_lanes(
         "ok": sum(1 for r in rows if r.verdict == VERDICT_OK),
         "stale": sum(1 for r in rows if r.verdict == VERDICT_STALE),
         "probation": sum(1 for r in rows if r.verdict == VERDICT_PROBATION),
+        "under_sampled": sum(
+            1 for r in rows if r.verdict == VERDICT_UNDER_SAMPLED
+        ),
         "silent": sum(1 for r in rows if r.verdict == VERDICT_SILENT),
         "missing": sum(1 for r in rows if r.verdict == VERDICT_MISSING),
         "orphan": sum(1 for r in rows if r.verdict == VERDICT_ORPHAN),
@@ -551,7 +575,8 @@ def _print_table(report: LaneHealthReport) -> None:
     totals = report.totals
     print(
         f"desired={totals['desired']} active={totals['active']} ok={totals['ok']} "
-        f"stale={totals['stale']} probation={totals.get('probation', 0)} "
+        f"stale={totals['stale']} under_sampled={totals.get('under_sampled', 0)} "
+        f"probation={totals.get('probation', 0)} "
         f"silent={totals['silent']} "
         f"missing={totals['missing']} orphan={totals['orphan']}"
     )

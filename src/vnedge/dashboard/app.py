@@ -27,7 +27,7 @@ import shutil
 import socket
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -455,12 +455,19 @@ class SnapshotProvider:
 
     def __init__(self) -> None:
         self._latest: dict | None = None
+        self._published_at_monotonic: float | None = None
 
     def publish(self, snapshot: dict) -> None:
         self._latest = snapshot
+        self._published_at_monotonic = time.monotonic()
 
     def latest(self) -> dict | None:
         return self._latest
+
+    def age_seconds(self) -> float | None:
+        if self._published_at_monotonic is None:
+            return None
+        return max(0.0, time.monotonic() - self._published_at_monotonic)
 
 
 def create_app(
@@ -585,15 +592,79 @@ def create_app(
 
     @app.get("/ready")
     async def ready() -> JSONResponse:
-        """Unauthenticated READINESS probe — liveness says "process up", this
-        says "up AND has data to serve". 200 once a snapshot has been published,
-        503 while still warming. Reveals only that boolean, never any state, so
-        it needs no token. Distinct from /health so an orchestrator can wait for
-        data readiness before routing traffic without treating a warming
-        process as dead."""
-        if provider.latest() is None:
-            return JSONResponse({"status": "starting"}, status_code=503)
-        return JSONResponse({"status": "ready"})
+        """Readiness means fresh runtime state and proven candle-lake health.
+
+        Liveness remains deliberately shallow at ``/health``. This endpoint is
+        the cross-process workflow contract: a running FastAPI process must not
+        look ready while snapshots are stale, lanes are missing, the primary
+        feed is stale, or the canonical-lake monitor has recorded holes.
+        """
+        snapshot = provider.latest()
+        if snapshot is None:
+            return JSONResponse(
+                {"status": "not_ready", "reasons": ["snapshot_missing"]},
+                status_code=503,
+            )
+
+        reasons: list[str] = []
+        max_snapshot_age = float(
+            os.environ.get("DASHBOARD_READY_MAX_SNAPSHOT_AGE_SECONDS", "30")
+        )
+        snapshot_age_ms = snapshot.get("snapshot_age_ms")
+        try:
+            snapshot_age = (
+                float(snapshot_age_ms) / 1000.0
+                if snapshot_age_ms is not None
+                else provider.age_seconds()
+                if hasattr(provider, "age_seconds")
+                else None
+            )
+        except (TypeError, ValueError):
+            snapshot_age = None
+        if snapshot_age is None:
+            reasons.append("snapshot_age_unknown")
+        elif snapshot_age > max_snapshot_age:
+            reasons.append("snapshot_stale")
+
+        feed = snapshot.get("feed_health")
+        if not isinstance(feed, dict):
+            reasons.append("primary_feed_missing")
+        elif str(feed.get("candles", "")).lower() != "ok":
+            reasons.append("primary_feed_unhealthy")
+        lane_health = snapshot.get("lane_health")
+        if not isinstance(lane_health, dict):
+            reasons.append("lane_health_missing")
+        elif lane_health.get("process_healthy") is not True:
+            reasons.append("lane_process_unhealthy")
+
+        lake_path_raw = os.environ.get("CANDLE_LAKE_HEALTH_PATH", "").strip()
+        if lake_path_raw:
+            try:
+                lake = json.loads(Path(lake_path_raw).read_text(encoding="utf-8"))
+                if lake.get("status") != "healthy":
+                    reasons.append("canonical_lake_unhealthy")
+                checked_raw = lake.get("checked_at")
+                checked_at = datetime.fromisoformat(checked_raw) if checked_raw else None
+                if checked_at is not None and (
+                    checked_at.tzinfo is None or checked_at.utcoffset() is None
+                ):
+                    checked_at = None
+                max_lake_age = float(
+                    os.environ.get("CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS", "1200")
+                )
+                if checked_at is None or (
+                    datetime.now(UTC) - checked_at.astimezone(UTC)
+                ).total_seconds() > max_lake_age:
+                    reasons.append("canonical_lake_check_stale")
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                reasons.append("canonical_lake_status_unreadable")
+
+        if reasons:
+            return JSONResponse(
+                {"status": "not_ready", "reasons": sorted(set(reasons))},
+                status_code=503,
+            )
+        return JSONResponse({"status": "ready", "reasons": []})
 
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.
@@ -638,7 +709,14 @@ def create_app(
         header = request.headers.get("authorization", "")
         candidate = header.removeprefix("Bearer ").strip()
         method = "bearer" if candidate else ""
-        if not candidate:
+        # URL credentials are disabled by default: query strings leak through
+        # browser history, reverse-proxy logs, screenshots and referrers. A
+        # temporary compatibility switch exists only for controlled migration
+        # and is intentionally absent from the production compose contract.
+        allow_query_token = os.environ.get(
+            "DASHBOARD_ALLOW_QUERY_TOKEN", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not candidate and allow_query_token:
             candidate = request.query_params.get("token", "")
             method = "query" if candidate else ""
         if not candidate:
@@ -2535,7 +2613,7 @@ def create_app(
         await websocket.accept()
         try:
             while True:
-                if result.expires_at is not None and datetime.now(timezone.utc) >= result.expires_at:
+                if result.expires_at is not None and datetime.now(UTC) >= result.expires_at:
                     await websocket.close(code=4401, reason="token expired")
                     return
                 payload = await asyncio.to_thread(
@@ -2569,7 +2647,7 @@ def create_app(
         try:
             while True:
                 if result.expires_at is not None and (
-                    datetime.now(timezone.utc) >= result.expires_at
+                    datetime.now(UTC) >= result.expires_at
                 ):
                     # A token that expires mid-session loses the stream too.
                     await websocket.close(code=4401, reason="token expired")

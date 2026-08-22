@@ -283,7 +283,12 @@ async def test_build_lane_uses_the_shared_registry(monkeypatch, tmp_path):
             return False
 
         async def fetch_candles(self, *a, **k):
-            return []
+            until = int(a[3])
+            step = 3_600_000
+            return [
+                [until - 2 * step, 100, 101, 99, 100, 1],
+                [until - step, 100, 101, 99, 100, 1],
+            ]
 
         async def fetch_funding_history(self, *a, **k):
             return []

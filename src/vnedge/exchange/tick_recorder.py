@@ -29,12 +29,13 @@ import os
 import time
 from collections import deque
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from vnedge.data.candles import CandleParquetStore, CandlePipeline
+from vnedge.data.candles import CandleParquetStore, CandlePipeline, Trade, floor_time
 from vnedge.data.lake_health import LakeHealthMonitor
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ def _normalize_trade_batch(
                     "price": price,
                     "amount": amount,
                     "side": str(trade.get("side") or ""),
+                    "trade_id": str(trade_id) if trade_id not in (None, "") else None,
                 },
                 key,
             )
@@ -101,12 +103,142 @@ class CanonicalCandleSink:
     are durably written to the tick lake and persists only closed candles.
     """
 
-    def __init__(self, exchange: str, symbols: list[str], root: Path | str) -> None:
+    def __init__(
+        self,
+        exchange: str,
+        symbols: list[str],
+        root: Path | str,
+        *,
+        tick_root: Path | str | None = None,
+        restore_at: datetime | None = None,
+    ) -> None:
         store = CandleParquetStore(root, exchange=exchange)
+        self.exchange = exchange
+        self.symbols = tuple(symbols)
         self.pipelines = {
             symbol: CandlePipeline(_canonical_symbol(symbol), store=store)
             for symbol in symbols
         }
+        self.restored_last_trade_ts_ms: dict[str, int] = {}
+        self.restored_trade_keys: dict[str, set[str]] = {
+            symbol: set() for symbol in symbols
+        }
+        if tick_root is not None:
+            self.restore_forming_from_tick_lake(
+                Path(tick_root), at=restore_at or datetime.now(UTC)
+            )
+
+    @staticmethod
+    def _candidate_shards(
+        tick_root: Path,
+        exchange: str,
+        symbol: str,
+        bucket_open_ms: int,
+    ) -> list[Path]:
+        day = datetime.fromtimestamp(bucket_open_ms / 1000, tz=UTC).strftime("%Y%m%d")
+        shard_dir = (
+            tick_root
+            / "ticks"
+            / f"exchange={exchange}"
+            / f"symbol={_canonical_symbol(symbol)}"
+            / "stream=trades"
+            / day
+        )
+        if not shard_dir.exists():
+            return []
+        # A timed flush can straddle the minute boundary. Include shards that
+        # began in the prior minute, then filter rows precisely below. This is
+        # bounded even on very active markets and avoids scanning a full day.
+        cutoff = bucket_open_ms - 60_000
+        selected: list[Path] = []
+        for path in shard_dir.glob("*.parquet"):
+            try:
+                first_ts = int(path.stem.split("-", 1)[0])
+            except (ValueError, IndexError):
+                continue
+            if first_ts >= cutoff:
+                selected.append(path)
+        return sorted(selected)
+
+    def restore_forming_from_tick_lake(self, tick_root: Path, *, at: datetime) -> int:
+        """Rebuild the current unclosed minute from durable trade shards.
+
+        Deployments commonly restart inside a minute. The old recorder began
+        with an empty builder, permanently dropping the pre-restart part of
+        that minute and, transitively, its 5m/15m/1h/4h parents. Replaying only
+        the current bucket is causal and never rewrites a closed candle.
+        """
+        if at.tzinfo is None or at.utcoffset() is None:
+            raise ValueError("restore_at must be timezone-aware")
+        bucket_open = floor_time(at.astimezone(UTC), "1m")
+        bucket_open_ms = int(bucket_open.timestamp() * 1000)
+        through_ms = int(at.timestamp() * 1000)
+        restored = 0
+        for symbol in self.symbols:
+            shards = self._candidate_shards(
+                tick_root, self.exchange, symbol, bucket_open_ms
+            )
+            if not shards:
+                continue
+            frames: list[pd.DataFrame] = []
+            for path in shards:
+                try:
+                    frames.append(pd.read_parquet(path))
+                except Exception:
+                    logger.exception("failed to read forming recovery shard %s", path)
+            if not frames:
+                continue
+            frame = pd.concat(frames, ignore_index=True)
+            required = {"ts_ms", "price", "amount"}
+            if not required.issubset(frame.columns):
+                logger.error("forming recovery skipped: trade shard schema incomplete for %s", symbol)
+                continue
+            ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
+            frame = frame.loc[(ts >= bucket_open_ms) & (ts <= through_ms)].copy()
+            if frame.empty:
+                continue
+            frame["ts_ms"] = pd.to_numeric(frame["ts_ms"], errors="raise").astype("int64")
+            if "trade_id" in frame.columns:
+                ids = frame["trade_id"].astype("string")
+                with_id = ids.notna() & (ids.str.len() > 0)
+                frame = pd.concat(
+                    [
+                        frame.loc[~with_id],
+                        frame.loc[with_id].drop_duplicates("trade_id", keep="last"),
+                    ],
+                    ignore_index=True,
+                )
+            frame = frame.sort_values("ts_ms", kind="stable")
+            trades: list[Trade] = []
+            keys: set[str] = set()
+            for row in frame.to_dict("records"):
+                side = str(row.get("side") or "").lower()
+                trade_id = row.get("trade_id")
+                if trade_id is not None and not pd.isna(trade_id) and str(trade_id):
+                    keys.add(f"{int(row['ts_ms'])}:{trade_id}")
+                trades.append(
+                    Trade(
+                        timestamp=datetime.fromtimestamp(int(row["ts_ms"]) / 1000, tz=UTC),
+                        price=Decimal(str(row["price"])),
+                        amount=Decimal(str(row["amount"])),
+                        is_buyer_maker=(
+                            False if side == "buy" else True if side == "sell" else None
+                        ),
+                    )
+                )
+            self.pipelines[symbol].rebuild_forming(bucket_open, trades)
+            self.restored_last_trade_ts_ms[symbol] = int(frame["ts_ms"].max())
+            self.restored_trade_keys[symbol] = keys
+            restored += len(trades)
+            logger.info(
+                "restored forming candle from tick lake: exchange=%s symbol=%s "
+                "bucket=%s trades=%d",
+                self.exchange,
+                symbol,
+                bucket_open.isoformat(),
+                len(trades),
+            )
+        return restored
 
     def on_trade(self, symbol: str, trade: dict[str, Any]) -> None:
         side = str(trade.get("side") or "").lower()
@@ -239,7 +371,12 @@ class TickRecorder:
             else None
         )
         self.candle_sink = (
-            CanonicalCandleSink(exchange_id, symbols, candle_root)
+            CanonicalCandleSink(
+                exchange_id,
+                symbols,
+                candle_root,
+                tick_root=root,
+            )
             if candle_root is not None
             else None
         )
@@ -247,10 +384,18 @@ class TickRecorder:
         self.book_count = 0
         self._last_trade_ts_ms: dict[str, int] = {}
         self._seen_trade_ids: dict[str, set[str]] = {
-            symbol: set() for symbol in symbols
+            symbol: set(
+                self.candle_sink.restored_trade_keys.get(symbol, set())
+                if self.candle_sink is not None
+                else ()
+            )
+            for symbol in symbols
         }
         self._seen_trade_order: dict[str, deque[str]] = {
-            symbol: deque() for symbol in symbols
+            symbol: deque(
+                sorted(self._seen_trade_ids[symbol])[-_SEEN_TRADE_IDS:]
+            )
+            for symbol in symbols
         }
         self._skipped_trade_counts: dict[str, list[int]] = {
             symbol: [0, 0, 0, 0] for symbol in symbols
@@ -258,6 +403,10 @@ class TickRecorder:
         self._next_skip_log: dict[str, float] = {
             symbol: 0.0 for symbol in symbols
         }
+        if self.candle_sink is not None:
+            self._last_trade_ts_ms.update(
+                self.candle_sink.restored_last_trade_ts_ms
+            )
 
     def _remember_trade(self, symbol: str, key: str | None) -> None:
         if key is None:
@@ -485,7 +634,12 @@ class DeltaTickRecorder:
         self.books_only = books_only
         self._clock = clock
         self.candle_sink = (
-            CanonicalCandleSink(exchange_id, self.symbols, candle_root)
+            CanonicalCandleSink(
+                exchange_id,
+                self.symbols,
+                candle_root,
+                tick_root=root,
+            )
             if candle_root is not None
             else None
         )
@@ -543,6 +697,7 @@ class DeltaTickRecorder:
             "price": float(trade["price"]),
             "amount": float(trade["size"]),
             "side": trade.get("side", ""),
+            "trade_id": trade.get("trade_id"),
         }
         if self.candle_sink is not None:
             self.candle_sink.on_trade(

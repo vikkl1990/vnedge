@@ -80,7 +80,11 @@ def test_ready_probe_flips_with_snapshot():
     provider = SnapshotProvider()
     client = TestClient(create_app(provider, token="t"))
     assert client.get("/ready").status_code == 503  # unauthenticated, warming
-    provider.publish({"mode": "shadow"})
+    provider.publish({
+        "mode": "shadow",
+        "feed_health": {"candles": "ok"},
+        "lane_health": {"process_healthy": True},
+    })
     r = client.get("/ready")
     assert r.status_code == 200 and r.json()["status"] == "ready"
 
@@ -89,6 +93,40 @@ def test_ready_needs_no_token():
     client = TestClient(create_app(SnapshotProvider(), token="t"))
     # 503 (not 401) — readiness is unauthenticated, like /health
     assert client.get("/ready").status_code == 503
+
+
+def test_ready_fails_when_canonical_lake_reports_holes(tmp_path, monkeypatch):
+    lake = tmp_path / "lake_health.json"
+    lake.write_text(
+        '{"status":"degraded","checked_at":"2026-08-22T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_PATH", str(lake))
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS", "999999999")
+    provider = SnapshotProvider()
+    provider.publish({
+        "mode": "shadow",
+        "feed_health": {"candles": "ok"},
+        "lane_health": {"process_healthy": True},
+    })
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 503
+    assert "canonical_lake_unhealthy" in response.json()["reasons"]
+
+
+def test_ready_fails_closed_when_feed_or_lane_evidence_is_missing():
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json()["reasons"] == [
+        "lane_health_missing",
+        "primary_feed_missing",
+    ]
 
 
 def test_whoami_reports_role_and_permissions():
@@ -109,3 +147,15 @@ def test_whoami_reports_role_and_permissions():
 
     o = client.get("/whoami?token=ot").json()
     assert PERM_KILL_SWITCH in o["permissions"] and o["role"] == "operator"
+
+
+def test_url_tokens_are_rejected_by_default(monkeypatch):
+    monkeypatch.delenv("DASHBOARD_ALLOW_QUERY_TOKEN", raising=False)
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    client = TestClient(create_app(provider, token="root-secret"))
+
+    assert client.get("/state?token=root-secret").status_code == 401
+    assert client.get(
+        "/state", headers={"Authorization": "Bearer root-secret"}
+    ).status_code == 200

@@ -10,18 +10,21 @@ Design constraints, learned from that audit:
 * **Detection is always safe, so it always runs.**  It reads the candle store
   and compares each bar's ``open_time`` against the previous ``close_time``.
   It needs no external truth and cannot be fooled by an empty gap store.
-* **Recovery is not automatic by default.**  ``binance_gap_recovery`` marks a
-  gap ``recovered`` on thin evidence and the tick lake carries no trade ids to
-  dedupe a refetched boundary, so unattended backfill can corrupt volume and
-  VWAP.  Recovery is opt-in and always followed by a re-scan.
+* **Recovery is a separate strict worker.** Detection never mutates candle
+  history. The deployed Binance worker may repair a recorded hole only when
+  aggregate-trade IDs prove a contiguous interval; a failed proof leaves the
+  gap open and readiness remains false.
 * **A clean status must mean "checked and clean", never "never checked".**
-  Before the first cycle the state is UNKNOWN, not healthy.
+  Before the first cycle the state is UNKNOWN, not healthy. An empty/short or
+  stale-ended lake is DEGRADED even though it has no interior discontinuity.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -29,6 +32,7 @@ from enum import Enum
 from pathlib import Path
 
 from vnedge.data.candle_gap_scan import scan
+from vnedge.data.candles import TF_SECONDS, CandleParquetStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,8 @@ class LakeHealth:
     status: LakeStatus = LakeStatus.UNKNOWN
     checked_at: datetime | None = None
     holes_by_symbol: dict[str, int] = field(default_factory=dict)
+    bars_by_symbol: dict[str, int] = field(default_factory=dict)
+    latest_close_by_symbol: dict[str, str | None] = field(default_factory=dict)
     detail: str = "no check has run yet"
 
     @property
@@ -60,6 +66,8 @@ class LakeHealth:
             "status": self.status.value,
             "checked_at": self.checked_at.isoformat() if self.checked_at else None,
             "holes_by_symbol": dict(self.holes_by_symbol),
+            "bars_by_symbol": dict(self.bars_by_symbol),
+            "latest_close_by_symbol": dict(self.latest_close_by_symbol),
             "total_holes": self.total_holes,
             "detail": self.detail,
         }
@@ -76,7 +84,29 @@ class LakeHealthMonitor:
     timeframe: str = "1h"
     interval: timedelta = DEFAULT_INTERVAL
     auto_recover: bool = False
+    minimum_bars: int = 2
+    tail_grace: timedelta = timedelta(minutes=10)
+    status_path: Path | None = None
     health: LakeHealth = field(default_factory=LakeHealth)
+
+    def __post_init__(self) -> None:
+        if self.status_path is None:
+            self.status_path = self.gap_root / "lake_health.json"
+
+    def _publish(self) -> None:
+        """Atomically expose the latest scan to other processes/the dashboard."""
+        if self.status_path is None:
+            return
+        try:
+            self.status_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.status_path.with_suffix(self.status_path.suffix + ".tmp")
+            tmp.write_text(
+                json.dumps(self.health.as_dict(), sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.status_path)
+        except OSError:
+            logger.exception("failed to publish lake health status")
 
     def check_once(self, *, now: datetime | None = None) -> LakeHealth:
         """One detection cycle.  Never raises: a failed check reports ERROR."""
@@ -91,22 +121,59 @@ class LakeHealthMonitor:
                 write=True,
                 now=moment,
             )
-        except Exception as exc:  # noqa: BLE001 - status must degrade, not crash
+            timeframe_seconds = TF_SECONDS[self.timeframe]
+            candle_store = CandleParquetStore(
+                self.candle_root,
+                exchange=self.exchange,
+            )
+            bars_by_symbol: dict[str, int] = {}
+            latest_close_by_symbol: dict[str, str | None] = {}
+            evidence_failures: list[str] = []
+            for symbol in self.symbols:
+                candles = candle_store.read(symbol, self.timeframe)
+                bars_by_symbol[symbol] = len(candles)
+                latest_close = max(
+                    (candle.close_time for candle in candles),
+                    default=None,
+                )
+                latest_close_by_symbol[symbol] = (
+                    latest_close.isoformat() if latest_close is not None else None
+                )
+                if len(candles) < self.minimum_bars:
+                    evidence_failures.append(
+                        f"{symbol}=only {len(candles)}/{self.minimum_bars} bars"
+                    )
+                    continue
+                if latest_close is None:
+                    evidence_failures.append(f"{symbol}=no closed tail")
+                    continue
+                tail_age = moment - latest_close
+                max_tail_age = timedelta(seconds=timeframe_seconds) + self.tail_grace
+                if tail_age < timedelta(0):
+                    evidence_failures.append(f"{symbol}=future closed tail")
+                elif tail_age > max_tail_age:
+                    evidence_failures.append(
+                        f"{symbol}=tail stale {tail_age.total_seconds():.0f}s"
+                    )
+        except Exception as exc:
             logger.exception("lake health scan failed")
             self.health = LakeHealth(
                 status=LakeStatus.ERROR,
                 checked_at=moment,
                 detail=f"scan failed: {exc}",
             )
+            self._publish()
             return self.health
 
         counts = {symbol: len(holes) for symbol, holes in found.items()}
         total = sum(counts.values())
-        if total == 0:
+        if total == 0 and not evidence_failures:
             self.health = LakeHealth(
                 status=LakeStatus.HEALTHY,
                 checked_at=moment,
                 holes_by_symbol=counts,
+                bars_by_symbol=bars_by_symbol,
+                latest_close_by_symbol=latest_close_by_symbol,
                 detail=f"{len(counts)} symbol(s) contiguous on {self.timeframe}",
             )
         else:
@@ -117,9 +184,19 @@ class LakeHealthMonitor:
                 status=LakeStatus.DEGRADED,
                 checked_at=moment,
                 holes_by_symbol=counts,
-                detail=f"{total} hole(s) recorded: {worst}",
+                bars_by_symbol=bars_by_symbol,
+                latest_close_by_symbol=latest_close_by_symbol,
+                detail="; ".join(
+                    part
+                    for part in (
+                        f"{total} hole(s) recorded: {worst}" if total else "",
+                        ", ".join(evidence_failures),
+                    )
+                    if part
+                ),
             )
             logger.warning("lake health: %s", self.health.detail)
+        self._publish()
         return self.health
 
     async def run(self) -> None:

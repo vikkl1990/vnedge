@@ -8,6 +8,7 @@ import pytest
 
 from vnedge.data.gaps import GapKind, GapParquetStore
 from vnedge.data.schemas import normalize_candles
+from vnedge.exchange.live_feed import QuoteUpdate
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.paper.fill_model import FillModel
@@ -59,6 +60,35 @@ class FakeFeed:
         )
 
 
+class QuoteDrivenFeed(FakeFeed):
+    """A feed whose BBO is continuously active between candle events."""
+
+    def __init__(self, *, now: datetime):
+        super().__init__([])
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue()
+        bucket = now.replace(minute=0, second=0, microsecond=0)
+        self.forming_candle = [
+            int(bucket.timestamp() * 1000),
+            100.0,
+            100.5,
+            99.5,
+            100.0,
+            5.0,
+        ]
+
+    def push_quote(self, now: datetime, bid: float = 100.1, ask: float = 100.2) -> None:
+        self.quote = (bid, ask)
+        self.quote_updates.put_nowait(
+            QuoteUpdate(
+                ts=now,
+                bid=bid,
+                ask=ask,
+                received_ts=now,
+                source="test:continuous_quotes",
+            )
+        )
+
+
 class AlwaysLong(BaseStrategy):
     strategy_id = "always_long"
     warmup_bars = 2
@@ -83,6 +113,19 @@ class LadderLong(AlwaysLong):
             take_profit_price=close * 1.10,
             take_profit_levels=(close * 1.03, close * 1.06, close * 1.10),
             reason="ladder plan",
+        )
+
+
+class ThinEdgeLong(AlwaysLong):
+    strategy_id = "thin_edge_long"
+
+    def signal(self, df, index):
+        close = float(df["close"].iloc[index])
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.99,
+            take_profit_price=close * 1.0005,
+            reason="gross edge below round-trip wall",
         )
 
 
@@ -160,6 +203,34 @@ def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
     assert session.shadow_outcomes is None
 
 
+async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_path):
+    """A busy BBO must not starve the candle-path freshness clock."""
+    now = datetime.now(UTC)
+    feed = QuoteDrivenFeed(now=now)
+    session, _ = build_session(
+        tmp_path,
+        feed,
+        strategy=SqueezeExpansionBreakoutV3(),
+        mode=RunnerMode.SHADOW,
+    )
+    session._IDLE_TICK_SECONDS = 0.005
+
+    async def publish_quotes() -> None:
+        for _ in range(20):
+            moment = datetime.now(UTC)
+            feed.push_quote(moment)
+            await asyncio.sleep(0.001)
+
+    producer = asyncio.create_task(publish_quotes())
+    await session.run(deadline_seconds=0.04)
+    await producer
+
+    assert session.time_machine is not None
+    age = session.time_machine.age_ms(SYM, session.config.timeframe, datetime.now(UTC))
+    assert age is not None and age < 1000
+    assert session._candle_path_arm_block(datetime.now(UTC)) is None
+
+
 async def test_closed_candle_triggers_full_pipeline(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed)
@@ -170,6 +241,20 @@ async def test_closed_candle_triggers_full_pipeline(tmp_path):
     assert len(exchange.get_positions()) == 1  # filled at live quote
     fill = exchange.get_fills()[0]
     assert fill.price == pytest.approx(100.01 * (1 + 2 / 10_000))  # ask + slippage
+
+
+async def test_every_entry_path_rejects_edge_below_cost_wall(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=ThinEdgeLong())
+
+    report = await session.run(max_bars=1)
+
+    assert report.signals_generated == 1
+    assert report.orders_submitted == 0
+    assert exchange.get_positions() == []
+    records = session.journal.read_all()
+    assert any(record["kind"] == "cost_rejected" for record in records)
+    assert session.last_reject_reason.startswith("cost_gate:")
 
 
 async def test_latency_is_measured_end_to_end(tmp_path):

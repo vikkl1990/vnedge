@@ -33,6 +33,7 @@ from ccxt.base.errors import NetworkError, NotSupported
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.dashboard.health_bands import annotate
 from vnedge.data.ccxt_client import CcxtPublicClient
+from vnedge.data.data_quality_gate import validate_candles
 from vnedge.data.gaps import GapParquetStore
 from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
@@ -894,9 +895,15 @@ async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, un
         last_ms = int(pd.Timestamp(cached["timestamp"].iloc[-1]).timestamp() * 1000)
         if last_ms >= since:  # the cache reaches back far enough to be useful
             frame = cached
-            if last_ms + 1 < until:
+            next_open_ms = last_ms + _timeframe_ms(spec.timeframe)
+            if next_open_ms < until:
                 gap = normalize_candles(
-                    await rest.fetch_candles(spec.symbol, spec.timeframe, last_ms + 1, until)
+                    await rest.fetch_candles(
+                        spec.symbol,
+                        spec.timeframe,
+                        next_open_ms,
+                        until,
+                    )
                 )
                 if not gap.empty:
                     frame = (
@@ -907,14 +914,38 @@ async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, un
                     )
             cutoff = pd.to_datetime(since, unit="ms", utc=True)
             frame = frame[frame["timestamp"] >= cutoff].reset_index(drop=True)
+            frame = _closed_validated_warmup(frame, spec, until)
             _save_candle_cache(cache_path, frame)
             logger.info("lane %s warmup: cache + gap-fill (%d bars)", spec.lane_id, len(frame))
             return frame
     history = normalize_candles(
         await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
     )
+    history = _closed_validated_warmup(history, spec, until)
     _save_candle_cache(cache_path, history)
     return history
+
+
+def _closed_validated_warmup(
+    frame: pd.DataFrame,
+    spec: LaneSpec,
+    until_ms: int,
+) -> pd.DataFrame:
+    """Remove the exchange's forming tail and enforce the quality boundary."""
+    timeframe_ms = _timeframe_ms(spec.timeframe)
+    cutoff = pd.to_datetime(until_ms, unit="ms", utc=True)
+    closed = frame[
+        frame["timestamp"] + pd.to_timedelta(timeframe_ms, unit="ms") <= cutoff
+    ].reset_index(drop=True)
+    report = validate_candles(
+        closed,
+        spec.timeframe,
+        allow_gaps=False,
+        dataset=f"runtime_warmup/{spec.exchange}/{spec.symbol}/{spec.timeframe}",
+    )
+    if not report.passed:
+        raise RuntimeError(report.summary)
+    return closed
 
 
 async def build_lane(

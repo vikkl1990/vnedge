@@ -5,6 +5,7 @@ import json
 import logging
 import math
 from collections import deque
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -117,6 +118,58 @@ def test_canonical_sink_persists_only_closed_trade_built_hour(tmp_path):
     assert hours[0].trade_count == 60
 
 
+def test_canonical_sink_restart_rebuilds_current_minute_from_tick_shards(tmp_path):
+    tick_root = tmp_path / "lake"
+    candle_root = tmp_path / "candles"
+    bucket = datetime(2026, 8, 21, 4, 5, tzinfo=UTC)
+    buffer = _Buffer(
+        tick_root,
+        "binanceusdm",
+        "BTC/USDT:USDT",
+        "trades",
+    )
+    for offset, price, trade_id in ((10, 100.0, "a"), (40, 102.0, "b")):
+        timestamp = int((bucket + timedelta(seconds=offset)).timestamp() * 1000)
+        buffer.add({
+            "ts_ms": timestamp,
+            "price": price,
+            "amount": 1.0,
+            "side": "buy",
+            "trade_id": trade_id,
+        })
+    buffer.flush(0.0)
+
+    sink = CanonicalCandleSink(
+        "binanceusdm",
+        ["BTC/USDT:USDT"],
+        candle_root,
+        tick_root=tick_root,
+        restore_at=bucket + timedelta(seconds=50),
+    )
+    forming = sink.pipelines["BTC/USDT:USDT"].forming()
+    assert forming is not None
+    assert forming.open_time == bucket
+    assert forming.trade_count == 2
+    assert float(forming.close) == 102.0
+    assert sink.restored_last_trade_ts_ms["BTC/USDT:USDT"] == int(
+        (bucket + timedelta(seconds=40)).timestamp() * 1000
+    )
+    assert sink.restored_trade_keys["BTC/USDT:USDT"] == {
+        f"{int((bucket + timedelta(seconds=10)).timestamp() * 1000)}:a",
+        f"{int((bucket + timedelta(seconds=40)).timestamp() * 1000)}:b",
+    }
+
+    sink.advance_time(bucket + timedelta(minutes=1))
+    from vnedge.data.candles import CandleParquetStore
+
+    closed = CandleParquetStore(
+        candle_root, exchange="binanceusdm"
+    ).read("BTCUSDT", "1m")
+    assert len(closed) == 1
+    assert closed[0].open_time == bucket
+    assert closed[0].trade_count == 2
+
+
 def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
     rows, rejected = _normalize_trade_batch(
         [
@@ -131,6 +184,7 @@ def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
     assert rejected == 3
     assert [row["ts_ms"] for row, _ in rows] == [1000, 2000]
     assert [key for _, key in rows] == ["1000:a", "2000:b"]
+    assert [row["trade_id"] for row, _ in rows] == ["a", "b"]
 
 
 class _TradeSink:

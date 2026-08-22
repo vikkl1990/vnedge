@@ -94,9 +94,11 @@ Two **unauthenticated** probes (they reveal only process state, never data):
 
 - `GET /health` — liveness: `200 {"status":"ok"}` as soon as the process
   serves. Used by the compose healthcheck + TLS proxy.
-- `GET /ready` — readiness: `200 {"status":"ready"}` once a snapshot has been
-  published, `503 {"status":"starting"}` while warming. Lets an orchestrator
-  wait for data-readiness without treating a warming process as dead.
+- `GET /ready` — workflow readiness: requires a fresh snapshot, an `ok` primary
+  feed, process-healthy lane evidence and, when `CANDLE_LAKE_HEALTH_PATH` is
+  configured, a recent clean canonical-lake scan. Empty, short, stale-ended or
+  gapped candle history is not ready. Failures return `503` with coarse reason
+  codes. This is intentionally stricter than liveness.
 
 ## Behavior
 
@@ -107,9 +109,10 @@ Two **unauthenticated** probes (they reveal only process state, never data):
   cookie. It is never present in JSON, browser storage, or WebSocket URLs.
 - Browser HTTP requests and both WebSocket streams authenticate with that
   same-origin cookie. WebSockets reject query-string credentials.
-- HTTP `?token=` remains a deprecated compatibility path for old API clients.
-  Do not use it in browsers: URLs leak into history, proxy logs, referrers, and
-  screenshots. New automation must use the bearer header.
+- HTTP `?token=` is rejected by default. A temporary migration-only switch,
+  `DASHBOARD_ALLOW_QUERY_TOKEN=1`, can re-enable it for a controlled legacy
+  client; production compose does not expose that switch. Automation must use
+  the bearer header or exchange it for the HttpOnly session cookie.
 - Every stored token is compared with a constant-time comparison, and every
   token is checked on every attempt (no early exit), so timing does not
   reveal which entry matched.

@@ -16,6 +16,10 @@ services:
       DASHBOARD_USERS: "${DASHBOARD_USERS:-}"
       DASHBOARD_JWT_SECRET: "${DASHBOARD_JWT_SECRET:-}"
       DASHBOARD_COOKIE_SECURE: "${DASHBOARD_COOKIE_SECURE:-true}"
+      # /health is process liveness; /ready additionally consumes this
+      # cross-process evidence and fails while the canonical lake has holes.
+      CANDLE_LAKE_HEALTH_PATH: data/gaps/lake_health.json
+      CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS: "${CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS:-1200}"
       VNEDGE_SECRETS_KEY: "${VNEDGE_SECRETS_KEY:-}"
       VNEDGE_SECRETS_KEY_VERSION: "${VNEDGE_SECRETS_KEY_VERSION:-1}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
@@ -103,6 +107,54 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
+
+  # Explicit fail-closed repair worker. The recorder only detects/publishes
+  # holes; this worker repairs Binance storage_hole records from aggregate
+  # trades with strict contiguous trade-ID proof, then deterministically
+  # rebuilds the canonical candle ladder. A failed proof leaves the gap open.
+  gap-recovery:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      pulse-recorder:
+        condition: service_started
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python -m vnedge.data.binance_gap_recovery \
+            --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
+            --data-root data \
+            --candle-root data/candles \
+            --gap-root data/gaps \
+            --report data/reports/binance_gap_recovery.json
+          sleep 900
+        done
+    volumes:
+      - ./data:/app/data
+    mem_limit: 600m
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  tick-lake-maintenance:
+    build: .
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - vnedge.data.tick_lake_maintenance
+      - --data-root
+      - data
+      - --interval-seconds
+      - "86400"
+    volumes:
+      - ./data:/app/data
+    mem_limit: 1200m
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
 
   # L2 order-book recorder. Separate from pulse-recorder, which is

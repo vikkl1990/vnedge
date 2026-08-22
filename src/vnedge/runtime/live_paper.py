@@ -48,6 +48,7 @@ from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.plan.adapters import signal_intent_to_plan
 from vnedge.plan.cost_model import CostModel
 from vnedge.plan.trade_plan import plan_gate
+from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import MarketState, OrderIntent, PreTradeRiskGateway
@@ -254,6 +255,7 @@ class LivePaperSession:
         else:
             self.cost_profile = "swing"
         self.cost_model = CostModel.for_profile(self.cost_profile)
+        self.entry_cost_gate = CostGate(CostProfile(self.cost_profile))
         self._regime_model = RegimeV0()
         self._overlay_regime: dict | None = None
         self._overlay_plan: dict | None = None
@@ -622,7 +624,13 @@ class LivePaperSession:
             "exchange_ts": now,
         }
 
-    def _feed_time_machine(self, now: datetime, closed_row: list | None = None) -> None:
+    def _feed_time_machine(
+        self,
+        now: datetime,
+        closed_row: list | None = None,
+        *,
+        live_mid: float | None = None,
+    ) -> None:
         """Feed the Time Machine. FAIL-CLOSED: never raises into the run loop.
 
         A Time Machine fault marks its health degraded (surfaced in the snapshot)
@@ -636,7 +644,23 @@ class LivePaperSession:
                 self.time_machine.on_kline_update(sym, tf, self._tm_kline(closed_row, now), is_closed=True)
             forming = getattr(self.feed, "forming_candle", None)
             if forming:
-                self.time_machine.on_kline_update(sym, tf, self._tm_kline(forming, now), is_closed=False)
+                forming_row = list(forming)
+                if live_mid is not None and live_mid > 0:
+                    # Quote-acceptance lanes can receive thousands of BBO
+                    # updates between exchange OHLCV events.  Fold the
+                    # executable midpoint into the read-only forming view so
+                    # Time Machine freshness follows real market evidence,
+                    # not the much slower kline publisher.  Volume remains the
+                    # exchange-reported value; only H/L/C are advanced.
+                    forming_row[2] = max(float(forming_row[2]), live_mid)
+                    forming_row[3] = min(float(forming_row[3]), live_mid)
+                    forming_row[4] = live_mid
+                self.time_machine.on_kline_update(
+                    sym,
+                    tf,
+                    self._tm_kline(forming_row, now),
+                    is_closed=False,
+                )
             self.time_machine.check_health(now)
             self._tm_degraded = False
         except Exception as exc:  # noqa: BLE001 — observability must NEVER affect trading
@@ -1057,6 +1081,64 @@ class LivePaperSession:
             return
         bid, ask = self.feed.quote
         ref_price = ask if sig.side == "long" else bid
+        targets = [
+            float(target)
+            for target in (sig.take_profit_price, *sig.take_profit_levels)
+            if target is not None and math.isfinite(float(target))
+        ]
+        favorable = [
+            target
+            for target in targets
+            if (sig.side == "long" and target > ref_price)
+            or (sig.side == "short" and target < ref_price)
+        ]
+        if not favorable:
+            self.last_reject_reason = "cost_gate: no favorable target/edge hypothesis"
+            self.journal.append("cost_rejected", {
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "side": sig.side,
+                "reason": self.last_reject_reason,
+                "signal_reason": sig.reason,
+            })
+            self._log_trade_event("cost_rejected", self.last_reject_reason, now)
+            return
+        target = max(favorable) if sig.side == "long" else min(favorable)
+        signal_edge_bps = (
+            (target - ref_price) / ref_price * 10_000.0
+            if sig.side == "long"
+            else (ref_price - target) / ref_price * 10_000.0
+        )
+        maker = (
+            self.config.mode is not RunnerMode.SHADOW
+            and is_maker_route_strategy(self.strategy.strategy_id)
+        )
+        cost_decision = self.entry_cost_gate.evaluate(
+            signal_edge_bps=signal_edge_bps,
+            side=sig.side,
+            urgency="maker" if maker else "taker",
+            expected_holding_seconds=(
+                max(1, self.config.max_holding_bars) * (self._tf_seconds or 0)
+            ),
+            current_funding_rate=getattr(self.feed, "funding_rate", 0.0),
+            symbol=self.config.symbol,
+            available_room_bps=signal_edge_bps,
+        )
+        if not cost_decision.approved:
+            self.last_reject_reason = f"cost_gate: {cost_decision.reason}"
+            self.journal.append("cost_rejected", {
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "side": sig.side,
+                "signal_edge_bps": signal_edge_bps,
+                "expected_net_bps": str(cost_decision.expected_net_bps),
+                "total_cost_bps": str(cost_decision.cost.total_cost_bps),
+                "min_required_bps": str(cost_decision.min_required_bps),
+                "reason": cost_decision.reason,
+                "signal_reason": sig.reason,
+            })
+            self._log_trade_event("cost_rejected", self.last_reject_reason, now)
+            return
         sizing = size_position(
             equity_usd=self.tracker.equity_usd(), entry_price=ref_price,
             stop_price=sig.stop_price, side=sig.side,
@@ -1071,10 +1153,6 @@ class LivePaperSession:
         # (bid for a long, ask for a short) instead of crossing the spread — the
         # route their scorecard edge is defined on. SHADOW never places real
         # orders, so it stays market (its virtual pricing is handled separately).
-        maker = (
-            self.config.mode is not RunnerMode.SHADOW
-            and is_maker_route_strategy(self.strategy.strategy_id)
-        )
         intent = OrderIntent(
             symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
             notional_usd=sizing.notional_usd,
@@ -2334,6 +2412,16 @@ class LivePaperSession:
                 self._sync_quote()
                 if acceptance_observer is None:  # defensive type/runtime guard
                     continue
+                # Keep the decision-timeframe clock alive before the observer
+                # can ask the fail-closed arm gate for approval.  Previously
+                # the immediate ``continue`` below starved Time Machine for as
+                # long as quotes kept arriving, blocking almost every scanner
+                # fire with ``tm_age_hard`` despite a sub-millisecond BBO.
+                quote_clock = quote_update.received_ts or quote_update.ts
+                self._feed_time_machine(
+                    quote_clock,
+                    live_mid=(quote_update.bid + quote_update.ask) / 2.0,
+                )
                 before_candidates = acceptance_observer.candidates
                 before_approved = acceptance_observer.fires
                 before_rejected = acceptance_observer.rejected

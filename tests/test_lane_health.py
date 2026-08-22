@@ -23,6 +23,7 @@ from vnedge.runtime.lane_health import (
     VERDICT_PROBATION,
     VERDICT_SILENT,
     VERDICT_STALE,
+    VERDICT_UNDER_SAMPLED,
     LaneHealthReport,
     audit_lanes,
     main,
@@ -102,7 +103,8 @@ def test_verdict_ok(tmp_path):
     assert report.summary() == "1/1 OK"
     assert report.totals == {
         "desired": 1, "active": 1, "ok": 1,
-        "stale": 0, "probation": 0, "silent": 0, "missing": 0, "orphan": 0,
+        "stale": 0, "under_sampled": 0, "probation": 0,
+        "silent": 0, "missing": 0, "orphan": 0,
         "trade_compatible": 1, "production_blockers": 0,
     }
 
@@ -186,7 +188,7 @@ def test_verdict_orphan_journal_without_desired_spec(tmp_path):
     assert report.totals["active"] == 1  # orphans not counted as active desired lanes
 
 
-def test_shadow_probation_when_virtual_outcomes_are_net_negative(tmp_path):
+def test_shadow_outcome_is_under_sampled_before_evidence_minimum(tmp_path):
     lane = LaneSpec(
         lane_id="shadow_lane",
         exchange="bybit",
@@ -202,14 +204,39 @@ def test_shadow_probation_when_virtual_outcomes_are_net_negative(tmp_path):
         }) + "\n")
     report = audit_lanes(tmp_path, desired=[lane], now=NOW)
     row = report.rows[0]
-    assert row.verdict == VERDICT_PROBATION
+    assert row.verdict == VERDICT_UNDER_SAMPLED
     assert row.shadow_virtual_trades == 1
     assert row.shadow_net_usd == -5.25
     assert row.trade_compatible is False
     assert report.healthy  # warning, not a missing/stale process failure
     assert not report.production_healthy
+    assert report.summary() == "1 UNDER_SAMPLED"
+    assert report.production_summary() == "1 UNDER_SAMPLED"
+
+
+def test_shadow_probation_requires_configured_minimum_evidence(tmp_path):
+    lane = LaneSpec(
+        lane_id="shadow_lane",
+        exchange="bybit",
+        symbol="BTC/USDT:USDT",
+        mode=RunnerMode.SHADOW,
+    )
+    write_journal(tmp_path, "shadow_lane", ok_records())
+    with open(tmp_path / "shadow_lane.journal.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "ts": _iso(NOW - 10.0),
+            "kind": "shadow_outcome",
+            "payload": {"virtual_net_usd": -5.25, "resolution": "stop"},
+        }) + "\n")
+
+    report = audit_lanes(
+        tmp_path,
+        desired=[lane],
+        now=NOW,
+        environ={"LANE_HEALTH_SHADOW_PROBATION_MIN_TRADES": "1"},
+    )
+    assert report.rows[0].verdict == VERDICT_PROBATION
     assert report.summary() == "1 SHADOW_PROBATION"
-    assert report.production_summary() == "1 SHADOW_PROBATION"
 
 
 def test_equity_file_freshness_counts_for_staleness(tmp_path):

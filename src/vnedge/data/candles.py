@@ -671,6 +671,14 @@ class CandlePipeline:
         gaps still fail closed through ``aggregate_candle_series``.
         """
         assert self.store is not None
+        base_rows = self.store.read(self.symbol, self.builder.timeframe)
+        if base_rows:
+            # The base builder is also restart state. Without this boundary a
+            # replayed/late trade can reopen history that Parquet has already
+            # declared immutable.
+            self.builder._closed_through = max(
+                candle.close_time for candle in base_rows
+            )
         rebuilt_count = 0
         for source, target in _AGGREGATION_CHAIN:
             aggregator = self._aggregators.get(source)
