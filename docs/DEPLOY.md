@@ -106,7 +106,7 @@ MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH=config/shadow-observers.v1.json
 ```
 
 The checked-in v1 roster runs virtual-only squeeze acceptance at 5m and
-range-expansion + BoS observation at 1h for BTC and ETH. It does not add a
+range-expansion + BoS observation at 15m for BTC and ETH. It does not add a
 paper lane, change `CAPITAL_APPROVED`, or enable live orders. Startup fails on
 unknown fields, wrong timeframes, duplicate stable lane IDs, or an ineligible
 strategy.
@@ -129,7 +129,7 @@ explicit and no evidence is silently lost.
 
 After recreation, a legacy singleton must report `shadow_observe_lanes: 1`;
 the checked-in versioned roster must report `shadow_observe_lanes: 6` and
-`shadow_observe_timeframes: ["1h", "5m"]`. Both must report
+`shadow_observe_timeframes: ["15m", "5m"]`. Both must report
 `paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
 The Desk banner must say
 `SHADOW_OBSERVE · virtual only`. A bad, killed, missing, or wrong-timeframe

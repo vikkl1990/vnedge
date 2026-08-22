@@ -89,3 +89,17 @@ def test_v4_never_falls_back_to_close_volume_proxy() -> None:
     assert row["sqz_vwap_source"] == "unavailable"
     assert row["sqz_arm_ready"] == 0.0
     assert pd.isna(row["sqz_vwap24"])
+
+
+def test_v4_diagnostics_explain_exact_volume_failure() -> None:
+    strategy = SqueezeExpansionBreakoutV4()
+    strategy._features = _PreparedFeatures()
+    candles = _candles()
+    candles.loc[100, "data_quality"] = "gap"
+    prepared = strategy.prepare(candles)
+
+    report = strategy.evaluation_diagnostics(prepared, len(prepared) - 1)
+
+    assert report["eligible"] is False
+    assert report["primary_failed_gate"] == "exact_volume_window_not_ready"
+    assert "exact_volume_window_not_ready" in report["all_failed_gates"]

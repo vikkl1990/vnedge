@@ -2791,7 +2791,7 @@
       tmCell="<div class='kpi'><div class='lbl'>Time Machine</div><div class='v' style='font-size:14px;color:"+(tmd?'var(--warn)':'var(--long)')+"'>"+(tmd?'degraded':(jEsc(k0)+' '+pr+'%'))+"</div><div class='s'>forming · "+tmk.map(function(k){return jEsc(k)+':'+jEsc(String(tmh[k]||'?'));}).join(' ')+"</div></div>";}
     var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
-      "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.primary_failed_gate||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
       "<div class='kpi'><div class='lbl'>Latency</div><div class='v num' style='font-size:14px'>"+(flat&&flat.p50!=null?ageMs(flat.p50):'—')+"</div><div class='s'>candle→act p50 · →signal "+(dlat&&dlat.p50!=null?ageMs(dlat.p50):'—')+"</div></div>"+
       feedGuard+tmCell+
       "<div class='kpi'><div class='lbl'>Shadow net</div><div class='v num "+(num(sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.net_usd))+"</div><div class='s'>"+num(sp.virtual_trades)+" trades · PF "+(sp.profit_factor!=null?(+sp.profit_factor).toFixed(2):'—')+"</div></div>"+
@@ -2799,7 +2799,18 @@
       "<div class='kpi'><div class='lbl'>Daily factory</div><div class='v' style='font-size:14px'>"+jEsc(factory?factory.label:'not published')+"</div><div class='s'>"+jEsc(factory?factory.detail:'waiting for lane payload')+"</div></div>"+
       "<div class='kpi'><div class='lbl'>ML labels</div><div class='v num'>"+(ml!=null?ml:'—')+"</div><div class='s'>fed to meta-labeler</div></div>"+
     "</div>";
-    var el=$("pipelineDetail"); if(el)el.innerHTML=head+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";
+    var failures=Array.isArray(ev.all_failed_gates)?ev.all_failed_gates:[];
+    var distances=ev.distance_to_threshold||{},distanceRows=Object.keys(distances).filter(function(k){return distances[k]!=null;}).slice(0,6).map(function(k){var value=Number(distances[k]);return jEsc(k.replace(/_/g,' '))+" "+jEsc(Number.isFinite(value)?value.toFixed(3):String(distances[k]));});
+    var source=ev.data_source||{},contract=(l&&l.runtime_contract)||{};
+    var gateDiag="<div style='margin:12px 15px 0;padding:12px;border:1px solid var(--line);border-radius:8px'>"+
+      "<div class='lbl'>Last evaluation contract</div>"+
+      "<div style='margin-top:6px;font-size:12px'><b>primary:</b> "+jEsc(String(ev.primary_failed_gate||ev.signal_reason||'eligible / awaiting trigger'))+"</div>"+
+      "<div class='s' style='margin-top:4px'>all gates · "+jEsc(failures.length?failures.join(' · '):'none')+"</div>"+
+      "<div class='s' style='margin-top:4px'>distance · "+(distanceRows.length?distanceRows.join(' · '):'not reported')+"</div>"+
+      "<div class='s' style='margin-top:4px'>source · "+jEsc(String(source.candle_source||'unreported'))+" · fallback "+jEsc(String(!!source.exchange_fallback_used))+" · row "+jEsc(String(source.decision_row_sha256||'—').slice(0,12))+"</div>"+
+      "<div class='s' style='margin-top:4px'>contract · "+jEsc(String((l&&l.cost_profile)||'—'))+" · "+jEsc(String(contract.max_holding_bars||'—'))+" bars / "+jEsc(String(contract.max_holding_hours||'—'))+"h</div>"+
+      "</div>";
+    var el=$("pipelineDetail"); if(el)el.innerHTML=head+gateDiag+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";
     poll("/trade-journal?limit=25&lane="+encodeURIComponent(laneId), function(d){ if(pldLane===laneId) renderPldTrades(d); });
   }
   function renderPldTrades(d){

@@ -9,6 +9,7 @@ the runtime may arm the quote acceptance engine.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -16,6 +17,7 @@ from typing import Final
 import pandas as pd
 
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.squeeze_expansion_breakout import PARAMS as FEATURE_PARAMS
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import PARAMS as ACCEPTANCE_PARAMS
 
@@ -127,6 +129,82 @@ class SqueezeExpansionBreakoutV4(BaseStrategy):
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         del df, index
         return None
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        """Explain the closed-bar arm decision; quote acceptance is separate."""
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        exact_ready = bool(number("sqz_exact_volume_ready") or 0)
+        compressed = bool(number("sqz_compressed_raw") or 0)
+        volume_ok = bool(number("sqz_volume_ok") or 0)
+        arm_ready = bool(number("sqz_arm_ready") or 0)
+        quality_ok = str(row.get("data_quality", "unknown")).lower() == "ok"
+        closed = bool(row.get("is_closed", False))
+        failures: list[str] = []
+        if not quality_ok:
+            failures.append("data_quality_not_ok")
+        if not closed:
+            failures.append("forming_bar")
+        if not exact_ready:
+            failures.append("exact_volume_window_not_ready")
+        if not compressed:
+            failures.append("compression_not_present")
+        if not volume_ok:
+            failures.append("volume_confirmation_failed")
+
+        rank = number("sqz_range_rank")
+        volume = number("volume")
+        volume_base = number("sqz_vol_ma")
+        volume_ratio = (
+            volume / volume_base
+            if volume is not None and volume_base is not None and volume_base > 0
+            else None
+        )
+        return {
+            "eligible": arm_ready,
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "sqz_exact_volume_ready": exact_ready,
+                "sqz_compressed_raw": compressed,
+                "sqz_volume_ok": volume_ok,
+                "sqz_arm_ready": arm_ready,
+                "sqz_range_rank": rank,
+                "sqz_volume_ratio": volume_ratio,
+                "sqz_range_high": number("sqz_range_high"),
+                "sqz_range_low": number("sqz_range_low"),
+                "sqz_atr": number("sqz_atr"),
+                "sqz_vwap24": number("sqz_vwap24"),
+                "sqz_vwap_source": str(row.get("sqz_vwap_source", "unavailable")),
+            },
+            "thresholds": {
+                "exact_vwap_bars": self.params.exact_vwap_bars,
+                "compression_threshold": FEATURE_PARAMS.compression_threshold,
+                "min_volume_mult": FEATURE_PARAMS.min_volume_mult,
+                "acceptance_hold_seconds": ACCEPTANCE_PARAMS.acceptance_hold_seconds,
+                "min_acceptance_samples": ACCEPTANCE_PARAMS.min_acceptance_samples,
+                "max_chase_bps": ACCEPTANCE_PARAMS.max_chase_bps,
+            },
+            "distance_to_threshold": {
+                "compression_rank_excess": (
+                    None
+                    if rank is None
+                    else max(0.0, rank - FEATURE_PARAMS.compression_threshold)
+                ),
+                "volume_ratio_shortfall": (
+                    None
+                    if volume_ratio is None
+                    else max(0.0, FEATURE_PARAMS.min_volume_mult - volume_ratio)
+                ),
+            },
+        }
 
 
 __all__ = [

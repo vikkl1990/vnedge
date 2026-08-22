@@ -155,7 +155,9 @@ def _last_signal_reason(
         return str(blocked)
     evaluation = _mapping(lane.get("last_eval"))
     return str(
-        evaluation.get("reason")
+        evaluation.get("primary_failed_gate")
+        or evaluation.get("skip_reason")
+        or evaluation.get("reason")
         or evaluation.get("signal_reason")
         or lane.get("last_risk_reject")
         or "no_signal_observed"
@@ -313,6 +315,11 @@ def build_lanes_payload(
                 "sizing_profile": (
                     dict(sizing)
                     if sizing and (mode == "paper" or observation_class == "shadow_observe")
+                    else None
+                ),
+                "runtime_contract": (
+                    dict(_mapping(lane.get("runtime_contract")))
+                    if lane.get("runtime_contract")
                     else None
                 ),
                 "active_plan": (

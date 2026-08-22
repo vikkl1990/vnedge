@@ -75,3 +75,25 @@ def test_v2_rejects_conflicting_higher_timeframe() -> None:
     row = strategy.prepare(_history()).iloc[-1]
 
     assert row["bos15_fire_long"] == 0.0
+
+
+def test_v2_diagnostics_name_higher_timeframe_conflict() -> None:
+    strategy = StructureBos15mTriggerV2()
+    context = _HourlyContext()
+    original = context.prepare
+
+    def prepare(hours: pd.DataFrame) -> pd.DataFrame:
+        out = original(hours)
+        out["htf_structure_trend"] = "down"
+        return out
+
+    context.prepare = prepare  # type: ignore[method-assign]
+    strategy._hourly = context
+    prepared = strategy.prepare(_history())
+
+    report = strategy.evaluation_diagnostics(prepared, len(prepared) - 1)
+
+    assert report["eligible"] is False
+    assert report["primary_failed_gate"] == "htf_structure_conflict"
+    assert report["features"]["bos15_structure_trend"] == "up"
+    assert report["features"]["bos15_htf_structure_trend"] == "down"

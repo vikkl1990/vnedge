@@ -68,6 +68,7 @@ from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
+from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
@@ -349,6 +350,9 @@ class MultiLaneProvider:
                 "arm_blocked": self._lanes[lid].get("session", {}).get("arm_blocked"),
                 # D-lite overlays (observe-only): cost world + regime + plan preview
                 "cost_profile": self._lanes[lid].get("session", {}).get("cost_profile"),
+                "runtime_contract": self._lanes[lid].get("session", {}).get(
+                    "runtime_contract"
+                ),
                 "regime": self._lanes[lid].get("session", {}).get("regime"),
                 "regime_would_block": self._lanes[lid].get("session", {}).get("regime_would_block"),
                 "plan_overlay": self._lanes[lid].get("session", {}).get("plan_overlay"),
@@ -1221,11 +1225,21 @@ async def build_lane(
     feed = acquire_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
     risk = _lane_risk_config(spec)
     daily_factory = _lane_daily_factory_config(spec)
+    runtime_contract = scanner_runtime_contract(spec.strategy_id)
+    if runtime_contract is not None and runtime_contract.timeframe != spec.timeframe:
+        raise ValueError(
+            f"{spec.strategy_id} runtime contract requires "
+            f"{runtime_contract.timeframe}, got {spec.timeframe}"
+        )
     config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
                           timeframe=spec.timeframe,
                           starting_equity_usd=spec.starting_equity, risk=risk,
                           limits=venue_symbol_limits(spec.exchange, spec.symbol),
                           daily_factory=daily_factory,
+                          max_holding_bars=(
+                              runtime_contract.max_holding_bars
+                              if runtime_contract is not None else 48
+                          ),
                           trail_atr_mult=spec.trail_atr_mult)
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path

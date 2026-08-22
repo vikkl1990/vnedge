@@ -25,6 +25,7 @@ strategy semantics that research models at bar granularity.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -88,6 +89,10 @@ from vnedge.runtime.squeeze_acceptance_observe import (
 from vnedge.runtime.squeeze_observe import ScannerApproval, SqueezeObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
+from vnedge.strategy.scanner_contracts import (
+    resolve_scanner_cost_profile,
+    scanner_runtime_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +277,25 @@ class LivePaperSession:
         # None of this changes the live decision; it only records for the cockpit.
         tf = config.timeframe
         ex = getattr(feed, "exchange_id", "") or ""
-        if tf in {"1m", "5m", "15m"}:
+        runtime_contract = scanner_runtime_contract(strategy.strategy_id)
+        self.runtime_contract = runtime_contract
+        if runtime_contract is not None:
+            if tf != runtime_contract.timeframe:
+                raise ValueError(
+                    f"{strategy.strategy_id} requires timeframe "
+                    f"{runtime_contract.timeframe}, got {tf}"
+                )
+            if config.max_holding_bars != runtime_contract.max_holding_bars:
+                raise ValueError(
+                    f"{strategy.strategy_id} requires max_holding_bars="
+                    f"{runtime_contract.max_holding_bars}, got "
+                    f"{config.max_holding_bars}"
+                )
+            self.cost_profile = resolve_scanner_cost_profile(
+                runtime_contract,
+                exchange_id=ex,
+            )
+        elif tf in {"1m", "5m", "15m"}:
             self.cost_profile = "delta_scalp" if "delta" in ex.lower() else "scalp"
         else:
             self.cost_profile = "swing"
@@ -2235,6 +2258,90 @@ class LivePaperSession:
                 val = float(row[col])
                 features[col] = None if math.isnan(val) else round(val, 6)
         thresholds = _extract_strategy_thresholds(self.strategy, self._EVAL_THRESHOLDS)
+        diagnostics: dict[str, object] = {}
+        explain = getattr(self.strategy, "evaluation_diagnostics", None)
+        if callable(explain):
+            try:
+                raw_diagnostics = explain(df, index)
+                if isinstance(raw_diagnostics, dict):
+                    diagnostics = raw_diagnostics
+            except Exception as exc:  # observability cannot stop the decision path
+                logger.exception(
+                    "%s evaluation diagnostics failed", self.strategy.strategy_id
+                )
+                diagnostics = {
+                    "eligible": False,
+                    "primary_failed_gate": "diagnostics_error",
+                    "all_failed_gates": ["diagnostics_error"],
+                    "diagnostics_error": type(exc).__name__,
+                }
+        diagnostic_features = diagnostics.get("features")
+        if isinstance(diagnostic_features, dict):
+            features.update(diagnostic_features)
+        diagnostic_thresholds = diagnostics.get("thresholds")
+        if isinstance(diagnostic_thresholds, dict):
+            thresholds.update(diagnostic_thresholds)
+
+        raw_failed_gates = diagnostics.get("all_failed_gates")
+        failed_gates = (
+            [str(gate) for gate in raw_failed_gates]
+            if isinstance(raw_failed_gates, (list, tuple))
+            else []
+        )
+        if skip_reason:
+            failed_gates = [skip_reason, *[gate for gate in failed_gates if gate != skip_reason]]
+        primary_failed_gate_raw = (
+            skip_reason
+            or diagnostics.get("primary_failed_gate")
+            or (failed_gates[0] if failed_gates else None)
+        )
+        primary_failed_gate = (
+            str(primary_failed_gate_raw)
+            if primary_failed_gate_raw is not None
+            else None
+        )
+        eligible = bool(diagnostics.get("eligible", sig is not None))
+        if skip_reason:
+            eligible = False
+        if sig is None and skip_reason is None and primary_failed_gate is not None:
+            skip_reason = str(primary_failed_gate)
+            if not backfill:
+                self.last_reject_reason = skip_reason
+
+        source_window = df.iloc[
+            max(0, index + 1 - max(1, int(getattr(self.strategy, "warmup_bars", 1))))
+            : index + 1
+        ]
+        if "candle_source" in source_window.columns:
+            source_counts = {
+                str(name): int(count)
+                for name, count in source_window["candle_source"]
+                .fillna("unknown")
+                .astype(str)
+                .value_counts()
+                .items()
+            }
+            canonical_rows = source_window.loc[
+                source_window["candle_source"].astype(str).eq("canonical_tick_lake")
+            ]
+            latest_canonical = (
+                canonical_rows["timestamp"].iloc[-1].isoformat()
+                if not canonical_rows.empty else None
+            )
+        else:
+            source_counts = {"unreported": len(source_window)}
+            latest_canonical = None
+        candle_source = str(row.get("candle_source", "unreported"))
+        identity = {
+            name: str(row.get(name, ""))
+            for name in (
+                "timestamp", "open", "high", "low", "close", "volume",
+                "quote_volume", "trade_count", "candle_source",
+            )
+        }
+        row_sha256 = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         record = {
             "bar_ts": bar_ts,
             "strategy_id": self.strategy.strategy_id,
@@ -2251,8 +2358,21 @@ class LivePaperSession:
             "signal_reason": sig.reason if sig is not None else None,
             "skip_reason": skip_reason,
             "signal": _signal_payload(sig),
+            "eligible": eligible,
+            "primary_failed_gate": primary_failed_gate,
+            "all_failed_gates": failed_gates,
             "features": features,
             "thresholds": thresholds,
+            "distance_to_threshold": diagnostics.get("distance_to_threshold", {}),
+            "data_source": {
+                "candle_source": candle_source,
+                "window_source_counts": source_counts,
+                "exchange_fallback_used": any(
+                    name != "canonical_tick_lake" for name in source_counts
+                ),
+                "latest_canonical_timestamp": latest_canonical,
+                "decision_row_sha256": row_sha256,
+            },
             "backfill": backfill,
         }
         self.evals += 1
@@ -2411,6 +2531,19 @@ class LivePaperSession:
                 # D-lite overlays (OBSERVE-ONLY): lane cost world + what regime_v0
                 # and the cost-aware plan contract WOULD say (never gates the lane)
                 "cost_profile": self.cost_profile,
+                "runtime_contract": (
+                    {
+                        "cost_family": self.runtime_contract.cost_family,
+                        "max_holding_bars": self.runtime_contract.max_holding_bars,
+                        "max_holding_hours": (
+                            self.runtime_contract.max_holding_bars
+                            * (self._tf_seconds or 0)
+                            / 3600
+                        ),
+                        "rationale": self.runtime_contract.rationale,
+                    }
+                    if self.runtime_contract is not None else None
+                ),
                 "regime": self._overlay_regime,
                 "regime_would_block": self._regime_would_block,
                 "plan_overlay": self._overlay_plan,

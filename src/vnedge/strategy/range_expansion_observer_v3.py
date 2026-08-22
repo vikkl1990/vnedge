@@ -201,14 +201,18 @@ class RangeExpansionObserverV3(BaseStrategy):
         short_level = prior_low.mul(1 - p.break_buffer_bps / 10_000)
         long_raw = previous_close.le(long_level) & close.gt(long_level) & common
         short_raw = previous_close.ge(short_level) & close.lt(short_level) & common
+        break_long = previous_close.le(long_level) & close.gt(long_level)
+        break_short = previous_close.ge(short_level) & close.lt(short_level)
 
         fire_long = [False] * len(out)
         fire_short = [False] * len(out)
+        spacing_ok = [False] * len(out)
         last_fire = -(10**9)
         for index, (is_long, is_short) in enumerate(
             zip(long_raw.fillna(False), short_raw.fillna(False), strict=True)
         ):
-            if index - last_fire < p.min_bars_between_signals:
+            spacing_ok[index] = index - last_fire >= p.min_bars_between_signals
+            if not spacing_ok[index]:
                 continue
             if is_long:
                 fire_long[index] = True
@@ -228,6 +232,14 @@ class RangeExpansionObserverV3(BaseStrategy):
         out["rex3_session_ok"] = session_ok.astype(float)
         out["rex3_expansion_ok"] = expansion_ok.astype(float)
         out["rex3_atr"] = atr
+        out["rex3_quality_ok"] = quality_ok.astype(float)
+        out["rex3_break_long"] = break_long.astype(float)
+        out["rex3_break_short"] = break_short.astype(float)
+        out["rex3_spacing_ok"] = pd.Series(spacing_ok, index=out.index).astype(float)
+        out["rex3_projected_net_bps"] = (
+            p.atr_stop_mult * atr / close * 10_000 * p.projected_reward_r
+            - p.round_trip_cost_bps
+        )
         out["rex3_fire_long"] = pd.Series(fire_long, index=out.index).astype(float)
         out["rex3_fire_short"] = pd.Series(fire_short, index=out.index).astype(float)
         return out
@@ -270,6 +282,101 @@ class RangeExpansionObserverV3(BaseStrategy):
                 f"projected_net={projected_net:.1f}bps session=12-16UTC virtual_only"
             ),
         )
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        def flag(name: str) -> bool:
+            return bool(number(name) or 0)
+
+        p = self.params
+        quality_ok = flag("rex3_quality_ok")
+        session_ok = flag("rex3_session_ok")
+        expansion_ok = flag("rex3_expansion_ok")
+        volume_ok = flag("rex3_volume_ok")
+        body = number("rex3_body_bps")
+        body_ok = body is not None and body >= p.body_min_bps
+        break_ok = flag("rex3_break_long") or flag("rex3_break_short")
+        spacing = flag("rex3_spacing_ok")
+        projected = number("rex3_projected_net_bps")
+        edge_ok = projected is not None and projected >= p.min_projected_net_bps
+        profile = number("rex3_hour_median_bps")
+        failures: list[str] = []
+        for ok, reason in (
+            (quality_ok, "data_quality_not_ok"),
+            (session_ok, "session_closed"),
+            (profile is not None and profile > 0, "hour_profile_not_ready"),
+            (expansion_ok, "hour_expansion_below_threshold"),
+            (volume_ok, "volume_confirmation_failed"),
+            (body_ok, "body_below_threshold"),
+            (break_ok, "prior_range_not_broken"),
+            (spacing, "signal_spacing"),
+            (edge_ok, "projected_net_below_threshold"),
+        ):
+            if not ok:
+                failures.append(reason)
+        hour_ratio = number("rex3_hour_range_ratio")
+        volume = number("volume")
+        volume_base = number("rex3_volume_base")
+        volume_ratio = (
+            volume / volume_base
+            if volume is not None and volume_base is not None and volume_base > 0
+            else None
+        )
+        eligible = flag("rex3_fire_long") or flag("rex3_fire_short")
+        eligible = eligible and edge_ok
+        return {
+            "eligible": eligible,
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "rex3_quality_ok": quality_ok,
+                "rex3_session_ok": session_ok,
+                "rex3_hour_range_bps": number("rex3_hour_range_bps"),
+                "rex3_hour_median_bps": profile,
+                "rex3_hour_range_ratio": hour_ratio,
+                "rex3_expansion_ok": expansion_ok,
+                "rex3_volume_ratio": volume_ratio,
+                "rex3_volume_ok": volume_ok,
+                "rex3_body_bps": body,
+                "rex3_break_long": flag("rex3_break_long"),
+                "rex3_break_short": flag("rex3_break_short"),
+                "rex3_spacing_ok": spacing,
+                "rex3_projected_net_bps": projected,
+            },
+            "thresholds": {
+                "session_start_hour_utc": p.session_start_hour_utc,
+                "session_end_hour_utc": p.session_end_hour_utc,
+                "min_hour_range_mult": p.min_hour_range_mult,
+                "volume_mult": p.volume_mult,
+                "body_min_bps": p.body_min_bps,
+                "break_buffer_bps": p.break_buffer_bps,
+                "min_bars_between_signals": p.min_bars_between_signals,
+                "min_projected_net_bps": p.min_projected_net_bps,
+                "round_trip_cost_bps": p.round_trip_cost_bps,
+            },
+            "distance_to_threshold": {
+                "hour_range_ratio_shortfall": (
+                    None if hour_ratio is None else max(0.0, p.min_hour_range_mult - hour_ratio)
+                ),
+                "volume_ratio_shortfall": (
+                    None if volume_ratio is None else max(0.0, p.volume_mult - volume_ratio)
+                ),
+                "body_bps_shortfall": (
+                    None if body is None else max(0.0, p.body_min_bps - body)
+                ),
+                "projected_net_bps_shortfall": (
+                    None if projected is None else max(0.0, p.min_projected_net_bps - projected)
+                ),
+            },
+        }
 
 
 __all__ = ["PARAMS", "STRATEGY_SPEC", "RangeExpansionObserverV3", "RangeExpansionV3Params"]

@@ -87,6 +87,23 @@ closed 1h swings and 4h direction into a 15-minute close trigger. Neither new
 15-minute scanner treats a raw tick through a level as confirmed structure;
 the quote path prices accepted virtual entries and protects their stops.
 
+Runtime economics and timeouts are frozen by exact strategy ID rather than
+inferred from timeframe:
+
+| Strategy | Cost family | Maximum virtual hold |
+|----------|-------------|----------------------|
+| `squeeze_expansion_breakout_v4` | scalp (`delta_scalp` on Delta) | 48 x 5m = 4h |
+| `range_expansion_observer_v3` | swing | 48 x 15m = 12h |
+| `structure_bos_15m_trigger_v2` | swing | 192 x 15m = 48h |
+
+Startup refuses a registered scanner when its roster timeframe or hold differs
+from this contract. Every closed-bar evaluation journals its primary failed
+gate, all failed gates, distance-to-threshold values, exact thresholds, and
+source provenance. Provenance includes the candle-source counts for the
+decision window, whether exchange fallback participated, the latest canonical
+timestamp, and a hash of the decision row. These fields explain a non-fire and
+allow audited lake/live parity without changing eligibility or order authority.
+
 `range_expansion_observer_v1` is a separate `1h` exploratory lane for the
 first body-and-volume-confirmed close beyond a prior 12-hour range. It exists
 because a continuation can begin hours after a squeeze arm expires; the

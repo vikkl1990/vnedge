@@ -209,13 +209,17 @@ class StructureBos15mTriggerV2(BaseStrategy):
             & previous_close.ge(low_level)
             & close.lt(low_level)
         )
+        break_long = previous_close.le(high_level) & close.gt(high_level)
+        break_short = previous_close.ge(low_level) & close.lt(low_level)
         fire_long = [False] * len(out)
         fire_short = [False] * len(out)
+        spacing_ok = [False] * len(out)
         last_fire = -(10**9)
         for index, (is_long, is_short) in enumerate(
             zip(long_raw.fillna(False), short_raw.fillna(False), strict=True)
         ):
-            if index - last_fire < p.min_bars_between_signals:
+            spacing_ok[index] = index - last_fire >= p.min_bars_between_signals
+            if not spacing_ok[index]:
                 continue
             if is_long:
                 fire_long[index] = True
@@ -226,6 +230,29 @@ class StructureBos15mTriggerV2(BaseStrategy):
         out["bos15_volume_base"] = volume_base
         out["bos15_volume_ok"] = volume_ok.astype(float)
         out["bos15_session_ok"] = session_ok.astype(float)
+        out["bos15_quality_ok"] = quality_ok.astype(float)
+        out["bos15_break_long"] = break_long.astype(float)
+        out["bos15_break_short"] = break_short.astype(float)
+        out["bos15_spacing_ok"] = pd.Series(spacing_ok, index=out.index).astype(float)
+        atr = pd.to_numeric(out["bos15_bos_atr"], errors="coerce")
+        last_high = pd.to_numeric(out["bos15_last_swing_high"], errors="coerce")
+        last_low = pd.to_numeric(out["bos15_last_swing_low"], errors="coerce")
+        long_swing_stop = last_low.mul(1 - p.stop_buffer_bps / 10_000)
+        short_swing_stop = last_high.mul(1 + p.stop_buffer_bps / 10_000)
+        long_stop = pd.concat(
+            [long_swing_stop, close - p.atr_stop_mult * atr], axis=1
+        ).max(axis=1, skipna=False)
+        short_stop = pd.concat(
+            [short_swing_stop, close + p.atr_stop_mult * atr], axis=1
+        ).min(axis=1, skipna=False)
+        out["bos15_projected_net_long_bps"] = (
+            (close - long_stop) / close * 10_000 * p.reward_r
+            - p.round_trip_cost_bps
+        )
+        out["bos15_projected_net_short_bps"] = (
+            (short_stop - close) / close * 10_000 * p.reward_r
+            - p.round_trip_cost_bps
+        )
         out["bos15_fire_long"] = pd.Series(fire_long, index=out.index).astype(float)
         out["bos15_fire_short"] = pd.Series(fire_short, index=out.index).astype(float)
         return out
@@ -269,6 +296,107 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 f"confirmation=15m projected_net={projected_net:.1f}bps virtual_only"
             ),
         )
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        def flag(name: str) -> bool:
+            return bool(number(name) or 0)
+
+        p = self.params
+        quality_ok = flag("bos15_quality_ok")
+        session_ok = flag("bos15_session_ok")
+        ready_raw = row.get("bos15_structure_ready", False)
+        structure_ready = bool(ready_raw) if not pd.isna(ready_raw) else False
+        volume_ok = flag("bos15_volume_ok")
+        trend = str(row.get("bos15_structure_trend", "unavailable"))
+        htf_trend = str(row.get("bos15_htf_structure_trend", "unavailable"))
+        bias = str(row.get("bos15_dual_avwap_bias", "unavailable"))
+        long_context = trend == "up" and htf_trend == "up"
+        short_context = trend == "down" and htf_trend == "down"
+        alignment_ok = long_context or short_context
+        bias_ok = not (
+            (long_context and bias == "strong_short")
+            or (short_context and bias == "strong_long")
+        )
+        break_long = flag("bos15_break_long")
+        break_short = flag("bos15_break_short")
+        break_ok = (long_context and break_long) or (short_context and break_short)
+        spacing = flag("bos15_spacing_ok")
+        projected_long = number("bos15_projected_net_long_bps")
+        projected_short = number("bos15_projected_net_short_bps")
+        projected = projected_long if long_context else projected_short if short_context else None
+        edge_ok = projected is not None and projected >= p.min_projected_net_bps
+        failures: list[str] = []
+        for ok, reason in (
+            (quality_ok, "data_quality_not_ok"),
+            (session_ok, "session_closed"),
+            (structure_ready, "confirmed_swing_pair_not_ready"),
+            (volume_ok, "volume_confirmation_failed"),
+            (alignment_ok, "htf_structure_conflict"),
+            (bias_ok, "dual_avwap_conflict"),
+            (break_ok, "confirmed_swing_not_broken"),
+            (spacing, "signal_spacing"),
+            (edge_ok, "projected_net_below_threshold"),
+        ):
+            if not ok:
+                failures.append(reason)
+        volume = number("volume")
+        volume_base = number("bos15_volume_base")
+        volume_ratio = (
+            volume / volume_base
+            if volume is not None and volume_base is not None and volume_base > 0
+            else None
+        )
+        eligible = (flag("bos15_fire_long") or flag("bos15_fire_short")) and edge_ok
+        return {
+            "eligible": eligible,
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "bos15_quality_ok": quality_ok,
+                "bos15_session_ok": session_ok,
+                "bos15_structure_ready": structure_ready,
+                "bos15_structure_trend": trend,
+                "bos15_htf_structure_trend": htf_trend,
+                "bos15_mtf_reason": str(row.get("bos15_mtf_reason", "unavailable")),
+                "bos15_dual_avwap_bias": bias,
+                "bos15_volume_ratio": volume_ratio,
+                "bos15_volume_ok": volume_ok,
+                "bos15_break_long": break_long,
+                "bos15_break_short": break_short,
+                "bos15_spacing_ok": spacing,
+                "bos15_last_swing_high": number("bos15_last_swing_high"),
+                "bos15_last_swing_low": number("bos15_last_swing_low"),
+                "bos15_projected_net_bps": projected,
+            },
+            "thresholds": {
+                "session_start_hour_utc": p.session_start_hour_utc,
+                "session_end_hour_utc": p.session_end_hour_utc,
+                "volume_mult": p.volume_mult,
+                "break_buffer_bps": p.break_buffer_bps,
+                "stop_buffer_bps": p.stop_buffer_bps,
+                "reward_r": p.reward_r,
+                "min_bars_between_signals": p.min_bars_between_signals,
+                "min_projected_net_bps": p.min_projected_net_bps,
+                "round_trip_cost_bps": p.round_trip_cost_bps,
+            },
+            "distance_to_threshold": {
+                "volume_ratio_shortfall": (
+                    None if volume_ratio is None else max(0.0, p.volume_mult - volume_ratio)
+                ),
+                "projected_net_bps_shortfall": (
+                    None if projected is None else max(0.0, p.min_projected_net_bps - projected)
+                ),
+            },
+        }
 
 
 __all__ = ["PARAMS", "STRATEGY_SPEC", "StructureBos15mParams", "StructureBos15mTriggerV2"]

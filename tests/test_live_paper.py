@@ -25,8 +25,10 @@ from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresh
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.squeeze_acceptance_observe import SqueezeAcceptanceObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
+from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 
 BASE = 1_750_000_000_000
 MIN = 60_000
@@ -149,6 +151,20 @@ class CountingPrepareLong(AlwaysLong):
         return super().prepare(candles)
 
 
+class DiagnosticLong(AlwaysLong):
+    strategy_id = "diagnostic_long"
+
+    def evaluation_diagnostics(self, df, index):
+        return {
+            "eligible": False,
+            "primary_failed_gate": "test_gate",
+            "all_failed_gates": ["test_gate", "second_gate"],
+            "features": {"test_feature": 0.25},
+            "thresholds": {"test_threshold": 0.5},
+            "distance_to_threshold": {"test_shortfall": 0.25},
+        }
+
+
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
     strategy = AlwaysLong()
     strategy.min_score = 6.0
@@ -193,8 +209,10 @@ def timed_rows(start: str, offsets: tuple[int, ...], low=99.5, high=100.5):
 
 def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
                   tick_stops_enabled=True, post_exit_cooldown_bars=1,
-                  trial_meta=None, daily_factory=None, max_holding_bars=48):
-    config = RunnerConfig(mode=mode, symbol=SYM, reconcile_every_bars=2,
+                  trial_meta=None, daily_factory=None, max_holding_bars=48,
+                  timeframe="1h"):
+    config = RunnerConfig(mode=mode, symbol=SYM, timeframe=timeframe,
+                          reconcile_every_bars=2,
                           tick_stops_enabled=tick_stops_enabled,
                           post_exit_cooldown_bars=post_exit_cooldown_bars,
                           max_holding_bars=max_holding_bars,
@@ -210,6 +228,66 @@ def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PA
         trial_meta=trial_meta,
     )
     return session, exchange
+
+
+def test_active_scanner_runtime_contract_controls_cost_and_hold(tmp_path):
+    range_session, _ = build_session(
+        tmp_path / "range",
+        FakeFeed([]),
+        strategy=RangeExpansionObserverV3(),
+        mode=RunnerMode.SHADOW,
+        timeframe="15m",
+        max_holding_bars=48,
+    )
+    bos_session, _ = build_session(
+        tmp_path / "bos",
+        FakeFeed([]),
+        strategy=StructureBos15mTriggerV2(),
+        mode=RunnerMode.SHADOW,
+        timeframe="15m",
+        max_holding_bars=192,
+    )
+
+    assert range_session.cost_profile == "swing"
+    assert range_session.config.max_holding_bars == 48
+    assert bos_session.cost_profile == "swing"
+    assert bos_session.config.max_holding_bars == 192
+
+
+def test_active_scanner_rejects_silent_hold_horizon_drift(tmp_path):
+    with pytest.raises(ValueError, match="requires max_holding_bars=192"):
+        build_session(
+            tmp_path,
+            FakeFeed([]),
+            strategy=StructureBos15mTriggerV2(),
+            mode=RunnerMode.SHADOW,
+            timeframe="15m",
+            max_holding_bars=48,
+        )
+
+
+def test_eval_record_contains_gate_contract_and_data_provenance(tmp_path):
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=DiagnosticLong(),
+        mode=RunnerMode.SHADOW,
+    )
+    prepared = history()
+    prepared["candle_source"] = "canonical_tick_lake"
+
+    session._record_eval(prepared, len(prepared) - 1, None)
+    record = session.journal.read_all()[-1]["payload"]
+
+    assert record["eligible"] is False
+    assert record["primary_failed_gate"] == "test_gate"
+    assert record["all_failed_gates"] == ["test_gate", "second_gate"]
+    assert record["features"]["test_feature"] == 0.25
+    assert record["thresholds"]["test_threshold"] == 0.5
+    assert record["distance_to_threshold"]["test_shortfall"] == 0.25
+    assert record["data_source"]["candle_source"] == "canonical_tick_lake"
+    assert record["data_source"]["exchange_fallback_used"] is False
+    assert len(record["data_source"]["decision_row_sha256"]) == 64
 
 
 def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):

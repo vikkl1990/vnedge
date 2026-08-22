@@ -62,3 +62,18 @@ def test_v3_does_not_fire_without_volume_confirmation() -> None:
 
     assert row["rex3_volume_ok"] == 0.0
     assert row["rex3_fire_long"] == 0.0
+
+
+def test_v3_diagnostics_publish_gate_values_and_threshold_distance() -> None:
+    strategy = RangeExpansionObserverV3()
+    candles = _history()
+    candles.loc[candles.index[-1], "volume"] = 100.0
+    prepared = strategy.prepare(candles)
+
+    report = strategy.evaluation_diagnostics(prepared, len(prepared) - 1)
+
+    assert report["eligible"] is False
+    assert report["primary_failed_gate"] == "volume_confirmation_failed"
+    assert report["features"]["rex3_volume_ok"] is False
+    assert report["thresholds"]["volume_mult"] == 1.2
+    assert report["distance_to_threshold"]["volume_ratio_shortfall"] > 0
