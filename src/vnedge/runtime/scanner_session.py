@@ -57,11 +57,18 @@ class SessionCosts:
     #: fields above, so a lane cannot hold a private fee assumption.
     cost_model: CostModel | None = None
     bar_minutes: float = 5.0
+    #: Funding paid per 8h period while a position is open, in bps of notional.
+    #: Immaterial at the ~1h holds every prior arm ran at, and decisive for a
+    #: multi-day one: a five-day hold crosses fifteen funding stamps, so at a
+    #: routine 1 bp per period that is 15 bps -- comparable to a whole round
+    #: trip. 0.0 keeps the behaviour of every measurement taken before this.
+    funding_bps_per_8h: float = 0.0
 
     @classmethod
     def from_profile(cls, profile: str = "delta_scalp", *,
                      free_close_within_bars: int = 0,
-                     bar_minutes: float = 5.0) -> SessionCosts:
+                     bar_minutes: float = 5.0,
+                     funding_bps_per_8h: float = 0.0) -> SessionCosts:
         """Costs from the canonical model, slippage and safety included."""
         model = CostModel.for_profile(profile)
         return cls(
@@ -69,7 +76,19 @@ class SessionCosts:
             maker_bps=model.fee_bps(maker=True) * model.config.fee_gst_mult,
             free_close_within_bars=free_close_within_bars,
             cost_model=model, bar_minutes=bar_minutes,
+            funding_bps_per_8h=funding_bps_per_8h,
         )
+
+    def funding_bps(self, held_bars: int) -> float:
+        """Funding accrued over the hold.
+
+        Charged per COMPLETED 8h period, which is when the venue stamps it --
+        a position closed after 7h pays none, and one held 9h pays one.
+        """
+        if self.funding_bps_per_8h <= 0:
+            return 0.0
+        hours = held_bars * self.bar_minutes / 60.0
+        return self.funding_bps_per_8h * int(hours // 8)
 
     def round_trip_bps(self, held_bars: int, *, maker_entry: bool = False) -> float:
         if self.cost_model is not None:
@@ -84,14 +103,14 @@ class SessionCosts:
                 maker_exit=False,
                 hold_minutes=hold_minutes,
                 include_safety=False,
-            )
+            ) + self.funding_bps(held_bars)
         exit_leg = 0.0 if held_bars <= self.free_close_within_bars else self.taker_bps
         entry_leg = (
             self.maker_bps
             if maker_entry and self.maker_bps is not None
             else self.taker_bps
         )
-        return entry_leg + exit_leg
+        return entry_leg + exit_leg + self.funding_bps(held_bars)
 
 
 @dataclass(frozen=True, slots=True)
