@@ -58,10 +58,10 @@ services:
       timeout: 15s
       retries: 5
       start_period: 120s
-    # Nine-lane cold start loads the shared exchange warm-up frames before
-    # deduplication settles. The measured peak is ~1.55 GiB, so the old
-    # 1500m cgroup ceiling caused an OOM/restart loop even on a healthy host.
-    mem_limit: 3g
+    # Nine-lane cold start loads the exchange warm-up frames concurrently
+    # before shared feeds and frame lifetimes settle. It crossed a 3 GiB
+    # ceiling in production, so retain bounded but operational headroom.
+    mem_limit: 6g
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
