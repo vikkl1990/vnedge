@@ -14,12 +14,12 @@ export function TerminalPanel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-panel/70 overflow-hidden">
-      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-line flex-wrap">
+    <section className="rounded-md border border-line bg-panel/70 overflow-hidden">
+      <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-inset/35 flex-wrap">
         <h2 className="text-[13px] font-semibold tracking-wide text-txt">{title}</h2>
         {meta ? <span className="text-[11px] font-mono text-dim">{meta}</span> : null}
       </header>
-      <div className="p-4">{children}</div>
+      <div className="p-3">{children}</div>
     </section>
   );
 }

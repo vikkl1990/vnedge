@@ -49,7 +49,7 @@ export function Header() {
   const margin = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.fixed_margin_usd;
   const leverage = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.max_leverage;
   return (
-    <header className="relative z-10 -mx-2 rounded-xl border border-line bg-bg/95 px-3 py-2.5 shadow-xl shadow-black/20 backdrop-blur sm:px-4 sm:py-3">
+    <header className="relative z-10 rounded-md border border-line bg-bg/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">VN</div>
@@ -108,8 +108,8 @@ export function LiveBlockedBanner() {
   }
   if (!data?.live.blocked) return null;
   return (
-    <div className="rounded-lg border border-short/50 bg-short/10 px-4 py-3 text-[12px] text-short" role="status">
-      <strong>Live blocked.</strong> {data.live.message}
+    <div className="flex items-center gap-3 border-l-[3px] border-warn bg-warn/5 px-3 py-2 text-[11px] text-dim" role="status">
+      <TerminalBadge tone="warn">capital path locked</TerminalBadge><span>{data.live.message}</span>
     </div>
   );
 }
@@ -136,11 +136,11 @@ export function StatusStrip() {
   const server = data?.chips as Record<string, { band: Band; label: string }> | undefined;
   const chips = server && Object.keys(server).length ? server : UNKNOWN_CHIPS;
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5">
       {Object.entries(chips).map(([name, c]) => (
         <div
           key={name}
-          className={`flex items-center gap-2 rounded-md border border-line border-l-[3px] ${BAND_BORDER[c.band]} bg-inset px-3 py-2.5`}
+          className={`flex items-center gap-2 border border-line border-l-[3px] ${BAND_BORDER[c.band]} bg-inset px-2.5 py-1.5`}
         >
           <span className="text-[10px] font-mono font-extrabold tracking-wider text-dim">{name}</span>
           <span className="ml-auto">
@@ -305,6 +305,11 @@ export function RiskPanel() {
   const dailyRemaining = data.daily_halt.limit_usd == null
     ? null
     : Math.max(0, data.daily_halt.limit_usd - data.daily_halt.used_usd);
+  const dailyUsedPct = data.daily_halt.limit_usd && data.daily_halt.limit_usd > 0
+    ? Math.min(100, Math.max(0, data.daily_halt.used_usd / data.daily_halt.limit_usd * 100))
+    : 0;
+  const configuredPositionCap = Math.max(0, ...data.sizing_profiles.map((profile) => profile.max_open_positions ?? 0));
+  const positionUsedPct = configuredPositionCap > 0 ? Math.min(100, data.positions.shadow_open / configuredPositionCap * 100) : 0;
   return (
     <TerminalPanel title="Risk" meta="kill · halt · journal · gateway · streams">
       {journalBlocked && (
@@ -332,10 +337,27 @@ export function RiskPanel() {
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Loss streak" value={`${data?.breaker.loss_streak ?? 0}/${data?.breaker.threshold ?? 3}`} tone={data?.breaker.active ? "text-short" : ""} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Unresolved" value={String(data?.positions.unresolved_orders ?? 0)} tone={(data?.positions.unresolved_orders ?? 0) > 0 ? "text-short" : ""} /></div>
       </div>
+      <div className="mb-4 grid gap-3 md:grid-cols-2">
+        <div className="border border-line bg-inset p-3">
+          <div className="flex items-center justify-between font-mono text-[10px]"><span className="uppercase text-faint">Daily loss budget</span><span>{dailyUsedPct.toFixed(1)}% used</span></div>
+          <div className="mt-2 h-2 bg-line/60"><div className={`h-full ${dailyUsedPct >= 80 ? "bg-short" : dailyUsedPct >= 50 ? "bg-warn" : "bg-long"}`} style={{ width: `${dailyUsedPct}%` }} /></div>
+          <div className="mt-2 text-[10px] text-dim">{usd(data.daily_halt.used_usd)} consumed · {dailyRemaining == null ? "limit not reported" : `${usd(dailyRemaining)} available`} · hard halt remains server-owned</div>
+        </div>
+        <div className="border border-line bg-inset p-3">
+          <div className="flex items-center justify-between font-mono text-[10px]"><span className="uppercase text-faint">Position capacity</span><span>{data.positions.shadow_open}/{configuredPositionCap || "—"}</span></div>
+          <div className="mt-2 h-2 bg-line/60"><div className={`h-full ${positionUsedPct >= 80 ? "bg-short" : positionUsedPct >= 50 ? "bg-warn" : "bg-info"}`} style={{ width: `${positionUsedPct}%` }} /></div>
+          <div className="mt-2 text-[10px] text-dim">{data.positions.shadow_pending_intents} pending · {data.positions.unresolved_orders} unresolved · measurement/shadow only</div>
+        </div>
+      </div>
       <div className="mb-4 rounded-lg border border-line bg-inset p-3">
         <div className="mb-3 font-mono text-[10px] uppercase text-faint">Sizing and exposure contracts</div>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {data.sizing_profiles.map((profile) => <div key={profile.lane_id} className="rounded-md border border-line px-3 py-2 text-[10px]"><div className="font-mono text-txt">{profile.symbol}</div><div className="mt-1 text-dim">{usd(profile.starting_equity_usd)} purse · {usd(profile.fixed_margin_usd)} margin · ≤{profile.max_leverage ?? "—"}x · notional cap {usd(profile.max_total_exposure_usd)}</div></div>)}
+          {data.sizing_profiles.map((profile) => {
+            const ticketNotional = (profile.fixed_margin_usd ?? 0) * (profile.max_leverage ?? 0);
+            const cap = profile.max_symbol_exposure_usd ?? profile.max_total_exposure_usd ?? 0;
+            const configuredPct = cap > 0 ? Math.min(100, ticketNotional / cap * 100) : 0;
+            return <div key={profile.lane_id} className="border border-line px-3 py-2 text-[10px]"><div className="flex items-center justify-between"><span className="font-mono text-txt">{profile.symbol}</span><span className="font-mono text-faint">ticket ≤ {usd(ticketNotional)}</span></div><div className="mt-1 text-dim">{usd(profile.starting_equity_usd)} purse · {usd(profile.fixed_margin_usd)} margin · ≤{profile.max_leverage ?? "—"}x · cap {usd(cap)}</div><div className="mt-2 h-1 bg-line/60"><div className="h-full bg-info/80" style={{ width: `${configuredPct}%` }} /></div></div>;
+          })}
           {!data.sizing_profiles.length && <div className="text-[11px] text-dim">Sizing telemetry not reported.</div>}
         </div>
       </div>
@@ -727,8 +749,10 @@ export function FeedPanel() {
 }
 
 export function JournalPanel() {
-  const { data, isLoading } = useJournal(50);
+  const { data, isLoading } = useJournal(250);
   const [view, setView] = useState<"all" | "decisions" | "trades">("all");
+  const [search, setSearch] = useState("");
+  const [laneFilter, setLaneFilter] = useState("all");
   const rows = data?.closed_trades ?? [];
   const summary = data?.summary;
   const rowsNet = rows.reduce((total, row) => {
@@ -738,8 +762,16 @@ export function JournalPanel() {
   const summaryNet = summary?.actual_realized_pnl_usd;
   const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
   const reconciliationMismatch = reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
-  const decisionEvents = (data?.events ?? []).filter((row) => /reject|block|refus|risk|skip/i.test(`${row.event ?? ""} ${row.detail ?? ""}`));
-  const visibleEvents = view === "decisions" ? decisionEvents : (data?.events ?? []);
+  const normalizedSearch = search.trim().toLowerCase();
+  const laneNames = Array.from(new Set([
+    ...rows.map((row) => String(row.lane ?? row.symbol ?? "")).filter(Boolean),
+    ...(data?.events ?? []).map((row) => String(row.lane ?? "")).filter(Boolean),
+  ])).sort();
+  const matches = (value: unknown) => !normalizedSearch || String(JSON.stringify(value) ?? "").toLowerCase().includes(normalizedSearch);
+  const filteredRows = rows.filter((row) => (laneFilter === "all" || String(row.lane ?? row.symbol ?? "") === laneFilter) && matches(row));
+  const filteredEvents = (data?.events ?? []).filter((row) => (laneFilter === "all" || String(row.lane ?? "") === laneFilter) && matches(row));
+  const decisionEvents = filteredEvents.filter((row) => /reject|block|refus|risk|skip/i.test(`${row.event ?? ""} ${row.detail ?? ""}`));
+  const visibleEvents = view === "decisions" ? decisionEvents : filteredEvents;
   const decisionTimes = (data?.events ?? []).map((row) => row.ts).filter((value): value is string => Boolean(value)).sort();
   const lastDecisionTs = decisionTimes[decisionTimes.length - 1];
   const cols: Column<JournalRow>[] = [
@@ -756,8 +788,18 @@ export function JournalPanel() {
     },
     { key: "exit", header: "Exit", render: (r) => <span className="text-dim">{r.exit_reason ?? r.resolution ?? "—"}</span> },
   ];
+  const exportEvidence = () => {
+    if (!data) return;
+    const payload = JSON.stringify({ ...data, closed_trades: filteredRows, events: filteredEvents }, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `vnedge-journal-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
   return (
-    <TerminalPanel title="Journal" meta={isLoading ? "loading…" : `${rows.length} closed · 20s`}>
+    <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${rows.length} closed · 250-row window · 20s`}>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Paper net" value={usd(summary?.actual_realized_pnl_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Fees" value={usd(summary?.fees_usd)} /></div>
@@ -770,6 +812,9 @@ export function JournalPanel() {
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
         {(["all", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
+        <input aria-label="Search journal" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="search event, reason, lane…" className="min-w-[220px] border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-txt placeholder:text-faint focus:border-brand focus:outline-none" />
+        <select aria-label="Filter journal lane" value={laneFilter} onChange={(event) => setLaneFilter(event.target.value)} className="border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-dim focus:border-brand focus:outline-none"><option value="all">all lanes</option>{laneNames.map((lane) => <option key={lane} value={lane}>{lane}</option>)}</select>
+        <button onClick={exportEvidence} disabled={!data} className="border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase text-dim hover:border-brand hover:text-brand disabled:opacity-40">export evidence</button>
         <span className="ml-auto text-[10px] font-mono text-faint">append-only · generated {data?.generated_at ? ageSec((Date.now() - Date.parse(data.generated_at)) / 1000) : "—"} ago</span>
       </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
@@ -785,7 +830,7 @@ export function JournalPanel() {
           <div className="mt-2 text-[10px] text-faint">An empty journal is explicit; it is not evidence of a healthy decision path.</div>
         </div>
       </div>
-      {(view === "all" || view === "trades") && <div className="mt-4"><DenseTable columns={cols} rows={rows} empty="no closed trades yet · waiting for append-only evidence" /></div>}
+      {(view === "all" || view === "trades") && <div className="mt-4"><DenseTable columns={cols} rows={filteredRows} empty="no closed trades match the current evidence filter" /></div>}
     </TerminalPanel>
   );
 }

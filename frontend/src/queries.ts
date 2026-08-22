@@ -2,7 +2,8 @@
 // interval refetch for free, with zero backend change. The classic dashboard
 // hand-rolls setInterval polling; this replaces that with declarative queries.
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   apiGet,
   type HourBrief,
@@ -129,7 +130,9 @@ export function useAgenticResearchStatus() {
 }
 
 export function usePulse(symbol: string, exchange = "binanceusdm") {
-  return useQuery({
+  const queryClient = useQueryClient();
+  const [streamState, setStreamState] = useState<"connecting" | "live" | "retrying">("connecting");
+  const query = useQuery({
     queryKey: ["pulse", exchange, symbol],
     queryFn: () =>
       apiGet<PulsePayload>(
@@ -137,6 +140,54 @@ export function usePulse(symbol: string, exchange = "binanceusdm") {
       ),
     refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let stopped = false;
+    let retryTimer: number | null = null;
+    let attempt = 0;
+
+    const connect = () => {
+      if (stopped) return;
+      setStreamState(attempt === 0 ? "connecting" : "retrying");
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const url = `${protocol}//${window.location.host}/api/pulse/stream?symbol=${encodeURIComponent(symbol)}&exchange=${encodeURIComponent(exchange)}`;
+      socket = new WebSocket(url);
+      socket.onopen = () => {
+        attempt = 0;
+        setStreamState("live");
+      };
+      socket.onmessage = (event) => {
+        try {
+          const incoming = JSON.parse(event.data) as PulsePayload;
+          queryClient.setQueryData<PulsePayload>(["pulse", exchange, symbol], (current) => {
+            if (!current) return incoming;
+            const currentAt = Date.parse(current.as_of);
+            const incomingAt = Date.parse(incoming.as_of);
+            return Number.isFinite(incomingAt) && incomingAt >= currentAt ? incoming : current;
+          });
+        } catch {
+          // A malformed frame cannot invalidate the last known-good REST state.
+        }
+      };
+      socket.onclose = () => {
+        if (stopped) return;
+        attempt += 1;
+        setStreamState("retrying");
+        retryTimer = window.setTimeout(connect, Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5)));
+      };
+      socket.onerror = () => socket?.close();
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      socket?.close();
+    };
+  }, [exchange, queryClient, symbol]);
+
+  return { ...query, streamState };
 }
 
 export function useHourAnalysis(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { MarketPulse } from "./components/MarketPulse";
+import { LiveStateBridge } from "./components/LiveStateBridge";
 import { TerminalTabs } from "./components/Terminal";
 import {
   Header,
@@ -81,11 +82,12 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-full max-w-[1500px] mx-auto px-5 py-6 flex flex-col gap-5">
+    <div className="min-h-full max-w-[1800px] mx-auto px-3 py-3 md:px-4 flex flex-col gap-3">
+      <LiveStateBridge />
       <Header />
-      <LiveBlockedBanner />
       <StatusStrip />
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <LiveBlockedBanner />
+      <div className="sticky top-0 z-30 -mx-1 flex items-center justify-between gap-3 border-y border-line bg-bg/95 px-1 py-2 backdrop-blur flex-wrap">
         <TerminalTabs tabs={TABS} active={tab} onChange={navigate} />
         <button
           onClick={() => setPalette(true)}
@@ -110,8 +112,8 @@ export default function App() {
       {tab === "system" && <SystemPanel />}
       {tab === "settings" && <SettingsPanel />}
 
-      <footer className="text-[11px] font-mono text-faint pt-2">
-        correction cockpit · scoped settings only · no order, live-enable, or promotion controls
+      <footer className="border-t border-line pt-3 text-[10px] font-mono text-faint">
+        VNEDGE workstation · measurement and shadow observation · no order, live-enable, or promotion controls
       </footer>
 
       <CommandPalette commands={commands} />

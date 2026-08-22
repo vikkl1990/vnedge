@@ -19,6 +19,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PulseHour } from "../api";
 import { useHourAnalysis, useLanes, usePulse, useRiskSnapshot } from "../queries";
+import { ScannerWorkspace } from "./ScannerWorkspace";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
@@ -581,6 +582,7 @@ function Metric({ label, value, note }: { label: string; value: string; note?: s
 export function MarketPulse() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [selected, setSelected] = useState<string | null>(null);
+  const [alertFilter, setAlertFilter] = useState<"active" | "all" | "recovered">("active");
   const btcPulse = usePulse("BTCUSDT");
   const ethPulse = usePulse("ETHUSDT");
   const solPulse = usePulse("SOLUSDT");
@@ -590,8 +592,6 @@ export function MarketPulse() {
   const marketQueries = [btcPulse, ethPulse, solPulse];
   const hours = pulse.data?.hours ?? [];
   const latest = hours[hours.length - 1];
-  const scannerLanes = (lanes.data?.lanes ?? []).filter((lane) => lane.observation_class === "shadow_observe");
-  const selectedScanner = scannerLanes.filter((lane) => lane.symbol.replace(/[^A-Z]/gi, "").startsWith(symbol.replace("USDT", "")));
 
   useEffect(() => {
     if (!selected || !hours.some((hour) => hour.open_time === selected)) {
@@ -651,6 +651,8 @@ export function MarketPulse() {
       recovered: false,
     }] : []),
   ];
+  const visibleEvents = events.filter((event) => alertFilter === "all" || (alertFilter === "recovered" ? event.recovered : !event.recovered));
+  const activeEventCount = events.filter((event) => !event.recovered).length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -681,24 +683,18 @@ export function MarketPulse() {
         <div className="rounded-xl border border-short/40 bg-short/5 p-4 text-sm text-short">Pulse API unavailable. Canonical 1h data may still be warming.</div>
       )}
 
-      <section className="rounded-xl border border-line bg-panel/80 p-4" aria-label="Scanner observer status">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">Scanner observer</div><div className="mt-1 text-[11px] text-dim">5m fee-wall momentum · virtual intents only · never order authority</div></div>
-          <div className="flex gap-2"><TerminalBadge tone={scannerLanes.length ? "info" : "neutral"}>{scannerLanes.length} active</TerminalBadge><TerminalBadge tone="neutral">{lanes.data?.portfolio.shadow_pending_intents ?? 0} pending</TerminalBadge><TerminalBadge tone="info">{lanes.data ? `$${lanes.data.portfolio.shadow_purse_usd.toFixed(0)} purse` : "purse —"}</TerminalBadge></div>
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          {(selectedScanner.length ? selectedScanner : scannerLanes).map((lane) => {
-            const recovery = Object.values(lane.latency_recovery ?? {}).find((state) => state.state === "recovering" || state.state === "recovered");
-            return <div key={lane.lane_id} className="rounded-lg border border-line bg-inset px-3 py-3">
-              <div className="flex items-center justify-between gap-3"><span className="font-mono text-[11px] text-txt">{lane.symbol} · {lane.timeframe}</span><TerminalBadge tone={lane.health === "ok" ? "good" : lane.health === "blocked" ? "bad" : "warn"}>{lane.health}</TerminalBadge></div>
-              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px]"><span className="text-faint">last signal</span><span className="text-right">{lane.last_signal_age_seconds == null ? "not observed" : `${Math.round(lane.last_signal_age_seconds / 60)}m ago`}</span><span className="text-faint">virtual outcome</span><span className="text-right">{lane.shadow_perf?.virtual_net_usd == null ? "—" : `$${lane.shadow_perf.virtual_net_usd.toFixed(2)}`} · {lane.shadow_perf?.wins ?? 0}W/{lane.shadow_perf?.losses ?? 0}L</span><span className="text-faint">sizing</span><span className="text-right">${lane.sizing_profile?.fixed_margin_usd ?? "—"} margin · ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>{recovery && <><span className="text-faint">recovery</span><span className="text-right">{recovery.state} · {recovery.healthy_samples ?? 0}/{recovery.required_samples ?? 0}</span></>}<span className="text-faint">why waiting</span><span className="text-right break-words">{lane.current_waiting_reason}</span></div>
-            </div>
-          })}
-          {!scannerLanes.length && <div className="text-[11px] text-dim">No shadow scanner lane is reported. Market measurement remains available, but scanner coverage is absent.</div>}
-        </div>
-      </section>
+      <ScannerWorkspace
+        lanes={lanes.data?.lanes ?? []}
+        selectedSymbol={symbol}
+        shadowPurse={lanes.data?.portfolio.shadow_purse_usd ?? null}
+        streamState={pulse.streamState}
+        risk={risk.data}
+      />
 
-      <section className="grid gap-3 md:grid-cols-3" aria-label="All-symbol market strip">
+      <section className="overflow-x-auto border border-line bg-panel/80" aria-label="All-symbol market monitor">
+        <div className="grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] border-b border-line bg-inset/70 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-faint">
+          <span>Instrument</span><span className="text-right">Last</span><span className="text-right">1h range</span><span className="text-right">vs VWAP</span><span className="text-right">Dual AVWAP</span><span className="text-right">Regime 1h</span><span className="text-right">vs prior POC</span><span className="text-right">Feed age</span>
+        </div>
         {SYMBOLS.map((item, index) => {
           const data = marketQueries[index].data;
           const itemForming = data?.forming;
@@ -709,17 +705,15 @@ export function MarketPulse() {
           const itemQuality = data?.data_quality ?? "unknown";
           const feedAge = data?.market.feed_age_ms ?? data?.market.canonical_age_ms;
           return (
-            <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`rounded-xl border p-4 text-left transition ${active ? "border-brand/60 bg-brand/10" : "border-line bg-panel/80 hover:border-line2"}`}>
-              <div className="flex items-center justify-between"><span className="font-mono text-sm font-semibold">{item.replace("USDT", "")}</span><TerminalBadge tone={itemQuality === "ok" ? "good" : itemQuality === "unknown" ? "neutral" : "bad"}>{itemQuality}</TerminalBadge></div>
-              <div className="mt-3 font-mono text-xl tabular-nums">{priceText(price)}</div>
-              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] text-dim">
-                <span>1h range</span><span className="text-right text-txt">{fmt(latestClosedHour?.range_bps)} bps</span>
-                <span>vs VWAP</span><span className="text-right text-txt">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
-                <span>dual AVWAP</span><span className="text-right text-txt">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
-                <span>regime 1h</span><span className="text-right text-txt">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
-                <span>vs prior POC</span><span className="text-right text-txt">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
-                <span>feed age</span><span className="text-right text-txt">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
-              </div>
+            <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] items-center border-b border-line/70 px-3 py-2 text-left font-mono text-[10px] transition last:border-0 ${active ? "border-l-2 border-l-brand bg-brand/10" : "hover:bg-white/[0.025]"}`}>
+              <span className="flex items-center gap-2 text-[11px] font-semibold text-txt">{item.replace("USDT", "")}<span className={`h-1.5 w-1.5 rounded-full ${itemQuality === "ok" ? "bg-long" : itemQuality === "unknown" ? "bg-faint" : "bg-short"}`} /></span>
+              <span className="text-right text-[13px] tabular-nums text-txt">{priceText(price)}</span>
+              <span className="text-right">{fmt(latestClosedHour?.range_bps)} bps</span>
+              <span className="text-right">{signed((itemForming?.vs_session_vwap_bps as number | undefined) ?? data?.indicators.vs_session_vwap_bps)} bps</span>
+              <span className="text-right">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
+              <span className="text-right">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
+              <span className="text-right">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
+              <span className="text-right">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
             </button>
           );
         })}
@@ -833,18 +827,22 @@ export function MarketPulse() {
         </div>
       </TerminalPanel>
 
-      <TerminalPanel title="Notifications" meta="hour closes · volume · integrity">
+      <TerminalPanel title="Incident rail" meta={`${activeEventCount} active · hour closes · volume · integrity`}>
+        <div className="mb-3 flex items-center gap-1 border-b border-line pb-2" role="group" aria-label="Incident filter">
+          {(["active", "all", "recovered"] as const).map((filter) => <button key={filter} onClick={() => setAlertFilter(filter)} className={`border px-2 py-1 font-mono text-[9px] uppercase ${alertFilter === filter ? "border-brand/60 bg-brand/10 text-brand" : "border-line text-dim"}`}>{filter}</button>)}
+          <span className="ml-auto font-mono text-[9px] text-faint">read-only · recovery evidence retained</span>
+        </div>
         <div className="divide-y divide-line/70">
-          {events.slice(0, 12).map((alert, index) => (
+          {visibleEvents.slice(0, 20).map((alert, index) => (
             <div key={`${alert.at}-${index}`} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
               <span className={`mt-1 h-2 w-2 rounded-full ${alert.severity === "critical" ? "bg-short" : alert.severity === "warning" ? "bg-warn" : "bg-info"}`} />
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] text-txt">{alert.message}</div>
-                <div className="mt-1 font-mono text-[10px] text-faint">{fullUtcHour(alert.at)} UTC · {alert.kind}</div>
+                <div className="mt-1 flex items-center gap-2 font-mono text-[10px] text-faint"><span>{fullUtcHour(alert.at)} UTC · {alert.kind}</span><TerminalBadge tone={alert.recovered ? "neutral" : alert.severity === "critical" ? "bad" : "warn"}>{alert.recovered ? "recovered" : "active"}</TerminalBadge></div>
               </div>
             </div>
           ))}
-          {!events.length && <div className="py-4 text-[12px] text-dim">No pulse events yet.</div>}
+          {!visibleEvents.length && <div className="py-4 text-[12px] text-dim">No incidents match the current filter.</div>}
         </div>
       </TerminalPanel>
     </div>
