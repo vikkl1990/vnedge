@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from vnedge.data.candles import Candle
 from vnedge.data.candle_gap_scan import find_candle_holes
+from vnedge.data.candles import Candle
 from vnedge.data.gaps import GapKind
 
 BASE = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
@@ -18,10 +18,10 @@ def _candle(offset_hours: int) -> Candle:
     return Candle(
         symbol="BTCUSDT", timeframe="1h", open_time=open_time,
         close_time=open_time + timedelta(hours=1),
-        open=Decimal("100"), high=Decimal("101"), low=Decimal("99"),
-        close=Decimal("100.5"), volume=Decimal("10"),
-        quote_volume=Decimal("1005"), trade_count=5,
-        taker_buy_volume=Decimal("5"),
+        open=Decimal(100), high=Decimal(101), low=Decimal(99),
+        close=Decimal("100.5"), volume=Decimal(10),
+        quote_volume=Decimal(1005), trade_count=5,
+        taker_buy_volume=Decimal(5),
     )
 
 
@@ -42,6 +42,24 @@ def test_a_missing_hour_is_recorded_as_a_storage_hole() -> None:
     assert hole.start == BASE + timedelta(hours=2)   # close of the 13:00 bar
     assert hole.end == BASE + timedelta(hours=3)     # open of the 15:00 bar
     assert "60 min missing" in hole.detail
+
+
+def test_same_storage_hole_has_stable_id_across_periodic_scans() -> None:
+    candles = [_candle(0), _candle(2)]
+    first = find_candle_holes(
+        candles,
+        exchange="binanceusdm",
+        symbol="BTCUSDT",
+        detected_at=DETECTED,
+    )[0]
+    second = find_candle_holes(
+        candles,
+        exchange="binanceusdm",
+        symbol="BTCUSDT",
+        detected_at=DETECTED + timedelta(minutes=15),
+    )[0]
+
+    assert first.gap_id == second.gap_id
 
 
 def test_multiple_holes_are_reported_separately() -> None:

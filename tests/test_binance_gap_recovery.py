@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 import pandas as pd
 import pytest
 
-from vnedge.data.binance_gap_recovery import BinanceAggTradeRest, _write_tape
+from vnedge.data.binance_gap_recovery import (
+    BinanceAggTradeRest,
+    _write_tape,
+    recover_storage_gaps,
+)
+from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 
 START = datetime(2026, 8, 16, tzinfo=UTC)
 
@@ -88,3 +95,99 @@ def test_gap_shard_is_atomic_and_idempotent(tmp_path) -> None:
     stored = pd.read_parquet(first[0])
     assert list(stored.columns) == ["ts_ms", "price", "amount", "side"]
     assert stored.to_dict("records") == tape.frame.to_dict("records")
+
+
+def test_existing_canonical_coverage_closes_duplicate_gap_records(tmp_path) -> None:
+    candle_store = CandleParquetStore(
+        tmp_path / "candles",
+        exchange="binanceusdm",
+    )
+    candle_store.upsert((
+        Candle(
+            symbol="BTCUSDT",
+            timeframe="1h",
+            open_time=START,
+            close_time=START + timedelta(hours=1),
+            open=Decimal(100),
+            high=Decimal(101),
+            low=Decimal(99),
+            close=Decimal(100),
+            volume=Decimal(1),
+            quote_volume=Decimal(100),
+            trade_count=1,
+        ),
+    ))
+    gap_store = GapParquetStore(tmp_path / "gaps")
+    records = tuple(
+        GapRecord(
+            symbol="BTCUSDT",
+            exchange="binanceusdm",
+            kind=GapKind.STORAGE_HOLE,
+            start=START,
+            end=START + timedelta(hours=1),
+            detected_at=START + timedelta(hours=offset),
+            gap_id=f"duplicate-{offset}",
+        )
+        for offset in (2, 3)
+    )
+    gap_store.upsert(records)
+
+    class MustNotFetch:
+        def fetch(self, *_args, **_kwargs):
+            raise AssertionError("covered canonical interval must not refetch")
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=MustNotFetch(),
+    )
+
+    assert not report.recovered
+    stored_records = gap_store.read("binanceusdm", "BTCUSDT")
+    assert len(stored_records) == 2
+    assert all(record.recovered for record in stored_records)
+
+
+def test_rest_retention_rejection_defers_to_vision_without_aborting(tmp_path) -> None:
+    gap_store = GapParquetStore(tmp_path / "gaps")
+    gap_store.upsert((
+        GapRecord(
+            symbol="BTCUSDT",
+            exchange="binanceusdm",
+            kind=GapKind.STORAGE_HOLE,
+            start=START,
+            end=START + timedelta(hours=1),
+            detected_at=START + timedelta(days=3),
+        ),
+    ))
+
+    class RetentionLimited:
+        def fetch(self, *_args, **_kwargs):
+            request = httpx.Request("GET", "https://fapi.binance.com/fapi/v1/aggTrades")
+            response = httpx.Response(
+                400,
+                request=request,
+                json={"code": -4166, "msg": "recent 2 days only"},
+            )
+            raise httpx.HTTPStatusError(
+                "outside retention",
+                request=request,
+                response=response,
+            )
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=RetentionLimited(),
+    )
+
+    assert not report.recovered
+    assert report.skipped_symbols == (
+        f"BTCUSDT:{START.isoformat()}:vision",
+    )

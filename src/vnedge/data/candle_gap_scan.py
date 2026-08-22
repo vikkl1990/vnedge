@@ -24,8 +24,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 from vnedge.data.candles import Candle, CandleParquetStore
@@ -44,10 +46,14 @@ def find_candle_holes(
 ) -> list[GapRecord]:
     """One STORAGE_HOLE record per discontinuity in the stored sequence."""
     records: list[GapRecord] = []
-    for previous, current in zip(candles, candles[1:]):
+    for previous, current in pairwise(candles):
         if current.open_time <= previous.close_time:
             continue
         missing_minutes = (current.open_time - previous.close_time).total_seconds() / 60
+        identity = (
+            f"{exchange}|{symbol}|{GapKind.STORAGE_HOLE.value}|"
+            f"{previous.close_time.isoformat()}|{current.open_time.isoformat()}"
+        )
         records.append(
             GapRecord(
                 symbol=symbol,
@@ -60,6 +66,9 @@ def find_candle_holes(
                     f"candle sequence hole: {missing_minutes:.0f} min missing between "
                     f"{previous.close_time.isoformat()} and {current.open_time.isoformat()}"
                 ),
+                # A periodic scan observes the same immutable hole many times.
+                # Its identity is the interval, not the observation timestamp.
+                gap_id=hashlib.sha256(identity.encode()).hexdigest()[:24],
             )
         )
     return records

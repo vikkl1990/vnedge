@@ -138,6 +138,40 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
 
+  # Binance REST retains aggTrades for only two days. Official Vision daily
+  # archives own older storage holes; replay stays trade-derived and never
+  # substitutes exchange OHLCV. Existing day archives are skipped.
+  vision-recovery:
+    build: .
+    restart: unless-stopped
+    environment:
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-7}"
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python -m vnedge.data.aggtrades_backfill \
+            --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
+            --days "$${VISION_BACKFILL_DAYS}" \
+            --data-root data \
+            --exchange binanceusdm_hist
+          python -m vnedge.data.candle_bootstrap \
+            --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
+            --days "$${VISION_BACKFILL_DAYS}" \
+            --data-root data \
+            --candle-root data/candles \
+            --source-exchange binanceusdm_hist \
+            --target-exchange binanceusdm
+          sleep 86400
+        done
+    volumes:
+      - ./data:/app/data
+    mem_limit: 1400m
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
   tick-lake-maintenance:
     build: .
     restart: unless-stopped

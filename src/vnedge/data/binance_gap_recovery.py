@@ -29,8 +29,8 @@ import pandas as pd
 
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
 from vnedge.data.candle_bootstrap import BootstrapReport, bootstrap_candles
-from vnedge.data.candles import CandlePipeline
-from vnedge.data.gaps import GapKind, GapParquetStore
+from vnedge.data.candles import CandleParquetStore, CandlePipeline
+from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ BASE_URL = "https://fapi.binance.com/fapi/v1/aggTrades"
 MAX_WINDOW = timedelta(hours=1)
 DEFAULT_PAGE_SIZE = 1_000
 DEFAULT_REQUEST_INTERVAL_SECONDS = 0.55
+REST_RETENTION_ERROR = -4166
 
 
 def _utc(value: datetime, *, label: str) -> datetime:
@@ -273,6 +274,36 @@ def _write_tape(
     return tuple(paths)
 
 
+def _canonical_gap_covered(
+    store: CandleParquetStore,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+) -> bool:
+    """True only when every missing 1h bucket now has a closed canonical bar."""
+    expected: set[datetime] = set()
+    cursor = start
+    while cursor < end:
+        expected.add(cursor)
+        cursor += timedelta(hours=1)
+    if not expected or cursor != end:
+        return False
+    present = {
+        candle.open_time
+        for candle in store.read(_market_id(symbol), "1h")
+        if candle.is_closed and start <= candle.open_time < end
+    }
+    return expected <= present
+
+
+def _rest_retention_rejection(exc: httpx.HTTPStatusError) -> bool:
+    try:
+        payload = exc.response.json()
+    except (ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("code") == REST_RETENTION_ERROR
+
+
 def recover_storage_gaps(
     *,
     data_root: Path | str,
@@ -285,6 +316,7 @@ def recover_storage_gaps(
     """Fetch, replay and then close exact unrecovered storage-hole records."""
     data_path = Path(data_root)
     gap_store = GapParquetStore(gap_root)
+    candle_store = CandleParquetStore(candle_root, exchange=exchange)
     recovered: list[RecoveredGap] = []
     skipped: list[str] = []
 
@@ -298,8 +330,41 @@ def recover_storage_gaps(
         if not holes:
             skipped.append(_market_id(symbol))
             continue
+        grouped: dict[tuple[datetime, datetime], list[GapRecord]] = {}
         for gap in holes:
-            tape = fetcher.fetch(symbol, gap.start, gap.end)
+            grouped.setdefault((gap.start, gap.end), []).append(gap)
+        for (start, end), duplicate_records in grouped.items():
+            gap = duplicate_records[-1]
+            if _canonical_gap_covered(candle_store, symbol, start, end):
+                proof = "recovered: canonical closed 1h coverage already present"
+                gap_store.upsert(
+                    replace(
+                        record,
+                        recovered=True,
+                        detail="; ".join(
+                            part for part in (record.detail, proof) if part
+                        ),
+                    )
+                    for record in duplicate_records
+                )
+                skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:covered")
+                continue
+            try:
+                tape = fetcher.fetch(symbol, start, end)
+            except httpx.HTTPStatusError as exc:
+                if not _rest_retention_rejection(exc):
+                    raise
+                # Binance REST is a recent-2-day source. The daily Vision
+                # worker owns older intervals; one old gap must not prevent
+                # later, recoverable gaps from being attempted.
+                logger.warning(
+                    "%s gap %s..%s is outside REST retention; awaiting Vision",
+                    symbol,
+                    start.isoformat(),
+                    end.isoformat(),
+                )
+                skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:vision")
+                continue
             paths = _write_tape(tape, data_path, exchange=exchange)
             days = max(1, (datetime.now(UTC).date() - gap.start.date()).days + 1)
             candle_report: BootstrapReport = bootstrap_candles(
@@ -324,13 +389,12 @@ def recover_storage_gaps(
                 f"unrelated_replay_rejections={candle_report.rejected}"
             )
             gap_store.upsert(
-                (
-                    replace(
-                        gap,
-                        recovered=True,
-                        detail="; ".join(part for part in (gap.detail, proof) if part),
-                    ),
+                replace(
+                    record,
+                    recovered=True,
+                    detail="; ".join(part for part in (record.detail, proof) if part),
                 )
+                for record in duplicate_records
             )
             recovered.append(
                 RecoveredGap(
