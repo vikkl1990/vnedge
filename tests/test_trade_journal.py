@@ -8,6 +8,112 @@ def write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
 
+def test_trade_journal_projects_scanner_chart_evidence_without_guessing(tmp_path):
+    lane = "shadow_observe_structure_bos_1h_binanceusdm_btc_usdt_usdt_1h"
+    write_jsonl(
+        tmp_path / f"{lane}.journal.jsonl",
+        [
+            {
+                "ts": "2026-08-20T12:00:01+00:00",
+                "kind": "lane_eval",
+                "payload": {
+                    "bar_ts": "2026-08-20T11:00:00+00:00",
+                    "strategy_id": "structure_bos_1h",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                    "fired": False,
+                    "skip_reason": "inside_structure",
+                    "backfill": False,
+                },
+            },
+            {
+                "ts": "2026-08-20T13:00:01+00:00",
+                "kind": "lane_eval",
+                "payload": {
+                    "bar_ts": "2026-08-20T12:00:00+00:00",
+                    "strategy_id": "structure_bos_1h",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                    "fired": True,
+                    "signal_reason": "bos_up_break_swing_high",
+                    "signal": {
+                        "side": "long",
+                        "stop_price": 62_000.0,
+                        "take_profit_price": 65_000.0,
+                    },
+                    "backfill": False,
+                },
+            },
+            {
+                "ts": "2026-08-20T13:00:02+00:00",
+                "kind": "shadow_intent",
+                "payload": {
+                    "intent_key": "bos-1",
+                    "approved": True,
+                    "intent": {
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "long",
+                        "quantity": 0.01,
+                        "notional_usd": 630.0,
+                        "strategy_id": "structure_bos_1h",
+                    },
+                    "signal_reason": "bos_up_break_swing_high",
+                    "stop_price": 62_000.0,
+                    "take_profit_price": 65_000.0,
+                    "bar_ts": "2026-08-20T12:00:00+00:00",
+                },
+            },
+            {
+                "ts": "2026-08-20T15:00:02+00:00",
+                "kind": "shadow_outcome",
+                "payload": {
+                    "intent_key": "bos-1",
+                    "resolution": "target",
+                    "side": "long",
+                    "entry_price": 63_000.0,
+                    "exit_price": 65_000.0,
+                    "virtual_net_usd": 18.5,
+                    "bars_held": 2,
+                    "bar_ts": "2026-08-20T14:00:00+00:00",
+                },
+            },
+            {
+                "ts": "2026-08-20T16:00:01+00:00",
+                "kind": "lane_eval",
+                "payload": {
+                    "bar_ts": "2026-08-20T15:00:00+00:00",
+                    "strategy_id": "structure_bos_1h",
+                    "exchange": "binanceusdm",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "1h",
+                    "fired": False,
+                    "skip_reason": "no_confirmed_swing_pair",
+                    "backfill": False,
+                },
+            },
+        ],
+    )
+    snapshot = {"lanes": [{"lane_id": lane}]}
+
+    payload = build_trade_journal(snapshot=snapshot, journal_dir=tmp_path, limit=50)
+    events = payload["scanner_events"]
+
+    assert {event["kind"] for event in events} == {"signal", "entry", "exit", "evaluation"}
+    entry = next(event for event in events if event["kind"] == "entry")
+    assert entry["price"] == 63_000.0
+    assert entry["stop_price"] == 62_000.0
+    assert entry["target_price"] == 65_000.0
+    outcome = next(event for event in events if event["kind"] == "exit")
+    assert outcome["symbol"] == "BTC/USDT:USDT"
+    assert outcome["strategy_id"] == "structure_bos_1h"
+    assert outcome["entry_ts"] == "2026-08-20T12:00:00+00:00"
+    assert outcome["virtual_net_usd"] == 18.5
+    waiting = next(event for event in events if event["kind"] == "evaluation")
+    assert waiting["reason"] == "no_confirmed_swing_pair"
+
+
 def test_trade_journal_projects_fills_orders_and_virtual_trades(tmp_path):
     write_jsonl(
         tmp_path / "alpha.fills.jsonl",

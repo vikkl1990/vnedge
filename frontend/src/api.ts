@@ -520,6 +520,31 @@ export interface JournalRow {
   [k: string]: unknown;
 }
 
+export interface ScannerAuditEvent {
+  lane: string;
+  ts: string;
+  bar_ts: string;
+  entry_ts?: string | null;
+  kind: "signal" | "evaluation" | "entry" | "rejection" | "exit";
+  source_event: string;
+  intent_key?: string;
+  strategy_id: string;
+  exchange?: string;
+  symbol: string;
+  timeframe: string;
+  side: string;
+  price: number | null;
+  entry_price?: number | null;
+  stop_price?: number | null;
+  target_price?: number | null;
+  approved: boolean;
+  reason: string;
+  resolution?: string;
+  virtual_net_usd?: number;
+  bars_held?: number;
+  backfill?: boolean;
+}
+
 export interface JournalPayload {
   generated_at: string;
   summary: {
@@ -533,6 +558,7 @@ export interface JournalPayload {
     [k: string]: unknown;
   };
   closed_trades: JournalRow[];
+  scanner_events: ScannerAuditEvent[];
   events: Array<{
     lane?: string;
     ts?: string;

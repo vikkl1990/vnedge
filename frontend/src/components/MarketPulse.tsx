@@ -17,12 +17,22 @@ import {
   type WhitespaceData,
 } from "lightweight-charts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PulseHour } from "../api";
-import { useHourAnalysis, useLanes, usePulse, useRiskSnapshot } from "../queries";
+import type { PulseHour, ScannerAuditEvent } from "../api";
+import { useHourAnalysis, useJournal, useLanes, usePulse, useRiskSnapshot } from "../queries";
 import { ScannerWorkspace } from "./ScannerWorkspace";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+
+const baseAsset = (symbol: string) => {
+  const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return SYMBOLS.map((item) => item.replace("USDT", "")).find((asset) => normalized.startsWith(asset)) ?? normalized;
+};
+
+const compactStrategy = (value: string) => value
+  .replace(/_observer|_observe|_strategy/g, "")
+  .replace(/_v\d+$/, "")
+  .slice(0, 18);
 
 const fmt = (value: number | null | undefined, digits = 1) =>
   typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
@@ -213,6 +223,7 @@ function CandleChart({
   priorDayPoc,
   priorDayVah,
   priorDayVal,
+  auditEvents,
 }: {
   hours: PulseHour[];
   forming: Record<string, unknown> | null | undefined;
@@ -223,6 +234,7 @@ function CandleChart({
   priorDayPoc: number | null | undefined;
   priorDayVah: number | null | undefined;
   priorDayVal: number | null | undefined;
+  auditEvents: ScannerAuditEvent[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -234,6 +246,8 @@ function CandleChart({
   const pocRef = useRef<IPriceLine | null>(null);
   const vahRef = useRef<IPriceLine | null>(null);
   const valRef = useRef<IPriceLine | null>(null);
+  const scannerStopRef = useRef<IPriceLine | null>(null);
+  const scannerTargetRef = useRef<IPriceLine | null>(null);
   const markerRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const historySignatureRef = useRef("");
   const formingTimeRef = useRef<UTCTimestamp | null>(null);
@@ -263,6 +277,16 @@ function CandleChart({
   const hasData = hours.length > 0 || chartLivePoint !== null;
   const hasDegradedHours = hours.some((hour) => hour.data_quality !== "ok");
   const hasDualAvwap = hours.some((hour) => hour.avwap_low != null || hour.avwap_high != null);
+  const activeIntent = useMemo(() => {
+    const resolved = new Set(
+      auditEvents
+        .filter((event) => event.kind === "exit" && event.intent_key)
+        .map((event) => event.intent_key),
+    );
+    return [...auditEvents]
+      .filter((event) => event.kind === "entry" && event.approved && (!event.intent_key || !resolved.has(event.intent_key)))
+      .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0] ?? null;
+  }, [auditEvents]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -385,6 +409,8 @@ function CandleChart({
         pocRef.current = null;
         vahRef.current = null;
         valRef.current = null;
+        scannerStopRef.current = null;
+        scannerTargetRef.current = null;
         markerRef.current = null;
         historySignatureRef.current = "";
         formingTimeRef.current = null;
@@ -434,8 +460,13 @@ function CandleChart({
   }, [chartLivePoint, points]);
 
   useEffect(() => {
-    markerRef.current?.setMarkers(
-      hours.flatMap((hour) => {
+    const markers: Array<{
+      time: UTCTimestamp;
+      position: "aboveBar" | "belowBar" | "inBar";
+      color: string;
+      shape: "circle" | "square" | "arrowUp" | "arrowDown";
+      text: string;
+    }> = hours.flatMap((hour) => {
         const time = toUnixHour(hour.open_time);
         if (time === null || hour.data_quality === "ok") return [];
         return [{
@@ -445,9 +476,43 @@ function CandleChart({
           shape: "circle" as const,
           text: "GAP",
         }];
-      }),
-    );
-  }, [hours]);
+      });
+    for (const event of auditEvents) {
+      if (event.backfill || !["signal", "entry", "exit"].includes(event.kind)) continue;
+      const time = toUnixHour(event.bar_ts || event.ts);
+      if (time === null) continue;
+      const long = ["long", "buy"].includes(event.side.toLowerCase());
+      const strategy = compactStrategy(event.strategy_id || event.lane || "scanner");
+      if (event.kind === "signal") {
+        markers.push({
+          time,
+          position: long ? "belowBar" : "aboveBar",
+          color: "#58A6FF",
+          shape: long ? "arrowUp" : "arrowDown",
+          text: `SIG ${long ? "L" : "S"} · ${strategy}`,
+        });
+      } else if (event.kind === "entry") {
+        markers.push({
+          time,
+          position: long ? "belowBar" : "aboveBar",
+          color: "#D29922",
+          shape: "circle",
+          text: `IN ${long ? "L" : "S"} · ${strategy}`,
+        });
+      } else {
+        const net = event.virtual_net_usd;
+        markers.push({
+          time,
+          position: long ? "aboveBar" : "belowBar",
+          color: typeof net === "number" && net >= 0 ? "#3FB950" : "#F85149",
+          shape: "square",
+          text: `OUT ${event.resolution || event.reason}${typeof net === "number" ? ` · ${net >= 0 ? "+" : ""}$${net.toFixed(2)}` : ""}`,
+        });
+      }
+    }
+    markers.sort((a, b) => Number(a.time) - Number(b.time));
+    markerRef.current?.setMarkers(markers);
+  }, [auditEvents, hours]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -525,6 +590,39 @@ function CandleChart({
     }
   }, [priorDayPoc, priorDayVah, priorDayVal]);
 
+  useEffect(() => {
+    const candles = candleRef.current;
+    if (!candles) return;
+    if (scannerStopRef.current) {
+      candles.removePriceLine(scannerStopRef.current);
+      scannerStopRef.current = null;
+    }
+    if (scannerTargetRef.current) {
+      candles.removePriceLine(scannerTargetRef.current);
+      scannerTargetRef.current = null;
+    }
+    if (typeof activeIntent?.stop_price === "number" && Number.isFinite(activeIntent.stop_price)) {
+      scannerStopRef.current = candles.createPriceLine({
+        price: activeIntent.stop_price,
+        color: "#F85149",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `VIRTUAL STOP · ${compactStrategy(activeIntent.strategy_id)}`,
+      });
+    }
+    if (typeof activeIntent?.target_price === "number" && Number.isFinite(activeIntent.target_price)) {
+      scannerTargetRef.current = candles.createPriceLine({
+        price: activeIntent.target_price,
+        color: "#3FB950",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `VIRTUAL TARGET · ${compactStrategy(activeIntent.strategy_id)}`,
+      });
+    }
+  }, [activeIntent]);
+
   return (
     <div className="relative overflow-hidden rounded-md bg-inset">
       <div
@@ -550,6 +648,7 @@ function CandleChart({
         {typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc) && <span className="flex items-center gap-1.5 text-[#F0883E]"><span className="h-0.5 w-4 bg-[#F0883E]" />PRIOR-DAY POC</span>}
         {typeof priorDayVah === "number" && typeof priorDayVal === "number" && <span className="flex items-center gap-1.5 text-dim"><span className="h-px w-4 border-t border-dotted border-dim" />VAH / VAL</span>}
         {chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
+        {auditEvents.some((event) => ["signal", "entry", "exit"].includes(event.kind)) && <span className="flex items-center gap-1.5 text-brand"><span className="h-2 w-2 rounded-full bg-brand" />SCANNER EVIDENCE</span>}
         {formingWithheld && <span className="text-warn">STALE FORMING POINT WITHHELD</span>}
         {hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
       </div>
@@ -579,6 +678,66 @@ function Metric({ label, value, note }: { label: string; value: string; note?: s
   );
 }
 
+function ScannerAuditRail({ events, hours }: { events: ScannerAuditEvent[]; hours: PulseHour[] }) {
+  const closes = useMemo(() => new Map(
+    hours.map((hour) => [toUnixHour(hour.open_time), hour.close]),
+  ), [hours]);
+  const rows = useMemo(() => [...events]
+    .filter((event) => !event.backfill)
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
+    .slice(0, 12), [events]);
+
+  const distanceFromDecision = (event: ScannerAuditEvent) => {
+    if (event.kind !== "entry" || typeof event.price !== "number") return null;
+    const time = toUnixHour(event.bar_ts || event.ts);
+    const decisionClose = time === null ? null : closes.get(time);
+    if (typeof decisionClose !== "number" || decisionClose <= 0) return null;
+    const direction = ["short", "sell"].includes(event.side.toLowerCase()) ? -1 : 1;
+    return (event.price - decisionClose) / decisionClose * 10_000 * direction;
+  };
+
+  return (
+    <div className="border-t border-line bg-inset/30">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-3 py-2">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-faint">Scanner audit overlay</div>
+          <div className="mt-0.5 text-[10px] text-dim">journal truth · virtual observations · no order authority</div>
+        </div>
+        <div className="flex items-center gap-2 font-mono text-[9px] text-faint">
+          <span className="text-info">▲▼ signal</span><span className="text-warn">● entry</span><span className="text-long">■ exit</span>
+        </div>
+      </div>
+      {!rows.length ? (
+        <div className="px-3 py-4 text-[11px] text-dim">No scanner evidence is journaled for this instrument in the current read window.</div>
+      ) : (
+        <div className="max-h-52 divide-y divide-line/60 overflow-y-auto">
+          {rows.map((event, index) => {
+            const distance = distanceFromDecision(event);
+            const tone = event.kind === "exit"
+              ? (event.virtual_net_usd ?? 0) >= 0 ? "good" : "bad"
+              : event.kind === "rejection" || event.kind === "evaluation"
+                ? "warn"
+                : event.kind === "entry" ? "warn" : "info";
+            return (
+              <div key={`${event.lane}-${event.ts}-${event.kind}-${index}`} className="grid gap-2 px-3 py-2 md:grid-cols-[110px_90px_minmax(150px,.8fr)_minmax(220px,1.4fr)_auto] md:items-center">
+                <span className="font-mono text-[9px] text-faint">{fullUtcHour(event.bar_ts || event.ts)} UTC</span>
+                <TerminalBadge tone={tone}>{event.kind}</TerminalBadge>
+                <span className="truncate font-mono text-[10px] text-txt" title={event.strategy_id || event.lane}>{compactStrategy(event.strategy_id || event.lane)} · {event.side || "—"}</span>
+                <span className="truncate text-[10px] text-dim" title={event.reason}>{event.reason || "no reason recorded"}</span>
+                <span className="text-right font-mono text-[9px] text-faint">
+                  {event.kind === "exit" && typeof event.virtual_net_usd === "number"
+                    ? `${event.virtual_net_usd >= 0 ? "+" : ""}$${event.virtual_net_usd.toFixed(2)}`
+                    : distance == null ? priceText(event.price) : `${distance >= 0 ? "+" : ""}${distance.toFixed(1)} bps vs close`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MarketPulse() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [selected, setSelected] = useState<string | null>(null);
@@ -588,10 +747,26 @@ export function MarketPulse() {
   const solPulse = usePulse("SOLUSDT");
   const risk = useRiskSnapshot();
   const lanes = useLanes();
+  const journal = useJournal(200);
   const pulse = symbol === "ETHUSDT" ? ethPulse : symbol === "SOLUSDT" ? solPulse : btcPulse;
   const marketQueries = [btcPulse, ethPulse, solPulse];
   const hours = pulse.data?.hours ?? [];
   const latest = hours[hours.length - 1];
+  const auditEvents = useMemo(() => {
+    const laneById = new Map((lanes.data?.lanes ?? []).map((lane) => [lane.lane_id, lane]));
+    const selectedBase = baseAsset(symbol);
+    return (journal.data?.scanner_events ?? []).flatMap((event) => {
+      const lane = laneById.get(event.lane);
+      const eventSymbol = event.symbol || lane?.symbol || "";
+      if (baseAsset(eventSymbol) !== selectedBase) return [];
+      return [{
+        ...event,
+        symbol: eventSymbol,
+        strategy_id: event.strategy_id || lane?.strategy_id || event.lane,
+        timeframe: event.timeframe || lane?.timeframe || "",
+      }];
+    });
+  }, [journal.data?.scanner_events, lanes.data?.lanes, symbol]);
 
   useEffect(() => {
     if (!selected || !hours.some((hour) => hour.open_time === selected)) {
@@ -731,7 +906,9 @@ export function MarketPulse() {
             priorDayPoc={priorDayProfile?.poc}
             priorDayVah={priorDayProfile?.value_area_high}
             priorDayVal={priorDayProfile?.value_area_low}
+            auditEvents={auditEvents}
           />
+          <ScannerAuditRail events={auditEvents} hours={hours} />
         </TerminalPanel>
 
         <div className="flex flex-col gap-4">

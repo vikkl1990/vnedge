@@ -66,6 +66,7 @@ def build_trade_journal(
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
     closed_trades = _build_closed_trades(fills, journal_rows, virtual_trades)
+    scanner_events = _scanner_audit_events(journal_rows)
     actual_closed = [
         row for row in closed_trades if row.get("kind") == "actual_closing_fill"
     ]
@@ -88,6 +89,7 @@ def build_trade_journal(
     order_rows = _sort_recent(order_rows)[:limit]
     closed_trades = _sort_recent(closed_trades)[:limit]
     events = _sort_recent(events)[:limit]
+    scanner_events = _sort_recent(scanner_events)[:limit]
     lane_counts = _lane_counts(snapshot)
 
     return {
@@ -102,6 +104,7 @@ def build_trade_journal(
             "actual_closed_trades": len(actual_closed),
             "shadow_closed_trades": len(shadow_closed),
             "events": len(events),
+            "scanner_events": len(scanner_events),
             "journals_scanned": _count_paths(root, ".journal.jsonl", lane, active),
             "fill_ledgers_scanned": _count_paths(root, ".fills.jsonl", lane, active),
             "active_lanes": len(active) if active is not None else None,
@@ -120,6 +123,7 @@ def build_trade_journal(
         "fills": fills,
         "closed_trades": closed_trades,
         "events": events,
+        "scanner_events": scanner_events,
         "policy": {
             "read_only": True,
             "can_trade": False,
@@ -362,9 +366,158 @@ _EVENT_KINDS = _ORDER_KINDS | {
     "exit_plan_preserved_after_reconciliation",
     "daily_report",
     "lane_eval",
+    "shadow_portfolio_rejected",
     "executor_finished",
     "executor_scalper_risk_decision",
 }
+
+
+def _scanner_audit_events(
+    journal_rows: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Project decision evidence into chart-safe scanner events.
+
+    This is deliberately a read-only projection.  It joins outcomes back to
+    their immutable intent keys so the UI can show where a scanner spoke,
+    where its virtual entry was priced, and how the observation resolved.
+    Waiting evaluations are reduced to the newest row per lane to avoid
+    covering the price chart with one rejection marker per bar.
+    """
+    intents: dict[str, dict[str, Any]] = {}
+    latest_waiting: dict[str, dict[str, Any]] = {}
+    output: list[dict[str, Any]] = []
+
+    def intent_price(payload: Mapping[str, Any], intent: Mapping[str, Any]) -> float | None:
+        explicit = _float(payload.get("entry_price"))
+        if explicit > 0:
+            return explicit
+        quantity = abs(_float(intent.get("quantity")))
+        notional = _float(intent.get("notional_usd"))
+        if quantity > 0 and notional > 0:
+            return notional / quantity
+        return None
+
+    for lane, record in journal_rows:
+        kind = str(record.get("kind") or "")
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        ts = _record_ts(record, payload)
+
+        if kind == "lane_eval":
+            signal = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+            fired = bool(payload.get("fired"))
+            row = {
+                "lane": lane,
+                "ts": ts,
+                "bar_ts": str(payload.get("bar_ts") or ts),
+                "kind": "signal" if fired else "evaluation",
+                "source_event": kind,
+                "strategy_id": str(payload.get("strategy_id") or ""),
+                "exchange": str(payload.get("exchange") or ""),
+                "symbol": str(payload.get("symbol") or ""),
+                "timeframe": str(payload.get("timeframe") or ""),
+                "side": str(signal.get("side") or ""),
+                "price": None,
+                "stop_price": signal.get("stop_price"),
+                "target_price": signal.get("take_profit_price"),
+                "approved": fired,
+                "reason": str(
+                    payload.get("signal_reason")
+                    or payload.get("skip_reason")
+                    or "no_signal_observed"
+                ),
+                "backfill": bool(payload.get("backfill")),
+            }
+            if fired:
+                output.append(row)
+            elif not row["backfill"]:
+                previous = latest_waiting.get(lane)
+                if previous is None or str(previous.get("ts") or "") < ts:
+                    latest_waiting[lane] = row
+            continue
+
+        if kind in {"shadow_intent", "scalp_shadow_intent"}:
+            intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+            key = str(payload.get("intent_key") or "")
+            approved = bool(payload.get("approved"))
+            row = {
+                "lane": lane,
+                "ts": ts,
+                "bar_ts": str(payload.get("bar_ts") or ts),
+                "kind": "entry" if approved else "rejection",
+                "source_event": kind,
+                "intent_key": key,
+                "strategy_id": str(intent.get("strategy_id") or payload.get("strategy_id") or ""),
+                "symbol": str(intent.get("symbol") or payload.get("symbol") or ""),
+                "timeframe": str(payload.get("timeframe") or ""),
+                "side": str(intent.get("side") or payload.get("side") or ""),
+                "price": intent_price(payload, intent),
+                "stop_price": payload.get("stop_price"),
+                "target_price": payload.get("take_profit_price"),
+                "approved": approved,
+                "reason": str(
+                    payload.get("signal_reason")
+                    or payload.get("explanation")
+                    or ", ".join(payload.get("failed_checks") or [])
+                ),
+            }
+            if key:
+                intents[key] = row
+            output.append(row)
+            continue
+
+        if kind in {"shadow_outcome", "scalp_shadow_outcome"}:
+            key = str(payload.get("intent_key") or "")
+            intent_row = intents.get(key, {})
+            output.append(
+                {
+                    "lane": lane,
+                    "ts": ts,
+                    "bar_ts": str(payload.get("bar_ts") or ts),
+                    "entry_ts": intent_row.get("bar_ts"),
+                    "kind": "exit",
+                    "source_event": kind,
+                    "intent_key": key,
+                    "strategy_id": str(
+                        payload.get("strategy_id") or intent_row.get("strategy_id") or ""
+                    ),
+                    "symbol": str(payload.get("symbol") or intent_row.get("symbol") or ""),
+                    "timeframe": str(payload.get("timeframe") or intent_row.get("timeframe") or ""),
+                    "side": str(payload.get("side") or intent_row.get("side") or ""),
+                    "price": payload.get("exit_price", payload.get("taker_exit_price")),
+                    "entry_price": payload.get("entry_price", intent_row.get("price")),
+                    "stop_price": intent_row.get("stop_price"),
+                    "target_price": intent_row.get("target_price"),
+                    "approved": True,
+                    "reason": str(payload.get("resolution") or "resolved"),
+                    "resolution": str(payload.get("resolution") or ""),
+                    "virtual_net_usd": _float(
+                        payload.get("virtual_net_usd", payload.get("taker_net_usd"))
+                    ),
+                    "bars_held": int(_float(payload.get("bars_held"))),
+                }
+            )
+            continue
+
+        if kind == "shadow_portfolio_rejected":
+            output.append(
+                {
+                    "lane": lane,
+                    "ts": ts,
+                    "bar_ts": ts,
+                    "kind": "rejection",
+                    "source_event": kind,
+                    "strategy_id": str(payload.get("strategy_id") or ""),
+                    "symbol": str(payload.get("symbol") or ""),
+                    "timeframe": str(payload.get("timeframe") or ""),
+                    "side": str(payload.get("side") or ""),
+                    "price": None,
+                    "approved": False,
+                    "reason": str(payload.get("reason") or "shadow_portfolio_rejected"),
+                }
+            )
+
+    output.extend(latest_waiting.values())
+    return output
 
 
 def _order_id(payload: dict[str, Any]) -> str:
