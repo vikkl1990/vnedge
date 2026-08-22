@@ -5,7 +5,12 @@ import sys
 
 import pytest
 
-from vnedge.runtime.scanner_startup import prerequisite_commands, run_prerequisites
+from vnedge.runtime.multi_lane import LaneSpec
+from vnedge.runtime.scanner_startup import (
+    archive_retired_lane_artifacts,
+    prerequisite_commands,
+    run_prerequisites,
+)
 
 
 def test_prerequisite_commands_are_restart_safe_and_ordered() -> None:
@@ -48,3 +53,22 @@ def test_prerequisites_stop_at_first_failed_gate(monkeypatch: pytest.MonkeyPatch
 def test_invalid_archive_days_fail_closed() -> None:
     with pytest.raises(ValueError, match="VISION_BACKFILL_DAYS"):
         prerequisite_commands({"VISION_BACKFILL_DAYS": "invalid"})
+
+
+def test_restart_archives_retired_lanes_but_preserves_active_evidence(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "active.journal.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "retired.journal.jsonl").write_text("evidence\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "vnedge.runtime.multi_lane_shadow.desired_lane_specs",
+        lambda environ: [LaneSpec("active", "binanceusdm", "BTC/USDT:USDT")],
+    )
+
+    archive_retired_lane_artifacts({"MULTI_LANE_JOURNAL_DIR": str(tmp_path)})
+
+    assert (tmp_path / "active.journal.jsonl").exists()
+    assert not (tmp_path / "retired.journal.jsonl").exists()
+    archived = list((tmp_path / "archive" / "orphans").glob("*/retired.journal.jsonl"))
+    assert len(archived) == 1
+    assert archived[0].read_text(encoding="utf-8") == "evidence\n"

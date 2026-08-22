@@ -588,6 +588,13 @@ export interface JournalPayload {
   }>;
   orders: Array<Record<string, unknown>>;
   fills: Array<Record<string, unknown>>;
+  page?: {
+    offset: number;
+    limit: number;
+    totals: { fills: number; orders: number; closed_trades: number; events: number; scanner_events: number };
+    has_previous: boolean;
+    has_more: boolean;
+  };
 }
 
 export interface MetaPayload {
@@ -653,6 +660,16 @@ export interface ResearchScorecard {
     trial_disclosure_rule: string;
     ranking_rule: string;
   };
+  runtime_alignment?: Array<{
+    strategy_id: string;
+    lane_count: number;
+    symbols: string[];
+    timeframes: string[];
+    resolved_outcomes: number;
+    pending_intents: number;
+    scorecard_match: boolean;
+    status: "EVIDENCE_MATCH" | "RUNTIME_OUTCOMES_NOT_SCORED" | "NO_CURRENT_EVIDENCE";
+  }>;
   can_trade: false;
   can_promote: false;
 }

@@ -31,7 +31,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from starlette.middleware.base import RequestResponseEndpoint
 
 from vnedge.agent_gateway.app import (
@@ -962,12 +968,15 @@ def create_app(
     )
 
     @app.get("/")
-    async def index() -> FileResponse:
-        # The shell page contains no data; all data endpoints require the token.
-        # no-store: the SPA ships on every deploy, so never let a browser serve a
-        # stale cached shell — that showed empty panels against a live backend.
-        return FileResponse(
-            _STATIC_DIR / "index.html",
+    async def index() -> RedirectResponse:
+        """Canonical operator UI.
+
+        The old monolithic dashboard is intentionally retired from navigation;
+        keeping two cockpits caused schema drift and contradictory health labels.
+        """
+        return RedirectResponse(
+            url="/app/",
+            status_code=307,
             headers={"Cache-Control": "no-store, must-revalidate"},
         )
 
@@ -1267,7 +1276,9 @@ def create_app(
         )
 
     @app.get("/trade-journal")
-    async def trade_journal(request: Request, limit: str = "200") -> JSONResponse:
+    async def trade_journal(
+        request: Request, limit: str = "200", offset: str = "0"
+    ) -> JSONResponse:
         """Read-only trade journal projection.
 
         Combines current snapshot positions/orders with per-lane decision
@@ -1281,6 +1292,10 @@ def create_app(
             limit = max(1, min(int(limit), 500))
         except ValueError:
             raise HTTPException(status_code=400, detail="limit must be an integer")
+        try:
+            offset = max(0, int(offset))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="offset must be an integer")
         return JSONResponse(
             build_trade_journal(
                 snapshot=provider.latest(),
@@ -1289,6 +1304,7 @@ def create_app(
                 lane=lane,
                 since=since,
                 limit=limit,
+                offset=offset,
             ),
             headers=_identity(user),
         )
@@ -2322,6 +2338,49 @@ def create_app(
                 -(r["best_net_bps"] or -1e9),
             )
         )
+        snapshot = provider.latest() or {}
+        active_payload = build_lanes_payload(snapshot)
+        evidence_ids = {str(row.get("strategy")) for row in rows if row.get("strategy")}
+        aligned: dict[str, dict] = {}
+        for lane in active_payload.get("lanes", []):
+            if lane.get("observation_class") != "shadow_observe":
+                continue
+            strategy_id = str(lane.get("strategy_id") or "unknown")
+            item = aligned.setdefault(
+                strategy_id,
+                {
+                    "strategy_id": strategy_id,
+                    "lane_count": 0,
+                    "symbols": set(),
+                    "timeframes": set(),
+                    "resolved_outcomes": 0,
+                    "pending_intents": 0,
+                    "scorecard_match": strategy_id in evidence_ids,
+                },
+            )
+            item["lane_count"] += 1
+            if lane.get("symbol"):
+                item["symbols"].add(str(lane["symbol"]))
+            if lane.get("timeframe"):
+                item["timeframes"].add(str(lane["timeframe"]))
+            perf = lane.get("shadow_perf") or {}
+            item["resolved_outcomes"] += int(perf.get("wins") or 0) + int(
+                perf.get("losses") or 0
+            )
+            item["pending_intents"] += int(perf.get("pending_shadow_intents") or 0)
+        runtime_alignment = []
+        for item in aligned.values():
+            item = dict(item)
+            item["symbols"] = sorted(item["symbols"])
+            item["timeframes"] = sorted(item["timeframes"])
+            if item["scorecard_match"]:
+                item["status"] = "EVIDENCE_MATCH"
+            elif item["resolved_outcomes"]:
+                item["status"] = "RUNTIME_OUTCOMES_NOT_SCORED"
+            else:
+                item["status"] = "NO_CURRENT_EVIDENCE"
+            runtime_alignment.append(item)
+        runtime_alignment.sort(key=lambda item: item["strategy_id"])
         return JSONResponse(
             {
                 "generated_at": forensics.get("generated_at"),
@@ -2330,6 +2389,7 @@ def create_app(
                 "probe_actuals": probe_actuals.get("rows", []),
                 "probe_actuals_summary": probe_actuals.get("summary", {}),
                 "performance_policy": scorecard_policy(),
+                "runtime_alignment": runtime_alignment,
                 "can_trade": False,
                 "can_promote": False,
             }

@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +112,35 @@ def run_prerequisites(commands: Sequence[Sequence[str]]) -> None:
         subprocess.run(tuple(command), check=True)
 
 
+def archive_retired_lane_artifacts(environ: Mapping[str, str] = os.environ) -> None:
+    """Move no-longer-configured lane evidence out of the active journal root.
+
+    The move is recoverable (manifest + timestamped archive) and roster scoped.
+    Keeping retired journals beside active lanes makes the health auditor report
+    them as ORPHAN on every restart even though no orphan process exists.
+    """
+    from vnedge.runtime.multi_lane_shadow import desired_lane_specs
+    from vnedge.runtime.orphan_lane_archive import archive_orphan_lane_artifacts
+
+    journal_dir = Path(environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
+    plan = archive_orphan_lane_artifacts(
+        journal_dir,
+        desired=desired_lane_specs(environ),
+        apply=True,
+    )
+    if plan.applied:
+        logger.info(
+            "archived %d retired lane artifact(s) for %d lane(s) under %s",
+            len(plan.files),
+            len(plan.lane_ids),
+            plan.archive_dir,
+        )
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     run_prerequisites(prerequisite_commands())
+    archive_retired_lane_artifacts()
     logger.info("scanner prerequisites current; starting multi-lane runtime")
     os.execv(
         sys.executable,

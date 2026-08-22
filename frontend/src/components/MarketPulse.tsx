@@ -949,7 +949,7 @@ export function MarketPulse() {
             </div>
           </TerminalPanel>
 
-          <TerminalPanel title={`AI brief${selectedHour ? ` · ${symbol.replace("USDT", "")}` : ""}`} meta={selectedHour ? `${utcHour(selectedHour.open_time)}:00–${utcHour(selectedHour.close_time)}:00 UTC` : "select an hour"}>
+          <TerminalPanel title={`Automated brief${selectedHour ? ` · ${symbol.replace("USDT", "")}` : ""}`} meta={selectedHour ? `${utcHour(selectedHour.open_time)}:00–${utcHour(selectedHour.close_time)}:00 UTC` : "select an hour"}>
             {analysis.isLoading ? (
               <div className="py-8 text-center font-mono text-xs text-dim">Building bounded observation…</div>
             ) : analysis.data ? (

@@ -97,12 +97,12 @@ export function useRiskSnapshot() {
   });
 }
 
-export function useJournal(limit = 50) {
+export function useJournal(limit = 50, offset = 0) {
   return useQuery({
-    queryKey: ["journal", limit],
+    queryKey: ["journal", limit, offset],
     // the route is /trade-journal (not /journal), and it returns a projection
     // object — the closed-trade rows live under `closed_trades`.
-    queryFn: () => apiGet<JournalPayload>(`/trade-journal?limit=${limit}`),
+    queryFn: () => apiGet<JournalPayload>(`/trade-journal?limit=${limit}&offset=${offset}`),
     refetchInterval: 20_000,
   });
 }

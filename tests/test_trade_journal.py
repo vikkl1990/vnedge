@@ -355,6 +355,40 @@ def test_trade_journal_days_filter_and_lane_filter(tmp_path):
     assert [row["lane"] for row in payload["fills"]] == ["beta"]
 
 
+def test_trade_journal_paginates_rows_without_changing_full_ledger_totals(tmp_path):
+    write_jsonl(
+        tmp_path / "alpha.journal.jsonl",
+        [
+            {
+                "ts": f"2026-07-16T0{hour}:00:00+00:00",
+                "kind": "shadow_outcome",
+                "payload": {
+                    "intent_key": f"intent-{hour}",
+                    "resolution": "time_stop",
+                    "virtual_net_usd": float(hour),
+                },
+            }
+            for hour in range(1, 4)
+        ],
+    )
+
+    first = build_trade_journal(
+        snapshot={}, journal_dir=tmp_path, limit=2, offset=0
+    )
+    second = build_trade_journal(
+        snapshot={}, journal_dir=tmp_path, limit=2, offset=2
+    )
+
+    assert first["summary"]["closed_trades"] == 3
+    assert second["summary"]["closed_trades"] == 3
+    assert first["summary"]["virtual_net_usd"] == 6.0
+    assert second["summary"]["virtual_net_usd"] == 6.0
+    assert len(first["closed_trades"]) == 2
+    assert len(second["closed_trades"]) == 1
+    assert first["page"]["has_more"] is True
+    assert second["page"]["has_previous"] is True
+
+
 # --- cohort P&L split (honest headline) ------------------------------------------
 
 from vnedge.dashboard.trade_journal import _cohort_pnl_rollup, _lane_cohort

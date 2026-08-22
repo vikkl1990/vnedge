@@ -76,7 +76,56 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     assert isinstance(payload["probes"], list)
     assert isinstance(payload["probe_actuals"], list)
     assert isinstance(payload["probe_actuals_summary"], dict)
+    assert isinstance(payload["runtime_alignment"], list)
     assert payload["can_trade"] is False and payload["can_promote"] is False
+
+
+def test_scorecard_names_current_runtime_scanners_without_inheriting_old_evidence(
+    tmp_path,
+):
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "lanes": [
+                {
+                    "lane_id": "shadow_observe_squeeze_btc",
+                    "strategy_id": "squeeze_expansion_breakout_v4",
+                    "mode": "shadow",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "5m",
+                    "shadow_perf": {
+                        "wins": 1,
+                        "losses": 2,
+                        "pending_shadow_intents": 1,
+                    },
+                }
+            ],
+        }
+    )
+    client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            fee_wall_forensics_path=tmp_path / "missing.json",
+        )
+    )
+
+    alignment = client.get("/scorecard?token=t3st-token").json()[
+        "runtime_alignment"
+    ]
+    assert alignment == [
+        {
+            "strategy_id": "squeeze_expansion_breakout_v4",
+            "lane_count": 1,
+            "symbols": ["BTC/USDT:USDT"],
+            "timeframes": ["5m"],
+            "resolved_outcomes": 3,
+            "pending_intents": 1,
+            "scorecard_match": False,
+            "status": "RUNTIME_OUTCOMES_NOT_SCORED",
+        }
+    ]
 
 
 def test_darwinian_agent_survival_endpoint_auth_gated_and_shaped(tmp_path):
@@ -221,60 +270,16 @@ def test_external_repo_synthesis_endpoint_auth_gated_and_research_only(client):
 def test_dashboard_shell_is_not_cached(client):
     """The SPA ships on every deploy — the shell must not be browser-cached, or
     a stale cached page shows empty panels against a live backend."""
-    r = client.get("/")
-    assert r.status_code == 200
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307
     assert "no-store" in r.headers.get("cache-control", "").lower()
 
 
-def test_dashboard_shell_is_the_perps_desk(client):
-    r = client.get("/")
-    assert r.status_code == 200
-    html = r.text
-    # Redesigned dashboard (2026-07): an autonomous perps *desk*, not a lab.
-    # Views — Desk / Journal / Promote / Research / System / About — reading the
-    # read-only /state stream. The VN-monogram mark + the desk cockpit are the shell.
-    assert "Autonomous Perps Desk" in html
-    assert 'id="vnmark"' in html                       # the logo mark
-    for view in ("desk", "journal", "promote", "research", "system", "about"):
-        assert f'data-view="{view}"' in html
-    # desk cockpit containers, wired to the snapshot in JS
-    assert 'id="lanes"' in html                        # active-lanes blotter
-    assert 'id="watch"' in html                        # coverage strip
-    assert 'id="eqChart"' in html                      # equity curve
-    assert "Active Lanes" in html
-    assert "Live Signal Tape" not in html
-    assert "Delta 5m Event Clock" not in html
-    assert "Exchange Connections" in html
-    assert "Safety Gates" in html
-    assert "Paper Route Doctor" in html
-    assert "/paper-route-doctor" in html
-    assert "Paper Cadence Monitor" in html
-    assert "/paper-lane-cadence" in html
-    assert "Trade Profile Matrix" in html
-    assert "/trade-profile-matrix" in html
-    assert "Lane Survival Engine" in html
-    assert "/lane-survival" in html
-    assert "Paper Lane Governor" in html
-    assert "/paper-lane-governor" in html
-    # #358 renamed this panel "Paper Roster Drift" -> "Unified Lane Roster"
-    # (same id/endpoint, now the governor-bounded roster view).
-    assert "Unified Lane Roster" in html
-    assert "/paper-roster-drift" in html
-    assert "Maker Quote Lifecycle" in html
-    assert "/maker-quote-lifecycle" in html
-    # honest safety posture stays visible
-    assert "no live orders" in html
-    assert "SHADOW" in html
-    # reads the read-only websocket stream via the HttpOnly session cookie
-    assert "/ws?token=" not in html
-    assert '"/ws"' in html
-    assert "new WebSocket" in html
-    assert 'id="profile"' in html                      # account menu
-    # the old lab surface is gone
-    assert "Quant Command Deck" not in html
-    assert "Live Readiness Ladder" not in html
-    assert "Trade Journal Ledger" not in html
-    assert "next live phase" not in html
+def test_root_redirects_to_the_single_canonical_react_cockpit(client):
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/app/"
+    assert "no-store" in r.headers.get("cache-control", "").lower()
 
 
 def test_cost_model_route_auth_gated_and_real_numbers(client):
@@ -1788,6 +1793,7 @@ def test_trade_journal_route_projects_journal_and_fill_ledgers(tmp_path):
     assert client.get("/trade-journal?token=wrong").status_code == 401
     assert client.get("/trade-journal?token=t3st-token&lane=../bad").status_code == 400
     assert client.get("/trade-journal?token=t3st-token&limit=nope").status_code == 400
+    assert client.get("/trade-journal?token=t3st-token&offset=nope").status_code == 400
 
     response = client.get("/trade-journal?token=t3st-token&lane=alpha")
     assert response.status_code == 200
@@ -1798,6 +1804,7 @@ def test_trade_journal_route_projects_journal_and_fill_ledgers(tmp_path):
     assert payload["summary"]["open_orders"] == 1
     assert payload["summary"]["fills"] == 1
     assert payload["summary"]["closed_trades"] == 2
+    assert payload["page"]["totals"]["closed_trades"] == 2
     assert payload["orders"][0]["client_order_id"] == "working-1"
     assert {row["kind"] for row in payload["closed_trades"]} == {
         "actual_closing_fill",

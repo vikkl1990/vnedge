@@ -32,6 +32,7 @@ def build_trade_journal(
     lane: str = "",
     since: str | None = None,
     limit: int = 200,
+    offset: int = 0,
     config: TradeJournalConfig = TradeJournalConfig(),
 ) -> dict[str, Any]:
     """Build a dashboard trade journal from snapshot + append-only artifacts.
@@ -44,6 +45,7 @@ def build_trade_journal(
     root = Path(journal_dir) if journal_dir is not None else None
     lane = lane.strip()
     limit = max(1, min(int(limit), config.max_rows))
+    offset = max(0, int(offset))
     since_dt = _parse_dt(since)
 
     # Fleet view (no lane filter) restricts to the lanes we ACTIVELY run, so
@@ -88,13 +90,24 @@ def build_trade_journal(
     virtual_net = sum(_float(row.get("virtual_net_usd")) for row in closed_trades)
     actual_closed_net = sum(_float(row.get("net_after_this_fill_fee_usd")) for row in actual_closed)
     actual_closed_fees = sum(_float(row.get("fee_usd")) for row in actual_closed)
+    open_orders_total = sum(1 for row in order_rows if _is_open_order(row))
+    lane_pnl = _lane_pnl_rollup(closed_trades)
+    cohort_pnl = _cohort_pnl_rollup(closed_trades)
 
-    # truncate for DISPLAY only (the rows returned to the panel)
-    fills = _sort_recent(fills)[:limit]
-    order_rows = _sort_recent(order_rows)[:limit]
-    closed_trades = _sort_recent(closed_trades)[:limit]
-    events = _sort_recent(events)[:limit]
-    scanner_events = _sort_recent(scanner_events)[:limit]
+    # Paginate for DISPLAY only. Aggregates above always use the full audited
+    # read window, so moving between pages cannot change headline accounting.
+    totals = {
+        "fills": len(fills),
+        "orders": len(order_rows),
+        "closed_trades": len(closed_trades),
+        "events": len(events),
+        "scanner_events": len(scanner_events),
+    }
+    fills = _sort_recent(fills)[offset : offset + limit]
+    order_rows = _sort_recent(order_rows)[offset : offset + limit]
+    closed_trades = _sort_recent(closed_trades)[offset : offset + limit]
+    events = _sort_recent(events)[offset : offset + limit]
+    scanner_events = _sort_recent(scanner_events)[offset : offset + limit]
     lane_counts = _lane_counts(snapshot)
 
     return {
@@ -102,14 +115,14 @@ def build_trade_journal(
         "lane": lane or "all",
         "summary": {
             "positions": len(positions),
-            "orders": len(order_rows),
-            "open_orders": sum(1 for row in order_rows if _is_open_order(row)),
-            "fills": len(fills),
-            "closed_trades": len(closed_trades),
+            "orders": totals["orders"],
+            "open_orders": open_orders_total,
+            "fills": totals["fills"],
+            "closed_trades": totals["closed_trades"],
             "actual_closed_trades": len(actual_closed),
             "shadow_closed_trades": len(shadow_closed),
-            "events": len(events),
-            "scanner_events": len(scanner_events),
+            "events": totals["events"],
+            "scanner_events": totals["scanner_events"],
             "journals_scanned": _count_paths(root, ".journal.jsonl", lane, active),
             "fill_ledgers_scanned": _count_paths(root, ".fills.jsonl", lane, active),
             "active_lanes": len(active) if active is not None else None,
@@ -119,8 +132,8 @@ def build_trade_journal(
             "actual_closed_net_usd": round(actual_closed_net, 6),
             "actual_closed_fees_usd": round(actual_closed_fees, 6),
             "lane_position_counts": lane_counts,
-            "lane_pnl": _lane_pnl_rollup(closed_trades),
-            "cohort_pnl": _cohort_pnl_rollup(closed_trades),
+            "lane_pnl": lane_pnl,
+            "cohort_pnl": cohort_pnl,
             "history_lane": _primary_lane(history_path),
         },
         "positions": positions[:limit],
@@ -129,6 +142,13 @@ def build_trade_journal(
         "closed_trades": closed_trades,
         "events": events,
         "scanner_events": scanner_events,
+        "page": {
+            "offset": offset,
+            "limit": limit,
+            "totals": totals,
+            "has_previous": offset > 0,
+            "has_more": any(total > offset + limit for total in totals.values()),
+        },
         "policy": {
             "read_only": True,
             "can_trade": False,

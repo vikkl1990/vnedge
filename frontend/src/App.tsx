@@ -11,7 +11,6 @@ import {
   LiveBlockedBanner,
   MarketPanel,
   PositionsPanel,
-  PromotePanel,
   ReadinessBanner,
   ResearchPanel,
   RiskPanel,
@@ -27,7 +26,6 @@ const TABS = [
   { id: "risk", label: "Risk" },
   { id: "journal", label: "Journal" },
   { id: "research", label: "Research" },
-  { id: "promote", label: "Promote" },
   { id: "system", label: "System" },
   { id: "settings", label: "Settings" },
 ];
@@ -67,17 +65,8 @@ export default function App() {
       { id: "risk", label: "Risk", hint: "purse · margin · leverage · gates", run: () => navigate("risk") },
       { id: "journal", label: "Journal", hint: "decisions · signals · outcomes", run: () => navigate("journal") },
       { id: "research", label: "Research", hint: "after-cost evidence · ML · agents", run: () => navigate("research") },
-      { id: "promote", label: "Promote", hint: "human gates · sealed strategies", run: () => navigate("promote") },
       { id: "system", label: "System", hint: "freshness · resources · transport", run: () => navigate("system") },
       { id: "settings", label: "Settings", hint: "profile · encrypted exchange connections", run: () => navigate("settings") },
-      {
-        id: "classic",
-        label: "Legacy dashboard ↗",
-        hint: "explicit fallback",
-        run: () => {
-          window.location.href = "/";
-        },
-      },
     ],
     [navigate],
   );
@@ -110,7 +99,6 @@ export default function App() {
       {tab === "risk" && <RiskPanel />}
       {tab === "journal" && <JournalPanel />}
       {tab === "research" && <ResearchPanel />}
-      {tab === "promote" && <PromotePanel />}
       {tab === "system" && <SystemPanel />}
       {tab === "settings" && <SettingsPanel />}
 

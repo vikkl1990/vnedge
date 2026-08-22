@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
+import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
 import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
 
 const usd = (n: unknown) =>
@@ -25,6 +25,7 @@ const ageSec = (s: unknown) => {
 
 export function Header() {
   const who = useWhoAmI();
+  const profile = useOperatorProfile();
   const risk = useRiskSnapshot();
   const meta = useMeta();
   const costs = useCostModel();
@@ -43,6 +44,9 @@ export function Header() {
   const systemChip = snapshot.data?.chips?.SYSTEM;
   const systemBand = (systemChip?.band ?? "unknown") as Band;
   const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
+  const preferredTimezone = profile.data?.timezone || "UTC";
+  const localTime = preferredTimezone === "UTC" ? null : clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: preferredTimezone });
+  const displayName = profile.data?.display_name || who.data?.name || "…";
   const feeWall = costs.data?.taker_round_trip_cost_bps;
   const sha = meta.data?.build_sha ?? posture?.build_sha;
   const shadowPurse = lanes.data?.portfolio.shadow_purse_usd;
@@ -63,7 +67,7 @@ export function Header() {
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap justify-end">
-          <span className="hidden text-[11px] font-mono text-dim sm:inline">{time} UTC</span>
+          <span className="hidden text-[11px] font-mono text-dim sm:inline">{time} UTC{localTime ? ` · ${localTime} ${preferredTimezone}` : ""}</span>
           <TerminalBadge tone={BAND_TONE[systemBand] as never}>system {systemChip?.label ?? "unknown"}</TerminalBadge>
           <TerminalBadge tone={riskUnknown || posture?.capital.enabled ? "bad" : "neutral"}>capital {riskUnknown ? "UNKNOWN" : posture.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
           <TerminalBadge tone={riskUnknown || posture?.kill.active ? "bad" : "neutral"}>kill {riskUnknown ? "UNKNOWN" : posture.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
@@ -72,16 +76,16 @@ export function Header() {
             <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
             <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
             <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
-            <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+            <TerminalBadge tone="neutral">{displayName} · {role}</TerminalBadge>
           </span>
           <details className="relative xl:hidden">
             <summary className="cursor-pointer list-none rounded-md border border-line px-2 py-[2px] text-[11px] font-mono uppercase text-dim">more</summary>
             <div className="absolute right-0 top-7 z-30 flex min-w-[260px] flex-col gap-2 rounded-lg border border-line bg-bg p-3 shadow-xl">
-              <span className="font-mono text-[10px] text-faint sm:hidden">{time} UTC</span>
+              <span className="font-mono text-[10px] text-faint sm:hidden">{time} UTC{localTime ? ` · ${localTime} ${preferredTimezone}` : ""}</span>
               <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
               <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
               <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
-              <TerminalBadge tone="neutral">{who.data?.name ?? "…"} · {role}</TerminalBadge>
+              <TerminalBadge tone="neutral">{displayName} · {role}</TerminalBadge>
             </div>
           </details>
         </div>
@@ -417,6 +421,8 @@ export function RiskPanel() {
 
 export function ResearchPanel() {
   const scorecard = useResearchScorecard();
+  const risk = useRiskSnapshot();
+  const lanes = useLanes();
   const scoreFreshness = generatedFreshness("research scorecard", scorecard.data?.generated_at, 2 * 60 * 60);
   const [showUndersampled, setShowUndersampled] = useState(false);
   const artifacts = [
@@ -426,6 +432,7 @@ export function ResearchPanel() {
     ["Promotion review runbook", "/promotion-review-runbook"],
   ];
   const scoreRows = (scorecard.data?.strategies ?? []).filter((row) => showUndersampled || row.sample_qualified);
+  const runtimeAlignment = scorecard.data?.runtime_alignment ?? [];
   const scoreCols: Column<(typeof scoreRows)[number]>[] = [
     { key: "strategy", header: "Strategy", render: (r) => <span className="font-mono">{r.strategy}</span> },
     { key: "samples", header: "n", align: "right", render: (r) => <span className={r.sample_qualified ? "" : "text-warn"} title={`${r.sample_unit}; ${r.samples_total} across all cells`}>{r.samples}</span> },
@@ -436,6 +443,13 @@ export function ResearchPanel() {
     { key: "trials", header: "N / N_eff", align: "right", render: (r) => <span title={r.trial_count_reason ?? "raw / correlation-adjusted trials"}>{r.raw_trials == null || r.effective_trials == null ? "not reported" : `${r.raw_trials.toFixed(0)} / ${r.effective_trials.toFixed(1)}`}</span> },
     { key: "dd", header: "Max DD", align: "right", render: (r) => r.max_drawdown_pct == null ? "—" : `${r.max_drawdown_pct.toFixed(2)}%` },
     { key: "verdict", header: "Evidence", render: (r) => <TerminalBadge tone={r.metric_state === "UNDER_SAMPLED" ? "warn" : String(r.verdict).toLowerCase().includes("pass") ? "info" : "neutral"}>{r.metric_state === "UNDER_SAMPLED" ? "UNDER_SAMPLED" : r.verdict ?? "unreported"}</TerminalBadge> },
+  ];
+  const alignmentCols: Column<(typeof runtimeAlignment)[number]>[] = [
+    { key: "strategy", header: "Current scanner", render: (row) => <span className="font-mono">{row.strategy_id}</span> },
+    { key: "lanes", header: "Lanes", align: "right", render: (row) => row.lane_count },
+    { key: "markets", header: "Markets / TF", render: (row) => <span className="font-mono text-[10px]">{row.symbols.join(", ")} · {row.timeframes.join(", ")}</span> },
+    { key: "outcomes", header: "Resolved / pending", align: "right", render: (row) => `${row.resolved_outcomes} / ${row.pending_intents}` },
+    { key: "evidence", header: "Evidence link", render: (row) => <TerminalBadge tone={row.status === "EVIDENCE_MATCH" ? "good" : row.status === "RUNTIME_OUTCOMES_NOT_SCORED" ? "warn" : "neutral"}>{row.status.replace(/_/g, " ")}</TerminalBadge> },
   ];
   return (
     <div className="space-y-4">
@@ -455,6 +469,24 @@ export function ResearchPanel() {
           <label className="flex items-center gap-2 text-[11px] text-dim"><input type="checkbox" checked={showUndersampled} onChange={(event) => setShowUndersampled(event.target.checked)} /> show undersampled</label>
         </div>
         <DenseTable columns={scoreCols} rows={scoreRows} empty={scorecard.isLoading ? "loading evidence…" : "no sample-qualified scorecard rows"} />
+      </div>
+      <div className="mt-4 rounded-lg border border-line bg-inset p-4">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">Current runtime ↔ evidence</div><div className="mt-1 text-[11px] text-dim">Exact strategy IDs only. A missing match is shown explicitly and never inherits evidence from an older scanner version.</div></div>
+          <TerminalBadge tone={runtimeAlignment.every((row) => row.scorecard_match) && runtimeAlignment.length ? "good" : "warn"}>{runtimeAlignment.filter((row) => row.scorecard_match).length}/{runtimeAlignment.length} matched</TerminalBadge>
+        </div>
+        <DenseTable columns={alignmentCols} rows={runtimeAlignment} empty={scorecard.isLoading ? "loading runtime alignment…" : "no active shadow scanners"} />
+      </div>
+      <div className="mt-4 rounded-lg border border-short/30 bg-short/5 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><div className="font-mono text-[10px] uppercase tracking-wider text-faint">Promotion gate</div><div className="mt-1 text-[11px] text-dim">Human-reviewed evidence gate only; this UI has no promotion mutation.</div></div>
+          <div className="flex flex-wrap gap-2">
+            <TerminalBadge tone="neutral">capital roster {risk.data?.capital.roster_size ?? 0}</TerminalBadge>
+            <TerminalBadge tone="bad">live checklist {risk.data?.live_checklist.passed ?? 0}/{risk.data?.live_checklist.total ?? 7}</TerminalBadge>
+            <TerminalBadge tone="warn">qualified {(scorecard.data?.strategies ?? []).filter((row) => row.sample_qualified).length}</TerminalBadge>
+            <TerminalBadge tone="neutral">runtime scanners {(lanes.data?.lanes ?? []).filter((row) => row.observation_class === "shadow_observe").length}</TerminalBadge>
+          </div>
+        </div>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {artifacts.map(([label, path]) => (
@@ -556,64 +588,6 @@ function IntelligencePanel() {
   );
 }
 
-export function PromotePanel() {
-  const risk = useRiskSnapshot();
-  const lanes = useLanes();
-  const scorecard = useResearchScorecard();
-  const runtime = lanes.data?.lanes ?? [];
-  const killed = runtime.filter((lane) => lane.eligibility === "KILLED");
-  const researchOnly = runtime.filter((lane) => lane.eligibility === "RESEARCH_ONLY");
-  const evidence = scorecard.data?.strategies ?? [];
-  const sampleQualified = evidence.filter((row) => row.sample_qualified).length;
-  const undersampled = evidence.filter((row) => !row.sample_qualified).length;
-  const evidenceFreshness = generatedFreshness("promotion scorecard", scorecard.data?.generated_at, 2 * 60 * 60);
-  const evidenceCols: Column<(typeof evidence)[number]>[] = [
-    { key: "strategy", header: "Candidate", render: (row) => <span className="font-mono">{row.strategy}</span> },
-    { key: "n", header: "n", align: "right", render: (row) => `${row.samples}/${row.min_samples}` },
-    { key: "oos", header: "OOS net", align: "right", render: (row) => row.oos_net_bps == null ? "—" : `${row.oos_net_bps.toFixed(2)} bps` },
-    { key: "dsr", header: "DSR", align: "right", render: (row) => row.deflated_sharpe == null ? "—" : row.deflated_sharpe.toFixed(3) },
-    { key: "blocker", header: "Promotion blocker", render: (row) => <span className="text-dim">{!row.sample_qualified ? "minimum sample evidence absent" : !row.deflated_sharpe_pass ? "deflated Sharpe gate failed" : (row.oos_net_bps ?? 0) <= 0 ? "after-cost OOS net ≤ 0" : "human review + live checklist still required"}</span> },
-    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.sample_qualified && row.deflated_sharpe_pass && (row.oos_net_bps ?? 0) > 0 ? "warn" : "bad"}>{row.sample_qualified && row.deflated_sharpe_pass && (row.oos_net_bps ?? 0) > 0 ? "review only" : "blocked"}</TerminalBadge> },
-  ];
-  return (
-    <div className="space-y-4">
-      <TerminalPanel title="Promote" meta="human ladder · no mutation controls">
-        <div className="rounded-lg border border-short/40 bg-short/5 px-4 py-3 text-[12px] text-short">
-          <strong>Capital remains off.</strong> Evidence, ML, and agents cannot add a strategy to the capital roster. Promotion requires reviewed code/config and operator attestation.
-        </div>
-        {evidenceFreshness.state !== "OK" && <div className="mt-3 rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-[11px] text-warn"><strong>Promotion evidence is {evidenceFreshness.state.toLowerCase()}.</strong> Age {evidenceFreshness.age}. Candidate counts below are historical and cannot satisfy a current gate.</div>}
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Capital roster" value={String(risk.data?.capital.roster_size ?? 0)} /></div>
-          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Live gates" value={`${risk.data?.live_checklist.passed ?? 0}/${risk.data?.live_checklist.total ?? 7}`} /></div>
-          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Sample-qualified" value={String(sampleQualified)} /></div>
-          <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Undersampled" value={String(undersampled)} /></div>
-        </div>
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          <div className="rounded-lg border border-line bg-inset p-4">
-            <div className="mb-3 flex items-center justify-between"><div className="font-mono text-[10px] uppercase text-faint">Live checklist</div><TerminalBadge tone="bad">blocked</TerminalBadge></div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(risk.data?.live_checklist.items ?? []).map((item) => <div key={item.id} className={`rounded-md border px-3 py-2 text-[11px] ${item.ok ? "border-long/30 text-long" : "border-short/30 text-short"}`}>{item.ok ? "✓" : "✕"} {item.label}</div>)}
-            </div>
-          </div>
-          <div className="rounded-lg border border-line bg-inset p-4">
-            <div className="font-mono text-[10px] uppercase text-faint">Registry boundary</div>
-            <div className="mt-3 text-[11px] text-dim">Desk rows are the runtime roster. Research evidence is not merged into it and cannot become active through this screen.</div>
-            <div className="mt-3 space-y-2">
-              {killed.map((lane) => <div key={lane.lane_id} className="flex items-center justify-between gap-3 text-[11px]"><span className="font-mono text-faint line-through">{lane.strategy_id}</span><TerminalBadge tone="bad">sealed KILLED</TerminalBadge></div>)}
-              {researchOnly.map((lane) => <div key={lane.lane_id} className="flex items-center justify-between gap-3 text-[11px]"><span className="font-mono">{lane.strategy_id}</span><TerminalBadge tone="warn">research only</TerminalBadge></div>)}
-              {!runtime.length && <div className="text-[11px] text-dim">Runtime roster unavailable.</div>}
-            </div>
-          </div>
-        </div>
-        <div className="mt-4 rounded-lg border border-line bg-inset p-4">
-          <div className="mb-3 font-mono text-[10px] uppercase text-faint">Evidence-to-promotion blockers</div>
-          <DenseTable columns={evidenceCols} rows={evidence.slice(0, 20)} rowKey={(row) => row.strategy} empty="No scorecard evidence is available." />
-        </div>
-      </TerminalPanel>
-    </div>
-  );
-}
-
 type FreshnessRow = { name: string; age: string; state: "OK" | "STALE" | "MISSING"; sla: string; required?: boolean };
 
 function generatedFreshness(name: string, generatedAt: string | null | undefined, slaSeconds: number): FreshnessRow {
@@ -690,6 +664,7 @@ export function SystemPanel() {
 export function PositionsPanel() {
   const { data, isLoading, isError } = useSnapshot();
   const rows = (data?.positions as Position[] | undefined) ?? [];
+  const runtimeMode = String(data?.mode ?? "").toLowerCase();
   const cols: Column<Position>[] = [
     { key: "sym", header: "Symbol", render: (r) => <span className="font-mono">{r.symbol ?? "—"}</span> },
     { key: "side", header: "Side", render: (r) => r.side ?? "—" },
@@ -708,6 +683,7 @@ export function PositionsPanel() {
     { key: "excursion", header: "MFE / MAE", align: "right", render: (r) => `${usd(r.mfe_usd)} / ${usd(r.mae_usd)}` },
     { key: "age", header: "Age", align: "right", render: (r) => ageSec(r.age_seconds) },
   ];
+  if (!isLoading && !isError && rows.length === 0 && !["paper", "live", "live_small", "live_full"].includes(runtimeMode)) return null;
   return (
     <TerminalPanel title="Positions" meta={isLoading ? "loading…" : isError ? "unknown" : `${rows.length} open`}>
       {isError && <div className="mb-3 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Position snapshot unavailable. Flat state is not being asserted.</div>}
@@ -770,7 +746,9 @@ export function FeedPanel() {
 }
 
 export function JournalPanel() {
-  const { data, isLoading } = useJournal(250);
+  const pageSize = 100;
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading } = useJournal(pageSize, offset);
   const [view, setView] = useState<"all" | "scanner" | "decisions" | "trades">("all");
   const [search, setSearch] = useState("");
   const [laneFilter, setLaneFilter] = useState("all");
@@ -783,7 +761,8 @@ export function JournalPanel() {
   }, 0);
   const summaryNet = summary?.actual_closed_net_usd;
   const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
-  const reconciliationMismatch = reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
+  const completeTradePopulation = (data?.page?.totals.closed_trades ?? rows.length) <= rows.length;
+  const reconciliationMismatch = completeTradePopulation && reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
   const normalizedSearch = search.trim().toLowerCase();
   const laneNames = Array.from(new Set([
     ...rows.map((row) => String(row.lane ?? row.symbol ?? "")).filter(Boolean),
@@ -829,7 +808,7 @@ export function JournalPanel() {
     URL.revokeObjectURL(link.href);
   };
   return (
-    <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${rows.length} closed · 250-row window · 20s`}>
+    <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${data?.page?.totals.closed_trades ?? rows.length} closed · page ${Math.floor(offset / pageSize) + 1} · 20s`}>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Paper net" value={usd(summary?.actual_realized_pnl_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Fees" value={usd(summary?.fees_usd)} /></div>
@@ -837,14 +816,16 @@ export function JournalPanel() {
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={String(summary?.open_orders ?? 0)} /></div>
       </div>
       <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${reconciliationMismatch ? "border-warn/50 bg-warn/5 text-warn" : "border-line bg-inset text-dim"}`}>
-        <span className="font-mono">Snapshot reconciliation:</span> visible rows {usd(rowsNet)} · summary {usd(summaryNet)}
-        {reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)} (window or accounting mismatch)` : " · matched"}
+        <span className="font-mono">Snapshot reconciliation:</span> {completeTradePopulation ? `visible rows ${usd(rowsNet)} · summary ${usd(summaryNet)}` : `full-ledger summary ${usd(summaryNet)} · page rows ${usd(rowsNet)}`}
+        {completeTradePopulation ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)} (accounting mismatch)` : " · matched") : " · page view (not a reconciliation population)"}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
         {(["all", "scanner", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
         <input aria-label="Search journal" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="search event, reason, lane…" className="min-w-[220px] border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-txt placeholder:text-faint focus:border-brand focus:outline-none" />
         <select aria-label="Filter journal lane" value={laneFilter} onChange={(event) => setLaneFilter(event.target.value)} className="border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-dim focus:border-brand focus:outline-none"><option value="all">all lanes</option>{laneNames.map((lane) => <option key={lane} value={lane}>{lane}</option>)}</select>
         <button onClick={exportEvidence} disabled={!data} className="border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase text-dim hover:border-brand hover:text-brand disabled:opacity-40">export evidence</button>
+        <button onClick={() => setOffset((value) => Math.max(0, value - pageSize))} disabled={!data?.page?.has_previous || isLoading} className="border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase text-dim hover:border-brand hover:text-brand disabled:opacity-30">newer</button>
+        <button onClick={() => setOffset((value) => value + pageSize)} disabled={!data?.page?.has_more || isLoading} className="border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase text-dim hover:border-brand hover:text-brand disabled:opacity-30">older</button>
         <span className="ml-auto text-[10px] font-mono text-faint">append-only · generated {data?.generated_at ? ageSec((Date.now() - Date.parse(data.generated_at)) / 1000) : "—"} ago</span>
       </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
