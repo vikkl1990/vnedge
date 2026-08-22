@@ -27,6 +27,12 @@ from typing import Any, Iterable, Mapping
 import pandas as pd
 
 from vnedge.ml.feature_matrix import FEATURE_COLUMNS, FeatureParams, build_feature_matrix
+from vnedge.ml.hybrid_feature_matrix import (
+    HYBRID_FEATURE_COLUMNS,
+    HybridFeatureParams,
+    MicroEvent,
+    build_hybrid_feature_matrix,
+)
 
 #: journal record kinds that represent a CLOSED primary-signal trade
 _OUTCOME_KINDS = ("shadow_outcome", "live_paper_exit", "tick_stop_exit")
@@ -137,6 +143,9 @@ def build_meta_label_dataset(
     candles_by_lane: Mapping[str, pd.DataFrame] | None = None,
     funding_by_symbol: Mapping[str, pd.DataFrame] | None = None,
     params: FeatureParams = FeatureParams(),
+    hybrid_params: HybridFeatureParams | None = None,
+    micro_events_by_symbol: Mapping[str, Iterable[MicroEvent]] | None = None,
+    micro_events_by_lane: Mapping[str, Iterable[MicroEvent]] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Join causal features at each trade's entry bar with its win/loss label.
 
@@ -152,23 +161,44 @@ def build_meta_label_dataset(
     per trade: a 5m lane and a 4h lane on the same symbol need different bars, and
     only the lane's own candles align a coarse-timeframe entry to its bar. The
     symbol map remains the fallback for trades from lanes with no candle cache.
+
+    When ``hybrid_params`` is supplied, the dataset switches to the opt-in
+    ``HYBRID_FEATURE_COLUMNS`` contract and joins tick/L2 aggregates from
+    ``micro_events_by_symbol`` / ``micro_events_by_lane``. Existing bar-only
+    callers keep the original ``FEATURE_COLUMNS`` order exactly.
     """
     funding_by_symbol = funding_by_symbol or {}
     candles_by_lane = candles_by_lane or {}
+    micro_events_by_symbol = micro_events_by_symbol or {}
+    micro_events_by_lane = micro_events_by_lane or {}
+    feature_columns = HYBRID_FEATURE_COLUMNS if hybrid_params is not None else FEATURE_COLUMNS
 
     # Build each symbol's causal feature matrix once, indexed by timestamp.
-    def _matrix(candles: pd.DataFrame, funding: pd.DataFrame | None) -> pd.DataFrame:
-        fm = build_feature_matrix(candles, funding, params)
+    def _matrix(
+        candles: pd.DataFrame,
+        funding: pd.DataFrame | None,
+        micro_events: Iterable[MicroEvent] | None = None,
+    ) -> pd.DataFrame:
+        fm = (
+            build_hybrid_feature_matrix(candles, funding, micro_events, hybrid_params)
+            if hybrid_params is not None
+            else build_feature_matrix(candles, funding, params)
+        )
         return fm.set_index(pd.DatetimeIndex(pd.to_datetime(fm["timestamp"], utc=True)))
 
     feats: dict[str, pd.DataFrame] = {
-        symbol: _matrix(candles, funding_by_symbol.get(symbol))
+        symbol: _matrix(
+            candles,
+            funding_by_symbol.get(symbol),
+            micro_events_by_symbol.get(symbol),
+        )
         for symbol, candles in candles_by_symbol.items()
     }
     # Per-lane matrices carry no funding history (caches are OHLCV only); that is
     # the same footing the symbol lake runs on, which already yields labels.
     feats_by_lane: dict[str, pd.DataFrame] = {
-        lane: _matrix(candles, None) for lane, candles in candles_by_lane.items()
+        lane: _matrix(candles, None, micro_events_by_lane.get(lane))
+        for lane, candles in candles_by_lane.items()
     }
 
     rows: list[dict] = []
@@ -183,11 +213,11 @@ def build_meta_label_dataset(
         if trade.entry_ts not in fm.index:
             no_bar += 1
             continue
-        feature_row = fm.loc[trade.entry_ts, FEATURE_COLUMNS]
+        feature_row = fm.loc[trade.entry_ts, feature_columns]
         if feature_row.isna().any():
             nan_feature += 1
             continue
-        row = {col: float(feature_row[col]) for col in FEATURE_COLUMNS}
+        row = {col: float(feature_row[col]) for col in feature_columns}
         row["meta_label"] = 1.0 if trade.net_usd > 0 else 0.0
         row["strategy"] = trade.strategy
         row["symbol"] = trade.symbol
@@ -197,13 +227,16 @@ def build_meta_label_dataset(
         row["lane"] = trade.lane
         rows.append(row)
 
-    frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
+    frame = pd.DataFrame(rows, columns=feature_columns + ["meta_label"] + META_COLUMNS)
     summary = {
         "samples": int(len(frame)),
         "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
         "dropped_no_symbol": no_symbol,
         "dropped_no_bar": no_bar,
         "dropped_nan_feature": nan_feature,
+        "feature_contract": "hybrid_bar_microstructure_v1"
+        if hybrid_params is not None else "bar_v1",
+        "feature_columns": len(feature_columns),
         "by_strategy": (
             frame.groupby("strategy").size().to_dict() if len(frame) else {}
         ),
