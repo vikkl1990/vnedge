@@ -1081,6 +1081,19 @@ class LivePaperSession:
         return abs(pos.quantity) if pos is not None else 0.0
 
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
+        decision_bar_ts = self.candles["timestamp"].iloc[-1]
+        decision_price = float(self.candles["close"].iloc[-1])
+        scanner_context = {
+            "strategy_id": self.strategy.strategy_id,
+            "symbol": self.config.symbol,
+            "timeframe": self.config.timeframe,
+            "side": sig.side,
+            "signal_reason": sig.reason,
+            "bar_ts": decision_bar_ts.isoformat(),
+            "decision_price": decision_price,
+            "stop_price": sig.stop_price,
+            "take_profit_price": sig.take_profit_price,
+        }
         # A shadow intent is a real reservation in the virtual book even
         # though it never reaches an exchange.  Treat it exactly like an open
         # plan for entry concurrency: otherwise every later signal can stack a
@@ -1093,6 +1106,10 @@ class LivePaperSession:
             and self.shadow_outcomes.has_pending
         ):
             self.last_reject_reason = "shadow_book: unresolved virtual position"
+            self.journal.append(
+                "shadow_entry_blocked",
+                {**scanner_context, "reason": self.last_reject_reason},
+            )
             self._log_trade_event(
                 "shadow_entry_blocked",
                 f"{sig.side} — unresolved virtual position already reserves the purse"[:140],
@@ -1115,11 +1132,8 @@ class LivePaperSession:
         if not favorable:
             self.last_reject_reason = "cost_gate: no favorable target/edge hypothesis"
             self.journal.append("cost_rejected", {
-                "strategy_id": self.strategy.strategy_id,
-                "symbol": self.config.symbol,
-                "side": sig.side,
+                **scanner_context,
                 "reason": self.last_reject_reason,
-                "signal_reason": sig.reason,
             })
             self._log_trade_event("cost_rejected", self.last_reject_reason, now)
             return
@@ -1147,15 +1161,12 @@ class LivePaperSession:
         if not cost_decision.approved:
             self.last_reject_reason = f"cost_gate: {cost_decision.reason}"
             self.journal.append("cost_rejected", {
-                "strategy_id": self.strategy.strategy_id,
-                "symbol": self.config.symbol,
-                "side": sig.side,
+                **scanner_context,
                 "signal_edge_bps": signal_edge_bps,
                 "expected_net_bps": str(cost_decision.expected_net_bps),
                 "total_cost_bps": str(cost_decision.cost.total_cost_bps),
                 "min_required_bps": str(cost_decision.min_required_bps),
                 "reason": cost_decision.reason,
-                "signal_reason": sig.reason,
             })
             self._log_trade_event("cost_rejected", self.last_reject_reason, now)
             return
@@ -1167,6 +1178,10 @@ class LivePaperSession:
         if not sizing.approved:
             self.sizing_skips += 1
             self.last_reject_reason = f"sizing: {', '.join(sizing.reasons)}"
+            self.journal.append(
+                "sizing_rejected",
+                {**scanner_context, "reason": self.last_reject_reason},
+            )
             self._log_trade_event("sizing_skip", f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140], now)
             return
         # Maker-edge strategies post a passive resting limit at the near touch
@@ -1181,7 +1196,6 @@ class LivePaperSession:
             order_type="limit" if maker else "market",
             limit_price=(bid if sig.side == "long" else ask) if maker else None,
         )
-        decision_bar_ts = self.candles["timestamp"].iloc[-1]
         key = make_intent_key(
             self.strategy.strategy_id, self.config.symbol, sig.side,
             decision_bar_ts,
@@ -1199,9 +1213,7 @@ class LivePaperSession:
                     self.shadow_rejected += 1
                     self.last_reject_reason = f"shadow_portfolio: {shared.reason}"
                     self.journal.append("shadow_portfolio_rejected", {
-                        "strategy_id": self.strategy.strategy_id,
-                        "symbol": self.config.symbol,
-                        "side": sig.side,
+                        **scanner_context,
                         "reason": shared.reason,
                         "active_margin_usd": str(shared.active_margin_usd),
                         "daily_net_usd": str(shared.daily_net_usd),
@@ -1228,6 +1240,8 @@ class LivePaperSession:
                 "take_profit_price": sig.take_profit_price,
                 "take_profit_levels": list(sig.take_profit_levels),
                 "bar_ts": decision_bar_ts.isoformat(),
+                "timeframe": self.config.timeframe,
+                "decision_price": decision_price,
             })
             if decision.approved:
                 self.shadow_approved += 1
@@ -2083,6 +2097,11 @@ class LivePaperSession:
             "exchange": getattr(self.feed, "exchange_id", ""),
             "symbol": self.config.symbol,
             "timeframe": self.config.timeframe,
+            "decision_price": (
+                None
+                if "close" not in df.columns or not math.isfinite(float(row["close"]))
+                else round(float(row["close"]), 10)
+            ),
             "mode": self.config.mode.value,
             "fired": sig is not None,
             "signal_reason": sig.reason if sig is not None else None,

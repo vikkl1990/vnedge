@@ -224,6 +224,7 @@ function CandleChart({
   priorDayVah,
   priorDayVal,
   auditEvents,
+  activeIntent,
 }: {
   hours: PulseHour[];
   forming: Record<string, unknown> | null | undefined;
@@ -235,6 +236,11 @@ function CandleChart({
   priorDayVah: number | null | undefined;
   priorDayVal: number | null | undefined;
   auditEvents: ScannerAuditEvent[];
+  activeIntent: {
+    strategy_id: string;
+    stop_price: number;
+    target_price: number | null;
+  } | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -277,17 +283,6 @@ function CandleChart({
   const hasData = hours.length > 0 || chartLivePoint !== null;
   const hasDegradedHours = hours.some((hour) => hour.data_quality !== "ok");
   const hasDualAvwap = hours.some((hour) => hour.avwap_low != null || hour.avwap_high != null);
-  const activeIntent = useMemo(() => {
-    const resolved = new Set(
-      auditEvents
-        .filter((event) => event.kind === "exit" && event.intent_key)
-        .map((event) => event.intent_key),
-    );
-    return [...auditEvents]
-      .filter((event) => event.kind === "entry" && event.approved && (!event.intent_key || !resolved.has(event.intent_key)))
-      .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0] ?? null;
-  }, [auditEvents]);
-
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -483,13 +478,16 @@ function CandleChart({
       if (time === null) continue;
       const long = ["long", "buy"].includes(event.side.toLowerCase());
       const strategy = compactStrategy(event.strategy_id || event.lane || "scanner");
+      const tfStamp = event.timeframe && event.timeframe !== "1h"
+        ? ` · ${event.timeframe} ${utcHour(event.bar_ts || event.ts)}:${new Date(event.bar_ts || event.ts).getUTCMinutes().toString().padStart(2, "0")}`
+        : "";
       if (event.kind === "signal") {
         markers.push({
           time,
           position: long ? "belowBar" : "aboveBar",
           color: "#58A6FF",
           shape: long ? "arrowUp" : "arrowDown",
-          text: `SIG ${long ? "L" : "S"} · ${strategy}`,
+          text: `SIG ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
         });
       } else if (event.kind === "entry") {
         markers.push({
@@ -497,7 +495,7 @@ function CandleChart({
           position: long ? "belowBar" : "aboveBar",
           color: "#D29922",
           shape: "circle",
-          text: `IN ${long ? "L" : "S"} · ${strategy}`,
+          text: `IN ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
         });
       } else {
         const net = event.virtual_net_usd;
@@ -678,10 +676,7 @@ function Metric({ label, value, note }: { label: string; value: string; note?: s
   );
 }
 
-function ScannerAuditRail({ events, hours }: { events: ScannerAuditEvent[]; hours: PulseHour[] }) {
-  const closes = useMemo(() => new Map(
-    hours.map((hour) => [toUnixHour(hour.open_time), hour.close]),
-  ), [hours]);
+function ScannerAuditRail({ events }: { events: ScannerAuditEvent[] }) {
   const rows = useMemo(() => [...events]
     .filter((event) => !event.backfill)
     .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
@@ -689,8 +684,7 @@ function ScannerAuditRail({ events, hours }: { events: ScannerAuditEvent[]; hour
 
   const distanceFromDecision = (event: ScannerAuditEvent) => {
     if (event.kind !== "entry" || typeof event.price !== "number") return null;
-    const time = toUnixHour(event.bar_ts || event.ts);
-    const decisionClose = time === null ? null : closes.get(time);
+    const decisionClose = event.decision_price;
     if (typeof decisionClose !== "number" || decisionClose <= 0) return null;
     const direction = ["short", "sell"].includes(event.side.toLowerCase()) ? -1 : 1;
     return (event.price - decisionClose) / decisionClose * 10_000 * direction;
@@ -727,7 +721,7 @@ function ScannerAuditRail({ events, hours }: { events: ScannerAuditEvent[]; hour
                 <span className="text-right font-mono text-[9px] text-faint">
                   {event.kind === "exit" && typeof event.virtual_net_usd === "number"
                     ? `${event.virtual_net_usd >= 0 ? "+" : ""}$${event.virtual_net_usd.toFixed(2)}`
-                    : distance == null ? priceText(event.price) : `${distance >= 0 ? "+" : ""}${distance.toFixed(1)} bps vs close`}
+                    : distance == null ? priceText(event.price) : `${distance >= 0 ? "+" : ""}${distance.toFixed(1)} bps vs decision`}
                 </span>
               </div>
             );
@@ -757,6 +751,7 @@ export function MarketPulse() {
     const selectedBase = baseAsset(symbol);
     return (journal.data?.scanner_events ?? []).flatMap((event) => {
       const lane = laneById.get(event.lane);
+      if (lane?.observation_class !== "shadow_observe") return [];
       const eventSymbol = event.symbol || lane?.symbol || "";
       if (baseAsset(eventSymbol) !== selectedBase) return [];
       return [{
@@ -767,6 +762,18 @@ export function MarketPulse() {
       }];
     });
   }, [journal.data?.scanner_events, lanes.data?.lanes, symbol]);
+  const activeIntent = useMemo(() => {
+    const selectedBase = baseAsset(symbol);
+    return (lanes.data?.lanes ?? [])
+      .filter((lane) => lane.observation_class === "shadow_observe" && baseAsset(lane.symbol) === selectedBase)
+      .flatMap((lane) => (lane.shadow_perf?.pending_intents ?? []).map((intent) => ({
+        strategy_id: lane.strategy_id,
+        stop_price: intent.stop_price,
+        target_price: intent.take_profit_price,
+        decision_bar_ts: intent.decision_bar_ts,
+      })))
+      .sort((a, b) => Date.parse(b.decision_bar_ts) - Date.parse(a.decision_bar_ts))[0] ?? null;
+  }, [lanes.data?.lanes, symbol]);
 
   useEffect(() => {
     if (!selected || !hours.some((hour) => hour.open_time === selected)) {
@@ -907,8 +914,9 @@ export function MarketPulse() {
             priorDayVah={priorDayProfile?.value_area_high}
             priorDayVal={priorDayProfile?.value_area_low}
             auditEvents={auditEvents}
+            activeIntent={activeIntent}
           />
-          <ScannerAuditRail events={auditEvents} hours={hours} />
+          <ScannerAuditRail events={auditEvents} />
         </TerminalPanel>
 
         <div className="flex flex-col gap-4">

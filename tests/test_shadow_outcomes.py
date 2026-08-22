@@ -364,6 +364,15 @@ def test_stats_aggregate_wins_net_and_profit_factor(tmp_path):
     assert stats["profit_factor"] is None  # no losses yet — undefined, not inf
     assert stats["resolutions"]["target"] == 2
     assert stats["pending_shadow_intents"] == 1
+    assert stats["pending_intents"] == [{
+        "intent_key": "open",
+        "side": "long",
+        "entry_price": 100.0,
+        "stop_price": 1.0,
+        "take_profit_price": None,
+        "decision_bar_ts": pd.Timestamp(BASE, unit="ms", tz="UTC").isoformat(),
+        "signal_reason": "test intent",
+    }]
     assert len(stats["shadow_outcomes_recent"]) == 2
     assert stats["shadow_outcomes_recent"][-1]["resolution"] == "target"
     assert stats["virtual_net_usd"] == stats["net_usd"]
@@ -534,16 +543,25 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
         tmp_path, FakeFeed([[BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]])
     )
     await session1.run(max_bars=1)
-    assert session1.shadow_outcomes.stats() == {
+    stats = session1.shadow_outcomes.stats()
+    pending = stats.pop("pending_intents")
+    assert stats == {
         "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
         "profit_factor": None, "open_intents": 1,
-        "pending_shadow_intents": 1, "shadow_outcomes_recent": [],
+        "pending_shadow_intents": 1,
+        "shadow_outcomes_recent": [],
         "virtual_net_usd": 0.0, "bars_since_signal": 0,
         "resolutions": {"stop": 0, "target": 0, "timeout": 0},
         "status": "OBSERVE", "trade_compatible": True,
         "exit_semantics": "single_exit_parity",
         "route": "taker", "net_taker_usd": 0.0, "maker_unfilled": 0,
     }
+    assert len(pending) == 1
+    assert pending[0]["side"] == "long"
+    assert pending[0]["entry_price"] == pytest.approx(100.01)
+    assert pending[0]["stop_price"] == pytest.approx(95.0)
+    assert pending[0]["take_profit_price"] == pytest.approx(110.0)
+    assert pending[0]["decision_bar_ts"] == ts(5).isoformat()
 
     # restart: seeded history now includes bar 6, which broke the stops while
     # the session was down; a quiet live bar 7 follows

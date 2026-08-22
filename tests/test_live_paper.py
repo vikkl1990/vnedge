@@ -253,7 +253,12 @@ async def test_every_entry_path_rejects_edge_below_cost_wall(tmp_path):
     assert report.orders_submitted == 0
     assert exchange.get_positions() == []
     records = session.journal.read_all()
-    assert any(record["kind"] == "cost_rejected" for record in records)
+    rejection = next(record for record in records if record["kind"] == "cost_rejected")
+    assert rejection["payload"]["timeframe"] == "1h"
+    assert rejection["payload"]["decision_price"] == 100.0
+    assert rejection["payload"]["bar_ts"] == pd.to_datetime(
+        BASE + 5 * MIN, unit="ms", utc=True
+    ).isoformat()
     assert session.last_reject_reason.startswith("cost_gate:")
 
 

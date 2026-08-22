@@ -100,6 +100,7 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["round_trip_bps"] == 13.0
     assert measurement["why_no_fire"] == ("measurement lane emits no OrderIntent by design")
     assert measurement["health"] == "blocked"  # canonical gap band, not feed-only OK
+    assert measurement["health_reason"] == "candle_gap"
     assert killed["eligibility"] == "KILLED"
     assert killed["mode"] == "off"
     assert killed["capital"] is False
@@ -120,6 +121,7 @@ def test_lane_projection_uses_server_health_bands() -> None:
     projected = build_lanes_payload(snap, now=NOW)["lanes"][0]
 
     assert projected["health"] == "blocked"
+    assert projected["health_reason"] == "bar_close_lag_hard"
 
 
 def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject() -> None:

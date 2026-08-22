@@ -539,6 +539,22 @@ class ShadowOutcomeTracker:
             "profit_factor": pf,
             "open_intents": len(self._pending),
             "pending_shadow_intents": len(self._pending),
+            "pending_intents": [
+                {
+                    "intent_key": pending.intent_key,
+                    "side": pending.side,
+                    "entry_price": round(pending.entry_price, 10),
+                    "stop_price": round(pending.stop_price, 10),
+                    "take_profit_price": (
+                        None
+                        if pending.take_profit_price is None
+                        else round(pending.take_profit_price, 10)
+                    ),
+                    "decision_bar_ts": pending.decision_bar_ts.isoformat(),
+                    "signal_reason": pending.signal_reason,
+                }
+                for pending in self._pending.values()
+            ],
             "shadow_outcomes_recent": list(self._recent_outcomes),
             "virtual_net_usd": round(self._net_usd, 4),
             "bars_since_signal": (

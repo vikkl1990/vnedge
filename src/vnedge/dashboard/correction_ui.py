@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from vnedge.dashboard.health_bands import lane_health, timeframe_health
+from vnedge.dashboard.health_bands import lane_bands, lane_health, timeframe_health
 from vnedge.runtime.latency_thresholds import LATENCY_GATE_MIN_SAMPLES
 from vnedge.strategy.strategy_registry import (
     KILLED,
@@ -175,6 +175,37 @@ def _current_waiting_reason(lane: Mapping[str, Any], fallback: str) -> str:
     return fallback
 
 
+def _health_reason(
+    lane: Mapping[str, Any], health: str, problem: str | None
+) -> str | None:
+    """Explain every non-OK lane with the same bands that assign its colour."""
+    if problem:
+        return problem
+    blocked = lane.get("arm_blocked")
+    if blocked:
+        if isinstance(blocked, Mapping):
+            return str(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
+        return str(blocked)
+    if lane.get("gapped_candles"):
+        return "candle_gap"
+    if health in {"ok", "unknown"}:
+        return None
+    bands = lane.get("bands")
+    bands = bands if isinstance(bands, Mapping) else lane_bands(dict(lane))
+    for name in ("age", "bar_close_lag", "decision_lag", "dd"):
+        band = str(bands.get(name) or "unknown")
+        if band == "blocked":
+            return f"{name}_hard"
+    for name in ("age", "bar_close_lag", "decision_lag", "dd"):
+        band = str(bands.get(name) or "unknown")
+        if band == "degraded":
+            return f"{name}_soft"
+    feed = str(lane.get("feed") or "").lower()
+    if feed and feed not in {"ok", "live"}:
+        return f"feed_{feed}"
+    return "degraded"
+
+
 def build_lanes_payload(
     snapshot: Mapping[str, Any], *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -253,7 +284,9 @@ def build_lanes_payload(
                     plan.get("round_trip_bps") or lane.get("round_trip_bps")
                 ),
                 "health": health,
-                "health_reason": problems.get(str(lane.get("lane_id") or "")),
+                "health_reason": _health_reason(
+                    lane, health, problems.get(str(lane.get("lane_id") or ""))
+                ),
                 "shadow_perf": lane.get("shadow_perf") if mode == "shadow" else None,
                 "equity_usd": _number(lane.get("equity")),
                 "realized_pnl_usd": _number(lane.get("realized_pnl")),

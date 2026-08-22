@@ -22,6 +22,7 @@ def test_trade_journal_projects_scanner_chart_evidence_without_guessing(tmp_path
                     "exchange": "binanceusdm",
                     "symbol": "BTC/USDT:USDT",
                     "timeframe": "1h",
+                    "decision_price": 62_900.0,
                     "fired": False,
                     "skip_reason": "inside_structure",
                     "backfill": False,
@@ -36,6 +37,7 @@ def test_trade_journal_projects_scanner_chart_evidence_without_guessing(tmp_path
                     "exchange": "binanceusdm",
                     "symbol": "BTC/USDT:USDT",
                     "timeframe": "1h",
+                    "decision_price": 62_900.0,
                     "fired": True,
                     "signal_reason": "bos_up_break_swing_high",
                     "signal": {
@@ -105,6 +107,7 @@ def test_trade_journal_projects_scanner_chart_evidence_without_guessing(tmp_path
     assert entry["price"] == 63_000.0
     assert entry["stop_price"] == 62_000.0
     assert entry["target_price"] == 65_000.0
+    assert entry["decision_price"] == 62_900.0
     outcome = next(event for event in events if event["kind"] == "exit")
     assert outcome["symbol"] == "BTC/USDT:USDT"
     assert outcome["strategy_id"] == "structure_bos_1h"
@@ -112,6 +115,56 @@ def test_trade_journal_projects_scanner_chart_evidence_without_guessing(tmp_path
     assert outcome["virtual_net_usd"] == 18.5
     waiting = next(event for event in events if event["kind"] == "evaluation")
     assert waiting["reason"] == "no_confirmed_swing_pair"
+
+
+def test_scanner_evidence_excludes_measurement_and_projects_rejections(tmp_path):
+    scanner = "shadow_observe_squeeze_binanceusdm_btc_5m"
+    measurement = "measurement_binanceusdm_btc_1h"
+    for lane in (scanner, measurement):
+        write_jsonl(
+            tmp_path / f"{lane}.journal.jsonl",
+            [{
+                "ts": "2026-08-20T13:05:02+00:00",
+                "kind": "lane_eval",
+                "payload": {
+                    "bar_ts": "2026-08-20T13:00:00+00:00",
+                    "strategy_id": "squeeze_expansion_breakout_v3",
+                    "symbol": "BTC/USDT:USDT",
+                    "timeframe": "5m",
+                    "decision_price": 63_125.0,
+                    "fired": True,
+                    "signal": {"side": "long"},
+                },
+            }],
+        )
+    with (tmp_path / f"{scanner}.journal.jsonl").open("a") as handle:
+        handle.write(json.dumps({
+            "ts": "2026-08-20T13:05:03+00:00",
+            "kind": "cost_rejected",
+            "payload": {
+                "bar_ts": "2026-08-20T13:00:00+00:00",
+                "strategy_id": "squeeze_expansion_breakout_v3",
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "5m",
+                "side": "long",
+                "decision_price": 63_125.0,
+                "reason": "net edge below fee wall",
+            },
+        }) + "\n")
+    snapshot = {"lanes": [
+        {"lane_id": scanner, "observation_class": "shadow_observe"},
+        {"lane_id": measurement, "observation_class": "measurement"},
+    ]}
+
+    events = build_trade_journal(
+        snapshot=snapshot, journal_dir=tmp_path, limit=50
+    )["scanner_events"]
+
+    assert {event["lane"] for event in events} == {scanner}
+    rejected = next(event for event in events if event["kind"] == "rejection")
+    assert rejected["source_event"] == "cost_rejected"
+    assert rejected["decision_price"] == 63_125.0
+    assert rejected["reason"] == "net edge below fee wall"
 
 
 def test_trade_journal_projects_fills_orders_and_virtual_trades(tmp_path):

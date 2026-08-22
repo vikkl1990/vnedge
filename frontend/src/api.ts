@@ -349,6 +349,15 @@ export interface CorrectionLane {
   last_reject_reason: string | null;
   shadow_perf: {
     pending_shadow_intents?: number;
+    pending_intents?: Array<{
+      intent_key: string;
+      side: string;
+      entry_price: number;
+      stop_price: number;
+      take_profit_price: number | null;
+      decision_bar_ts: string;
+      signal_reason: string;
+    }>;
     shadow_outcomes_recent?: Record<string, unknown>[];
     virtual_net_usd?: number;
     wins?: number;
@@ -534,6 +543,7 @@ export interface ScannerAuditEvent {
   timeframe: string;
   side: string;
   price: number | null;
+  decision_price?: number | null;
   entry_price?: number | null;
   stop_price?: number | null;
   target_price?: number | null;

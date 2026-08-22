@@ -67,6 +67,11 @@ def build_trade_journal(
 
     closed_trades = _build_closed_trades(fills, journal_rows, virtual_trades)
     scanner_events = _scanner_audit_events(journal_rows)
+    scanner_lanes = _shadow_observe_lane_ids(snapshot)
+    if scanner_lanes is not None:
+        scanner_events = [
+            row for row in scanner_events if str(row.get("lane") or "") in scanner_lanes
+        ]
     actual_closed = [
         row for row in closed_trades if row.get("kind") == "actual_closing_fill"
     ]
@@ -196,6 +201,29 @@ def _active_lane_ids(snapshot: dict[str, Any]) -> set[str]:
         if isinstance(lane, dict) and lane.get("lane_id"):
             ids.add(str(lane["lane_id"]))
     return ids
+
+
+def _shadow_observe_lane_ids(snapshot: dict[str, Any]) -> set[str] | None:
+    """Return the explicitly configured scanner lanes.
+
+    ``None`` means the snapshot has no fleet metadata, so direct/single-lane
+    journal inspection remains backwards compatible.  An explicit fleet is
+    filtered fail closed: measurement lanes are market telemetry, not scanner
+    evidence, even though both journal ``lane_eval`` rows.
+    """
+    lanes = snapshot.get("lanes")
+    if not isinstance(lanes, list):
+        return None
+    return {
+        str(row["lane_id"])
+        for row in lanes
+        if isinstance(row, dict)
+        and row.get("lane_id")
+        and (
+            row.get("observation_class") == "shadow_observe"
+            or str(row.get("lane_id") or "").startswith("shadow_observe_")
+        )
+    }
 
 
 def _lane_from_path(path: Path, suffix: str) -> str:
@@ -367,6 +395,9 @@ _EVENT_KINDS = _ORDER_KINDS | {
     "daily_report",
     "lane_eval",
     "shadow_portfolio_rejected",
+    "shadow_entry_blocked",
+    "cost_rejected",
+    "sizing_rejected",
     "executor_finished",
     "executor_scalper_risk_decision",
 }
@@ -384,6 +415,7 @@ def _scanner_audit_events(
     covering the price chart with one rejection marker per bar.
     """
     intents: dict[str, dict[str, Any]] = {}
+    decisions: dict[tuple[str, str], dict[str, Any]] = {}
     latest_waiting: dict[str, dict[str, Any]] = {}
     output: list[dict[str, Any]] = []
 
@@ -417,6 +449,7 @@ def _scanner_audit_events(
                 "timeframe": str(payload.get("timeframe") or ""),
                 "side": str(signal.get("side") or ""),
                 "price": None,
+                "decision_price": payload.get("decision_price"),
                 "stop_price": signal.get("stop_price"),
                 "target_price": signal.get("take_profit_price"),
                 "approved": fired,
@@ -427,6 +460,7 @@ def _scanner_audit_events(
                 ),
                 "backfill": bool(payload.get("backfill")),
             }
+            decisions[(lane, row["bar_ts"])] = row
             if fired:
                 output.append(row)
             elif not row["backfill"]:
@@ -439,18 +473,23 @@ def _scanner_audit_events(
             intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
             key = str(payload.get("intent_key") or "")
             approved = bool(payload.get("approved"))
+            bar_ts = str(payload.get("bar_ts") or ts)
+            decision = decisions.get((lane, bar_ts), {})
             row = {
                 "lane": lane,
                 "ts": ts,
-                "bar_ts": str(payload.get("bar_ts") or ts),
+                "bar_ts": bar_ts,
                 "kind": "entry" if approved else "rejection",
                 "source_event": kind,
                 "intent_key": key,
                 "strategy_id": str(intent.get("strategy_id") or payload.get("strategy_id") or ""),
                 "symbol": str(intent.get("symbol") or payload.get("symbol") or ""),
-                "timeframe": str(payload.get("timeframe") or ""),
+                "timeframe": str(payload.get("timeframe") or decision.get("timeframe") or ""),
                 "side": str(intent.get("side") or payload.get("side") or ""),
                 "price": intent_price(payload, intent),
+                "decision_price": payload.get(
+                    "decision_price", decision.get("decision_price")
+                ),
                 "stop_price": payload.get("stop_price"),
                 "target_price": payload.get("take_profit_price"),
                 "approved": approved,
@@ -498,21 +537,35 @@ def _scanner_audit_events(
             )
             continue
 
-        if kind == "shadow_portfolio_rejected":
+        if kind in {
+            "shadow_portfolio_rejected",
+            "shadow_entry_blocked",
+            "cost_rejected",
+            "sizing_rejected",
+        }:
+            bar_ts = str(payload.get("bar_ts") or ts)
+            decision = decisions.get((lane, bar_ts), {})
             output.append(
                 {
                     "lane": lane,
                     "ts": ts,
-                    "bar_ts": ts,
+                    "bar_ts": bar_ts,
                     "kind": "rejection",
                     "source_event": kind,
                     "strategy_id": str(payload.get("strategy_id") or ""),
                     "symbol": str(payload.get("symbol") or ""),
-                    "timeframe": str(payload.get("timeframe") or ""),
+                    "timeframe": str(
+                        payload.get("timeframe") or decision.get("timeframe") or ""
+                    ),
                     "side": str(payload.get("side") or ""),
-                    "price": None,
+                    "price": payload.get("entry_price"),
+                    "decision_price": payload.get(
+                        "decision_price", decision.get("decision_price")
+                    ),
+                    "stop_price": payload.get("stop_price"),
+                    "target_price": payload.get("take_profit_price"),
                     "approved": False,
-                    "reason": str(payload.get("reason") or "shadow_portfolio_rejected"),
+                    "reason": str(payload.get("reason") or kind),
                 }
             )
 
