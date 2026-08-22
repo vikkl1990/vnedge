@@ -168,6 +168,46 @@ def test_forming_hour_is_never_attached_without_exact_symbol_ownership(tmp_path)
     assert missing_symbol["forming"]["status"] == "awaiting_trades"
 
 
+def test_non_primary_symbol_forms_current_hour_from_immutable_tick_shards(
+    tmp_path,
+) -> None:
+    now = START + timedelta(hours=26, minutes=15)
+    trade_dir = (
+        tmp_path
+        / "ticks/exchange=binanceusdm/symbol=ETHUSDT/stream=trades/20260816"
+    )
+    trade_dir.mkdir(parents=True)
+    opened = now.replace(minute=0, second=0, microsecond=0)
+    rows = [
+        {"ts_ms": int((opened + timedelta(minutes=1)).timestamp() * 1000), "price": 200.0, "amount": 2.0},
+        {"ts_ms": int((opened + timedelta(minutes=3)).timestamp() * 1000), "price": 210.0, "amount": 3.0},
+        {"ts_ms": int((opened + timedelta(minutes=14)).timestamp() * 1000), "price": 205.0, "amount": 5.0},
+    ]
+    pd.DataFrame(rows).to_parquet(
+        trade_dir / f"{rows[0]['ts_ms']}-000001.parquet", index=False
+    )
+    pulse_service = service(tmp_path)
+    pulse_service.clock = lambda: now
+
+    payload = pulse_service.pulse(
+        "binanceusdm",
+        "ETHUSDT",
+        runtime={"symbol": "BTC/USDT:USDT", "price": {"mid": 999.0}},
+    )
+
+    assert payload["forming"]["status"] == "forming"
+    assert payload["forming"]["price_source"] == "last_trade"
+    assert payload["forming"]["open"] == 200.0
+    assert payload["forming"]["high"] == 210.0
+    assert payload["forming"]["low"] == 200.0
+    assert payload["forming"]["close"] == 205.0
+    assert payload["forming"]["volume"] == 10.0
+    assert payload["forming"]["mid"] == 205.0
+    assert payload["market"]["mid"] is None
+    assert payload["market"]["last"] == 205.0
+    assert payload["market"]["feed_age_ms"] == 60_000
+
+
 def test_pulse_exposes_closed_1h_and_4h_regime_measurements(tmp_path) -> None:
     rows = tuple(candle(hour, volume="100") for hour in range(180))
     CandleParquetStore(tmp_path / "candles", exchange="binanceusdm").upsert(rows)

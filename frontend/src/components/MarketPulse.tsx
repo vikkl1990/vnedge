@@ -738,7 +738,7 @@ export function MarketPulse() {
           <TerminalPanel title="This hour" meta="forming · never persisted">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-[11px] font-mono text-faint">LIVE MID</div>
+                <div className="text-[11px] font-mono text-faint">{forming?.price_source === "last_trade" ? "LIVE LAST" : "LIVE MID"}</div>
                 <div className="text-3xl font-mono tabular-nums">{priceText((forming?.mid as number | null | undefined) ?? book?.mid)}</div>
               </div>
               <TerminalBadge tone={formingActive ? "info" : "neutral"}>{formingActive ? "forming" : "awaiting trades"}</TerminalBadge>

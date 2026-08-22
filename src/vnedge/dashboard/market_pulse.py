@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -596,8 +597,11 @@ class MarketPulseService:
         if stale_after <= timedelta(0):
             raise ValueError("pulse stale_after must be positive")
         self.candle_root = Path(candle_root)
-        self.profile_store = TickLakeVolumeProfileStore(
+        self.tick_root = Path(
             tick_root if tick_root is not None else self.candle_root.parent
+        )
+        self.profile_store = TickLakeVolumeProfileStore(
+            self.tick_root
         )
         self.profile_artifact_store = VolumeProfileArtifactStore(
             self.candle_root.parent / "volume_profiles"
@@ -612,6 +616,11 @@ class MarketPulseService:
         )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.stale_after = stale_after
+        self._forming_cache_hour: datetime | None = None
+        self._forming_shard_cache: dict[
+            tuple[str, int], tuple[int, dict[str, Any] | None]
+        ] = {}
+        self._forming_cache_lock = threading.RLock()
 
     def _prior_day_profile(
         self,
@@ -874,37 +883,156 @@ class MarketPulseService:
         candle_health = feed.get("candles") if isinstance(feed, Mapping) else None
         return bool(candle_health) and str(candle_health).lower() not in {"ok", "live"}
 
-    @classmethod
+    def _tick_forming(
+        self,
+        exchange: str,
+        symbol: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any] | None:
+        """Reconstruct the current hour from immutable public-trade shards.
+
+        The multi-lane runtime owns one primary quote/candle only. Pulse still
+        covers BTC, ETH, and SOL, so non-primary rows must not render empty
+        while their recorder is healthy. Published shards are atomic and the
+        projection remains read-only; the final unflushed seconds may lag.
+        """
+        hour_open = now.replace(minute=0, second=0, microsecond=0)
+        hour_open_ms = int(hour_open.timestamp() * 1000)
+        now_ms = int(now.timestamp() * 1000)
+        canonical = symbol.upper().replace("/", "").split(":", 1)[0]
+        base = (
+            self.tick_root
+            / "ticks"
+            / f"exchange={exchange}"
+            / f"symbol={canonical}"
+            / "stream=trades"
+        )
+        directories = [
+            base / hour_open.strftime("%Y%m%d"),
+            base / hour_open.date().isoformat(),
+        ]
+        paths: list[Path] = []
+        for directory in directories:
+            if not directory.is_dir():
+                continue
+            for path in directory.glob("*.parquet"):
+                try:
+                    first_ts = int(path.stem.split("-", 1)[0])
+                except (ValueError, IndexError):
+                    continue
+                # Timed flushes can straddle the hour boundary.
+                if hour_open_ms - 60_000 <= first_ts <= now_ms:
+                    paths.append(path)
+        if not paths:
+            return None
+
+        with self._forming_cache_lock:
+            if self._forming_cache_hour != hour_open:
+                self._forming_shard_cache.clear()
+                self._forming_cache_hour = hour_open
+            shards: list[dict[str, Any]] = []
+            for path in sorted(set(paths)):
+                cache_key = (str(path), hour_open_ms)
+                modified = path.stat().st_mtime_ns
+                cached = self._forming_shard_cache.get(cache_key)
+                if cached is not None and cached[0] == modified:
+                    aggregate = cached[1]
+                else:
+                    try:
+                        import pandas as pd
+
+                        frame = pd.read_parquet(
+                            path, columns=["ts_ms", "price", "amount"]
+                        )
+                        frame["ts_ms"] = pd.to_numeric(
+                            frame["ts_ms"], errors="coerce"
+                        )
+                        frame["price"] = pd.to_numeric(
+                            frame["price"], errors="coerce"
+                        )
+                        frame["amount"] = pd.to_numeric(
+                            frame["amount"], errors="coerce"
+                        )
+                        frame = frame.loc[
+                            frame["ts_ms"].between(hour_open_ms, now_ms)
+                            & (frame["price"] > 0)
+                            & (frame["amount"] > 0)
+                        ].sort_values("ts_ms", kind="stable")
+                        aggregate = None if frame.empty else {
+                            "first_ts": int(frame["ts_ms"].iloc[0]),
+                            "last_ts": int(frame["ts_ms"].iloc[-1]),
+                            "open": float(frame["price"].iloc[0]),
+                            "high": float(frame["price"].max()),
+                            "low": float(frame["price"].min()),
+                            "close": float(frame["price"].iloc[-1]),
+                            "volume": float(frame["amount"].sum()),
+                        }
+                    except Exception as exc:  # noqa: BLE001 - UI fails visible
+                        logger.warning(
+                            "forming tick shard unavailable: exchange=%s "
+                            "symbol=%s path=%s reason=%s",
+                            exchange,
+                            symbol,
+                            path,
+                            exc,
+                        )
+                        aggregate = None
+                    self._forming_shard_cache[cache_key] = (modified, aggregate)
+                if aggregate is not None:
+                    shards.append(aggregate)
+        if not shards:
+            return None
+        first = min(shards, key=lambda row: row["first_ts"])
+        last = max(shards, key=lambda row: row["last_ts"])
+        return {
+            "symbol": symbol,
+            "open_time": _iso(hour_open),
+            "close_time": _iso(hour_open + timedelta(hours=1)),
+            "open": first["open"],
+            "high": max(row["high"] for row in shards),
+            "low": min(row["low"] for row in shards),
+            "close": last["close"],
+            "volume": sum(row["volume"] for row in shards),
+            "last_trade_ts_ms": last["last_ts"],
+            "feed_age_ms": max(0, now_ms - int(last["last_ts"])),
+            "price_source": "last_trade",
+        }
+
     def _forming(
-        cls,
+        self,
         runtime: Mapping[str, Any] | None,
         symbol: str,
+        *,
+        exchange: str,
+        now: datetime,
     ) -> dict[str, Any] | None:
         pulse = runtime.get("pulse") if runtime else None
         forming = pulse.get("forming") if isinstance(pulse, Mapping) else None
         if (
             isinstance(forming, Mapping)
-            and cls._same_symbol(forming.get("symbol"), symbol)
+            and self._same_symbol(forming.get("symbol"), symbol)
         ):
             return dict(forming)
 
         # The multi-lane snapshot publishes the primary lane's canonical
         # forming candle under Time Machine. Pulse is not a runtime producer in
         # that topology, so consume the read-only 1h awareness record directly.
-        if not runtime or not cls._symbol_runtime(runtime, symbol):
-            return None
-        time_machine = runtime.get("time_machine")
-        time_machine_forming = (
-            time_machine.get("forming") if isinstance(time_machine, Mapping) else None
-        )
-        hour = (
-            time_machine_forming.get("1h")
-            if isinstance(time_machine_forming, Mapping)
-            else None
-        )
-        if not isinstance(hour, Mapping):
-            return None
-        return {**dict(hour), "symbol": symbol}
+        if runtime and self._symbol_runtime(runtime, symbol):
+            time_machine = runtime.get("time_machine")
+            time_machine_forming = (
+                time_machine.get("forming")
+                if isinstance(time_machine, Mapping)
+                else None
+            )
+            hour = (
+                time_machine_forming.get("1h")
+                if isinstance(time_machine_forming, Mapping)
+                else None
+            )
+            if isinstance(hour, Mapping):
+                return {**dict(hour), "symbol": symbol, "price_source": "book_mid"}
+        return self._tick_forming(exchange, symbol, now=now)
 
     @staticmethod
     def _symbol_runtime(runtime: Mapping[str, Any] | None, symbol: str) -> bool:
@@ -1194,7 +1322,7 @@ class MarketPulseService:
                 },
             )
         forming_metrics = self._forming_metrics(
-            self._forming(runtime, symbol),
+            self._forming(runtime, symbol, exchange=exchange, now=now),
             rows,
             quality=pulse_quality,
             now=now,
@@ -1204,22 +1332,26 @@ class MarketPulseService:
         feed_age_ms = (
             _number(feed.get("last_update_ms"))
             if isinstance(feed, Mapping)
-            else None
+            else _number(_mapping(forming_metrics).get("feed_age_ms"))
         )
         latest_gap = gaps[-1] if gaps else None
         book = runtime.get("price") if runtime and runtime_matches else None
         mid = _number(_mapping(book).get("mid"))
+        forming_price = _number(_mapping(forming_metrics).get("close"))
+        display_price = mid if mid is not None else forming_price
         prior_day_profile = self._prior_day_profile(
             exchange,
             symbol,
             now=now,
             gaps=gaps,
-            reference_price=mid if mid is not None else (latest.close if latest else None),
+            reference_price=(
+                display_price if display_price is not None else (latest.close if latest else None)
+            ),
         )
         forming = self._forming_contract(
             forming_metrics,
             now=now,
-            mid=mid,
+            mid=display_price,
             quality=pulse_quality,
             latest=latest,
             prior_day_profile=prior_day_profile,
@@ -1271,7 +1403,7 @@ class MarketPulseService:
             "volume_profile": {"prior_day": prior_day_profile},
             "regime": regimes,
             "market": {
-                "last": latest.close if latest else None,
+                "last": display_price if display_price is not None else (latest.close if latest else None),
                 "mid": mid,
                 "feed_age_ms": feed_age_ms,
                 "canonical_age_ms": (
