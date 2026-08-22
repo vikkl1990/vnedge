@@ -187,7 +187,7 @@ async def _fetch(session, url: str) -> bytes | None:
                     return None
                 resp.raise_for_status()
                 return await resp.read()
-        except Exception as exc:  # noqa: BLE001 — bounded retry, then surface
+        except Exception as exc:  # bounded retry, then surface
             if attempt == _RETRIES:
                 raise
             logger.warning("fetch failed (%s/%s) %s: %s", attempt, _RETRIES, url, exc)
@@ -224,6 +224,11 @@ async def backfill(
         if not force and day_has_shards(data_root, symbol, day_key, exchange):
             report.skipped_existing.append(label)
             return
+        # Keep the semaphore for the WHOLE fetch/convert/write lifetime.  The
+        # ZIP payload and the expanded pandas frame are both large on BTC.  An
+        # older version released the semaphore immediately after download,
+        # allowing every task to inflate its CSV concurrently and OOM the
+        # recovery container even though network concurrency looked bounded.
         async with sem:
             try:
                 raw = await _fetch(session, daily_zip_url(symbol, day))
@@ -231,16 +236,16 @@ async def backfill(
                 logger.error("giving up on %s: %s", label, exc)
                 report.failed.append(label)
                 return
-        if raw is None:
-            report.missing_upstream.append(label)
-            return
-        try:
-            trades = convert_aggtrades(frame_from_zip_bytes(raw))
-            write_trade_shard(trades, data_root, symbol, day_key, exchange)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("convert/write failed for %s: %s", label, exc)
-            report.failed.append(label)
-            return
+            if raw is None:
+                report.missing_upstream.append(label)
+                return
+            try:
+                trades = convert_aggtrades(frame_from_zip_bytes(raw))
+                write_trade_shard(trades, data_root, symbol, day_key, exchange)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("convert/write failed for %s: %s", label, exc)
+                report.failed.append(label)
+                return
         report.written.append(label)
         report.rows_written += len(trades)
         logger.info("wrote %s: %d trades", label, len(trades))

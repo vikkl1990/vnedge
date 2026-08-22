@@ -29,7 +29,13 @@ import httpx
 import pandas as pd
 
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
-from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
+from vnedge.data.candles import (
+    TF_SECONDS,
+    Candle,
+    CandleParquetStore,
+    CandlePipeline,
+    floor_time,
+)
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.lake_health import LakeHealthMonitor
 
@@ -50,6 +56,17 @@ def _utc(value: datetime, *, label: str) -> datetime:
 
 def _market_id(symbol: str) -> str:
     return symbol.split(":", 1)[0].replace("/", "").upper()
+
+
+def _recovery_chunks(start: datetime, end: datetime) -> tuple[tuple[datetime, datetime], ...]:
+    """Split a gap into independently durable REST recovery units."""
+    chunks = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + MAX_WINDOW, end)
+        chunks.append((cursor, chunk_end))
+        cursor = chunk_end
+    return tuple(chunks)
 
 
 class IntervalFetcher(Protocol):
@@ -313,18 +330,23 @@ def _canonical_gap_covered(
     symbol: str,
     start: datetime,
     end: datetime,
+    timeframe: str = "1h",
 ) -> bool:
-    """True only when every missing 1h bucket now has a closed canonical bar."""
+    """True only when every missing target bucket has a canonical bar."""
+    try:
+        step = timedelta(seconds=TF_SECONDS[timeframe])
+    except KeyError as exc:
+        raise ValueError(f"unsupported recovery coverage timeframe: {timeframe}") from exc
     expected: set[datetime] = set()
     cursor = start
     while cursor < end:
         expected.add(cursor)
-        cursor += timedelta(hours=1)
+        cursor += step
     if not expected or cursor != end:
         return False
     present = {
         candle.open_time
-        for candle in store.read(_market_id(symbol), "1h")
+        for candle in store.read(_market_id(symbol), timeframe)
         if candle.is_closed and start <= candle.open_time < end
     }
     return expected <= present
@@ -347,6 +369,7 @@ def recover_storage_gaps(
     symbols: list[str],
     fetcher: IntervalFetcher,
     recover_closed_tail: bool = False,
+    tail_timeframe: str = "1h",
     now: datetime | None = None,
 ) -> RecoveryReport:
     """Fetch, replay and then close exact unrecovered storage-hole records.
@@ -366,7 +389,9 @@ def recover_storage_gaps(
     recovered: list[RecoveredGap] = []
     skipped: list[str] = []
     moment = _utc(now or datetime.now(UTC), label="recovery clock")
-    completed_hour_end = moment.replace(minute=0, second=0, microsecond=0)
+    if tail_timeframe not in {"5m", "1h"}:
+        raise ValueError("tail_timeframe must be '5m' or '1h'")
+    completed_tail_end = floor_time(moment, tail_timeframe)
 
     for symbol in symbols:
         records = gap_store.read(exchange, symbol)
@@ -374,15 +399,17 @@ def recover_storage_gaps(
             latest_close = max(
                 (
                     candle.close_time
-                    for candle in candle_store.read(_market_id(symbol), "1h")
+                    for candle in candle_store.read(
+                        _market_id(symbol), tail_timeframe
+                    )
                     if candle.is_closed
                 ),
                 default=None,
             )
-            if latest_close is not None and latest_close < completed_hour_end:
+            if latest_close is not None and latest_close < completed_tail_end:
                 tail_id = (
-                    f"tail-{exchange}-{_market_id(symbol)}-"
-                    f"{latest_close:%Y%m%d%H}-{completed_hour_end:%Y%m%d%H}"
+                    f"tail-{tail_timeframe}-{exchange}-{_market_id(symbol)}-"
+                    f"{latest_close:%Y%m%d%H%M}-{completed_tail_end:%Y%m%d%H%M}"
                 )
                 already_recorded = any(record.gap_id == tail_id for record in records)
                 if not already_recorded:
@@ -391,11 +418,12 @@ def recover_storage_gaps(
                         exchange=exchange,
                         kind=GapKind.STORAGE_HOLE,
                         start=latest_close,
-                        end=completed_hour_end,
+                        end=completed_tail_end,
                         detected_at=moment,
                         detail=(
                             "closed canonical tail missing after recorder restart; "
-                            "materialized by recovery worker"
+                            "materialized by recovery worker; "
+                            f"coverage_timeframe={tail_timeframe}"
                         ),
                         gap_id=tail_id,
                     )
@@ -414,8 +442,20 @@ def recover_storage_gaps(
             grouped.setdefault((gap.start, gap.end), []).append(gap)
         for (start, end), duplicate_records in grouped.items():
             gap = duplicate_records[-1]
-            if _canonical_gap_covered(candle_store, symbol, start, end):
-                proof = "recovered: canonical closed 1h coverage already present"
+            coverage_timeframe = (
+                "5m" if "coverage_timeframe=5m" in gap.detail else "1h"
+            )
+            if _canonical_gap_covered(
+                candle_store,
+                symbol,
+                start,
+                end,
+                coverage_timeframe,
+            ):
+                proof = (
+                    "recovered: canonical closed "
+                    f"{coverage_timeframe} coverage already present"
+                )
                 gap_store.upsert(
                     replace(
                         record,
@@ -426,37 +466,98 @@ def recover_storage_gaps(
                 )
                 skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:covered")
                 continue
-            try:
-                tape = fetcher.fetch(symbol, start, end)
-            except httpx.HTTPStatusError as exc:
-                if not _rest_retention_rejection(exc):
-                    raise
-                # Binance REST is a recent-2-day source. The daily Vision
-                # worker owns older intervals; one old gap must not prevent
-                # later, recoverable gaps from being attempted.
-                logger.warning(
-                    "%s gap %s..%s is outside REST retention; awaiting Vision",
+            chunk_failed = False
+            recovered_chunks = 0
+            for chunk_start, chunk_end in _recovery_chunks(start, end):
+                if _canonical_gap_covered(
+                    candle_store,
                     symbol,
-                    start.isoformat(),
-                    end.isoformat(),
-                )
-                skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:vision")
-                continue
-            paths = _write_tape(tape, data_path, exchange=exchange)
-            candle_count = _replay_fetched_tape(tape, candle_store)
-            if not _canonical_gap_covered(candle_store, symbol, start, end):
-                logger.error(
-                    "%s recovery replay did not produce complete closed 1h coverage "
-                    "for %s..%s; gap remains open",
+                    chunk_start,
+                    chunk_end,
+                    coverage_timeframe,
+                ):
+                    continue
+                try:
+                    tape = fetcher.fetch(symbol, chunk_start, chunk_end)
+                except httpx.HTTPStatusError as exc:
+                    if not _rest_retention_rejection(exc):
+                        raise
+                    # Binance REST is a recent-2-day source. The daily Vision
+                    # worker owns older intervals; one old gap must not prevent
+                    # later, recoverable gaps from being attempted.
+                    logger.warning(
+                        "%s gap %s..%s is outside REST retention; awaiting Vision",
+                        symbol,
+                        chunk_start.isoformat(),
+                        chunk_end.isoformat(),
+                    )
+                    skipped.append(
+                        f"{_market_id(symbol)}:{chunk_start.isoformat()}:vision"
+                    )
+                    chunk_failed = True
+                    break
+                paths = _write_tape(tape, data_path, exchange=exchange)
+                candle_count = _replay_fetched_tape(tape, candle_store)
+                if not _canonical_gap_covered(
+                    candle_store,
                     symbol,
-                    start.isoformat(),
-                    end.isoformat(),
+                    chunk_start,
+                    chunk_end,
+                    coverage_timeframe,
+                ):
+                    logger.error(
+                        "%s recovery replay did not produce complete closed %s "
+                        "coverage for %s..%s; gap remains open",
+                        symbol,
+                        coverage_timeframe,
+                        chunk_start.isoformat(),
+                        chunk_end.isoformat(),
+                    )
+                    skipped.append(
+                        f"{_market_id(symbol)}:{chunk_start.isoformat()}:unproven"
+                    )
+                    chunk_failed = True
+                    break
+                recovered_chunks += 1
+                logger.info(
+                    "%s recovered %s..%s (%d trades, %d requests)",
+                    symbol,
+                    chunk_start.isoformat(),
+                    chunk_end.isoformat(),
+                    tape.trades,
+                    tape.requests,
                 )
-                skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:unproven")
+                recovered.append(
+                    RecoveredGap(
+                        symbol=tape.symbol,
+                        gap_id=(
+                            gap.gap_id
+                            if start == chunk_start and end == chunk_end
+                            else f"{gap.gap_id}:{chunk_start:%Y%m%d%H%M}"
+                        ),
+                        start=chunk_start.isoformat(),
+                        end=chunk_end.isoformat(),
+                        trades=tape.trades,
+                        first_agg_id=tape.first_agg_id,
+                        last_agg_id=tape.last_agg_id,
+                        requests=tape.requests,
+                        sha256=tape.sha256,
+                        shards=tuple(str(path) for path in paths),
+                        candles=candle_count,
+                        unrelated_replay_rejections=0,
+                    )
+                )
+            if chunk_failed or not _canonical_gap_covered(
+                candle_store,
+                symbol,
+                start,
+                end,
+                coverage_timeframe,
+            ):
                 continue
             proof = (
-                f"recovered from Binance REST aggTrades; rows={tape.trades}; "
-                f"agg_ids={tape.first_agg_id}-{tape.last_agg_id}; sha256={tape.sha256}; "
+                "recovered from Binance REST aggTrades in independently durable "
+                f"chunks; newly_fetched_chunks={recovered_chunks}; "
                 "unrelated_replay_rejections=0"
             )
             gap_store.upsert(
@@ -467,27 +568,33 @@ def recover_storage_gaps(
                 )
                 for record in duplicate_records
             )
-            recovered.append(
-                RecoveredGap(
-                    symbol=tape.symbol,
-                    gap_id=gap.gap_id,
-                    start=gap.start.isoformat(),
-                    end=gap.end.isoformat(),
-                    trades=tape.trades,
-                    first_agg_id=tape.first_agg_id,
-                    last_agg_id=tape.last_agg_id,
-                    requests=tape.requests,
-                    sha256=tape.sha256,
-                    shards=tuple(str(path) for path in paths),
-                    candles=candle_count,
-                    unrelated_replay_rejections=0,
-                )
-            )
     return RecoveryReport(exchange, tuple(recovered), tuple(skipped))
 
 
 def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _tails_current(
+    candle_store: CandleParquetStore,
+    symbols: list[str],
+    timeframe: str,
+    *,
+    now: datetime,
+) -> bool:
+    expected_close = floor_time(now, timeframe)
+    for symbol in symbols:
+        latest_close = max(
+            (
+                candle.close_time
+                for candle in candle_store.read(_market_id(symbol), timeframe)
+                if candle.is_closed
+            ),
+            default=None,
+        )
+        if latest_close is None or latest_close < expected_close:
+            return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -505,26 +612,61 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candle-root", default="data/candles")
     parser.add_argument("--gap-root", default="data/gaps")
     parser.add_argument(
+        "--tail-timeframe",
+        choices=("5m", "1h"),
+        default="1h",
+        help="closed-tail recovery granularity; scanner startup uses 5m",
+    )
+    parser.add_argument(
         "--request-interval-seconds",
         type=float,
         default=DEFAULT_REQUEST_INTERVAL_SECONDS,
+    )
+    parser.add_argument(
+        "--max-tail-passes",
+        type=int,
+        default=3,
+        help="bounded rechecks so a long initial repair also heals elapsed 5m delta",
     )
     parser.add_argument("--report", default="data/reports/binance_gap_recovery.json")
     args = parser.parse_args(argv)
     symbols = _csv(args.symbols)
     if not symbols:
         parser.error("--symbols must name at least one symbol")
+    if args.max_tail_passes < 1:
+        parser.error("--max-tail-passes must be >= 1")
 
     with BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher:
-        report = recover_storage_gaps(
-            data_root=args.data_root,
-            candle_root=args.candle_root,
-            gap_root=args.gap_root,
-            exchange=args.exchange,
-            symbols=symbols,
-            fetcher=fetcher,
-            recover_closed_tail=True,
-        )
+        recovered: list[RecoveredGap] = []
+        skipped: list[str] = []
+        candle_store = CandleParquetStore(args.candle_root, exchange=args.exchange)
+        for pass_number in range(1, args.max_tail_passes + 1):
+            pass_report = recover_storage_gaps(
+                data_root=args.data_root,
+                candle_root=args.candle_root,
+                gap_root=args.gap_root,
+                exchange=args.exchange,
+                symbols=symbols,
+                fetcher=fetcher,
+                recover_closed_tail=True,
+                tail_timeframe=args.tail_timeframe,
+            )
+            recovered.extend(pass_report.recovered)
+            skipped.extend(pass_report.skipped_symbols)
+            if _tails_current(
+                candle_store,
+                symbols,
+                args.tail_timeframe,
+                now=datetime.now(UTC),
+            ):
+                break
+            logger.info(
+                "closed %s tail advanced during recovery; convergence pass %d/%d",
+                args.tail_timeframe,
+                pass_number + 1,
+                args.max_tail_passes,
+            )
+        report = RecoveryReport(args.exchange, tuple(recovered), tuple(skipped))
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = report_path.with_suffix(f"{report_path.suffix}.tmp")

@@ -1,0 +1,274 @@
+"""1h/4h structure with a causal 15-minute break trigger (shadow only).
+
+The original S1 deliberately waited for the 1h close.  This new registration
+keeps its confirmed 1h swings and fully closed 4h direction, but carries that
+context forward to closed 15-minute children.  It can therefore confirm a
+break up to 45 minutes earlier without treating an unconfirmed tick as market
+structure.  Entries remain virtual and still pass the shared risk/cost path.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Literal
+
+import pandas as pd
+
+from vnedge.plan.cost_model import CostModel
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.structure_bos_1h import PARAMS as BOS_1H_PARAMS
+from vnedge.strategy.structure_bos_1h import StructureBos1H
+
+
+@dataclass(frozen=True, slots=True)
+class StructureBos15mParams:
+    break_buffer_bps: float = float(BOS_1H_PARAMS.break_buffer_bps)
+    stop_buffer_bps: float = float(BOS_1H_PARAMS.stop_buffer_bps)
+    atr_stop_mult: float = float(BOS_1H_PARAMS.atr_stop_mult)
+    reward_r: float = float(BOS_1H_PARAMS.cost_edge_reward_r)
+    round_trip_cost_bps: float = CostModel.for_profile("swing").round_trip_bps()
+    min_projected_net_bps: float = 4.0
+    volume_lookback: int = 96
+    volume_mult: float = 1.1
+    min_bars_between_signals: int = 48
+    session_start_hour_utc: int = 12
+    session_end_hour_utc: int = 16
+
+    def __post_init__(self) -> None:
+        if self.volume_lookback < 2 or self.volume_mult <= 0:
+            raise ValueError("volume settings are invalid")
+        if self.reward_r <= 0 or self.atr_stop_mult <= 0:
+            raise ValueError("risk settings are invalid")
+        if not 0 <= self.session_start_hour_utc < self.session_end_hour_utc <= 24:
+            raise ValueError("UTC session settings are invalid")
+
+
+PARAMS: Final = StructureBos15mParams()
+STRATEGY_SPEC = MappingProxyType(
+    {
+        "strategy_id": "structure_bos_15m_trigger_v2",
+        "eligibility": "RESEARCH_ONLY",
+        "capital_eligible": False,
+        "tradeable": False,
+        "timeframe": "15m",
+        "params": PARAMS,
+        "context": "confirmed 1h swings plus fully closed 4h structure",
+    }
+)
+
+
+def _complete_hour_frame(candles: pd.DataFrame) -> pd.DataFrame:
+    ts = pd.to_datetime(candles["timestamp"], utc=True, errors="coerce")
+    work = candles.copy()
+    work["timestamp"] = ts
+    work["hour_open"] = ts.dt.floor("h")
+    work["minute"] = ts.dt.minute
+    numeric = ("open", "high", "low", "close", "volume")
+    for name in numeric:
+        work[name] = pd.to_numeric(work[name], errors="coerce")
+    rows: list[dict[str, object]] = []
+    for hour_open, group in work.groupby("hour_open", sort=True):
+        if set(group["minute"].astype(int)) != {0, 15, 30, 45} or len(group) != 4:
+            continue
+        quality = (
+            group["data_quality"].astype(str).str.lower().eq("ok").all()
+            if "data_quality" in group.columns
+            else True
+        )
+        rows.append(
+            {
+                "timestamp": hour_open,
+                "symbol": str(group.iloc[-1].get("symbol", "BTCUSDT")),
+                "timeframe": "1h",
+                "open": float(group.iloc[0]["open"]),
+                "high": float(group["high"].max()),
+                "low": float(group["low"].min()),
+                "close": float(group.iloc[-1]["close"]),
+                "volume": float(group["volume"].sum()),
+                "quote_volume": float(
+                    pd.to_numeric(
+                        group.get("quote_volume", pd.Series(0.0, index=group.index)),
+                        errors="coerce",
+                    ).fillna(0).sum()
+                ),
+                "trade_count": int(
+                    pd.to_numeric(
+                        group.get("trade_count", pd.Series(0, index=group.index)),
+                        errors="coerce",
+                    ).fillna(0).sum()
+                ),
+                "data_quality": "ok" if quality else "gap",
+                "is_closed": True,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+class StructureBos15mTriggerV2(BaseStrategy):
+    strategy_id = "structure_bos_15m_trigger_v2"
+    eligibility = "RESEARCH_ONLY"
+    timeframe = "15m"
+    params = PARAMS
+    # 50 complete 1h bars plus room for 4h context and one trigger child.
+    warmup_bars = 224
+
+    def __init__(self, funding: pd.DataFrame | None = None) -> None:
+        self.funding = funding
+        self._hourly = StructureBos1H(funding, allow_price_only_live=True)
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        missing = required.difference(candles.columns)
+        if missing:
+            raise ValueError(f"structure BoS 15m missing columns: {sorted(missing)}")
+        out = candles.copy().reset_index(drop=True)
+        ts = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+        if ts.isna().any():
+            raise ValueError("structure BoS 15m requires valid UTC timestamps")
+        out["timestamp"] = ts
+        close = pd.to_numeric(out["close"], errors="coerce")
+        volume = pd.to_numeric(out["volume"], errors="coerce")
+        volume_base = volume.shift(1).rolling(
+            self.params.volume_lookback, min_periods=self.params.volume_lookback
+        ).median()
+
+        hours = _complete_hour_frame(out)
+        context_columns = (
+            "structure_ready",
+            "structure_trend",
+            "last_swing_high",
+            "last_swing_low",
+            "dual_avwap_bias",
+            "bos_atr",
+            "htf_structure_trend",
+            "mtf_reason",
+        )
+        for name in context_columns:
+            out[f"bos15_{name}"] = math.nan if name not in {
+                "structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason"
+            } else "unavailable"
+
+        if not hours.empty:
+            prepared = self._hourly.prepare(hours).copy()
+            prepared["available_at"] = pd.to_datetime(
+                prepared["timestamp"], utc=True
+            ) + pd.Timedelta(hours=1)
+            right = prepared[["available_at", *context_columns]].rename(
+                columns={name: f"bos15_{name}" for name in context_columns}
+            )
+            left = pd.DataFrame(
+                {"_row": out.index, "decision_at": ts + pd.Timedelta(minutes=15)}
+            )
+            merged = pd.merge_asof(
+                left.sort_values("decision_at"),
+                right.sort_values("available_at"),
+                left_on="decision_at",
+                right_on="available_at",
+                direction="backward",
+            ).sort_values("_row")
+            for name in context_columns:
+                out[f"bos15_{name}"] = merged[f"bos15_{name}"].to_numpy()
+
+        p = self.params
+        high_level = pd.to_numeric(out["bos15_last_swing_high"], errors="coerce").mul(
+            1 + p.break_buffer_bps / 10_000
+        )
+        low_level = pd.to_numeric(out["bos15_last_swing_low"], errors="coerce").mul(
+            1 - p.break_buffer_bps / 10_000
+        )
+        previous_close = close.shift(1)
+        volume_ok = volume.ge(volume_base.mul(p.volume_mult))
+        session_ok = ts.dt.hour.ge(p.session_start_hour_utc) & ts.dt.hour.lt(
+            p.session_end_hour_utc
+        )
+        quality_ok = (
+            out["data_quality"].astype(str).str.lower().eq("ok")
+            if "data_quality" in out.columns
+            else pd.Series(True, index=out.index)
+        )
+        trend = out["bos15_structure_trend"].astype(str)
+        htf_trend = out["bos15_htf_structure_trend"].astype(str)
+        bias = out["bos15_dual_avwap_bias"].astype(str)
+        ready = out["bos15_structure_ready"].fillna(False).astype(bool)
+        common = ready & volume_ok & session_ok & quality_ok
+        long_raw = (
+            common
+            & trend.eq("up")
+            & htf_trend.eq("up")
+            & ~bias.eq("strong_short")
+            & previous_close.le(high_level)
+            & close.gt(high_level)
+        )
+        short_raw = (
+            common
+            & trend.eq("down")
+            & htf_trend.eq("down")
+            & ~bias.eq("strong_long")
+            & previous_close.ge(low_level)
+            & close.lt(low_level)
+        )
+        fire_long = [False] * len(out)
+        fire_short = [False] * len(out)
+        last_fire = -(10**9)
+        for index, (is_long, is_short) in enumerate(
+            zip(long_raw.fillna(False), short_raw.fillna(False), strict=True)
+        ):
+            if index - last_fire < p.min_bars_between_signals:
+                continue
+            if is_long:
+                fire_long[index] = True
+                last_fire = index
+            elif is_short:
+                fire_short[index] = True
+                last_fire = index
+        out["bos15_volume_base"] = volume_base
+        out["bos15_volume_ok"] = volume_ok.astype(float)
+        out["bos15_session_ok"] = session_ok.astype(float)
+        out["bos15_fire_long"] = pd.Series(fire_long, index=out.index).astype(float)
+        out["bos15_fire_short"] = pd.Series(fire_short, index=out.index).astype(float)
+        return out
+
+    def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
+        if index < self.warmup_bars or index >= len(df):
+            return None
+        row = df.iloc[index]
+        is_long = float(row["bos15_fire_long"]) > 0
+        is_short = float(row["bos15_fire_short"]) > 0
+        if not (is_long or is_short):
+            return None
+        close = float(row["close"])
+        atr = float(row["bos15_bos_atr"])
+        last_high = float(row["bos15_last_swing_high"])
+        last_low = float(row["bos15_last_swing_low"])
+        if not all(math.isfinite(value) and value > 0 for value in (close, atr, last_high, last_low)):
+            return None
+        side: Literal["long", "short"] = "long" if is_long else "short"
+        if side == "long":
+            swing_stop = last_low * (1 - self.params.stop_buffer_bps / 10_000)
+            stop = max(swing_stop, close - self.params.atr_stop_mult * atr)
+            risk = close - stop
+            target = close + self.params.reward_r * risk
+        else:
+            swing_stop = last_high * (1 + self.params.stop_buffer_bps / 10_000)
+            stop = min(swing_stop, close + self.params.atr_stop_mult * atr)
+            risk = stop - close
+            target = close - self.params.reward_r * risk
+        if risk <= 0 or stop <= 0 or target <= 0:
+            return None
+        projected_net = risk / close * 10_000 * self.params.reward_r - self.params.round_trip_cost_bps
+        if projected_net < self.params.min_projected_net_bps:
+            return None
+        return SignalIntent(
+            side=side,
+            stop_price=stop,
+            take_profit_price=target,
+            reason=(
+                f"structure_bos_15m_trigger_v2 side={side} context=closed_1h_4h "
+                f"confirmation=15m projected_net={projected_net:.1f}bps virtual_only"
+            ),
+        )
+
+
+__all__ = ["PARAMS", "STRATEGY_SPEC", "StructureBos15mParams", "StructureBos15mTriggerV2"]

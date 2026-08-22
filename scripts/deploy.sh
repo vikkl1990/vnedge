@@ -151,7 +151,10 @@ fi
 
 echo "waiting for lanes..."
 LANES_OK=0
-for _ in $(seq 1 60); do
+# A clean volume may spend substantial time in the exact aggTrade prerequisite
+# entrypoint before the HTTP runtime exists. Existing volumes are delta-only
+# and return quickly; retain a bounded one-hour cold-start allowance.
+for _ in $(seq 1 "${DEPLOY_LANE_WAIT_ATTEMPTS:-720}"); do
     # --since DEPLOY_START so we read THIS deploy's container, not a stale
     # container's historical "lanes running" line (that false-positive is how
     # a failed deploy read green on 2026-07-11).

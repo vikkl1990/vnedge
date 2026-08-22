@@ -23,6 +23,7 @@ class SqueezeAcceptanceObserveRunner:
 
     journal: JournalSink
     symbol: str
+    strategy_id: str = "squeeze_expansion_breakout_v3"
     notional_usd: float = 3000.0
     margin_usd: float = 100.0
     approve_fire: FireGuard | None = None
@@ -52,6 +53,14 @@ class SqueezeAcceptanceObserveRunner:
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
 
+    @property
+    def intent_prefix(self) -> str:
+        return (
+            "squeeze_acceptance_v3"
+            if self.strategy_id == "squeeze_expansion_breakout_v3"
+            else self.strategy_id
+        )
+
     def __post_init__(self) -> None:
         if self.costs.cost_model is not None:
             self.exits = ExitEngine(
@@ -71,7 +80,7 @@ class SqueezeAcceptanceObserveRunner:
             payload = record.get("payload", {})
             key = str(payload.get("intent_key") or "")
             if record.get("kind") == "shadow_intent" and key.startswith(
-                "squeeze_acceptance_v3|"
+                f"{self.intent_prefix}|"
             ):
                 self.candidates += 1
                 if payload.get("approved"):
@@ -80,7 +89,7 @@ class SqueezeAcceptanceObserveRunner:
                 else:
                     self.rejected += 1
             elif record.get("kind") == "shadow_outcome" and key.startswith(
-                "squeeze_acceptance_v3|"
+                f"{self.intent_prefix}|"
             ):
                 resolved.add(key)
                 self.outcomes += 1
@@ -225,7 +234,7 @@ class SqueezeAcceptanceObserveRunner:
                     "symbol": self.symbol,
                     "side": fire.side,
                     "notional_usd": self.notional_usd,
-                    "strategy_id": "squeeze_expansion_breakout_v3",
+                    "strategy_id": self.strategy_id,
                     "order_type": "shadow_quote_acceptance",
                 },
                 passed_checks=("quote_acceptance",),
@@ -235,8 +244,8 @@ class SqueezeAcceptanceObserveRunner:
             )
         )
         self.last_approval = approval
-        key = (
-            f"squeeze_acceptance_v3|{self.symbol}|{fire.side}|"
+        key = approval.intent_key or (
+            f"{self.intent_prefix}|{self.symbol}|{fire.side}|"
             f"{int(ts.timestamp() * 1000)}"
         )
         self.journal.append("shadow_intent", {
@@ -295,7 +304,7 @@ class SqueezeAcceptanceObserveRunner:
         self.journal.append(
             "scanner_transition",
             {
-                "strategy_id": "squeeze_expansion_breakout_v3",
+                "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
                 "state": reason,
                 "event_ts": ts.isoformat(),

@@ -39,4 +39,4 @@ RUN echo "$VNEDGE_BUILD_SHA" > /app/BUILD_SHA
 # Safe image default: public-data measurement lanes + read-only dashboard.
 # Compose specifies the same command explicitly. Paper/live runtimes are never
 # an image fallback and require a reviewed, explicit invocation.
-CMD ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
+CMD ["python", "-m", "vnedge.runtime.scanner_startup"]

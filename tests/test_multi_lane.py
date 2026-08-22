@@ -19,9 +19,12 @@ from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
+from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
+from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
 from vnedge.strategy.structure_bos_1h import StructureBos1H
+from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 
 
 def test_default_roster_is_measurement_only_and_has_no_capital_lane():
@@ -177,6 +180,32 @@ def test_squeeze_v3_lane_factory_uses_quote_acceptance_strategy():
     with pytest.raises(ValueError, match="parameters are frozen"):
         _build_single_strategy(
             "squeeze_expansion_breakout_v3", {"arm_grace_bars": 4}, None, None
+        )
+
+
+def test_squeeze_v4_lane_factory_uses_exact_volume_acceptance_strategy():
+    strategy = _build_single_strategy(
+        "squeeze_expansion_breakout_v4", {}, None, None
+    )
+    assert isinstance(strategy, SqueezeExpansionBreakoutV4)
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "squeeze_expansion_breakout_v4", {"exact_vwap_bars": 12}, None, None
+        )
+
+
+def test_15m_scanner_factories_use_new_frozen_registrations():
+    assert isinstance(
+        _build_single_strategy("range_expansion_observer_v3", {}, None, None),
+        RangeExpansionObserverV3,
+    )
+    assert isinstance(
+        _build_single_strategy("structure_bos_15m_trigger_v2", {}, None, None),
+        StructureBos15mTriggerV2,
+    )
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "structure_bos_15m_trigger_v2", {"volume_mult": 1.0}, None, None
         )
 
 

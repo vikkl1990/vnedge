@@ -11,9 +11,12 @@ from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
+from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
+from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
 from vnedge.strategy.structure_bos_1h import StructureBos1H
+from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -27,10 +30,13 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     PanicReversal.strategy_id: PanicReversal,
     RangeExpansionObserver.strategy_id: RangeExpansionObserver,
     RangeExpansionObserverV2.strategy_id: RangeExpansionObserverV2,
+    RangeExpansionObserverV3.strategy_id: RangeExpansionObserverV3,
     FundingSqueezeContinuation.strategy_id: FundingSqueezeContinuation,
     StructureBos1H.strategy_id: StructureBos1H,
+    StructureBos15mTriggerV2.strategy_id: StructureBos15mTriggerV2,
     SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout,
     SqueezeExpansionBreakoutV3.strategy_id: SqueezeExpansionBreakoutV3,
+    SqueezeExpansionBreakoutV4.strategy_id: SqueezeExpansionBreakoutV4,
 }
 
 # Observation and pre-registered candidates are deliberately non-capital even
@@ -41,10 +47,13 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         MeasurementOnly.strategy_id,
         RangeExpansionObserver.strategy_id,
         RangeExpansionObserverV2.strategy_id,
+        RangeExpansionObserverV3.strategy_id,
         StructureBos1H.strategy_id,
+        StructureBos15mTriggerV2.strategy_id,
         FeeWallMomentumObserver.strategy_id,
         SqueezeExpansionBreakout.strategy_id,
         SqueezeExpansionBreakoutV3.strategy_id,
+        SqueezeExpansionBreakoutV4.strategy_id,
     }
 )
 
@@ -64,11 +73,14 @@ CAPITAL_APPROVED: frozenset[str] = frozenset()
 SHADOW_OBSERVE: frozenset[str] = frozenset(
     {
         StructureBos1H.strategy_id,
+        StructureBos15mTriggerV2.strategy_id,
         RangeExpansionObserver.strategy_id,
         RangeExpansionObserverV2.strategy_id,
+        RangeExpansionObserverV3.strategy_id,
         FeeWallMomentumObserver.strategy_id,
         SqueezeExpansionBreakout.strategy_id,
         SqueezeExpansionBreakoutV3.strategy_id,
+        SqueezeExpansionBreakoutV4.strategy_id,
     }
 )
 

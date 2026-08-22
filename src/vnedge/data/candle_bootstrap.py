@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
+from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline, floor_time
 from vnedge.data.parquet_store import sanitize_symbol
 
 _GAPFILL_NAME = re.compile(r"^\d+-gapfill-(\d+)-[0-9a-f]+\.parquet$")
@@ -31,6 +31,7 @@ class BootstrapReport:
     trades: int
     rejected: int
     candles: int
+    skipped_existing_minutes: int = 0
 
 
 def _csv(value: str) -> list[str]:
@@ -88,6 +89,27 @@ def _gapfill_interval(path: Path) -> tuple[int, int] | None:
     return start_ms, int(match.group(1))
 
 
+def _shard_interval(path: Path) -> tuple[int, int] | None:
+    """Return a shard's known half-open coverage interval when available."""
+    gapfill = _gapfill_interval(path)
+    if gapfill is not None:
+        return gapfill
+    day = path.parent.name
+    if len(day) != 8 or not day.isdigit():
+        return None
+    start = datetime.strptime(day, "%Y%m%d").replace(tzinfo=UTC)
+    start_ms = int(start.timestamp() * 1_000)
+    return start_ms, start_ms + 86_400_000
+
+
+def _interval_minutes(start_ms: int, end_ms: int) -> set[int]:
+    first = int(
+        floor_time(datetime.fromtimestamp(start_ms / 1_000, tz=UTC), "1m").timestamp()
+        * 1_000
+    )
+    return set(range(first, end_ms, 60_000))
+
+
 def bootstrap_candles(
     data_root: Path | str,
     candle_root: Path | str,
@@ -100,6 +122,7 @@ def bootstrap_candles(
 ) -> BootstrapReport:
     """Replay recent shards and atomically upsert closed canonical candles."""
     total_shards = total_trades = total_rejected = total_candles = 0
+    total_skipped_existing_minutes = 0
     symbol_count = 0
     store = CandleParquetStore(candle_root, exchange=target_exchange)
     boundary = close_through or datetime.now(UTC)
@@ -107,6 +130,11 @@ def bootstrap_candles(
     for symbol in symbols:
         symbol_count += 1
         canonical = _symbol_key(symbol)
+        existing_minute_ms = {
+            int(candle.open_time.timestamp() * 1_000)
+            for candle in store.read(canonical, "1m")
+        }
+        skipped_minutes: set[int] = set()
         captured: list[Candle] = []
         pipeline = CandlePipeline(canonical, subscribers=(captured.append,))
         shards = trade_shards(data_root, source_exchange, symbol, days=days)
@@ -116,12 +144,29 @@ def bootstrap_candles(
         total_shards += len(shards)
         last_timestamp: int | None = None
         for shard in shards:
+            interval = _shard_interval(shard)
+            if interval is not None:
+                shard_minutes = _interval_minutes(*interval)
+                if shard_minutes.issubset(existing_minute_ms):
+                    # The whole authoritative shard is already canonical. Do
+                    # not scan millions of trades merely to skip each row.
+                    skipped_minutes.update(shard_minutes)
+                    continue
             for ts_ms, price, amount, side in _rows(shard):
                 if _gapfill_interval(shard) is None and any(
                     start_ms <= ts_ms < end_ms for start_ms, end_ms in authoritative_intervals
                 ):
                     # The strict REST recovery is complete for this interval;
                     # ignore the websocket's partial overlap after a restart.
+                    continue
+                minute_ms = int(
+                    floor_time(
+                        datetime.fromtimestamp(ts_ms / 1_000, tz=UTC), "1m"
+                    ).timestamp()
+                    * 1_000
+                )
+                if minute_ms in existing_minute_ms:
+                    skipped_minutes.add(minute_ms)
                     continue
                 if last_timestamp is not None and ts_ms < last_timestamp:
                     total_rejected += 1
@@ -144,6 +189,11 @@ def bootstrap_candles(
         if captured:
             store.upsert(captured)
             total_candles += len(captured)
+        # Re-run the store-backed parent repair even when no trades were
+        # replayed.  This fills only missing complete 5m/15m/1h/4h parents
+        # from the now-authoritative 1m base and never rebuilds existing rows.
+        CandlePipeline(canonical, store=store)
+        total_skipped_existing_minutes += len(skipped_minutes)
 
     return BootstrapReport(
         symbols=symbol_count,
@@ -151,6 +201,7 @@ def bootstrap_candles(
         trades=total_trades,
         rejected=total_rejected,
         candles=total_candles,
+        skipped_existing_minutes=total_skipped_existing_minutes,
     )
 
 
@@ -183,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         "canonical candle bootstrap: "
         f"{report.symbols} symbols, {report.shards} shards, "
         f"{report.trades} trades, {report.candles} candles, "
-        f"{report.rejected} rejected"
+        f"{report.rejected} rejected, "
+        f"{report.skipped_existing_minutes} existing minutes skipped"
     )
     return 1 if report.rejected else 0
 

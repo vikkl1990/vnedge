@@ -34,6 +34,7 @@ from ccxt.base.errors import NetworkError, NotSupported
 
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.dashboard.health_bands import annotate
+from vnedge.data.candles import CandleParquetStore
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.data_quality_gate import validate_candles
 from vnedge.data.gaps import GapParquetStore
@@ -66,10 +67,13 @@ from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
+from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
+from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
 from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.structure_bos_1h import StructureBos1H
+from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -598,6 +602,13 @@ def _build_single_strategy(
                 "structure_bos_1h parameters are frozen; configure a new strategy ID"
             )
         return StructureBos1H(seed_funding, allow_price_only_live=True)
+    if strategy_id == StructureBos15mTriggerV2.strategy_id:
+        if params:
+            raise ValueError(
+                "structure_bos_15m_trigger_v2 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return StructureBos15mTriggerV2(seed_funding)
     if strategy_id == FeeWallMomentumObserver.strategy_id:
         if params:
             raise ValueError(
@@ -619,6 +630,13 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return SqueezeExpansionBreakoutV3(seed_funding)
+    if strategy_id == SqueezeExpansionBreakoutV4.strategy_id:
+        if params:
+            raise ValueError(
+                "squeeze_expansion_breakout_v4 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return SqueezeExpansionBreakoutV4(seed_funding)
     if strategy_id == RangeExpansionObserver.strategy_id:
         if params:
             raise ValueError(
@@ -633,6 +651,13 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return RangeExpansionObserverV2(seed_funding)
+    if strategy_id == RangeExpansionObserverV3.strategy_id:
+        if params:
+            raise ValueError(
+                "range_expansion_observer_v3 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return RangeExpansionObserverV3(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -818,6 +843,74 @@ _TF_MS = {
 _CANDLE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
 
+def _canonical_candle_frame(
+    store: CandleParquetStore,
+    symbol: str,
+    timeframe: str,
+    *,
+    since_ms: int,
+    until_ms: int,
+) -> pd.DataFrame:
+    """Read the exact-volume lake slice used to enrich scanner warm-up.
+
+    A partial lake is still useful: prices remain sourced from the validated
+    CCXT seed outside its coverage, while exact fields are populated only on
+    matching canonical rows. Strict scanners can then fail closed until their
+    own exact-data window is complete instead of treating a missing field as 0.
+    """
+    candles = [
+        candle
+        for candle in store.read(symbol, timeframe)
+        if since_ms <= int(candle.open_time.timestamp() * 1000) < until_ms
+    ]
+    if not candles:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [candle.open_time for candle in candles], utc=True
+            ),
+            "open": [float(candle.open) for candle in candles],
+            "high": [float(candle.high) for candle in candles],
+            "low": [float(candle.low) for candle in candles],
+            "close": [float(candle.close) for candle in candles],
+            "volume": [float(candle.volume) for candle in candles],
+            "quote_volume": [float(candle.quote_volume) for candle in candles],
+            "trade_count": [candle.trade_count for candle in candles],
+            "taker_buy_volume": [float(candle.taker_buy_volume) for candle in candles],
+            "vwap": [
+                float(candle.vwap) if candle.vwap is not None else float("nan")
+                for candle in candles
+            ],
+            "data_quality": "ok",
+            "is_closed": True,
+            "timeframe": timeframe,
+            "symbol": symbol,
+            "candle_source": "canonical_tick_lake",
+        }
+    )
+
+
+def _overlay_canonical_history(
+    history: pd.DataFrame,
+    canonical: pd.DataFrame,
+) -> pd.DataFrame:
+    if canonical.empty:
+        out = history.copy()
+        out["candle_source"] = "exchange_ohlcv"
+        return out
+    out = history.copy().set_index("timestamp")
+    exact = canonical.copy().set_index("timestamp")
+    for name in exact.columns:
+        if name not in out:
+            out[name] = pd.NA
+        overlap = out.index.intersection(exact.index)
+        if len(overlap):
+            out.loc[overlap, name] = exact.loc[overlap, name]
+    out["candle_source"] = out["candle_source"].fillna("exchange_ohlcv")
+    return out.reset_index().sort_values("timestamp").reset_index(drop=True)
+
+
 def _timeframe_ms(timeframe: str) -> int:
     return _TF_MS.get(str(timeframe).strip(), 3_600_000)  # default 1h
 
@@ -836,9 +929,12 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     FeeWallMomentumObserver.strategy_id: FeeWallMomentumObserver.warmup_bars,
     SqueezeExpansionBreakout.strategy_id: SqueezeExpansionBreakout.warmup_bars,
     SqueezeExpansionBreakoutV3.strategy_id: SqueezeExpansionBreakoutV3.warmup_bars,
+    SqueezeExpansionBreakoutV4.strategy_id: SqueezeExpansionBreakoutV4.warmup_bars,
     RangeExpansionObserver.strategy_id: RangeExpansionObserver.warmup_bars,
     RangeExpansionObserverV2.strategy_id: RangeExpansionObserverV2.warmup_bars,
+    RangeExpansionObserverV3.strategy_id: RangeExpansionObserverV3.warmup_bars,
     StructureBos1H.strategy_id: StructureBos1H.warmup_bars,
+    StructureBos15mTriggerV2.strategy_id: StructureBos15mTriggerV2.warmup_bars,
 }
 
 
@@ -1055,11 +1151,31 @@ async def build_lane(
     last_closed_boundary = (until // tf_ms) * tf_ms
     since = last_closed_boundary - warmup_bars * tf_ms
     cache_path = journal_dir / f"{spec.lane_id}.candles.parquet"
+    canonical_store = CandleParquetStore(
+        Path(os.environ.get("VNEDGE_CANDLE_ROOT", "data/candles")),
+        exchange=spec.exchange,
+    )
     funding_history_unsupported = False
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
         # the gap since the last run; degrades to a full fetch on any cache miss.
         history = await _warmup_candles(rest, spec, cache_path, since, until)
+        try:
+            canonical_history = await asyncio.to_thread(
+                _canonical_candle_frame,
+                canonical_store,
+                spec.symbol,
+                spec.timeframe,
+                since_ms=since,
+                until_ms=until,
+            )
+        except (OSError, ValueError):
+            logger.exception(
+                "lane %s canonical warm-up overlay unavailable; exact fields remain missing",
+                spec.lane_id,
+            )
+            canonical_history = pd.DataFrame()
+        history = _overlay_canonical_history(history, canonical_history)
         strategy_requirement = _strategy_warmup_requirement(spec)
         if len(history) <= strategy_requirement:
             raise RuntimeError(
@@ -1137,6 +1253,7 @@ async def build_lane(
             Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
         ),
         shadow_portfolio=shadow_portfolio,
+        canonical_candle_store=canonical_store,
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,

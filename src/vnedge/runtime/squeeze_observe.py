@@ -42,6 +42,7 @@ class ScannerApproval:
     explanation: str = ""
     notional_usd: float = 0.0
     margin_usd: float = 0.0
+    intent_key: str = ""
 
 
 FireGuard = Callable[[FireDecision, int, datetime], ScannerApproval]
@@ -233,7 +234,10 @@ class SqueezeObserveRunner:
             )
         )
         self.last_approval = approval
-        key = f"squeeze_observe|{self.symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
+        key = approval.intent_key or (
+            f"squeeze_observe|{self.symbol}|{fire.side}|"
+            f"{int(bar_ts.timestamp() * 1000)}"
+        )
         self.journal.append("shadow_intent", {
             "intent_key": key,
             "approved": approval.approved,

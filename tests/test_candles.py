@@ -220,6 +220,17 @@ def test_pipeline_restart_repairs_higher_bars_from_persisted_base(tmp_path) -> N
     assert hours[0].trade_count == 60
 
 
+def test_store_reads_exact_canonical_bar_from_its_partition(tmp_path) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    expected = candle_at(0)
+    store.upsert((expected,))
+
+    assert store.read_at(expected.symbol, "1h", expected.open_time) == expected
+    assert store.read_at(
+        expected.symbol, "1h", expected.open_time + timedelta(hours=1)
+    ) is None
+
+
 def test_pipeline_restart_repairs_interior_holes_without_filling_source_gap(tmp_path) -> None:
     trades = [
         Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"))

@@ -12,12 +12,13 @@ def test_container_default_and_compose_are_measurement_only() -> None:
     final_cmd = next(
         line for line in reversed(dockerfile.splitlines()) if line.startswith("CMD ")
     )
-    assert "vnedge.runtime.multi_lane_shadow" in final_cmd
+    assert "vnedge.runtime.scanner_startup" in final_cmd
     assert "paper_trial" not in final_cmd
 
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     service = compose["services"]["multi-lane-shadow"]
-    assert service["command"] == ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
+    assert service["command"] == ["python", "-m", "vnedge.runtime.scanner_startup"]
+    assert "scanner-prereq-backfill" not in compose["services"]
     environment = service["environment"]
     assert environment["MULTI_LANE_CAPITAL_ENABLED"].endswith(":-0}")
     assert environment["MULTI_LANE_CAPITAL_STRATEGY"].endswith(":-}")

@@ -262,3 +262,160 @@ def test_closed_tail_is_materialized_and_recovered_after_restart(tmp_path) -> No
     assert len(gaps) == 1
     assert gaps[0].recovered is True
     assert "closed canonical tail missing" in gaps[0].detail
+
+
+def test_scanner_tail_can_recover_at_closed_five_minute_boundary(tmp_path) -> None:
+    candle_store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    candle_store.upsert(
+        (
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="5m",
+                open_time=START,
+                close_time=START + timedelta(minutes=5),
+                open=Decimal(100),
+                high=Decimal(101),
+                low=Decimal(99),
+                close=Decimal(100),
+                volume=Decimal(1),
+                quote_volume=Decimal(100),
+                trade_count=1,
+            ),
+        )
+    )
+
+    class FiveMinuteTailFetcher:
+        def fetch(self, symbol, start, end):
+            assert symbol == "BTCUSDT"
+            assert start == START + timedelta(minutes=5)
+            assert end == START + timedelta(minutes=10)
+            start_ms = int(start.timestamp() * 1_000)
+            frame = pd.DataFrame(
+                [
+                    {
+                        "ts_ms": start_ms + minute * 60_000,
+                        "price": 101.0 + minute / 100,
+                        "amount": 1.0,
+                        "side": "buy",
+                    }
+                    for minute in range(5)
+                ]
+            )
+            return FetchedTape(
+                symbol="BTCUSDT",
+                start=start,
+                end=end,
+                frame=frame,
+                first_agg_id=100,
+                last_agg_id=104,
+                requests=1,
+                sha256="five-minute-tail",
+            )
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=FiveMinuteTailFetcher(),
+        recover_closed_tail=True,
+        tail_timeframe="5m",
+        now=START + timedelta(minutes=12),
+    )
+
+    assert len(report.recovered) == 1
+    repaired = candle_store.read("BTCUSDT", "5m")
+    assert [candle.open_time for candle in repaired] == [
+        START,
+        START + timedelta(minutes=5),
+    ]
+    gap = GapParquetStore(tmp_path / "gaps").read("binanceusdm", "BTCUSDT")[0]
+    assert gap.recovered is True
+    assert "coverage_timeframe=5m" in gap.detail
+
+
+def test_long_gap_recovery_commits_each_hour_and_resumes_delta(tmp_path) -> None:
+    gap_store = GapParquetStore(tmp_path / "gaps")
+    gap_store.upsert(
+        (
+            GapRecord(
+                symbol="BTCUSDT",
+                exchange="binanceusdm",
+                kind=GapKind.STORAGE_HOLE,
+                start=START,
+                end=START + timedelta(hours=2),
+                detected_at=START + timedelta(hours=3),
+                detail="coverage_timeframe=1h",
+            ),
+        )
+    )
+
+    def tape(start, end, first_id):
+        start_ms = int(start.timestamp() * 1_000)
+        frame = pd.DataFrame(
+            [
+                {
+                    "ts_ms": start_ms + minute * 60_000,
+                    "price": 100.0 + minute / 100,
+                    "amount": 1.0,
+                    "side": "buy",
+                }
+                for minute in range(60)
+            ]
+        )
+        return FetchedTape(
+            symbol="BTCUSDT",
+            start=start,
+            end=end,
+            frame=frame,
+            first_agg_id=first_id,
+            last_agg_id=first_id + 59,
+            requests=1,
+            sha256=f"proof-{first_id}",
+        )
+
+    class InterruptedAfterFirstHour:
+        calls = 0
+
+        def fetch(self, symbol, start, end):
+            assert symbol == "BTCUSDT"
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("simulated restart")
+            return tape(start, end, 100)
+
+    with pytest.raises(RuntimeError, match="simulated restart"):
+        recover_storage_gaps(
+            data_root=tmp_path,
+            candle_root=tmp_path / "candles",
+            gap_root=tmp_path / "gaps",
+            exchange="binanceusdm",
+            symbols=["BTCUSDT"],
+            fetcher=InterruptedAfterFirstHour(),
+        )
+
+    stored = CandleParquetStore(
+        tmp_path / "candles", exchange="binanceusdm"
+    ).read("BTCUSDT", "1h")
+    assert [candle.open_time for candle in stored] == [START]
+
+    class ResumeSecondHourOnly:
+        def fetch(self, symbol, start, end):
+            assert symbol == "BTCUSDT"
+            assert start == START + timedelta(hours=1)
+            assert end == START + timedelta(hours=2)
+            return tape(start, end, 200)
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=ResumeSecondHourOnly(),
+    )
+
+    assert len(report.recovered) == 1
+    assert report.recovered[0].start == (START + timedelta(hours=1)).isoformat()
+    assert gap_store.read("binanceusdm", "BTCUSDT")[0].recovered is True

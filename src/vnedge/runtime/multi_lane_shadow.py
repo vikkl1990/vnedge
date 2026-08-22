@@ -156,11 +156,14 @@ def _nonnegative_float(environ: Mapping[str, str], name: str, default: str) -> f
 def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
     required = {
         "structure_bos_1h": "1h",
+        "structure_bos_15m_trigger_v2": "15m",
         "range_expansion_observer_v1": "1h",
         "range_expansion_observer_v2": "1h",
+        "range_expansion_observer_v3": "15m",
         "fee_wall_momentum_observer_v1": "5m",
         "squeeze_expansion_breakout_v2": "5m",
         "squeeze_expansion_breakout_v3": "5m",
+        "squeeze_expansion_breakout_v4": "5m",
     }.get(strategy_id)
     if required is not None and timeframe != required:
         raise ValueError(

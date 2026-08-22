@@ -1,0 +1,107 @@
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.scanner_prereq import scanner_prerequisites
+
+
+def _candles(symbol: str, timeframe: str, count: int, close: datetime) -> list[Candle]:
+    step = timedelta(minutes=5 if timeframe == "5m" else 15)
+    if timeframe == "1h":
+        step = timedelta(hours=1)
+    elif timeframe == "4h":
+        step = timedelta(hours=4)
+    start = close - count * step
+    return [
+        Candle(
+            symbol=symbol,
+            timeframe=timeframe,
+            open_time=start + index * step,
+            close_time=start + (index + 1) * step,
+            open=Decimal(100),
+            high=Decimal(101),
+            low=Decimal(99),
+            close=Decimal(100),
+            volume=Decimal(2),
+            quote_volume=Decimal(200),
+            trade_count=2,
+            taker_buy_volume=Decimal(1),
+            vwap=Decimal(100),
+        )
+        for index in range(count)
+    ]
+
+
+def test_scanner_prerequisites_require_complete_exact_ladder(tmp_path):
+    now = datetime(2026, 8, 22, 12, 3, tzinfo=UTC)
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    requirements = {"5m": 3, "15m": 2, "1h": 2, "4h": 2}
+    close = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+    for timeframe, count in requirements.items():
+        store.upsert(_candles("BTCUSDT", timeframe, count, close))
+
+    report = scanner_prerequisites(
+        tmp_path,
+        exchange="binanceusdm",
+        symbols=["BTC/USDT:USDT"],
+        requirements=requirements,
+        now=now,
+    )
+
+    assert report.ready is True
+    assert {row.reason for row in report.rows} == {"ok"}
+
+
+def test_scanner_prerequisites_fail_closed_on_stale_or_inexact_tail(tmp_path):
+    now = datetime(2026, 8, 22, 12, 3, tzinfo=UTC)
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    stale = _candles(
+        "BTCUSDT", "5m", 3, datetime(2026, 8, 22, 11, 55, tzinfo=UTC)
+    )
+    store.upsert(stale)
+
+    report = scanner_prerequisites(
+        tmp_path,
+        exchange="binanceusdm",
+        symbols=["BTC/USDT:USDT"],
+        requirements={"5m": 3},
+        now=now,
+    )
+
+    assert report.ready is False
+    assert report.rows[0].reason == "stale_tail"
+
+
+def test_scanner_prerequisites_fail_closed_on_non_exact_volume(tmp_path):
+    now = datetime(2026, 8, 22, 12, 3, tzinfo=UTC)
+    candles = _candles(
+        "BTCUSDT", "5m", 3, datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+    )
+    invalid = candles[-1]
+    candles[-1] = Candle(
+        symbol=invalid.symbol,
+        timeframe=invalid.timeframe,
+        open_time=invalid.open_time,
+        close_time=invalid.close_time,
+        open=invalid.open,
+        high=invalid.high,
+        low=invalid.low,
+        close=invalid.close,
+        volume=invalid.volume,
+        quote_volume=Decimal(0),
+        trade_count=invalid.trade_count,
+        taker_buy_volume=invalid.taker_buy_volume,
+        vwap=None,
+    )
+    CandleParquetStore(tmp_path, exchange="binanceusdm").upsert(candles)
+
+    report = scanner_prerequisites(
+        tmp_path,
+        exchange="binanceusdm",
+        symbols=["BTC/USDT:USDT"],
+        requirements={"5m": 3},
+        now=now,
+    )
+
+    assert report.ready is False
+    assert report.rows[0].reason == "non_exact_volume"

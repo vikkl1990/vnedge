@@ -35,6 +35,21 @@ docker compose ps
 docker compose logs -f multi-lane-shadow
 ```
 
+`multi-lane-shadow` starts through `vnedge.runtime.scanner_startup`. On every
+container start—including Docker daemon and host restarts—it downloads at least nine
+complete Binance Vision aggTrade days for BTC/ETH, deterministically rebuilds
+the canonical 1m→4h ladder, and fills the unpublished closed 5m tail from
+the recent aggregate-trade API. Existing archive days and canonical minutes
+are skipped, so ordinary restarts fetch only the missing delta. A failed
+continuity proof prevents the lane runtime from starting; the container's
+restart policy retries the complete fail-closed entrypoint. It never falls
+back to exchange OHLCV as exact VWAP history.
+
+The final proof is persisted at
+`data/reports/scanner_prerequisites.json`. It verifies current contiguous
+exact-volume 5m/15m/1h/4h tails for BTC and ETH. Treat a non-zero prerequisite
+exit as a real data-integrity failure; do not bypass the dependency.
+
 The default services build SHADOW measurement lanes, record public trades for
 the canonical Pulse candle lake, and expose the dashboard. They do not submit
 venue orders.
@@ -137,16 +152,16 @@ This journals virtual crossing intents and their frozen SL/TP outcomes. It does
 not place paper or live orders; `/state.runtime_control` must continue to show
 `paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
 
-To run the v3 quote-acceptance candidate instead, change only the strategy id:
+To run the current exact-volume quote-acceptance candidate instead, change only
+the strategy id:
 
 ```dotenv
-MULTI_LANE_SHADOW_OBSERVE_STRATEGY=squeeze_expansion_breakout_v3
+MULTI_LANE_SHADOW_OBSERVE_STRATEGY=squeeze_expansion_breakout_v4
 ```
 
-V3 is still `RESEARCH_ONLY`. It journals current bid/ask acceptance and virtual
+V4 is still `RESEARCH_ONLY`. It journals current bid/ask acceptance and virtual
 outcomes, but does not create an `OrderIntent`. Its exploratory 1-minute proxy
-replay is available as `python -m research.squeeze_acceptance_replay`; that
-proxy is not tick-parity or promotion evidence.
+replay remains V3 evidence and is not V4 tick-parity or promotion evidence.
 
 ## Dashboard access
 

@@ -2,10 +2,12 @@
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pandas as pd
 import pytest
 
+from vnedge.data.candles import Candle
 from vnedge.data.gaps import GapKind, GapParquetStore
 from vnedge.data.schemas import normalize_candles
 from vnedge.exchange.live_feed import QuoteUpdate
@@ -1465,3 +1467,90 @@ async def test_append_replaces_partial_seam_bar(tmp_path):
     # a forward bar appends
     assert session._append_candle([last_ts_ms + _HR_MS, 100.0, 101.0, 99.0, 100.0, 5.0]) is True
     assert len(session.candles) == 4
+
+
+def test_next_close_reconciles_recent_exchange_row_from_canonical_lake(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(3)
+    session.candles["timestamp"] = pd.date_range(
+        end="2026-08-22 12:00", periods=3, freq="h", tz="UTC"
+    )
+    session.candles["candle_source"] = "exchange_ohlcv"
+    opened = pd.Timestamp(session.candles["timestamp"].iloc[-1]).to_pydatetime()
+    canonical = Candle(
+        symbol=SYM,
+        timeframe=session.config.timeframe,
+        open_time=opened,
+        close_time=opened + timedelta(hours=1),
+        open=Decimal(100),
+        high=Decimal(106),
+        low=Decimal(94),
+        close=Decimal(104),
+        volume=Decimal(25),
+        quote_volume=Decimal(2550),
+        trade_count=42,
+        taker_buy_volume=Decimal(12),
+        vwap=Decimal(102),
+    )
+
+    class _LateStore:
+        def read_at(self, symbol, timeframe, open_time):
+            del symbol, timeframe
+            return canonical if open_time == opened else None
+
+    session.canonical_candle_store = _LateStore()
+    next_ts = int((pd.Timestamp(opened) + pd.Timedelta(hours=1)).timestamp() * 1000)
+
+    assert session._append_candle([next_ts, 104, 105, 103, 104.5, 5])
+    repaired = session.candles.iloc[-2]
+    assert repaired["candle_source"] == "canonical_tick_lake"
+    assert repaired["quote_volume"] == pytest.approx(2550)
+    assert repaired["trade_count"] == 42
+
+
+def test_next_close_bulk_reconciles_full_missing_canonical_warmup(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(6)
+    session.candles["timestamp"] = pd.date_range(
+        end="2026-08-22 12:00", periods=6, freq="h", tz="UTC"
+    )
+    session.candles["candle_source"] = "exchange_ohlcv"
+    canonical = []
+    for row in session.candles.iloc[:5].itertuples():
+        opened = pd.Timestamp(row.timestamp).to_pydatetime()
+        canonical.append(
+            Candle(
+                symbol=SYM,
+                timeframe=session.config.timeframe,
+                open_time=opened,
+                close_time=opened + timedelta(hours=1),
+                open=Decimal(100),
+                high=Decimal(101),
+                low=Decimal(99),
+                close=Decimal(100),
+                volume=Decimal(2),
+                quote_volume=Decimal(200),
+                trade_count=2,
+                vwap=Decimal(100),
+            )
+        )
+
+    class _BulkStore:
+        def read(self, symbol, timeframe):
+            assert symbol == SYM
+            assert timeframe == session.config.timeframe
+            return canonical
+
+        def read_at(self, symbol, timeframe, open_time):
+            del symbol, timeframe, open_time
+
+    session.canonical_candle_store = _BulkStore()
+    next_ts = int(
+        (pd.Timestamp(session.candles["timestamp"].iloc[-1]) + pd.Timedelta(hours=1))
+        .timestamp()
+        * 1000
+    )
+    assert session._append_candle([next_ts, 100, 101, 99, 100, 1])
+    repaired = session.candles.iloc[:5]
+    assert repaired["candle_source"].eq("canonical_tick_lake").all()
+    assert repaired["trade_count"].eq(2).all()

@@ -37,6 +37,7 @@ from pathlib import Path
 import pandas as pd
 
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
+from vnedge.data.candles import CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.time_machine import TimeMachine
 from vnedge.execution.idempotency import make_intent_key
@@ -190,6 +191,7 @@ class LivePaperSession:
         latency_store=None,  # optional LaneLatencyStore — resume p95 samples
         gap_store: GapParquetStore | None = None,
         shadow_portfolio: ShadowPortfolioGate | None = None,
+        canonical_candle_store: CandleParquetStore | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -221,6 +223,7 @@ class LivePaperSession:
         self.latency_store = latency_store
         self.gap_store = gap_store
         self.shadow_portfolio = shadow_portfolio
+        self.canonical_candle_store = canonical_candle_store
         # when this lane last fired a LIVE signal — lets the dashboard show
         # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
         self.last_fired_ts: str | None = None
@@ -295,13 +298,17 @@ class LivePaperSession:
                 SqueezeAcceptanceObserveRunner(
                     journal=journal,
                     symbol=config.symbol,
+                    strategy_id=strategy.strategy_id,
                     approve_fire=self._approve_scanner_fire,
                     costs=SessionCosts.from_profile(
                         self.cost_profile,
                         bar_minutes=(self._tf_seconds or 300) / 60.0,
                     ),
                 )
-                if strategy.strategy_id == "squeeze_expansion_breakout_v3"
+                if strategy.strategy_id in {
+                    "squeeze_expansion_breakout_v3",
+                    "squeeze_expansion_breakout_v4",
+                }
                 else SqueezeObserveRunner(
                 journal=journal,
                 symbol=config.symbol,
@@ -317,6 +324,7 @@ class LivePaperSession:
                 and strategy.strategy_id in {
                     "squeeze_expansion_breakout_v2",
                     "squeeze_expansion_breakout_v3",
+                    "squeeze_expansion_breakout_v4",
                 }
             )
             else None
@@ -420,12 +428,53 @@ class LivePaperSession:
         close and keeps a partial bar out of the indicator windows); a strictly
         older timestamp is dropped as non-forward (replay)."""
         ts = pd.to_datetime(raw_row[0], unit="ms", utc=True)
-        row = {
+        self._refresh_canonical_tail()
+        row: dict[str, object] = {
             "timestamp": ts,
             "open": float(raw_row[1]), "high": float(raw_row[2]),
             "low": float(raw_row[3]), "close": float(raw_row[4]),
             "volume": float(raw_row[5]),
         }
+        if self.canonical_candle_store is not None:
+            try:
+                canonical = self.canonical_candle_store.read_at(
+                    self.config.symbol,
+                    self.config.timeframe,
+                    ts.to_pydatetime(),
+                )
+            except (OSError, ValueError):
+                canonical = None
+            if canonical is not None:
+                # The lake is authoritative for both prices and volume. A CCXT
+                # close is only the low-latency notification that the bucket is
+                # ready; it must not create a parallel candle truth.
+                row.update(
+                    {
+                        "open": float(canonical.open),
+                        "high": float(canonical.high),
+                        "low": float(canonical.low),
+                        "close": float(canonical.close),
+                        "volume": float(canonical.volume),
+                        "quote_volume": float(canonical.quote_volume),
+                        "trade_count": canonical.trade_count,
+                        "taker_buy_volume": float(canonical.taker_buy_volume),
+                        "vwap": (
+                            float(canonical.vwap)
+                            if canonical.vwap is not None
+                            else float("nan")
+                        ),
+                        "data_quality": "ok",
+                        "is_closed": True,
+                        "timeframe": self.config.timeframe,
+                        "symbol": self.config.symbol,
+                        "candle_source": "canonical_tick_lake",
+                    }
+                )
+            else:
+                # Never synthesize exact-volume fields from close*volume. Their
+                # absence is a decision input: strict scanners fail closed and
+                # price-only observers remain explicitly labelled as such.
+                row["candle_source"] = "exchange_ohlcv"
         if len(self.candles):
             last_ts = self.candles["timestamp"].iloc[-1]
             if ts == last_ts:
@@ -441,6 +490,82 @@ class LivePaperSession:
             [self.candles, pd.DataFrame([row])], ignore_index=True
         )
         return True
+
+    def _refresh_canonical_tail(self) -> None:
+        """Repair every exchange-only row that now exists in the tick lake.
+
+        The exchange OHLCV close and canonical recorder run concurrently.  A
+        close notification can therefore arrive just before its trade-derived
+        candle is durable.  V4 consumes only prior exact rows, so reconciling a
+        missing rows on the next close removes that race without delaying the
+        live notification path.  This is deliberately delta-only: canonical
+        rows already reconciled in memory are never revisited.
+        """
+        if self.canonical_candle_store is None or self.candles.empty:
+            return
+        source = self.candles.get("candle_source")
+        if source is None:
+            candidates = self.candles.index
+        else:
+            candidates = self.candles.index[
+                source.fillna("exchange_ohlcv").eq("exchange_ohlcv")
+            ]
+        if len(candidates) == 0:
+            return
+
+        # Real stores expose a bulk read.  One indexed map is dramatically
+        # cheaper than opening the same daily Parquet partition once for each
+        # of a strategy's 2,000 warm-up rows.  Tiny test/fake stores may keep
+        # the single-row contract and fall back below.
+        read_all = getattr(self.canonical_candle_store, "read", None)
+        canonical_by_open: dict[pd.Timestamp, object] = {}
+        if callable(read_all):
+            try:
+                canonical_by_open = {
+                    pd.Timestamp(candle.open_time): candle
+                    for candle in read_all(
+                        self.config.symbol,
+                        self.config.timeframe,
+                    )
+                }
+            except (OSError, ValueError):
+                canonical_by_open = {}
+        for index in candidates:
+            opened = pd.Timestamp(self.candles.at[index, "timestamp"])
+            canonical = canonical_by_open.get(opened)
+            if canonical is None and not callable(read_all):
+                try:
+                    canonical = self.canonical_candle_store.read_at(
+                        self.config.symbol,
+                        self.config.timeframe,
+                        opened.to_pydatetime(),
+                    )
+                except (OSError, ValueError):
+                    continue
+            if canonical is None:
+                continue
+            values: dict[str, object] = {
+                "open": float(canonical.open),
+                "high": float(canonical.high),
+                "low": float(canonical.low),
+                "close": float(canonical.close),
+                "volume": float(canonical.volume),
+                "quote_volume": float(canonical.quote_volume),
+                "trade_count": canonical.trade_count,
+                "taker_buy_volume": float(canonical.taker_buy_volume),
+                "vwap": (
+                    float(canonical.vwap)
+                    if canonical.vwap is not None
+                    else float("nan")
+                ),
+                "data_quality": "ok",
+                "is_closed": True,
+                "timeframe": self.config.timeframe,
+                "symbol": self.config.symbol,
+                "candle_source": "canonical_tick_lake",
+            }
+            for name, value in values.items():
+                self.candles.at[index, name] = value
 
     # --- Feed-continuity guard (gap + stall → heal or fail closed) ----------------
     def _candle_gap_bars(self, incoming_ms: int) -> int:
@@ -1201,13 +1326,17 @@ class LivePaperSession:
             decision_bar_ts,
         )
         if self.config.mode is RunnerMode.SHADOW:
-            if self.shadow_portfolio is not None:
+            decision = self.gateway.evaluate(
+                intent, self.tracker.account_state(), self._market_state(), now=now
+            )
+            if decision.approved and self.shadow_portfolio is not None:
                 shared = self.shadow_portfolio.evaluate_entry(
                     lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
                     symbol=self.config.symbol,
                     side=sig.side,
                     margin_usd=Decimal(str(intent.notional_usd / intent.leverage)),
                     now=now,
+                    intent_key=key,
                 )
                 if not shared.allowed:
                     self.shadow_rejected += 1
@@ -1223,9 +1352,6 @@ class LivePaperSession:
                         "shadow_portfolio_rejected", self.last_reject_reason, now
                     )
                     return
-            decision = self.gateway.evaluate(
-                intent, self.tracker.account_state(), self._market_state(), now=now
-            )
             self.journal.append("shadow_intent", {
                 "intent_key": key,
                 "approved": decision.approved,
@@ -1402,6 +1528,15 @@ class LivePaperSession:
             self._market_state(),
             now=datetime.now(UTC),
         )
+        key_prefix = {
+            "squeeze_expansion_breakout_v2": "squeeze_observe",
+            "squeeze_expansion_breakout_v3": "squeeze_acceptance_v3",
+            "squeeze_expansion_breakout_v4": "squeeze_expansion_breakout_v4",
+        }.get(self.strategy.strategy_id, self.strategy.strategy_id)
+        intent_key = (
+            f"{key_prefix}|{self.config.symbol}|{fire.side}|"
+            f"{int(bar_ts.timestamp() * 1000)}"
+        )
         if decision.approved and self.shadow_portfolio is not None:
             shared = self.shadow_portfolio.evaluate_entry(
                 lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
@@ -1409,6 +1544,7 @@ class LivePaperSession:
                 side=fire.side,
                 margin_usd=Decimal(str(intent.notional_usd / leverage)),
                 now=bar_ts,
+                intent_key=intent_key,
             )
             if not shared.allowed:
                 return ScannerApproval(
@@ -1419,6 +1555,7 @@ class LivePaperSession:
                     explanation=shared.reason,
                     notional_usd=intent.notional_usd,
                     margin_usd=intent.notional_usd / leverage,
+                    intent_key=intent_key,
                 )
         return ScannerApproval(
             approved=decision.approved,
@@ -1428,6 +1565,7 @@ class LivePaperSession:
             explanation=decision.explanation,
             notional_usd=intent.notional_usd,
             margin_usd=intent.notional_usd / leverage,
+            intent_key=intent_key,
         )
 
     async def _manage_pending_entry(self, now: datetime) -> None:

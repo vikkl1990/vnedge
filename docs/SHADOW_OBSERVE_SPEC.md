@@ -8,10 +8,9 @@ or live permission.
 
 - `CAPITAL_APPROVED` remains the only strategy capital allowlist and is empty.
 - `RESEARCH_ONLY` strategies cannot take capital.
-- `SHADOW_OBSERVE` is a separate explicit allowlist; it currently contains
-  `structure_bos_1h`, `fee_wall_momentum_observer_v1`,
-  `squeeze_expansion_breakout_v2`, `squeeze_expansion_breakout_v3`, and
-  `range_expansion_observer_v1`.
+- `SHADOW_OBSERVE` is a separate explicit allowlist. It retains the frozen
+  historical scanner IDs and adds `squeeze_expansion_breakout_v4`,
+  `range_expansion_observer_v3`, and `structure_bos_15m_trigger_v2`.
 - `KILLED` strategies cannot be observed or capital-enabled.
 - The multi-lane process contains no live execution adapter. Its observe lane
   uses `RunnerMode.SHADOW`, `SimulatedExchange`, the risk gateway, the decision
@@ -52,7 +51,9 @@ The feature is off unless either the legacy singleton pair
 configuration contracts cannot be mixed. For
 `structure_bos_1h`, the timeframe must be `1h`; for
 `fee_wall_momentum_observer_v1`, `squeeze_expansion_breakout_v2`, and
-`squeeze_expansion_breakout_v3`, it must be `5m`. V3 arms from closed bars but
+`squeeze_expansion_breakout_v3`/`v4`, it must be `5m`;
+`range_expansion_observer_v3` and `structure_bos_15m_trigger_v2` require `15m`.
+V3/V4 arm from closed bars but
 accepts only after three current top-of-book samples remain beyond the level
 for at least five seconds. Failed probes re-arm per side; the opposite arm is
 not burned. Its per-view quote queue is bounded to the latest observation, so
@@ -63,8 +64,10 @@ IDs fail startup.
 
 The versioned roster supports multiple observer families and timeframes in one
 single-writer process. `config/shadow-observers.v1.json` is the canonical
-example: squeeze acceptance on 5m plus range expansion and BoS on 1h for BTC
-and ETH. Lane IDs include strategy, venue, symbol, and timeframe; duplicate
+example: squeeze acceptance on 5m plus range expansion and BoS for BTC and ETH.
+The current roster uses V4 squeeze on 5m and the corrected range/BoS
+registrations on 15m; the prior 1h IDs remain registered only so their evidence
+is reproducible. Lane IDs include strategy, venue, symbol, and timeframe; duplicate
 IDs fail startup. Feeds remain shared only for identical
 `(exchange, symbol, timeframe)` keys.
 
@@ -74,6 +77,15 @@ samples; duplicate, out-of-order, future-skewed, and over-lagged events fail
 closed and do not advance the hold. Receive-time fallback is explicit for
 sources without event timestamps. State transitions and quote provenance are
 appended to the decision journal as `scanner_transition` records.
+
+V4 squeeze does not inherit V3's close-times-volume VWAP proxy. It requires a
+contiguous 288-bar canonical quote/base-volume window and makes the expansion
+volume test binding before it arms the same quote-held acceptance engine.
+Range v3 evaluates the forming hour at causal 15-minute closes against the
+last 20 complete same-hour observations. Structure BoS v2 carries only fully
+closed 1h swings and 4h direction into a 15-minute close trigger. Neither new
+15-minute scanner treats a raw tick through a level as confirmed structure;
+the quote path prices accepted virtual entries and protects their stops.
 
 `range_expansion_observer_v1` is a separate `1h` exploratory lane for the
 first body-and-volume-confirmed close beyond a prior 12-hour range. It exists

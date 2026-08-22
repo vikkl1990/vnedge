@@ -192,6 +192,9 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "funding_squeeze_continuation_v1", "structure_bos_1h",
         "fee_wall_momentum_observer_v1", "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
+        "squeeze_expansion_breakout_v4",
         "range_expansion_observer_v1",
         "range_expansion_observer_v2",
+        "range_expansion_observer_v3",
+        "structure_bos_15m_trigger_v2",
     }

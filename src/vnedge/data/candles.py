@@ -624,6 +624,59 @@ class CandleParquetStore:
             )
         return candles
 
+    def read_at(
+        self,
+        symbol: str,
+        timeframe: str,
+        open_time: datetime,
+    ) -> Candle | None:
+        """Read one canonical closed candle without scanning the whole lake.
+
+        Runtime scanner lanes receive a fast exchange OHLCV notification at a
+        boundary, while the trade-derived lake owns the richer volume contract.
+        Looking up only the matching daily/monthly partition lets the runtime
+        enrich that notification with exact quote/base volume and trade count
+        without rebuilding history on every bar.
+        """
+        _timeframe_seconds(timeframe)
+        opened = _utc(open_time)
+        root = self.root
+        if self.exchange:
+            root = root / f"exchange={self.exchange}"
+        directory = root / sanitize_symbol(symbol) / timeframe
+        name = (
+            opened.strftime("%Y-%m.parquet")
+            if timeframe in {"1h", "4h"}
+            else opened.strftime("%Y-%m-%d.parquet")
+        )
+        path = directory / name
+        if not path.exists():
+            return None
+        frame = pd.read_parquet(path)
+        if frame.empty or "open_time" not in frame:
+            return None
+        times = pd.to_datetime(frame["open_time"], utc=True)
+        matches = frame.loc[times.eq(pd.Timestamp(opened))]
+        if matches.empty:
+            return None
+        row = matches.iloc[-1]
+        return Candle(
+            symbol=symbol,
+            timeframe=timeframe,
+            open_time=pd.Timestamp(row["open_time"]).to_pydatetime(),
+            close_time=pd.Timestamp(row["close_time"]).to_pydatetime(),
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            volume=row["volume"],
+            quote_volume=row["quote_volume"],
+            trade_count=int(row["trade_count"]),
+            taker_buy_volume=row["taker_buy_volume"],
+            vwap=row["vwap"],
+            is_closed=True,
+        )
+
 
 _AGGREGATION_CHAIN = (
     ("1s", "1m"),

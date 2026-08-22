@@ -2,7 +2,7 @@
   "version": 1,
   "observers": [
     {
-      "strategy_id": "squeeze_expansion_breakout_v3",
+      "strategy_id": "squeeze_expansion_breakout_v4",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "5m",
@@ -11,19 +11,19 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "range_expansion_observer_v2",
+      "strategy_id": "range_expansion_observer_v3",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
-      "timeframe": "1h",
+      "timeframe": "15m",
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "structure_bos_1h",
+      "strategy_id": "structure_bos_15m_trigger_v2",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
-      "timeframe": "1h",
+      "timeframe": "15m",
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0

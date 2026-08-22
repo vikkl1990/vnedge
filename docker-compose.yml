@@ -8,7 +8,9 @@ services:
       args:
         VNEDGE_BUILD_SHA: "${VNEDGE_BUILD_SHA:-dev}"
     restart: unless-stopped
-    command: ["python", "-m", "vnedge.runtime.multi_lane_shadow"]
+    # The entrypoint reruns delta-backfill + exact-volume readiness before the
+    # runtime on every container start, including daemon/host restarts.
+    command: ["python", "-m", "vnedge.runtime.scanner_startup"]
     environment:
       VNEDGE_HOST: "${VNEDGE_HOST:-}"
       DASHBOARD_HOST: 0.0.0.0
@@ -52,12 +54,16 @@ services:
       MULTI_LANE_FIXED_MARGIN: "${MULTI_LANE_FIXED_MARGIN:-}"
       MULTI_LANE_FIXED_MARGIN_LEVERAGE: "${MULTI_LANE_FIXED_MARGIN_LEVERAGE:-30}"
       MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-1}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-9}"
+      SCANNER_PREREQ_SYMBOLS: "${SCANNER_PREREQ_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
       interval: 30s
       timeout: 15s
       retries: 5
-      start_period: 120s
+      # A fresh volume may require a large exact aggTrade seed before the HTTP
+      # runtime exists. Existing volumes normally process only a short delta.
+      start_period: 1800s
     # Nine-lane cold start loads the exchange warm-up frames concurrently
     # before shared feeds and frame lifetimes settle. It crossed a 3 GiB
     # ceiling in production, so retain bounded but operational headroom.
@@ -131,6 +137,7 @@ services:
             --data-root data \
             --candle-root data/candles \
             --gap-root data/gaps \
+            --tail-timeframe 5m \
             --report data/reports/binance_gap_recovery.json
           sleep 900
         done
@@ -148,20 +155,23 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-7}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-9}"
     command:
       - sh
       - -c
       - |
         while true; do
+          required_days="$${VISION_BACKFILL_DAYS}"
+          if [ "$${required_days}" -lt 9 ]; then required_days=9; fi
           python -m vnedge.data.aggtrades_backfill \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
-            --days "$${VISION_BACKFILL_DAYS}" \
+            --days "$${required_days}" \
             --data-root data \
-            --exchange binanceusdm_hist
+            --exchange binanceusdm_hist \
+            --concurrency 1
           python -m vnedge.data.candle_bootstrap \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
-            --days "$${VISION_BACKFILL_DAYS}" \
+            --days "$${required_days}" \
             --data-root data \
             --candle-root data/candles \
             --source-exchange binanceusdm_hist \

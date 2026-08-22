@@ -23,6 +23,7 @@ import { ScannerWorkspace } from "./ScannerWorkspace";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+const MARKET_MONITOR_GRID = "grid w-full min-w-[1120px] grid-cols-[minmax(110px,.8fr)_minmax(130px,.9fr)_minmax(110px,.8fr)_minmax(110px,.8fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(120px,.9fr)_minmax(145px,1fr)] gap-x-4";
 
 const baseAsset = (symbol: string) => {
   const normalized = symbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -874,7 +875,7 @@ export function MarketPulse() {
       />
 
       <section className="overflow-x-auto border border-line bg-panel/80" aria-label="All-symbol market monitor">
-        <div className="grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] border-b border-line bg-inset/70 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-faint">
+        <div className={`${MARKET_MONITOR_GRID} border-b border-line bg-inset/70 px-4 py-1.5 font-mono text-[9px] uppercase tracking-wide text-faint`}>
           <span>Instrument</span><span className="text-right">Last</span><span className="text-right">1h range</span><span className="text-right">vs VWAP</span><span className="text-right">Dual AVWAP</span><span className="text-right">Regime 1h</span><span className="text-right">vs prior POC</span><span className="text-right">Tick / candle age</span>
         </div>
         {SYMBOLS.map((item, index) => {
@@ -888,7 +889,13 @@ export function MarketPulse() {
           const tickAge = data?.market.feed_age_ms;
           const candleAge = data?.market.canonical_age_ms;
           return (
-            <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] items-center border-b border-line/70 px-3 py-2 text-left font-mono text-[10px] transition last:border-0 ${active ? "border-l-2 border-l-brand bg-brand/10" : "hover:bg-white/[0.025]"}`}>
+            <button
+              key={item}
+              type="button"
+              aria-pressed={active}
+              onClick={() => { setSymbol(item); setSelected(null); }}
+              className={`${MARKET_MONITOR_GRID} items-center border-b border-line/70 px-4 py-2 text-left font-mono text-[10px] transition last:border-0 ${active ? "border-l-2 border-l-brand bg-brand/10" : "hover:bg-white/[0.025]"}`}
+            >
               <span className="flex items-center gap-2 text-[11px] font-semibold text-txt">{item.replace("USDT", "")}<span className={`h-1.5 w-1.5 rounded-full ${itemQuality === "ok" ? "bg-long" : itemQuality === "unknown" ? "bg-faint" : "bg-short"}`} /></span>
               <span className="text-right text-[13px] tabular-nums text-txt">{priceText(price)}</span>
               <span className="text-right">{fmt(latestClosedHour?.range_bps)} bps</span>
