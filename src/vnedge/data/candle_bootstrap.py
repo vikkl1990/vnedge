@@ -9,6 +9,7 @@ empty bars.
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ import pyarrow.parquet as pq
 
 from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
 from vnedge.data.parquet_store import sanitize_symbol
+
+_GAPFILL_NAME = re.compile(r"^\d+-gapfill-(\d+)-[0-9a-f]+\.parquet$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,10 +56,14 @@ def trade_shards(
         / f"symbol={sanitize_symbol(_symbol_key(symbol))}"
         / "stream=trades"
     )
-    day_dirs = sorted(
-        (path for path in root.iterdir() if path.is_dir() and path.name.isdigit()),
-        key=lambda path: path.name,
-    ) if root.is_dir() else []
+    day_dirs = (
+        sorted(
+            (path for path in root.iterdir() if path.is_dir() and path.name.isdigit()),
+            key=lambda path: path.name,
+        )
+        if root.is_dir()
+        else []
+    )
     selected = day_dirs[-max(1, days) :]
     return tuple(path for day in selected for path in sorted(day.glob("*.parquet")))
 
@@ -70,6 +77,15 @@ def _rows(path: Path) -> Iterable[tuple[int, object, object, str]]:
         frame = batch.to_pandas().sort_values("ts_ms", kind="stable")
         for row in frame.itertuples(index=False):
             yield int(row.ts_ms), row.price, row.amount, str(row.side or "")
+
+
+def _gapfill_interval(path: Path) -> tuple[int, int] | None:
+    """Return the authoritative half-open interval encoded by a gapfill."""
+    match = _GAPFILL_NAME.match(path.name)
+    if match is None:
+        return None
+    start_ms = int(path.name.split("-", 1)[0])
+    return start_ms, int(match.group(1))
 
 
 def bootstrap_candles(
@@ -94,15 +110,26 @@ def bootstrap_candles(
         captured: list[Candle] = []
         pipeline = CandlePipeline(canonical, subscribers=(captured.append,))
         shards = trade_shards(data_root, source_exchange, symbol, days=days)
+        authoritative_intervals = tuple(
+            interval for shard in shards if (interval := _gapfill_interval(shard)) is not None
+        )
         total_shards += len(shards)
         last_timestamp: int | None = None
         for shard in shards:
             for ts_ms, price, amount, side in _rows(shard):
+                if _gapfill_interval(shard) is None and any(
+                    start_ms <= ts_ms < end_ms for start_ms, end_ms in authoritative_intervals
+                ):
+                    # The strict REST recovery is complete for this interval;
+                    # ignore the websocket's partial overlap after a restart.
+                    continue
                 if last_timestamp is not None and ts_ms < last_timestamp:
                     total_rejected += 1
                     continue
                 last_timestamp = ts_ms
-                buyer_maker = False if side.lower() == "buy" else True if side.lower() == "sell" else None
+                buyer_maker = (
+                    False if side.lower() == "buy" else True if side.lower() == "sell" else None
+                )
                 try:
                     pipeline.on_trade(
                         datetime.fromtimestamp(ts_ms / 1000, tz=UTC),

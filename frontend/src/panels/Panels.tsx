@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
+import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
 import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
 
 const usd = (n: unknown) =>
@@ -114,6 +114,17 @@ export function LiveBlockedBanner() {
   );
 }
 
+export function ReadinessBanner() {
+  const readiness = useReadiness();
+  if (readiness.isLoading && !readiness.data) return null;
+  if (readiness.isError || !readiness.data || readiness.data.status === "unknown") {
+    return <div className="border-l-[3px] border-short bg-short/5 px-3 py-2 text-[11px] text-short" role="alert"><strong>Workflow readiness unknown.</strong> Canonical data and lane readiness could not be verified.</div>;
+  }
+  if (readiness.data.status === "ready") return null;
+  const reasons = readiness.data.reasons.map((reason) => reason.replace(/_/g, " ")).join(" · ");
+  return <div className="border-l-[3px] border-short bg-short/5 px-3 py-2 text-[11px] text-short" role="alert"><strong>Workflow not ready.</strong> {reasons || `HTTP ${readiness.data.http_status}`}. Live ticks may still be flowing; closed-candle and decision data must be treated as degraded.</div>;
+}
+
 // Health bands are server policy truth. Missing bands stay UNKNOWN; the client
 // must not independently reinterpret latency or cumulative arm-skip counters.
 type Band = "ok" | "degraded" | "blocked" | "unknown";
@@ -167,8 +178,8 @@ export function DeskPanel() {
     { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
     { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
     { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
-    { key: "close-lag", header: "Close p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} persisted runtime samples`}>{r.latency_samples.bar_close < r.latency_samples.required ? `collecting ${r.latency_samples.bar_close}/${r.latency_samples.required}` : r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms`}</span> },
-    { key: "lag", header: "Decision p95", align: "right", render: (r) => <span title={`${r.latency_samples.decision}/${r.latency_samples.required} persisted runtime samples`}>{r.latency_samples.decision < r.latency_samples.required ? `collecting ${r.latency_samples.decision}/${r.latency_samples.required}` : r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms`}</span> },
+    { key: "close-lag", header: "Close p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} persisted runtime samples`}>{r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms`}<span className="block text-[9px] text-faint">n {r.latency_samples.bar_close}/{r.latency_samples.required}</span></span> },
+    { key: "lag", header: "Decision p95", align: "right", render: (r) => <span title={`${r.latency_samples.decision}/${r.latency_samples.required} persisted runtime samples`}>{r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms`}<span className="block text-[9px] text-faint">n {r.latency_samples.decision}/{r.latency_samples.required}</span></span> },
     { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString("en-US") },
     { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.current_waiting_reason}</span></span> },
     { key: "virtual", header: "Virtual outcome", render: (r) => r.observation_class !== "shadow_observe" ? "—" : <span className="block min-w-[130px] font-mono">{usd(r.shadow_perf?.virtual_net_usd)}<span className="block text-[10px] text-dim">{r.shadow_perf?.wins ?? 0}W / {r.shadow_perf?.losses ?? 0}L · {r.shadow_perf?.pending_shadow_intents ?? 0} pending</span></span> },
@@ -406,6 +417,7 @@ export function RiskPanel() {
 
 export function ResearchPanel() {
   const scorecard = useResearchScorecard();
+  const scoreFreshness = generatedFreshness("research scorecard", scorecard.data?.generated_at, 2 * 60 * 60);
   const [showUndersampled, setShowUndersampled] = useState(false);
   const artifacts = [
     ["Strategy scorecard", "/scorecard"],
@@ -428,6 +440,7 @@ export function ResearchPanel() {
   return (
     <div className="space-y-4">
       <TerminalPanel title="Research" meta="evidence only · no mutation">
+      {scoreFreshness.state !== "OK" && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[11px] text-warn"><strong>Scorecard {scoreFreshness.state.toLowerCase()}.</strong> Age {scoreFreshness.age}; metrics remain historical evidence and must not drive promotion.</div>}
       <div className="rounded-lg border border-line bg-inset p-4">
         <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Pinned findings</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -465,6 +478,8 @@ function IntelligencePanel() {
   const summary = agentAvailable ? agents.data?.summary : undefined;
   const gateRows = mlAvailable ? Object.entries(ml.data?.gates ?? {}).slice(0, 6) : [];
   const locked = mlAvailable && !ml.data?.can_promote && !ml.data?.can_trade;
+  const mlFreshness = generatedFreshness("ML pipeline", ml.data?.generated_at, 2 * 60 * 60);
+  const agentFreshness = generatedFreshness("agent governor", agents.data?.generated_at, 2 * 60 * 60);
   const gateValue = (value: unknown) => {
     if (typeof value === "number") return value.toLocaleString("en-US");
     if (typeof value === "string" || typeof value === "boolean") return String(value);
@@ -479,7 +494,7 @@ function IntelligencePanel() {
               <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Meta-label pipeline</div>
               <div className="mt-1 text-[11px] text-dim">Scores rule outcomes after enough labels; it is not a free trader.</div>
             </div>
-            <TerminalBadge tone={!mlAvailable ? "bad" : locked ? "warn" : "bad"}>{!mlAvailable ? "status unavailable" : locked ? "gates locked" : "authority mismatch"}</TerminalBadge>
+            <TerminalBadge tone={!mlAvailable ? "bad" : mlFreshness.state !== "OK" ? "warn" : locked ? "warn" : "bad"}>{!mlAvailable ? "status unavailable" : mlFreshness.state !== "OK" ? `${mlFreshness.state.toLowerCase()} · ${mlFreshness.age}` : locked ? "gates locked" : "authority mismatch"}</TerminalBadge>
           </div>
           {!mlAvailable && <div className="mt-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">ML status artifact unavailable. No stage, label count, or gate state is being asserted.</div>}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -516,7 +531,7 @@ function IntelligencePanel() {
               <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Agent research governor</div>
               <div className="mt-1 text-[11px] text-dim">Ranks research tasks and stale evidence, never capital actions.</div>
             </div>
-            <TerminalBadge tone="neutral">research only</TerminalBadge>
+            <TerminalBadge tone={agentFreshness.state === "OK" ? "neutral" : "warn"}>{agentFreshness.state === "OK" ? "research only" : `${agentFreshness.state.toLowerCase()} · ${agentFreshness.age}`}</TerminalBadge>
           </div>
           {!agentAvailable && <div className="mt-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Agent governor artifact unavailable. Zero actions or tasks is not being asserted.</div>}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -551,6 +566,7 @@ export function PromotePanel() {
   const evidence = scorecard.data?.strategies ?? [];
   const sampleQualified = evidence.filter((row) => row.sample_qualified).length;
   const undersampled = evidence.filter((row) => !row.sample_qualified).length;
+  const evidenceFreshness = generatedFreshness("promotion scorecard", scorecard.data?.generated_at, 2 * 60 * 60);
   const evidenceCols: Column<(typeof evidence)[number]>[] = [
     { key: "strategy", header: "Candidate", render: (row) => <span className="font-mono">{row.strategy}</span> },
     { key: "n", header: "n", align: "right", render: (row) => `${row.samples}/${row.min_samples}` },
@@ -565,6 +581,7 @@ export function PromotePanel() {
         <div className="rounded-lg border border-short/40 bg-short/5 px-4 py-3 text-[12px] text-short">
           <strong>Capital remains off.</strong> Evidence, ML, and agents cannot add a strategy to the capital roster. Promotion requires reviewed code/config and operator attestation.
         </div>
+        {evidenceFreshness.state !== "OK" && <div className="mt-3 rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-[11px] text-warn"><strong>Promotion evidence is {evidenceFreshness.state.toLowerCase()}.</strong> Age {evidenceFreshness.age}. Candidate counts below are historical and cannot satisfy a current gate.</div>}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Capital roster" value={String(risk.data?.capital.roster_size ?? 0)} /></div>
           <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Live gates" value={`${risk.data?.live_checklist.passed ?? 0}/${risk.data?.live_checklist.total ?? 7}`} /></div>
@@ -614,8 +631,12 @@ export function SystemPanel() {
   const scorecard = useResearchScorecard();
   const ml = useMlStatus();
   const agents = useAgenticResearchStatus();
+  const readiness = useReadiness();
   const snapshotAge = typeof snapshot.data?.snapshot_age_ms === "number" ? snapshot.data.snapshot_age_ms / 1000 : null;
   const freshness: FreshnessRow[] = [
+    readiness.data?.status === "ready"
+      ? { name: "workflow readiness", age: "current", state: "OK", sla: "10s", required: true }
+      : { name: "workflow readiness", age: readiness.data?.reasons.join(", ") || "not reported", state: "MISSING", sla: "10s", required: true },
     snapshotAge == null
       ? { name: "runtime snapshot", age: "not reported", state: "MISSING", sla: "15s", required: true }
       : { name: "runtime snapshot", age: ageSec(snapshotAge), state: snapshotAge <= 15 ? "OK" : "STALE", sla: "15s", required: true },
@@ -750,29 +771,38 @@ export function FeedPanel() {
 
 export function JournalPanel() {
   const { data, isLoading } = useJournal(250);
-  const [view, setView] = useState<"all" | "decisions" | "trades">("all");
+  const [view, setView] = useState<"all" | "scanner" | "decisions" | "trades">("all");
   const [search, setSearch] = useState("");
   const [laneFilter, setLaneFilter] = useState("all");
   const rows = data?.closed_trades ?? [];
   const summary = data?.summary;
-  const rowsNet = rows.reduce((total, row) => {
-    const value = row.net_pnl_usd ?? row.net_after_this_fill_fee_usd ?? row.virtual_net_usd;
+  const actualRows = rows.filter((row) => row.kind === "actual_closing_fill");
+  const rowsNet = actualRows.reduce((total, row) => {
+    const value = row.net_after_this_fill_fee_usd ?? row.net_pnl_usd;
     return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
   }, 0);
-  const summaryNet = summary?.actual_realized_pnl_usd;
+  const summaryNet = summary?.actual_closed_net_usd;
   const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
   const reconciliationMismatch = reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
   const normalizedSearch = search.trim().toLowerCase();
   const laneNames = Array.from(new Set([
     ...rows.map((row) => String(row.lane ?? row.symbol ?? "")).filter(Boolean),
     ...(data?.events ?? []).map((row) => String(row.lane ?? "")).filter(Boolean),
+    ...(data?.scanner_events ?? []).map((row) => row.lane).filter(Boolean),
   ])).sort();
   const matches = (value: unknown) => !normalizedSearch || String(JSON.stringify(value) ?? "").toLowerCase().includes(normalizedSearch);
   const filteredRows = rows.filter((row) => (laneFilter === "all" || String(row.lane ?? row.symbol ?? "") === laneFilter) && matches(row));
   const filteredEvents = (data?.events ?? []).filter((row) => (laneFilter === "all" || String(row.lane ?? "") === laneFilter) && matches(row));
+  const filteredScannerEvents = (data?.scanner_events ?? []).filter((row) => (laneFilter === "all" || row.lane === laneFilter) && matches(row));
+  const scannerEventRows = filteredScannerEvents.map((row) => ({
+    lane: row.lane,
+    ts: row.ts,
+    event: `scanner_${row.kind}`,
+    detail: `${row.strategy_id} · ${row.reason} · ${row.timeframe}${row.backfill ? " · backfill" : ""}`,
+  }));
   const decisionEvents = filteredEvents.filter((row) => /reject|block|refus|risk|skip/i.test(`${row.event ?? ""} ${row.detail ?? ""}`));
-  const visibleEvents = view === "decisions" ? decisionEvents : filteredEvents;
-  const decisionTimes = (data?.events ?? []).map((row) => row.ts).filter((value): value is string => Boolean(value)).sort();
+  const visibleEvents = view === "scanner" ? scannerEventRows : view === "decisions" ? decisionEvents : filteredEvents;
+  const decisionTimes = [...(data?.events ?? []).map((row) => row.ts), ...(data?.scanner_events ?? []).map((row) => row.ts)].filter((value): value is string => Boolean(value)).sort();
   const lastDecisionTs = decisionTimes[decisionTimes.length - 1];
   const cols: Column<JournalRow>[] = [
     { key: "lane", header: "Lane", render: (r) => <span className="font-mono">{r.lane ?? r.symbol ?? "—"}</span> },
@@ -790,7 +820,7 @@ export function JournalPanel() {
   ];
   const exportEvidence = () => {
     if (!data) return;
-    const payload = JSON.stringify({ ...data, closed_trades: filteredRows, events: filteredEvents }, null, 2);
+    const payload = JSON.stringify({ ...data, closed_trades: filteredRows, events: filteredEvents, scanner_events: filteredScannerEvents }, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -811,7 +841,7 @@ export function JournalPanel() {
         {reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)} (window or accounting mismatch)` : " · matched"}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
-        {(["all", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
+        {(["all", "scanner", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
         <input aria-label="Search journal" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="search event, reason, lane…" className="min-w-[220px] border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-txt placeholder:text-faint focus:border-brand focus:outline-none" />
         <select aria-label="Filter journal lane" value={laneFilter} onChange={(event) => setLaneFilter(event.target.value)} className="border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-dim focus:border-brand focus:outline-none"><option value="all">all lanes</option>{laneNames.map((lane) => <option key={lane} value={lane}>{lane}</option>)}</select>
         <button onClick={exportEvidence} disabled={!data} className="border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase text-dim hover:border-brand hover:text-brand disabled:opacity-40">export evidence</button>
@@ -819,7 +849,7 @@ export function JournalPanel() {
       </div>
       <div className="mt-4 grid gap-3 xl:grid-cols-2">
         <div className="rounded-lg border border-line bg-inset p-3">
-          <div className="mb-2 font-mono text-[10px] uppercase text-faint">{view === "decisions" ? "Decision rejects / arm blocks" : "Recent event stream"}</div>
+          <div className="mb-2 font-mono text-[10px] uppercase text-faint">{view === "scanner" ? `Scanner audit · ${filteredScannerEvents.length} records` : view === "decisions" ? "Decision rejects / arm blocks" : "Recent event stream"}</div>
           {visibleEvents.slice(0, 12).map((event, index) => <div key={`${event.ts}-${index}`} className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 border-t border-line/60 py-2 first:border-0 text-[11px]"><span className="font-mono text-faint">{event.ts ? new Date(event.ts).toLocaleTimeString("en-GB", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</span><span><span className="font-mono text-txt">{event.event ?? "decision"}</span><span className="ml-2 text-dim break-words">{event.detail ?? "no detail"}</span></span></div>)}
           {!visibleEvents.length && <div className="text-[11px] text-dim">No matching event records in the current journal window.</div>}
         </div>

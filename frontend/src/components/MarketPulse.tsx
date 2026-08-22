@@ -875,7 +875,7 @@ export function MarketPulse() {
 
       <section className="overflow-x-auto border border-line bg-panel/80" aria-label="All-symbol market monitor">
         <div className="grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] border-b border-line bg-inset/70 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-faint">
-          <span>Instrument</span><span className="text-right">Last</span><span className="text-right">1h range</span><span className="text-right">vs VWAP</span><span className="text-right">Dual AVWAP</span><span className="text-right">Regime 1h</span><span className="text-right">vs prior POC</span><span className="text-right">Feed age</span>
+          <span>Instrument</span><span className="text-right">Last</span><span className="text-right">1h range</span><span className="text-right">vs VWAP</span><span className="text-right">Dual AVWAP</span><span className="text-right">Regime 1h</span><span className="text-right">vs prior POC</span><span className="text-right">Tick / candle age</span>
         </div>
         {SYMBOLS.map((item, index) => {
           const data = marketQueries[index].data;
@@ -885,7 +885,8 @@ export function MarketPulse() {
           const price = data?.market.mid ?? data?.market.last;
           const active = item === symbol;
           const itemQuality = data?.data_quality ?? "unknown";
-          const feedAge = data?.market.feed_age_ms ?? data?.market.canonical_age_ms;
+          const tickAge = data?.market.feed_age_ms;
+          const candleAge = data?.market.canonical_age_ms;
           return (
             <button key={item} onClick={() => { setSymbol(item); setSelected(null); }} className={`grid min-w-[940px] grid-cols-[92px_140px_repeat(6,minmax(100px,1fr))] items-center border-b border-line/70 px-3 py-2 text-left font-mono text-[10px] transition last:border-0 ${active ? "border-l-2 border-l-brand bg-brand/10" : "hover:bg-white/[0.025]"}`}>
               <span className="flex items-center gap-2 text-[11px] font-semibold text-txt">{item.replace("USDT", "")}<span className={`h-1.5 w-1.5 rounded-full ${itemQuality === "ok" ? "bg-long" : itemQuality === "unknown" ? "bg-faint" : "bg-short"}`} /></span>
@@ -895,7 +896,7 @@ export function MarketPulse() {
               <span className="text-right">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
               <span className="text-right">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
               <span className="text-right">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
-              <span className="text-right">{feedAge == null ? "not reported" : ageSecMs(feedAge)}</span>
+              <span className={`text-right ${candleAge != null && candleAge > 70 * 60_000 ? "text-short" : ""}`}>{tickAge == null ? "—" : ageSecMs(tickAge)} / {candleAge == null ? "—" : ageSecMs(candleAge)}</span>
             </button>
           );
         })}

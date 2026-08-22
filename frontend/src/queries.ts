@@ -21,6 +21,7 @@ import {
   type SettingsSecurity,
   type OperatorProfile,
   type ExchangeConnectionPublic,
+  type ReadinessStatus,
 } from "./api";
 
 export function useWhoAmI() {
@@ -60,6 +61,23 @@ export function useSnapshot() {
     queryKey: ["state"],
     queryFn: () => apiGet<Snapshot>("/state"),
     refetchInterval: 5_000,
+  });
+}
+
+export function useReadiness() {
+  return useQuery({
+    queryKey: ["readiness"],
+    queryFn: async (): Promise<ReadinessStatus> => {
+      const response = await fetch("/ready", { cache: "no-store", credentials: "same-origin" });
+      let body: { status?: string; reasons?: unknown } = {};
+      try { body = await response.json() as typeof body; } catch { /* fail visible below */ }
+      return {
+        status: body.status === "ready" ? "ready" : body.status === "not_ready" ? "not_ready" : "unknown",
+        reasons: Array.isArray(body.reasons) ? body.reasons.map(String) : ["readiness_payload_unavailable"],
+        http_status: response.status,
+      };
+    },
+    refetchInterval: 10_000,
   });
 }
 

@@ -390,25 +390,19 @@ def _render_runbooks_html(markdown: str) -> str:
 
 
 def _cost_model_payload() -> dict:
-    """The REAL round-trip cost model, read from the same constants the
-    research and paper engines use — never hardcoded in the UI.
-
-    Two honest cost models the operator must reconcile:
-    - maker-first: maker entry + taker exit + slippage (the ~8 bps wall the
-      scalper replay diagnostics use as breakeven).
-    - taker round-trip: both legs taker + slippage (the ~11 bps wall).
-    The paper broker's pessimistic fill model is reported alongside so the
-    "8 vs 10 bps" disconnect is visible instead of buried in one number.
-    """
+    """Canonical active fee wall plus explicitly labelled evidence schedules."""
     from vnedge.paper.fill_model import FillModel
+    from vnedge.plan.cost_model import CostModel
     from vnedge.scalping.parameter_registry import (
         DEFAULT_SCALPER_PARAMETER_REGISTRY as _registry,
     )
 
+    canonical = CostModel.for_profile("scalp")
+    config = canonical.config
     fee = _registry.fee_profile("binanceusdm")
     paper = FillModel()
-    maker_first_rt = fee.maker_bps + fee.taker_bps + fee.slippage_bps
-    taker_rt = 2 * fee.taker_bps + fee.slippage_bps
+    maker_first_rt = canonical.round_trip_bps(maker_entry=True, include_safety=False)
+    taker_rt = canonical.round_trip_bps(include_safety=False)
     paper_taker_rt = 2 * (paper.taker_fee_bps + paper.slippage_bps)
 
     # Every venue's real fee schedule, so the leverage/PnL calculator can model
@@ -428,17 +422,18 @@ def _cost_model_payload() -> dict:
         })
     return {
         "exchange": fee.exchange,
-        "source": "scalper_replay_diagnostics + paper.fill_model constants",
-        "maker_bps": fee.maker_bps,
-        "taker_bps": fee.taker_bps,
-        "slippage_bps": fee.slippage_bps,
-        "safety_buffer_bps": fee.safety_buffer_bps,
+        "source": "vnedge.plan.cost_model canonical scalp profile",
+        "profile": canonical.profile,
+        "maker_bps": config.maker_fee_bps,
+        "taker_bps": config.taker_fee_bps,
+        "slippage_bps": config.default_slip_entry_bps + config.default_slip_exit_bps,
+        "safety_buffer_bps": config.safety_buffer_bps,
         # Two labelled round-trip cost models (no safety buffer — the raw wall).
         "maker_first_rt_bps": round(maker_first_rt, 2),
         "taker_rt_bps": round(taker_rt, 2),
         # With the research safety buffer applied (what the gates actually use).
-        "maker_first_cost_bps": round(fee.maker_first_cost_bps, 2),
-        "taker_round_trip_cost_bps": round(fee.taker_round_trip_cost_bps, 2),
+        "maker_first_cost_bps": round(canonical.round_trip_bps(maker_entry=True), 2),
+        "taker_round_trip_cost_bps": round(canonical.round_trip_bps(), 2),
         # Per-exchange schedules for the calculator (Binance / Bybit / Delta).
         "exchanges": exchanges,
         "paper_fill_model": {
@@ -1586,11 +1581,40 @@ def create_app(
         from vnedge.research.pre_live_status import build_pre_live_status
 
         ladder = _REPO_ROOT / "research" / "live_research" / "live_ladder_latest.json"
+        payload = build_pre_live_status(
+            journal_dir=lane_dir or Path("logs/paper_trials"),
+            ladder_path=ladder if ladder.exists() else None,
+        )
+        snapshot = provider.latest() or {}
+        runtime_checklist = build_risk_payload(snapshot)["live_checklist"]
+        owner_by_id = {
+            "live_flags": "deliberate",
+            "trade_keys": "operator",
+        }
+        payload["checks"] = [
+            {
+                "name": item["id"],
+                "passed": bool(item["ok"]),
+                "critical": True,
+                "detail": f"runtime snapshot: {item['label']}",
+                "owner": owner_by_id.get(item["id"], "system"),
+            }
+            for item in runtime_checklist["items"]
+        ]
+        payload["red_count"] = runtime_checklist["total"] - runtime_checklist["passed"]
+        payload["cleared"] = payload["red_count"] == 0
+        payload["operator_action_reds"] = [
+            item["name"]
+            for item in payload["checks"]
+            if not item["passed"] and item["owner"] == "operator"
+        ]
+        payload["operator_answer"] = (
+            "all runtime live gates cleared"
+            if payload["cleared"]
+            else f"{payload['red_count']} runtime gate(s) still red — see the path to live"
+        )
         return JSONResponse(
-            build_pre_live_status(
-                journal_dir=lane_dir or Path("logs/paper_trials"),
-                ladder_path=ladder if ladder.exists() else None,
-            ),
+            payload,
             headers=_identity(user),
         )
 
@@ -2220,6 +2244,7 @@ def create_app(
         secure = request.url.scheme == "https" or forwarded_proto == "https"
         return JSONResponse(
             {
+                "generated_at": datetime.now(UTC).isoformat(),
                 "build_sha": _build_sha(),
                 "host": os.environ.get("VNEDGE_HOST") or socket.gethostname(),
                 "uptime_seconds": int(max(0.0, time.time() - _APP_START)),

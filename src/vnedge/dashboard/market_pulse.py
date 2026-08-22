@@ -592,7 +592,9 @@ class MarketPulseService:
         analyzer: BriefAnalyzer = bounded_observation_brief,
         model: str | None = None,
         clock: Callable[[], datetime] | None = None,
-        stale_after: timedelta = timedelta(hours=2),
+        # Match the canonical lake contract: a 1h bar may be one full bucket
+        # old plus ten minutes of close/persist grace, but not two hours old.
+        stale_after: timedelta = timedelta(minutes=70),
     ) -> None:
         if stale_after <= timedelta(0):
             raise ValueError("pulse stale_after must be positive")

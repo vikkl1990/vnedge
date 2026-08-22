@@ -55,7 +55,7 @@ export function ExchangesPanel({ secretsReady }: { secretsReady: boolean }) {
   return (
     <section className="rounded-xl border border-line bg-panel p-5">
       <div className="flex items-start justify-between gap-4">
-        <div><h2 className="text-[15px] font-semibold">Exchange connections</h2><p className="mt-1 text-[11px] text-dim">Credential verification uses an authenticated read only call. It never sends an order.</p></div>
+        <div><h2 className="text-[15px] font-semibold">Private/API credentials</h2><p className="mt-1 text-[11px] text-dim">These records are separate from the live public measurement feeds shown under System. Verification uses an authenticated read-only call and never sends an order.</p></div>
         <span className={`rounded border px-2 py-1 font-mono text-[10px] ${secretsReady ? "border-long/40 text-long" : "border-short/40 text-short"}`}>{secretsReady ? "ENCRYPTION READY" : "ENCRYPTION KEY MISSING"}</span>
       </div>
       {!secretsReady && <div className="mt-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short">Set VNEDGE_SECRETS_KEY on the server before storing credentials. No fallback key is generated.</div>}

@@ -9,6 +9,7 @@ import pytest
 
 from vnedge.data.binance_gap_recovery import (
     BinanceAggTradeRest,
+    FetchedTape,
     _write_tape,
     recover_storage_gaps,
 )
@@ -102,21 +103,23 @@ def test_existing_canonical_coverage_closes_duplicate_gap_records(tmp_path) -> N
         tmp_path / "candles",
         exchange="binanceusdm",
     )
-    candle_store.upsert((
-        Candle(
-            symbol="BTCUSDT",
-            timeframe="1h",
-            open_time=START,
-            close_time=START + timedelta(hours=1),
-            open=Decimal(100),
-            high=Decimal(101),
-            low=Decimal(99),
-            close=Decimal(100),
-            volume=Decimal(1),
-            quote_volume=Decimal(100),
-            trade_count=1,
-        ),
-    ))
+    candle_store.upsert(
+        (
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                open_time=START,
+                close_time=START + timedelta(hours=1),
+                open=Decimal(100),
+                high=Decimal(101),
+                low=Decimal(99),
+                close=Decimal(100),
+                volume=Decimal(1),
+                quote_volume=Decimal(100),
+                trade_count=1,
+            ),
+        )
+    )
     gap_store = GapParquetStore(tmp_path / "gaps")
     records = tuple(
         GapRecord(
@@ -153,16 +156,18 @@ def test_existing_canonical_coverage_closes_duplicate_gap_records(tmp_path) -> N
 
 def test_rest_retention_rejection_defers_to_vision_without_aborting(tmp_path) -> None:
     gap_store = GapParquetStore(tmp_path / "gaps")
-    gap_store.upsert((
-        GapRecord(
-            symbol="BTCUSDT",
-            exchange="binanceusdm",
-            kind=GapKind.STORAGE_HOLE,
-            start=START,
-            end=START + timedelta(hours=1),
-            detected_at=START + timedelta(days=3),
-        ),
-    ))
+    gap_store.upsert(
+        (
+            GapRecord(
+                symbol="BTCUSDT",
+                exchange="binanceusdm",
+                kind=GapKind.STORAGE_HOLE,
+                start=START,
+                end=START + timedelta(hours=1),
+                detected_at=START + timedelta(days=3),
+            ),
+        )
+    )
 
     class RetentionLimited:
         def fetch(self, *_args, **_kwargs):
@@ -188,6 +193,72 @@ def test_rest_retention_rejection_defers_to_vision_without_aborting(tmp_path) ->
     )
 
     assert not report.recovered
-    assert report.skipped_symbols == (
-        f"BTCUSDT:{START.isoformat()}:vision",
+    assert report.skipped_symbols == (f"BTCUSDT:{START.isoformat()}:vision",)
+
+
+def test_closed_tail_is_materialized_and_recovered_after_restart(tmp_path) -> None:
+    candle_store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    candle_store.upsert(
+        (
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                open_time=START,
+                close_time=START + timedelta(hours=1),
+                open=Decimal(100),
+                high=Decimal(101),
+                low=Decimal(99),
+                close=Decimal(100),
+                volume=Decimal(1),
+                quote_volume=Decimal(100),
+                trade_count=1,
+            ),
+        )
     )
+
+    class TailFetcher:
+        def fetch(self, symbol, start, end):
+            assert symbol == "BTCUSDT"
+            assert start == START + timedelta(hours=1)
+            assert end == START + timedelta(hours=2)
+            start_ms = int(start.timestamp() * 1_000)
+            frame = pd.DataFrame(
+                [
+                    {
+                        "ts_ms": start_ms + minute * 60_000,
+                        "price": 101.0 + minute / 100,
+                        "amount": 1.0,
+                        "side": "buy" if minute % 2 == 0 else "sell",
+                    }
+                    for minute in range(60)
+                ]
+            )
+            return FetchedTape(
+                symbol="BTCUSDT",
+                start=start,
+                end=end,
+                frame=frame,
+                first_agg_id=20,
+                last_agg_id=79,
+                requests=1,
+                sha256="tail-proof",
+            )
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=TailFetcher(),
+        recover_closed_tail=True,
+        now=START + timedelta(hours=2, minutes=5),
+    )
+
+    assert len(report.recovered) == 1
+    repaired = candle_store.read("BTCUSDT", "1h")
+    assert any(candle.open_time == START + timedelta(hours=1) for candle in repaired)
+    gaps = GapParquetStore(tmp_path / "gaps").read("binanceusdm", "BTCUSDT")
+    assert len(gaps) == 1
+    assert gaps[0].recovered is True
+    assert "closed canonical tail missing" in gaps[0].detail

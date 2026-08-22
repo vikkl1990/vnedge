@@ -2,7 +2,8 @@
 
 This command is intentionally narrower than the research archive backfill:
 
-* it reads only unrecovered ``storage_hole`` records;
+* it reads unrecovered ``storage_hole`` records and may materialize the exact
+  missing closed tail after a recorder restart;
 * it fetches the exact half-open interval ``[start, end)`` from Binance;
 * aggregate-trade IDs must be strictly contiguous across every REST page;
 * shards are atomically added to the live tick-lake partition;
@@ -28,8 +29,7 @@ import httpx
 import pandas as pd
 
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
-from vnedge.data.candle_bootstrap import BootstrapReport, bootstrap_candles
-from vnedge.data.candles import CandleParquetStore, CandlePipeline
+from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 
 logger = logging.getLogger(__name__)
@@ -254,24 +254,57 @@ def _write_tape(
     validation.advance_time(tape.end)
 
     frame = tape.frame.copy()
-    frame["_day"] = pd.to_datetime(frame["ts_ms"], unit="ms", utc=True).dt.strftime(
-        "%Y%m%d"
-    )
+    frame["_day"] = pd.to_datetime(frame["ts_ms"], unit="ms", utc=True).dt.strftime("%Y%m%d")
     paths: list[Path] = []
     for day, chunk in frame.groupby("_day", sort=True):
         payload = chunk.drop(columns="_day").reset_index(drop=True)
         directory = shard_dir(data_root, tape.symbol, str(day), exchange)
         directory.mkdir(parents=True, exist_ok=True)
-        first_ts = int(payload["ts_ms"].iloc[0])
+        start_ms = int(tape.start.timestamp() * 1_000)
+        end_ms = int(tape.end.timestamp() * 1_000)
         identity = hashlib.sha256(
             f"{tape.symbol}|{tape.start.isoformat()}|{tape.end.isoformat()}".encode()
         ).hexdigest()[:12]
-        final = directory / f"{first_ts}-gapfill-{identity}.parquet"
+        # The exact requested interval is encoded in the filename so a future
+        # full bootstrap can give this proven REST tape precedence over a
+        # recorder's partial, overlapping shard from before the repair.
+        final = directory / f"{start_ms}-gapfill-{end_ms}-{identity}.parquet"
         tmp = directory / f".{final.name}.tmp"
         payload.to_parquet(tmp, index=False)
         tmp.replace(final)
         paths.append(final)
     return tuple(paths)
+
+
+def _replay_fetched_tape(
+    tape: FetchedTape,
+    store: CandleParquetStore,
+) -> int:
+    """Upsert candles from only the verified interval, then repair parents.
+
+    Replaying the combined live lake here is unsafe: a recorder restart may
+    have captured the final minutes of the otherwise missing hour, and the
+    authoritative REST gapfill necessarily overlaps those partial rows.
+    Replaying only ``tape`` prevents double-counted volume.  Constructing a
+    store-backed pipeline afterwards deterministically rebuilds any now-
+    complete higher-timeframe buckets from persisted child bars.
+    """
+    captured: list[Candle] = []
+    pipeline = CandlePipeline(tape.symbol, subscribers=(captured.append,))
+    for row in tape.frame.itertuples(index=False):
+        pipeline.on_trade(
+            datetime.fromtimestamp(int(row.ts_ms) / 1_000, tz=UTC),
+            Decimal(str(row.price)),
+            Decimal(str(row.amount)),
+            str(row.side).lower() != "buy",
+        )
+    pipeline.advance_time(tape.end)
+    if captured:
+        store.upsert(captured)
+        # Constructor recovery is deliberately delta-only: it fills missing
+        # parent buckets but never overwrites existing authoritative candles.
+        CandlePipeline(tape.symbol, store=store)
+    return len(captured)
 
 
 def _canonical_gap_covered(
@@ -312,16 +345,61 @@ def recover_storage_gaps(
     exchange: str,
     symbols: list[str],
     fetcher: IntervalFetcher,
+    recover_closed_tail: bool = False,
+    now: datetime | None = None,
 ) -> RecoveryReport:
-    """Fetch, replay and then close exact unrecovered storage-hole records."""
+    """Fetch, replay and then close exact unrecovered storage-hole records.
+    ``recover_closed_tail`` is used by the long-running repair worker.  A
+    recorder restart during an hour cannot reconstruct the already elapsed
+    part of that hour from its live websocket.  Once that hour is closed, it
+    is a provable missing interval even though there is not yet a later candle
+    with which the ordinary interior-hole detector can bracket it.
+
+    The tail is bounded to completed UTC hours and persisted as an ordinary
+    ``storage_hole`` before recovery, so it follows the same strict aggregate
+    trade-ID proof and audit path as every other repair.
+    """
     data_path = Path(data_root)
     gap_store = GapParquetStore(gap_root)
     candle_store = CandleParquetStore(candle_root, exchange=exchange)
     recovered: list[RecoveredGap] = []
     skipped: list[str] = []
+    moment = _utc(now or datetime.now(UTC), label="recovery clock")
+    completed_hour_end = moment.replace(minute=0, second=0, microsecond=0)
 
     for symbol in symbols:
         records = gap_store.read(exchange, symbol)
+        if recover_closed_tail:
+            latest_close = max(
+                (
+                    candle.close_time
+                    for candle in candle_store.read(_market_id(symbol), "1h")
+                    if candle.is_closed
+                ),
+                default=None,
+            )
+            if latest_close is not None and latest_close < completed_hour_end:
+                tail_id = (
+                    f"tail-{exchange}-{_market_id(symbol)}-"
+                    f"{latest_close:%Y%m%d%H}-{completed_hour_end:%Y%m%d%H}"
+                )
+                already_recorded = any(record.gap_id == tail_id for record in records)
+                if not already_recorded:
+                    tail = GapRecord(
+                        symbol=_market_id(symbol),
+                        exchange=exchange,
+                        kind=GapKind.STORAGE_HOLE,
+                        start=latest_close,
+                        end=completed_hour_end,
+                        detected_at=moment,
+                        detail=(
+                            "closed canonical tail missing after recorder restart; "
+                            "materialized by recovery worker"
+                        ),
+                        gap_id=tail_id,
+                    )
+                    gap_store.upsert((tail,))
+                    records.append(tail)
         holes = [
             record
             for record in records
@@ -341,9 +419,7 @@ def recover_storage_gaps(
                     replace(
                         record,
                         recovered=True,
-                        detail="; ".join(
-                            part for part in (record.detail, proof) if part
-                        ),
+                        detail="; ".join(part for part in (record.detail, proof) if part),
                     )
                     for record in duplicate_records
                 )
@@ -366,27 +442,21 @@ def recover_storage_gaps(
                 skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:vision")
                 continue
             paths = _write_tape(tape, data_path, exchange=exchange)
-            days = max(1, (datetime.now(UTC).date() - gap.start.date()).days + 1)
-            candle_report: BootstrapReport = bootstrap_candles(
-                data_path,
-                candle_root,
-                source_exchange=exchange,
-                target_exchange=exchange,
-                symbols=[symbol],
-                days=days,
-            )
-            if candle_report.rejected:
-                logger.warning(
-                    "%s canonical replay skipped %d invalid/out-of-order rows from "
-                    "the combined live lake; the fetched gap tape itself passed "
-                    "strict value and aggregate-ID validation",
+            candle_count = _replay_fetched_tape(tape, candle_store)
+            if not _canonical_gap_covered(candle_store, symbol, start, end):
+                logger.error(
+                    "%s recovery replay did not produce complete closed 1h coverage "
+                    "for %s..%s; gap remains open",
                     symbol,
-                    candle_report.rejected,
+                    start.isoformat(),
+                    end.isoformat(),
                 )
+                skipped.append(f"{_market_id(symbol)}:{start.isoformat()}:unproven")
+                continue
             proof = (
                 f"recovered from Binance REST aggTrades; rows={tape.trades}; "
                 f"agg_ids={tape.first_agg_id}-{tape.last_agg_id}; sha256={tape.sha256}; "
-                f"unrelated_replay_rejections={candle_report.rejected}"
+                "unrelated_replay_rejections=0"
             )
             gap_store.upsert(
                 replace(
@@ -408,8 +478,8 @@ def recover_storage_gaps(
                     requests=tape.requests,
                     sha256=tape.sha256,
                     shards=tuple(str(path) for path in paths),
-                    candles=candle_report.candles,
-                    unrelated_replay_rejections=candle_report.rejected,
+                    candles=candle_count,
+                    unrelated_replay_rejections=0,
                 )
             )
     return RecoveryReport(exchange, tuple(recovered), tuple(skipped))
@@ -444,9 +514,7 @@ def main(argv: list[str] | None = None) -> int:
     if not symbols:
         parser.error("--symbols must name at least one symbol")
 
-    with BinanceAggTradeRest(
-        request_interval_seconds=args.request_interval_seconds
-    ) as fetcher:
+    with BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher:
         report = recover_storage_gaps(
             data_root=args.data_root,
             candle_root=args.candle_root,
@@ -454,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             exchange=args.exchange,
             symbols=symbols,
             fetcher=fetcher,
+            recover_closed_tail=True,
         )
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)

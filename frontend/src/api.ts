@@ -6,6 +6,12 @@ export interface BrowserSession {
   expires_at: string | null;
 }
 
+export interface ReadinessStatus {
+  status: "ready" | "not_ready" | "unknown";
+  reasons: string[];
+  http_status: number;
+}
+
 export async function hasBrowserSession(): Promise<BrowserSession | null> {
   const response = await fetch("/whoami", {
     credentials: "same-origin",
@@ -563,6 +569,10 @@ export interface JournalPayload {
     fills: number;
     closed_trades: number;
     actual_realized_pnl_usd: number;
+    actual_closed_net_usd: number;
+    actual_closed_trades: number;
+    shadow_closed_trades: number;
+    scanner_events: number;
     fees_usd: number;
     virtual_net_usd: number;
     [k: string]: unknown;
@@ -581,6 +591,7 @@ export interface JournalPayload {
 }
 
 export interface MetaPayload {
+  generated_at?: string;
   build_sha: string;
   host: string;
   uptime_seconds: number;

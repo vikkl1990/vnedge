@@ -288,21 +288,18 @@ def test_cost_model_route_auth_gated_and_real_numbers(client):
     payload = r.json()
     # Numbers come from the same source the engines use.
     from vnedge.paper.fill_model import FillModel
-    from vnedge.scalping.parameter_registry import (
-        DEFAULT_SCALPER_PARAMETER_REGISTRY as registry,
-    )
+    from vnedge.plan.cost_model import CostModel
 
-    fee = registry.fee_profile("binanceusdm")
+    model = CostModel.for_profile("scalp")
+    fee = model.config
     paper = FillModel()
-    assert payload["maker_bps"] == fee.maker_bps
-    assert payload["taker_bps"] == fee.taker_bps
-    assert payload["slippage_bps"] == fee.slippage_bps
-    # maker-first RT (~8 bps) = maker entry + taker exit + slippage
-    assert payload["maker_first_rt_bps"] == fee.maker_bps + fee.taker_bps + fee.slippage_bps
-    # taker RT (~11 bps) = both legs taker + slippage
-    assert payload["taker_rt_bps"] == 2 * fee.taker_bps + fee.slippage_bps
-    assert payload["maker_first_rt_bps"] == 8.0
-    assert payload["taker_rt_bps"] == 11.0
+    assert payload["maker_bps"] == fee.maker_fee_bps
+    assert payload["taker_bps"] == fee.taker_fee_bps
+    assert payload["slippage_bps"] == fee.default_slip_entry_bps + fee.default_slip_exit_bps
+    assert payload["maker_first_rt_bps"] == model.round_trip_bps(maker_entry=True, include_safety=False)
+    assert payload["taker_rt_bps"] == model.round_trip_bps(include_safety=False)
+    assert payload["maker_first_cost_bps"] == model.round_trip_bps(maker_entry=True)
+    assert payload["taker_round_trip_cost_bps"] == model.round_trip_bps()
     # paper broker's own pessimistic model is reported alongside
     assert payload["paper_fill_model"]["taker_fee_bps"] == paper.taker_fee_bps
     assert payload["paper_fill_model"]["slippage_bps"] == paper.slippage_bps

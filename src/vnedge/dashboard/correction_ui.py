@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from vnedge.dashboard.health_bands import lane_bands, lane_health, timeframe_health
+from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.latency_thresholds import LATENCY_GATE_MIN_SAMPLES
 from vnedge.strategy.strategy_registry import (
     KILLED,
@@ -26,6 +27,19 @@ LIVE_BLOCKED_MESSAGE = (
     "Live entrypoint disabled — venue private stream / checklist incomplete. "
     "Paper/shadow only."
 )
+
+
+def _lane_round_trip_bps(lane: Mapping[str, Any], plan: Mapping[str, Any]) -> float | None:
+    reported = _number(plan.get("round_trip_bps") or lane.get("round_trip_bps"))
+    if reported is not None:
+        return reported
+    profile = str(lane.get("cost_profile") or "").strip()
+    if not profile:
+        return None
+    try:
+        return CostModel.for_profile(profile).round_trip_bps()
+    except ValueError:
+        return None
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -280,9 +294,7 @@ def build_lanes_payload(
                 "last_signal_reason": reason,
                 "current_waiting_reason": waiting_reason,
                 "cost_profile": str(lane.get("cost_profile") or "unreported"),
-                "round_trip_bps": _number(
-                    plan.get("round_trip_bps") or lane.get("round_trip_bps")
-                ),
+                "round_trip_bps": _lane_round_trip_bps(lane, plan),
                 "health": health,
                 "health_reason": _health_reason(
                     lane, health, problems.get(str(lane.get("lane_id") or ""))
@@ -445,8 +457,12 @@ def _journal(snapshot: Mapping[str, Any], lanes: list[Mapping[str, Any]]) -> dic
 def _daily_halt(snapshot: Mapping[str, Any], lanes: list[Mapping[str, Any]]) -> dict[str, Any]:
     daily_pnl = float(snapshot.get("daily_pnl") or 0.0)
     peak = float(snapshot.get("peak_equity") or 0.0)
-    limit: float | None = None
+    runtime = _mapping(snapshot.get("runtime_control"))
+    shared_limit = _number(runtime.get("shadow_shared_daily_loss_usd"))
+    limit: float | None = shared_limit if shared_limit is not None and shared_limit > 0 else None
     for lane in lanes:
+        if limit is not None:
+            break
         scorecard = _mapping(lane.get("trial_scorecard"))
         criteria = scorecard.get("criteria")
         for criterion in criteria if isinstance(criteria, list) else []:
@@ -457,8 +473,6 @@ def _daily_halt(snapshot: Mapping[str, Any], lanes: list[Mapping[str, Any]]) -> 
                 except (TypeError, ValueError):
                     limit = None
                 break
-        if limit is not None:
-            break
     used = max(0.0, -daily_pnl)
     return {
         "used_usd": round(used, 2),
