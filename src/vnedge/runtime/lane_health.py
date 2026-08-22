@@ -70,6 +70,11 @@ SILENT_EVAL_SECONDS = 24 * 3600.0
 
 _JOURNAL_SUFFIX = ".journal.jsonl"
 _EQUITY_SUFFIX = ".equity.jsonl"
+# Runtime-wide journals share the lane artifact directory for atomicity, but
+# they are not strategy lanes and must never be compared with the desired
+# lane roster.  Keep this allowlist narrow and explicit: an unknown journal
+# remains an ORPHAN and is still recoverably archived at startup.
+_NON_LANE_JOURNAL_IDS = frozenset({"shadow_portfolio"})
 # How much file tail to scan for the newest record / newest lane_eval.
 # lane_eval is written every evaluated bar, so it dominates recent history;
 # 256 KiB of tail is thousands of records.
@@ -496,7 +501,7 @@ def audit_lanes(
     if journal_dir.is_dir():
         for path in sorted(journal_dir.glob(f"*{_JOURNAL_SUFFIX}")):
             lane_id = path.name[: -len(_JOURNAL_SUFFIX)]
-            if lane_id in desired_ids:
+            if lane_id in desired_ids or lane_id in _NON_LANE_JOURNAL_IDS:
                 continue
             _, record_age, eval_age, _, _, _ = _audit_one(
                 path, journal_dir / f"{lane_id}{_EQUITY_SUFFIX}", "", now

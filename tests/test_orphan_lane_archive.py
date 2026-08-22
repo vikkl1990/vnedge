@@ -31,6 +31,23 @@ def test_orphan_archive_dry_run_does_not_mutate(tmp_path) -> None:
     assert orphan.exists()
 
 
+def test_orphan_archive_preserves_runtime_wide_portfolio_journal(tmp_path) -> None:
+    (tmp_path / "active.journal.jsonl").write_text("", encoding="utf-8")
+    portfolio = tmp_path / "shadow_portfolio.journal.jsonl"
+    portfolio.write_text("shared state", encoding="utf-8")
+
+    plan = archive_orphan_lane_artifacts(
+        tmp_path,
+        desired=_desired(),
+        apply=True,
+        now=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+
+    assert plan.applied is False
+    assert plan.lane_ids == ()
+    assert portfolio.read_text(encoding="utf-8") == "shared state"
+
+
 def test_orphan_archive_moves_all_lane_artifacts_and_writes_manifest(tmp_path) -> None:
     active = tmp_path / "active.journal.jsonl"
     active.write_text("", encoding="utf-8")

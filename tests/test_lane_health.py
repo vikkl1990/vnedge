@@ -188,6 +188,17 @@ def test_verdict_orphan_journal_without_desired_spec(tmp_path):
     assert report.totals["active"] == 1  # orphans not counted as active desired lanes
 
 
+def test_runtime_wide_shadow_portfolio_journal_is_not_an_orphan(tmp_path):
+    write_journal(tmp_path, "lane_a", ok_records())
+    write_journal(tmp_path, "shadow_portfolio", ok_records())
+
+    report = audit_lanes(tmp_path, desired=[spec("lane_a")], now=NOW)
+
+    assert [row.lane_id for row in report.rows] == ["lane_a"]
+    assert report.totals["orphan"] == 0
+    assert report.production_healthy
+
+
 def test_shadow_outcome_is_under_sampled_before_evidence_minimum(tmp_path):
     lane = LaneSpec(
         lane_id="shadow_lane",
