@@ -31,6 +31,7 @@ import pandas as pd
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
 from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
+from vnedge.data.lake_health import LakeHealthMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -529,6 +530,16 @@ def main(argv: list[str] | None = None) -> int:
     tmp = report_path.with_suffix(f"{report_path.suffix}.tmp")
     tmp.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
     tmp.replace(report_path)
+    # Recovery and readiness are one workflow. Do not leave the dashboard on
+    # a stale DEGRADED result until the recorder's next 15-minute monitor pass.
+    # This scan remains fail-closed: any remaining hole or stale tail keeps the
+    # published lake status non-healthy.
+    LakeHealthMonitor(
+        exchange=args.exchange,
+        symbols=[_market_id(symbol) for symbol in symbols],
+        candle_root=Path(args.candle_root),
+        gap_root=Path(args.gap_root),
+    ).check_once()
     print(json.dumps(report.to_dict(), sort_keys=True))
     return 0
 
