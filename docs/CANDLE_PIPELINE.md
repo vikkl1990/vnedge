@@ -302,8 +302,8 @@ python -m vnedge.data.candle_bootstrap \
 ```
 
 The scanner roster uses a stricter startup barrier in Compose. It keeps at
-least nine complete archive days (enough for the 2,065-bar 5m squeeze feature
-window), then recovers the unpublished closed tail from strict Binance REST
+least 23 complete archive days (enough for both the 2,065-bar 5m squeeze and
+2,017-bar 15m range feature windows), then recovers the unpublished closed tail from strict Binance REST
 aggregate trades at 5m granularity. Candle replay is delta-only: canonical 1m
 minutes already present are skipped and only missing complete parent buckets
 are repaired. The scanner container runs this sequence inside its own

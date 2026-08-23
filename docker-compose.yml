@@ -54,7 +54,7 @@ services:
       MULTI_LANE_FIXED_MARGIN: "${MULTI_LANE_FIXED_MARGIN:-}"
       MULTI_LANE_FIXED_MARGIN_LEVERAGE: "${MULTI_LANE_FIXED_MARGIN_LEVERAGE:-30}"
       MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-1}"
-      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-9}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-23}"
       SCANNER_PREREQ_SYMBOLS: "${SCANNER_PREREQ_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
@@ -155,14 +155,14 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-9}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-23}"
     command:
       - sh
       - -c
       - |
         while true; do
           required_days="$${VISION_BACKFILL_DAYS}"
-          if [ "$${required_days}" -lt 9 ]; then required_days=9; fi
+          if [ "$${required_days}" -lt 23 ]; then required_days=23; fi
           python -m vnedge.data.aggtrades_backfill \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
             --days "$${required_days}" \

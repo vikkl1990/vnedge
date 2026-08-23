@@ -36,7 +36,7 @@ docker compose logs -f multi-lane-shadow
 ```
 
 `multi-lane-shadow` starts through `vnedge.runtime.scanner_startup`. On every
-container start—including Docker daemon and host restarts—it downloads at least nine
+container start—including Docker daemon and host restarts—it downloads at least 23
 complete Binance Vision aggTrade days for BTC/ETH, deterministically rebuilds
 the canonical 1m→4h ladder, and fills the unpublished closed 5m tail from
 the recent aggregate-trade API. Existing archive days and canonical minutes

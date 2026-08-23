@@ -953,8 +953,10 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     RangeExpansionObserver.strategy_id: RangeExpansionObserver.warmup_bars,
     RangeExpansionObserverV2.strategy_id: RangeExpansionObserverV2.warmup_bars,
     RangeExpansionObserverV3.strategy_id: RangeExpansionObserverV3.warmup_bars,
+    RangeExpansionObserverV4.strategy_id: RangeExpansionObserverV4.warmup_bars,
     StructureBos1H.strategy_id: StructureBos1H.warmup_bars,
     StructureBos15mTriggerV2.strategy_id: StructureBos15mTriggerV2.warmup_bars,
+    StructureBos15mTriggerV3.strategy_id: StructureBos15mTriggerV3.warmup_bars,
 }
 
 

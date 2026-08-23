@@ -59,6 +59,27 @@ def test_strategy_warmup_expands_only_lanes_that_need_more_history():
     assert _required_warmup_bars(measurement, {}) == 500
 
 
+def test_current_scanner_ids_use_their_frozen_warmup_contracts():
+    range_v4 = LaneSpec(
+        lane_id="range-v4",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        timeframe="15m",
+        strategy_id="range_expansion_observer_v4",
+    )
+    bos_v3 = LaneSpec(
+        lane_id="bos-v3",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        timeframe="15m",
+        strategy_id="structure_bos_15m_trigger_v3",
+    )
+
+    assert _required_warmup_bars(range_v4, {}) == 2018
+    # The global operational floor exceeds BoS v3's 224-bar feature need.
+    assert _required_warmup_bars(bos_v3, {}) == 500
+
+
 def test_first_run_full_fetches_and_writes_cache(tmp_path):
     cache = tmp_path / "lane-a.candles.parquet"
     rest = _FakeRest()

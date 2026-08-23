@@ -28,7 +28,7 @@ def test_prerequisite_commands_are_restart_safe_and_ordered() -> None:
         "vnedge.data.scanner_prereq",
     ]
     assert all(command[0] == sys.executable for command in commands)
-    assert commands[0][commands[0].index("--days") + 1] == "9"
+    assert commands[0][commands[0].index("--days") + 1] == "23"
     assert "--max-tail-passes" in commands[2]
 
 

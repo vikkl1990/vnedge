@@ -2,7 +2,16 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from vnedge.data.candles import Candle, CandleParquetStore
-from vnedge.data.scanner_prereq import scanner_prerequisites
+from vnedge.data.scanner_prereq import DEFAULT_REQUIREMENTS, scanner_prerequisites
+
+
+def test_default_requirements_cover_active_scanner_warmups() -> None:
+    assert DEFAULT_REQUIREMENTS == {
+        "5m": 2066,
+        "15m": 2018,
+        "1h": 24,
+        "4h": 6,
+    }
 
 
 def _candles(symbol: str, timeframe: str, count: int, close: datetime) -> list[Candle]:

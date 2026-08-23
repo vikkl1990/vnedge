@@ -24,8 +24,11 @@ from pathlib import Path
 from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore, floor_time
 
 DEFAULT_REQUIREMENTS: Mapping[str, int] = {
-    "5m": 288,
-    "15m": 96,
+    # Active scanner causal contracts, including one evaluable bar after
+    # indicator warmup. Readiness must prove the full exact-volume window,
+    # not merely one recent day of healthy candles.
+    "5m": 2066,
+    "15m": 2018,
     "1h": 24,
     "4h": 6,
 }

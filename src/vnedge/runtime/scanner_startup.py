@@ -18,7 +18,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = "BTC/USDT:USDT,ETH/USDT:USDT"
-MINIMUM_ARCHIVE_DAYS = 9
+# The active 15m range scanner needs 2,017 causal bars before it may evaluate.
+# Twenty-three complete UTC archive days provide that window plus boundary
+# room, while ordinary restarts remain delta-only because archive shards and
+# canonical candles are idempotent.
+MINIMUM_ARCHIVE_DAYS = 23
 
 
 def _archive_days(environ: Mapping[str, str]) -> int:
