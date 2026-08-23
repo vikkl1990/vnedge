@@ -574,6 +574,9 @@ def create_app(
 
     app = FastAPI(title="VNEDGE dashboard", docs_url=None, redoc_url=None)
     ws_connections: dict[str, int] = {}  # user name -> live socket count (never tokens)
+    strategy_workflow_cache: dict | None = None
+    strategy_workflow_cache_at = 0.0
+    strategy_workflow_lock = asyncio.Lock()
 
     @app.middleware("http")
     async def spa_shell_cache_policy(
@@ -2391,20 +2394,38 @@ def create_app(
                 },
             )
         else:
-            try:
-                payload = build_strategy_workflow()
-            except (OSError, ValueError) as exc:
-                payload = _read_json_payload(
-                    strategy_workflow_file,
-                    {
-                        "workflow_id": "strategy_workflow_v1",
-                        "status": "workflow_unavailable",
-                        "error": str(exc),
-                        "summary": {},
-                        "revisions": [],
-                        "policy": {"can_trade": False, "can_promote": False},
-                    },
-                )
+            nonlocal strategy_workflow_cache, strategy_workflow_cache_at
+            ttl = max(
+                1.0,
+                float(os.environ.get("DASHBOARD_STRATEGY_WORKFLOW_CACHE_SECONDS", "60")),
+            )
+            async with strategy_workflow_lock:
+                cache_age = time.monotonic() - strategy_workflow_cache_at
+                if strategy_workflow_cache is not None and cache_age < ttl:
+                    payload = {**strategy_workflow_cache}
+                else:
+                    try:
+                        payload = await asyncio.wait_for(
+                            asyncio.to_thread(build_strategy_workflow),
+                            timeout=10.0,
+                        )
+                        strategy_workflow_cache = payload
+                        strategy_workflow_cache_at = time.monotonic()
+                    except (OSError, ValueError, TimeoutError) as exc:
+                        payload = _read_json_payload(
+                            strategy_workflow_file,
+                            {
+                                "workflow_id": "strategy_workflow_v1",
+                                "status": "workflow_unavailable",
+                                "error": str(exc) or type(exc).__name__,
+                                "summary": {},
+                                "revisions": [],
+                                "policy": {
+                                    "can_trade": False,
+                                    "can_promote": False,
+                                },
+                            },
+                        )
         payload["can_trade"] = False
         payload["can_promote"] = False
         return JSONResponse(payload, headers=_identity(user))

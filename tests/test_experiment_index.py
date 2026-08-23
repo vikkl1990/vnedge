@@ -14,13 +14,13 @@ from vnedge.research.experiment_index import (
     KIND_UNTOUCHED_JUDGMENT,
     KIND_WALK_FORWARD,
     PROV_UNTOUCHED,
+    RunRecord,
+    _records_from_feed,
     best,
     build_experiment_index,
     distinct,
     query,
-    _records_from_feed,
 )
-from vnedge.research.experiment_index import RunRecord
 
 
 def _write_feed(path, rows):
@@ -118,6 +118,37 @@ def test_torn_jsonl_tail_does_not_lose_the_index(tmp_path):
     feed.write_text(json.dumps(_feed_row()) + "\n" + '{"strategy": "broke", "verd')  # torn tail
     records = _records_from_feed(feed)
     assert len(records) == 1 and records[0].strategy_id == "funding_mr"
+
+
+def test_feed_reader_can_bound_runtime_view_to_recent_records(tmp_path):
+    feed = tmp_path / "feed.jsonl"
+    _write_feed(
+        feed,
+        [
+            _feed_row(
+                strategy=f"strategy_{index}",
+                updated=f"2026-08-23T00:{index:02}:00Z",
+            )
+            for index in range(20)
+        ],
+    )
+
+    payload = build_experiment_index(
+        feed_path=feed,
+        burn_registry_path=tmp_path / "burn.jsonl",
+        paper_trials_dir=tmp_path / "trials",
+        feed_max_records=5,
+    )
+
+    assert payload["summary"]["total"] == 5
+    assert [row["strategy_id"] for row in payload["records"]] == [
+        "strategy_15",
+        "strategy_16",
+        "strategy_17",
+        "strategy_18",
+        "strategy_19",
+    ]
+    assert payload["policy"]["feed_record_limit"] == 5
 
 
 def test_auto_explore_rows_are_labelled_and_non_promotable(tmp_path):

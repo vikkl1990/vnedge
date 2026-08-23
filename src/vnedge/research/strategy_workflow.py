@@ -48,6 +48,7 @@ from vnedge.research.experiment_index import (
 WORKFLOW_ID = "strategy_workflow_v1"
 DEFAULT_WORKFLOW_REGISTRY = Path("research/strategy_workflow/registry.jsonl")
 DEFAULT_WORKFLOW_OUT = Path("research/live_research/strategy_workflow_latest.json")
+DEFAULT_DASHBOARD_FEED_RECORD_LIMIT = 5_000
 
 EVENT_REGISTERED = "revision_registered"
 EVENT_FORKED = "revision_forked"
@@ -657,9 +658,16 @@ def build_strategy_workflow(
     burn_registry_path: str | Path = DEFAULT_BURN_REGISTRY,
     paper_trials_dir: str | Path = DEFAULT_PAPER_TRIALS_DIR,
     prereg_dir: str | Path = Path("docs/prereg"),
+    feed_max_records: int | None = DEFAULT_DASHBOARD_FEED_RECORD_LIMIT,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Join lineage, engine parity, run evidence, and runtime permissions."""
+    """Join lineage, engine parity, run evidence, and runtime permissions.
+
+    The workflow is a control-plane view, not an exhaustive research export.
+    Its rolling feed input is therefore tail-bounded by default so an
+    append-only production feed cannot stall the dashboard. Offline callers
+    that truly need the complete history may pass ``feed_max_records=None``.
+    """
     from vnedge.strategy.strategy_registry import KILLED, RESEARCH_ONLY, SHADOW_OBSERVE
 
     store = StrategyWorkflowStore(workflow_registry_path)
@@ -676,6 +684,7 @@ def build_strategy_workflow(
         feed_path=Path(feed_path),
         burn_registry_path=Path(burn_registry_path),
         paper_trials_dir=Path(paper_trials_dir),
+        feed_max_records=feed_max_records,
         now=now,
     )
     records = [RunRecord(**row) for row in experiment["records"]]
@@ -740,6 +749,11 @@ def build_strategy_workflow(
         ],
         "revisions": rows,
         "experiment_summary": experiment["summary"],
+        "evidence_scope": {
+            "rolling_feed_record_limit": feed_max_records,
+            "untouched_judgments": "complete burn registry",
+            "paper_trials": "complete reports directory",
+        },
         "policy": {
             "immutable_revisions": True,
             "fork_requires_new_registered_strategy_id": True,

@@ -26,17 +26,16 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Callable
+from typing import Any
 
-from vnedge.research.data_burn import (
-    DEFAULT_REGISTRY_PATH as DEFAULT_BURN_REGISTRY_PATH,
-    KIND_JUDGMENT,
-    read_records as read_burn_records,
-)
+from vnedge.research.data_burn import DEFAULT_REGISTRY_PATH as DEFAULT_BURN_REGISTRY_PATH
+from vnedge.research.data_burn import KIND_JUDGMENT
+from vnedge.research.data_burn import read_records as read_burn_records
 
 EXPERIMENT_INDEX_ID = "research_experiment_index_v1"
 
@@ -84,12 +83,58 @@ def _lane(strategy_id: str, exchange: str, symbol: str, timeframe: str) -> str:
     return f"{strategy_id}|{exchange}|{symbol}|{timeframe}"
 
 
-def _read_jsonl(path: Path) -> list[dict]:
+def _tail_lines(
+    path: Path,
+    *,
+    max_records: int,
+    chunk_size: int = 64 * 1024,
+    max_scan_bytes: int = 32 * 1024 * 1024,
+) -> list[bytes]:
+    """Read a bounded JSONL tail without walking an arbitrarily large file.
+
+    Runtime research feeds are append-only and can grow into gigabytes. A UI
+    request must never read one from byte zero. The bounded reverse scan keeps
+    dashboard cost proportional to the requested evidence window while the
+    unbounded offline index remains available to explicit research jobs.
+    """
+    if max_records <= 0:
+        return []
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        chunks: list[bytes] = []
+        newlines = 0
+        scanned = 0
+        while position > 0 and newlines <= max_records and scanned < max_scan_bytes:
+            size = min(chunk_size, position, max_scan_bytes - scanned)
+            position -= size
+            handle.seek(position)
+            chunk = handle.read(size)
+            chunks.append(chunk)
+            newlines += chunk.count(b"\n")
+            scanned += size
+    lines = b"".join(reversed(chunks)).splitlines()
+    if position > 0 and lines:
+        # The reverse scan probably began in the middle of a record. Dropping
+        # one complete-looking row is safer than accepting a truncated prefix.
+        lines = lines[1:]
+    return lines[-max_records:]
+
+
+def _read_jsonl(path: Path, *, max_records: int | None = None) -> list[dict]:
     if not path.exists():
         return []
     out: list[dict] = []
-    for line in path.read_text().splitlines():
-        line = line.strip()
+    if max_records is None:
+        raw_lines: Sequence[str | bytes] = path.read_text().splitlines()
+    else:
+        raw_lines = _tail_lines(path, max_records=max_records)
+    for raw_line in raw_lines:
+        line = (
+            raw_line.decode("utf-8", errors="replace")
+            if isinstance(raw_line, bytes)
+            else raw_line
+        ).strip()
         if not line:
             continue
         try:
@@ -100,10 +145,14 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 # --------------------------------------------------------------------- loaders
-def _records_from_feed(feed_path: Path) -> list[RunRecord]:
+def _records_from_feed(
+    feed_path: Path,
+    *,
+    max_records: int | None = None,
+) -> list[RunRecord]:
     """Rolling walk-forward verdicts (continuous_research ``wf_record`` shape)."""
     out: list[RunRecord] = []
-    for i, rec in enumerate(_read_jsonl(feed_path)):
+    for i, rec in enumerate(_read_jsonl(feed_path, max_records=max_records)):
         strategy = rec.get("strategy", "")
         symbol = rec.get("symbol", "")
         exchange = rec.get("exchange", "")
@@ -268,11 +317,11 @@ def best(
     ascending: bool = False,
 ) -> list[RunRecord]:
     """Top runs by a numeric metric key; records missing the metric are dropped."""
-    scored = [
-        (r, r.metrics.get(metric))
-        for r in records
-        if isinstance(r.metrics.get(metric), (int, float))
-    ]
+    scored: list[tuple[RunRecord, float]] = []
+    for record in records:
+        value = record.metrics.get(metric)
+        if isinstance(value, (int, float)):
+            scored.append((record, float(value)))
     scored.sort(key=lambda kv: kv[1], reverse=not ascending)
     return [r for r, _ in scored[:limit]]
 
@@ -310,11 +359,14 @@ def build_experiment_index(
     feed_path: Path | str = DEFAULT_FEED,
     burn_registry_path: Path | str = DEFAULT_BURN_REGISTRY_PATH,
     paper_trials_dir: Path | str = DEFAULT_PAPER_TRIALS_DIR,
+    feed_max_records: int | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Join every run store into one read-only, queryable snapshot payload."""
     records: list[RunRecord] = []
-    records.extend(_records_from_feed(Path(feed_path)))
+    records.extend(
+        _records_from_feed(Path(feed_path), max_records=feed_max_records)
+    )
     records.extend(_records_from_burn_registry(Path(burn_registry_path)))
     records.extend(_records_from_paper_trials(Path(paper_trials_dir)))
     records.sort(key=lambda r: (r.recorded_at, r.run_id))
@@ -332,6 +384,7 @@ def build_experiment_index(
             "provenance_authority": "research/judgments/burn_registry.jsonl (data_burn)",
             "can_trade": False,
             "can_promote": False,
+            "feed_record_limit": feed_max_records,
         },
     }
 

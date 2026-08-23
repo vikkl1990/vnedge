@@ -69,6 +69,12 @@ That snapshot joins:
 - paper-forward reports;
 - current `RESEARCH_ONLY`, `SHADOW_OBSERVE`, and `KILLED` policy.
 
+The dashboard reads at most the latest 5,000 rolling-research feed records,
+then joins the complete burn registry and paper-trial reports. This bound is
+intentional: append-only runtime feeds can grow to gigabytes and must never be
+scanned from byte zero by an HTTP request. The result is cached in-process for
+60 seconds. Offline evidence jobs can explicitly request the full feed.
+
 ## Commands
 
 Register the first frozen revision of an already-reviewed strategy:
