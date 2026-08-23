@@ -7,7 +7,10 @@ def _lane(**kw):
     d = {
         "timeframe": "1h",
         "time_machine": {"health": {"1h": "ok"}, "age_ms": {"1h": 400}},
-        "latency": {"decision_lag_ms": {"p95": 25, "n": 20}},
+        "latency": {
+            "bar_close_processing_ms": {"p95": 25, "n": 20},
+            "decision_lag_ms": {"p95": 25, "n": 20},
+        },
         "decision_skips": {},
     }
     d.update(kw)
@@ -64,6 +67,7 @@ def test_kill_dominates_system_and_risk():
 def test_unknown_never_fakes_ok():
     c = compute_chips({"lanes": [], "feed_health": {}})
     assert c["CANDLE"]["band"] == "unknown" and c["DECISION"]["band"] == "unknown"
+    assert c["SYSTEM"] == {"band": "unknown", "label": "incomplete telemetry"}
 
 
 def test_lane_bands_drawdown():

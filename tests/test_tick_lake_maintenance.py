@@ -294,4 +294,4 @@ def test_compact_verification_failure_keeps_shards(tmp_path, monkeypatch, caplog
         assert compact_day(d, now=NOW) is None
     assert len(list(d.glob("*.parquet"))) == 2      # shards untouched
     assert not list(d.glob(".*.tmp"))               # temp cleaned up
-    assert any("row-count mismatch" in r.message for r in caplog.records)
+    assert any("day left as-is" in r.message for r in caplog.records)

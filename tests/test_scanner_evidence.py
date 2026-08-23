@@ -156,3 +156,31 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     assert row["virtual_pending"] == 0
     assert row["gross_usd"] == 10.0
     assert row["net_execution_usd"] == 9.7
+
+
+def test_journal_report_reads_only_a_bounded_recent_tail(tmp_path: Path):
+    journal = tmp_path / "bounded.journal.jsonl"
+    old = {
+        "ts": "2026-01-01T00:00:00+00:00",
+        "kind": "lane_eval",
+        "payload": {"strategy_id": "old_v1", "fired": False},
+    }
+    recent = {
+        "ts": "2026-01-02T00:00:00+00:00",
+        "kind": "lane_eval",
+        "payload": {"strategy_id": "recent_v1", "fired": True},
+    }
+    journal.write_text(
+        (json.dumps(old) + "\n") * 100 + json.dumps(recent) + "\n",
+        encoding="utf-8",
+    )
+
+    report = scanner_evidence.build_journal_report(
+        [journal], max_bytes_per_journal=256, max_total_bytes=256
+    )
+
+    rows = {row["strategy_id"]: row for row in report["strategies"]}
+    assert "recent_v1" in rows
+    assert rows.get("old_v1", {}).get("evaluations", 0) < 100
+    assert report["source_window"]["effective_bytes_per_journal"] == 256
+    assert report["fires"] == 1

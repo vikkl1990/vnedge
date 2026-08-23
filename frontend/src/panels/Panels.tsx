@@ -4,8 +4,8 @@
 
 import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
-import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
+import { useAgenticResearchStatus, useCostModel, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
+import type { ArtifactMetadata, CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
@@ -523,7 +523,7 @@ export function ResearchPanel() {
   const scorecard = useResearchScorecard();
   const risk = useRiskSnapshot();
   const lanes = useLanes();
-  const scoreFreshness = generatedFreshness("research scorecard", scorecard.data?.generated_at, 2 * 60 * 60);
+  const scoreFreshness = artifactFreshness("research scorecard", scorecard.data?.artifact);
   const [showUndersampled, setShowUndersampled] = useState(false);
   const artifacts = [
     ["Strategy scorecard", "/scorecard"],
@@ -555,7 +555,7 @@ export function ResearchPanel() {
     <div className="space-y-4">
       <StrategyWorkflowPanel />
       <TerminalPanel title="Research" meta="evidence only · no mutation">
-      {scoreFreshness.state !== "OK" && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[11px] text-warn"><strong>Scorecard {scoreFreshness.state.toLowerCase()}.</strong> Age {scoreFreshness.age}; metrics remain historical evidence and must not drive promotion.</div>}
+      <div className="mb-4 rounded-lg border border-line bg-inset px-3 py-2 text-[11px] text-dim"><strong className="text-txt">Scorecard {scoreFreshness.state.toLowerCase()}.</strong> Evidence as of {scoreFreshness.age}; historical age is provenance, not a runtime outage.</div>
       <div className="rounded-lg border border-line bg-inset p-4">
         <div className="font-mono text-[10px] uppercase tracking-wider text-faint">Pinned findings</div>
         <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -611,8 +611,8 @@ function IntelligencePanel() {
   const summary = agentAvailable ? agents.data?.summary : undefined;
   const gateRows = mlAvailable ? Object.entries(ml.data?.gates ?? {}).slice(0, 6) : [];
   const locked = mlAvailable && !ml.data?.can_promote && !ml.data?.can_trade;
-  const mlFreshness = generatedFreshness("ML pipeline", ml.data?.generated_at, 2 * 60 * 60);
-  const agentFreshness = generatedFreshness("agent governor", agents.data?.generated_at, 2 * 60 * 60);
+  const mlFreshness = artifactFreshness("ML pipeline", ml.data?.artifact);
+  const agentFreshness = artifactFreshness("agent governor", agents.data?.artifact);
   const gateValue = (value: unknown) => {
     if (typeof value === "number") return value.toLocaleString("en-US");
     if (typeof value === "string" || typeof value === "boolean") return String(value);
@@ -689,7 +689,19 @@ function IntelligencePanel() {
   );
 }
 
-type FreshnessRow = { name: string; age: string; state: "OK" | "STALE" | "MISSING"; sla: string; required?: boolean };
+type FreshnessRow = { name: string; age: string; state: "OK" | "STALE" | "MISSING" | "UNKNOWN" | "HISTORICAL"; sla: string; required?: boolean };
+
+function artifactFreshness(name: string, artifact?: ArtifactMetadata): FreshnessRow {
+  if (!artifact) return { name, age: "not reported", state: "MISSING", sla: "declared by producer", required: false };
+  const state = artifact.state === "CURRENT" ? "OK" : artifact.state;
+  return {
+    name,
+    age: artifact.age_seconds == null ? "not reported" : ageSec(artifact.age_seconds),
+    state,
+    sla: artifact.expected_interval_seconds == null ? "historical" : ageSec(artifact.expected_interval_seconds),
+    required: false,
+  };
+}
 
 function generatedFreshness(name: string, generatedAt: string | null | undefined, slaSeconds: number): FreshnessRow {
   if (!generatedAt) return { name, age: "not configured", state: "MISSING", sla: ageSec(slaSeconds), required: false };
@@ -707,8 +719,9 @@ export function SystemPanel() {
   const ml = useMlStatus();
   const agents = useAgenticResearchStatus();
   const readiness = useReadiness();
+  const products = useDataProducts();
   const snapshotAge = typeof snapshot.data?.snapshot_age_ms === "number" ? snapshot.data.snapshot_age_ms / 1000 : null;
-  const freshness: FreshnessRow[] = [
+  const fallbackFreshness: FreshnessRow[] = [
     readiness.data?.status === "ready"
       ? { name: "workflow readiness", age: "current", state: "OK", sla: "10s", required: true }
       : { name: "workflow readiness", age: readiness.data?.reasons.join(", ") || "not reported", state: "MISSING", sla: "10s", required: true },
@@ -719,13 +732,20 @@ export function SystemPanel() {
     generatedFreshness("ML pipeline", ml.data?.generated_at, 2 * 60 * 60),
     generatedFreshness("agent governor", agents.data?.generated_at, 2 * 60 * 60),
   ];
+  const freshness: FreshnessRow[] = products.data?.rows.map((row) => ({
+    name: row.product.replace(/_/g, " "),
+    age: row.age_seconds == null ? "not reported" : ageSec(row.age_seconds),
+    state: row.state === "CURRENT" ? "OK" : row.state,
+    sla: row.expected_interval_seconds == null ? "historical" : ageSec(row.expected_interval_seconds),
+    required: row.required,
+  })) ?? fallbackFreshness;
   const runtimeNonOk = freshness.filter((row) => row.required && row.state !== "OK").length;
   const optionalUnavailable = freshness.filter((row) => !row.required && row.state !== "OK").length;
   const cols: Column<FreshnessRow>[] = [
     { key: "artifact", header: "Artifact", render: (row) => <span className="font-mono">{row.name}</span> },
     { key: "age", header: "Age", align: "right", render: (row) => row.age },
     { key: "sla", header: "SLA", align: "right", render: (row) => row.sla },
-    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.state === "OK" ? "good" : row.required ? (row.state === "STALE" ? "warn" : "bad") : "neutral"}>{row.state === "MISSING" && !row.required ? "NOT CONFIGURED" : row.state}</TerminalBadge> },
+    { key: "state", header: "State", render: (row) => <TerminalBadge tone={row.state === "OK" ? "good" : row.state === "HISTORICAL" ? "info" : row.required ? (row.state === "STALE" || row.state === "UNKNOWN" ? "warn" : "bad") : "neutral"}>{row.state === "MISSING" && !row.required ? "NOT CONFIGURED" : row.state}</TerminalBadge> },
   ];
   return (
     <div className="space-y-4">

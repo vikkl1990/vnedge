@@ -13,7 +13,7 @@ from vnedge.data.binance_gap_recovery import (
     _write_tape,
     recover_storage_gaps,
 )
-from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 
 START = datetime(2026, 8, 16, tzinfo=UTC)
@@ -402,6 +402,11 @@ def test_scanner_recovery_materializes_an_interior_five_minute_hole(tmp_path) ->
         START + timedelta(minutes=5),
         START + timedelta(minutes=10),
     ]
+    parents = candle_store.read("BTCUSDT", "15m")
+    assert [item.open_time for item in parents] == [START]
+    # Recovery is restart-safe and idempotent; a second reconciliation neither
+    # raises on duplicate source bars nor rewrites the canonical parent.
+    assert CandlePipeline("BTCUSDT", store=candle_store).reconcile_aggregates() == 0
     gap = GapParquetStore(tmp_path / "gaps").read("binanceusdm", "BTCUSDT")[0]
     assert gap.recovered is True
     assert "interior canonical hole" in gap.detail

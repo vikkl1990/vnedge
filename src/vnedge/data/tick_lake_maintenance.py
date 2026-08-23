@@ -53,6 +53,7 @@ state — losing none beats occasionally doubling some.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -61,7 +62,8 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
@@ -201,29 +203,76 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
     inputs = sorted(p for p in day_dir.glob("*.parquet") if p.is_file())
     if not inputs or inputs == [out]:
         return None  # empty or already compacted
-    frames: list[pd.DataFrame] = []
+    metadata: list[tuple[int, int, int, Path]] = []
     for p in inputs:
         try:
-            frames.append(pd.read_parquet(p))
-        except (OSError, ValueError) as exc:
+            parquet = pq.ParquetFile(p)
+            if "ts_ms" not in parquet.schema_arrow.names:
+                logger.error("compact %s: no ts_ms column — day left as-is", day_dir)
+                return None
+            rows = int(parquet.metadata.num_rows)
+            if rows == 0:
+                metadata.append((0, 0, 0, p))
+                continue
+            first = parquet.read_row_group(0, columns=["ts_ms"])["ts_ms"]
+            last = parquet.read_row_group(
+                parquet.num_row_groups - 1, columns=["ts_ms"]
+            )["ts_ms"]
+            metadata.append(
+                (
+                    int(pc.min(first).as_py()),
+                    int(pc.max(last).as_py()),
+                    rows,
+                    p,
+                )
+            )
+        except (OSError, ValueError, AttributeError, pa.ArrowException) as exc:
             logger.error("compact %s: unreadable shard %s (%s) — day left as-is",
                          day_dir, p.name, exc)
             return None
-    expected = sum(len(f) for f in frames)
-    merged = pd.concat(frames, ignore_index=True)
-    if "ts_ms" not in merged.columns:
-        logger.error("compact %s: no ts_ms column — day left as-is", day_dir)
-        return None
-    merged = merged.sort_values("ts_ms", kind="stable", ignore_index=True)
+    metadata.sort(key=lambda item: (item[0], item[1], item[3].name))
+    expected = sum(item[2] for item in metadata)
     if dry_run:
         return {"day": day, "shards": len(inputs), "rows": expected, "dry_run": True}
     # clear any temp left by a crash before publish (its rows still live in shards)
     for stale in day_dir.glob(".*.tmp"):
         stale.unlink(missing_ok=True)
     tmp = day_dir / f".{out.name}.tmp"
-    merged.to_parquet(tmp, index=False, compression="snappy")
+    writer: pq.ParquetWriter | None = None
+    written_rows = 0
+    previous_ts: int | None = None
+    stream_failed = False
+    try:
+        for _minimum, _maximum, _rows, path in metadata:
+            parquet = pq.ParquetFile(path)
+            for batch in parquet.iter_batches(batch_size=100_000):
+                table = pa.Table.from_batches([batch])
+                order = pc.sort_indices(table, sort_keys=[("ts_ms", "ascending")])
+                table = table.take(order)
+                if table.num_rows:
+                    first_ts = int(table["ts_ms"][0].as_py())
+                    if previous_ts is not None and first_ts < previous_ts:
+                        raise ValueError(
+                            "overlapping/out-of-order shard ranges require offline repair"
+                        )
+                    previous_ts = int(table["ts_ms"][table.num_rows - 1].as_py())
+                if writer is None:
+                    writer = pq.ParquetWriter(tmp, table.schema, compression="snappy")
+                writer.write_table(table)
+                written_rows += table.num_rows
+    except (OSError, ValueError, AttributeError, pa.ArrowException) as exc:
+        stream_failed = True
+        logger.error("compact %s: bounded stream failed (%s) — shards kept", day_dir, exc)
+        return None
+    finally:
+        if writer is not None:
+            writer.close()
+        if stream_failed or written_rows != expected:
+            tmp.unlink(missing_ok=True)
+    if writer is None:
+        return None
     written = pq.ParquetFile(tmp).metadata.num_rows
-    if written != int(expected) or len(merged) != int(expected):
+    if written != int(expected) or written_rows != int(expected):
         tmp.unlink(missing_ok=True)
         logger.error("compact %s: row-count mismatch (wrote %d, expected %d) — shards kept",
                      day_dir, written, expected)
@@ -440,10 +489,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--interval-seconds", type=int,
                    default=_env_int("TICK_MAINTENANCE_INTERVAL_SECONDS", 0),
                    help="loop cadence; <=0 runs a single sweep and exits")
+    p.add_argument(
+        "--report",
+        type=Path,
+        default=Path("data/reports/tick_lake_maintenance.json"),
+    )
     args = p.parse_args(argv)
     while True:
         started = time.time()
         report = run_maintenance(Path(args.data_root), dry_run=args.dry_run)
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        tmp_report = args.report.with_suffix(args.report.suffix + ".tmp")
+        tmp_report.write_text(json.dumps(report, default=str), encoding="utf-8")
+        os.replace(tmp_report, args.report)
         print_report(report)
         logger.info("tick-lake maintenance sweep done in %.1fs", time.time() - started)
         if args.interval_seconds <= 0:

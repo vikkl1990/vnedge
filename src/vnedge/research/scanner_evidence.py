@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -170,32 +170,45 @@ def read_lane_evals(paths: Iterable[Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def read_journal_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    """Read scanner evidence records with their durable lane provenance."""
-    rows: list[dict[str, Any]] = []
+def _journal_lines(path: Path, *, max_bytes: int | None = None) -> Iterator[str]:
+    """Yield complete UTF-8 JSONL records from a bounded file tail."""
+    try:
+        size = path.stat().st_size
+        handle = path.open("rb")
+    except OSError:
+        return
+    with handle:
+        if max_bytes is not None and max_bytes > 0 and size > max_bytes:
+            handle.seek(size - max_bytes)
+            handle.readline()  # discard the partial first record
+        for raw in handle:
+            yield raw.decode("utf-8", errors="replace")
+
+
+def iter_journal_records(
+    paths: Iterable[Path], *, max_bytes_per_journal: int | None = None
+) -> Iterator[dict[str, Any]]:
+    """Stream scanner records; never retain entire journals in memory."""
     for path in paths:
-        try:
-            handle = path.open(encoding="utf-8")
-        except OSError:
-            continue
-        with handle:
-            for line in handle:
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = item.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                rows.append(
-                    {
-                        "kind": str(item.get("kind") or ""),
-                        "ts": item.get("ts"),
-                        "lane_id": path.name.removesuffix(".journal.jsonl"),
-                        "payload": payload,
-                    }
-                )
-    return rows
+        for line in _journal_lines(path, max_bytes=max_bytes_per_journal):
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            yield {
+                "kind": str(item.get("kind") or ""),
+                "ts": item.get("ts"),
+                "lane_id": path.name.removesuffix(".journal.jsonl"),
+                "payload": payload,
+            }
+
+
+def read_journal_records(paths: Iterable[Path]) -> list[dict[str, Any]]:
+    """Compatibility materializer for callers/tests with already-bounded input."""
+    return list(iter_journal_records(paths))
 
 
 def build_daily_report(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
@@ -238,74 +251,135 @@ def build_daily_report(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_journal_report(paths: Iterable[Path]) -> dict[str, Any]:
+def build_journal_report(
+    paths: Iterable[Path],
+    *,
+    max_bytes_per_journal: int = 8 * 1024 * 1024,
+    max_total_bytes: int = 64 * 1024 * 1024,
+) -> dict[str, Any]:
     """Join evaluations, virtual intents and outcomes by durable intent key."""
-    records = read_journal_records(paths)
-    evaluations = [
-        enrich_evaluation(record["payload"])
-        for record in records
-        if record["kind"] == "lane_eval"
-    ]
-    report = build_daily_report(evaluations)
-    intents: dict[str, dict[str, Any]] = {}
-    outcomes: dict[str, dict[str, Any]] = {}
-    for record in records:
-        payload = record["payload"]
-        key = str(payload.get("intent_key") or "")
-        if not key:
-            continue
-        if record["kind"] == "shadow_intent" and key not in intents:
-            intents[key] = {**record, "payload": dict(payload)}
-        elif record["kind"] == "shadow_outcome" and key not in outcomes:
-            outcomes[key] = {**record, "payload": dict(payload)}
+    journal_paths = tuple(paths)
+    effective_bytes = min(
+        max_bytes_per_journal,
+        max(1, max_total_bytes // max(1, len(journal_paths))),
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    pending_intents: dict[str, dict[str, Any]] = {}
 
-    by_strategy = {row["strategy_id"]: row for row in report["strategies"]}
-    for key, record in intents.items():
-        payload = record["payload"]
-        intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
-        strategy_id = str(intent.get("strategy_id") or payload.get("strategy_id") or "unknown")
-        row = by_strategy.setdefault(
+    def strategy_row(strategy_id: str) -> dict[str, Any]:
+        return grouped.setdefault(
             strategy_id,
             {
                 "strategy_id": strategy_id,
                 "evaluations": 0,
                 "fires": 0,
                 "backfill_evaluations": 0,
-                "failed_gates": {},
-                "lifecycle": {},
+                "failed_gates": Counter(),
+                "lifecycle": Counter(),
                 "closest_near_miss": None,
                 "capital_eligible": is_capital_eligible(strategy_id),
+                "virtual_candidates": 0,
+                "virtual_approved": 0,
+                "virtual_rejected": 0,
+                "virtual_resolved": 0,
+                "gross_usd": 0.0,
+                "gross_bps": 0.0,
+                "fees_usd": 0.0,
+                "net_execution_usd": 0.0,
             },
         )
-        row["virtual_candidates"] = int(row.get("virtual_candidates") or 0) + 1
-        if bool(payload.get("approved")):
-            row["virtual_approved"] = int(row.get("virtual_approved") or 0) + 1
-        else:
-            row["virtual_rejected"] = int(row.get("virtual_rejected") or 0) + 1
-        outcome_record = outcomes.get(key)
-        if outcome_record is None or not bool(payload.get("approved")):
-            continue
-        outcome = outcome_record["payload"]
-        side = str(intent.get("side") or outcome.get("side") or "long")
-        entry = float(outcome.get("entry_price") or 0.0)
-        exit_price = float(outcome.get("exit_price") or 0.0)
-        quantity = float(intent.get("quantity") or 0.0)
-        direction = 1.0 if side == "long" else -1.0
-        gross_usd = direction * quantity * (exit_price - entry)
-        gross_bps = (
-            direction * (exit_price - entry) / entry * 10_000.0
-            if entry > 0 else 0.0
-        )
-        row["virtual_resolved"] = int(row.get("virtual_resolved") or 0) + 1
-        row["gross_usd"] = float(row.get("gross_usd") or 0.0) + gross_usd
-        row["gross_bps"] = float(row.get("gross_bps") or 0.0) + gross_bps
-        row["fees_usd"] = float(row.get("fees_usd") or 0.0) + float(
-            outcome.get("fees_usd") or 0.0
-        )
-        row["net_execution_usd"] = float(row.get("net_execution_usd") or 0.0) + float(
-            outcome.get("virtual_net_usd") or 0.0
-        )
 
+    for record in iter_journal_records(
+        journal_paths, max_bytes_per_journal=effective_bytes
+    ):
+        payload = record["payload"]
+        if record["kind"] == "lane_eval":
+            evaluation = enrich_evaluation(payload)
+            strategy_id = str(evaluation.get("strategy_id") or "unknown")
+            row = strategy_row(strategy_id)
+            row["evaluations"] += 1
+            row["fires"] += int(bool(evaluation.get("fired")))
+            row["backfill_evaluations"] += int(bool(evaluation.get("backfill")))
+            row["failed_gates"].update(
+                str(gate) for gate in evaluation.get("all_failed_gates", [])
+            )
+            row["lifecycle"].update(
+                (str(evaluation.get("setup_lifecycle") or "watching"),)
+            )
+            near = evaluation.get("near_miss")
+            current = row["closest_near_miss"]
+            if isinstance(near, dict) and (
+                current is None
+                or float(near.get("closest_distance") or float("inf"))
+                < float(current.get("closest_distance") or float("inf"))
+            ):
+                row["closest_near_miss"] = near
+        key = str(payload.get("intent_key") or "")
+        if record["kind"] == "shadow_intent" and key:
+            intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+            strategy_id = str(
+                intent.get("strategy_id") or payload.get("strategy_id") or "unknown"
+            )
+            row = strategy_row(strategy_id)
+            row["virtual_candidates"] += 1
+            if bool(payload.get("approved")):
+                row["virtual_approved"] += 1
+                pending_intents.setdefault(
+                    key,
+                    {"strategy_id": strategy_id, "intent": dict(intent)},
+                )
+            else:
+                row["virtual_rejected"] += 1
+        elif record["kind"] == "shadow_outcome" and key:
+            matched = pending_intents.pop(key, None)
+            if matched is None:
+                continue
+            intent = matched["intent"]
+            row = strategy_row(str(matched["strategy_id"]))
+            side = str(intent.get("side") or payload.get("side") or "long")
+            entry = float(payload.get("entry_price") or 0.0)
+            exit_price = float(payload.get("exit_price") or 0.0)
+            quantity = float(intent.get("quantity") or 0.0)
+            direction = 1.0 if side == "long" else -1.0
+            gross_usd = direction * quantity * (exit_price - entry)
+            gross_bps = (
+                direction * (exit_price - entry) / entry * 10_000.0
+                if entry > 0
+                else 0.0
+            )
+            row["virtual_resolved"] += 1
+            row["gross_usd"] += gross_usd
+            row["gross_bps"] += gross_bps
+            row["fees_usd"] += float(payload.get("fees_usd") or 0.0)
+            row["net_execution_usd"] += float(payload.get("virtual_net_usd") or 0.0)
+
+    strategies = []
+    for strategy_id in sorted(grouped):
+        row = grouped[strategy_id]
+        strategies.append(
+            {
+                **row,
+                "failed_gates": dict(row["failed_gates"]),
+                "lifecycle": dict(row["lifecycle"]),
+            }
+        )
+    report = {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "source_window": {
+            "mode": "bounded_journal_tail",
+            "max_bytes_per_journal": max_bytes_per_journal,
+            "effective_bytes_per_journal": effective_bytes,
+            "max_total_bytes": max_total_bytes,
+            "journals": len(journal_paths),
+        },
+        "read_only": True,
+        "evaluations": sum(int(row["evaluations"]) for row in strategies),
+        "fires": sum(int(row["fires"]) for row in strategies),
+        "strategies": strategies,
+    }
+
+    by_strategy = {row["strategy_id"]: row for row in report["strategies"]}
     for strategy_id, row in by_strategy.items():
         approved = int(row.get("virtual_approved") or 0)
         resolved = int(row.get("virtual_resolved") or 0)
@@ -346,6 +420,18 @@ def main() -> None:
     parser.add_argument("--candles", type=Path)
     parser.add_argument("--strategy", action="append", default=[])
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--max-bytes-per-journal",
+        type=int,
+        default=8 * 1024 * 1024,
+        help="bounded tail read per journal (default 8 MiB)",
+    )
+    parser.add_argument(
+        "--max-total-bytes",
+        type=int,
+        default=64 * 1024 * 1024,
+        help="hard read budget across all journals (default 64 MiB)",
+    )
     args = parser.parse_args()
     if args.candles:
         if not args.strategy:
@@ -365,7 +451,14 @@ def main() -> None:
             },
         )
         return
-    atomic_write(args.out, build_journal_report(args.journal))
+    atomic_write(
+        args.out,
+        build_journal_report(
+            args.journal,
+            max_bytes_per_journal=args.max_bytes_per_journal,
+            max_total_bytes=args.max_total_bytes,
+        ),
+    )
 
 
 if __name__ == "__main__":
@@ -374,5 +467,5 @@ if __name__ == "__main__":
 
 __all__ = [
     "atomic_write", "build_daily_report", "build_journal_report",
-    "read_journal_records", "read_lane_evals", "replay_scanner",
+    "iter_journal_records", "read_journal_records", "read_lane_evals", "replay_scanner",
 ]

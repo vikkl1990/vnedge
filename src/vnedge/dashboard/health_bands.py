@@ -152,6 +152,12 @@ def timeframe_health(lane: Mapping[str, object]) -> tuple[str, float | None]:
         age = round(float(str(raw_age)), 3) if raw_age is not None else None
     except (TypeError, ValueError):
         age = None
+    blocked = str(lane.get("arm_blocked") or "").lower()
+    degraded = str(lane.get("degraded") or "").lower()
+    if "canonical_bar_timeout" in blocked or "canonical_bar_timeout" in degraded:
+        status = "blocked"
+    elif blocked or degraded:
+        status = "degraded"
     return status, age
 
 
@@ -178,6 +184,9 @@ def lane_health(lane: Mapping[str, object], *, has_problem: bool = False) -> str
         return "blocked"
     if "degraded" in values:
         return "degraded"
+    sample_counts = _latency_samples(lane.get("latency"))
+    if sample_counts and min(sample_counts) < LT.LATENCY_GATE_MIN_SAMPLES:
+        return "unknown"
     if feed in {"ok", "live"} or "ok" in values:
         return "ok"
     return "unknown"
@@ -224,6 +233,9 @@ def compute_chips(snap: dict) -> dict:
         decision, d_label = "blocked", "bar close lag"
     elif "blocked" in decision_bands:
         decision, d_label = "blocked", "compute lag"
+    elif "unknown" in decision_bands + bar_bands and sample_counts:
+        decision = "unknown"
+        d_label = f"collecting {min(sample_counts)}/{LT.LATENCY_GATE_MIN_SAMPLES}"
     elif any(b != "unknown" for b in decision_bands + bar_bands):
         if "degraded" in bar_bands:
             decision, d_label = "degraded", "bar close lag"
@@ -263,11 +275,15 @@ def compute_chips(snap: dict) -> dict:
     if kill:
         system, s_label = "blocked", "kill tripped"
     else:
-        system = "ok"
-        for x in (candle, decision, feed, risk):
-            if x != "unknown":
-                system = _worse(system, x)
-        s_label = {"ok": "nominal", "degraded": "degraded", "blocked": "blocked"}[system]
+        required = (candle, decision, feed, risk)
+        if "blocked" in required:
+            system, s_label = "blocked", "blocked"
+        elif "degraded" in required:
+            system, s_label = "degraded", "degraded"
+        elif "unknown" in required:
+            system, s_label = "unknown", "incomplete telemetry"
+        else:
+            system, s_label = "ok", "nominal"
 
     return {
         "SYSTEM": {"band": system, "label": s_label},

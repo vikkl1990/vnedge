@@ -87,6 +87,19 @@ def test_scanner_evidence_endpoint_is_read_only_and_auth_gated(client):
     assert response.json()["read_only"] is True
 
 
+def test_data_products_separates_required_runtime_from_optional_research(client):
+    assert client.get("/data-products").status_code == 401
+
+    payload = client.get("/data-products?token=t3st-token").json()
+
+    rows = {row["product"]: row for row in payload["rows"]}
+    assert payload["read_only"] is True
+    assert rows["runtime_snapshot"]["required"] is True
+    assert rows["runtime_snapshot"]["state"] == "CURRENT"
+    assert rows["ml_pipeline"]["required"] is False
+    assert rows["research_scorecard"]["class"] == "historical_evidence"
+
+
 def test_strategy_workflow_endpoint_is_read_only_and_auth_gated(tmp_path):
     artifact = tmp_path / "strategy-workflow.json"
     artifact.write_text(
@@ -1071,6 +1084,9 @@ def test_history_endpoint_auth_and_content(tmp_path):
     points = client.get("/history?token=t3st-token").json()
     assert len(points) == 3
     assert points[-1]["equity"] == 502.0
+    limited = client.get("/history?token=t3st-token&limit=1").json()
+    assert len(limited) == 1 and limited[0]["equity"] == 502.0
+    assert client.get("/history?token=t3st-token&limit=nope").status_code == 400
 
 
 def test_history_without_file_is_empty(client):
@@ -1596,11 +1612,40 @@ def test_missing_intelligence_artifacts_are_reported_as_unavailable(tmp_path):
     ml = client.get("/ml-status?token=t3st-token").json()
 
     assert agentic["artifact_available"] is False
+    assert agentic["artifact"]["state"] == "MISSING"
     assert agentic["summary"] == {}
     assert ml["artifact_available"] is False
     assert ml["stage"] == "UNAVAILABLE"
     assert ml["can_trade"] is False
     assert ml["can_promote"] is False
+
+
+def test_agent_source_health_is_recomputed_when_artifact_is_served(tmp_path):
+    old = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+    agentic = tmp_path / "agentic.json"
+    agentic.write_text(
+        json.dumps(
+            {
+                "generated_at": old,
+                "policy": {"config": {"stale_artifact_minutes": 60}},
+                "source_status": [
+                    {"source": "scorecard", "state": "OK", "generated_at": old}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow"})
+    stale_client = TestClient(
+        create_app(provider, token="t3st-token", agentic_research_os_path=agentic)
+    )
+
+    payload = stale_client.get("/agentic-research-os?token=t3st-token").json()
+
+    assert payload["artifact"]["state"] == "STALE"
+    assert payload["source_status"][0]["state"] == "STALE"
+    assert payload["source_status"][0]["age_minutes"] >= 239
 
 
 def test_alpha_council_and_workbench_missing_files_are_safe(tmp_path):
@@ -1941,6 +1986,43 @@ def test_incidents_limit_param_and_missing_files(tmp_path):
         journal_dir=tmp_path / "missing",
     ))
     assert bare.get("/incidents?token=t3st-token").json() == []
+
+
+def test_incidents_include_current_blocked_lane_state(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "lanes": [
+                {
+                    "lane_id": "btc_shadow",
+                    "strategy_id": "structure_bos_1h",
+                    "symbol": SYM,
+                    "timeframe": "1h",
+                    "mode": "shadow",
+                    "arm_blocked": "canonical_bar_timeout",
+                    "time_machine": {
+                        "health": {"1h": "ok"},
+                        "age_ms": {"1h": 0},
+                    },
+                }
+            ],
+        }
+    )
+    runtime_client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            alerts_path=tmp_path / "missing-alerts.jsonl",
+            journal_dir=tmp_path / "missing-journals",
+        )
+    )
+
+    incidents = runtime_client.get("/incidents?token=t3st-token").json()
+
+    assert incidents[0]["source"] == "runtime:btc_shadow"
+    assert incidents[0]["severity"] == "critical"
+    assert "canonical_bar_timeout" in incidents[0]["message"]
 
 
 def test_runbooks_route_is_auth_gated_and_anchored(client):

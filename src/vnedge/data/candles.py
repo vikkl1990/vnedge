@@ -714,7 +714,26 @@ class CandlePipeline:
         if self.store is not None:
             self._restore_aggregators()
 
-    def _restore_aggregators(self) -> None:
+    def reconcile_aggregates(self) -> int:
+        """Rebuild every provable missing parent candle and return its count.
+
+        Recovery workers call this explicitly after committing repaired child
+        bars.  Keeping the operation public avoids relying on a constructor
+        side effect when deciding whether a storage gap is actually healed.
+        """
+        if self.store is None:
+            raise ValueError("aggregate reconciliation requires a candle store")
+        # Reconciliation is deliberately repeatable.  The live aggregators
+        # retain their last source boundary, so replaying the store through the
+        # same instances would look like duplicate/out-of-order input.
+        start = 0 if self.builder.timeframe == "1s" else 1
+        self._aggregators = {
+            source: CandleAggregator(self.symbol, source, target)
+            for source, target in _AGGREGATION_CHAIN[start:]
+        }
+        return self._restore_aggregators()
+
+    def _restore_aggregators(self) -> int:
         """Repair forward higher bars and restore incomplete buckets.
 
         A recorder restart must not make the 1m→4h ladder wait for a completely
@@ -777,6 +796,7 @@ class CandlePipeline:
                 self.symbol,
                 rebuilt_count,
             )
+        return rebuilt_count
 
     def _publish(self, candle: Candle, published: list[Candle]) -> None:
         if not candle.is_closed:

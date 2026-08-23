@@ -887,6 +887,7 @@ export function MarketPulse() {
             <TerminalBadge tone="info">read only</TerminalBadge>
           </div>
           <p className="mt-1 text-[12px] text-dim">Closed-hour structure · VWAP context · bounded AI narrative</p>
+          {pulse.data?.quality_reason && <p className="mt-1 font-mono text-[10px] text-warn">{pulse.data.quality_reason.replace(/_/g, " ")} · latest {pulse.data.market.latest_close_utc ? fullUtcHour(pulse.data.market.latest_close_utc) : "missing"} UTC · expected {fullUtcHour(pulse.data.market.expected_close_utc)} UTC</p>}
         </div>
         <div className="flex items-center gap-2">
           {SYMBOLS.map((item) => (
@@ -945,6 +946,7 @@ export function MarketPulse() {
               key={item}
               type="button"
               aria-pressed={active}
+              title={`${itemQuality}${data?.quality_reason ? ` · ${data.quality_reason.replace(/_/g, " ")}` : ""}`}
               onClick={() => { setSymbol(item); setSelected(null); }}
               className={`${MARKET_MONITOR_GRID} items-center border-b border-line/70 px-4 py-2 text-left font-mono text-[10px] transition last:border-0 ${active ? "border-l-2 border-l-brand bg-brand/10" : "hover:bg-white/[0.025]"}`}
             >
@@ -955,7 +957,7 @@ export function MarketPulse() {
               <span className="text-right">{itemForming?.dual_avwap_bias ?? data?.indicators.dual_avwap_bias ?? "n/a"}</span>
               <span className="text-right">{data?.regime?.["1h"].label?.replace(/_/g, " ") ?? "unavailable"}</span>
               <span className="text-right">{signed(data?.volume_profile.prior_day.vs_poc_bps)} bps</span>
-              <span className={`text-right ${candleAge != null && candleAge > 70 * 60_000 ? "text-short" : ""}`}>{tickAge == null ? "—" : ageSecMs(tickAge)} / {candleAge == null ? "—" : ageSecMs(candleAge)}</span>
+              <span className={`text-right ${data?.market.canonical_state !== "current" ? "text-short" : ""}`}>{tickAge == null ? "—" : ageSecMs(tickAge)} / {candleAge == null ? "—" : ageSecMs(candleAge)}</span>
             </button>
           );
         })}

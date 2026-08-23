@@ -387,6 +387,7 @@ export interface CorrectionLane {
   mode: "shadow" | "paper" | "measurement" | "off";
   observation_class: "shadow_observe" | "measurement" | null;
   exchange: string;
+  candle_source: string;
   symbol: string;
   timeframe: string;
   capital: boolean;
@@ -436,6 +437,8 @@ export interface CorrectionLane {
 }
 
 export interface LanesPayload {
+  generated_at: string;
+  source_snapshot_at: string | null;
   lanes: CorrectionLane[];
   capital_roster_size: number;
   measurement_only: boolean;
@@ -481,6 +484,8 @@ export interface SizingProfile {
 }
 
 export interface RiskSnapshot {
+  generated_at: string;
+  source_snapshot_at: string | null;
   runtime_mode: "measurement" | "shadow" | "paper" | "live_blocked" | string;
   runtime_label: string;
   capital: { enabled: boolean; roster_size: number };
@@ -689,6 +694,31 @@ export interface CostModelPayload {
   }>;
 }
 
+export interface ArtifactMetadata {
+  available: boolean;
+  state: "CURRENT" | "STALE" | "MISSING" | "UNKNOWN" | "HISTORICAL";
+  served_at: string;
+  source_as_of: string | null;
+  age_seconds: number | null;
+  expected_interval_seconds: number | null;
+  historical_evidence: boolean;
+}
+
+export interface DataProductsPayload {
+  generated_at: string;
+  required_non_current: number;
+  rows: Array<Partial<ArtifactMetadata> & {
+    product: string;
+    class: string;
+    required: boolean;
+    state: ArtifactMetadata["state"];
+    age_seconds: number | null;
+    expected_interval_seconds: number | null;
+    source_as_of: string | null;
+  }>;
+  read_only: true;
+}
+
 export interface ResearchScorecard {
   generated_at: string | null;
   strategies: Array<{
@@ -741,6 +771,7 @@ export interface ResearchScorecard {
   }>;
   can_trade: false;
   can_promote: false;
+  artifact?: ArtifactMetadata;
 }
 
 export interface StrategyWorkflowRevision {
@@ -845,6 +876,7 @@ export interface MlStatus {
   can_trade: false;
   can_promote: false;
   note?: string;
+  artifact?: ArtifactMetadata;
 }
 
 export interface AgenticResearchStatus {
@@ -870,6 +902,7 @@ export interface AgenticResearchStatus {
   can_trade: false;
   can_promote: false;
   live_orders_enabled: false;
+  artifact?: ArtifactMetadata;
 }
 
 export interface PulseHour {
@@ -966,6 +999,7 @@ export interface PulsePayload {
   as_of_utc: string;
   status: string;
   data_quality: string;
+  quality_reason: string | null;
   forming: PulseForming;
   hours: PulseHour[];
   fee_wall_bps: number;
@@ -1010,6 +1044,9 @@ export interface PulsePayload {
     mid: number | null;
     feed_age_ms: number | null;
     canonical_age_ms: number | null;
+    canonical_state: "current" | "missing_expected_close" | "stale" | "missing";
+    latest_close_utc: string | null;
+    expected_close_utc: string;
     session_label: string;
     regime_1h: string;
     regime_4h: string;

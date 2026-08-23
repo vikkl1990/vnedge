@@ -727,9 +727,20 @@ def build_strategy_workflow(
         stage = str(row["stage"])
         by_stage[stage] = by_stage.get(stage, 0) + 1
     generated = (now or datetime.now(UTC)).isoformat()
+    evidence_as_of = max(
+        (record.recorded_at for record in records if record.recorded_at),
+        default=None,
+    )
     return {
         "workflow_id": WORKFLOW_ID,
         "generated_at": generated,
+        "evidence_as_of": evidence_as_of,
+        "provenance": {
+            "assembled_at": generated,
+            "evidence_as_of": evidence_as_of,
+            "feed_max_records": feed_max_records,
+            "explicit_registry_events": len(explicit),
+        },
         "summary": {
             "revisions": len(rows),
             "explicit_revisions": len(explicit),

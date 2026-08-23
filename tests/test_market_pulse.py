@@ -482,6 +482,20 @@ def test_stale_canonical_hour_is_degraded_not_live(tmp_path) -> None:
     assert payload["alerts"][0]["kind"] == "stale"
 
 
+def test_missing_expected_hour_degrades_after_publish_grace(tmp_path) -> None:
+    pulse_service = service(tmp_path)
+    # Fixture ends at 02:00 UTC. At 03:06 the 03:00 parent close is missing,
+    # while its 66-minute age is still below the legacy 70-minute stale limit.
+    pulse_service.clock = lambda: START + timedelta(hours=27, minutes=6)
+
+    payload = pulse_service.pulse("binanceusdm", "BTCUSDT")
+
+    assert payload["status"] == "degraded"
+    assert payload["quality_reason"] == "missing_expected_1h_close"
+    assert payload["market"]["canonical_state"] == "missing_expected_close"
+    assert any(alert["kind"] == "missing_close" for alert in payload["alerts"])
+
+
 def test_analysis_uses_fixed_context_is_cached_and_cannot_grant_orders(tmp_path) -> None:
     calls: list[dict] = []
 

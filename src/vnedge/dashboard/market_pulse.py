@@ -26,6 +26,7 @@ from vnedge.data.candles import (
     Candle,
     CandleParquetStore,
     aggregate_candle_series,
+    floor_time,
 )
 from vnedge.data.gaps import GapParquetStore, GapRecord
 from vnedge.data.regime_context import (
@@ -595,9 +596,12 @@ class MarketPulseService:
         # Match the canonical lake contract: a 1h bar may be one full bucket
         # old plus ten minutes of close/persist grace, but not two hours old.
         stale_after: timedelta = timedelta(minutes=70),
+        close_publish_grace: timedelta = timedelta(minutes=5),
     ) -> None:
         if stale_after <= timedelta(0):
             raise ValueError("pulse stale_after must be positive")
+        if close_publish_grace < timedelta(0) or close_publish_grace >= timedelta(hours=1):
+            raise ValueError("close_publish_grace must be between 0 and 1h")
         self.candle_root = Path(candle_root)
         self.tick_root = Path(
             tick_root if tick_root is not None else self.candle_root.parent
@@ -618,6 +622,7 @@ class MarketPulseService:
         )
         self.clock = clock or (lambda: datetime.now(UTC))
         self.stale_after = stale_after
+        self.close_publish_grace = close_publish_grace
         self._forming_cache_hour: datetime | None = None
         self._forming_shard_cache: dict[
             tuple[str, int], tuple[int, dict[str, Any] | None]
@@ -1257,12 +1262,18 @@ class MarketPulseService:
             if latest is not None
             else None
         )
+        expected_close = floor_time(now, "1h")
+        missing_expected_close = bool(
+            latest_close is not None
+            and now >= expected_close + self.close_publish_grace
+            and latest_close < expected_close
+        )
         stale = latest_close is not None and now - latest_close > self.stale_after
         if (
             latest is not None and latest.data_quality == "gap"
         ) or any(not gap.recovered for gap in gaps):
             pulse_quality = "gap"
-        elif degraded or stale:
+        elif degraded or stale or missing_expected_close:
             pulse_quality = "degraded"
         elif latest is None:
             pulse_quality = "unknown"
@@ -1323,6 +1334,20 @@ class MarketPulseService:
                     "recovered": False,
                 },
             )
+        elif missing_expected_close and latest_close is not None:
+            alerts.insert(
+                0,
+                {
+                    "kind": "missing_close",
+                    "at": _iso(expected_close),
+                    "severity": "warning",
+                    "message": (
+                        f"expected canonical 1h close {_iso(expected_close)} has not "
+                        f"published after {self.close_publish_grace.total_seconds() / 60:g}m grace"
+                    ),
+                    "recovered": False,
+                },
+            )
         forming_metrics = self._forming_metrics(
             self._forming(runtime, symbol, exchange=exchange, now=now),
             rows,
@@ -1372,6 +1397,19 @@ class MarketPulseService:
                 else "warming" if pulse_quality == "unknown" else "degraded"
             ),
             "data_quality": pulse_quality,
+            "quality_reason": (
+                "unrecovered_gap"
+                if pulse_quality == "gap"
+                else "missing_expected_1h_close"
+                if missing_expected_close
+                else "canonical_stale"
+                if stale
+                else "runtime_degraded"
+                if degraded
+                else "no_canonical_hours"
+                if latest is None
+                else None
+            ),
             "forming": forming,
             "hours": [hour.to_dict() for hour in rows],
             "fee_wall_bps": round(fee_wall, 2),
@@ -1413,6 +1451,17 @@ class MarketPulseService:
                     if latest_close is not None
                     else None
                 ),
+                "canonical_state": (
+                    "missing_expected_close"
+                    if missing_expected_close
+                    else "stale"
+                    if stale
+                    else "current"
+                    if latest_close is not None
+                    else "missing"
+                ),
+                "latest_close_utc": _iso(latest_close) if latest_close is not None else None,
+                "expected_close_utc": _iso(expected_close),
                 "session_label": _session_label(now.hour),
                 "regime_1h": regimes["1h"]["label"],
                 "regime_4h": regimes["4h"]["label"],

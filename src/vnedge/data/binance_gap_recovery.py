@@ -19,7 +19,7 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise
@@ -35,6 +35,7 @@ from vnedge.data.candles import (
     Candle,
     CandleParquetStore,
     CandlePipeline,
+    aggregate_candle_series,
     floor_time,
 )
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
@@ -111,9 +112,13 @@ class RecoveryReport:
     exchange: str
     recovered: tuple[RecoveredGap, ...]
     skipped_symbols: tuple[str, ...]
+    generated_at: str = field(
+        default_factory=lambda: datetime.now(UTC).isoformat()
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "generated_at": self.generated_at,
             "exchange": self.exchange,
             "recovered": [asdict(item) for item in self.recovered],
             "skipped_symbols": list(self.skipped_symbols),
@@ -320,10 +325,43 @@ def _replay_fetched_tape(
     pipeline.advance_time(tape.end)
     if captured:
         store.upsert(captured)
-        # Constructor recovery is deliberately delta-only: it fills missing
-        # parent buckets but never overwrites existing authoritative candles.
-        CandlePipeline(tape.symbol, store=store)
+        # Recovery completion must not rely on a constructor side effect.  Run
+        # an explicit, idempotent ladder reconciliation after every durable
+        # child-bar commit; it fills missing parents without rewriting an
+        # existing authoritative candle.
+        CandlePipeline(tape.symbol, store=store).reconcile_aggregates()
     return len(captured)
+
+
+def _canonical_ladder_covered(
+    store: CandleParquetStore,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+) -> bool:
+    """Prove every complete parent bucket touched by a repair is persisted.
+
+    A short 5m repair can complete a 15m, 1h, or 4h bucket.  Verifying only
+    the requested 5m interval previously allowed the gap record to close while
+    a newly-provable hourly parent remained absent.
+    """
+    market = _market_id(symbol)
+    for source, target in (("1m", "5m"), ("5m", "15m"), ("15m", "1h"), ("1h", "4h")):
+        source_rows = store.read(market, source)
+        if not source_rows:
+            continue
+        complete = aggregate_candle_series(market, source, target, source_rows)
+        expected = {
+            candle.open_time
+            for candle in complete
+            if candle.open_time < end and candle.close_time > start
+        }
+        if not expected:
+            continue
+        present = {candle.open_time for candle in store.read(market, target)}
+        if not expected <= present:
+            return False
+    return True
 
 
 def _canonical_gap_covered(
@@ -543,6 +581,8 @@ def recover_storage_gaps(
                     chunk_start,
                     chunk_end,
                     coverage_timeframe,
+                ) or not _canonical_ladder_covered(
+                    candle_store, symbol, chunk_start, chunk_end
                 ):
                     logger.error(
                         "%s recovery replay did not produce complete closed %s "
@@ -592,7 +632,7 @@ def recover_storage_gaps(
                 start,
                 end,
                 coverage_timeframe,
-            ):
+            ) or not _canonical_ladder_covered(candle_store, symbol, start, end):
                 continue
             proof = (
                 "recovered from Binance REST aggTrades in independently durable "

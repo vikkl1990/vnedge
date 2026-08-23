@@ -209,7 +209,14 @@ def _health_reason(
         return str(blocked)
     if lane.get("gapped_candles"):
         return "candle_gap"
-    if health in {"ok", "unknown"}:
+    if health == "unknown":
+        samples = [
+            _latency_samples(lane, "bar_close_processing_ms", "feed_lag_ms"),
+            _latency_samples(lane, "decision_lag_ms"),
+        ]
+        observed = min((value for value in samples if value > 0), default=0)
+        return f"latency_warming_{observed}/{LATENCY_GATE_MIN_SAMPLES}"
+    if health == "ok":
         return None
     bands = lane.get("bands")
     bands = bands if isinstance(bands, Mapping) else lane_bands(dict(lane))
@@ -273,6 +280,9 @@ def build_lanes_payload(
                 "mode": mode,
                 "observation_class": observation_class,
                 "exchange": str(lane.get("exchange") or lane.get("lane_exchange") or ""),
+                "candle_source": str(
+                    lane.get("exchange") or lane.get("lane_exchange") or "unknown"
+                ),
                 "symbol": str(lane.get("symbol") or ""),
                 "timeframe": str(lane.get("timeframe") or ""),
                 "capital": capital,
@@ -427,6 +437,8 @@ def build_lanes_payload(
             )
         )
     return {
+        "generated_at": at.isoformat(),
+        "source_snapshot_at": snapshot.get("timestamp") or snapshot.get("as_of"),
         "lanes": result,
         "capital_roster_size": capital_count,
         "measurement_only": capital_count == 0,
@@ -624,6 +636,8 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "source_snapshot_at": snapshot.get("timestamp") or snapshot.get("as_of"),
         "runtime_mode": runtime_mode,
         "runtime_label": str(snapshot.get("mode") or "unknown"),
         "capital": {"enabled": capital_size > 0, "roster_size": capital_size},

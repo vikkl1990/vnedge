@@ -137,6 +137,7 @@ services:
       - sh
       - -c
       - |
+        set -e
         until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           python -m vnedge.data.binance_gap_recovery \
@@ -151,6 +152,15 @@ services:
     volumes:
       - ./data:/app/data
     mem_limit: 600m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time,sys; from datetime import datetime; p=json.load(open('data/reports/binance_gap_recovery.json')); age=time.time()-datetime.fromisoformat(p['generated_at']).timestamp(); sys.exit(0 if age < 1200 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
@@ -171,6 +181,7 @@ services:
       - sh
       - -c
       - |
+        set -e
         until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           required_days="$${VISION_BACKFILL_DAYS}"
@@ -208,9 +219,20 @@ services:
       - data
       - --interval-seconds
       - "86400"
+      - --report
+      - data/reports/tick_lake_maintenance.json
     volumes:
       - ./data:/app/data
     mem_limit: 1200m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time,sys; p=json.load(open('data/reports/tick_lake_maintenance.json')); t=p.get('generated_at'); from datetime import datetime; age=time.time()-datetime.fromisoformat(t).timestamp(); sys.exit(0 if age < 90000 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
@@ -287,6 +309,7 @@ services:
       - sh
       - -c
       - |
+        set -e
         while true; do
           set --
           for journal in /app/logs/paper_trials/*.journal.jsonl; do
@@ -294,12 +317,21 @@ services:
           done
           python -m vnedge.research.scanner_evidence "$${@}" \
             --out /app/research/live_research/scanner_evidence_latest.json
-          sleep 86400
+          sleep 300
         done
     volumes:
       - ./logs:/app/logs:ro
       - ./research/live_research:/app/research/live_research
     mem_limit: 300m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time,sys; p=json.load(open('/app/research/live_research/scanner_evidence_latest.json')); t=p.get('generated_at'); from datetime import datetime; age=time.time()-datetime.fromisoformat(t).timestamp(); sys.exit(0 if age < 900 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "3"}

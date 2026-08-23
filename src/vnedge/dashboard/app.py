@@ -346,6 +346,30 @@ def _journal_incidents(journal_dir: Path | None) -> list[dict]:
     return out
 
 
+def _snapshot_health_incidents(snapshot: dict | None) -> list[dict]:
+    """Project current lane failures into the incident rail without persistence."""
+    if not snapshot:
+        return []
+    generated = datetime.now(UTC).isoformat()
+    out: list[dict] = []
+    for lane in build_lanes_payload(snapshot, now=datetime.now(UTC)).get("lanes", []):
+        health = str(lane.get("health") or "unknown")
+        if health not in {"blocked", "degraded"}:
+            continue
+        lane_id = str(lane.get("lane_id") or "unknown")
+        reason = str(lane.get("health_reason") or lane.get("current_waiting_reason") or health)
+        out.append(
+            {
+                "ts": generated,
+                "severity": "critical" if health == "blocked" else "warning",
+                "source": f"runtime:{lane_id}",
+                "message": f"lane_{health} — {reason}",
+                "runbook": "/runbooks#feed-stale",
+            }
+        )
+    return out
+
+
 def _snapshot_trade_log(snapshot: dict | None, lane: str) -> list[dict]:
     """The trade log lives in the coalesced snapshot (multi-lane snapshots
     carry a per-lane tail; the primary lane's session carries the full one)."""
@@ -843,9 +867,92 @@ def create_app(
             return fallback
         try:
             payload = json.loads(path.read_text())
-        except json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             return fallback  # mid-write race: serve a safe empty payload
         return payload if isinstance(payload, dict) else fallback
+
+    def _artifact_payload(
+        path: Path | None,
+        fallback: dict,
+        *,
+        expected_interval_seconds: float | None = None,
+        historical: bool = False,
+    ) -> dict:
+        """Read one artifact and attach current, server-computed provenance."""
+        available = bool(path is not None and path.exists())
+        payload = dict(_read_json_payload(path, fallback))
+        now = datetime.now(UTC)
+        source_as_of = payload.get("generated_at") or payload.get("generated_at_utc")
+        if not source_as_of and available and path is not None:
+            try:
+                source_as_of = datetime.fromtimestamp(
+                    path.stat().st_mtime, tz=UTC
+                ).isoformat()
+            except OSError:
+                available = False
+        age_seconds: float | None = None
+        if source_as_of:
+            try:
+                stamp = datetime.fromisoformat(str(source_as_of))
+                if stamp.tzinfo is not None:
+                    age_seconds = max(0.0, (now - stamp.astimezone(UTC)).total_seconds())
+            except ValueError:
+                age_seconds = None
+        if not available:
+            state = "MISSING"
+        elif historical:
+            state = "HISTORICAL"
+        elif age_seconds is None:
+            state = "UNKNOWN"
+        elif expected_interval_seconds is not None and age_seconds > expected_interval_seconds:
+            state = "STALE"
+        else:
+            state = "CURRENT"
+        payload["artifact"] = {
+            "available": available,
+            "state": state,
+            "served_at": now.isoformat(),
+            "source_as_of": source_as_of,
+            "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+            "expected_interval_seconds": expected_interval_seconds,
+            "historical_evidence": historical,
+        }
+        return payload
+
+    def _refresh_source_status(payload: dict) -> dict:
+        """Never serve frozen source-health labels from an old agent artifact."""
+        now = datetime.now(UTC)
+        policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+        config = policy.get("config") if isinstance(policy.get("config"), dict) else {}
+        stale_minutes = float(config.get("stale_artifact_minutes") or 120.0)
+        rows = payload.get("source_status")
+        refreshed = []
+        for raw in rows if isinstance(rows, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            generated = row.get("generated_at")
+            age_minutes: float | None = None
+            if generated:
+                try:
+                    stamp = datetime.fromisoformat(str(generated))
+                    if stamp.tzinfo is not None:
+                        age_minutes = max(
+                            0.0, (now - stamp.astimezone(UTC)).total_seconds() / 60.0
+                        )
+                except ValueError:
+                    pass
+            row["age_minutes"] = round(age_minutes, 2) if age_minutes is not None else None
+            row["state"] = (
+                "MISSING"
+                if age_minutes is None
+                else "STALE"
+                if age_minutes > stale_minutes
+                else "OK"
+            )
+            refreshed.append(row)
+        payload["source_status"] = refreshed
+        return payload
 
     pine_alpha_distiller_file = (
         pine_alpha_distiller_path
@@ -1270,7 +1377,11 @@ def create_app(
         lane = _query_lane(request)
         _reject_if_orphan(lane)
         since = _since_iso(_query_days(request))
-        return JSONResponse(_equity_points(lane, since), headers=_identity(user))
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", "5000")), 20_000))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="limit must be an integer")
+        return JSONResponse(_equity_points(lane, since)[-limit:], headers=_identity(user))
 
     @app.get("/export.csv")
     async def export_csv(request: Request) -> Response:
@@ -1414,7 +1525,11 @@ def create_app(
             alert_files.extend(
                 p for p in sorted(lane_dir.glob("*.alerts.jsonl")) if p != alerts_path
             )
-        merged = _alert_incidents(alert_files) + _journal_incidents(lane_dir)
+        merged = (
+            _alert_incidents(alert_files)
+            + _journal_incidents(lane_dir)
+            + _snapshot_health_incidents(provider.latest())
+        )
         merged.sort(key=lambda record: record["ts"], reverse=True)
         return JSONResponse(merged[:limit], headers=_identity(user))
 
@@ -1500,8 +1615,7 @@ def create_app(
         granting trade or promotion authority.
         """
         user = _authorized(request)
-        return JSONResponse(
-            _read_json_payload(
+        payload = _artifact_payload(
                 agentic_research_os_file,
                 {
                     "artifact_available": False,
@@ -1515,8 +1629,10 @@ def create_app(
                     "can_promote": False,
                     "live_orders_enabled": False,
                 },
-            ),
-            headers=_identity(user),
+                expected_interval_seconds=2 * 60 * 60,
+            )
+        return JSONResponse(
+            _refresh_source_status(payload), headers=_identity(user)
         )
 
     @app.get("/agent-jobs")
@@ -1620,7 +1736,7 @@ def create_app(
         Read-only; no model trades outside the gateway/registry."""
         user = _authorized(request)
         return JSONResponse(
-            _read_json_payload(
+            _artifact_payload(
                 ml_pipeline_status_file,
                 {
                     "artifact_available": False,
@@ -1643,6 +1759,7 @@ def create_app(
                     "can_promote": False,
                     "note": "ml pipeline status unavailable",
                 },
+                expected_interval_seconds=2 * 60 * 60,
             ),
             headers=_identity(user),
         )
@@ -2351,6 +2468,64 @@ def create_app(
         payload = _read_json_payload(fleet_status_file, {"services": [], "written_at": None})
         return JSONResponse(payload)
 
+    @app.get("/data-products")
+    async def data_products(request: Request) -> JSONResponse:
+        """Current provenance for runtime, canonical and optional evidence products."""
+        user = _authorized(request)
+        scanner = _artifact_payload(
+            Path("research/live_research/scanner_evidence_latest.json"),
+            {},
+            expected_interval_seconds=15 * 60,
+        )["artifact"]
+        maintenance = _artifact_payload(
+            Path("data/reports/tick_lake_maintenance.json"),
+            {},
+            expected_interval_seconds=25 * 60 * 60,
+        )["artifact"]
+        recovery = _artifact_payload(
+            Path("data/reports/binance_gap_recovery.json"),
+            {},
+            expected_interval_seconds=20 * 60,
+        )["artifact"]
+        ml_artifact = _artifact_payload(
+            ml_pipeline_status_file, {}, expected_interval_seconds=2 * 60 * 60
+        )["artifact"]
+        agent_artifact = _artifact_payload(
+            agentic_research_os_file, {}, expected_interval_seconds=2 * 60 * 60
+        )["artifact"]
+        score_artifact = _artifact_payload(
+            fee_wall_forensics_file, {}, historical=True
+        )["artifact"]
+        snapshot_age = provider.age_seconds()
+        rows = [
+            {
+                "product": "runtime_snapshot",
+                "class": "runtime",
+                "required": True,
+                "state": "CURRENT" if snapshot_age is not None and snapshot_age <= 15 else "STALE",
+                "age_seconds": snapshot_age,
+                "expected_interval_seconds": 15,
+                "source_as_of": None,
+            },
+            {"product": "scanner_evidence", "class": "derived", "required": False, **scanner},
+            {"product": "gap_recovery", "class": "canonical_recovery", "required": True, **recovery},
+            {"product": "tick_lake_maintenance", "class": "maintenance", "required": True, **maintenance},
+            {"product": "ml_pipeline", "class": "optional_research", "required": False, **ml_artifact},
+            {"product": "agent_governor", "class": "optional_research", "required": False, **agent_artifact},
+            {"product": "research_scorecard", "class": "historical_evidence", "required": False, **score_artifact},
+        ]
+        return JSONResponse(
+            {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "rows": rows,
+                "required_non_current": sum(
+                    row["required"] and row["state"] != "CURRENT" for row in rows
+                ),
+                "read_only": True,
+            },
+            headers=_identity(user),
+        )
+
     @app.get("/scanner-evidence")
     async def scanner_evidence(request: Request) -> JSONResponse:
         """Daily exact-ID scanner evaluations and near-miss evidence.
@@ -2359,7 +2534,7 @@ def create_app(
         contains no mutation, promotion, or order controls.
         """
         user = _authorized(request)
-        payload = _read_json_payload(
+        payload = _artifact_payload(
             Path("research/live_research/scanner_evidence_latest.json"),
             {
                 "schema_version": 1,
@@ -2370,6 +2545,7 @@ def create_app(
                 "strategies": [],
                 "status": "artifact_unavailable",
             },
+            expected_interval_seconds=15 * 60,
         )
         return JSONResponse(payload, headers=_identity(user))
 
@@ -2531,6 +2707,11 @@ def create_app(
                 "runtime_alignment": runtime_alignment,
                 "can_trade": False,
                 "can_promote": False,
+                "artifact": _artifact_payload(
+                    fee_wall_forensics_file,
+                    {"reports": []},
+                    historical=True,
+                )["artifact"],
             }
         )
 

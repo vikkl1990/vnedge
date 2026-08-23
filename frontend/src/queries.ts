@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, fetchChartCandles, type AgenticResearchStatus, type ChartTimeframe, type CostModelPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
+import { apiGet, fetchChartCandles, type AgenticResearchStatus, type ChartTimeframe, type CostModelPayload, type DataProductsPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
 
 export function useWhoAmI() {
   return useQuery({
@@ -94,6 +94,14 @@ export function useMeta() {
     queryKey: ["meta"],
     queryFn: () => apiGet<MetaPayload>("/meta"),
     staleTime: 60_000,
+  });
+}
+
+export function useDataProducts() {
+  return useQuery({
+    queryKey: ["data-products"],
+    queryFn: () => apiGet<DataProductsPayload>("/data-products"),
+    refetchInterval: 30_000,
   });
 }
 
