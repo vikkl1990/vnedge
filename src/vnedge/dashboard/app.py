@@ -76,6 +76,7 @@ from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.data.candles import CandleParquetStore
 from vnedge.dashboard.chart_series import candles_payload
+from vnedge.research.scanner_catalog import live_catalog
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.execution.operator_audit import OperatorAuditLog
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
@@ -1030,6 +1031,17 @@ def create_app(
             build_risk_payload({**snapshot, "build_sha": _build_sha()}),
             headers=_identity(user),
         )
+
+    @app.get("/api/scanners")
+    async def scanner_catalog(request: Request) -> JSONResponse:
+        """Browsable catalogue of every scanner and the evidence behind it.
+
+        Ordered by evidence state, not by profit. Ranking a strategy directory
+        by best return is how the luckiest curve fit reaches the top row.
+        """
+        user = _authorized(request)
+        payload = await asyncio.to_thread(live_catalog, Path("docs/prereg"))
+        return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/api/candles/{symbol}")
     async def chart_candles(
