@@ -20,11 +20,13 @@ from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
+from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
+from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 
 
 def test_default_roster_is_measurement_only_and_has_no_capital_lane():
@@ -203,9 +205,21 @@ def test_15m_scanner_factories_use_new_frozen_registrations():
         _build_single_strategy("structure_bos_15m_trigger_v2", {}, None, None),
         StructureBos15mTriggerV2,
     )
+    assert isinstance(
+        _build_single_strategy("range_expansion_observer_v4", {}, None, None),
+        RangeExpansionObserverV4,
+    )
+    assert isinstance(
+        _build_single_strategy("structure_bos_15m_trigger_v3", {}, None, None),
+        StructureBos15mTriggerV3,
+    )
     with pytest.raises(ValueError, match="parameters are frozen"):
         _build_single_strategy(
             "structure_bos_15m_trigger_v2", {"volume_mult": 1.0}, None, None
+        )
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "range_expansion_observer_v4", {"volume_mult": 1.0}, None, None
         )
 
 

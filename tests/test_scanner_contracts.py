@@ -9,7 +9,9 @@ from vnedge.strategy.scanner_contracts import (
 def test_active_scanner_holds_are_frozen_in_bars_for_their_timeframes() -> None:
     squeeze = scanner_runtime_contract("squeeze_expansion_breakout_v4")
     range_v3 = scanner_runtime_contract("range_expansion_observer_v3")
+    range_v4 = scanner_runtime_contract("range_expansion_observer_v4")
     bos = scanner_runtime_contract("structure_bos_15m_trigger_v2")
+    bos_v3 = scanner_runtime_contract("structure_bos_15m_trigger_v3")
 
     assert squeeze is not None and (squeeze.timeframe, squeeze.max_holding_bars) == (
         "5m",
@@ -19,7 +21,15 @@ def test_active_scanner_holds_are_frozen_in_bars_for_their_timeframes() -> None:
         "15m",
         48,
     )
+    assert range_v4 is not None and (range_v4.timeframe, range_v4.max_holding_bars) == (
+        "15m",
+        48,
+    )
     assert bos is not None and (bos.timeframe, bos.max_holding_bars) == ("15m", 192)
+    assert bos_v3 is not None and (bos_v3.timeframe, bos_v3.max_holding_bars) == (
+        "15m",
+        192,
+    )
 
 
 def test_cost_profile_comes_from_strategy_family_then_venue() -> None:

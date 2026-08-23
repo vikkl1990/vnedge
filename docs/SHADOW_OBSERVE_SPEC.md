@@ -10,7 +10,7 @@ or live permission.
 - `RESEARCH_ONLY` strategies cannot take capital.
 - `SHADOW_OBSERVE` is a separate explicit allowlist. It retains the frozen
   historical scanner IDs and adds `squeeze_expansion_breakout_v4`,
-  `range_expansion_observer_v3`, and `structure_bos_15m_trigger_v2`.
+  `range_expansion_observer_v4`, and `structure_bos_15m_trigger_v3`.
 - `KILLED` strategies cannot be observed or capital-enabled.
 - The multi-lane process contains no live execution adapter. Its observe lane
   uses `RunnerMode.SHADOW`, `SimulatedExchange`, the risk gateway, the decision
@@ -52,7 +52,8 @@ configuration contracts cannot be mixed. For
 `structure_bos_1h`, the timeframe must be `1h`; for
 `fee_wall_momentum_observer_v1`, `squeeze_expansion_breakout_v2`, and
 `squeeze_expansion_breakout_v3`/`v4`, it must be `5m`;
-`range_expansion_observer_v3` and `structure_bos_15m_trigger_v2` require `15m`.
+`range_expansion_observer_v3`/`v4` and
+`structure_bos_15m_trigger_v2`/`v3` require `15m`.
 V3/V4 arm from closed bars but
 accepts only after three current top-of-book samples remain beyond the level
 for at least five seconds. Failed probes re-arm per side; the opposite arm is
@@ -81,9 +82,11 @@ appended to the decision journal as `scanner_transition` records.
 V4 squeeze does not inherit V3's close-times-volume VWAP proxy. It requires a
 contiguous 288-bar canonical quote/base-volume window and makes the expansion
 volume test binding before it arms the same quote-held acceptance engine.
-Range v3 evaluates the forming hour at causal 15-minute closes against the
-last 20 complete same-hour observations. Structure BoS v2 carries only fully
-closed 1h swings and 4h direction into a 15-minute close trigger. Neither new
+Range v4 evaluates the forming hour at causal 15-minute closes against the
+last 20 complete same-hour observations. Structure BoS v3 carries only fully
+closed 1h swings and 4h direction into a 15-minute close trigger. Both
+corrected registrations apply spacing only after every final gate, including
+projected net edge, passes; v3/v2 remain available for historical replay. Neither new
 15-minute scanner treats a raw tick through a level as confirmed structure;
 the quote path prices accepted virtual entries and protects their stops.
 
@@ -93,8 +96,8 @@ inferred from timeframe:
 | Strategy | Cost family | Maximum virtual hold |
 |----------|-------------|----------------------|
 | `squeeze_expansion_breakout_v4` | scalp (`delta_scalp` on Delta) | 48 x 5m = 4h |
-| `range_expansion_observer_v3` | swing | 48 x 15m = 12h |
-| `structure_bos_15m_trigger_v2` | swing | 192 x 15m = 48h |
+| `range_expansion_observer_v4` | swing | 48 x 15m = 12h |
+| `structure_bos_15m_trigger_v3` | swing | 192 x 15m = 48h |
 
 Startup refuses a registered scanner when its roster timeframe or hold differs
 from this contract. Every closed-bar evaluation journals its primary failed

@@ -47,12 +47,26 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         max_holding_bars=48,  # explicitly frozen: 12 hours
         rationale="session expansion with a 12-hour continuation horizon",
     ),
+    "range_expansion_observer_v4": ScannerRuntimeContract(
+        strategy_id="range_expansion_observer_v4",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
+        rationale="V3 setup with final-eligibility spacing correction",
+    ),
     "structure_bos_15m_trigger_v2": ScannerRuntimeContract(
         strategy_id="structure_bos_15m_trigger_v2",
         timeframe="15m",
         cost_family="swing",
         max_holding_bars=192,  # 48 hours at 15-minute cadence
         rationale="inherits the registered structure_bos_1h 48-hour horizon",
+    ),
+    "structure_bos_15m_trigger_v3": ScannerRuntimeContract(
+        strategy_id="structure_bos_15m_trigger_v3",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale="V2 structure with final-eligibility spacing correction",
     ),
 }
 

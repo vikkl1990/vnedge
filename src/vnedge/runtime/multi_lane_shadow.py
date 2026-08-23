@@ -157,9 +157,11 @@ def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
     required = {
         "structure_bos_1h": "1h",
         "structure_bos_15m_trigger_v2": "15m",
+        "structure_bos_15m_trigger_v3": "15m",
         "range_expansion_observer_v1": "1h",
         "range_expansion_observer_v2": "1h",
         "range_expansion_observer_v3": "15m",
+        "range_expansion_observer_v4": "15m",
         "fee_wall_momentum_observer_v1": "5m",
         "squeeze_expansion_breakout_v2": "5m",
         "squeeze_expansion_breakout_v3": "5m",

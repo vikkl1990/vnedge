@@ -68,6 +68,7 @@ from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
+from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
@@ -75,6 +76,7 @@ from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreako
 from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
+from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -613,6 +615,13 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return StructureBos15mTriggerV2(seed_funding)
+    if strategy_id == StructureBos15mTriggerV3.strategy_id:
+        if params:
+            raise ValueError(
+                "structure_bos_15m_trigger_v3 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return StructureBos15mTriggerV3(seed_funding)
     if strategy_id == FeeWallMomentumObserver.strategy_id:
         if params:
             raise ValueError(
@@ -662,6 +671,13 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return RangeExpansionObserverV3(seed_funding)
+    if strategy_id == RangeExpansionObserverV4.strategy_id:
+        if params:
+            raise ValueError(
+                "range_expansion_observer_v4 parameters are frozen; "
+                "configure a new strategy ID"
+            )
+        return RangeExpansionObserverV4(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)

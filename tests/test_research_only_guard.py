@@ -22,8 +22,10 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "range_expansion_observer_v1",
         "range_expansion_observer_v2",
         "range_expansion_observer_v3",
+        "range_expansion_observer_v4",
         "structure_bos_1h",
         "structure_bos_15m_trigger_v2",
+        "structure_bos_15m_trigger_v3",
         "fee_wall_momentum_observer_v1",
         "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
@@ -61,7 +63,9 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "range_expansion_observer_v1",
         "range_expansion_observer_v2",
         "range_expansion_observer_v3",
+        "range_expansion_observer_v4",
         "structure_bos_15m_trigger_v2",
+        "structure_bos_15m_trigger_v3",
         "fee_wall_momentum_observer_v1",
         "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
@@ -72,8 +76,10 @@ def test_shadow_observe_is_a_separate_narrow_permission():
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v4")
     assert is_shadow_observe_eligible("range_expansion_observer_v1")
     assert is_shadow_observe_eligible("range_expansion_observer_v3")
+    assert is_shadow_observe_eligible("range_expansion_observer_v4")
     assert is_shadow_observe_eligible("structure_bos_1h")
     assert is_shadow_observe_eligible("structure_bos_15m_trigger_v2")
+    assert is_shadow_observe_eligible("structure_bos_15m_trigger_v3")
     assert is_shadow_observe_eligible("fee_wall_momentum_observer_v1")
     assert not is_capital_eligible("fee_wall_momentum_observer_v1")
     assert not is_capital_eligible("structure_bos_1h")

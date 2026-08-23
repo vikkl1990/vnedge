@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
+from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
 
 
 def _history() -> pd.DataFrame:
@@ -77,3 +78,13 @@ def test_v3_diagnostics_publish_gate_values_and_threshold_distance() -> None:
     assert report["features"]["rex3_volume_ok"] is False
     assert report["thresholds"]["volume_mult"] == 1.2
     assert report["distance_to_threshold"]["volume_ratio_shortfall"] > 0
+
+
+def test_v4_preserves_v3_setup_and_emits_corrected_identity() -> None:
+    strategy = RangeExpansionObserverV4()
+    prepared = strategy.prepare(_history())
+
+    assert prepared.iloc[-1]["rex4_final_eligible_long"] == 1.0
+    signal = strategy.signal(prepared, len(prepared) - 1)
+    assert signal is not None
+    assert "range_expansion_v4" in signal.reason

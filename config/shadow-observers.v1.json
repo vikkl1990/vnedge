@@ -11,7 +11,7 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "range_expansion_observer_v3",
+      "strategy_id": "range_expansion_observer_v4",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
@@ -20,7 +20,7 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "structure_bos_15m_trigger_v2",
+      "strategy_id": "structure_bos_15m_trigger_v3",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
+from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 
 
 class _HourlyContext:
@@ -97,3 +98,14 @@ def test_v2_diagnostics_name_higher_timeframe_conflict() -> None:
     assert report["primary_failed_gate"] == "htf_structure_conflict"
     assert report["features"]["bos15_structure_trend"] == "up"
     assert report["features"]["bos15_htf_structure_trend"] == "down"
+
+
+def test_v3_preserves_v2_setup_and_emits_corrected_identity() -> None:
+    strategy = StructureBos15mTriggerV3()
+    strategy._hourly = _HourlyContext()
+    prepared = strategy.prepare(_history())
+
+    assert prepared.iloc[-1]["bos15_v3_final_eligible_long"] == 1.0
+    signal = strategy.signal(prepared, len(prepared) - 1)
+    assert signal is not None
+    assert "structure_bos_15m_trigger_v3" in signal.reason

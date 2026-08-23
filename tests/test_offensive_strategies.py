@@ -196,5 +196,7 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "range_expansion_observer_v1",
         "range_expansion_observer_v2",
         "range_expansion_observer_v3",
+        "range_expansion_observer_v4",
         "structure_bos_15m_trigger_v2",
+        "structure_bos_15m_trigger_v3",
     }
