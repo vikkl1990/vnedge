@@ -55,6 +55,14 @@ configuration contracts cannot be mixed. For
 `range_expansion_observer_v3`/`v4` and
 `structure_bos_15m_trigger_v2`/`v3`, and
 `session_continuation_15m_v1` require `15m`.
+
+Research registration is not shadow permission. In particular,
+`liquidity_sweep_reversal_15m_v1` remains replayable but is parked outside
+`SHADOW_OBSERVE` after the current canonical BTC/ETH slice was gross-negative
+on BTC and net-negative on both symbols. `trend_squeeze_continuation_1h_v1`
+is likewise registered for deterministic replay only; it needs a longer,
+chronologically separate evidence window before it may consume live shadow
+resources.
 V3/V4 arm from closed bars but
 accepts only after three current top-of-book samples remain beyond the level
 for at least five seconds. Failed probes re-arm per side; the opposite arm is

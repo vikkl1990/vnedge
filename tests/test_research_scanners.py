@@ -4,7 +4,10 @@ import pandas as pd
 
 from vnedge.strategy.research_scanners import (
     NEW_RESEARCH_SCANNERS,
+    SHADOW_RESEARCH_SCANNERS,
+    LiquiditySweepReversal15mV1,
     TickAcceptedBreakoutV1,
+    TrendSqueezeContinuation1hV1,
 )
 from vnedge.strategy.strategy_registry import (
     CAPITAL_APPROVED,
@@ -34,13 +37,19 @@ def _candles(count: int = 800) -> pd.DataFrame:
     )
 
 
-def test_new_scanners_are_explicitly_shadow_only_and_never_capital():
+def test_new_scanners_are_registered_research_only_and_never_capital():
     for scanner in NEW_RESEARCH_SCANNERS:
         assert scanner.strategy_id in STRATEGIES
         assert scanner.strategy_id in RESEARCH_ONLY
-        assert scanner.strategy_id in SHADOW_OBSERVE
         assert scanner.strategy_id not in CAPITAL_APPROVED
         assert is_capital_eligible(scanner.strategy_id) is False
+
+
+def test_shadow_permission_is_narrower_than_research_registration():
+    permitted = {scanner.strategy_id for scanner in SHADOW_RESEARCH_SCANNERS}
+    assert permitted <= SHADOW_OBSERVE
+    assert LiquiditySweepReversal15mV1.strategy_id not in SHADOW_OBSERVE
+    assert TrendSqueezeContinuation1hV1.strategy_id not in SHADOW_OBSERVE
 
 
 def test_all_new_scanners_prepare_and_explain_current_bar():
@@ -89,3 +98,53 @@ def test_tick_acceptance_requires_time_samples_and_monotonic_ticks():
     assert intent is not None
     assert intent.side == "long"
     assert "virtual_only" in intent.reason
+
+
+def test_trend_squeeze_requires_completed_compression_then_release():
+    scanner = TrendSqueezeContinuation1hV1()
+    count = 140
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    close = pd.Series([100.0 + index * 0.02 for index in range(count)])
+    candles = pd.DataFrame(
+        {
+            "timestamp": [start + timedelta(hours=index) for index in range(count)],
+            "open": close - 0.01,
+            "high": close + pd.Series([0.35] * 80 + [0.10] * (count - 80)),
+            "low": close - pd.Series([0.35] * 80 + [0.10] * (count - 80)),
+            "close": close,
+            "volume": [10.0] * count,
+            "quote_volume": close * 10.0,
+            "trade_count": [20] * count,
+            "data_quality": ["ok"] * count,
+            "is_closed": [True] * count,
+        }
+    )
+    candles.loc[count - 1, ["open", "high", "low", "close", "volume"]] = [
+        float(close.iloc[-2]),
+        float(close.iloc[-2] + 3.2),
+        float(close.iloc[-2] - 0.05),
+        float(close.iloc[-2] + 3.0),
+        30.0,
+    ]
+    candles.loc[count - 1, "quote_volume"] = (
+        candles.loc[count - 1, "close"] * candles.loc[count - 1, "volume"]
+    )
+
+    prepared = scanner.prepare(candles)
+    row = prepared.iloc[-1]
+
+    assert row["tsc1h_compression_ready"] == 1
+    assert row["tsc1h_release"] == 1
+    assert row["tsc1h_fire"] == 1
+    intent = scanner.signal(prepared, len(prepared) - 1)
+    assert intent is not None and intent.side == "long"
+    assert intent.stop_price < float(row["close"]) < intent.take_profit_price
+
+
+def test_scanner_diagnostics_include_non_binding_near_miss_distances():
+    scanner = TrendSqueezeContinuation1hV1()
+    prepared = scanner.prepare(_candles())
+    diagnostics = scanner.evaluation_diagnostics(prepared, len(prepared) - 1)
+
+    assert diagnostics["distance_to_threshold"]
+    assert all(value >= 0 for value in diagnostics["distance_to_threshold"].values())

@@ -70,19 +70,20 @@ from vnedge.dashboard.auth import (
     has_permission,
     permissions_for,
 )
+from vnedge.dashboard.chart_series import candles_payload
 from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_payload
 from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
-from vnedge.data.candles import CandleParquetStore
-from vnedge.dashboard.chart_series import candles_payload
-from vnedge.research.scanner_catalog import live_catalog
 from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.data.candles import CandleParquetStore
 from vnedge.execution.operator_audit import OperatorAuditLog
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
 from vnedge.research.performance_scorecard import performance_disclosure, scorecard_policy
 from vnedge.research.quantified_port_factory import load_quantified_port_factory_payload
 from vnedge.research.quantified_strategy_lab import load_quantified_strategy_lab_payload
+from vnedge.research.scanner_catalog import live_catalog
+from vnedge.research.strategy_workflow import build_strategy_workflow
 from vnedge.settings.api_routes import mount_settings_routes
 from vnedge.settings.crypto import SecretBox
 from vnedge.settings.exchange_connections import SettingsService
@@ -521,6 +522,7 @@ def create_app(
     quant_loop_governance_path: Path | None = None,
     evidence_index_path: Path | None = None,
     execution_replay_profile_path: Path | None = None,
+    strategy_workflow_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -916,6 +918,11 @@ def create_app(
         execution_replay_profile_path
         or Path("research/live_research/execution_replay_profile_latest.json")
     )
+    strategy_workflow_file = (
+        strategy_workflow_path
+        or Path("research/live_research/strategy_workflow_latest.json")
+    )
+    strategy_workflow_override = strategy_workflow_path is not None
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
@@ -2361,6 +2368,45 @@ def create_app(
                 "status": "artifact_unavailable",
             },
         )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/strategy-workflow")
+    async def strategy_workflow(request: Request) -> JSONResponse:
+        """Immutable strategy versions, lineage, evidence, and quarantine state.
+
+        The endpoint is intentionally GET-only.  Registration, forking, and
+        quarantine are reviewed CLI/library operations; this surface cannot
+        grant shadow/capital permission or promote a strategy.
+        """
+        user = _authorized(request)
+        if strategy_workflow_override:
+            payload = _read_json_payload(
+                strategy_workflow_file,
+                {
+                    "workflow_id": "strategy_workflow_v1",
+                    "status": "artifact_unreadable",
+                    "summary": {},
+                    "revisions": [],
+                    "policy": {"can_trade": False, "can_promote": False},
+                },
+            )
+        else:
+            try:
+                payload = build_strategy_workflow()
+            except (OSError, ValueError) as exc:
+                payload = _read_json_payload(
+                    strategy_workflow_file,
+                    {
+                        "workflow_id": "strategy_workflow_v1",
+                        "status": "workflow_unavailable",
+                        "error": str(exc),
+                        "summary": {},
+                        "revisions": [],
+                        "policy": {"can_trade": False, "can_promote": False},
+                    },
+                )
+        payload["can_trade"] = False
+        payload["can_promote"] = False
         return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/scorecard")

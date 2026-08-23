@@ -13,7 +13,10 @@ from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
-from vnedge.strategy.research_scanners import NEW_RESEARCH_SCANNERS
+from vnedge.strategy.research_scanners import (
+    NEW_RESEARCH_SCANNERS,
+    SHADOW_RESEARCH_SCANNERS,
+)
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.squeeze_expansion_breakout_v4 import SqueezeExpansionBreakoutV4
@@ -92,7 +95,7 @@ SHADOW_OBSERVE: frozenset[str] = frozenset(
         SqueezeExpansionBreakout.strategy_id,
         SqueezeExpansionBreakoutV3.strategy_id,
         SqueezeExpansionBreakoutV4.strategy_id,
-        *(strategy.strategy_id for strategy in NEW_RESEARCH_SCANNERS),
+        *(strategy.strategy_id for strategy in SHADOW_RESEARCH_SCANNERS),
     }
 )
 

@@ -88,6 +88,11 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         cost_family="swing", max_holding_bars=48,
         rationale="one-hour trend pullback with a 48-hour evidence horizon",
     ),
+    "trend_squeeze_continuation_1h_v1": ScannerRuntimeContract(
+        strategy_id="trend_squeeze_continuation_1h_v1", timeframe="1h",
+        cost_family="swing", max_holding_bars=12,
+        rationale="one-hour squeeze release with a frozen 12-hour horizon",
+    ),
     "tick_accepted_breakout_v1": ScannerRuntimeContract(
         strategy_id="tick_accepted_breakout_v1", timeframe="5m",
         cost_family="scalp", max_holding_bars=48,

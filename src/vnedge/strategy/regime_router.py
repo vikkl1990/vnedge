@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Final
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 
 class Regime(str, Enum):
@@ -45,6 +45,7 @@ SESSION_CONTINUATION: Final = "session_continuation_15m_v1"
 SWEEP_REVERSAL: Final = "liquidity_sweep_reversal_15m_v1"
 AVWAP_RECLAIM: Final = "avwap_reclaim_15m_v1"
 TREND_PULLBACK: Final = "trend_pullback_1h_v1"
+TREND_SQUEEZE: Final = "trend_squeeze_continuation_1h_v1"
 
 FAST_IDS: Final = frozenset({FAST_SQUEEZE, FAST_VOL_EXP})
 SLOW_IDS: Final = frozenset({SLOW_RECLAIM, SLOW_PULLBACK, STRUCTURE})
@@ -52,6 +53,7 @@ RANGE_NATIVE_IDS: Final = frozenset({AVWAP_RECLAIM, SWEEP_REVERSAL})
 EXPAND_NATIVE_IDS: Final = frozenset(
     {TICK_ACCEPTED, SESSION_CONTINUATION, TREND_PULLBACK}
 )
+TRANSITION_IDS: Final = frozenset({TREND_SQUEEZE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,17 +95,17 @@ DEFAULT_CONFIG: Final = RegimeRouterConfig()
 
 
 def build_policy(config: RegimeRouterConfig) -> Mapping[Regime, frozenset[str]]:
-    range_set = RANGE_NATIVE_IDS | (FAST_IDS if config.allow_fast_in_range else frozenset()) | (
+    range_set = RANGE_NATIVE_IDS | TRANSITION_IDS | (FAST_IDS if config.allow_fast_in_range else frozenset()) | (
         SLOW_IDS if config.allow_slow_in_range else frozenset()
     )
-    expand_set = EXPAND_NATIVE_IDS | (FAST_IDS if config.allow_fast_in_expand else frozenset()) | (
+    expand_set = EXPAND_NATIVE_IDS | TRANSITION_IDS | (FAST_IDS if config.allow_fast_in_expand else frozenset()) | (
         SLOW_IDS if config.allow_slow_in_expand else frozenset()
     )
     return {
         Regime.RANGE: range_set,
         Regime.EXPAND: expand_set,
         Regime.STRESS: (
-            FAST_IDS | SLOW_IDS | RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS
+            FAST_IDS | SLOW_IDS | RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS | TRANSITION_IDS
             if config.allow_any_in_stress else frozenset()
         ),
         Regime.UNKNOWN: frozenset(),

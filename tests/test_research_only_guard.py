@@ -34,6 +34,7 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "session_continuation_15m_v1",
         "liquidity_sweep_reversal_15m_v1",
         "trend_pullback_1h_v1",
+        "trend_squeeze_continuation_1h_v1",
         "tick_accepted_breakout_v1",
     }
     for sid in RESEARCH_ONLY:
@@ -77,7 +78,6 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "squeeze_expansion_breakout_v4",
         "avwap_reclaim_15m_v1",
         "session_continuation_15m_v1",
-        "liquidity_sweep_reversal_15m_v1",
         "trend_pullback_1h_v1",
         "tick_accepted_breakout_v1",
     }

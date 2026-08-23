@@ -196,6 +196,15 @@ one position per lane, next-open entry, stop-before-target, and the frozen hold
 contract. Evidence reports realized execution cost separately from conservative
 gate cost and joins evaluations, intents, and outcomes by `intent_key`.
 
+Scanner authority is split into three explicit sets: registered research
+mechanisms, the narrower `SHADOW_OBSERVE` allowlist, and the independent
+`CAPITAL_APPROVED` allowlist. Adding a class to research therefore cannot
+start a live-public-data observer. Every diagnostic scanner also reports
+non-binding distance-to-threshold values; those values explain near misses but
+never relax a gate. The 1h trend-squeeze candidate is intentionally held at
+research replay after one trade on the already-seen August slice, while the
+negative sweep-reversal candidate is parked outside shadow.
+
 ## Dashboard and authentication
 
 The local React `/app` cockpit now has:
@@ -266,6 +275,7 @@ trusted DNS certificate even when the guarded application deployment passes.
 | React authority hierarchy (Desk/Promote/System) | **SHIPPED locally** |
 | ML and agent evidence subordinate to Research | **SHIPPED locally** |
 | Canonical candles, gaps, VWAP/AVWAP pipeline | **SHIPPED end to end** |
+| Immutable strategy version/fork/quarantine workflow | **SHIPPED locally** — see `STRATEGY_WORKFLOW.md` |
 | License for the public repository | **SHIPPED locally** — MIT |
 | CI visibility beyond the safety allowlist | **PARTIAL** — full-package Ruff/mypy report debt but are non-blocking |
 

@@ -87,6 +87,49 @@ def test_scanner_evidence_endpoint_is_read_only_and_auth_gated(client):
     assert response.json()["read_only"] is True
 
 
+def test_strategy_workflow_endpoint_is_read_only_and_auth_gated(tmp_path):
+    artifact = tmp_path / "strategy-workflow.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "workflow_id": "strategy_workflow_v1",
+                "summary": {"revisions": 1, "quarantined": 0},
+                "revisions": [
+                    {
+                        "revision_id": "scanner_v1@1+abc",
+                        "strategy_id": "scanner_v1",
+                        "version": "1",
+                        "stage": "BACKTESTED",
+                        "parent_revision_id": None,
+                        "performance": {"trades": 42, "after_cost_net_usd": 12.0},
+                        "governance_flags": ["NO_UNTOUCHED_JUDGMENT"],
+                        "can_trade": False,
+                        "can_promote": False,
+                    }
+                ],
+                "policy": {"can_trade": False, "can_promote": False},
+            }
+        )
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    workflow_client = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            strategy_workflow_path=artifact,
+        )
+    )
+
+    assert workflow_client.get("/strategy-workflow").status_code == 401
+    response = workflow_client.get("/strategy-workflow?token=t3st-token")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["revisions"] == 1
+    assert payload["revisions"][0]["stage"] == "BACKTESTED"
+    assert payload["can_trade"] is False and payload["can_promote"] is False
+
+
 def test_scorecard_names_current_runtime_scanners_without_inheriting_old_evidence(
     tmp_path,
 ):

@@ -743,6 +743,58 @@ export interface ResearchScorecard {
   can_promote: false;
 }
 
+export interface StrategyWorkflowRevision {
+  revision_id: string;
+  strategy_id: string;
+  version: string;
+  parent_revision_id: string | null;
+  stage: string;
+  status: string;
+  status_reason: string;
+  timeframes: string[];
+  symbols: string[];
+  backtest_engine: string;
+  engine_version: string;
+  parity_status: "PASS" | "FAIL" | "NOT_REPORTED";
+  preregistration: string;
+  governance_flags: string[];
+  performance: {
+    after_cost_net_usd: number | null;
+    trades: number | null;
+    profit_factor: number | null;
+    max_drawdown_pct: number | null;
+    sample_qualified: boolean;
+  };
+  latest_run: { symbol?: string; timeframe?: string; data_provenance?: string } | null;
+  can_trade: false;
+  can_promote: false;
+}
+
+export interface StrategyWorkflowPayload {
+  workflow_id: string;
+  generated_at?: string;
+  status?: string;
+  summary: {
+    revisions?: number;
+    explicit_revisions?: number;
+    strategies?: number;
+    quarantined?: number;
+    shadow_observe?: number;
+    oos_pass?: number;
+    by_stage?: Record<string, number>;
+  };
+  revisions: StrategyWorkflowRevision[];
+  policy: {
+    immutable_revisions?: boolean;
+    fork_requires_new_registered_strategy_id?: boolean;
+    engine_parity_failure_quarantines_revision?: boolean;
+    can_trade: false;
+    can_promote: false;
+  };
+  can_trade: false;
+  can_promote: false;
+}
+
 export interface MlStage {
   key: string;
   label: string;

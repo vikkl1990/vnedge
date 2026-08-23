@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useWhoAmI } from "../queries";
+import { useAgenticResearchStatus, useCostModel, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
 import type { CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
 
 const usd = (n: unknown) =>
@@ -419,6 +419,106 @@ export function RiskPanel() {
   );
 }
 
+function StrategyWorkflowPanel() {
+  const workflow = useStrategyWorkflow();
+  const [stage, setStage] = useState("all");
+  const [symbol, setSymbol] = useState("all");
+  const [minTrades, setMinTrades] = useState(0);
+  const revisions = workflow.data?.revisions ?? [];
+  const stages = Array.from(new Set(revisions.map((row) => row.stage))).sort();
+  const symbols = Array.from(new Set(revisions.flatMap((row) => [
+    ...row.symbols,
+    row.latest_run?.symbol ?? "",
+  ]).filter(Boolean))).sort();
+  const filtered = revisions.filter((row) => {
+    const rowSymbols = [...row.symbols, row.latest_run?.symbol ?? ""].filter(Boolean);
+    const trades = row.performance.trades;
+    return (stage === "all" || row.stage === stage)
+      && (symbol === "all" || rowSymbols.includes(symbol))
+      && (minTrades <= 0 || (trades != null && trades >= minTrades));
+  });
+  const stageTone = (value: string) => {
+    if (["OOS_PASS", "SHADOW_OBSERVE"].includes(value)) return "good";
+    if (["BACKTESTED", "PREREGISTERED"].includes(value)) return "info";
+    if (["QUARANTINED", "KILLED", "OOS_REJECT"].includes(value)) return "bad";
+    return "neutral";
+  };
+  const cols: Column<(typeof filtered)[number]>[] = [
+    {
+      key: "revision",
+      header: "Revision / lineage",
+      render: (row) => (
+        <span className="block min-w-[220px]">
+          <span className="font-mono text-txt">{row.strategy_id} · v{row.version}</span>
+          <span className="block max-w-[260px] truncate text-[9px] text-faint" title={row.revision_id}>
+            {row.parent_revision_id ? `fork ← ${row.parent_revision_id.split("+")[0]}` : "root revision"}
+          </span>
+        </span>
+      ),
+    },
+    { key: "stage", header: "Stage", render: (row) => <TerminalBadge tone={stageTone(row.stage)}>{row.stage.replace(/_/g, " ")}</TerminalBadge> },
+    {
+      key: "net",
+      header: "After cost",
+      align: "right",
+      render: (row) => <span className={signed(row.performance.after_cost_net_usd)}>{usd(row.performance.after_cost_net_usd)}</span>,
+    },
+    { key: "trades", header: "Trades", align: "right", render: (row) => <span className={row.performance.sample_qualified ? "" : "text-warn"}>{row.performance.trades ?? "—"}</span> },
+    { key: "pf", header: "PF", align: "right", render: (row) => row.performance.profit_factor?.toFixed(2) ?? "—" },
+    {
+      key: "parity",
+      header: "Engine parity",
+      render: (row) => (
+        <span className="block min-w-[130px]">
+          <TerminalBadge tone={row.parity_status === "PASS" ? "good" : row.parity_status === "FAIL" ? "bad" : "warn"}>{row.parity_status.replace(/_/g, " ")}</TerminalBadge>
+          <span className="mt-1 block text-[9px] text-faint">{[row.backtest_engine, row.engine_version].filter(Boolean).join(" · ") || "engine not frozen"}</span>
+        </span>
+      ),
+    },
+    {
+      key: "governance",
+      header: "Governance",
+      render: (row) => (
+        <span className="block min-w-[180px]">
+          <span className={row.governance_flags.length ? "text-warn" : "text-long"}>{row.governance_flags[0]?.replace(/_/g, " ") ?? "contracts complete"}</span>
+          <span className="block max-w-[230px] truncate text-[9px] text-faint" title={row.governance_flags.join(" · ")}>{row.preregistration ? "pre-registration linked" : "no pre-registration linked"} · read only</span>
+        </span>
+      ),
+    },
+  ];
+  const summary = workflow.data?.summary;
+  const metric = (label: string, value: number | undefined, tone = "") => (
+    <div className="border border-line bg-inset p-3">
+      <div className="font-mono text-[9px] uppercase tracking-wider text-faint">{label}</div>
+      <div className={`mt-1 font-mono text-xl font-black ${tone}`}>{value ?? 0}</div>
+    </div>
+  );
+  return (
+    <TerminalPanel title="Strategy Workflow" meta="immutable versions · lineage · OOS · quarantine">
+      {workflow.isError && <div className="mb-3 border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Strategy workflow unavailable. No revision or parity state is being asserted.</div>}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        {metric("Revisions", summary?.revisions)}
+        {metric("Explicit", summary?.explicit_revisions, "text-brand")}
+        {metric("OOS pass", summary?.oos_pass, "text-long")}
+        {metric("Shadow observe", summary?.shadow_observe, "text-info")}
+        {metric("Quarantined", summary?.quarantined, (summary?.quarantined ?? 0) > 0 ? "text-short" : "")}
+      </div>
+      <div className="my-3 flex flex-wrap items-center gap-2">
+        <select aria-label="Filter workflow stage" value={stage} onChange={(event) => setStage(event.target.value)} className="border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-dim focus:border-brand focus:outline-none">
+          <option value="all">all stages</option>{stages.map((value) => <option key={value} value={value}>{value.replace(/_/g, " ").toLowerCase()}</option>)}
+        </select>
+        <select aria-label="Filter workflow symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)} className="border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-dim focus:border-brand focus:outline-none">
+          <option value="all">all symbols</option>{symbols.map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <input aria-label="Minimum workflow trades" type="number" min={0} value={minTrades || ""} onChange={(event) => setMinTrades(Math.max(0, Number(event.target.value) || 0))} placeholder="min trades" className="w-24 border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-txt placeholder:text-faint focus:border-brand focus:outline-none" />
+        <span className="ml-auto text-[10px] font-mono text-faint">{filtered.length}/{revisions.length} shown · after-cost evidence · no fork/promote controls</span>
+      </div>
+      <DenseTable columns={cols} rows={filtered} rowKey={(row) => row.revision_id} empty={workflow.isLoading ? "loading immutable workflow…" : "no revisions match these filters"} />
+      <div className="mt-3 border-l-2 border-warn px-3 py-2 text-[10px] text-dim"><strong className="text-txt">Boundary:</strong> forks require a new reviewed strategy ID. OOS PASS still cannot trade or promote from this screen.</div>
+    </TerminalPanel>
+  );
+}
+
 export function ResearchPanel() {
   const scorecard = useResearchScorecard();
   const risk = useRiskSnapshot();
@@ -453,6 +553,7 @@ export function ResearchPanel() {
   ];
   return (
     <div className="space-y-4">
+      <StrategyWorkflowPanel />
       <TerminalPanel title="Research" meta="evidence only · no mutation">
       {scoreFreshness.state !== "OK" && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[11px] text-warn"><strong>Scorecard {scoreFreshness.state.toLowerCase()}.</strong> Age {scoreFreshness.age}; metrics remain historical evidence and must not drive promotion.</div>}
       <div className="rounded-lg border border-line bg-inset p-4">

@@ -78,7 +78,7 @@ def test_breakout_blocked_without_volume():
         regime=SMALL, min_atr_pct=0.0, max_atr_pct=1.0, min_volume_z=0.5,
         breakout_bars=24,
     )
-    idx, intent = first_signal(strategy, flat_vol)
+    _idx, intent = first_signal(strategy, flat_vol)
     assert intent is None
 
 
@@ -87,7 +87,7 @@ def test_breakout_blocked_by_volatility_ceiling():
         regime=SMALL, min_atr_pct=0.0, max_atr_pct=0.05, min_volume_z=0.5,
         breakout_bars=24,
     )
-    idx, intent = first_signal(strategy, breakout_market())
+    _idx, intent = first_signal(strategy, breakout_market())
     assert intent is None
 
 
@@ -130,13 +130,13 @@ def test_panic_reversal_fires_after_stabilization():
 
 def test_panic_reversal_never_catches_falling_knife():
     candles = panic_market(stabilize=False)
-    idx, intent = first_signal(panic_strategy(len(candles)), candles)
+    _idx, intent = first_signal(panic_strategy(len(candles)), candles)
     assert intent is None
 
 
 def test_panic_reversal_blocked_when_longs_still_crowded():
     candles = panic_market(stabilize=True)
-    idx, intent = first_signal(
+    _idx, intent = first_signal(
         panic_strategy(len(candles), funding_flushed=False), candles)
     assert intent is None
 
@@ -159,7 +159,7 @@ def test_squeeze_joins_crowding_in_trend():
     strategy = FundingSqueezeContinuation(
         funding, regime=SMALL, funding_pct_window=48, extreme_pct=0.85,
     )
-    idx, intent = first_signal(strategy, candles)
+    _idx, intent = first_signal(strategy, candles)
     assert intent is not None
     assert intent.side == "long"  # SAME feature as MR, OPPOSITE action in trend
     assert "continuation, not fade" in intent.reason
@@ -174,7 +174,7 @@ def test_squeeze_blocked_without_trend():
     strategy = FundingSqueezeContinuation(
         funding, regime=SMALL, funding_pct_window=48, extreme_pct=0.85,
     )
-    idx, intent = first_signal(strategy, candles)
+    _idx, intent = first_signal(strategy, candles)
     assert intent is None
 
 
@@ -204,4 +204,5 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "liquidity_sweep_reversal_15m_v1",
         "trend_pullback_1h_v1",
         "tick_accepted_breakout_v1",
+        "trend_squeeze_continuation_1h_v1",
     }

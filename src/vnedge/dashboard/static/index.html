@@ -300,6 +300,20 @@
   .osrow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
   .osrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .osrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wffilters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .wffilters select,.wffilters input{background:var(--bg-inset);border:1px solid var(--line-2);color:var(--txt-dim);border-radius:6px;padding:7px 9px;font:700 10.5px var(--mono)}
+  .wffilters input{width:90px}
+  .wfmetrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:14px}
+  .wfmetric{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 11px}
+  .wfmetric .l{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .wfmetric .v{font-family:var(--mono);font-size:21px;font-weight:900;margin-top:3px}
+  .wfrows{max-height:540px;overflow:auto;border-top:1px solid var(--line)}
+  .wfrow{display:grid;grid-template-columns:minmax(185px,1.35fr) .75fr .8fr .7fr .8fr minmax(180px,1.2fr);gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-size:11.5px}
+  .wfrow.head{position:sticky;top:0;z-index:2;background:var(--bg-2)}
+  .wfrow.head span{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--txt-faint);font-weight:800}
+  .wfrow b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wfrow small{display:block;color:var(--txt-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wfguard{color:var(--warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .funnelgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:14px}
   .fstep{background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 10px;min-width:0;position:relative}
   .fstep:after{content:"";position:absolute;right:-8px;top:50%;width:8px;height:1px;background:var(--line-2)}
@@ -340,6 +354,7 @@
   .schip.blocked{border-left-color:var(--short)} .schip.blocked .dot{background:var(--short)} .schip.blocked .st{color:var(--short)}
   .schip.unknown{opacity:.75}
   @media(max-width:720px){.statusstrip{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:900px){.wfmetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.wfrow{grid-template-columns:1.4fr .8fr .7fr .8fr}.wfrow .wfhide{display:none}}
   /* Candle Path panel (Phase C) — reads the canonical time_machine/latency schema */
   .cpbanner{margin:0 14px 4px;padding:8px 11px;border-radius:var(--r-sm);font-size:11px;font-weight:700;letter-spacing:.02em}
   .cpbanner.warn{background:rgba(224,165,47,.14);color:var(--warn);border:1px solid rgba(224,165,47,.35)}
@@ -1151,6 +1166,16 @@
   <div class="view" data-view="research" hidden>
     <p class="intro"><b>Research lab.</b> Where edges are found and judged against untouched data. Nothing here trades or promotes on its own — every candidate needs human-gated approval before it can reach the desk.</p>
     <section class="panel" style="margin-bottom:14px">
+      <div class="phead"><h2>Strategy Workflow</h2><span class="meta" id="strategyWorkflowMeta">immutable versions · lineage · OOS · quarantine</span></div>
+      <div class="wffilters">
+        <select id="wfStage" aria-label="Filter workflow by stage"><option value="">all stages</option></select>
+        <select id="wfSymbol" aria-label="Filter workflow by symbol"><option value="">all symbols</option></select>
+        <input id="wfMinTrades" type="number" min="0" step="1" placeholder="min trades" aria-label="Minimum trade count">
+        <span class="meta">after-cost evidence only · no fork/promote controls</span>
+      </div>
+      <div id="strategyWorkflow"><div class="note">strategy lineage and evidence workflow loading…</div></div>
+    </section>
+    <section class="panel" style="margin-bottom:14px">
       <div class="phead"><h2>Session Regime</h2><span class="meta" id="regimeMeta">when each strategy earns · loading…</span></div>
       <div id="sessionRegime"><div class="note">session-regime rollup loading… — closed trades bucketed by UTC entry session (Asia / Europe / US / Late).</div></div>
     </section>
@@ -1781,6 +1806,62 @@
         '<span class="num hidem">'+num(g.samples).toLocaleString()+'</span>'+
         '<span class="pill '+pill[0]+'">'+pill[1]+'</span></div>';
     }).join('');
+  }
+  var strategyWorkflowData=null;
+  function wfTone(stage){
+    stage=String(stage||"");
+    if(stage==="OOS_PASS"||stage==="SHADOW_OBSERVE")return"ok";
+    if(stage==="BACKTESTED"||stage==="PREREGISTERED")return"wait";
+    if(stage==="QUARANTINED"||stage==="KILLED"||stage==="OOS_REJECT")return"bad";
+    return"none";
+  }
+  function wfSetOptions(id,values,label){
+    var el=$(id);if(!el)return;var cur=el.value;
+    el.innerHTML='<option value="">'+safe(label)+'</option>'+values.map(function(v){return '<option value="'+safe(v)+'">'+safe(String(v).toLowerCase().replace(/_/g," "))+'</option>';}).join('');
+    if(values.indexOf(cur)>=0)el.value=cur;
+  }
+  function wfMetric(label,value,color){return '<div class="wfmetric"><div class="l">'+safe(label)+'</div><div class="v"'+(color?' style="color:'+color+'"':'')+'>'+safe(value)+'</div></div>';}
+  function renderStrategyWorkflow(d){
+    strategyWorkflowData=d||{};var el=$("strategyWorkflow"),meta=$("strategyWorkflowMeta");if(!el)return;
+    var rows=(strategyWorkflowData.revisions||[]),sum=strategyWorkflowData.summary||{};
+    var stages=[],symbols=[];
+    rows.forEach(function(r){
+      if(r.stage&&stages.indexOf(r.stage)<0)stages.push(r.stage);
+      (r.symbols||[]).forEach(function(s){if(symbols.indexOf(s)<0)symbols.push(s);});
+      var lr=r.latest_run||{};if(lr.symbol&&symbols.indexOf(lr.symbol)<0)symbols.push(lr.symbol);
+    });
+    stages.sort();symbols.sort();wfSetOptions("wfStage",stages,"all stages");wfSetOptions("wfSymbol",symbols,"all symbols");
+    var stage=$("wfStage")?$("wfStage").value:"",symbol=$("wfSymbol")?$("wfSymbol").value:"",minTrades=num($("wfMinTrades")&&$("wfMinTrades").value);
+    rows=rows.filter(function(r){
+      var syms=(r.symbols||[]).slice(),lr=r.latest_run||{};if(lr.symbol)syms.push(lr.symbol);
+      var trades=(r.performance||{}).trades;
+      return (!stage||r.stage===stage)&&(!symbol||syms.indexOf(symbol)>=0)&&(!minTrades||(trades!=null&&num(trades)>=minTrades));
+    });
+    if(meta)meta.textContent=num(sum.revisions)+" revisions · "+num(sum.explicit_revisions)+" frozen · "+num(sum.quarantined)+" quarantined";
+    var metrics='<div class="wfmetrics">'+
+      wfMetric("Revisions",String(num(sum.revisions)))+
+      wfMetric("Explicit",String(num(sum.explicit_revisions)),"var(--brand)")+
+      wfMetric("OOS pass",String(num(sum.oos_pass)),"var(--long)")+
+      wfMetric("Shadow observe",String(num(sum.shadow_observe)),"var(--info)")+
+      wfMetric("Quarantined",String(num(sum.quarantined)),num(sum.quarantined)?"var(--short)":"var(--txt)")+
+    '</div>';
+    if(!rows.length){el.innerHTML=metrics+'<div class="note">no revisions match these evidence filters.</div>';return;}
+    var head='<div class="wfrow head"><span>Revision / lineage</span><span>Stage</span><span>After cost</span><span>Trades</span><span class="wfhide">Engine parity</span><span class="wfhide">Governance</span></div>';
+    var body=rows.slice(0,80).map(function(r){
+      var p=r.performance||{},net=p.after_cost_net_usd,netText=net==null?'—':((num(net)>=0?'+$':'-$')+Math.abs(num(net)).toFixed(2));
+      var netClass=net==null?'':num(net)>=0?'up':'dn',parent=r.parent_revision_id?('fork ← '+String(r.parent_revision_id).split('+')[0]):'root revision';
+      var flags=r.governance_flags||[],flag=flags.length?flags[0].toLowerCase().replace(/_/g,' '):'contracts complete';
+      var parity=r.parity_status||'NOT_REPORTED',parityTone=parity==='PASS'?'ok':parity==='FAIL'?'bad':'fix';
+      return '<div class="wfrow">'+
+        '<div title="'+safe(r.revision_id||'')+'"><b>'+safe(r.strategy_id||'--')+' <span class="num">v'+safe(r.version||'--')+'</span></b><small>'+safe(parent)+'</small></div>'+
+        '<div>'+lifeChip(String(r.stage||'registered').toLowerCase(),wfTone(r.stage))+'</div>'+
+        '<div><b class="num '+netClass+'">'+safe(netText)+'</b><small>PF '+(p.profit_factor==null?'—':num(p.profit_factor).toFixed(2))+'</small></div>'+
+        '<div><b class="num">'+(p.trades==null?'—':num(p.trades).toLocaleString())+'</b><small>'+(p.sample_qualified?'sample qualified':'under / not reported')+'</small></div>'+
+        '<div class="wfhide">'+lifeChip(String(parity).toLowerCase().replace(/_/g,' '),parityTone)+'<small>'+safe([r.backtest_engine,r.engine_version].filter(Boolean).join(' · ')||'engine not frozen')+'</small></div>'+
+        '<div class="wfhide"><b class="wfguard" title="'+safe(flags.join(' · '))+'">'+safe(flag)+'</b><small>'+safe(r.preregistration?'pre-registered':'no prereg linked')+' · read only</small></div>'+
+      '</div>';
+    }).join('');
+    el.innerHTML=metrics+'<div class="wfrows">'+head+body+'</div><div class="fblocker"><b>Boundary:</b> ranking and lineage are evidence. Forks require a new registered ID; OOS PASS still cannot trade or promote from this screen.</div>';
   }
   function renderPromo(sc){
     var el=$("promoQueue"); if(!el)return; var pp=(sc&&sc.probes)||[];
@@ -3066,6 +3147,7 @@
       }).catch(function(e){recordPoll(path,"error",null,e);});
   }
   function pollScorecard(){ poll("/scorecard", applyScorecard); }
+  function pollStrategyWorkflow(){ poll("/strategy-workflow", renderStrategyWorkflow); }
   function pollScanner(){}
   function pollDeltaEventClock(){}
   function pollExternalRepoSynthesis(){ poll("/external-repo-synthesis", renderExternalRepoSynthesis); }
@@ -3263,8 +3345,9 @@
   }
   function pollMLStatus(){ poll("/ml-status", renderMLStatus); }
 
-  pollScorecard(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollSessionRegime(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
-  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollSessionRegime,60000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  pollScorecard(); pollStrategyWorkflow(); pollScanner(); pollDeltaEventClock(); pollAgenticResearchOS(); pollExternalRepoSynthesis(); pollLaneReadiness(); pollCausality(); pollPaperActivation(); pollPaperRouteDoctor(); pollPaperCadence(); pollPaperPerformance(); pollTradeAnalyzerOS(); pollPaperTradeEntryAutopsy(); pollPaperTradeExitAutopsy(); pollMakerQuoteLifecycle(); pollPaperContractTruth(); pollPaperPromotionBridge(); pollOperatorActions(); pollLaneSurvival(); pollPaperLaneGovernor(); pollPaperRosterDrift(); pollPaperLaneRootCause(); pollDarwinianAgentSurvival(); pollTradeProfileMatrix(); pollSessionRegime(); pollPreLive(); pollMLStatus(); pollMeta(); pollFleet(); pollJournal();
+  if(!reduce){ setInterval(pollScanner,5000); setInterval(pollDeltaEventClock,5000); setInterval(pollScorecard,30000); setInterval(pollStrategyWorkflow,60000); setInterval(pollAgenticResearchOS,30000); setInterval(pollExternalRepoSynthesis,300000); setInterval(pollLaneReadiness,30000); setInterval(pollCausality,30000); setInterval(pollPaperActivation,30000); setInterval(pollPaperRouteDoctor,30000); setInterval(pollPaperCadence,30000); setInterval(pollPaperPerformance,30000); setInterval(pollTradeAnalyzerOS,30000); setInterval(pollPaperTradeEntryAutopsy,30000); setInterval(pollPaperTradeExitAutopsy,30000); setInterval(pollMakerQuoteLifecycle,30000); setInterval(pollPaperContractTruth,30000); setInterval(pollPaperPromotionBridge,30000); setInterval(pollOperatorActions,30000); setInterval(pollLaneSurvival,30000); setInterval(pollPaperLaneGovernor,30000); setInterval(pollPaperRosterDrift,30000); setInterval(pollPaperLaneRootCause,30000); setInterval(pollDarwinianAgentSurvival,30000); setInterval(pollTradeProfileMatrix,30000); setInterval(pollSessionRegime,60000); setInterval(pollPreLive,60000); setInterval(pollMLStatus,60000); setInterval(pollFleet,30000); setInterval(pollMeta,60000); setInterval(pollJournal,20000); }
+  ["wfStage","wfSymbol","wfMinTrades"].forEach(function(id){var e=$(id);if(e)e.addEventListener(id==="wfMinTrades"?"input":"change",function(){if(strategyWorkflowData)renderStrategyWorkflow(strategyWorkflowData);});});
 
   /* ---- leverage & PnL calculator · per-exchange fee models ---- */
   var COST=null, calcState={side:"long"};
@@ -3379,7 +3462,7 @@
     if(v==="calc"){ if(!COST)pollCostModel(); calcCompute(); }
     if(v==="pipeline") renderPipeline(lastSnap);
     if(v==="promote"){ pollPreLive(); pollPaperPromotionBridge(); pollOperatorActions(); }
-    if(v==="research") pollSessionRegime();
+    if(v==="research"){pollSessionRegime();pollStrategyWorkflow();}
   }
   function setActiveNav(v){
     Array.prototype.forEach.call(nav.querySelectorAll("a[data-v]"),function(x){x.classList.toggle("on",x.getAttribute("data-v")===v)});

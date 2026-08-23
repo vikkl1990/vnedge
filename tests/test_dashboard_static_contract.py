@@ -129,6 +129,22 @@ def test_dashboard_has_agentic_research_os_supervisor_panel():
     assert "research-only supervisor; no trade authority" in html
 
 
+def test_research_view_has_immutable_strategy_workflow():
+    html = _index()
+    app = APP.read_text()
+    assert "Strategy Workflow" in html
+    assert 'id="strategyWorkflow"' in html
+    assert 'id="wfStage"' in html
+    assert 'id="wfSymbol"' in html
+    assert 'id="wfMinTrades"' in html
+    assert "function renderStrategyWorkflow" in html
+    assert "function pollStrategyWorkflow" in html
+    assert 'poll("/strategy-workflow"' in html
+    assert "Forks require a new registered ID" in html
+    assert "OOS PASS still cannot trade or promote" in html
+    assert '@app.get("/strategy-workflow")' in app
+
+
 def test_dashboard_has_no_scanner_tape():
     html = _index()
     assert "Live Signal Tape" not in html

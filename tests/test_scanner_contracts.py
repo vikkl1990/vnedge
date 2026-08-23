@@ -12,6 +12,7 @@ def test_active_scanner_holds_are_frozen_in_bars_for_their_timeframes() -> None:
     range_v4 = scanner_runtime_contract("range_expansion_observer_v4")
     bos = scanner_runtime_contract("structure_bos_15m_trigger_v2")
     bos_v3 = scanner_runtime_contract("structure_bos_15m_trigger_v3")
+    trend_squeeze = scanner_runtime_contract("trend_squeeze_continuation_1h_v1")
 
     assert squeeze is not None and (squeeze.timeframe, squeeze.max_holding_bars) == (
         "5m",
@@ -30,6 +31,10 @@ def test_active_scanner_holds_are_frozen_in_bars_for_their_timeframes() -> None:
         "15m",
         192,
     )
+    assert trend_squeeze is not None and (
+        trend_squeeze.timeframe,
+        trend_squeeze.max_holding_bars,
+    ) == ("1h", 12)
 
 
 def test_cost_profile_comes_from_strategy_family_then_venue() -> None:

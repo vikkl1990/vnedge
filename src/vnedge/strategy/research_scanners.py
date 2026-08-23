@@ -1,4 +1,4 @@
-"""Five causal, pre-registered scanner mechanisms (research/shadow only).
+"""Causal, pre-registered scanner mechanisms (research/shadow only).
 
 The implementations intentionally share only data-quality and stop/target
 helpers.  Each mechanism has an independent market claim and strategy id.
@@ -66,6 +66,11 @@ class _DiagnosticScanner(BaseStrategy):
         # mechanisms are price/volume-only and never inspect funding.
         self.funding = funding
 
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        """Non-binding distances to the closest frozen trigger thresholds."""
+        del row
+        return {}
+
     def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, Any]:
         row = df.iloc[index]
         features: dict[str, Any] = {}
@@ -95,7 +100,7 @@ class _DiagnosticScanner(BaseStrategy):
             "all_failed_gates": failures,
             "features": features,
             "thresholds": dict(self.threshold_contract),
-            "distance_to_threshold": {},
+            "distance_to_threshold": self.diagnostic_distances(row),
         }
 
 
@@ -182,6 +187,7 @@ class AvwapReclaim15mV1(_DiagnosticScanner):
         out["avr_anchor_index"] = anchor_indices
         out["avr_anchor_kind"] = anchor_kinds
         out["avr_distance_bps"] = distance
+        out["avr_prior_distance_bps"] = prior_distance
         out["avr_exact_volume"] = exact.astype(float)
         out["avr_excursion_ok"] = prior_distance.abs().ge(p.min_excursion_bps).astype(float)
         out["avr_reclaim"] = (reclaim_long | reclaim_short).astype(float)
@@ -189,6 +195,17 @@ class AvwapReclaim15mV1(_DiagnosticScanner):
         out["avr_atr"] = atr(out, p.atr_period)
         out["avr_fire"] = fire.astype(float)
         return out
+
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        prior = float(row.get("avr_prior_distance_bps", float("nan")))
+        current = float(row.get("avr_distance_bps", float("nan")))
+        if not math.isfinite(prior) or not math.isfinite(current):
+            return {}
+        reclaim_gap = max(0.0, -current) if prior < 0 else max(0.0, current)
+        return {
+            "excursion_bps": max(0.0, self.params.min_excursion_bps - abs(prior)),
+            "reclaim_zero_bps": reclaim_gap,
+        }
 
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         if index < self.warmup_bars or not bool(df.iloc[index]["avr_fire"]):
@@ -242,11 +259,25 @@ class SessionContinuation15mV1(_DiagnosticScanner):
         fire = session & volume_ok & out["rs_quality_ok"].eq(1) & out["rs_route_ok"].eq(1) & (long | short)
         out["sc15_session_ok"] = session.astype(float)
         out["sc15_volume_ok"] = volume_ok.astype(float)
+        out["sc15_volume_ratio"] = out["volume"].div(vol_base.replace(0, float("nan")))
+        long_gap = high.sub(out["close"]).clip(lower=0).div(out["close"]).mul(10_000)
+        short_gap = out["close"].sub(low).clip(lower=0).div(out["close"]).mul(10_000)
+        out["sc15_break_gap_bps"] = pd.concat([long_gap, short_gap], axis=1).min(axis=1)
         out["sc15_break"] = (long | short).astype(float)
         out["sc15_side"] = long.map({True: "long", False: "short"})
         out["sc15_atr"] = atr(out, p.atr_period)
         out["sc15_fire"] = fire.astype(float)
         return out
+
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        volume_ratio = float(row.get("sc15_volume_ratio", float("nan")))
+        break_gap = float(row.get("sc15_break_gap_bps", float("nan")))
+        distances: dict[str, float] = {}
+        if math.isfinite(volume_ratio):
+            distances["volume_multiple"] = max(0.0, 1.0 - volume_ratio)
+        if math.isfinite(break_gap):
+            distances["continuation_break_bps"] = max(0.0, break_gap)
+        return distances
 
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         if index < self.warmup_bars or not bool(df.iloc[index]["sc15_fire"]):
@@ -303,6 +334,13 @@ class LiquiditySweepReversal15mV1(_DiagnosticScanner):
         out["lsr_fire"] = fire.astype(float)
         return out
 
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        wick = float(row.get("lsr_wick_bps", float("nan")))
+        return (
+            {"minimum_wick_bps": max(0.0, self.params.min_wick_bps - wick)}
+            if math.isfinite(wick) else {}
+        )
+
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         if index < self.warmup_bars or not bool(df.iloc[index]["lsr_fire"]):
             return None
@@ -356,6 +394,12 @@ class TrendPullback1hV1(_DiagnosticScanner):
         fire = out["rs_quality_ok"].eq(1) & out["rs_route_ok"].eq(1) & (long | short)
         out["tp1h_fast"] = fast
         out["tp1h_slow"] = slow
+        out["tp1h_ema_gap_bps"] = fast.sub(slow).abs().div(out["close"]).mul(10_000)
+        long_resume_gap = out["high"].shift(1).sub(out["close"]).clip(lower=0)
+        short_resume_gap = out["close"].sub(out["low"].shift(1)).clip(lower=0)
+        out["tp1h_resume_gap_bps"] = pd.concat(
+            [long_resume_gap, short_resume_gap], axis=1
+        ).min(axis=1).div(out["close"]).mul(10_000)
         out["tp1h_trend_ok"] = (up | down).astype(float)
         out["tp1h_pullback"] = (pull_long | pull_short).astype(float)
         out["tp1h_resume"] = (resume_long | resume_short).astype(float)
@@ -363,6 +407,10 @@ class TrendPullback1hV1(_DiagnosticScanner):
         out["tp1h_atr"] = atr(out, p.atr_period)
         out["tp1h_fire"] = fire.astype(float)
         return out
+
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        resume = float(row.get("tp1h_resume_gap_bps", float("nan")))
+        return {"resume_break_bps": max(0.0, resume)} if math.isfinite(resume) else {}
 
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         if index < self.warmup_bars or not bool(df.iloc[index]["tp1h_fire"]):
@@ -373,6 +421,165 @@ class TrendPullback1hV1(_DiagnosticScanner):
                        reward_r=self.params.reward_r,
                        reason=f"trend_pullback_1h_v1 {side} virtual_only")
 
+
+@dataclass(frozen=True, slots=True)
+class TrendSqueezeContinuationParams:
+    bb_period: int = 20
+    bb_mult: float = 2.0
+    kc_period: int = 20
+    kc_mult: float = 1.5
+    squeeze_bars: int = 3
+    fast_ema: int = 20
+    slow_ema: int = 50
+    momentum_period: int = 5
+    volume_period: int = 20
+    min_volume_multiple: float = 1.0
+    stop_atr_mult: float = 1.5
+    reward_r: float = 2.5
+
+
+class TrendSqueezeContinuation1hV1(_DiagnosticScanner):
+    """Closed-bar squeeze release aligned with trend and participation.
+
+    This is intentionally a new mechanism and strategy id.  It does not alter
+    the 5m squeeze scanners: a completed three-bar 1h compression must release
+    beyond its Bollinger envelope while EMA trend, momentum and volume agree.
+    Entry remains next-bar in replay/runtime, with hard ATR stop/target and a
+    frozen time stop supplied by the runtime contract.
+    """
+
+    strategy_id = "trend_squeeze_continuation_1h_v1"
+    eligibility = "RESEARCH_ONLY"
+    timeframe = "1h"
+    params = TrendSqueezeContinuationParams()
+    warmup_bars = 51
+    prefix = "tsc1h"
+    failure_contract = (
+        ("rs_quality_ok", "data_quality_not_ok"),
+        ("rs_route_ok", "regime_route_blocked"),
+        ("tsc1h_compression_ready", "squeeze_not_established"),
+        ("tsc1h_release", "squeeze_not_released"),
+        ("tsc1h_trend_ok", "ema_trend_not_aligned"),
+        ("tsc1h_momentum_ok", "momentum_not_aligned"),
+        ("tsc1h_break", "envelope_not_broken"),
+        ("tsc1h_volume_ok", "volume_confirmation_failed"),
+        ("tsc1h_fire", "no_trend_squeeze_setup"),
+    )
+    threshold_contract: ClassVar[dict[str, float]] = {
+        "bb_period": 20.0,
+        "bb_mult": 2.0,
+        "kc_mult": 1.5,
+        "squeeze_bars": 3.0,
+        "fast_ema": 20.0,
+        "slow_ema": 50.0,
+        "momentum_period": 5.0,
+        "min_volume_multiple": 1.0,
+        "stop_atr_mult": 1.5,
+        "reward_r": 2.5,
+    }
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
+        out, _ = _frame(candles, name=self.strategy_id)
+        p = self.params
+        close = out["close"]
+        basis = close.rolling(p.bb_period, min_periods=p.bb_period).mean()
+        deviation = close.rolling(p.bb_period, min_periods=p.bb_period).std(ddof=0)
+        bb_upper = basis + p.bb_mult * deviation
+        bb_lower = basis - p.bb_mult * deviation
+        range_atr = atr(out, p.kc_period)
+        kc_basis = ema(close, p.kc_period)
+        kc_upper = kc_basis + p.kc_mult * range_atr
+        kc_lower = kc_basis - p.kc_mult * range_atr
+        bb_width = bb_upper.sub(bb_lower)
+        kc_width = kc_upper.sub(kc_lower)
+        compression_ratio = bb_width.div(kc_width.replace(0, float("nan")))
+        squeeze = bb_upper.le(kc_upper) & bb_lower.ge(kc_lower)
+        prior_squeeze_count = squeeze.shift(1).astype(float).rolling(
+            p.squeeze_bars, min_periods=p.squeeze_bars
+        ).sum()
+        compression_ready = prior_squeeze_count.eq(float(p.squeeze_bars))
+        release = compression_ready & ~squeeze
+
+        fast = ema(close, p.fast_ema)
+        slow = ema(close, p.slow_ema)
+        momentum = close.sub(close.shift(p.momentum_period))
+        volume_base = out["volume"].shift(1).rolling(
+            p.volume_period, min_periods=p.volume_period
+        ).median()
+        volume_ratio = out["volume"].div(volume_base.replace(0, float("nan")))
+        volume_ok = volume_ratio.ge(p.min_volume_multiple)
+
+        trend_long = fast.gt(slow) & close.gt(fast)
+        trend_short = fast.lt(slow) & close.lt(fast)
+        momentum_long = momentum.gt(0)
+        momentum_short = momentum.lt(0)
+        break_long = close.gt(bb_upper)
+        break_short = close.lt(bb_lower)
+        momentum_aligned = (trend_long & momentum_long) | (trend_short & momentum_short)
+        break_aligned = (trend_long & break_long) | (trend_short & break_short)
+        long = release & trend_long & momentum_long & break_long & volume_ok
+        short = release & trend_short & momentum_short & break_short & volume_ok
+        fire = (
+            out["rs_quality_ok"].eq(1)
+            & out["rs_route_ok"].eq(1)
+            & (long | short)
+        )
+
+        out["tsc1h_bb_upper"] = bb_upper
+        out["tsc1h_bb_lower"] = bb_lower
+        out["tsc1h_kc_upper"] = kc_upper
+        out["tsc1h_kc_lower"] = kc_lower
+        out["tsc1h_squeeze"] = squeeze.astype(float)
+        out["tsc1h_compression_ready"] = compression_ready.astype(float)
+        out["tsc1h_release"] = release.astype(float)
+        out["tsc1h_fast"] = fast
+        out["tsc1h_slow"] = slow
+        out["tsc1h_trend_ok"] = (trend_long | trend_short).astype(float)
+        out["tsc1h_momentum"] = momentum
+        out["tsc1h_momentum_ok"] = momentum_aligned.astype(float)
+        out["tsc1h_break"] = break_aligned.astype(float)
+        out["tsc1h_volume_ratio"] = volume_ratio
+        out["tsc1h_volume_ok"] = volume_ok.astype(float)
+        long_gap = bb_upper.sub(close).clip(lower=0).div(close).mul(10_000)
+        short_gap = close.sub(bb_lower).clip(lower=0).div(close).mul(10_000)
+        out["tsc1h_break_gap_bps"] = long_gap.where(trend_long, short_gap)
+        out["tsc1h_compression_ratio"] = compression_ratio
+        out["tsc1h_prior_squeeze_count"] = prior_squeeze_count
+        out["tsc1h_side"] = long.map({True: "long", False: "short"})
+        out["tsc1h_atr"] = range_atr
+        out["tsc1h_fire"] = fire.astype(float)
+        return out
+
+    def diagnostic_distances(self, row: pd.Series) -> dict[str, float]:
+        squeeze_count = float(row.get("tsc1h_prior_squeeze_count", float("nan")))
+        volume = float(row.get("tsc1h_volume_ratio", float("nan")))
+        breakout = float(row.get("tsc1h_break_gap_bps", float("nan")))
+        distances: dict[str, float] = {}
+        if math.isfinite(squeeze_count):
+            distances["compression_bars"] = max(
+                0.0, float(self.params.squeeze_bars) - squeeze_count
+            )
+        if math.isfinite(volume):
+            distances["volume_multiple"] = max(
+                0.0, self.params.min_volume_multiple - volume
+            )
+        if math.isfinite(breakout):
+            distances["envelope_break_bps"] = max(0.0, breakout)
+        return distances
+
+    def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
+        if index < self.warmup_bars or not bool(df.iloc[index]["tsc1h_fire"]):
+            return None
+        row = df.iloc[index]
+        side: Literal["long", "short"] = str(row["tsc1h_side"])  # type: ignore[assignment]
+        risk = float(row["tsc1h_atr"]) * self.params.stop_atr_mult
+        return _intent(
+            side,
+            float(row["close"]),
+            risk,
+            reward_r=self.params.reward_r,
+            reason=f"trend_squeeze_continuation_1h_v1 {side} closed_bar virtual_only",
+        )
 
 @dataclass(frozen=True, slots=True)
 class TickAcceptedBreakoutParams:
@@ -488,7 +695,22 @@ NEW_RESEARCH_SCANNERS = (
     SessionContinuation15mV1,
     LiquiditySweepReversal15mV1,
     TrendPullback1hV1,
+    TrendSqueezeContinuation1hV1,
     TickAcceptedBreakoutV1,
 )
 
-__all__ = [item.__name__ for item in NEW_RESEARCH_SCANNERS] + ["NEW_RESEARCH_SCANNERS"]
+# Registration and shadow authority are deliberately separate. A mechanism
+# may remain available for deterministic replay without consuming live-public
+# data or emitting virtual intents. Sweep reversal is parked after the current
+# canonical BTC/ETH slice was gross/net negative; a new evidence window is
+# required before it can be considered for this allowlist again.
+SHADOW_RESEARCH_SCANNERS = (
+    AvwapReclaim15mV1,
+    SessionContinuation15mV1,
+    TrendPullback1hV1,
+    TickAcceptedBreakoutV1,
+)
+
+__all__ = [item.__name__ for item in NEW_RESEARCH_SCANNERS] + [
+    "NEW_RESEARCH_SCANNERS", "SHADOW_RESEARCH_SCANNERS",
+]
