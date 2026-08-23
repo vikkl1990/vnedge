@@ -44,6 +44,46 @@ def test_candles_come_from_the_canonical_store_and_say_so() -> None:
     )
 
 
+def test_chart_series_sorts_and_deduplicates_recovery_rows() -> None:
+    """Recovery/upsert overlap must never reach Lightweight Charts unordered."""
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    first = _C(
+        base,
+        Decimal(100),
+        Decimal(101),
+        Decimal(99),
+        Decimal("100.5"),
+        Decimal(7),
+    )
+    corrected = _C(
+        base,
+        Decimal(100),
+        Decimal(102),
+        Decimal(98),
+        Decimal("101.5"),
+        Decimal(9),
+    )
+    later = _C(
+        base + timedelta(hours=1),
+        Decimal("101.5"),
+        Decimal(103),
+        Decimal(101),
+        Decimal(102),
+        Decimal(8),
+    )
+
+    class _RecoveryStore:
+        def read(self, *_):
+            return [later, first, corrected]
+
+    payload = candles_payload(_RecoveryStore(), "BTCUSDT", "1h")
+    assert [row["time"] for row in payload["candles"]] == sorted(
+        row["time"] for row in payload["candles"]
+    )
+    assert payload["count"] == 2
+    assert payload["candles"][0]["close"] == 101.5
+
+
 def test_the_series_is_bounded() -> None:
     """A year of 1m bars is 525k rows; a browser must never be handed that."""
     payload = candles_payload(_Store(MAX_BARS + 500), "BTCUSDT", "1m", limit=99_999)

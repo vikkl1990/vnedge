@@ -267,6 +267,7 @@ function CandleChart({
   const markerRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const historySignatureRef = useRef("");
   const formingTimeRef = useRef<UTCTimestamp | null>(null);
+  const seriesLastTimeRef = useRef<UTCTimestamp | null>(null);
   const fittedRef = useRef(false);
   const [rendererError, setRendererError] = useState<string | null>(null);
   const [crosshair, setCrosshair] = useState<{
@@ -278,6 +279,26 @@ function CandleChart({
   } | null>(null);
   const points = useMemo(() => chartPoints(hours), [hours]);
   const livePoint = useMemo(() => formingPoint(forming, asOf), [forming, asOf]);
+  const canonicalPoints = useMemo(() => {
+    const byTime = new Map<number, ChartCandle>();
+    for (const row of canonicalCandles) {
+      if (
+        Number.isFinite(row.time)
+        && [row.open, row.high, row.low, row.close].every(Number.isFinite)
+      ) {
+        byTime.set(Math.floor(row.time), row);
+      }
+    }
+    return [...byTime.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([time, row]): CandlestickData<UTCTimestamp> => ({
+        time: time as UTCTimestamp,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      }));
+  }, [canonicalCandles]);
   const latestHistoryTime = points.candles.length
     ? points.candles[points.candles.length - 1].time
     : null;
@@ -290,7 +311,9 @@ function CandleChart({
   // runtime forming clock can briefly trail canonical storage at an hour
   // boundary, so withhold that point instead of letting the chart throw.
   const chartLivePoint = formingWithheld ? null : livePoint;
-  const hasData = hours.length > 0 || chartLivePoint !== null;
+  const hasData = timeframe === "1h"
+    ? hours.length > 0 || chartLivePoint !== null
+    : canonicalPoints.length > 0;
   const hasDegradedHours = hours.some((hour) => hour.data_quality !== "ok");
   const hasDualAvwap = hours.some((hour) => hour.avwap_low != null || hour.avwap_high != null);
   useLayoutEffect(() => {
@@ -419,6 +442,7 @@ function CandleChart({
         markerRef.current = null;
         historySignatureRef.current = "";
         formingTimeRef.current = null;
+        seriesLastTimeRef.current = null;
         fittedRef.current = false;
       };
     } catch (error) {
@@ -436,26 +460,29 @@ function CandleChart({
     const chart = chartRef.current;
     const candles = candleRef.current;
     if (!chart || !candles) return;
-    const rows = canonicalCandles;
     try {
-      candles.setData(rows.map((row) => ({
-        time: row.time as UTCTimestamp,
-        open: row.open,
-        high: row.high,
-        low: row.low,
-        close: row.close,
-      })));
+      candles.setData(canonicalPoints);
       vwapRef.current?.setData([]);
       lowAvwapRef.current?.setData([]);
       highAvwapRef.current?.setData([]);
       historySignatureRef.current = "";
-      if (rows.length > 0) chart.timeScale().fitContent();
-    } catch {
-      /* chart disposed mid-update */
+      formingTimeRef.current = null;
+      seriesLastTimeRef.current = canonicalPoints.length
+        ? canonicalPoints[canonicalPoints.length - 1].time
+        : null;
+      if (canonicalPoints.length > 0) chart.timeScale().fitContent();
+      setRendererError(null);
+    } catch (error) {
+      setRendererError(error instanceof Error ? error.message : "unknown canonical chart error");
     }
-  }, [timeframe, canonicalCandles]);
+  }, [timeframe, canonicalPoints]);
 
   useEffect(() => {
+    // The canonical-series effect exclusively owns non-hour timeframes.  A
+    // Pulse refresh must never append its hour-open forming point to a newer
+    // 5m/15m/4h series; Lightweight Charts rejects that as an oldest-data
+    // update and previously blanked the whole chart.
+    if (timeframe !== "1h") return;
     const chart = chartRef.current;
     const candles = candleRef.current;
     const vwap = vwapRef.current;
@@ -471,27 +498,39 @@ function CandleChart({
         && formingTimeRef.current !== chartLivePoint.time
       );
       const formingCleared = formingTimeRef.current !== null && chartLivePoint === null;
-      if (timeframe !== "1h") {
-        // the canonical effect below owns the series on other timeframes
-      } else if (historyChanged || formingRolled || formingCleared) {
+      if (historyChanged || formingRolled || formingCleared) {
         candles.setData(points.candles);
         vwap.setData(points.vwap);
         lowAvwap.setData(points.avwapLow);
         highAvwap.setData(points.avwapHigh);
         historySignatureRef.current = points.signature;
+        seriesLastTimeRef.current = points.candles.length
+          ? points.candles[points.candles.length - 1].time
+          : null;
         if (!fittedRef.current && points.candles.length > 0) {
           chart.timeScale().fitContent();
           fittedRef.current = true;
         }
       }
-      if (chartLivePoint) candles.update(chartLivePoint);
-      formingTimeRef.current = chartLivePoint?.time ?? null;
+      if (
+        chartLivePoint
+        && (
+          seriesLastTimeRef.current === null
+          || chartLivePoint.time >= seriesLastTimeRef.current
+        )
+      ) {
+        candles.update(chartLivePoint);
+        seriesLastTimeRef.current = chartLivePoint.time;
+        formingTimeRef.current = chartLivePoint.time;
+      } else if (chartLivePoint === null) {
+        formingTimeRef.current = null;
+      }
       setRendererError(null);
     } catch (error) {
       formingTimeRef.current = null;
       setRendererError(error instanceof Error ? error.message : "unknown chart update error");
     }
-  }, [chartLivePoint, points]);
+  }, [timeframe, chartLivePoint, points]);
 
   useEffect(() => {
     const markers: Array<{
@@ -666,7 +705,9 @@ function CandleChart({
         ref={containerRef}
         className="h-[360px] w-full"
         role="img"
-        aria-label={`${hours.length} closed one-hour candlesticks with session VWAP${chartLivePoint ? " and one forming hour" : ""}. Times are UTC.`}
+        aria-label={timeframe === "1h"
+          ? `${hours.length} closed one-hour candlesticks with session VWAP${chartLivePoint ? " and one forming hour" : ""}. Times are UTC.`
+          : `${canonicalPoints.length} closed ${timeframe} canonical candlesticks. Times are UTC.`}
       />
       {rendererError && (
         <div className="absolute inset-0 z-20 grid place-items-center bg-inset px-6 text-center font-mono text-xs text-short">
@@ -675,19 +716,19 @@ function CandleChart({
       )}
       {!hasData && !rendererError && (
         <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-inset font-mono text-sm text-dim">
-          No 1h candles yet.
+          No {timeframe} candles yet.
         </div>
       )}
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap items-center gap-3 rounded-md border border-line bg-bg/90 px-2.5 py-1.5 font-mono text-[10px] shadow-lg">
-        <span className="flex items-center gap-1.5 text-warn"><span className="h-0.5 w-4 bg-warn" />SESSION VWAP</span>
-        {hasDualAvwap && <span className="flex items-center gap-1.5 text-info"><span className="h-0.5 w-4 bg-info" />AVWAP L</span>}
-        {hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
+        {timeframe === "1h" && <span className="flex items-center gap-1.5 text-warn"><span className="h-0.5 w-4 bg-warn" />SESSION VWAP</span>}
+        {timeframe === "1h" && hasDualAvwap && <span className="flex items-center gap-1.5 text-info"><span className="h-0.5 w-4 bg-info" />AVWAP L</span>}
+        {timeframe === "1h" && hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
         {typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc) && <span className="flex items-center gap-1.5 text-[#F0883E]"><span className="h-0.5 w-4 bg-[#F0883E]" />PRIOR-DAY POC</span>}
         {typeof priorDayVah === "number" && typeof priorDayVal === "number" && <span className="flex items-center gap-1.5 text-dim"><span className="h-px w-4 border-t border-dotted border-dim" />VAH / VAL</span>}
-        {chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
+        {timeframe === "1h" && chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
         {auditEvents.some((event) => ["signal", "entry", "exit"].includes(event.kind)) && <span className="flex items-center gap-1.5 text-brand"><span className="h-2 w-2 rounded-full bg-brand" />SCANNER EVIDENCE</span>}
-        {formingWithheld && <span className="text-warn">STALE FORMING POINT WITHHELD</span>}
-        {hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
+        {timeframe === "1h" && formingWithheld && <span className="text-warn">STALE FORMING POINT WITHHELD</span>}
+        {timeframe === "1h" && hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}
       </div>
       {crosshair && (
         <div className="pointer-events-none absolute right-3 top-3 z-10 rounded-md border border-line bg-bg/95 px-3 py-2 font-mono text-[10px] shadow-lg">
@@ -964,7 +1005,10 @@ export function MarketPulse() {
       </section>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,.7fr)] gap-4">
-        <TerminalPanel title="1h market structure" meta={`${hours.length} closed hours · ${symbol}`}>
+        <TerminalPanel
+          title={`${timeframe} market structure`}
+          meta={`${timeframe === "1h" ? hours.length : (canonical.data?.candles.length ?? 0)} closed ${timeframe} bars · ${symbol}`}
+        >
           <CandleChart
             timeframe={timeframe}
             canonicalCandles={canonical.data?.candles ?? []}
