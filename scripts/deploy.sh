@@ -265,7 +265,11 @@ import urllib.request
 with urllib.request.urlopen("http://127.0.0.1:8080/ready", timeout=5) as response:
     payload = json.load(response)
 print(json.dumps(payload, separators=(",", ":")))
-raise SystemExit(0 if payload.get("ready") is True else 1)
+# /ready publishes the readiness band as ``status``.  Retain support for the
+# former boolean shape so a rolling deploy can validate either side of the
+# API transition without waiting through the full recovery timeout.
+is_ready = payload.get("status") == "ready" or payload.get("ready") is True
+raise SystemExit(0 if is_ready else 1)
 ' 2>/dev/null); then
         READY_OK=1
         break
