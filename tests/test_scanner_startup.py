@@ -10,6 +10,7 @@ from vnedge.runtime.scanner_startup import (
     archive_retired_lane_artifacts,
     prerequisite_commands,
     run_prerequisites,
+    write_health,
 )
 
 
@@ -28,8 +29,23 @@ def test_prerequisite_commands_are_restart_safe_and_ordered() -> None:
         "vnedge.data.scanner_prereq",
     ]
     assert all(command[0] == sys.executable for command in commands)
-    assert commands[0][commands[0].index("--days") + 1] == "23"
+    assert commands[0][commands[0].index("--days") + 1] == "24"
     assert "--max-tail-passes" in commands[2]
+
+
+def test_prerequisite_commands_forward_versioned_roster(tmp_path) -> None:
+    roster = tmp_path / "roster.json"
+    roster.write_text(
+        '{"version":1,"observers":[{"strategy_id":'
+        '"session_continuation_15m_v1","exchange":"binanceusdm",'
+        '"symbols":["BTC/USDT:USDT"],"timeframe":"15m"}]}',
+        encoding="utf-8",
+    )
+    commands = prerequisite_commands(
+        {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(roster)}
+    )
+    assert commands[0][commands[0].index("--days") + 1] == "3"
+    assert commands[-1][-2:] == ("--roster", str(roster))
 
 
 def test_prerequisites_stop_at_first_failed_gate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,6 +69,19 @@ def test_prerequisites_stop_at_first_failed_gate(monkeypatch: pytest.MonkeyPatch
 def test_invalid_archive_days_fail_closed() -> None:
     with pytest.raises(ValueError, match="VISION_BACKFILL_DAYS"):
         prerequisite_commands({"VISION_BACKFILL_DAYS": "invalid"})
+
+
+def test_startup_health_artifact_is_atomic_and_fail_closed(tmp_path) -> None:
+    path = tmp_path / "scanner_health.json"
+    env = {"SCANNER_PREREQ_HEALTH_PATH": str(path)}
+    write_health("recovering", detail="cold start", environ=env)
+    payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+    assert payload["status"] == "recovering"
+    assert payload["arms_allowed"] is False
+    write_health("ready", detail="proved", environ=env)
+    payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+    assert payload["arms_allowed"] is True
+    assert not path.with_suffix(".json.tmp").exists()
 
 
 def test_restart_archives_retired_lanes_but_preserves_active_evidence(

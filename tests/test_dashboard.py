@@ -80,6 +80,13 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_scanner_evidence_endpoint_is_read_only_and_auth_gated(client):
+    assert client.get("/scanner-evidence").status_code == 401
+    response = client.get("/scanner-evidence?token=t3st-token")
+    assert response.status_code == 200
+    assert response.json()["read_only"] is True
+
+
 def test_scorecard_names_current_runtime_scanners_without_inheriting_old_evidence(
     tmp_path,
 ):

@@ -30,6 +30,11 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
         "squeeze_expansion_breakout_v4",
+        "avwap_reclaim_15m_v1",
+        "session_continuation_15m_v1",
+        "liquidity_sweep_reversal_15m_v1",
+        "trend_pullback_1h_v1",
+        "tick_accepted_breakout_v1",
     }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
@@ -70,6 +75,11 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
         "squeeze_expansion_breakout_v4",
+        "avwap_reclaim_15m_v1",
+        "session_continuation_15m_v1",
+        "liquidity_sweep_reversal_15m_v1",
+        "trend_pullback_1h_v1",
+        "tick_accepted_breakout_v1",
     }
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v2")
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v3")

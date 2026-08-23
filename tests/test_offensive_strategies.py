@@ -199,4 +199,9 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "range_expansion_observer_v4",
         "structure_bos_15m_trigger_v2",
         "structure_bos_15m_trigger_v3",
+        "avwap_reclaim_15m_v1",
+        "session_continuation_15m_v1",
+        "liquidity_sweep_reversal_15m_v1",
+        "trend_pullback_1h_v1",
+        "tick_accepted_breakout_v1",
     }

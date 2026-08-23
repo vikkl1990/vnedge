@@ -166,6 +166,11 @@ def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
         "squeeze_expansion_breakout_v2": "5m",
         "squeeze_expansion_breakout_v3": "5m",
         "squeeze_expansion_breakout_v4": "5m",
+        "avwap_reclaim_15m_v1": "15m",
+        "session_continuation_15m_v1": "15m",
+        "liquidity_sweep_reversal_15m_v1": "15m",
+        "trend_pullback_1h_v1": "1h",
+        "tick_accepted_breakout_v1": "5m",
     }.get(strategy_id)
     if required is not None and timeframe != required:
         raise ValueError(

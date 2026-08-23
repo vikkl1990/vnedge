@@ -1597,6 +1597,86 @@ async def test_append_replaces_partial_seam_bar(tmp_path):
     assert len(session.candles) == 4
 
 
+async def test_canonical_close_wait_retries_until_trade_bar_is_ready(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+    session.config = session.config.model_copy(
+        update={
+            "canonical_candle_wait_seconds": 0.2,
+            "canonical_candle_poll_seconds": 0.001,
+        }
+    )
+    opened = pd.Timestamp("2026-08-22 13:00", tz="UTC")
+    candle = Candle(
+        symbol=SYM,
+        timeframe="1h",
+        open_time=opened.to_pydatetime(),
+        close_time=(opened + pd.Timedelta(hours=1)).to_pydatetime(),
+        open=Decimal(100), high=Decimal(102), low=Decimal(99), close=Decimal(101),
+        volume=Decimal(10), quote_volume=Decimal(1005), trade_count=5,
+        vwap=Decimal("100.5"),
+    )
+
+    class _EventuallyReady:
+        calls = 0
+
+        def read_at(self, symbol, timeframe, open_time):
+            del symbol, timeframe, open_time
+            self.calls += 1
+            return candle if self.calls >= 3 else None
+
+    store = _EventuallyReady()
+    session.canonical_candle_store = store
+    raw = [int(opened.timestamp() * 1000), 100, 102, 99, 101, 10]
+
+    assert await session._await_canonical_candle(raw) is True
+    assert store.calls == 3
+    assert not any(
+        record["kind"] == "canonical_bar_timeout"
+        for record in session.journal.read_all()
+    )
+
+
+async def test_canonical_close_timeout_is_explicit_and_non_armable(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+    session.config = session.config.model_copy(
+        update={"canonical_candle_wait_seconds": 0.0}
+    )
+    session.canonical_candle_store = type(
+        "_MissingStore", (), {"read_at": lambda *args: None}
+    )()
+    opened = pd.Timestamp("2026-08-22 13:00", tz="UTC")
+    raw = [int(opened.timestamp() * 1000), 100, 102, 99, 101, 10]
+
+    assert await session._await_canonical_candle(raw) is False
+    assert session._append_candle(raw) is True
+    assert session.candles.iloc[-1]["data_quality"] == "gap"
+    assert session.candles.iloc[-1]["candle_source"] == "exchange_ohlcv"
+    assert session.journal.read_all()[-1]["kind"] == "canonical_bar_timeout"
+    session._enter_degraded("canonical_bar_timeout", recoverable=True)
+    assert session._candle_path_arm_block(datetime.now(UTC)) == (
+        "lane_degraded:canonical_bar_timeout"
+    )
+
+
+def test_scanner_prerequisite_health_blocks_only_new_arms(tmp_path, monkeypatch):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+    health = tmp_path / "scanner_health.json"
+    monkeypatch.setenv("SCANNER_PREREQ_HEALTH_PATH", str(health))
+
+    health.write_text(
+        '{"status":"recovering","arms_allowed":false}', encoding="utf-8"
+    )
+    assert session._candle_path_arm_block(datetime.now(UTC)) == (
+        "scanner_prerequisite_recovering"
+    )
+
+    health.write_text(
+        '{"status":"ready","arms_allowed":true}', encoding="utf-8"
+    )
+    # No Time Machine in this unit session, so readiness removes this gate.
+    assert session._candle_path_arm_block(datetime.now(UTC)) is None
+
+
 def test_next_close_reconciles_recent_exchange_row_from_canonical_lake(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]))
     session.candles = _hourly(3)

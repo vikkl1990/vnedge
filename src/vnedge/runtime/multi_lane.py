@@ -69,6 +69,7 @@ from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
+from vnedge.strategy.research_scanners import NEW_RESEARCH_SCANNERS
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
@@ -678,6 +679,16 @@ def _build_single_strategy(
                 "configure a new strategy ID"
             )
         return RangeExpansionObserverV4(seed_funding)
+    for scanner_class in NEW_RESEARCH_SCANNERS:
+        if strategy_id == scanner_class.strategy_id:
+            if params:
+                raise ValueError(
+                    f"{strategy_id} parameters are frozen; configure a new strategy ID"
+                )
+            try:
+                return scanner_class(seed_funding)
+            except TypeError:
+                return scanner_class()
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -917,6 +928,11 @@ def _overlay_canonical_history(
 ) -> pd.DataFrame:
     if canonical.empty:
         out = history.copy()
+        # Absence of the canonical lake must not be more permissive than a
+        # partially populated lake. Every exchange-only row is explicit and
+        # non-armable until exact trade-derived truth is available.
+        out["data_quality"] = "gap"
+        out["is_closed"] = True
         out["candle_source"] = "exchange_ohlcv"
         return out
     out = history.copy().set_index("timestamp")
@@ -957,6 +973,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     StructureBos1H.strategy_id: StructureBos1H.warmup_bars,
     StructureBos15mTriggerV2.strategy_id: StructureBos15mTriggerV2.warmup_bars,
     StructureBos15mTriggerV3.strategy_id: StructureBos15mTriggerV3.warmup_bars,
+    **{strategy.strategy_id: strategy.warmup_bars for strategy in NEW_RESEARCH_SCANNERS},
 }
 
 
@@ -1258,6 +1275,7 @@ async def build_lane(
                               runtime_contract.max_holding_bars
                               if runtime_contract is not None else 48
                           ),
+                          canonical_candle_wait_seconds=8.0,
                           trail_atr_mult=spec.trail_atr_mult)
     strategy = _build_strategy(
         spec, seed_funding, feed, funding_store_path=funding_store_path

@@ -2,33 +2,53 @@
 
 Docker restart policies restart the container command, but they do not rerun a
 separate one-shot dependency that exited successfully during an earlier boot.
-This entrypoint therefore owns the prerequisite sequence and replaces itself
-with the actual scanner runtime only after every command succeeds.
+This entrypoint launches a retrying recovery worker, then immediately replaces
+itself with the read-only runtime.  New scanner arms remain fail-closed behind
+the worker's atomic health artifact, while the operator UI stays available.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import math
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = "BTC/USDT:USDT,ETH/USDT:USDT"
-# The active 15m range scanner needs 2,017 causal bars before it may evaluate.
-# Twenty-three complete UTC archive days provide that window plus boundary
-# room, while ordinary restarts remain delta-only because archive shards and
-# canonical candles are idempotent.
-MINIMUM_ARCHIVE_DAYS = 23
+MINIMUM_ARCHIVE_DAYS = 2
+DEFAULT_HEALTH_PATH = Path("data/reports/scanner_startup_health.json")
+
+
+def _active_requirements(environ: Mapping[str, str]) -> Mapping[str, int]:
+    from vnedge.data.scanner_prereq import DEFAULT_REQUIREMENTS, requirements_from_roster
+
+    roster = str(environ.get("MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH") or "").strip()
+    return requirements_from_roster(roster) if roster else DEFAULT_REQUIREMENTS
 
 
 def _archive_days(environ: Mapping[str, str]) -> int:
-    raw = environ.get("VISION_BACKFILL_DAYS", str(MINIMUM_ARCHIVE_DAYS))
+    from vnedge.data.candles import TF_SECONDS
+
+    requirements = _active_requirements(environ)
+    computed = max(
+        MINIMUM_ARCHIVE_DAYS,
+        max(
+            math.ceil(required * TF_SECONDS[timeframe] / 86_400) + 2
+            for timeframe, required in requirements.items()
+        ),
+    )
+    raw = environ.get("VISION_BACKFILL_DAYS", str(computed))
     try:
-        return max(MINIMUM_ARCHIVE_DAYS, int(raw))
+        return max(computed, int(raw))
     except ValueError as exc:
         raise ValueError("VISION_BACKFILL_DAYS must be an integer") from exc
 
@@ -42,7 +62,8 @@ def prerequisite_commands(
     if not symbols:
         raise ValueError("SCANNER_PREREQ_SYMBOLS must not be empty")
     days = str(_archive_days(environ))
-    return (
+    roster = str(environ.get("MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH") or "").strip()
+    commands = (
         (
             python,
             "-m",
@@ -108,12 +129,64 @@ def prerequisite_commands(
             "data/reports/scanner_prerequisites.json",
         ),
     )
+    if roster:
+        commands = commands[:-1] + (commands[-1] + ("--roster", roster),)
+    return commands
 
 
 def run_prerequisites(commands: Sequence[Sequence[str]]) -> None:
     for index, command in enumerate(commands, start=1):
         logger.info("scanner startup prerequisite %d/%d: %s", index, len(commands), command[2])
         subprocess.run(tuple(command), check=True)
+
+
+def _health_path(environ: Mapping[str, str] = os.environ) -> Path:
+    return Path(environ.get("SCANNER_PREREQ_HEALTH_PATH", str(DEFAULT_HEALTH_PATH)))
+
+
+def write_health(
+    status: str,
+    *,
+    detail: str,
+    environ: Mapping[str, str] = os.environ,
+) -> None:
+    path = _health_path(environ)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "detail": detail,
+        "checked_at": datetime.now(UTC).isoformat(),
+        "arms_allowed": status == "ready",
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def recover_until_ready(
+    environ: Mapping[str, str] = os.environ,
+    *,
+    retry_seconds: float = 60.0,
+) -> int:
+    """Retry prerequisites while the read-only runtime remains available."""
+    attempt = 0
+    while True:
+        attempt += 1
+        write_health("recovering", detail=f"attempt {attempt}", environ=environ)
+        try:
+            run_prerequisites(prerequisite_commands(environ))
+        except Exception as exc:
+            logger.exception("scanner prerequisite recovery attempt %d failed", attempt)
+            write_health(
+                "retrying",
+                detail=f"{type(exc).__name__}: {exc}",
+                environ=environ,
+            )
+            time.sleep(max(1.0, retry_seconds))
+            continue
+        write_health("ready", detail=f"completed on attempt {attempt}", environ=environ)
+        logger.info("scanner prerequisites current; new shadow arms enabled")
+        return 0
 
 
 def archive_retired_lane_artifacts(environ: Mapping[str, str] = os.environ) -> None:
@@ -141,11 +214,22 @@ def archive_retired_lane_artifacts(environ: Mapping[str, str] = os.environ) -> N
         )
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--recover-only", action="store_true")
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run_prerequisites(prerequisite_commands())
+    if args.recover_only:
+        return recover_until_ready()
+    # Keep recoverable journal moves single-threaded and ahead of the runtime;
+    # the background worker only owns canonical data repair/readiness.
     archive_retired_lane_artifacts()
-    logger.info("scanner prerequisites current; starting multi-lane runtime")
+    write_health("recovering", detail="startup worker launching")
+    subprocess.Popen(
+        (sys.executable, "-m", "vnedge.runtime.scanner_startup", "--recover-only"),
+        close_fds=True,
+    )
+    logger.info("starting read-only runtime while scanner prerequisites recover")
     os.execv(
         sys.executable,
         (sys.executable, "-m", "vnedge.runtime.multi_lane_shadow"),

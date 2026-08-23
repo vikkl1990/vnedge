@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -67,6 +68,7 @@ from vnedge.runtime.daily_factory import (
     session_day,
     should_force_flatten,
 )
+from vnedge.runtime.expansion_acceptance import ExpansionAcceptanceEngine
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
     DECISION_LAG_MS,
@@ -93,6 +95,7 @@ from vnedge.strategy.scanner_contracts import (
     resolve_scanner_cost_profile,
     scanner_runtime_contract,
 )
+from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +325,18 @@ class LivePaperSession:
                     journal=journal,
                     symbol=config.symbol,
                     strategy_id=strategy.strategy_id,
+                    acceptance=(
+                        ExpansionAcceptanceEngine(
+                            config=SqueezeExpansionV3Params(
+                                acceptance_hold_seconds=3.0,
+                                min_acceptance_samples=3,
+                                # Levels are already buffered by the strategy.
+                                break_buffer_bps=0.0,
+                            )
+                        )
+                        if strategy.strategy_id == "tick_accepted_breakout_v1"
+                        else ExpansionAcceptanceEngine()
+                    ),
                     approve_fire=self._approve_scanner_fire,
                     costs=SessionCosts.from_profile(
                         self.cost_profile,
@@ -331,6 +346,7 @@ class LivePaperSession:
                 if strategy.strategy_id in {
                     "squeeze_expansion_breakout_v3",
                     "squeeze_expansion_breakout_v4",
+                    "tick_accepted_breakout_v1",
                 }
                 else SqueezeObserveRunner(
                 journal=journal,
@@ -348,6 +364,7 @@ class LivePaperSession:
                     "squeeze_expansion_breakout_v2",
                     "squeeze_expansion_breakout_v3",
                     "squeeze_expansion_breakout_v4",
+                    "tick_accepted_breakout_v1",
                 }
             )
             else None
@@ -497,7 +514,15 @@ class LivePaperSession:
                 # Never synthesize exact-volume fields from close*volume. Their
                 # absence is a decision input: strict scanners fail closed and
                 # price-only observers remain explicitly labelled as such.
-                row["candle_source"] = "exchange_ohlcv"
+                row.update(
+                    {
+                        "data_quality": "gap",
+                        "is_closed": True,
+                        "timeframe": self.config.timeframe,
+                        "symbol": self.config.symbol,
+                        "candle_source": "exchange_ohlcv",
+                    }
+                )
         if len(self.candles):
             last_ts = self.candles["timestamp"].iloc[-1]
             if ts == last_ts:
@@ -513,6 +538,49 @@ class LivePaperSession:
             [self.candles, pd.DataFrame([row])], ignore_index=True
         )
         return True
+
+    async def _await_canonical_candle(self, raw_row: list) -> bool:
+        """Wait briefly for the exact current candle before scanner evaluation.
+
+        The public venue candle is a close notification, not a second source
+        of decision truth. When the writer loses this bounded race we retain
+        the row for continuity/measurement, mark it non-OK in ``_append_candle``,
+        and journal the precise reason. The bar is never silently evaluated
+        and then repaired after its decision opportunity has passed.
+        """
+        if self.canonical_candle_store is None:
+            return True
+        opened = pd.to_datetime(raw_row[0], unit="ms", utc=True)
+        timeout = float(self.config.canonical_candle_wait_seconds)
+        poll = float(self.config.canonical_candle_poll_seconds)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            try:
+                canonical = await asyncio.to_thread(
+                    self.canonical_candle_store.read_at,
+                    self.config.symbol,
+                    self.config.timeframe,
+                    opened.to_pydatetime(),
+                )
+            except (OSError, ValueError):
+                canonical = None
+            if canonical is not None:
+                return True
+            if loop.time() >= deadline:
+                self.journal.append(
+                    "canonical_bar_timeout",
+                    {
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": self.config.symbol,
+                        "timeframe": self.config.timeframe,
+                        "bar_ts": opened.isoformat(),
+                        "wait_seconds": timeout,
+                        "decision_blocked": True,
+                    },
+                )
+                return False
+            await asyncio.sleep(min(poll, max(0.0, deadline - loop.time())))
 
     def _refresh_canonical_tail(self) -> None:
         """Repair every exchange-only row that now exists in the tick lake.
@@ -854,6 +922,20 @@ class LivePaperSession:
         Returns the coarse block reason, or None to allow.  Any unreadable state
         blocks arming a new position; exits bypass this gate entirely.
         """
+        prerequisite_path = os.environ.get("SCANNER_PREREQ_HEALTH_PATH", "").strip()
+        if prerequisite_path:
+            try:
+                prerequisite = json.loads(
+                    Path(prerequisite_path).read_text(encoding="utf-8")
+                )
+                status = str(prerequisite.get("status") or "unknown")
+                if status != "ready" or prerequisite.get("arms_allowed") is not True:
+                    return f"scanner_prerequisite_{status}"
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return "scanner_prerequisite_unreadable"
+        degraded_reason = getattr(self, "_degraded_reason", None)
+        if degraded_reason is not None:
+            return f"lane_degraded:{degraded_reason}"
         # A hard processing/compute breach is unsafe even if the candle values
         # themselves are healthy. A p95 needs 20 samples before it can gate;
         # immature samples remain visible to operators without halting arms.
@@ -2375,6 +2457,11 @@ class LivePaperSession:
             },
             "backfill": backfill,
         }
+        # Observation enrichment is read-only: it explains this exact decision
+        # and cannot alter ``sig``, thresholds, risk, or order permissions.
+        from vnedge.strategy.scanner_observability import enrich_evaluation
+
+        record = enrich_evaluation(record)
         self.evals += 1
         if backfill:
             self.backfill_evals += 1
@@ -2881,8 +2968,11 @@ class LivePaperSession:
                 raw, now
             ):
                 continue
+            canonical_ready = await self._await_canonical_candle(raw)
             if not self._append_candle(raw) or not self._sync_quote():
                 continue
+            if not canonical_ready:
+                self._enter_degraded("canonical_bar_timeout", recoverable=True)
             self._last_bar_wall = now
             self._feed_time_machine(now, closed_row=raw)  # read-only, fail-closed
             bars += 1

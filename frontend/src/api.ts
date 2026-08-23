@@ -445,6 +445,13 @@ export interface LanesPayload {
   shadow_observe_timeframes: string[];
   lane_set_hash: string | null;
   portfolio: PortfolioScope;
+  scanner_conflicts: Record<string, {
+    state: "empty" | "single" | "aligned" | "conflict";
+    selected: string | null;
+    side?: string;
+    read_only?: boolean;
+    candidates: Array<Record<string, unknown>>;
+  }>;
   read_only: true;
   can_promote: false;
   can_trade: false;

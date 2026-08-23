@@ -1,8 +1,13 @@
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from vnedge.data.candles import Candle, CandleParquetStore
-from vnedge.data.scanner_prereq import DEFAULT_REQUIREMENTS, scanner_prerequisites
+from vnedge.data.scanner_prereq import (
+    DEFAULT_REQUIREMENTS,
+    requirements_from_roster,
+    scanner_prerequisites,
+)
 
 
 def test_default_requirements_cover_active_scanner_warmups() -> None:
@@ -12,6 +17,27 @@ def test_default_requirements_cover_active_scanner_warmups() -> None:
         "1h": 24,
         "4h": 6,
     }
+
+
+def test_roster_requirements_follow_active_strategy_dependencies(tmp_path) -> None:
+    roster = tmp_path / "roster.json"
+    roster.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "observers": [
+                    {
+                        "strategy_id": "session_continuation_15m_v1",
+                        "exchange": "binanceusdm",
+                        "symbols": ["BTC/USDT:USDT"],
+                        "timeframe": "15m",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert requirements_from_roster(roster) == {"1h": 24, "4h": 6, "15m": 65}
 
 
 def _candles(symbol: str, timeframe: str, count: int, close: datetime) -> list[Candle]:

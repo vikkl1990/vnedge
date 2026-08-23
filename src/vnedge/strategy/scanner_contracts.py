@@ -68,6 +68,31 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         max_holding_bars=192,
         rationale="V2 structure with final-eligibility spacing correction",
     ),
+    "avwap_reclaim_15m_v1": ScannerRuntimeContract(
+        strategy_id="avwap_reclaim_15m_v1", timeframe="15m",
+        cost_family="swing", max_holding_bars=48,
+        rationale="closed-bar AVWAP reclaim with a 12-hour evidence horizon",
+    ),
+    "session_continuation_15m_v1": ScannerRuntimeContract(
+        strategy_id="session_continuation_15m_v1", timeframe="15m",
+        cost_family="swing", max_holding_bars=32,
+        rationale="US-overlap continuation with an 8-hour evidence horizon",
+    ),
+    "liquidity_sweep_reversal_15m_v1": ScannerRuntimeContract(
+        strategy_id="liquidity_sweep_reversal_15m_v1", timeframe="15m",
+        cost_family="swing", max_holding_bars=32,
+        rationale="closed-bar sweep rejection with an 8-hour evidence horizon",
+    ),
+    "trend_pullback_1h_v1": ScannerRuntimeContract(
+        strategy_id="trend_pullback_1h_v1", timeframe="1h",
+        cost_family="swing", max_holding_bars=48,
+        rationale="one-hour trend pullback with a 48-hour evidence horizon",
+    ),
+    "tick_accepted_breakout_v1": ScannerRuntimeContract(
+        strategy_id="tick_accepted_breakout_v1", timeframe="5m",
+        cost_family="scalp", max_holding_bars=48,
+        rationale="tick-held acceptance after a closed-bar range arm",
+    ),
 }
 
 SCANNER_RUNTIME_CONTRACTS: Mapping[str, ScannerRuntimeContract] = MappingProxyType(

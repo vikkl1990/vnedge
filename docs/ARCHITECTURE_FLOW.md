@@ -1,6 +1,6 @@
 # VNEDGE architecture flow and completion map
 
-Code-aligned status as of 2026-08-16. This document describes the current
+Code-aligned status as of 2026-08-23. This document describes the current
 working tree, not proof that a VM is running the same image. Runtime policy in
 `strategy_registry.py`, `hf_engine_registry.py`, `multi_lane_shadow.py`, and
 the pre-trade gateway takes precedence over every research or historical doc.
@@ -28,8 +28,8 @@ flowchart TB
 
     subgraph Public["Public market-data plane"]
         Venues["Binance · Bybit · Delta India"] --> PublicFeed["REST warmup + public WS / polling"]
-        PublicFeed --> LiveDQ["Live feed freshness · closed-bar discipline · Time Machine"]
-        PublicFeed -. "canonical integration not wired" .-> Integrity["StreamIntegrityGuard"]
+        PublicFeed --> LiveDQ["Close notification · freshness · Time Machine"]
+        PublicFeed --> Integrity["Trade recorder · StreamIntegrityGuard"]
         Integrity --> CandlePipe["GapAwareCandlePipeline<br/>1m → 5m → 15m → 1h → 4h"]
         CandlePipe --> CanonicalLake["Atomic exchange-partitioned Parquet"]
     end
@@ -37,6 +37,10 @@ flowchart TB
     Registry --> Roster["Default roster builder"]
     LiveDQ --> Measure["measurement_only_v1"]
     Roster --> Measure
+    CanonicalLake --> Scanner["Canonical-ready scanner clock"]
+    Roster --> Scanner
+    Scanner --> Shadow["CostGate · RiskGateway · shadow intent/outcome WAL"]
+    Shadow --> Snapshot
     Measure --> Snapshot["Coalesced health / lane / risk snapshot"]
     CanonicalLake --> PulseService["MarketPulseService"]
     Snapshot --> PulseService
@@ -101,10 +105,12 @@ can write the capital registry, emit an order, or bypass the gateway.
 | `research-loop` | no, `research` profile | Offline/public-data evidence only | **DEFERRED from capital** |
 | `live_trader_main` | no service; manual CLI | Real orders only after all live gates | **GUARDED** |
 
-The image default and Compose default are both
+The image and Compose entrypoint are both `vnedge.runtime.scanner_startup`,
+which launches retrying canonical recovery and immediately serves
 `vnedge.runtime.multi_lane_shadow`. The React frontend is built in the Docker
-multi-stage build and served at `/app`. Scanner, Pine, alpha-uplift, automatic
-manifest/promotion, and live-order services are absent from Compose.
+multi-stage build and served at `/app`. Compose includes public trade/book
+recorders, canonical recovery, versioned shadow scanners, and a read-only
+evidence worker. Pine, automatic-promotion, and live-order services are absent.
 
 ## Permission and mode flow
 
@@ -175,14 +181,20 @@ The deterministic libraries are **SHIPPED**:
 - gaps distinguish unproven stream coverage from a quiet market;
 - AVWAP and confirmed-swing utilities are measurement/research-only.
 
-The production integration is an **INTEGRATION GAP**. No default runtime
-currently constructs `GapAwareCandlePipeline` or writes the canonical candle
-store. `MarketPulseService` reads `data/candles`, so a fresh Compose deployment
-can show an empty Pulse even while the older live-feed/Time-Machine path is
-healthy. The next data-plane change must connect public trades/heartbeats to
-the canonical writer and surface its gap state in the runtime snapshot. It
-must not replace missing trades with exchange OHLC or synthetic zero-volume
-bars.
+The production integration is **SHIPPED**. `pulse-recorder` owns public trades;
+archive/bootstrap and strict gap recovery deterministically build the canonical
+ladder; `MarketPulseService` and scanner lanes read the same
+exchange-partitioned store. Venue candle closes are notifications only. A lane
+waits a bounded period for the matching canonical row, then journals
+`canonical_bar_timeout` and blocks that decision bar instead of silently using
+exchange OHLCV.
+
+Startup recovery runs in a retrying worker: `/health` and the read-only cockpit
+remain available, while an atomic prerequisite artifact blocks new shadow arms
+until exact history is proved. Offline scanner replay and VM shadow both use
+one position per lane, next-open entry, stop-before-target, and the frozen hold
+contract. Evidence reports realized execution cost separately from conservative
+gate cost and joins evaluations, intents, and outcomes by `intent_key`.
 
 ## Dashboard and authentication
 
@@ -246,14 +258,14 @@ trusted DNS certificate even when the guarded application deployment passes.
 |---|---|
 | Default capital roster should be empty | **SHIPPED** — explicit allowlist is empty |
 | Killed/research strategy enforcement | **SHIPPED** — registry, roster builder, runtime downgrade, fleet audit |
-| Remove scanner services | **SHIPPED** — no scanner/auto-promotion service in Compose |
+| Keep scanners non-capital | **SHIPPED** — shadow-only roster; no auto-promotion service |
 | Dashboard `/healthz` and edge gate | **SHIPPED locally** |
 | React frontend baked into Docker | **SHIPPED** |
 | Honest status, lanes, and Risk UI | **SHIPPED locally** |
 | Market Pulse chart and hour strip | **SHIPPED locally** |
 | React authority hierarchy (Desk/Promote/System) | **SHIPPED locally** |
 | ML and agent evidence subordinate to Research | **SHIPPED locally** |
-| Canonical candles, gaps, VWAP/AVWAP libraries | **SHIPPED as libraries** |
+| Canonical candles, gaps, VWAP/AVWAP pipeline | **SHIPPED end to end** |
 | License for the public repository | **SHIPPED locally** — MIT |
 | CI visibility beyond the safety allowlist | **PARTIAL** — full-package Ruff/mypy report debt but are non-blocking |
 
@@ -277,9 +289,9 @@ trusted DNS certificate even when the guarded application deployment passes.
 
 ### P1 — complete the measurement product
 
-1. **Wire canonical ingest into the default runtime.** Feed trades and
-   heartbeats into `GapAwareCandlePipeline`, persist closed bars, propagate
-   `data_degraded`, and make Pulse non-empty on a clean deployment.
+1. ~~**Wire canonical ingest into the default runtime.**~~ Complete: public
+   trades, deterministic candles, bounded canonical-ready decisions, startup
+   proof, and gap recovery are Compose-owned.
 2. ~~**Wire AVWAP history into Pulse.**~~ Complete: deterministic 3-left/3-right
    closed-hour anchors feed dual AVWAP series, bias, and explicit anchor plus
    `confirmed_at` provenance. Forming-hour bias is preview-only and cannot

@@ -36,19 +36,22 @@ docker compose logs -f multi-lane-shadow
 ```
 
 `multi-lane-shadow` starts through `vnedge.runtime.scanner_startup`. On every
-container start—including Docker daemon and host restarts—it downloads at least 23
+container start—including Docker daemon and host restarts—it downloads at least 24
 complete Binance Vision aggTrade days for BTC/ETH, deterministically rebuilds
 the canonical 1m→4h ladder, and fills the unpublished closed 5m tail from
 the recent aggregate-trade API. Existing archive days and canonical minutes
-are skipped, so ordinary restarts fetch only the missing delta. A failed
-continuity proof prevents the lane runtime from starting; the container's
-restart policy retries the complete fail-closed entrypoint. It never falls
-back to exchange OHLCV as exact VWAP history.
+are skipped, so ordinary restarts fetch only the missing delta. The read-only
+runtime and UI start immediately while a serialized recovery worker retries a
+failed continuity proof. Until the proof succeeds, the atomic prerequisite
+health artifact blocks every new scanner arm; exits and observability continue.
+It never falls back to exchange OHLCV as exact VWAP history.
 
 The final proof is persisted at
 `data/reports/scanner_prerequisites.json`. It verifies current contiguous
-exact-volume 5m/15m/1h/4h tails for BTC and ETH. Treat a non-zero prerequisite
-exit as a real data-integrity failure; do not bypass the dependency.
+exact-volume 5m/15m/1h/4h tails for BTC and ETH. Its companion
+`data/reports/scanner_startup_health.json` remains `recovering` or `retrying`
+until that report passes. Treat either state as a real arm blocker; do not
+bypass the dependency.
 
 The default services build SHADOW measurement lanes, record public trades for
 the canonical Pulse candle lake, and expose the dashboard. They do not submit
@@ -106,10 +109,17 @@ MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH=config/shadow-observers.v1.json
 ```
 
 The checked-in v1 roster runs virtual-only squeeze acceptance at 5m and
-range-expansion + BoS observation at 15m for BTC and ETH. It does not add a
+range-expansion, BoS, and session-continuation observation at 15m for BTC and
+ETH. It does not add a
 paper lane, change `CAPITAL_APPROVED`, or enable live orders. Startup fails on
 unknown fields, wrong timeframes, duplicate stable lane IDs, or an ineligible
 strategy.
+
+Container startup serves the read-only control plane immediately and launches
+canonical recovery as a retrying worker. Until
+`data/reports/scanner_startup_health.json` is `ready`, `/ready` reports the
+blocker and every new scanner arm fails closed; exits and observability remain
+available. Recovery is delta/idempotent on ordinary restarts.
 
 Before switching from legacy lane IDs to the versioned roster, inspect stale
 artifacts without changing them:
@@ -128,7 +138,7 @@ only then recreate the service. A partial filesystem failure leaves a
 explicit and no evidence is silently lost.
 
 After recreation, a legacy singleton must report `shadow_observe_lanes: 1`;
-the checked-in versioned roster must report `shadow_observe_lanes: 6` and
+the checked-in versioned roster must report `shadow_observe_lanes: 8` and
 `shadow_observe_timeframes: ["15m", "5m"]`. Both must report
 `paper_lanes: 0`, `orders_allowed: false`, and `live_orders_allowed: false`.
 The Desk banner must say

@@ -93,6 +93,21 @@ def test_stop_wins_when_stop_and_target_share_a_bar(tmp_path):
     assert records[0]["payload"]["intent_key"] == "k1"
 
 
+def test_gap_through_stop_fills_at_first_available_open(tmp_path):
+    tracker, journal = tracker_for(tmp_path)
+    journal_intent(journal, "k1", stop=95.0, tp=110.0, bar_index=0)
+    tracker = ShadowOutcomeTracker(journal)
+    gap_bar = bar(1, high=92.0, low=89.0, close=91.0)
+    gap_bar["open"] = 90.0
+
+    out = tracker.resolve_bar(gap_bar)[0]
+
+    assert out.resolution == "stop"
+    assert out.entry_price == 90.0
+    assert out.exit_price == 90.0
+    assert out.virtual_net_usd < 0.0  # fees remain; no fictional stop improvement
+
+
 def test_target_resolution_and_fee_math(tmp_path):
     tracker, journal = tracker_for(tmp_path)
     journal_intent(journal, "k1", stop=95.0, tp=110.0, bar_index=0)

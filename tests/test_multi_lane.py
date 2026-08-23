@@ -5,7 +5,12 @@ import json
 import pandas as pd
 import pytest
 
-from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, _build_single_strategy
+from vnedge.runtime.multi_lane import (
+    LaneSpec,
+    MultiLaneProvider,
+    _build_single_strategy,
+    _overlay_canonical_history,
+)
 from vnedge.runtime.multi_lane_shadow import (
     build_capital_lane_specs,
     build_lane_specs_from_env,
@@ -37,6 +42,20 @@ def test_default_roster_is_measurement_only_and_has_no_capital_lane():
     assert all(spec.mode is RunnerMode.SHADOW for spec in specs)
     assert build_capital_lane_specs({}) == []
     assert build_shadow_observe_lane_specs({}) == []
+
+
+def test_missing_canonical_history_is_explicitly_non_armable():
+    exchange = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
+            "open": [100.0], "high": [101.0], "low": [99.0],
+            "close": [100.5], "volume": [10.0],
+        }
+    )
+    overlaid = _overlay_canonical_history(exchange, pd.DataFrame())
+    assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv"
+    assert overlaid.iloc[0]["data_quality"] == "gap"
+    assert bool(overlaid.iloc[0]["is_closed"]) is True
 
 
 def test_measurement_grid_expands_and_normalizes_delta_symbol():
@@ -307,7 +326,10 @@ def test_checked_in_observer_roster_is_valid() -> None:
     specs = build_shadow_observe_roster_specs(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
-    assert len(specs) == 6
+    assert len(specs) == 8
+    assert sum(
+        spec.strategy_id == "session_continuation_15m_v1" for spec in specs
+    ) == 2
     assert all(not spec.is_primary for spec in specs)
 
 

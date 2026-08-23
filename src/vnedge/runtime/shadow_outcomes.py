@@ -83,7 +83,7 @@ class _PendingIntent:
     side: str  # "long" | "short"
     quantity: float
     notional_usd: float
-    entry_price: float  # recorded ref quote = notional / quantity
+    entry_price: float  # decision ref until the first post-decision bar opens
     stop_price: float
     take_profit_price: float | None
     decision_bar_ts: pd.Timestamp  # bar whose close produced the intent
@@ -91,7 +91,7 @@ class _PendingIntent:
     bars_held: int = -1  # -1 = virtual fill not reached yet; fill bar = 0
     take_profit_levels: tuple[float, ...] = ()  # TP ladder (tp1, tp2, …) for the journal
     mfe_price: float = 0.0  # max-favourable price since entry — observation only
-    filled: bool = True  # taker fills immediately; maker waits for a touch
+    filled: bool = False  # every virtual entry fills after the decision bar
     bars_waiting: int = 0  # maker-route only: bars the resting limit has waited
 
 
@@ -234,7 +234,7 @@ class ShadowOutcomeTracker:
             signal_reason=str(payload.get("signal_reason") or ""),
             take_profit_levels=tuple(float(x) for x in levels),
             mfe_price=entry_price,
-            filled=not self.maker_route,  # maker entries wait for a touch
+            filled=False,
         )
 
     # --- live registration -------------------------------------------------------
@@ -269,7 +269,7 @@ class ShadowOutcomeTracker:
             signal_reason=signal_reason,
             take_profit_levels=tuple(take_profit_levels),
             mfe_price=entry_price,  # starts at entry; updated each active bar
-            filled=not self.maker_route,  # maker entries wait for a touch
+            filled=False,
         )
         self._semantic_gap = self._semantic_gap or bool(take_profit_levels)
 
@@ -292,11 +292,20 @@ class ShadowOutcomeTracker:
         positive ATR is supplied, the virtual stop ratchets tighten-only off the
         running MFE, byte-identically to ActiveExitState.trail_stop."""
         bar_ts = pd.Timestamp(bar["timestamp"])
+        open_price = float(bar["open"])
         high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
         outcomes: list[VirtualOutcome] = []
         for pending in list(self._pending.values()):
             if bar_ts <= pending.decision_bar_ts:
                 continue
+            # Taker shadow fills use the first post-decision bar's open, which
+            # is the same convention as PaperRunner and the offline scanner
+            # replay. The decision-time quote remains only a sizing reference.
+            if not self.maker_route and not pending.filled:
+                pending.entry_price = open_price
+                pending.notional_usd = pending.quantity * open_price
+                pending.mfe_price = open_price
+                pending.filled = True
             # Maker route: the resting limit only fills if this bar's range
             # touches it. If the market runs away without a touch, the order is
             # cancelled after its TTL — the immediate runners a maker miss are
@@ -362,14 +371,15 @@ class ShadowOutcomeTracker:
         bar: pd.Series,
     ) -> tuple[str | None, float]:
         tp = pending.take_profit_price
+        bar_open = float(bar["open"])
         if pending.side == "long":
             if low <= pending.stop_price:
-                return "stop", pending.stop_price
+                return "stop", min(pending.stop_price, bar_open)
             if tp is not None and high >= tp:
                 return "target", tp
         else:
             if high >= pending.stop_price:
-                return "stop", pending.stop_price
+                return "stop", max(pending.stop_price, bar_open)
             if tp is not None and low <= tp:
                 return "target", tp
         if self.strategy_exit is not None:

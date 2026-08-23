@@ -27,6 +27,15 @@
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
+    },
+    {
+      "strategy_id": "session_continuation_15m_v1",
+      "exchange": "binanceusdm",
+      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "timeframe": "15m",
+      "starting_equity": 1000,
+      "daily_loss_usd": 20,
+      "trail_atr_mult": 0
     }
   ]
 }

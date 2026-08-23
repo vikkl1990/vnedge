@@ -22,6 +22,14 @@ const numberFrom = (record: Record<string, unknown> | null, keys: string[]) => {
   return null;
 };
 
+const objectFrom = (value: unknown): Record<string, unknown> | null =>
+  value != null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+
+const listFrom = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map(String) : [];
+
 type Tone = "neutral" | "good" | "warn" | "bad" | "info";
 
 function healthTone(health: CorrectionLane["health"]): Tone {
@@ -68,12 +76,14 @@ export function ScannerWorkspace({
   shadowPurse,
   streamState,
   risk,
+  conflicts,
 }: {
   lanes: CorrectionLane[];
   selectedSymbol: string;
   shadowPurse: number | null;
   streamState: "connecting" | "live" | "retrying";
   risk?: RiskSnapshot;
+  conflicts?: Record<string, { state: string; selected: string | null; side?: string }>;
 }) {
   const scanners = useMemo(
     () => lanes.filter((lane) => lane.observation_class === "shadow_observe"),
@@ -91,6 +101,11 @@ export function ScannerWorkspace({
   const closeWarm = selected ? selected.latency_samples.bar_close >= selected.latency_samples.required : false;
   const decisionWarm = selected ? selected.latency_samples.decision >= selected.latency_samples.required : false;
   const dataTone: Tone = selected?.candle_status === "ok" ? "good" : selected?.candle_status?.includes("block") ? "bad" : "warn";
+  const evaluation = selected?.last_eval ?? null;
+  const lifecycle = String(evaluation?.setup_lifecycle ?? "watching").replace(/_/g, " ");
+  const failedGates = listFrom(evaluation?.all_failed_gates);
+  const nearMiss = objectFrom(evaluation?.near_miss);
+  const symbolConflict = conflicts?.[selected?.symbol ?? ""];
 
   return (
     <section className="border border-line bg-panel/80" aria-label="Scanner decision workspace">
@@ -104,6 +119,7 @@ export function ScannerWorkspace({
           <TerminalBadge tone={scanners.length ? "info" : "neutral"}>{scanners.length} lanes</TerminalBadge>
           <TerminalBadge tone="neutral">{scanners.reduce((sum, lane) => sum + (lane.shadow_perf?.pending_shadow_intents ?? 0), 0)} pending</TerminalBadge>
           <TerminalBadge tone="info">purse {shadowPurse == null ? "—" : `$${shadowPurse.toFixed(0)}`}</TerminalBadge>
+          <TerminalBadge tone={symbolConflict?.state === "conflict" ? "bad" : symbolConflict ? "good" : "neutral"}>arbiter {symbolConflict?.state ?? "empty"}</TerminalBadge>
         </div>
       </header>
 
@@ -133,7 +149,15 @@ export function ScannerWorkspace({
             <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />
             <Criterion label="risk" value={risk?.kill.active || risk?.daily_halt.active ? "blocked" : "clear"} detail={risk?.kill.active ? "kill is latched" : risk?.daily_halt.active ? "daily halt active" : "kill and daily halt clear; capital still disabled"} tone={risk?.kill.active || risk?.daily_halt.active ? "bad" : "good"} />
             <Criterion label="last result" value={outcomeNet == null ? "none" : usd(outcomeNet)} detail={latestOutcome ? String(latestOutcome.reason ?? latestOutcome.resolution ?? "resolved shadow observation") : "no recent resolved outcome"} tone={outcomeNet == null ? "neutral" : outcomeNet >= 0 ? "good" : "bad"} />
-            <div className="mt-3 border-l-2 border-warn bg-warn/5 px-3 py-2"><div className="font-mono text-[10px] uppercase text-warn">Why not armed</div><div className="mt-1 text-[11px] text-dim">{selected.current_waiting_reason || selected.why_no_fire}</div></div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <div className="border-l-2 border-brand bg-brand/5 px-3 py-2"><div className="font-mono text-[10px] uppercase text-brand">Setup lifecycle</div><div className="mt-1 text-[12px] uppercase text-main">{lifecycle}</div><div className="mt-1 text-[10px] text-faint">observation only · cannot grant permission</div></div>
+              <div className="border-l-2 border-warn bg-warn/5 px-3 py-2"><div className="font-mono text-[10px] uppercase text-warn">Why not armed</div><div className="mt-1 text-[11px] text-dim">{failedGates[0] || selected.current_waiting_reason || selected.why_no_fire}</div>{failedGates.length > 1 && <div className="mt-1 font-mono text-[9px] text-faint">+{failedGates.length - 1} additional gates</div>}</div>
+            </div>
+            <div className="mt-2 border border-line bg-inset/50 px-3 py-2">
+              <div className="flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase text-faint">Nearest counterfactual</span><TerminalBadge tone="neutral">research only</TerminalBadge></div>
+              <div className="mt-1 text-[11px] text-dim">{nearMiss ? String(nearMiss.would_pass_if ?? "distance unavailable") : "No threshold-distance evidence yet."}</div>
+              {failedGates.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{failedGates.slice(0, 6).map((gate) => <TerminalBadge key={gate} tone="warn">{gate}</TerminalBadge>)}</div>}
+            </div>
           </div>
 
           <div className="p-3">

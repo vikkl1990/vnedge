@@ -22,6 +22,7 @@ services:
       # cross-process evidence and fails while the canonical lake has holes.
       CANDLE_LAKE_HEALTH_PATH: data/gaps/lake_health.json
       CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS: "${CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS:-1200}"
+      SCANNER_PREREQ_HEALTH_PATH: data/reports/scanner_startup_health.json
       VNEDGE_SECRETS_KEY: "${VNEDGE_SECRETS_KEY:-}"
       VNEDGE_SECRETS_KEY_VERSION: "${VNEDGE_SECRETS_KEY_VERSION:-1}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
@@ -54,7 +55,7 @@ services:
       MULTI_LANE_FIXED_MARGIN: "${MULTI_LANE_FIXED_MARGIN:-}"
       MULTI_LANE_FIXED_MARGIN_LEVERAGE: "${MULTI_LANE_FIXED_MARGIN_LEVERAGE:-30}"
       MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-1}"
-      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-23}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-24}"
       SCANNER_PREREQ_SYMBOLS: "${SCANNER_PREREQ_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
@@ -136,6 +137,7 @@ services:
       - sh
       - -c
       - |
+        until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           python -m vnedge.data.binance_gap_recovery \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
@@ -164,14 +166,15 @@ services:
       multi-lane-shadow:
         condition: service_healthy
     environment:
-      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-23}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-24}"
     command:
       - sh
       - -c
       - |
+        until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           required_days="$${VISION_BACKFILL_DAYS}"
-          if [ "$${required_days}" -lt 23 ]; then required_days=23; fi
+          if [ "$${required_days}" -lt 24 ]; then required_days=24; fi
           python -m vnedge.data.aggtrades_backfill \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
             --days "$${required_days}" \
@@ -270,6 +273,36 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
+  # Daily, read-only scanner evidence. It reads append-only lane journals and
+  # writes one atomic aggregate artifact; it has no exchange credentials,
+  # strategy mutation, promotion, or order authority.
+  scanner-evidence:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          set --
+          for journal in /app/logs/paper_trials/*.journal.jsonl; do
+            if [ -f "$${journal}" ]; then set -- "$${@}" --journal "$${journal}"; fi
+          done
+          python -m vnedge.research.scanner_evidence "$${@}" \
+            --out /app/research/live_research/scanner_evidence_latest.json
+          sleep 86400
+        done
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    mem_limit: 300m
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
 
   dashboard-tls:
     image: caddy:2-alpine

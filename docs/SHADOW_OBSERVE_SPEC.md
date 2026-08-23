@@ -53,7 +53,8 @@ configuration contracts cannot be mixed. For
 `fee_wall_momentum_observer_v1`, `squeeze_expansion_breakout_v2`, and
 `squeeze_expansion_breakout_v3`/`v4`, it must be `5m`;
 `range_expansion_observer_v3`/`v4` and
-`structure_bos_15m_trigger_v2`/`v3` require `15m`.
+`structure_bos_15m_trigger_v2`/`v3`, and
+`session_continuation_15m_v1` require `15m`.
 V3/V4 arm from closed bars but
 accepts only after three current top-of-book samples remain beyond the level
 for at least five seconds. Failed probes re-arm per side; the opposite arm is
@@ -65,8 +66,8 @@ IDs fail startup.
 
 The versioned roster supports multiple observer families and timeframes in one
 single-writer process. `config/shadow-observers.v1.json` is the canonical
-example: squeeze acceptance on 5m plus range expansion and BoS for BTC and ETH.
-The current roster uses V4 squeeze on 5m and the corrected range/BoS
+example: squeeze acceptance on 5m plus range expansion, BoS, and session
+continuation for BTC and ETH. The current roster uses V4 squeeze on 5m and the corrected range/BoS
 registrations on 15m; the prior 1h IDs remain registered only so their evidence
 is reproducible. Lane IDs include strategy, venue, symbol, and timeframe; duplicate
 IDs fail startup. Feeds remain shared only for identical

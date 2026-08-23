@@ -62,6 +62,13 @@ class RunnerConfig(BaseModel):
     # timing is strategy semantics that the backtester models at bar
     # granularity (tick-level TPs would make paper diverge from research).
     tick_stops_enabled: bool = True
+    # A venue close notification can beat the trade-derived candle writer by a
+    # few hundred milliseconds. Scanner decisions wait for the matching
+    # canonical row instead of evaluating an exchange-OHLCV substitute and
+    # repairing it one bar too late. Zero keeps unit/offline sessions instant;
+    # production multi-lane config supplies the bounded wait explicitly.
+    canonical_candle_wait_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
+    canonical_candle_poll_seconds: float = Field(default=0.20, gt=0.0, le=5.0)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: SymbolLimits = Field(
         default=SymbolLimits(

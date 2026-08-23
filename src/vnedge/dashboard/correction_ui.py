@@ -16,6 +16,11 @@ from typing import Any
 from vnedge.dashboard.health_bands import lane_bands, lane_health, timeframe_health
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.latency_thresholds import LATENCY_GATE_MIN_SAMPLES
+from vnedge.strategy.scanner_observability import (
+    ScannerCandidate,
+    SetupLifecycle,
+    arbitrate_conflicts,
+)
 from vnedge.strategy.strategy_registry import (
     KILLED,
     RESEARCH_ONLY,
@@ -389,6 +394,38 @@ def build_lanes_payload(
     }
     observer_strategies = runtime.get("shadow_observe_strategies")
     observer_timeframes = runtime.get("shadow_observe_timeframes")
+    candidates_by_symbol: dict[str, list[ScannerCandidate]] = {}
+    for row in shadow_rows:
+        evaluation = _mapping(row.get("last_eval"))
+        signal = _mapping(evaluation.get("signal"))
+        features = _mapping(evaluation.get("features"))
+        feature_side = next(
+            (
+                value
+                for name, value in features.items()
+                if str(name).lower() == "side" or str(name).lower().endswith("_side")
+            ),
+            "",
+        )
+        side = str(signal.get("side") or feature_side or "").lower()
+        lifecycle_raw = str(evaluation.get("setup_lifecycle") or "watching")
+        if side not in {"long", "short"}:
+            continue
+        try:
+            lifecycle = SetupLifecycle(lifecycle_raw)
+        except ValueError:
+            lifecycle = SetupLifecycle.WATCHING
+        failed = evaluation.get("all_failed_gates")
+        failed_count = len(failed) if isinstance(failed, list) else 0
+        candidates_by_symbol.setdefault(str(row.get("symbol") or "unknown"), []).append(
+            ScannerCandidate(
+                strategy_id=str(row.get("strategy_id") or "unknown"),
+                symbol=str(row.get("symbol") or "unknown"),
+                side=side,
+                score=1.0 / (1.0 + failed_count),
+                lifecycle=lifecycle,
+            )
+        )
     return {
         "lanes": result,
         "capital_roster_size": capital_count,
@@ -415,6 +452,10 @@ def build_lanes_payload(
         ],
         "lane_set_hash": str(runtime.get("lane_set_hash") or "") or None,
         "portfolio": portfolio,
+        "scanner_conflicts": {
+            symbol: arbitrate_conflicts(candidates)
+            for symbol, candidates in sorted(candidates_by_symbol.items())
+        },
         "read_only": True,
         "can_promote": False,
         "can_trade": False,

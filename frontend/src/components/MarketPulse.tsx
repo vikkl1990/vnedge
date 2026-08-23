@@ -923,6 +923,7 @@ export function MarketPulse() {
         shadowPurse={lanes.data?.portfolio.shadow_purse_usd ?? null}
         streamState={pulse.streamState}
         risk={risk.data}
+        conflicts={lanes.data?.scanner_conflicts}
       />
 
       <section className="overflow-x-auto border border-line bg-panel/80" aria-label="All-symbol market monitor">

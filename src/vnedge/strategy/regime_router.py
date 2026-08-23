@@ -18,9 +18,10 @@ Thresholds are frozen; changing them is a reviewed config change.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Mapping
+from typing import Final
 
 import numpy as np
 import pandas as pd
@@ -39,9 +40,18 @@ FAST_VOL_EXP: Final = "volatility_expansion_breakout_v1"
 SLOW_RECLAIM: Final = "panic_reversal_v1"
 SLOW_PULLBACK: Final = "trend_continuation_v1"
 STRUCTURE: Final = "structure_bos_1h"
+TICK_ACCEPTED: Final = "tick_accepted_breakout_v1"
+SESSION_CONTINUATION: Final = "session_continuation_15m_v1"
+SWEEP_REVERSAL: Final = "liquidity_sweep_reversal_15m_v1"
+AVWAP_RECLAIM: Final = "avwap_reclaim_15m_v1"
+TREND_PULLBACK: Final = "trend_pullback_1h_v1"
 
 FAST_IDS: Final = frozenset({FAST_SQUEEZE, FAST_VOL_EXP})
 SLOW_IDS: Final = frozenset({SLOW_RECLAIM, SLOW_PULLBACK, STRUCTURE})
+RANGE_NATIVE_IDS: Final = frozenset({AVWAP_RECLAIM, SWEEP_REVERSAL})
+EXPAND_NATIVE_IDS: Final = frozenset(
+    {TICK_ACCEPTED, SESSION_CONTINUATION, TREND_PULLBACK}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,16 +93,19 @@ DEFAULT_CONFIG: Final = RegimeRouterConfig()
 
 
 def build_policy(config: RegimeRouterConfig) -> Mapping[Regime, frozenset[str]]:
-    range_set = (FAST_IDS if config.allow_fast_in_range else frozenset()) | (
+    range_set = RANGE_NATIVE_IDS | (FAST_IDS if config.allow_fast_in_range else frozenset()) | (
         SLOW_IDS if config.allow_slow_in_range else frozenset()
     )
-    expand_set = (FAST_IDS if config.allow_fast_in_expand else frozenset()) | (
+    expand_set = EXPAND_NATIVE_IDS | (FAST_IDS if config.allow_fast_in_expand else frozenset()) | (
         SLOW_IDS if config.allow_slow_in_expand else frozenset()
     )
     return {
         Regime.RANGE: range_set,
         Regime.EXPAND: expand_set,
-        Regime.STRESS: (FAST_IDS | SLOW_IDS) if config.allow_any_in_stress else frozenset(),
+        Regime.STRESS: (
+            FAST_IDS | SLOW_IDS | RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS
+            if config.allow_any_in_stress else frozenset()
+        ),
         Regime.UNKNOWN: frozenset(),
     }
 
@@ -266,6 +279,22 @@ def annotate_with_hysteresis(
     out["regime"] = labels
     out["regime_allows_fast"] = allows_fast
     out["regime_allows_slow"] = allows_slow
+    return out
+
+
+def annotate_strategy_route(
+    candles: pd.DataFrame,
+    strategy_id: str,
+    config: RegimeRouterConfig | None = None,
+) -> pd.DataFrame:
+    """Attach the denial-only decision for one exact scanner registration."""
+    cfg = config or DEFAULT_CONFIG
+    out = annotate_with_hysteresis(candles, cfg)
+    policy = build_policy(cfg)
+    out["regime_route_allowed"] = [
+        strategy_id in policy.get(Regime(str(label)), frozenset())
+        for label in out["regime"]
+    ]
     return out
 
 

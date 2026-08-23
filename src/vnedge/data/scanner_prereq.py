@@ -22,6 +22,9 @@ from itertools import pairwise
 from pathlib import Path
 
 from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore, floor_time
+from vnedge.strategy.regime_router import DEFAULT_CONFIG as REGIME_CONFIG
+from vnedge.strategy.regime_router import EXPAND_NATIVE_IDS, RANGE_NATIVE_IDS
+from vnedge.strategy.strategy_registry import get_strategy_class
 
 DEFAULT_REQUIREMENTS: Mapping[str, int] = {
     # Active scanner causal contracts, including one evaluable bar after
@@ -32,6 +35,37 @@ DEFAULT_REQUIREMENTS: Mapping[str, int] = {
     "1h": 24,
     "4h": 6,
 }
+
+
+def requirements_from_roster(path: Path | str) -> dict[str, int]:
+    """Derive exact-candle depth from the configured scanner contracts.
+
+    The roster, not an unrelated retired lane, owns startup depth. Strategies
+    routed through the causal regime layer also inherit that layer's warmup.
+    Small 1h/4h tails remain required for Pulse/MTF integrity.
+    """
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    observers = payload.get("observers")
+    if not isinstance(observers, list) or not observers:
+        raise ValueError("scanner roster must contain a non-empty observers list")
+    requirements: dict[str, int] = {"1h": 24, "4h": 6}
+    routed = RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS
+    for observer in observers:
+        if not isinstance(observer, dict):
+            raise TypeError("scanner roster observer must be an object")
+        strategy_id = str(observer.get("strategy_id") or "")
+        timeframe = str(observer.get("timeframe") or "")
+        strategy = get_strategy_class(strategy_id)
+        declared = str(getattr(strategy, "timeframe", timeframe) or timeframe)
+        if timeframe != declared:
+            raise ValueError(
+                f"{strategy_id} roster timeframe {timeframe} != declared {declared}"
+            )
+        needed = int(getattr(strategy, "warmup_bars", 0)) + 1
+        if strategy_id in routed:
+            needed = max(needed, REGIME_CONFIG.min_bars + 1)
+        requirements[timeframe] = max(requirements.get(timeframe, 0), needed)
+    return requirements
 
 
 def _symbol_key(symbol: str) -> str:
@@ -167,6 +201,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--report", default="data/reports/scanner_prerequisites.json"
     )
+    parser.add_argument(
+        "--roster",
+        help="derive required bars from this versioned shadow-observer roster",
+    )
     args = parser.parse_args(argv)
     symbols = _csv(args.symbols)
     if not symbols:
@@ -175,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         args.candle_root,
         exchange=args.exchange,
         symbols=symbols,
+        requirements=(requirements_from_roster(args.roster) if args.roster else DEFAULT_REQUIREMENTS),
     )
     _write_report(Path(args.report), report)
     for row in report.rows:
