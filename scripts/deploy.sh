@@ -249,5 +249,43 @@ if ! docker compose exec -T multi-lane-shadow \
     exit 1
 fi
 echo "fleet policy OK: measurement-only posture confirmed"
+
+# Operational readiness assertion: a process can publish "lanes running" and
+# still lose individual lane tasks immediately afterwards, or remain arm-
+# blocked while the prerequisite worker repairs a candle hole. Wait through
+# bounded recovery and require the serving runtime's aggregate /ready proof.
+echo "waiting for operational readiness..."
+READY_OK=0
+READY_PAYLOAD=""
+for _ in $(seq 1 "${DEPLOY_READY_WAIT_ATTEMPTS:-720}"); do
+    if READY_PAYLOAD=$(docker compose exec -T multi-lane-shadow python -c '
+import json
+import urllib.request
+
+with urllib.request.urlopen("http://127.0.0.1:8080/ready", timeout=5) as response:
+    payload = json.load(response)
+print(json.dumps(payload, separators=(",", ":")))
+raise SystemExit(0 if payload.get("ready") is True else 1)
+' 2>/dev/null); then
+        READY_OK=1
+        break
+    fi
+    sleep 5
+done
+if [ "$READY_OK" != 1 ]; then
+    echo "RUNTIME NOT READY — prerequisite recovery or lane health did not converge" >&2
+    docker compose exec -T multi-lane-shadow python -c '
+import urllib.error
+import urllib.request
+
+try:
+    print(urllib.request.urlopen("http://127.0.0.1:8080/ready", timeout=5).read().decode())
+except urllib.error.HTTPError as exc:
+    print(exc.read().decode())
+' >&2 || true
+    docker compose logs --tail=80 multi-lane-shadow >&2 || true
+    exit 1
+fi
+echo "runtime readiness OK: $READY_PAYLOAD"
 exit 0
 }

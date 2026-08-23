@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.squeeze_expansion_breakout import PARAMS as FEATURE_PARAMS
@@ -84,7 +84,7 @@ class SqueezeExpansionBreakoutV4(BaseStrategy):
             else pd.Series(False, index=out.index)
         )
         closed = (
-            out["is_closed"].astype(bool)
+            out["is_closed"].eq(True).fillna(False).astype(bool)
             if "is_closed" in out.columns
             else pd.Series(False, index=out.index)
         )
@@ -146,7 +146,8 @@ class SqueezeExpansionBreakoutV4(BaseStrategy):
         volume_ok = bool(number("sqz_volume_ok") or 0)
         arm_ready = bool(number("sqz_arm_ready") or 0)
         quality_ok = str(row.get("data_quality", "unknown")).lower() == "ok"
-        closed = bool(row.get("is_closed", False))
+        closed_value = row.get("is_closed", False)
+        closed = False if pd.isna(closed_value) else bool(closed_value)
         failures: list[str] = []
         if not quality_ok:
             failures.append("data_quality_not_ok")

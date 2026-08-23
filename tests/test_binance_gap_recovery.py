@@ -335,6 +335,78 @@ def test_scanner_tail_can_recover_at_closed_five_minute_boundary(tmp_path) -> No
     assert "coverage_timeframe=5m" in gap.detail
 
 
+def test_scanner_recovery_materializes_an_interior_five_minute_hole(tmp_path) -> None:
+    candle_store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+
+    def candle(open_time: datetime) -> Candle:
+        return Candle(
+            symbol="BTCUSDT",
+            timeframe="5m",
+            open_time=open_time,
+            close_time=open_time + timedelta(minutes=5),
+            open=Decimal(100),
+            high=Decimal(101),
+            low=Decimal(99),
+            close=Decimal(100),
+            volume=Decimal(1),
+            quote_volume=Decimal(100),
+            trade_count=1,
+        )
+
+    candle_store.upsert((candle(START), candle(START + timedelta(minutes=10))))
+
+    class InteriorFetcher:
+        def fetch(self, symbol, start, end):
+            assert symbol == "BTCUSDT"
+            assert start == START + timedelta(minutes=5)
+            assert end == START + timedelta(minutes=10)
+            start_ms = int(start.timestamp() * 1_000)
+            frame = pd.DataFrame(
+                [
+                    {
+                        "ts_ms": start_ms + minute * 60_000,
+                        "price": 100.0 + minute / 100,
+                        "amount": 1.0,
+                        "side": "buy",
+                    }
+                    for minute in range(5)
+                ]
+            )
+            return FetchedTape(
+                symbol="BTCUSDT",
+                start=start,
+                end=end,
+                frame=frame,
+                first_agg_id=200,
+                last_agg_id=204,
+                requests=1,
+                sha256="interior-five-minute",
+            )
+
+    report = recover_storage_gaps(
+        data_root=tmp_path,
+        candle_root=tmp_path / "candles",
+        gap_root=tmp_path / "gaps",
+        exchange="binanceusdm",
+        symbols=["BTCUSDT"],
+        fetcher=InteriorFetcher(),
+        recover_closed_tail=True,
+        tail_timeframe="5m",
+        now=START + timedelta(minutes=17),
+    )
+
+    assert len(report.recovered) == 1
+    repaired = candle_store.read("BTCUSDT", "5m")
+    assert [item.open_time for item in repaired] == [
+        START,
+        START + timedelta(minutes=5),
+        START + timedelta(minutes=10),
+    ]
+    gap = GapParquetStore(tmp_path / "gaps").read("binanceusdm", "BTCUSDT")[0]
+    assert gap.recovered is True
+    assert "interior canonical hole" in gap.detail
+
+
 def test_long_gap_recovery_commits_each_hour_and_resumes_delta(tmp_path) -> None:
     gap_store = GapParquetStore(tmp_path / "gaps")
     gap_store.upsert(

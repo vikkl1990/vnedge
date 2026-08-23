@@ -36,7 +36,7 @@ def _frame(candles: pd.DataFrame, *, name: str) -> tuple[pd.DataFrame, pd.Series
         if "data_quality" in out.columns else pd.Series(True, index=out.index)
     )
     closed = (
-        out["is_closed"].astype(bool)
+        out["is_closed"].eq(True).fillna(False).astype(bool)
         if "is_closed" in out.columns else pd.Series(True, index=out.index)
     )
     out["rs_quality_ok"] = (quality & closed).astype(float)

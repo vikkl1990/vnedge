@@ -22,11 +22,12 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Protocol, Self
 
 import httpx
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 from vnedge.data.aggtrades_backfill import TRADE_SCHEMA, shard_dir
 from vnedge.data.candles import (
@@ -396,14 +397,52 @@ def recover_storage_gaps(
     for symbol in symbols:
         records = gap_store.read(exchange, symbol)
         if recover_closed_tail:
-            latest_close = max(
+            closed_tail = sorted(
                 (
-                    candle.close_time
+                    candle
                     for candle in candle_store.read(
                         _market_id(symbol), tail_timeframe
                     )
-                    if candle.is_closed
+                    if candle.is_closed and candle.close_time <= completed_tail_end
                 ),
+                key=lambda candle: candle.open_time,
+            )
+            step = timedelta(seconds=TF_SECONDS[tail_timeframe])
+            known_ids = {record.gap_id for record in records}
+            interior_holes: list[GapRecord] = []
+            for previous, current in pairwise(closed_tail):
+                if current.open_time - previous.open_time <= step:
+                    continue
+                hole_start = previous.close_time
+                hole_end = current.open_time
+                hole_id = (
+                    f"interior-{tail_timeframe}-{exchange}-{_market_id(symbol)}-"
+                    f"{hole_start:%Y%m%d%H%M}-{hole_end:%Y%m%d%H%M}"
+                )
+                if hole_id in known_ids:
+                    continue
+                interior_holes.append(
+                    GapRecord(
+                        symbol=_market_id(symbol),
+                        exchange=exchange,
+                        kind=GapKind.STORAGE_HOLE,
+                        start=hole_start,
+                        end=hole_end,
+                        detected_at=moment,
+                        detail=(
+                            "interior canonical hole discovered by recovery worker; "
+                            f"coverage_timeframe={tail_timeframe}"
+                        ),
+                        gap_id=hole_id,
+                    )
+                )
+                known_ids.add(hole_id)
+            if interior_holes:
+                gap_store.upsert(interior_holes)
+                records.extend(interior_holes)
+
+            latest_close = max(
+                (candle.close_time for candle in closed_tail),
                 default=None,
             )
             if latest_close is not None and latest_close < completed_tail_end:

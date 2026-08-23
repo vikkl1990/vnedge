@@ -64,6 +64,16 @@ def test_all_new_scanners_prepare_and_explain_current_bar():
         assert scanner.signal(prepared, scanner.warmup_bars - 1) is None
 
 
+def test_new_scanners_treat_unknown_closed_state_as_not_eligible():
+    candles = _candles()
+    candles["is_closed"] = candles["is_closed"].astype("boolean")
+    candles.loc[len(candles) - 1, "is_closed"] = pd.NA
+
+    for scanner_class in NEW_RESEARCH_SCANNERS:
+        prepared = scanner_class().prepare(candles)
+        assert prepared.iloc[-1]["rs_quality_ok"] == 0.0
+
+
 def test_new_scanner_features_are_prefix_causal():
     candles = _candles()
     changed = candles.copy()

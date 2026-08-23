@@ -68,6 +68,21 @@ def test_v4_fails_closed_when_exact_window_has_a_gap() -> None:
     assert pd.isna(out.iloc[-1]["sqz_vwap24"])
 
 
+def test_v4_fails_closed_when_closed_state_is_unknown() -> None:
+    strategy = SqueezeExpansionBreakoutV4()
+    strategy._features = _PreparedFeatures()
+    candles = _candles()
+    candles["is_closed"] = candles["is_closed"].astype("boolean")
+    candles.loc[100, "is_closed"] = pd.NA
+
+    out = strategy.prepare(candles)
+
+    assert out.iloc[-1]["sqz_exact_volume_ready"] == 0.0
+    assert out.iloc[-1]["sqz_arm_ready"] == 0.0
+    report = strategy.evaluation_diagnostics(out, 100)
+    assert "forming_bar" in report["all_failed_gates"]
+
+
 def test_v4_makes_volume_confirmation_binding() -> None:
     strategy = SqueezeExpansionBreakoutV4()
     strategy._features = _PreparedFeatures(volume_ok=0.0)
