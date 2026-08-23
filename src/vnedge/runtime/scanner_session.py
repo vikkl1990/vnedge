@@ -137,6 +137,10 @@ class ScannerTrade:
     gross_bps: float
     fee_bps: float
     chase_bps: float
+    #: Best unrealised gain the trade ever showed, in bps. Scored against
+    #: gross_bps it gives MFE CAPTURE: what fraction of the trade's best
+    #: moment the exit actually banked.
+    mfe_bps: float = 0.0
 
     @property
     def entry_time(self) -> dt.datetime:
@@ -322,6 +326,7 @@ class ScannerSession:
             reason=decision.reason, held_bars=held,
             net_bps=gross - fee, gross_bps=gross, fee_bps=fee,
             chase_bps=opened["chase_bps"],
+            mfe_bps=decision.mfe / opened["entry"] * 1e4 if opened["entry"] else 0.0,
         )
         self.trades.append(trade)
         self.trigger.notify_flat(i, won=decision.won)

@@ -111,6 +111,13 @@ class ExitDecision:
     reason: str
     price: float
     won: bool
+    #: Maximum favourable excursion reached before the exit, in price units.
+    #: Carried so callers can score gross / MFE -- the fraction of the best
+    #: moment a trade actually captured. A book capturing ~90%+ of its MFE is
+    #: not skilled, it is exiting at a resolution the bar data cannot
+    #: adjudicate; that single ratio exposed a 12-strategy public catalogue as
+    #: one unrealisable exit artifact.
+    mfe: float = 0.0
 
 
 @dataclass
@@ -271,4 +278,4 @@ class ExitEngine:
         final = (price - p.entry) if p.side == "long" else (p.entry - price)
         total = p.realized + p.remaining * final
         effective = p.entry + total if p.side == "long" else p.entry - total
-        return ExitDecision(reason=reason, price=effective, won=total > 0)
+        return ExitDecision(reason=reason, price=effective, won=total > 0, mfe=p.mfe)
