@@ -75,7 +75,7 @@ from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.data.candles import CandleParquetStore
-from vnedge.dashboard.chart_series import candles_payload, markers_payload
+from vnedge.dashboard.chart_series import candles_payload
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.execution.operator_audit import OperatorAuditLog
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
@@ -1050,17 +1050,6 @@ def create_app(
         payload = await asyncio.to_thread(
             candles_payload, store, symbol, timeframe, limit=n
         )
-        return JSONResponse(payload, headers=_identity(user))
-
-    @app.get("/api/candles/{symbol}/markers")
-    async def chart_markers(
-        symbol: str,
-        request: Request,
-        n: int = 500,
-    ) -> JSONResponse:
-        """Where the lanes actually got in and out, for overlay on the candles."""
-        user = _authorized(request)
-        payload = await asyncio.to_thread(markers_payload, lane_dir, symbol, limit=n)
         return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/api/pulse/{symbol}")

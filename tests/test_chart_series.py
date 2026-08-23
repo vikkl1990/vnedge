@@ -1,18 +1,12 @@
-"""Chart series: canonical source, bounded size, honest markers."""
+"""Chart series: canonical source, bounded size, and exactly one marker path."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from vnedge.dashboard.chart_series import (
-    MAX_BARS,
-    candles_payload,
-    markers_from_journal,
-    markers_payload,
-)
+from vnedge.dashboard.chart_series import MAX_BARS, candles_payload
 
 UTC = timezone.utc
 
@@ -38,15 +32,6 @@ class _Store:
 
     def read(self, symbol, timeframe):
         return self.rows
-
-
-def _outcome(**over):
-    payload = {"symbol": "BTCUSDT", "side": "long",
-               "entry_bar_ts": "2026-08-19T15:00:00+00:00",
-               "bar_ts": "2026-08-19T18:00:00+00:00",
-               "resolution": "stop", "virtual_net_usd": -5.31}
-    payload.update(over)
-    return json.dumps({"kind": "shadow_outcome", "payload": payload})
 
 
 def test_candles_come_from_the_canonical_store_and_say_so() -> None:
@@ -75,53 +60,6 @@ def test_an_unreadable_store_yields_an_empty_series_not_a_crash() -> None:
     assert payload["candles"] == [] and payload["count"] == 0
 
 
-def test_each_outcome_produces_an_entry_and_an_exit_marker() -> None:
-    markers = markers_from_journal([_outcome()], "BTCUSDT")
-    assert [m.shape for m in markers] == ["arrowUp", "circle"]
-    assert markers[0].time < markers[1].time
-
-
-def test_exit_colour_encodes_the_outcome() -> None:
-    """A red exit under a green entry is the shape a reader scans for."""
-    loser = markers_from_journal([_outcome()], "BTCUSDT")[1]
-    winner = markers_from_journal([_outcome(virtual_net_usd=12.0)], "BTCUSDT")[1]
-    assert loser.color != winner.color
-    assert "stop" in loser.text and "-5.31" in loser.text
-
-
-def test_a_short_is_marked_on_the_opposite_side() -> None:
-    short = markers_from_journal([_outcome(side="short")], "BTCUSDT")
-    assert short[0].position == "aboveBar" and short[0].shape == "arrowDown"
-
-
-def test_other_symbols_and_other_record_kinds_are_ignored() -> None:
-    lines = [_outcome(symbol="ETHUSDT"),
-             json.dumps({"kind": "lane_eval", "payload": {"symbol": "BTCUSDT"}}),
-             "not json at all", ""]
-    assert markers_from_journal(lines, "BTCUSDT") == []
-
-
-def test_a_missing_journal_directory_is_empty_not_an_error() -> None:
-    from pathlib import Path
-
-    payload = markers_payload(Path("/nonexistent/journals"), "BTCUSDT")
-    assert payload["markers"] == [] and payload["journals"] == 0
-    assert markers_payload(None, "BTCUSDT")["count"] == 0
-
-
-def test_markers_are_ordered_and_bounded(tmp_path) -> None:
-    path = tmp_path / "lane.journal.jsonl"
-    path.write_text("\n".join(
-        _outcome(entry_bar_ts=f"2026-08-{d:02d}T15:00:00+00:00",
-                 bar_ts=f"2026-08-{d:02d}T18:00:00+00:00")
-        for d in range(1, 21)
-    ))
-    payload = markers_payload(tmp_path, "BTCUSDT", limit=6)
-    times = [m["time"] for m in payload["markers"]]
-    assert len(times) == 6
-    assert times == sorted(times)
-
-
 def test_the_endpoints_are_registered_and_authorised(tmp_path) -> None:
     """The chart is read-only and behind the same auth as everything else."""
     from starlette.testclient import TestClient
@@ -131,7 +69,9 @@ def test_the_endpoints_are_registered_and_authorised(tmp_path) -> None:
     client = TestClient(create_app(SnapshotProvider(), token="t"))
     paths = {r.path for r in client.app.routes if hasattr(r, "path")}
     assert "/api/candles/{symbol}" in paths
-    assert "/api/candles/{symbol}/markers" in paths
+    # Markers are built client-side from journal scanner_events. A server-side
+    # marker route would be a second path to one answer; its absence is the fix.
+    assert "/api/candles/{symbol}/markers" not in paths
 
     # unauthenticated callers get nothing
     assert client.get("/api/candles/BTCUSDT").status_code in (401, 403)
@@ -142,6 +82,4 @@ def test_the_endpoints_are_registered_and_authorised(tmp_path) -> None:
     assert body["source"] == "canonical_lake"      # not a fourth feed
     assert isinstance(body["candles"], list)
 
-    markers = client.get("/api/candles/BTCUSDT/markers?token=t")
-    assert markers.status_code == 200
-    assert isinstance(markers.json()["markers"], list)
+    assert client.get("/api/candles/BTCUSDT/markers?token=t").status_code == 404
