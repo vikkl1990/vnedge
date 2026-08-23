@@ -177,6 +177,68 @@ export async function apiDelete(path: string): Promise<void> {
 }
 
 // --- Response shapes (only the fields the panels read) ---------------------
+/** Canonical OHLCV for the chart.
+ *
+ * Served from the same store research and shadow read. The UI deliberately does
+ * NOT derive candles of its own: three candle sources already disagree in this
+ * system, and a fourth built for display would be the hardest to notice.
+ */
+export type ChartTimeframe = "1m" | "5m" | "15m" | "1h" | "4h";
+
+export interface ChartCandle {
+  time: number;      // epoch SECONDS — the unit lightweight-charts expects
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface ChartCandles {
+  symbol: string;
+  timeframe: string;
+  source: string;    // "canonical_lake"
+  count: number;
+  truncated: boolean;
+  candles: ChartCandle[];
+}
+
+export interface ChartMarker {
+  time: number;
+  position: "aboveBar" | "belowBar";
+  shape: "arrowUp" | "arrowDown" | "circle";
+  color: string;
+  text: string;
+}
+
+export interface ChartMarkers {
+  symbol: string;
+  count: number;
+  journals: number;
+  markers: ChartMarker[];
+}
+
+export async function fetchChartCandles(
+  symbol: string,
+  timeframe: ChartTimeframe,
+  n = 500,
+  exchange = "binanceusdm",
+): Promise<ChartCandles> {
+  const q = new URLSearchParams({ timeframe, n: String(n), exchange });
+  return apiGet<ChartCandles>(`/api/candles/${encodeURIComponent(symbol)}?${q}`);
+}
+
+/** Where the lanes actually got in and out, for overlay on the candles. */
+export async function fetchChartMarkers(
+  symbol: string,
+  n = 500,
+): Promise<ChartMarkers> {
+  const q = new URLSearchParams({ n: String(n) });
+  return apiGet<ChartMarkers>(
+    `/api/candles/${encodeURIComponent(symbol)}/markers?${q}`,
+  );
+}
+
 export interface WhoAmI {
   name: string | null;
   role: string | null;

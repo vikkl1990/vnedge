@@ -17,12 +17,15 @@ import {
   type WhitespaceData,
 } from "lightweight-charts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { PulseHour, ScannerAuditEvent } from "../api";
-import { useHourAnalysis, useJournal, useLanes, usePulse, useRiskSnapshot } from "../queries";
+import type { ChartCandle, ChartTimeframe, PulseHour, ScannerAuditEvent } from "../api";
+import { useChartCandles, useHourAnalysis, useJournal, useLanes, usePulse, useRiskSnapshot } from "../queries";
 import { ScannerWorkspace } from "./ScannerWorkspace";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+//: "1h" keeps the pulse-derived series, which carries the VWAP/AVWAP overlays.
+//: Every other timeframe reads the CANONICAL lake instead.
+const CHART_TIMEFRAMES: ChartTimeframe[] = ["5m", "15m", "1h", "4h"];
 const MARKET_MONITOR_GRID = "grid w-full min-w-[1120px] grid-cols-[minmax(110px,.8fr)_minmax(130px,.9fr)_minmax(110px,.8fr)_minmax(110px,.8fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(120px,.9fr)_minmax(145px,1fr)] gap-x-4";
 
 const baseAsset = (symbol: string) => {
@@ -226,6 +229,8 @@ function CandleChart({
   priorDayVal,
   auditEvents,
   activeIntent,
+  timeframe,
+  canonicalCandles,
 }: {
   hours: PulseHour[];
   forming: Record<string, unknown> | null | undefined;
@@ -242,6 +247,10 @@ function CandleChart({
     stop_price: number;
     target_price: number | null;
   } | null;
+  //: "1h" keeps the pulse-derived series; anything else is served from the
+  //: canonical lake and the hour-derived overlays are cleared.
+  timeframe: ChartTimeframe;
+  canonicalCandles: ChartCandle[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -419,6 +428,33 @@ function CandleChart({
     }
   }, []); // history markers are re-created when the chart mounts for a symbol
 
+  // Canonical-lake series. Only active off the hour view; the VWAP and AVWAP
+  // overlays are hour-derived, so they are cleared rather than drawn against a
+  // timeframe they were never computed for.
+  useEffect(() => {
+    if (timeframe === "1h") return;
+    const chart = chartRef.current;
+    const candles = candleRef.current;
+    if (!chart || !candles) return;
+    const rows = canonicalCandles;
+    try {
+      candles.setData(rows.map((row) => ({
+        time: row.time as UTCTimestamp,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      })));
+      vwapRef.current?.setData([]);
+      lowAvwapRef.current?.setData([]);
+      highAvwapRef.current?.setData([]);
+      historySignatureRef.current = "";
+      if (rows.length > 0) chart.timeScale().fitContent();
+    } catch {
+      /* chart disposed mid-update */
+    }
+  }, [timeframe, canonicalCandles]);
+
   useEffect(() => {
     const chart = chartRef.current;
     const candles = candleRef.current;
@@ -435,7 +471,9 @@ function CandleChart({
         && formingTimeRef.current !== chartLivePoint.time
       );
       const formingCleared = formingTimeRef.current !== null && chartLivePoint === null;
-      if (historyChanged || formingRolled || formingCleared) {
+      if (timeframe !== "1h") {
+        // the canonical effect below owns the series on other timeframes
+      } else if (historyChanged || formingRolled || formingCleared) {
         candles.setData(points.candles);
         vwap.setData(points.vwap);
         lowAvwap.setData(points.avwapLow);
@@ -735,6 +773,8 @@ function ScannerAuditRail({ events }: { events: ScannerAuditEvent[] }) {
 
 export function MarketPulse() {
   const [symbol, setSymbol] = useState("BTCUSDT");
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>("1h");
+  const canonical = useChartCandles(symbol, timeframe, timeframe !== "1h");
   const [selected, setSelected] = useState<string | null>(null);
   const [alertFilter, setAlertFilter] = useState<"active" | "all" | "recovered">("active");
   const btcPulse = usePulse("BTCUSDT");
@@ -858,6 +898,17 @@ export function MarketPulse() {
               {item.replace("USDT", "")}
             </button>
           ))}
+          <span className="mx-1 h-5 w-px bg-line" aria-hidden="true" />
+          {CHART_TIMEFRAMES.map((tf) => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              title={tf === "1h" ? "Pulse series with VWAP context" : "Canonical lake candles"}
+              className={`rounded-lg border px-2.5 py-2 font-mono text-[11px] transition ${timeframe === tf ? "border-brand/60 bg-brand/10 text-brand" : "border-line text-dim hover:text-txt"}`}
+            >
+              {tf}
+            </button>
+          ))}
           <span className="hidden md:inline font-mono text-[11px] text-faint">{pulse.data?.as_of ? fullUtcHour(pulse.data.as_of) : "syncing"} UTC</span>
         </div>
       </section>
@@ -912,6 +963,8 @@ export function MarketPulse() {
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,.7fr)] gap-4">
         <TerminalPanel title="1h market structure" meta={`${hours.length} closed hours · ${symbol}`}>
           <CandleChart
+            timeframe={timeframe}
+            canonicalCandles={canonical.data?.candles ?? []}
             hours={hours}
             forming={forming}
             asOf={pulse.data?.as_of}

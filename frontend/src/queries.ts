@@ -4,25 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  apiGet,
-  type HourBrief,
-  type CostModelPayload,
-  type JournalPayload,
-  type LanesPayload,
-  type PulsePayload,
-  type RiskSnapshot,
-  type ResearchScorecard,
-  type Snapshot,
-  type MetaPayload,
-  type MlStatus,
-  type AgenticResearchStatus,
-  type WhoAmI,
-  type SettingsSecurity,
-  type OperatorProfile,
-  type ExchangeConnectionPublic,
-  type ReadinessStatus,
-} from "./api";
+import { apiGet, fetchChartCandles, type AgenticResearchStatus, type ChartTimeframe, type CostModelPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type WhoAmI } from "./api";
 
 export function useWhoAmI() {
   return useQuery({
@@ -144,6 +126,27 @@ export function useAgenticResearchStatus() {
     queryKey: ["agentic-research-os"],
     queryFn: () => apiGet<AgenticResearchStatus>("/agentic-research-os"),
     refetchInterval: 60_000,
+  });
+}
+
+/** Canonical OHLCV for the chart, by timeframe.
+ *
+ * Disabled on "1h" because that view is already served by the pulse payload
+ * with its VWAP/AVWAP overlays; every other timeframe reads the canonical
+ * lake -- the same store research and shadow are meant to read, rather than a
+ * fourth series derived for display.
+ */
+export function useChartCandles(
+  symbol: string,
+  timeframe: ChartTimeframe,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["chart-candles", symbol, timeframe],
+    queryFn: () => fetchChartCandles(symbol, timeframe, 500),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 }
 
