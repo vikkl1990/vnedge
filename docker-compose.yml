@@ -127,6 +127,11 @@ services:
     depends_on:
       pulse-recorder:
         condition: service_started
+      # The scanner entrypoint owns the serialized cold-start repair. Do not
+      # let the periodic worker mutate the same candle store until that proof
+      # has completed and the runtime is healthy.
+      multi-lane-shadow:
+        condition: service_healthy
     command:
       - sh
       - -c
@@ -154,6 +159,10 @@ services:
   vision-recovery:
     build: .
     restart: unless-stopped
+    depends_on:
+      # Avoid concurrent historical candle rebuilds against scanner_startup.
+      multi-lane-shadow:
+        condition: service_healthy
     environment:
       VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-23}"
     command:

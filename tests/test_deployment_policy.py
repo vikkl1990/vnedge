@@ -41,3 +41,12 @@ def test_tls_edge_has_an_explicit_healthcheck() -> None:
     command = " ".join(healthcheck["test"])
     assert "/healthz" in command
     assert "127.0.0.1:8765" in command
+
+
+def test_background_recovery_waits_for_scanner_startup_proof() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    for service_name in ("gap-recovery", "vision-recovery"):
+        dependency = compose["services"][service_name]["depends_on"][
+            "multi-lane-shadow"
+        ]
+        assert dependency["condition"] == "service_healthy"
