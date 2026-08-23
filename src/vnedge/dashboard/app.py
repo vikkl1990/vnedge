@@ -74,6 +74,8 @@ from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_paylo
 from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
+from vnedge.data.candles import CandleParquetStore
+from vnedge.dashboard.chart_series import candles_payload, markers_payload
 from vnedge.dashboard.trade_journal import build_trade_journal
 from vnedge.execution.operator_audit import OperatorAuditLog
 from vnedge.research.external_repo_synthesis import build_external_repo_synthesis
@@ -1028,6 +1030,38 @@ def create_app(
             build_risk_payload({**snapshot, "build_sha": _build_sha()}),
             headers=_identity(user),
         )
+
+    @app.get("/api/candles/{symbol}")
+    async def chart_candles(
+        symbol: str,
+        request: Request,
+        exchange: str = "binanceusdm",
+        timeframe: str = "1h",
+        n: int = 500,
+    ) -> JSONResponse:
+        """Canonical OHLCV for the chart.
+
+        Deliberately reads the SAME store research and shadow are meant to
+        read. A separate UI feed would make the cockpit a fourth candle source
+        on top of the three that already disagree.
+        """
+        user = _authorized(request)
+        store = CandleParquetStore(Path("data/candles"), exchange=exchange)
+        payload = await asyncio.to_thread(
+            candles_payload, store, symbol, timeframe, limit=n
+        )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/candles/{symbol}/markers")
+    async def chart_markers(
+        symbol: str,
+        request: Request,
+        n: int = 500,
+    ) -> JSONResponse:
+        """Where the lanes actually got in and out, for overlay on the candles."""
+        user = _authorized(request)
+        payload = await asyncio.to_thread(markers_payload, lane_dir, symbol, limit=n)
+        return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/api/pulse/{symbol}")
     async def market_pulse(
