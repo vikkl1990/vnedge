@@ -142,3 +142,39 @@ def test_orphaned_atomic_reservation_self_recovers(tmp_path):
 
     assert recovered.allowed
     assert recovered.active_margin_usd == 0
+
+
+def test_legacy_null_or_nonfinite_margin_uses_notional_fallback(tmp_path):
+    lane = DecisionJournal(tmp_path / "lane_a.journal.jsonl")
+    for key, margin in (("null-margin", None), ("nan-margin", "NaN")):
+        lane.append(
+            "shadow_intent",
+            {
+                "intent_key": key,
+                "approved": True,
+                "margin_usd": margin,
+                "intent": {
+                    "symbol": f"{key}/USDT:USDT",
+                    "side": "long",
+                    "notional_usd": 300,
+                    "leverage": 3,
+                },
+            },
+        )
+    gate = ShadowPortfolioGate(
+        journal_dir=tmp_path,
+        lane_ids=("lane_a", "lane_b"),
+        equity_usd=Decimal(1000),
+        daily_loss_limit_usd=Decimal(20),
+    )
+
+    decision = gate.evaluate_entry(
+        lane_id="lane_b",
+        symbol="ETH/USDT:USDT",
+        side="long",
+        margin_usd=Decimal(100),
+        now=NOW,
+    )
+
+    assert decision.allowed
+    assert decision.active_margin_usd == Decimal(200)

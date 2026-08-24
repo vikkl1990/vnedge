@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from vnedge.execution.journal import DecisionJournal
@@ -76,9 +76,10 @@ class ShadowPortfolioGate:
     @staticmethod
     def _decimal(value: object, default: Decimal = Decimal(0)) -> Decimal:
         try:
-            return Decimal(str(value))
-        except (ValueError, TypeError):
+            parsed = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
             return default
+        return parsed if parsed.is_finite() else default
 
     @staticmethod
     def _record_time(record: dict[str, object]) -> datetime | None:
