@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import Literal
 
 CostFamily = Literal["scalp", "swing"]
-DecisionEngine = Literal["base_strategy_next_open_v1", "quote_acceptance_v1"]
+DecisionEngine = Literal["base_strategy_next_open_v1", "quote_acceptance_v1", "quote_acceptance_v2"]
 ExitEngine = Literal["active_exit_v1", "scanner_exit_v1"]
 
 
@@ -75,42 +75,88 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         rationale="V2 structure with final-eligibility spacing correction",
     ),
     "avwap_reclaim_15m_v1": ScannerRuntimeContract(
-        strategy_id="avwap_reclaim_15m_v1", timeframe="15m",
-        cost_family="swing", max_holding_bars=48,
+        strategy_id="avwap_reclaim_15m_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
         rationale="closed-bar AVWAP reclaim with a 12-hour evidence horizon",
     ),
     "session_continuation_15m_v1": ScannerRuntimeContract(
-        strategy_id="session_continuation_15m_v1", timeframe="15m",
-        cost_family="swing", max_holding_bars=32,
+        strategy_id="session_continuation_15m_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=32,
         rationale="US-overlap continuation with an 8-hour evidence horizon",
     ),
     "liquidity_sweep_reversal_15m_v1": ScannerRuntimeContract(
-        strategy_id="liquidity_sweep_reversal_15m_v1", timeframe="15m",
-        cost_family="swing", max_holding_bars=32,
+        strategy_id="liquidity_sweep_reversal_15m_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=32,
         rationale="closed-bar sweep rejection with an 8-hour evidence horizon",
     ),
     "trend_pullback_1h_v1": ScannerRuntimeContract(
-        strategy_id="trend_pullback_1h_v1", timeframe="1h",
-        cost_family="swing", max_holding_bars=48,
+        strategy_id="trend_pullback_1h_v1",
+        timeframe="1h",
+        cost_family="swing",
+        max_holding_bars=48,
         rationale="one-hour trend pullback with a 48-hour evidence horizon",
     ),
     "trend_squeeze_continuation_1h_v1": ScannerRuntimeContract(
-        strategy_id="trend_squeeze_continuation_1h_v1", timeframe="1h",
-        cost_family="swing", max_holding_bars=12,
+        strategy_id="trend_squeeze_continuation_1h_v1",
+        timeframe="1h",
+        cost_family="swing",
+        max_holding_bars=12,
         rationale="one-hour squeeze release with a frozen 12-hour horizon",
     ),
     "tick_accepted_breakout_v1": ScannerRuntimeContract(
-        strategy_id="tick_accepted_breakout_v1", timeframe="5m",
-        cost_family="scalp", max_holding_bars=48,
+        strategy_id="tick_accepted_breakout_v1",
+        timeframe="5m",
+        cost_family="scalp",
+        max_holding_bars=48,
         rationale="tick-held acceptance after a closed-bar range arm",
         decision_engine="quote_acceptance_v1",
         exit_engine="scanner_exit_v1",
     ),
+    "range_expansion_realtime_v1": ScannerRuntimeContract(
+        strategy_id="range_expansion_realtime_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
+        rationale="closed-bar expansion context with quote-held breakout entry",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    ),
+    "structure_bos_realtime_v1": ScannerRuntimeContract(
+        strategy_id="structure_bos_realtime_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale="confirmed 1h/4h structure with quote-held level break",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    ),
+    "session_continuation_realtime_v1": ScannerRuntimeContract(
+        strategy_id="session_continuation_realtime_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=32,
+        rationale="closed-bar session setup with fill-time session and quote acceptance",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    ),
+    "htf_structure_continuation_realtime_v1": ScannerRuntimeContract(
+        strategy_id="htf_structure_continuation_realtime_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
+        rationale=("aligned 4h/1h direction with 15m pullback/reclaim and quote-held entry"),
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    ),
 }
 
-SCANNER_RUNTIME_CONTRACTS: Mapping[str, ScannerRuntimeContract] = MappingProxyType(
-    _CONTRACTS
-)
+SCANNER_RUNTIME_CONTRACTS: Mapping[str, ScannerRuntimeContract] = MappingProxyType(_CONTRACTS)
 
 
 def scanner_runtime_contract(strategy_id: str) -> ScannerRuntimeContract | None:
@@ -124,13 +170,15 @@ def resolve_scanner_cost_profile(
 ) -> str:
     """Combine strategy economics with the venue tariff family.
 
-    Delta's scalp profile includes the India GST/slippage assumptions.  Swing
-    currently has one conservative cross-venue profile; introducing a
-    venue-specific swing tariff requires a new CostModel profile and tests,
-    never an implicit string convention here.
+    Delta profiles include the India GST while preserving the strategy
+    family's execution assumptions. Venue selection is explicit here so a
+    Delta swing lane cannot silently inherit the untaxed cross-venue fallback.
     """
-    if contract.cost_family == "scalp" and "delta" in exchange_id.lower():
-        return "delta_scalp"
+    if "delta" in exchange_id.lower():
+        if contract.cost_family == "scalp":
+            return "delta_scalp"
+        if contract.cost_family == "swing":
+            return "delta_swing"
     return contract.cost_family
 
 

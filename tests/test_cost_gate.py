@@ -53,6 +53,22 @@ def test_delta_india_costs_more_than_binance():
     assert delta.cost.total_cost_bps > binance.cost.total_cost_bps   # 18% GST + thinner book
 
 
+def test_delta_swing_uses_gst_with_swing_execution_floor():
+    result = CostGate(CostProfile.DELTA_SWING).evaluate(
+        signal_edge_bps=100,
+        side="buy",
+        urgency="taker",
+        expected_holding_seconds=0,
+        current_funding_rate=0,
+        symbol="BTCUSD",
+    )
+    assert result.cost.fee_bps == Decimal("11.800")
+    assert result.cost.slippage_bps == Decimal("4.0")
+    # CostGate reports executable expected cost; the separate 3 bps plan
+    # reserve remains a promotion/plan margin, not a venue charge.
+    assert result.cost.total_cost_bps == Decimal("15.800")
+
+
 def test_result_is_frozen():
     r = _gate().evaluate(signal_edge_bps=1, side="buy", urgency="taker",
                          expected_holding_seconds=0, current_funding_rate=0, symbol="X")

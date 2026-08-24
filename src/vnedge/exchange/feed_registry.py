@@ -27,10 +27,13 @@ from collections.abc import Callable
 from datetime import datetime
 
 from vnedge.exchange.live_feed import (
+    QUOTE_ACCEPTANCE_BUFFER_SIZE,
     LiveMarketFeed,
     QuoteUpdate,
     RestPollingMarketFeed,
     create_market_feed,
+    quote_overflow_drops,
+    record_quote_overflow,
 )
 from vnedge.risk.risk_manager import MarketState
 
@@ -53,7 +56,9 @@ class SharedFeedView:
         self._registry = registry
         self._entry = entry
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
-        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
+            maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
+        )
         self.candles_closed = 0  # candles delivered to THIS view
         self._stopped = False
 
@@ -77,9 +82,16 @@ class SharedFeedView:
         if self.quote_updates.full():
             try:
                 self.quote_updates.get_nowait()
+                record_quote_overflow(self.quote_updates)
             except asyncio.QueueEmpty:  # pragma: no cover
                 pass
         self.quote_updates.put_nowait(quote)
+
+    @property
+    def quote_overflow_drops(self) -> int:
+        """Total source + per-lane quote evictions visible to this lane."""
+        source = quote_overflow_drops(self._feed.quote_updates)
+        return source + quote_overflow_drops(self.quote_updates)
 
     # --- shared read-through state --------------------------------------------------
     @property

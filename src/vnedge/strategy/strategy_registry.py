@@ -13,6 +13,7 @@ from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
+from vnedge.strategy.realtime_scanners import REALTIME_SCANNERS
 from vnedge.strategy.research_scanners import (
     NEW_RESEARCH_SCANNERS,
     SHADOW_RESEARCH_SCANNERS,
@@ -46,6 +47,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     SqueezeExpansionBreakoutV3.strategy_id: SqueezeExpansionBreakoutV3,
     SqueezeExpansionBreakoutV4.strategy_id: SqueezeExpansionBreakoutV4,
     **{strategy.strategy_id: strategy for strategy in NEW_RESEARCH_SCANNERS},
+    **{strategy.strategy_id: strategy for strategy in REALTIME_SCANNERS},
 }
 
 # Observation and pre-registered candidates are deliberately non-capital even
@@ -66,6 +68,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         SqueezeExpansionBreakoutV3.strategy_id,
         SqueezeExpansionBreakoutV4.strategy_id,
         *(strategy.strategy_id for strategy in NEW_RESEARCH_SCANNERS),
+        *(strategy.strategy_id for strategy in REALTIME_SCANNERS),
     }
 )
 
@@ -96,6 +99,7 @@ SHADOW_OBSERVE: frozenset[str] = frozenset(
         SqueezeExpansionBreakoutV3.strategy_id,
         SqueezeExpansionBreakoutV4.strategy_id,
         *(strategy.strategy_id for strategy in SHADOW_RESEARCH_SCANNERS),
+        *(strategy.strategy_id for strategy in REALTIME_SCANNERS),
     }
 )
 

@@ -444,16 +444,49 @@ def _cost_model_payload() -> dict:
     # never a number hardcoded in the UI.
     exchanges = []
     for name, prof in sorted(_registry.exchange_fees.items()):
-        exchanges.append({
-            "exchange": prof.exchange,
-            "label": _EXCHANGE_LABELS.get(prof.exchange, prof.exchange),
-            "maker_bps": prof.maker_bps,
-            "taker_bps": prof.taker_bps,
-            "slippage_bps": prof.slippage_bps,
-            "safety_buffer_bps": prof.safety_buffer_bps,
-            "maker_first_cost_bps": round(prof.maker_first_cost_bps, 2),
-            "taker_round_trip_cost_bps": round(prof.taker_round_trip_cost_bps, 2),
-        })
+        if name == "delta_india":
+            # The registry row is frozen historical research evidence and does
+            # not include India GST. The live cockpit must show the canonical
+            # active Delta profile used by CostGate and shadow accounting.
+            venue_model = CostModel.for_profile("delta_scalp")
+            venue_config = venue_model.config
+            exchanges.append(
+                {
+                    "exchange": prof.exchange,
+                    "label": _EXCHANGE_LABELS.get(prof.exchange, prof.exchange),
+                    "profile": venue_model.profile,
+                    "maker_bps": round(
+                        venue_config.maker_fee_bps * venue_config.fee_gst_mult, 3
+                    ),
+                    "taker_bps": round(
+                        venue_config.taker_fee_bps * venue_config.fee_gst_mult, 3
+                    ),
+                    "slippage_bps": (
+                        venue_config.default_slip_entry_bps
+                        + venue_config.default_slip_exit_bps
+                    ),
+                    "safety_buffer_bps": venue_config.safety_buffer_bps,
+                    "maker_first_cost_bps": round(
+                        venue_model.round_trip_bps(maker_entry=True), 2
+                    ),
+                    "taker_round_trip_cost_bps": round(
+                        venue_model.round_trip_bps(), 2
+                    ),
+                }
+            )
+            continue
+        exchanges.append(
+            {
+                "exchange": prof.exchange,
+                "label": _EXCHANGE_LABELS.get(prof.exchange, prof.exchange),
+                "maker_bps": prof.maker_bps,
+                "taker_bps": prof.taker_bps,
+                "slippage_bps": prof.slippage_bps,
+                "safety_buffer_bps": prof.safety_buffer_bps,
+                "maker_first_cost_bps": round(prof.maker_first_cost_bps, 2),
+                "taker_round_trip_cost_bps": round(prof.taker_round_trip_cost_bps, 2),
+            }
+        )
     return {
         "exchange": fee.exchange,
         "source": "vnedge.plan.cost_model canonical scalp profile",

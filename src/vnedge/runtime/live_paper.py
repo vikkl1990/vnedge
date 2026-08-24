@@ -31,6 +31,7 @@ import logging
 import math
 import os
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -42,6 +43,17 @@ from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
 from vnedge.data.candles import CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.time_machine import TimeMachine
+from vnedge.exchange.live_feed import (
+    QUOTE_ACCEPTANCE_BUFFER_SIZE,
+    QuoteUpdate,
+    quote_overflow_drops,
+)
+from vnedge.execution.exit_engine import (
+    ExitConfig as ScannerExitConfig,
+)
+from vnedge.execution.exit_engine import (
+    ExitEngine as ScannerExitEngine,
+)
 from vnedge.execution.idempotency import make_intent_key
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
@@ -103,9 +115,8 @@ logger = logging.getLogger(__name__)
 def _append_equity_history(path: str | Path, now: datetime, equity: float) -> None:
     """Append one equity sample without blocking the asyncio decision loop."""
     with Path(path).open("a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps({"ts": now.isoformat(), "equity": round(equity, 4)}) + "\n"
-        )
+        handle.write(json.dumps({"ts": now.isoformat(), "equity": round(equity, 4)}) + "\n")
+
 
 _EXIT_ACCEPTED_STATES = frozenset(
     {OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED, OrderState.FILLED}
@@ -256,20 +267,21 @@ class LivePaperSession:
         # and a wedged loop can leave a bar undelivered. Either would poison the
         # contiguous-index indicators. On a gap we heal (REST gap-fill) or fail
         # closed (reduce-only: block new entries, keep managing exits).
-        self._degraded_reason: str | None = None      # reduce-only while set
-        self._degraded_recoverable: bool = False       # stall clears on resume; a hole does not
-        self._recovery_bars_remaining = 0              # post-backfill clean-bar proof
-        self._last_bar_wall: datetime | None = None    # wall clock of last processed bar
-        self.gapped_candles = 0                        # time-gaps detected
-        self.gap_fills = 0                             # gaps healed by REST backfill
-        self.discontinuity_events = 0                  # large open≠prev-close jumps (soft)
-        self.future_candles = 0                        # bar claims to close in the future (skew/convention)
+        self._degraded_reason: str | None = None  # reduce-only while set
+        self._degraded_recoverable: bool = False  # stall clears on resume; a hole does not
+        self._recovery_bars_remaining = 0  # post-backfill clean-bar proof
+        self._last_bar_wall: datetime | None = None  # wall clock of last processed bar
+        self.gapped_candles = 0  # time-gaps detected
+        self.gap_fills = 0  # gaps healed by REST backfill
+        self.discontinuity_events = 0  # large open≠prev-close jumps (soft)
+        self.future_candles = 0  # bar claims to close in the future (skew/convention)
         # Time Machine (read-only observability) — multi-TF forming+closed
         # awareness for this lane's timeframe. FAIL-CLOSED: any error updating it
         # is swallowed and never touches the decision/execution path.
         self.time_machine: TimeMachine | None = (
             TimeMachine([config.symbol], [config.timeframe])
-            if config.timeframe in {"1m", "5m", "15m", "1h", "4h"} else None
+            if config.timeframe in {"1m", "5m", "15m", "1h", "4h"}
+            else None
         )
         self._tm_degraded = False
         # candle-path arm-gate skip counter, keyed by coarse reason
@@ -301,7 +313,7 @@ class LivePaperSession:
         elif tf in {"1m", "5m", "15m"}:
             self.cost_profile = "delta_scalp" if "delta" in ex.lower() else "scalp"
         else:
-            self.cost_profile = "swing"
+            self.cost_profile = "delta_swing" if "delta" in ex.lower() else "swing"
         self.cost_model = CostModel.for_profile(self.cost_profile)
         self.entry_cost_gate = CostGate(CostProfile(self.cost_profile))
         self._regime_model = RegimeV0()
@@ -309,7 +321,7 @@ class LivePaperSession:
         self._overlay_plan: dict | None = None
         self._regime_would_block = 0
         self._plan_gate_rejects = 0
-        self._trail_atr_faults = 0     # ATR-compute faults that silently disabled the trail
+        self._trail_atr_faults = 0  # ATR-compute faults that silently disabled the trail
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
         self.reconciler = PaperReconciler(order_manager, exchange)
         # The first canonical scanner runtime. It deliberately exists only in
@@ -317,55 +329,71 @@ class LivePaperSession:
         # authority, but their trigger/exit/cost lifecycle now uses the same
         # engines and fee model as replay instead of the legacy fixed-TP
         # SignalIntent path.
-        self.scanner_observer: (
-            SqueezeObserveRunner | SqueezeAcceptanceObserveRunner | None
-        ) = (
+        quote_acceptance = bool(
+            (
+                runtime_contract is not None
+                and runtime_contract.decision_engine.startswith("quote_acceptance")
+            )
+            or strategy.strategy_id
+            in {
+                "squeeze_expansion_breakout_v3",
+                "squeeze_expansion_breakout_v4",
+                "tick_accepted_breakout_v1",
+            }
+        )
+        acceptance_config = getattr(strategy, "acceptance_params", None)
+        if not isinstance(acceptance_config, SqueezeExpansionV3Params):
+            acceptance_config = (
+                SqueezeExpansionV3Params(
+                    acceptance_hold_seconds=3.0,
+                    min_acceptance_samples=3,
+                    break_buffer_bps=0.0,
+                )
+                if strategy.strategy_id == "tick_accepted_breakout_v1"
+                else SqueezeExpansionV3Params()
+            )
+        scanner_exit_config = ScannerExitConfig(
+            absolute_max_bars=(runtime_contract.max_holding_bars if runtime_contract else 48),
+            max_age_bars=(runtime_contract.max_holding_bars if runtime_contract else 48),
+            failed_breakout=bool(getattr(strategy, "realtime_failed_breakout", True)),
+            breakeven_arm_r=float(getattr(strategy, "realtime_breakeven_arm_r", 1.0)),
+            trail_arm_r=float(getattr(strategy, "realtime_trail_arm_r", 2.0)),
+            trail_atr_mult=float(getattr(strategy, "realtime_trail_atr_mult", 1.0)),
+            tp_ladder=(
+                ((float(getattr(strategy, "realtime_reward_r", 2.0)), 1.0),)
+                if bool(getattr(strategy, "realtime_fixed_target", False))
+                else ()
+            ),
+        )
+        self.scanner_observer: SqueezeObserveRunner | SqueezeAcceptanceObserveRunner | None = (
             (
                 SqueezeAcceptanceObserveRunner(
                     journal=journal,
                     symbol=config.symbol,
                     strategy_id=strategy.strategy_id,
-                    acceptance=(
-                        ExpansionAcceptanceEngine(
-                            config=SqueezeExpansionV3Params(
-                                acceptance_hold_seconds=3.0,
-                                min_acceptance_samples=3,
-                                # Levels are already buffered by the strategy.
-                                break_buffer_bps=0.0,
-                            )
-                        )
-                        if strategy.strategy_id == "tick_accepted_breakout_v1"
-                        else ExpansionAcceptanceEngine()
-                    ),
+                    strategy=strategy,
+                    acceptance=ExpansionAcceptanceEngine(config=acceptance_config),
+                    exits=ScannerExitEngine(config=scanner_exit_config),
                     approve_fire=self._approve_scanner_fire,
                     costs=SessionCosts.from_profile(
                         self.cost_profile,
                         bar_minutes=(self._tf_seconds or 300) / 60.0,
                     ),
                 )
-                if strategy.strategy_id in {
-                    "squeeze_expansion_breakout_v3",
-                    "squeeze_expansion_breakout_v4",
-                    "tick_accepted_breakout_v1",
-                }
+                if quote_acceptance
                 else SqueezeObserveRunner(
-                journal=journal,
-                symbol=config.symbol,
-                approve_fire=self._approve_scanner_fire,
-                costs=SessionCosts.from_profile(
-                    self.cost_profile,
-                    bar_minutes=(self._tf_seconds or 300) / 60.0,
-                ),
+                    journal=journal,
+                    symbol=config.symbol,
+                    approve_fire=self._approve_scanner_fire,
+                    costs=SessionCosts.from_profile(
+                        self.cost_profile,
+                        bar_minutes=(self._tf_seconds or 300) / 60.0,
+                    ),
                 )
             )
             if (
                 config.mode is RunnerMode.SHADOW
-                and strategy.strategy_id in {
-                    "squeeze_expansion_breakout_v2",
-                    "squeeze_expansion_breakout_v3",
-                    "squeeze_expansion_breakout_v4",
-                    "tick_accepted_breakout_v1",
-                }
+                and (quote_acceptance or strategy.strategy_id == "squeeze_expansion_breakout_v2")
             )
             else None
         )
@@ -403,7 +431,6 @@ class LivePaperSession:
         self.last_reject_reason: str | None = None
         # chronological trade narrative for the dashboard journal panel:
         # fired signals, gateway verdicts, submissions, fills, exits
-        from collections import deque
         self.trade_log: deque = deque(maxlen=40)
         self._plan: _LivePlan | None = None
         # A maker-routed entry resting as a limit (touch-to-fill), if any. It is
@@ -428,6 +455,13 @@ class LivePaperSession:
         self._factory_day = session_day(self._started_at, self.config.daily_factory)
         self._factory_entries_today = 0
         self._factory_flatten_sent = False
+        # Quotes consumed in the same wait batch as a candle are held until
+        # that candle has updated/invalidated the arm. This makes the tie-break
+        # deterministic: CandleClose -> Quote, never a silently lost quote.
+        self._deferred_quote_updates: deque[QuoteUpdate] = deque(
+            maxlen=QUOTE_ACCEPTANCE_BUFFER_SIZE
+        )
+        self._deferred_quote_overflow_drops = 0
 
     # --- Internals ---------------------------------------------------------------
     def _sync_quote(self) -> bool:
@@ -436,6 +470,99 @@ class LivePaperSession:
         bid, ask = self.feed.quote
         self.exchange.set_quote(self.config.symbol, bid, ask)
         return True
+
+    def _defer_quote(self, quote: QuoteUpdate) -> None:
+        if len(self._deferred_quote_updates) == self._deferred_quote_updates.maxlen:
+            self._deferred_quote_updates.popleft()
+            self._deferred_quote_overflow_drops += 1
+        self._deferred_quote_updates.append(quote)
+
+    def _discard_deferred_quotes(self, reason: str) -> None:
+        """Discard quotes whose preceding candle transition failed closed.
+
+        Applying them after a later candle would assign evidence to the wrong
+        arm. The discard is durable and explicit; it is not reported as queue
+        overflow because the cause is a rejected candle contract.
+        """
+        count = len(self._deferred_quote_updates)
+        if count == 0:
+            return
+        self._deferred_quote_updates.clear()
+        self.journal.append(
+            "scanner_quote_drop",
+            {
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "timeframe": self.config.timeframe,
+                "reason": reason,
+                "quotes_dropped": count,
+                "decision_blocked": True,
+            },
+        )
+
+    def _quote_overflow_total(self, queue: asyncio.Queue[QuoteUpdate]) -> int:
+        reported = getattr(self.feed, "quote_overflow_drops", None)
+        source = int(reported) if isinstance(reported, int) else quote_overflow_drops(queue)
+        return source + self._deferred_quote_overflow_drops
+
+    def _drain_quote_batch(
+        self,
+        queue: asyncio.Queue[QuoteUpdate],
+        first: QuoteUpdate | None = None,
+        *,
+        include_deferred: bool = False,
+    ) -> list[QuoteUpdate]:
+        updates: list[QuoteUpdate] = []
+        if include_deferred:
+            updates.extend(self._deferred_quote_updates)
+            self._deferred_quote_updates.clear()
+        if first is not None:
+            updates.append(first)
+        while True:
+            try:
+                updates.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        # Python's sort is stable. Receive time preserves ingress order for
+        # equal event timestamps; sequence validation remains in the engine.
+        return sorted(updates, key=lambda item: (item.ts, item.received_ts or item.ts))
+
+    def _handle_quote_batch(
+        self,
+        observer: SqueezeAcceptanceObserveRunner,
+        queue: asyncio.Queue[QuoteUpdate],
+        updates: list[QuoteUpdate],
+    ) -> None:
+        if not updates:
+            return
+        overflow_drops = self._quote_overflow_total(queue)
+        for update in updates:
+            # The simulated executable quote follows the exact observation
+            # being evaluated, not a newer shared-feed value.
+            self.exchange.set_quote(self.config.symbol, update.bid, update.ask)
+            quote_clock = update.received_ts or update.ts
+            self._feed_time_machine(
+                quote_clock,
+                live_mid=(update.bid + update.ask) / 2.0,
+            )
+            before_candidates = observer.candidates
+            before_approved = observer.fires
+            before_rejected = observer.rejected
+            observer.on_quote(
+                bid=update.bid,
+                ask=update.ask,
+                ts=update.ts,
+                received_ts=update.received_ts,
+                sequence=update.sequence,
+                source=update.source,
+                exchange_timestamped=update.exchange_timestamped,
+                overflow_drops=overflow_drops,
+            )
+            self.signals += observer.candidates - before_candidates
+            self.shadow_approved += observer.fires - before_approved
+            self.shadow_rejected += observer.rejected - before_rejected
+            self._record_runner_heartbeat("quote_acceptance", update.ts)
+        self._publish_snapshot()
 
     def _market_state(self) -> MarketState:
         """Feed state plus this lane's candle-continuity truth.
@@ -471,8 +598,10 @@ class LivePaperSession:
         self._refresh_canonical_tail()
         row: dict[str, object] = {
             "timestamp": ts,
-            "open": float(raw_row[1]), "high": float(raw_row[2]),
-            "low": float(raw_row[3]), "close": float(raw_row[4]),
+            "open": float(raw_row[1]),
+            "high": float(raw_row[2]),
+            "low": float(raw_row[3]),
+            "close": float(raw_row[4]),
             "volume": float(raw_row[5]),
         }
         if self.canonical_candle_store is not None:
@@ -499,9 +628,7 @@ class LivePaperSession:
                         "trade_count": canonical.trade_count,
                         "taker_buy_volume": float(canonical.taker_buy_volume),
                         "vwap": (
-                            float(canonical.vwap)
-                            if canonical.vwap is not None
-                            else float("nan")
+                            float(canonical.vwap) if canonical.vwap is not None else float("nan")
                         ),
                         "data_quality": "ok",
                         "is_closed": True,
@@ -534,9 +661,7 @@ class LivePaperSession:
                 self.dropped_candles += 1
                 logger.warning("dropped non-forward candle %s", ts)
                 return False
-        self.candles = pd.concat(
-            [self.candles, pd.DataFrame([row])], ignore_index=True
-        )
+        self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
         return True
 
     async def _await_canonical_candle(self, raw_row: list) -> bool:
@@ -598,9 +723,7 @@ class LivePaperSession:
         if source is None:
             candidates = self.candles.index
         else:
-            candidates = self.candles.index[
-                source.fillna("exchange_ohlcv").eq("exchange_ohlcv")
-            ]
+            candidates = self.candles.index[source.fillna("exchange_ohlcv").eq("exchange_ohlcv")]
         if len(candidates) == 0:
             return
 
@@ -644,11 +767,7 @@ class LivePaperSession:
                 "quote_volume": float(canonical.quote_volume),
                 "trade_count": canonical.trade_count,
                 "taker_buy_volume": float(canonical.taker_buy_volume),
-                "vwap": (
-                    float(canonical.vwap)
-                    if canonical.vwap is not None
-                    else float("nan")
-                ),
+                "vwap": (float(canonical.vwap) if canonical.vwap is not None else float("nan")),
                 "data_quality": "ok",
                 "is_closed": True,
                 "timeframe": self.config.timeframe,
@@ -686,18 +805,32 @@ class LivePaperSession:
         if not recoverable:
             self._recovery_bars_remaining = 0
         logger.error("lane %s DEGRADED → reduce-only: %s", self.config.symbol, reason)
-        self.journal.append("lane_degraded", {
-            "symbol": self.config.symbol, "reason": reason, "recoverable": recoverable,
-        })
+        self.journal.append(
+            "lane_degraded",
+            {
+                "symbol": self.config.symbol,
+                "reason": reason,
+                "recoverable": recoverable,
+            },
+        )
 
     def _clear_degraded(self, note: str) -> None:
         if self._degraded_reason is None:
             return
-        logger.info("lane %s recovered from reduce-only (%s → %s)",
-                    self.config.symbol, self._degraded_reason, note)
-        self.journal.append("lane_recovered", {
-            "symbol": self.config.symbol, "was": self._degraded_reason, "note": note,
-        })
+        logger.info(
+            "lane %s recovered from reduce-only (%s → %s)",
+            self.config.symbol,
+            self._degraded_reason,
+            note,
+        )
+        self.journal.append(
+            "lane_recovered",
+            {
+                "symbol": self.config.symbol,
+                "was": self._degraded_reason,
+                "note": note,
+            },
+        )
         self._degraded_reason = None
         self._degraded_recoverable = False
         self._recovery_bars_remaining = 0
@@ -748,15 +881,17 @@ class LivePaperSession:
                 incoming_ms + self._tf_ms, unit="ms", utc=True
             ).to_pydatetime()
             detail = f"candle close {claimed_close.isoformat()} is ahead of wall clock"
-            self._persist_gap(GapRecord(
-                self.config.symbol,
-                getattr(self.feed, "exchange_id", "unknown"),
-                GapKind.CLOCK_SKEW,
-                now,
-                claimed_close,
-                now,
-                detail,
-            ))
+            self._persist_gap(
+                GapRecord(
+                    self.config.symbol,
+                    getattr(self.feed, "exchange_id", "unknown"),
+                    GapKind.CLOCK_SKEW,
+                    now,
+                    claimed_close,
+                    now,
+                    detail,
+                )
+            )
             self._enter_degraded("future_candle:clock_skew", recoverable=False)
             logger.error("%s; candle withheld", detail)
             return False
@@ -764,16 +899,20 @@ class LivePaperSession:
         if last_ms is not None and incoming_ms < last_ms:
             incoming = pd.to_datetime(incoming_ms, unit="ms", utc=True).to_pydatetime()
             previous = pd.to_datetime(last_ms, unit="ms", utc=True).to_pydatetime()
-            detail = f"closed candle moved backward: {incoming.isoformat()} < {previous.isoformat()}"
-            self._persist_gap(GapRecord(
-                self.config.symbol,
-                getattr(self.feed, "exchange_id", "unknown"),
-                GapKind.OUT_OF_ORDER,
-                incoming,
-                previous,
-                now,
-                detail,
-            ))
+            detail = (
+                f"closed candle moved backward: {incoming.isoformat()} < {previous.isoformat()}"
+            )
+            self._persist_gap(
+                GapRecord(
+                    self.config.symbol,
+                    getattr(self.feed, "exchange_id", "unknown"),
+                    GapKind.OUT_OF_ORDER,
+                    incoming,
+                    previous,
+                    now,
+                    detail,
+                )
+            )
             self._enter_degraded("out_of_order_candle", recoverable=False)
             logger.error("%s; candle withheld", detail)
             return False
@@ -793,9 +932,7 @@ class LivePaperSession:
             return True
         self.gapped_candles += 1
         assert last_ms is not None and self._tf_ms is not None
-        gap_start = pd.to_datetime(
-            last_ms + self._tf_ms, unit="ms", utc=True
-        ).to_pydatetime()
+        gap_start = pd.to_datetime(last_ms + self._tf_ms, unit="ms", utc=True).to_pydatetime()
         gap_end = pd.to_datetime(incoming_ms, unit="ms", utc=True).to_pydatetime()
         gap_record = GapRecord(
             self.config.symbol,
@@ -807,30 +944,31 @@ class LivePaperSession:
             f"missing {gap} closed {self.config.timeframe} bar(s)",
         )
         self._persist_gap(gap_record)
-        logger.error("feed gap: %d missing %s bar(s) before %s",
-                     gap, self.config.timeframe, raw_row[0])
+        logger.error(
+            "feed gap: %d missing %s bar(s) before %s", gap, self.config.timeframe, raw_row[0]
+        )
         if gap > self._MAX_GAP_FILL_BARS:
             self._enter_degraded(f"feed_gap:{gap}_bars_too_large", recoverable=False)
         else:
             filled = await self._gap_fill(last_ms + self._tf_ms, incoming_ms)
             expected = set(range(last_ms + self._tf_ms, incoming_ms, self._tf_ms))
-            by_open = {
-                int(row[0]): row
-                for row in (filled or [])
-                if int(row[0]) in expected
-            }
+            by_open = {int(row[0]): row for row in (filled or []) if int(row[0]) in expected}
             if set(by_open) == expected:
-                added = sum(
-                    1 for ts in sorted(by_open) if self._append_candle(by_open[ts])
-                )
+                added = sum(1 for ts in sorted(by_open) if self._append_candle(by_open[ts]))
                 self.gap_fills += 1
-                logger.info("gap healed: backfilled %d/%d %s bar(s) via REST",
-                            added, gap, self.config.timeframe)
-                self._persist_gap(replace(
-                    gap_record,
-                    recovered=True,
-                    detail=f"{gap_record.detail}; REST backfill proved continuity",
-                ))
+                logger.info(
+                    "gap healed: backfilled %d/%d %s bar(s) via REST",
+                    added,
+                    gap,
+                    self.config.timeframe,
+                )
+                self._persist_gap(
+                    replace(
+                        gap_record,
+                        recovered=True,
+                        detail=f"{gap_record.detail}; REST backfill proved continuity",
+                    )
+                )
                 # The incoming bar counts as the first clean bar. Keep entries
                 # blocked until one subsequent contiguous close confirms the
                 # recovered stream did not immediately break again.
@@ -838,15 +976,17 @@ class LivePaperSession:
                 self._recovery_bars_remaining = 1
             else:
                 missing = len(expected - set(by_open))
-                self._persist_gap(GapRecord(
-                    self.config.symbol,
-                    getattr(self.feed, "exchange_id", "unknown"),
-                    GapKind.BACKFILL_FAIL,
-                    gap_start,
-                    gap_end,
-                    now,
-                    f"REST backfill missing {missing}/{gap} expected bar(s)",
-                ))
+                self._persist_gap(
+                    GapRecord(
+                        self.config.symbol,
+                        getattr(self.feed, "exchange_id", "unknown"),
+                        GapKind.BACKFILL_FAIL,
+                        gap_start,
+                        gap_end,
+                        now,
+                        f"REST backfill missing {missing}/{gap} expected bar(s)",
+                    )
+                )
                 self._enter_degraded(f"feed_gap:{gap}_bars_unfilled", recoverable=False)
         self._flag_discontinuity(raw_row)
         return True
@@ -855,8 +995,12 @@ class LivePaperSession:
     def _tm_kline(self, row: list, now: datetime) -> dict:
         ts = pd.to_datetime(int(row[0]), unit="ms", utc=True).to_pydatetime()
         return {
-            "open_time": ts, "open": float(row[1]), "high": float(row[2]),
-            "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
+            "open_time": ts,
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
             "exchange_ts": now,
         }
 
@@ -877,7 +1021,9 @@ class LivePaperSession:
         try:
             sym, tf = self.config.symbol, self.config.timeframe
             if closed_row is not None:
-                self.time_machine.on_kline_update(sym, tf, self._tm_kline(closed_row, now), is_closed=True)
+                self.time_machine.on_kline_update(
+                    sym, tf, self._tm_kline(closed_row, now), is_closed=True
+                )
             forming = getattr(self.feed, "forming_candle", None)
             if forming:
                 forming_row = list(forming)
@@ -925,9 +1071,7 @@ class LivePaperSession:
         prerequisite_path = os.environ.get("SCANNER_PREREQ_HEALTH_PATH", "").strip()
         if prerequisite_path:
             try:
-                prerequisite = json.loads(
-                    Path(prerequisite_path).read_text(encoding="utf-8")
-                )
+                prerequisite = json.loads(Path(prerequisite_path).read_text(encoding="utf-8"))
                 status = str(prerequisite.get("status") or "unknown")
                 if status != "ready" or prerequisite.get("arms_allowed") is not True:
                     return f"scanner_prerequisite_{status}"
@@ -941,12 +1085,10 @@ class LivePaperSession:
         # immature samples remain visible to operators without halting arms.
         latency = getattr(self, "latency", None)
         if latency is not None:
-            decision_soft, decision_hard, decision_recovery = (
-                LT.decision_compute_limits(self.config.timeframe)
+            decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
+                self.config.timeframe
             )
-            bar_stats = latency.stats(BAR_CLOSE_PROCESSING_MS) or latency.stats(
-                "feed_lag_ms"
-            )
+            bar_stats = latency.stats(BAR_CLOSE_PROCESSING_MS) or latency.stats("feed_lag_ms")
             if LT.blocks_new_arms(
                 LT.classify_latency_stats(
                     bar_stats,
@@ -988,12 +1130,10 @@ class LivePaperSession:
 
     def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
         """Operator-visible proof behind automatic latency recovery."""
-        decision_soft, decision_hard, decision_recovery = (
-            LT.decision_compute_limits(self.config.timeframe)
+        decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
+            self.config.timeframe
         )
-        bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats(
-            "feed_lag_ms"
-        )
+        bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats("feed_lag_ms")
         return {
             "bar_close_processing_ms": LT.latency_recovery_state(
                 bar_stats,
@@ -1016,7 +1156,7 @@ class LivePaperSession:
         swallowed so an overlay bug can never touch trading."""
         try:
             row = df.iloc[idx]
-            reading = self._regime_model.read_row(row)   # reads regime cols already on df
+            reading = self._regime_model.read_row(row)  # reads regime cols already on df
             self._overlay_regime = reading.to_dict()
             if sig is None:
                 self._overlay_plan = None
@@ -1026,7 +1166,9 @@ class LivePaperSession:
                 self._regime_would_block += 1
             ref = float(row["close"])
             plan = signal_intent_to_plan(
-                sig, ref, self.cost_model,
+                sig,
+                ref,
+                self.cost_model,
                 decision_tf=self.config.timeframe,
                 time_stop_bars=self.config.max_holding_bars,
                 source=self.strategy.strategy_id,
@@ -1038,13 +1180,16 @@ class LivePaperSession:
             if not ok:
                 self._plan_gate_rejects += 1
             self._overlay_plan = {
-                "side": plan.side, "profile": self.cost_model.profile,
+                "side": plan.side,
+                "profile": self.cost_model.profile,
                 "stop_bps": round(plan.risk.stop_bps, 1),
                 "tp1_bps": round(plan.tp1_bps, 1),
                 "expected_net_bps": round(plan.ai.expected_net_bps, 1),
                 "round_trip_bps": round(plan.costs.round_trip_bps, 1),
-                "gate_ok": ok, "gate_reasons": reasons,
-                "regime_allows": allowed, "regime_label": reading.label,
+                "gate_ok": ok,
+                "gate_reasons": reasons,
+                "regime_allows": allowed,
+                "regime_label": reading.label,
             }
         except Exception as exc:  # noqa: BLE001 — observability must never affect trading
             logger.debug("overlay recording failed (observability only): %s", exc)
@@ -1058,7 +1203,7 @@ class LivePaperSession:
 
     def _trial_days_elapsed(self, t: dict) -> int | None:
         started = t.get("started")
-        if not started:                                   # fall back to trailing YYYYMMDD in the id
+        if not started:  # fall back to trailing YYYYMMDD in the id
             tail = str(t.get("trial_id") or "")[-8:]
             started = f"{tail[:4]}-{tail[4:6]}-{tail[6:]}" if tail.isdigit() else None
         if not started:
@@ -1078,15 +1223,36 @@ class LivePaperSession:
         crit: list[dict] = []
 
         def add(name, value, threshold, ok, hard, unit=""):
-            crit.append({"name": name, "value": value, "threshold": threshold,
-                         "ok": bool(ok), "hard": hard, "unit": unit})
+            crit.append(
+                {
+                    "name": name,
+                    "value": value,
+                    "threshold": threshold,
+                    "ok": bool(ok),
+                    "hard": hard,
+                    "unit": unit,
+                }
+            )
 
         dd = self._drawdown_pct()
         max_dd = t.get("max_dd_pct")
-        add("max_drawdown", round(dd, 2), max_dd, (dd <= max_dd) if max_dd is not None else True, True, "%")
+        add(
+            "max_drawdown",
+            round(dd, 2),
+            max_dd,
+            (dd <= max_dd) if max_dd is not None else True,
+            True,
+            "%",
+        )
         trades = (self.fill_ledger.records // 2) if self.fill_ledger is not None else 0
         min_trades = t.get("min_trades")
-        add("min_trades", trades, min_trades, (trades >= min_trades) if min_trades is not None else True, False)
+        add(
+            "min_trades",
+            trades,
+            min_trades,
+            (trades >= min_trades) if min_trades is not None else True,
+            False,
+        )
         days = self._trial_days_elapsed(t)
         min_days = t.get("min_days")
         if days is not None and min_days is not None:
@@ -1102,9 +1268,13 @@ class LivePaperSession:
         return {"trial_id": t.get("trial_id"), "verdict": verdict, "criteria": crit}
 
     def _log_trade_event(self, event: str, detail: str, now: datetime) -> None:
-        self.trade_log.append({
-            "ts": now.isoformat(), "event": event, "detail": detail,
-        })
+        self.trade_log.append(
+            {
+                "ts": now.isoformat(),
+                "event": event,
+                "detail": detail,
+            }
+        )
 
     def _mode_label(self) -> str:
         if self.config.mode is RunnerMode.SHADOW:
@@ -1115,9 +1285,9 @@ class LivePaperSession:
     # Bars a maker entry limit rests before it is cancelled (touch-to-fill TTL).
     _MAKER_ENTRY_TTL_BARS = 2
     # Feed-continuity guard tuning:
-    _STALL_BARS = 2.5           # no closed bar in > this × timeframe ⇒ feed stalled
-    _MAX_GAP_FILL_BARS = 240    # gaps larger than this fail closed instead of backfilling
-    _CONTINUITY_TOL = 0.01      # |open−prev_close|/prev_close above this is logged (soft)
+    _STALL_BARS = 2.5  # no closed bar in > this × timeframe ⇒ feed stalled
+    _MAX_GAP_FILL_BARS = 240  # gaps larger than this fail closed instead of backfilling
+    _CONTINUITY_TOL = 0.01  # |open−prev_close|/prev_close above this is logged (soft)
 
     def _why_no_trade(self, reason: str) -> str:
         if self._plan is not None:
@@ -1139,9 +1309,7 @@ class LivePaperSession:
             return "last_eval_no_signal"
         return reason
 
-    def _record_runner_heartbeat(
-        self, reason: str, now: datetime, *, force: bool = False
-    ) -> None:
+    def _record_runner_heartbeat(self, reason: str, now: datetime, *, force: bool = False) -> None:
         if (
             not force
             and self._last_heartbeat_at is not None
@@ -1152,47 +1320,50 @@ class LivePaperSession:
         last_bar_ts = None
         if len(self.candles):
             last_bar_ts = self.candles["timestamp"].iloc[-1].isoformat()
-        self.journal.append("paper_lane_heartbeat", {
-            "reason": reason,
-            "why_no_trade": self._why_no_trade(reason),
-            "started_at": self._started_at.isoformat(),
-            "strategy_id": self.strategy.strategy_id,
-            "exchange": getattr(self.feed, "exchange_id", ""),
-            "symbol": self.config.symbol,
-            "timeframe": self.config.timeframe,
-            "mode": self.config.mode.value,
-            "runner_state": "in_position" if self._plan is not None else "waiting",
-            "bars_processed": self.bars_processed,
-            "evals": self.evals,
-            "live_evals": self.live_evals,
-            "backfill_evals": self.backfill_evals,
-            "signals": self.signals,
-            "live_signals": self.live_signals,
-            "backfill_signals": self.backfill_signals,
-            "orders_submitted": self.orders_submitted,
-            "risk_rejects": self.risk_rejects,
-            "sizing_skips": self.sizing_skips,
-            "shadow_approved": self.shadow_approved,
-            "shadow_rejected": self.shadow_rejected,
-            "recon_mismatches": self.recon_mismatches,
-            "dropped_candles": self.dropped_candles,
-            # feed-continuity guard: reduce-only reason (or None) + counters
-            "degraded": self._degraded_reason,
-            "gapped_candles": self.gapped_candles,
-            "gap_fills": self.gap_fills,
-            "discontinuity_events": self.discontinuity_events,
-            "future_candles": self.future_candles,
-            "quote_seen": self.feed.quote is not None,
-            "feed_staleness_seconds": float(self.feed.staleness_seconds()),
-            # candle->signal pipeline latency (offline trail for the dashboard)
-            "latency": self.latency.snapshot(),
-            "latency_recovery": self._latency_recovery_snapshot(),
-            "last_bar_ts": last_bar_ts,
-            "last_eval": self.last_eval,
-            "trial_id": (self.trial_meta or {}).get("trial_id"),
-            "journal_path": str(self.journal.path),
-            "daily_factory": self._daily_factory_payload(now),
-        })
+        self.journal.append(
+            "paper_lane_heartbeat",
+            {
+                "reason": reason,
+                "why_no_trade": self._why_no_trade(reason),
+                "started_at": self._started_at.isoformat(),
+                "strategy_id": self.strategy.strategy_id,
+                "exchange": getattr(self.feed, "exchange_id", ""),
+                "symbol": self.config.symbol,
+                "timeframe": self.config.timeframe,
+                "mode": self.config.mode.value,
+                "runner_state": "in_position" if self._plan is not None else "waiting",
+                "bars_processed": self.bars_processed,
+                "evals": self.evals,
+                "live_evals": self.live_evals,
+                "backfill_evals": self.backfill_evals,
+                "signals": self.signals,
+                "live_signals": self.live_signals,
+                "backfill_signals": self.backfill_signals,
+                "orders_submitted": self.orders_submitted,
+                "risk_rejects": self.risk_rejects,
+                "sizing_skips": self.sizing_skips,
+                "shadow_approved": self.shadow_approved,
+                "shadow_rejected": self.shadow_rejected,
+                "recon_mismatches": self.recon_mismatches,
+                "dropped_candles": self.dropped_candles,
+                # feed-continuity guard: reduce-only reason (or None) + counters
+                "degraded": self._degraded_reason,
+                "gapped_candles": self.gapped_candles,
+                "gap_fills": self.gap_fills,
+                "discontinuity_events": self.discontinuity_events,
+                "future_candles": self.future_candles,
+                "quote_seen": self.feed.quote is not None,
+                "feed_staleness_seconds": float(self.feed.staleness_seconds()),
+                # candle->signal pipeline latency (offline trail for the dashboard)
+                "latency": self.latency.snapshot(),
+                "latency_recovery": self._latency_recovery_snapshot(),
+                "last_bar_ts": last_bar_ts,
+                "last_eval": self.last_eval,
+                "trial_id": (self.trial_meta or {}).get("trial_id"),
+                "journal_path": str(self.journal.path),
+                "daily_factory": self._daily_factory_payload(now),
+            },
+        )
 
     def _roll_daily_factory(self, clock: datetime) -> None:
         if not self.config.daily_factory.enabled:
@@ -1203,13 +1374,16 @@ class LivePaperSession:
         self._factory_day = day
         self._factory_entries_today = 0
         self._factory_flatten_sent = False
-        self.journal.append("daily_factory_day_started", {
-            "day": str(day),
-            "timezone": self.config.daily_factory.session_timezone,
-            "strategy_id": self.strategy.strategy_id,
-            "symbol": self.config.symbol,
-            "mode": self.config.mode.value,
-        })
+        self.journal.append(
+            "daily_factory_day_started",
+            {
+                "day": str(day),
+                "timezone": self.config.daily_factory.session_timezone,
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "mode": self.config.mode.value,
+            },
+        )
 
     def _daily_factory_payload(self, clock: datetime) -> dict:
         cfg = self.config.daily_factory
@@ -1272,7 +1446,7 @@ class LivePaperSession:
         try:
             series = _atr_indicator(self.candles, self.config.trail_atr_window)
         except Exception:  # noqa: BLE001 - trailing must never break the exit loop
-            self._trail_atr_faults += 1     # surfaced in the snapshot so a stuck trail is visible
+            self._trail_atr_faults += 1  # surfaced in the snapshot so a stuck trail is visible
             return 0.0
         value = float(series.iloc[-1])
         return value if math.isfinite(value) else 0.0
@@ -1367,10 +1541,13 @@ class LivePaperSession:
         ]
         if not favorable:
             self.last_reject_reason = "cost_gate: no favorable target/edge hypothesis"
-            self.journal.append("cost_rejected", {
-                **scanner_context,
-                "reason": self.last_reject_reason,
-            })
+            self.journal.append(
+                "cost_rejected",
+                {
+                    **scanner_context,
+                    "reason": self.last_reject_reason,
+                },
+            )
             self._log_trade_event("cost_rejected", self.last_reject_reason, now)
             return
         target = max(favorable) if sig.side == "long" else min(favorable)
@@ -1379,9 +1556,8 @@ class LivePaperSession:
             if sig.side == "long"
             else (ref_price - target) / ref_price * 10_000.0
         )
-        maker = (
-            self.config.mode is not RunnerMode.SHADOW
-            and is_maker_route_strategy(self.strategy.strategy_id)
+        maker = self.config.mode is not RunnerMode.SHADOW and is_maker_route_strategy(
+            self.strategy.strategy_id
         )
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
@@ -1396,20 +1572,26 @@ class LivePaperSession:
         )
         if not cost_decision.approved:
             self.last_reject_reason = f"cost_gate: {cost_decision.reason}"
-            self.journal.append("cost_rejected", {
-                **scanner_context,
-                "signal_edge_bps": signal_edge_bps,
-                "expected_net_bps": str(cost_decision.expected_net_bps),
-                "total_cost_bps": str(cost_decision.cost.total_cost_bps),
-                "min_required_bps": str(cost_decision.min_required_bps),
-                "reason": cost_decision.reason,
-            })
+            self.journal.append(
+                "cost_rejected",
+                {
+                    **scanner_context,
+                    "signal_edge_bps": signal_edge_bps,
+                    "expected_net_bps": str(cost_decision.expected_net_bps),
+                    "total_cost_bps": str(cost_decision.cost.total_cost_bps),
+                    "min_required_bps": str(cost_decision.min_required_bps),
+                    "reason": cost_decision.reason,
+                },
+            )
             self._log_trade_event("cost_rejected", self.last_reject_reason, now)
             return
         sizing = size_position(
-            equity_usd=self.tracker.equity_usd(), entry_price=ref_price,
-            stop_price=sig.stop_price, side=sig.side,
-            config=self.config.risk, limits=self.config.limits,
+            equity_usd=self.tracker.equity_usd(),
+            entry_price=ref_price,
+            stop_price=sig.stop_price,
+            side=sig.side,
+            config=self.config.risk,
+            limits=self.config.limits,
         )
         if not sizing.approved:
             self.sizing_skips += 1
@@ -1418,22 +1600,31 @@ class LivePaperSession:
                 "sizing_rejected",
                 {**scanner_context, "reason": self.last_reject_reason},
             )
-            self._log_trade_event("sizing_skip", f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140], now)
+            self._log_trade_event(
+                "sizing_skip",
+                f"{sig.side} rejected by sizing: {', '.join(sizing.reasons)}"[:140],
+                now,
+            )
             return
         # Maker-edge strategies post a passive resting limit at the near touch
         # (bid for a long, ask for a short) instead of crossing the spread — the
         # route their scorecard edge is defined on. SHADOW never places real
         # orders, so it stays market (its virtual pricing is handled separately).
         intent = OrderIntent(
-            symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
+            symbol=self.config.symbol,
+            side=sig.side,
+            quantity=sizing.quantity,
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
-            reduce_only=False, strategy_id=self.strategy.strategy_id,
+            reduce_only=False,
+            strategy_id=self.strategy.strategy_id,
             order_type="limit" if maker else "market",
             limit_price=(bid if sig.side == "long" else ask) if maker else None,
         )
         key = make_intent_key(
-            self.strategy.strategy_id, self.config.symbol, sig.side,
+            self.strategy.strategy_id,
+            self.config.symbol,
+            sig.side,
             decision_bar_ts,
         )
         if self.config.mode is RunnerMode.SHADOW:
@@ -1452,40 +1643,45 @@ class LivePaperSession:
                 if not shared.allowed:
                     self.shadow_rejected += 1
                     self.last_reject_reason = f"shadow_portfolio: {shared.reason}"
-                    self.journal.append("shadow_portfolio_rejected", {
-                        **scanner_context,
-                        "reason": shared.reason,
-                        "active_margin_usd": str(shared.active_margin_usd),
-                        "daily_net_usd": str(shared.daily_net_usd),
-                        "unresolved_intents": shared.unresolved_intents,
-                    })
-                    self._log_trade_event(
-                        "shadow_portfolio_rejected", self.last_reject_reason, now
+                    self.journal.append(
+                        "shadow_portfolio_rejected",
+                        {
+                            **scanner_context,
+                            "reason": shared.reason,
+                            "active_margin_usd": str(shared.active_margin_usd),
+                            "daily_net_usd": str(shared.daily_net_usd),
+                            "unresolved_intents": shared.unresolved_intents,
+                        },
                     )
+                    self._log_trade_event("shadow_portfolio_rejected", self.last_reject_reason, now)
                     return
-            self.journal.append("shadow_intent", {
-                "intent_key": key,
-                "approved": decision.approved,
-                "failed_checks": list(decision.failed_checks),
-                "passed_checks": list(decision.passed_checks),
-                "explanation": decision.explanation,
-                "intent": asdict(intent),
-                "signal_reason": sig.reason,
-                # stop/target/decision bar make the intent resolvable into a
-                # virtual outcome later (and on restart, from the journal)
-                "stop_price": sig.stop_price,
-                "take_profit_price": sig.take_profit_price,
-                "take_profit_levels": list(sig.take_profit_levels),
-                "bar_ts": decision_bar_ts.isoformat(),
-                "timeframe": self.config.timeframe,
-                "decision_price": decision_price,
-            })
+            self.journal.append(
+                "shadow_intent",
+                {
+                    "intent_key": key,
+                    "approved": decision.approved,
+                    "failed_checks": list(decision.failed_checks),
+                    "passed_checks": list(decision.passed_checks),
+                    "explanation": decision.explanation,
+                    "intent": asdict(intent),
+                    "signal_reason": sig.reason,
+                    # stop/target/decision bar make the intent resolvable into a
+                    # virtual outcome later (and on restart, from the journal)
+                    "stop_price": sig.stop_price,
+                    "take_profit_price": sig.take_profit_price,
+                    "take_profit_levels": list(sig.take_profit_levels),
+                    "bar_ts": decision_bar_ts.isoformat(),
+                    "timeframe": self.config.timeframe,
+                    "decision_price": decision_price,
+                },
+            )
             if decision.approved:
                 self.shadow_approved += 1
                 self._factory_entries_today += 1
                 if self.shadow_outcomes is not None:
                     self.shadow_outcomes.track(
-                        intent_key=key, side=sig.side,
+                        intent_key=key,
+                        side=sig.side,
                         quantity=intent.quantity,
                         notional_usd=intent.notional_usd,
                         stop_price=sig.stop_price,
@@ -1501,9 +1697,7 @@ class LivePaperSession:
                 )
             else:
                 self.shadow_rejected += 1
-                self.last_reject_reason = (
-                    f"gateway: {', '.join(decision.failed_checks)}"
-                )
+                self.last_reject_reason = f"gateway: {', '.join(decision.failed_checks)}"
                 self._log_trade_event(
                     "shadow_rejected",
                     f"{sig.side} — failed: {', '.join(decision.failed_checks)}"[:140],
@@ -1515,7 +1709,9 @@ class LivePaperSession:
         )
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
-            self._log_trade_event("risk_rejected", f"{sig.side} — gateway rejected entry"[:140], now)
+            self._log_trade_event(
+                "risk_rejected", f"{sig.side} — gateway rejected entry"[:140], now
+            )
         else:
             self.orders_submitted += 1
             self._factory_entries_today += 1
@@ -1539,9 +1735,7 @@ class LivePaperSession:
             elif order.state is OrderState.TIMEOUT_UNKNOWN:
                 self._parked_entries[order.client_order_id] = plan
 
-    def _approve_scanner_fire(
-        self, fire, bar_index: int, bar_ts: datetime
-    ) -> ScannerApproval:
+    def _approve_scanner_fire(self, fire, bar_index: int, bar_ts: datetime) -> ScannerApproval:
         """Run a scanner candidate through the normal sizing+risk boundary.
 
         This returns data to the read-only scanner runner; it never calls
@@ -1555,18 +1749,23 @@ class LivePaperSession:
                 failed_checks=("scanner_shadow_only",),
                 explanation="canonical scanner runner has no paper/live authority",
             )
-        if self.feed.quote is None:
+        try:
+            ref_price = float(fire.entry)
+        except (AttributeError, TypeError, ValueError):
+            ref_price = 0.0
+        if not math.isfinite(ref_price) or ref_price <= 0:
             return ScannerApproval(
                 approved=False,
                 intent={},
-                failed_checks=("missing_quote",),
-                explanation="scanner fire has no executable reference quote",
+                failed_checks=("invalid_acceptance_quote",),
+                explanation="scanner fire has no valid executable acceptance quote",
             )
         cp_block = self._candle_path_arm_block(datetime.now(UTC))
         factory_block = self._daily_factory_entry_block_reason(bar_ts)
         protected, protection_reason = self.protections.entries_allowed(bar_index)
         local_failure = (
-            f"candle_path:{cp_block}" if cp_block is not None
+            f"candle_path:{cp_block}"
+            if cp_block is not None
             else factory_block
             if factory_block is not None
             else protection_reason
@@ -1581,8 +1780,6 @@ class LivePaperSession:
                 explanation=local_failure,
             )
 
-        bid, ask = self.feed.quote
-        ref_price = ask if fire.side == "long" else bid
         risk_bps = abs(ref_price - float(fire.stop)) / ref_price * 10_000.0
         features = getattr(self.strategy, "_features", None)
         reward_r = float(getattr(getattr(features, "params", None), "reward_r", 2.0))
@@ -1645,8 +1842,7 @@ class LivePaperSession:
             "squeeze_expansion_breakout_v4": "squeeze_expansion_breakout_v4",
         }.get(self.strategy.strategy_id, self.strategy.strategy_id)
         intent_key = (
-            f"{key_prefix}|{self.config.symbol}|{fire.side}|"
-            f"{int(bar_ts.timestamp() * 1000)}"
+            f"{key_prefix}|{self.config.symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
         )
         if decision.approved and self.shadow_portfolio is not None:
             shared = self.shadow_portfolio.evaluate_entry(
@@ -1702,19 +1898,17 @@ class LivePaperSession:
             return
         pending.bars_waited += 1
         if pending.bars_waited >= self._MAKER_ENTRY_TTL_BARS:
-            await self.om.cancel_order(
-                pending.client_order_id, reason="maker entry TTL — no touch"
-            )
+            await self.om.cancel_order(pending.client_order_id, reason="maker entry TTL — no touch")
             self._pending_entry = None
             self._log_trade_event(
                 "maker_entry_unfilled",
-                f"{pending.plan.signal.side} no touch in {pending.bars_waited} bars — skipped"[:140],
+                f"{pending.plan.signal.side} no touch in {pending.bars_waited} bars — skipped"[
+                    :140
+                ],
                 now,
             )
 
-    async def _cancel_pending_entry_for_daily_factory(
-        self, clock: datetime, now: datetime
-    ) -> None:
+    async def _cancel_pending_entry_for_daily_factory(self, clock: datetime, now: datetime) -> None:
         if self._pending_entry is None:
             return
         cfg = self.config.daily_factory
@@ -1728,21 +1922,22 @@ class LivePaperSession:
             reason="daily factory cutoff — resting entry cancelled",
         )
         self._pending_entry = None
-        self.journal.append("daily_factory_pending_entry_cancelled", {
-            "client_order_id": pending.client_order_id,
-            "strategy_id": self.strategy.strategy_id,
-            "symbol": self.config.symbol,
-            "clock": clock.isoformat(),
-        })
+        self.journal.append(
+            "daily_factory_pending_entry_cancelled",
+            {
+                "client_order_id": pending.client_order_id,
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "clock": clock.isoformat(),
+            },
+        )
         self._log_trade_event(
             "daily_factory_cancel",
             f"{pending.plan.signal.side} maker entry cancelled at daily cutoff"[:140],
             now,
         )
 
-    async def _enforce_daily_factory_flatten(
-        self, clock: datetime, now: datetime
-    ) -> None:
+    async def _enforce_daily_factory_flatten(self, clock: datetime, now: datetime) -> None:
         cfg = self.config.daily_factory
         if not should_force_flatten(clock, cfg) or self._factory_flatten_sent:
             return
@@ -1767,27 +1962,33 @@ class LivePaperSession:
             return
         if order.state in _EXIT_ACCEPTED_STATES:
             self._factory_flatten_sent = True
-        self.journal.append("live_paper_exit", {
-            "reason": "daily_factory_close",
-            "state": order.state.value,
-            "client_order_id": order.client_order_id,
-            "take_profit_levels": list(pre_sig.take_profit_levels) if pre_sig else [],
-            "tp_number": 0,
-            "tp_reached": pre_state.tp_reached() if pre_state is not None else 0,
-            "mfe_price": pre_state.mfe_price if pre_state is not None else None,
-            "exit_price": None,
-            "quantity": None,
-            "final": True,
-            "active_stop_price": pre_state.current_stop if pre_state is not None else None,
-            "breakeven_armed": pre_state.breakeven_armed if pre_state is not None else False,
-        })
-        self.journal.append("daily_factory_flatten", {
-            "state": order.state.value,
-            "client_order_id": order.client_order_id,
-            "strategy_id": self.strategy.strategy_id,
-            "symbol": self.config.symbol,
-            "clock": clock.isoformat(),
-        })
+        self.journal.append(
+            "live_paper_exit",
+            {
+                "reason": "daily_factory_close",
+                "state": order.state.value,
+                "client_order_id": order.client_order_id,
+                "take_profit_levels": list(pre_sig.take_profit_levels) if pre_sig else [],
+                "tp_number": 0,
+                "tp_reached": pre_state.tp_reached() if pre_state is not None else 0,
+                "mfe_price": pre_state.mfe_price if pre_state is not None else None,
+                "exit_price": None,
+                "quantity": None,
+                "final": True,
+                "active_stop_price": pre_state.current_stop if pre_state is not None else None,
+                "breakeven_armed": pre_state.breakeven_armed if pre_state is not None else False,
+            },
+        )
+        self.journal.append(
+            "daily_factory_flatten",
+            {
+                "state": order.state.value,
+                "client_order_id": order.client_order_id,
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "clock": clock.isoformat(),
+            },
+        )
         self._log_trade_event(
             "daily_factory_close",
             f"force-flat before session close ({order.state.value})"[:140],
@@ -1810,8 +2011,7 @@ class LivePaperSession:
         current_ts = pd.Timestamp(bar["timestamp"])
         return int(
             (
-                (self.candles["timestamp"] > entry_ts)
-                & (self.candles["timestamp"] <= current_ts)
+                (self.candles["timestamp"] > entry_ts) & (self.candles["timestamp"] <= current_ts)
             ).sum()
         )
 
@@ -1847,20 +2047,23 @@ class LivePaperSession:
             return
         if order.state in _EXIT_ACCEPTED_STATES and self._plan is not None:
             engine.mark_fill(decision)
-        self.journal.append("live_paper_exit", {
-            "reason": decision.reason,
-            "state": order.state.value,
-            "client_order_id": order.client_order_id,
-            "take_profit_levels": levels,
-            "tp_number": decision.tp_number,
-            "tp_reached": decision.tp_reached,
-            "mfe_price": decision.mfe_price,
-            "exit_price": decision.exit_price,
-            "quantity": decision.quantity,
-            "final": decision.final,
-            "active_stop_price": decision.active_stop_price,
-            "breakeven_armed": decision.breakeven_armed,
-        })
+        self.journal.append(
+            "live_paper_exit",
+            {
+                "reason": decision.reason,
+                "state": order.state.value,
+                "client_order_id": order.client_order_id,
+                "take_profit_levels": levels,
+                "tp_number": decision.tp_number,
+                "tp_reached": decision.tp_reached,
+                "mfe_price": decision.mfe_price,
+                "exit_price": decision.exit_price,
+                "quantity": decision.quantity,
+                "final": decision.final,
+                "active_stop_price": decision.active_stop_price,
+                "breakeven_armed": decision.breakeven_armed,
+            },
+        )
         self._log_trade_event("exit", f"{decision.reason} ({order.state.value})"[:140], now)
 
     def _strategy_exit_decision(self, bar: pd.Series) -> ActiveExitDecision | None:
@@ -1918,12 +2121,15 @@ class LivePaperSession:
                 OrderState.TIMEOUT_UNKNOWN,
                 OrderState.RECONCILING,
             ):
-                self.journal.append("exit_plan_waiting_reconciliation", {
-                    "intent_key": base_key,
-                    "client_order_id": pending,
-                    "reason": reason,
-                    "state": pending_order.state.value,
-                })
+                self.journal.append(
+                    "exit_plan_waiting_reconciliation",
+                    {
+                        "intent_key": base_key,
+                        "client_order_id": pending,
+                        "reason": reason,
+                        "state": pending_order.state.value,
+                    },
+                )
                 return None
             self._pending_exit_orders.pop(base_key, None)
             self._pending_exit_finals.pop(base_key, None)
@@ -1931,12 +2137,17 @@ class LivePaperSession:
         intent = OrderIntent(
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
-            quantity=close_qty, notional_usd=0.0, leverage=1.0,
-            reduce_only=True, strategy_id=self.strategy.strategy_id,
+            quantity=close_qty,
+            notional_usd=0.0,
+            leverage=1.0,
+            reduce_only=True,
+            strategy_id=self.strategy.strategy_id,
         )
         intent_key = self._exit_intent_key(base_key)
         order = await self.om.submit(
-            intent, self.tracker.account_state(), self._market_state(),
+            intent,
+            self.tracker.account_state(),
+            self._market_state(),
             intent_key=intent_key,
             now=now,
         )
@@ -1944,9 +2155,7 @@ class LivePaperSession:
         if order.state in _EXIT_ACCEPTED_STATES:
             self._mark_exit_accepted(reason, final=final)
         else:
-            self._preserve_exit_plan(
-                base_key, order, reason, final=final, decision=decision
-            )
+            self._preserve_exit_plan(base_key, order, reason, final=final, decision=decision)
         return order
 
     def _exit_intent_key(self, base_key: str) -> str:
@@ -1989,13 +2198,16 @@ class LivePaperSession:
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
-        self.journal.append("exit_plan_preserved", {
-            "intent_key": base_key,
-            "client_order_id": order.client_order_id,
-            "reason": reason,
-            "state": order.state.value,
-            "next_retry": self._exit_intent_key(base_key),
-        })
+        self.journal.append(
+            "exit_plan_preserved",
+            {
+                "intent_key": base_key,
+                "client_order_id": order.client_order_id,
+                "reason": reason,
+                "state": order.state.value,
+                "next_retry": self._exit_intent_key(base_key),
+            },
+        )
         logger.warning(
             "preserving exit plan after %s submit ended %s (%s)",
             reason,
@@ -2052,22 +2264,25 @@ class LivePaperSession:
         if order.state in _EXIT_ACCEPTED_STATES:
             self.tick_stop_exits += 1
         trigger_px = bid if sig.side == "long" else ask
-        self.journal.append("tick_stop_exit", {
-            "reason": "tick_stop",
-            "state": order.state.value,
-            "client_order_id": order.client_order_id,
-            "side": sig.side,
-            "stop_price": stop_price,
-            "initial_stop_price": sig.stop_price,
-            "take_profit_price": sig.take_profit_price,
-            "take_profit_levels": list(sig.take_profit_levels),
-            "active_stop_price": stop_price,
-            "breakeven_armed": self._plan.exit_state.breakeven_armed if self._plan else True,
-            "bid": bid,
-            "ask": ask,
-            "entry_bar_ts": entry_bar_ts.isoformat(),
-            "signal_reason": sig.reason,
-        })
+        self.journal.append(
+            "tick_stop_exit",
+            {
+                "reason": "tick_stop",
+                "state": order.state.value,
+                "client_order_id": order.client_order_id,
+                "side": sig.side,
+                "stop_price": stop_price,
+                "initial_stop_price": sig.stop_price,
+                "take_profit_price": sig.take_profit_price,
+                "take_profit_levels": list(sig.take_profit_levels),
+                "active_stop_price": stop_price,
+                "breakeven_armed": self._plan.exit_state.breakeven_armed if self._plan else True,
+                "bid": bid,
+                "ask": ask,
+                "entry_bar_ts": entry_bar_ts.isoformat(),
+                "signal_reason": sig.reason,
+            },
+        )
         self._log_trade_event(
             "exit",
             f"tick_stop {sig.side} — {'bid' if sig.side == 'long' else 'ask'} "
@@ -2078,9 +2293,7 @@ class LivePaperSession:
         # the already-closed position/plan
         self._ledger_new_fills(now)
         if self.account_store is not None:
-            self.account_store.save_from(
-                self.exchange, self.tracker, plan=self._serialize_plan()
-            )
+            self.account_store.save_from(self.exchange, self.tracker, plan=self._serialize_plan())
 
     def _maybe_daily_report(self, now: datetime) -> None:
         """At each UTC day rollover, journal a summary of the finished day
@@ -2105,8 +2318,13 @@ class LivePaperSession:
         )
         self.journal.append("daily_report", {"day": str(self._report_day), "summary": summary})
         if self.alert_engine is not None:
-            alert = {"ts": now.isoformat(), "rule_id": "daily_report",
-                     "severity": "info", "message": summary, "mode": self._mode_label()}
+            alert = {
+                "ts": now.isoformat(),
+                "rule_id": "daily_report",
+                "severity": "info",
+                "message": summary,
+                "mode": self._mode_label(),
+            }
             self.alert_engine.recent.append(alert)
             for notifier in self.alert_engine.notifiers:
                 try:
@@ -2148,16 +2366,24 @@ class LivePaperSession:
         ):
             # corrupted/hand-edited store: refuse the plan; orphan-guard
             # manual-flatten semantics are safer than a bad stop
-            self.journal.append("plan_restore_rejected", {
-                "reason": "stop fails sanity bounds", "stored": dict(stored),
-            })
+            self.journal.append(
+                "plan_restore_rejected",
+                {
+                    "reason": "stop fails sanity bounds",
+                    "stored": dict(stored),
+                },
+            )
             logger.warning("restored plan REJECTED (insane stop)")
             return
         if stored is not None:
             sig = SignalIntent(
-                stored["side"], stop_price=float(stored["stop_price"]),
-                take_profit_price=(float(stored["take_profit_price"])
-                                   if stored.get("take_profit_price") is not None else None),
+                stored["side"],
+                stop_price=float(stored["stop_price"]),
+                take_profit_price=(
+                    float(stored["take_profit_price"])
+                    if stored.get("take_profit_price") is not None
+                    else None
+                ),
                 take_profit_levels=tuple(float(x) for x in stored.get("take_profit_levels") or ()),
                 reason=stored.get("reason", "restored plan"),
             )
@@ -2170,20 +2396,22 @@ class LivePaperSession:
         if len(self.candles) <= self.strategy.warmup_bars:
             return
         df = self.strategy.prepare(self.candles)
-        sig = self.strategy.synthesize_exit_plan(
-            df, len(df) - 1, pos.side, pos.entry_price
-        )
+        sig = self.strategy.synthesize_exit_plan(df, len(df) - 1, pos.side, pos.entry_price)
         if sig is None:
             return  # orphan guard will handle it (entries halted, manual flatten)
         sig = self._clamp_synthesized_stop(pos, sig)
         self._plan = self._new_plan(sig, df["timestamp"].iloc[-1])
         self._seed_plan_from_venue(self._plan)
-        self.journal.append("plan_rebuilt_on_resume", {
-            "side": sig.side, "stop_price": sig.stop_price,
-            "take_profit_price": sig.take_profit_price,
-            "take_profit_levels": list(sig.take_profit_levels),
-            "reason": sig.reason,
-        })
+        self.journal.append(
+            "plan_rebuilt_on_resume",
+            {
+                "side": sig.side,
+                "stop_price": sig.stop_price,
+                "take_profit_price": sig.take_profit_price,
+                "take_profit_levels": list(sig.take_profit_levels),
+                "reason": sig.reason,
+            },
+        )
         logger.info("trade plan REBUILT on resume: %s", sig.reason)
 
     # A synthesized stop uses CURRENT ATR; after a volatile gap it could sit
@@ -2208,20 +2436,36 @@ class LivePaperSession:
         if abs(sig.stop_price - entry) <= max_dist:
             return sig
         clamped = entry - max_dist if sig.side == "long" else entry + max_dist
-        self.journal.append("plan_stop_clamped", {
-            "side": sig.side, "synthesized_stop": sig.stop_price,
-            "clamped_stop": clamped, "entry_price": entry,
-        })
-        logger.warning("synthesized stop %.6g beyond %.0f%% cap — clamped to %.6g",
-                       sig.stop_price, self._MAX_REBUILT_STOP_PCT * 100, clamped)
-        return SignalIntent(sig.side, stop_price=clamped,
-                            take_profit_price=sig.take_profit_price,
-                            take_profit_levels=sig.take_profit_levels,
-                            reason=sig.reason + " [stop clamped on rebuild]")
+        self.journal.append(
+            "plan_stop_clamped",
+            {
+                "side": sig.side,
+                "synthesized_stop": sig.stop_price,
+                "clamped_stop": clamped,
+                "entry_price": entry,
+            },
+        )
+        logger.warning(
+            "synthesized stop %.6g beyond %.0f%% cap — clamped to %.6g",
+            sig.stop_price,
+            self._MAX_REBUILT_STOP_PCT * 100,
+            clamped,
+        )
+        return SignalIntent(
+            sig.side,
+            stop_price=clamped,
+            take_profit_price=sig.take_profit_price,
+            take_profit_levels=sig.take_profit_levels,
+            reason=sig.reason + " [stop clamped on rebuild]",
+        )
 
     def _guard_orphaned_position(self) -> None:
-        if self._orphan_position_guarded or self._plan is not None \
-                or self._pending_entry is not None or self._parked_entries:
+        if (
+            self._orphan_position_guarded
+            or self._plan is not None
+            or self._pending_entry is not None
+            or self._parked_entries
+        ):
             return
         positions = self.exchange.get_positions()
         if not positions:
@@ -2232,26 +2476,30 @@ class LivePaperSession:
             "manual reduce-only flatten required"
         )
         self.gateway.kill_switch.activate(reason)
-        self.journal.append("orphaned_paper_position", {
-            "reason": reason,
-            "positions": [
-                {"symbol": p.symbol, "side": p.side, "quantity": abs(p.quantity)}
-                for p in positions
-            ],
-        })
+        self.journal.append(
+            "orphaned_paper_position",
+            {
+                "reason": reason,
+                "positions": [
+                    {"symbol": p.symbol, "side": p.side, "quantity": abs(p.quantity)}
+                    for p in positions
+                ],
+            },
+        )
 
     def _fail_closed_on_reconciliation(self, mismatches: tuple[str, ...]) -> None:
         if not mismatches or self._reconciliation_fail_closed:
             return
         self._reconciliation_fail_closed = True
-        reason = (
-            "reconciliation mismatch — entries halted; reduce-only exits remain allowed"
-        )
+        reason = "reconciliation mismatch — entries halted; reduce-only exits remain allowed"
         self.gateway.kill_switch.activate(reason)
-        self.journal.append("reconciliation_fail_closed", {
-            "reason": reason,
-            "mismatches": list(mismatches),
-        })
+        self.journal.append(
+            "reconciliation_fail_closed",
+            {
+                "reason": reason,
+                "mismatches": list(mismatches),
+            },
+        )
 
     # Feature columns worth surfacing per evaluation, when the strategy
     # computes them. Signal proximity ("how close is this lane to firing")
@@ -2310,8 +2558,13 @@ class LivePaperSession:
     )
 
     def _record_eval(
-        self, df: pd.DataFrame, index: int, sig: SignalIntent | None,
-        *, backfill: bool = False, skip_reason: str | None = None,
+        self,
+        df: pd.DataFrame,
+        index: int,
+        sig: SignalIntent | None,
+        *,
+        backfill: bool = False,
+        skip_reason: str | None = None,
     ) -> None:
         """Journal one strategy evaluation — fired or not — with the feature
         values that drove it. This is the observability record that turns
@@ -2348,9 +2601,7 @@ class LivePaperSession:
                 if isinstance(raw_diagnostics, dict):
                     diagnostics = raw_diagnostics
             except Exception as exc:  # observability cannot stop the decision path
-                logger.exception(
-                    "%s evaluation diagnostics failed", self.strategy.strategy_id
-                )
+                logger.exception("%s evaluation diagnostics failed", self.strategy.strategy_id)
                 diagnostics = {
                     "eligible": False,
                     "primary_failed_gate": "diagnostics_error",
@@ -2378,9 +2629,7 @@ class LivePaperSession:
             or (failed_gates[0] if failed_gates else None)
         )
         primary_failed_gate = (
-            str(primary_failed_gate_raw)
-            if primary_failed_gate_raw is not None
-            else None
+            str(primary_failed_gate_raw) if primary_failed_gate_raw is not None else None
         )
         eligible = bool(diagnostics.get("eligible", sig is not None))
         if skip_reason:
@@ -2391,8 +2640,7 @@ class LivePaperSession:
                 self.last_reject_reason = skip_reason
 
         source_window = df.iloc[
-            max(0, index + 1 - max(1, int(getattr(self.strategy, "warmup_bars", 1))))
-            : index + 1
+            max(0, index + 1 - max(1, int(getattr(self.strategy, "warmup_bars", 1)))) : index + 1
         ]
         if "candle_source" in source_window.columns:
             source_counts = {
@@ -2408,7 +2656,8 @@ class LivePaperSession:
             ]
             latest_canonical = (
                 canonical_rows["timestamp"].iloc[-1].isoformat()
-                if not canonical_rows.empty else None
+                if not canonical_rows.empty
+                else None
             )
         else:
             source_counts = {"unreported": len(source_window)}
@@ -2417,8 +2666,15 @@ class LivePaperSession:
         identity = {
             name: str(row.get(name, ""))
             for name in (
-                "timestamp", "open", "high", "low", "close", "volume",
-                "quote_volume", "trade_count", "candle_source",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "quote_volume",
+                "trade_count",
+                "candle_source",
             )
         }
         row_sha256 = hashlib.sha256(
@@ -2480,24 +2736,31 @@ class LivePaperSession:
             self.last_eval = record
         if sig is not None and not backfill:
             from datetime import datetime as _dt
+
             self._log_trade_event(
-                "signal_fired", f"{sig.side} — {sig.reason}"[:140], _dt.now(UTC),
+                "signal_fired",
+                f"{sig.side} — {sig.reason}"[:140],
+                _dt.now(UTC),
             )
         if sig is not None:
             logger.info(
                 "lane eval [%s %s]%s: FIRED %s — %s",
-                self.strategy.strategy_id, self.config.symbol,
-                " (backfill)" if backfill else "", sig.side, sig.reason,
+                self.strategy.strategy_id,
+                self.config.symbol,
+                " (backfill)" if backfill else "",
+                sig.side,
+                sig.reason,
             )
         elif skip_reason and not backfill:
             from datetime import datetime as _dt
+
             self._log_trade_event(
-                "entry_skipped", skip_reason[:140], _dt.now(UTC),
+                "entry_skipped",
+                skip_reason[:140],
+                _dt.now(UTC),
             )
 
-    def _log_shadow_outcomes(
-        self, outcomes: list[VirtualOutcome], now: datetime
-    ) -> None:
+    def _log_shadow_outcomes(self, outcomes: list[VirtualOutcome], now: datetime) -> None:
         for outcome in outcomes:
             self._log_trade_event(
                 "shadow_outcome",
@@ -2512,7 +2775,7 @@ class LivePaperSession:
         if self.fill_ledger is None:
             return
         fills = self.exchange.get_fills()
-        for fill in fills[self._ledgered_fills:]:
+        for fill in fills[self._ledgered_fills :]:
             managed_order = self.om.orders.get(fill.client_order_id)
             fee_leg = (
                 "close"
@@ -2525,43 +2788,48 @@ class LivePaperSession:
                 f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
                 now,
             )
-            self.fill_ledger.append({
-                "ts": now.isoformat(),
-                "mode": self.config.mode.value,
-                "venue": getattr(self.feed, "exchange_id", "paper"),
-                "strategy_id": self.strategy.strategy_id,
-                "symbol": fill.symbol,
-                "side": "buy" if fill.buy else "sell",
-                "quantity": fill.quantity,
-                "price": fill.price,
-                "fee_usd": fill.fee_usd,
-                "realized_pnl_usd": fill.realized_pnl_usd,
-                "client_order_id": fill.client_order_id,
-                "exchange_seq": fill.seq,
-                "mid_at_send": fill.mid_at_send,
-                "fill_price": fill.price,
-                "realized_exec_bps": fill.realized_exec_bps,
-                "liquidity": fill.liquidity,
-                "schedule_fee_bps": (
-                    self.exchange.fill_model.maker_fee_bps
-                    if fill.liquidity == "maker"
-                    else self.exchange.fill_model.taker_fee_bps
-                ),
-                "fee_leg": fee_leg,
-                "hold_seconds": None,
-                "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
-                "execution_label_resolved": fill.realized_exec_bps is not None,
-                "execution_label_schema_version": "execution_cost_label_v1",
-            })
+            self.fill_ledger.append(
+                {
+                    "ts": now.isoformat(),
+                    "mode": self.config.mode.value,
+                    "venue": getattr(self.feed, "exchange_id", "paper"),
+                    "strategy_id": self.strategy.strategy_id,
+                    "symbol": fill.symbol,
+                    "side": "buy" if fill.buy else "sell",
+                    "quantity": fill.quantity,
+                    "price": fill.price,
+                    "fee_usd": fill.fee_usd,
+                    "realized_pnl_usd": fill.realized_pnl_usd,
+                    "client_order_id": fill.client_order_id,
+                    "exchange_seq": fill.seq,
+                    "mid_at_send": fill.mid_at_send,
+                    "fill_price": fill.price,
+                    "realized_exec_bps": fill.realized_exec_bps,
+                    "liquidity": fill.liquidity,
+                    "schedule_fee_bps": (
+                        self.exchange.fill_model.maker_fee_bps
+                        if fill.liquidity == "maker"
+                        else self.exchange.fill_model.taker_fee_bps
+                    ),
+                    "fee_leg": fee_leg,
+                    "hold_seconds": None,
+                    "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
+                    "execution_label_resolved": fill.realized_exec_bps is not None,
+                    "execution_label_schema_version": "execution_cost_label_v1",
+                }
+            )
         self._ledgered_fills = len(fills)
 
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
         snapshot = build_snapshot(
-            mode=self._mode_label(), live_trading_enabled=False,
-            tracker=self.tracker, exchange=self.exchange,
-            kill_switch=self.gateway.kill_switch, journal=self.journal,
+            mode=self._mode_label(),
+            live_trading_enabled=False,
+            tracker=self.tracker,
+            exchange=self.exchange,
+            kill_switch=self.gateway.kill_switch,
+            journal=self.journal,
             order_manager=self.om,
             feed_health=FeedHealth(
                 exchange=(
@@ -2573,8 +2841,7 @@ class LivePaperSession:
             ),
             symbol=self.config.symbol,
             strategy_id=self.strategy.strategy_id,
-            recent_alerts=list(self.alert_engine.recent)
-            if self.alert_engine is not None else [],
+            recent_alerts=list(self.alert_engine.recent) if self.alert_engine is not None else [],
             quote=self.feed.quote,
             funding_rate=getattr(self.feed, "funding_rate", 0.0),
             session_stats={
@@ -2625,13 +2892,12 @@ class LivePaperSession:
                         "decision_engine": self.runtime_contract.decision_engine,
                         "exit_engine": self.runtime_contract.exit_engine,
                         "max_holding_hours": (
-                            self.runtime_contract.max_holding_bars
-                            * (self._tf_seconds or 0)
-                            / 3600
+                            self.runtime_contract.max_holding_bars * (self._tf_seconds or 0) / 3600
                         ),
                         "rationale": self.runtime_contract.rationale,
                     }
-                    if self.runtime_contract is not None else None
+                    if self.runtime_contract is not None
+                    else None
                 ),
                 "regime": self._overlay_regime,
                 "regime_would_block": self._regime_would_block,
@@ -2664,16 +2930,10 @@ class LivePaperSession:
                     "max_effective_account_leverage": (
                         self.config.risk.max_effective_account_leverage
                     ),
-                    "max_symbol_exposure_usd": (
-                        self.config.risk.max_exposure_per_symbol_usd
-                    ),
-                    "max_total_exposure_usd": (
-                        self.config.risk.max_total_exposure_usd
-                    ),
+                    "max_symbol_exposure_usd": (self.config.risk.max_exposure_per_symbol_usd),
+                    "max_total_exposure_usd": (self.config.risk.max_total_exposure_usd),
                     "max_open_positions": self.config.risk.max_open_positions,
-                    "daily_loss_halt_enabled": (
-                        self.config.risk.daily_loss_halt_enabled
-                    ),
+                    "daily_loss_halt_enabled": (self.config.risk.daily_loss_halt_enabled),
                     "profile": (
                         "fixed_margin_shadow"
                         if self.config.risk.fixed_margin_usd is not None
@@ -2686,19 +2946,11 @@ class LivePaperSession:
                         "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
                         "entry_price": self._plan.exit_state.entry_price,
                         "stop_price": self._plan.exit_state.current_stop,
-                        "initial_stop_price": (
-                            self._plan.exit_state.initial_stop_price
-                        ),
-                        "take_profit_price": (
-                            self._plan.exit_state.take_profit_price
-                        ),
-                        "take_profit_levels": list(
-                            self._plan.exit_state.take_profit_levels
-                        ),
+                        "initial_stop_price": (self._plan.exit_state.initial_stop_price),
+                        "take_profit_price": (self._plan.exit_state.take_profit_price),
+                        "take_profit_levels": list(self._plan.exit_state.take_profit_levels),
                         "mfe_price": self._plan.exit_state.mfe_price,
-                        "breakeven_armed": (
-                            self._plan.exit_state.breakeven_armed
-                        ),
+                        "breakeven_armed": (self._plan.exit_state.breakeven_armed),
                     }
                     if self._plan is not None
                     else None
@@ -2707,7 +2959,9 @@ class LivePaperSession:
                 "fill_ledger": {
                     "records": self.fill_ledger.records,
                     "chained": True,
-                } if self.fill_ledger is not None else None,
+                }
+                if self.fill_ledger is not None
+                else None,
                 "book_metrics": getattr(self.feed, "book_metrics", None),
             },
             trial=self.trial_meta,
@@ -2778,21 +3032,19 @@ class LivePaperSession:
                 else None
             ),
         )
-        self._record_overlays(df, last, sig)   # populate regime/plan on startup, not next close
+        self._record_overlays(df, last, sig)  # populate regime/plan on startup, not next close
         logger.info(
-            "shadow prime [%s %s]: %d seeded bars backfilled (%d would have "
-            "fired), latest -> %s",
-            self.strategy.strategy_id, self.config.symbol,
-            max(0, last - first), backfill_fired,
+            "shadow prime [%s %s]: %d seeded bars backfilled (%d would have fired), latest -> %s",
+            self.strategy.strategy_id,
+            self.config.symbol,
+            max(0, last - first),
+            backfill_fired,
             f"{sig.side} historical signal (not submitted)" if sig is not None else "no signal",
         )
 
     def _is_paper_observation_lane(self) -> bool:
         trial_id = str((self.trial_meta or {}).get("trial_id") or "")
-        return (
-            self.config.mode is RunnerMode.PAPER
-            and trial_id.endswith("_paper_observation")
-        )
+        return self.config.mode is RunnerMode.PAPER and trial_id.endswith("_paper_observation")
 
     async def _paper_observation_prime(self) -> None:
         """PAPER observation lanes: prime observability, never restart-enter.
@@ -2824,8 +3076,7 @@ class LivePaperSession:
             last,
             sig,
             skip_reason=(
-                "paper_observation_prime: no restart order submitted"
-                if sig is not None else None
+                "paper_observation_prime: no restart order submitted" if sig is not None else None
             ),
         )
         logger.info(
@@ -2838,8 +3089,9 @@ class LivePaperSession:
             f"{sig.side} signal" if sig is not None else "no signal",
         )
 
-    async def run(self, *, max_bars: int | None = None,
-                  deadline_seconds: float | None = None) -> RunReport:
+    async def run(
+        self, *, max_bars: int | None = None, deadline_seconds: float | None = None
+    ) -> RunReport:
         started = datetime.now(UTC)
         bars = 0
         prepared_warmup = self.strategy.warmup_bars
@@ -2849,9 +3101,7 @@ class LivePaperSession:
             # the seeded history first, so an already-hit stop or target is
             # never mis-resolved later at live prices
             self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
-            self._log_shadow_outcomes(
-                self.shadow_outcomes.replay(self._shadow_exit_df), started
-            )
+            self._log_shadow_outcomes(self.shadow_outcomes.replay(self._shadow_exit_df), started)
         if self.scanner_observer is not None:
             self.scanner_observer.restore(
                 self.strategy.prepare(self.candles).reset_index(drop=True)
@@ -2873,15 +3123,10 @@ class LivePaperSession:
             quote_queue = getattr(self.feed, "quote_updates", None)
             acceptance_observer = (
                 self.scanner_observer
-                if isinstance(
-                    self.scanner_observer, SqueezeAcceptanceObserveRunner
-                )
+                if isinstance(self.scanner_observer, SqueezeAcceptanceObserveRunner)
                 else None
             )
-            if (
-                acceptance_observer is not None
-                and quote_queue is not None
-            ):
+            if acceptance_observer is not None and quote_queue is not None:
                 candle_task = asyncio.create_task(self.feed.closed_candles.get())
                 quote_task = asyncio.create_task(quote_queue.get())
                 done, pending = await asyncio.wait(
@@ -2895,7 +3140,7 @@ class LivePaperSession:
                     await asyncio.gather(*pending, return_exceptions=True)
                 if candle_task in done:
                     raw = candle_task.result()
-                elif quote_task in done:
+                if quote_task in done:
                     quote_update = quote_task.result()
             else:
                 try:
@@ -2905,38 +3150,27 @@ class LivePaperSession:
                 except TimeoutError:
                     pass
 
-            if quote_update is not None:
-                self._sync_quote()
+            if quote_update is not None and raw is None:
                 if acceptance_observer is None:  # defensive type/runtime guard
                     continue
-                # Keep the decision-timeframe clock alive before the observer
-                # can ask the fail-closed arm gate for approval.  Previously
-                # the immediate ``continue`` below starved Time Machine for as
-                # long as quotes kept arriving, blocking almost every scanner
-                # fire with ``tm_age_hard`` despite a sub-millisecond BBO.
-                quote_clock = quote_update.received_ts or quote_update.ts
-                self._feed_time_machine(
-                    quote_clock,
-                    live_mid=(quote_update.bid + quote_update.ask) / 2.0,
+                if self._deferred_quote_updates:
+                    # A prior candle/quote tie is still waiting for a valid bar
+                    # transition. Preserve ordering instead of letting a newer
+                    # quote overtake it.
+                    self._defer_quote(quote_update)
+                    continue
+                self._handle_quote_batch(
+                    acceptance_observer,
+                    quote_queue,
+                    self._drain_quote_batch(quote_queue, quote_update),
                 )
-                before_candidates = acceptance_observer.candidates
-                before_approved = acceptance_observer.fires
-                before_rejected = acceptance_observer.rejected
-                acceptance_observer.on_quote(
-                    bid=quote_update.bid,
-                    ask=quote_update.ask,
-                    ts=quote_update.ts,
-                    received_ts=quote_update.received_ts,
-                    sequence=quote_update.sequence,
-                    source=quote_update.source,
-                    exchange_timestamped=quote_update.exchange_timestamped,
-                )
-                self.signals += acceptance_observer.candidates - before_candidates
-                self.shadow_approved += acceptance_observer.fires - before_approved
-                self.shadow_rejected += acceptance_observer.rejected - before_rejected
-                self._record_runner_heartbeat("quote_acceptance", quote_update.ts)
-                self._publish_snapshot()
                 continue
+
+            if quote_update is not None:
+                # Candle and quote became ready in the same wait batch. Defer
+                # the quote until after on_prepared_bar below establishes or
+                # invalidates the arm for this logical time.
+                self._defer_quote(quote_update)
 
             if raw is None:
                 # capital protection between bars: stops (and ONLY stops) are
@@ -2952,9 +3186,7 @@ class LivePaperSession:
                 if self._tf_seconds is not None and self._last_bar_wall is not None:
                     idle_s = (idle_now - self._last_bar_wall).total_seconds()
                     if idle_s > self._STALL_BARS * self._tf_seconds:
-                        self._enter_degraded(
-                            f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True
-                        )
+                        self._enter_degraded(f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True)
                 self._feed_time_machine(idle_now)  # forming-bar progress (read-only)
                 self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
                 self._publish_snapshot()  # keep the dashboard honest while idle
@@ -2969,9 +3201,11 @@ class LivePaperSession:
             if self._last_bar_wall is not None and not await self._guard_candle_continuity(
                 raw, now
             ):
+                self._discard_deferred_quotes("candle_continuity_rejected")
                 continue
             canonical_ready = await self._await_canonical_candle(raw)
             if not self._append_candle(raw) or not self._sync_quote():
+                self._discard_deferred_quotes("candle_or_quote_sync_rejected")
                 continue
             if not canonical_ready:
                 self._enter_degraded("canonical_bar_timeout", recoverable=True)
@@ -3010,10 +3244,7 @@ class LivePaperSession:
             # gateway through ``_approve_scanner_fire``, but never create an
             # OrderIntent submission. Running the observer here (once per
             # forward closed bar) keeps replay and VM shadow semantics aligned.
-            if (
-                self.scanner_observer is not None
-                and len(self.candles) > prepared_warmup
-            ):
+            if self.scanner_observer is not None and len(self.candles) > prepared_warmup:
                 _dec_t0 = time.perf_counter()
                 scanner_df = await self._prepare_strategy_for_bar()
                 prepared_frame = scanner_df
@@ -3021,9 +3252,7 @@ class LivePaperSession:
                 before_candidates = self.scanner_observer.candidates
                 before_approved = self.scanner_observer.fires
                 before_rejected = self.scanner_observer.rejected
-                fire = self.scanner_observer.on_prepared_bar(
-                    scanner_df, scanner_idx, bar_clock
-                )
+                fire = self.scanner_observer.on_prepared_bar(scanner_df, scanner_idx, bar_clock)
                 self.signals += self.scanner_observer.candidates - before_candidates
                 self.shadow_approved += self.scanner_observer.fires - before_approved
                 self.shadow_rejected += self.scanner_observer.rejected - before_rejected
@@ -3049,8 +3278,19 @@ class LivePaperSession:
                     ),
                 )
                 self._record_overlays(scanner_df, scanner_idx, scanner_sig)
-                self.latency.record(
-                    DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0
+                self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
+
+            # Always complete the deterministic close -> quote transition,
+            # including during feature warmup. This prevents old deferred
+            # quotes from being replayed against a later arm once warmup ends.
+            if acceptance_observer is not None and quote_queue is not None:
+                self._handle_quote_batch(
+                    acceptance_observer,
+                    quote_queue,
+                    self._drain_quote_batch(
+                        quote_queue,
+                        include_deferred=True,
+                    ),
                 )
 
             shadow_book_reserved = (
@@ -3058,11 +3298,14 @@ class LivePaperSession:
                 and self.shadow_outcomes is not None
                 and self.shadow_outcomes.has_pending
             )
-            if self._plan is None and self._pending_entry is None \
-                    and self.scanner_observer is None \
-                    and not shadow_book_reserved \
-                    and self._degraded_reason is None \
-                    and len(self.candles) > prepared_warmup:
+            if (
+                self._plan is None
+                and self._pending_entry is None
+                and self.scanner_observer is None
+                and not shadow_book_reserved
+                and self._degraded_reason is None
+                and len(self.candles) > prepared_warmup
+            ):
                 # decision lag: candle in hand -> signal decided (prepare +
                 # signal). perf_counter is monotonic — immune to wall-clock
                 # steps. Measured on every eval, blocked or not, so a slow
@@ -3086,25 +3329,19 @@ class LivePaperSession:
                 elif factory_block is not None:
                     sig = None
                     self._record_eval(df, idx, sig, skip_reason=factory_block)
-                    self._log_trade_event(
-                        "daily_factory_blocked", factory_block[:140], now
-                    )
+                    self._log_trade_event("daily_factory_blocked", factory_block[:140], now)
                 elif not allowed:
                     sig = None
                     self._record_eval(df, idx, sig, skip_reason=block_reason)
                     if not self._protection_block_logged:
-                        self._log_trade_event(
-                            "protection_blocked", block_reason[:140], now
-                        )
+                        self._log_trade_event("protection_blocked", block_reason[:140], now)
                         self._protection_block_logged = True
                 else:
                     self._protection_block_logged = False
                     sig = self.strategy.signal(df, idx)
                     self._record_eval(df, idx, sig)
-                self.latency.record(
-                    DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0
-                )
-                self._record_overlays(df, idx, sig)   # OBSERVE-ONLY: regime + plan
+                self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
+                self._record_overlays(df, idx, sig)  # OBSERVE-ONLY: regime + plan
                 if sig is not None:
                     self.signals += 1
                     await self._submit_entry(sig, now)
@@ -3126,8 +3363,10 @@ class LivePaperSession:
                 )
 
             self._bars_since_reconcile += 1
-            if self._bars_since_reconcile >= self.config.reconcile_every_bars \
-                    or self.om.has_unresolved_orders:
+            if (
+                self._bars_since_reconcile >= self.config.reconcile_every_bars
+                or self.om.has_unresolved_orders
+            ):
                 report = self._reconcile()
                 self.recon_mismatches += len(report.mismatches)
                 self._bars_since_reconcile = 0
@@ -3159,16 +3398,19 @@ class LivePaperSession:
         self.recon_mismatches += len(final.mismatches)
         fills = self.exchange.get_fills()
         report = RunReport(
-            mode=f"{self.config.mode.value}_live", symbol=self.config.symbol,
+            mode=f"{self.config.mode.value}_live",
+            symbol=self.config.symbol,
             strategy_id=self.strategy.strategy_id,
-            bars_processed=bars, signals_generated=self.signals,
-            orders_submitted=self.orders_submitted, fills=len(fills),
+            bars_processed=bars,
+            signals_generated=self.signals,
+            orders_submitted=self.orders_submitted,
+            fills=len(fills),
             fees_usd=sum(f.fee_usd for f in fills),
-            realized_pnl_usd=self.exchange.get_balances()["USDT"]
-            - self.config.starting_equity_usd,
+            realized_pnl_usd=self.exchange.get_balances()["USDT"] - self.config.starting_equity_usd,
             unrealized_pnl_usd=self.tracker.unrealized_pnl_usd(),
             max_drawdown_pct=0.0,  # session-level dd needs longer runs; journal has equity
-            risk_rejects=self.risk_rejects, sizing_skips=self.sizing_skips,
+            risk_rejects=self.risk_rejects,
+            sizing_skips=self.sizing_skips,
             shadow_approved=self.shadow_approved,
             shadow_rejected=self.shadow_rejected,
             reconciliation_mismatches=self.recon_mismatches,
@@ -3209,13 +3451,16 @@ class LivePaperSession:
             decision = self._pending_exit_decisions.pop(base_key, None)
             if decision is not None and not decision.final and self._plan is not None:
                 self._plan.exit_state.mark_accepted(decision)
-            self.journal.append("exit_plan_cleared_after_reconciliation", {
-                "intent_key": base_key,
-                "client_order_id": client_order_id,
-                "reason": reason,
-                "state": order.state.value,
-                "final": final,
-            })
+            self.journal.append(
+                "exit_plan_cleared_after_reconciliation",
+                {
+                    "intent_key": base_key,
+                    "client_order_id": client_order_id,
+                    "reason": reason,
+                    "state": order.state.value,
+                    "final": final,
+                },
+            )
             self._pending_exit_orders.pop(base_key, None)
             self._mark_exit_accepted(reason, final=final)
             return
@@ -3224,13 +3469,16 @@ class LivePaperSession:
             self._pending_exit_finals.pop(base_key, None)
             self._pending_exit_decisions.pop(base_key, None)
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
-            self.journal.append("exit_plan_preserved_after_reconciliation", {
-                "intent_key": base_key,
-                "client_order_id": client_order_id,
-                "reason": reason,
-                "state": order.state.value,
-                "next_retry": self._exit_intent_key(base_key),
-            })
+            self.journal.append(
+                "exit_plan_preserved_after_reconciliation",
+                {
+                    "intent_key": base_key,
+                    "client_order_id": client_order_id,
+                    "reason": reason,
+                    "state": order.state.value,
+                    "next_retry": self._exit_intent_key(base_key),
+                },
+            )
 
 
 def _exit_reason_from_key(intent_key: str) -> str:

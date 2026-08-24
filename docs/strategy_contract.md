@@ -122,9 +122,9 @@ strategy revision must name its decision engine, exit engine, replay engine,
 and engine version. The runtime validates decision and exit identities against
 `ScannerRuntimeContract` before network startup and refuses a mismatch.
 
-Most active closed-bar strategies use
-`base_strategy_next_open_v1 -> active_exit_v1`. Quote-accepted breakout
-strategies are an explicit exception and use
-`quote_acceptance_v1 -> scanner_exit_v1`. A named engine is only an identity
+Historical closed-bar strategies use
+`base_strategy_next_open_v1 -> active_exit_v1`. The squeeze quote path uses
+`quote_acceptance_v1 -> scanner_exit_v1`; generalized range, HTF-structure,
+and session successors use `quote_acceptance_v2 -> scanner_exit_v1`. A named engine is only an identity
 freeze: it does not imply engine parity or a successful backtest. Those remain
 separate evidence events in the strategy workflow.

@@ -13,16 +13,14 @@ from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 BASE = 1_750_000_000_000
 HOUR = 3_600_000
 
-SMALL = RegimeParams(ema_fast=6, ema_slow=24, er_window=12,
-                     atr_window=6, atr_pct_window=48)
+SMALL = RegimeParams(ema_fast=6, ema_slow=24, er_window=12, atr_window=6, atr_pct_window=48)
 
 
 def candles_from(closes, volumes=None):
     raw, prev = [], closes[0]
     for i, c in enumerate(closes):
         vol = volumes[i] if volumes else 10.0
-        raw.append([BASE + i * HOUR, prev, max(prev, c) * 1.002,
-                    min(prev, c) * 0.998, c, vol])
+        raw.append([BASE + i * HOUR, prev, max(prev, c) * 1.002, min(prev, c) * 0.998, c, vol])
         prev = c
     return normalize_candles(raw)
 
@@ -46,6 +44,7 @@ def first_signal(strategy, candles):
 
 # --- Lane A: volatility expansion breakout -------------------------------------
 
+
 def breakout_market():
     closes = [100.0 + (0.1 if i % 2 else -0.1) for i in range(90)]
     vols = [10.0] * 90
@@ -57,7 +56,10 @@ def breakout_market():
 
 def test_breakout_fires_with_volume_and_expansion():
     strategy = VolatilityExpansionBreakout(
-        regime=SMALL, min_atr_pct=0.0, max_atr_pct=1.0, min_volume_z=0.5,
+        regime=SMALL,
+        min_atr_pct=0.0,
+        max_atr_pct=1.0,
+        min_volume_z=0.5,
         breakout_bars=24,
     )
     idx, intent = first_signal(strategy, breakout_market())
@@ -66,7 +68,8 @@ def test_breakout_fires_with_volume_and_expansion():
     df = strategy.prepare(breakout_market())
     close = float(df["close"].iloc[idx])
     assert (intent.take_profit_price - close) == pytest.approx(
-        2.5 * (close - intent.stop_price), rel=1e-6)
+        2.5 * (close - intent.stop_price), rel=1e-6
+    )
 
 
 def test_breakout_blocked_without_volume():
@@ -75,7 +78,10 @@ def test_breakout_blocked_without_volume():
         closes.append(closes[-1] * 1.006)
     flat_vol = candles_from(closes)  # volume never expands
     strategy = VolatilityExpansionBreakout(
-        regime=SMALL, min_atr_pct=0.0, max_atr_pct=1.0, min_volume_z=0.5,
+        regime=SMALL,
+        min_atr_pct=0.0,
+        max_atr_pct=1.0,
+        min_volume_z=0.5,
         breakout_bars=24,
     )
     _idx, intent = first_signal(strategy, flat_vol)
@@ -84,7 +90,10 @@ def test_breakout_blocked_without_volume():
 
 def test_breakout_blocked_by_volatility_ceiling():
     strategy = VolatilityExpansionBreakout(
-        regime=SMALL, min_atr_pct=0.0, max_atr_pct=0.05, min_volume_z=0.5,
+        regime=SMALL,
+        min_atr_pct=0.0,
+        max_atr_pct=0.05,
+        min_volume_z=0.5,
         breakout_bars=24,
     )
     _idx, intent = first_signal(strategy, breakout_market())
@@ -92,6 +101,7 @@ def test_breakout_blocked_by_volatility_ceiling():
 
 
 # --- Lane B: panic reversal -------------------------------------------------------
+
 
 def panic_market(stabilize: bool = True):
     closes = [100.0 + (0.1 if i % 2 else -0.1) for i in range(100)]
@@ -108,13 +118,20 @@ def panic_market(stabilize: bool = True):
 
 def panic_strategy(candles_len, funding_flushed=True):
     funding = funding_series(
-        candles_len, rate=0.0001,
+        candles_len,
+        rate=0.0001,
         late_rate=-0.0006 if funding_flushed else 0.0008,
         switch_at=candles_len - 24,
     )
     return PanicReversal(
-        funding, regime=SMALL, drop_z_window=48, funding_pct_window=48,
-        min_atr_pct=0.5, target_window=48, min_rr=1.5, drop_z_entry=-2.0,
+        funding,
+        regime=SMALL,
+        drop_z_window=48,
+        funding_pct_window=48,
+        min_atr_pct=0.5,
+        target_window=48,
+        min_rr=1.5,
+        drop_z_entry=-2.0,
     )
 
 
@@ -136,12 +153,12 @@ def test_panic_reversal_never_catches_falling_knife():
 
 def test_panic_reversal_blocked_when_longs_still_crowded():
     candles = panic_market(stabilize=True)
-    _idx, intent = first_signal(
-        panic_strategy(len(candles), funding_flushed=False), candles)
+    _idx, intent = first_signal(panic_strategy(len(candles), funding_flushed=False), candles)
     assert intent is None
 
 
 # --- Lane C: funding squeeze continuation ----------------------------------------
+
 
 def squeeze_market():
     closes = [100.0 + (0.1 if i % 2 else -0.1) for i in range(90)]
@@ -154,10 +171,14 @@ def squeeze_market():
 
 def test_squeeze_joins_crowding_in_trend():
     candles = squeeze_market()
-    funding = funding_series(len(candles), rate=0.0001, late_rate=0.003,
-                             switch_at=len(candles) - 10)
+    funding = funding_series(
+        len(candles), rate=0.0001, late_rate=0.003, switch_at=len(candles) - 10
+    )
     strategy = FundingSqueezeContinuation(
-        funding, regime=SMALL, funding_pct_window=48, extreme_pct=0.85,
+        funding,
+        regime=SMALL,
+        funding_pct_window=48,
+        extreme_pct=0.85,
     )
     _idx, intent = first_signal(strategy, candles)
     assert intent is not None
@@ -169,10 +190,14 @@ def test_squeeze_blocked_without_trend():
     # extreme funding in CHOP: that's MR territory, not squeeze territory
     closes = [100.0 + (0.5 if i % 2 else -0.5) for i in range(140)]
     candles = candles_from(closes)
-    funding = funding_series(len(candles), rate=0.0001, late_rate=0.003,
-                             switch_at=len(candles) - 10)
+    funding = funding_series(
+        len(candles), rate=0.0001, late_rate=0.003, switch_at=len(candles) - 10
+    )
     strategy = FundingSqueezeContinuation(
-        funding, regime=SMALL, funding_pct_window=48, extreme_pct=0.85,
+        funding,
+        regime=SMALL,
+        funding_pct_window=48,
+        extreme_pct=0.85,
     )
     _idx, intent = first_signal(strategy, candles)
     assert intent is None
@@ -187,10 +212,14 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
     assert set(STRATEGIES) == {
         "measurement_only_v1",
         "crypto_trend_atr_margin_v1",
-        "trend_continuation_v1", "funding_mean_reversion_v1",
-        "volatility_expansion_breakout_v1", "panic_reversal_v1",
-        "funding_squeeze_continuation_v1", "structure_bos_1h",
-        "fee_wall_momentum_observer_v1", "squeeze_expansion_breakout_v2",
+        "trend_continuation_v1",
+        "funding_mean_reversion_v1",
+        "volatility_expansion_breakout_v1",
+        "panic_reversal_v1",
+        "funding_squeeze_continuation_v1",
+        "structure_bos_1h",
+        "fee_wall_momentum_observer_v1",
+        "squeeze_expansion_breakout_v2",
         "squeeze_expansion_breakout_v3",
         "squeeze_expansion_breakout_v4",
         "range_expansion_observer_v1",
@@ -205,4 +234,8 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "trend_pullback_1h_v1",
         "tick_accepted_breakout_v1",
         "trend_squeeze_continuation_1h_v1",
+        "range_expansion_realtime_v1",
+        "structure_bos_realtime_v1",
+        "session_continuation_realtime_v1",
+        "htf_structure_continuation_realtime_v1",
     }

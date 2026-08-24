@@ -26,6 +26,10 @@ from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.squeeze_acceptance_observe import SqueezeAcceptanceObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
+from vnedge.strategy.realtime_scanners import (
+    HtfStructureContinuationRealtimeV1,
+    RangeExpansionRealtimeV1,
+)
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionBreakoutV3
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
@@ -58,9 +62,11 @@ class FakeFeed:
         )
         bid, ask = self.quote
         return MarketState(
-            symbol=SYM, last_update=last,
+            symbol=SYM,
+            last_update=last,
             spread_bps=(ask - bid) / ((ask + bid) / 2) * 10_000,
-            estimated_slippage_bps=2.0, funding_rate=self.funding_rate,
+            estimated_slippage_bps=2.0,
+            funding_rate=self.funding_rate,
             exchange_healthy=self.healthy,
         )
 
@@ -103,8 +109,7 @@ class AlwaysLong(BaseStrategy):
 
     def signal(self, df, index):
         close = float(df["close"].iloc[index])
-        return SignalIntent("long", stop_price=close * 0.95,
-                            take_profit_price=close * 1.10)
+        return SignalIntent("long", stop_price=close * 0.95, take_profit_price=close * 1.10)
 
 
 class LadderLong(AlwaysLong):
@@ -165,6 +170,46 @@ class DiagnosticLong(AlwaysLong):
         }
 
 
+class OrderingAcceptanceObserver(SqueezeAcceptanceObserveRunner):
+    """Minimal observer used to pin the runtime's close/quote tie-break."""
+
+    def restore(self, df: pd.DataFrame) -> None:
+        del df
+
+    def on_prepared_bar(
+        self,
+        df: pd.DataFrame,
+        index: int,
+        bar_ts: datetime,
+    ) -> None:
+        del df, index, bar_ts
+        self.events.append("candle")
+
+    def on_quote(
+        self,
+        *,
+        bid: float,
+        ask: float,
+        ts: datetime,
+        received_ts: datetime | None = None,
+        sequence: int | str | None = None,
+        source: str = "unknown",
+        exchange_timestamped: bool = False,
+        overflow_drops: int = 0,
+    ) -> None:
+        del (
+            bid,
+            ask,
+            ts,
+            received_ts,
+            sequence,
+            source,
+            exchange_timestamped,
+            overflow_drops,
+        )
+        self.events.append("quote")
+
+
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
     strategy = AlwaysLong()
     strategy.min_score = 6.0
@@ -183,9 +228,7 @@ def test_eval_threshold_extraction_reads_frozen_strategy_params():
 
 
 def history(n=5) -> pd.DataFrame:
-    return normalize_candles(
-        [[BASE + i * MIN, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(n)]
-    )
+    return normalize_candles([[BASE + i * MIN, 100.0, 100.5, 99.5, 100.0, 5.0] for i in range(n)])
 
 
 def live_rows(start=5, n=3, low=99.5, high=100.5):
@@ -207,24 +250,43 @@ def timed_rows(start: str, offsets: tuple[int, ...], low=99.5, high=100.5):
     ]
 
 
-def build_session(tmp_path, feed, strategy=None, script=None, mode=RunnerMode.PAPER,
-                  tick_stops_enabled=True, post_exit_cooldown_bars=1,
-                  trial_meta=None, daily_factory=None, max_holding_bars=48,
-                  timeframe="1h"):
-    config = RunnerConfig(mode=mode, symbol=SYM, timeframe=timeframe,
-                          reconcile_every_bars=2,
-                          tick_stops_enabled=tick_stops_enabled,
-                          post_exit_cooldown_bars=post_exit_cooldown_bars,
-                          max_holding_bars=max_holding_bars,
-                          daily_factory=daily_factory or DailySignalFactoryConfig())
+def build_session(
+    tmp_path,
+    feed,
+    strategy=None,
+    script=None,
+    mode=RunnerMode.PAPER,
+    tick_stops_enabled=True,
+    post_exit_cooldown_bars=1,
+    trial_meta=None,
+    daily_factory=None,
+    max_holding_bars=48,
+    timeframe="1h",
+):
+    config = RunnerConfig(
+        mode=mode,
+        symbol=SYM,
+        timeframe=timeframe,
+        reconcile_every_bars=2,
+        tick_stops_enabled=tick_stops_enabled,
+        post_exit_cooldown_bars=post_exit_cooldown_bars,
+        max_holding_bars=max_holding_bars,
+        daily_factory=daily_factory or DailySignalFactoryConfig(),
+    )
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
     kill = KillSwitch(kill_file=tmp_path / "KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange, script=script))
     session = LivePaperSession(
-        strategy or AlwaysLong(), feed, history(), config,
-        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+        strategy or AlwaysLong(),
+        feed,
+        history(),
+        config,
+        gateway=gateway,
+        order_manager=om,
+        exchange=exchange,
+        journal=journal,
         trial_meta=trial_meta,
     )
     return session, exchange
@@ -252,6 +314,16 @@ def test_active_scanner_runtime_contract_controls_cost_and_hold(tmp_path):
     assert range_session.config.max_holding_bars == 48
     assert bos_session.cost_profile == "swing"
     assert bos_session.config.max_holding_bars == 192
+
+
+def test_delta_legacy_swing_lane_uses_gst_aware_profile(tmp_path):
+    feed = FakeFeed([])
+    feed.exchange_id = "delta_india"
+    session, _ = build_session(tmp_path, feed, timeframe="1h")
+
+    assert session.cost_profile == "delta_swing"
+    assert session.cost_model.round_trip_bps(include_safety=False) == pytest.approx(15.8)
+    assert session.cost_model.round_trip_bps() == pytest.approx(18.8)
 
 
 def test_active_scanner_rejects_silent_hold_horizon_drift(tmp_path):
@@ -299,6 +371,41 @@ def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
     )
     assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
     assert session.shadow_outcomes is None
+
+
+def test_realtime_successor_selects_quote_acceptance_runner(tmp_path):
+    strategy = RangeExpansionRealtimeV1()
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=strategy,
+        mode=RunnerMode.SHADOW,
+        timeframe="15m",
+        max_holding_bars=48,
+    )
+    assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
+    assert session.scanner_observer.strategy is strategy
+    assert session.shadow_outcomes is None
+
+
+def test_htf_continuation_has_runner_exit_without_fixed_profit_cap(tmp_path):
+    strategy = HtfStructureContinuationRealtimeV1()
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=strategy,
+        mode=RunnerMode.SHADOW,
+        timeframe="15m",
+        max_holding_bars=48,
+    )
+
+    assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
+    config = session.scanner_observer.exits.config
+    assert config.tp_ladder == ()
+    assert config.failed_breakout is False
+    assert config.breakeven_arm_r == 1.25
+    assert config.trail_arm_r == 2.0
+    assert config.trail_atr_mult == 1.5
 
 
 async def test_strategy_prepare_yields_event_loop_to_peer_lanes(tmp_path):
@@ -361,6 +468,42 @@ async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_pa
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
 
 
+async def test_same_wait_batch_processes_candle_before_quote(tmp_path):
+    """A ready candle and quote are both consumed; the quote is never lost."""
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    feed = QuoteDrivenFeed(now=now)
+    open_time = now.replace(minute=0) - timedelta(hours=1)
+    raw = [
+        int(open_time.timestamp() * 1000),
+        100.0,
+        100.5,
+        99.5,
+        100.1,
+        5.0,
+    ]
+    quote_ts = open_time + timedelta(hours=1)
+    feed.closed_candles.put_nowait(raw)
+    feed.push_quote(quote_ts, bid=100.2, ask=100.3)
+    session, _ = build_session(
+        tmp_path,
+        feed,
+        strategy=AlwaysLong(),
+        mode=RunnerMode.SHADOW,
+    )
+    observer = OrderingAcceptanceObserver(
+        journal=session.journal,
+        symbol=SYM,
+    )
+    observer.events = []
+    session.scanner_observer = observer
+
+    await session.run(max_bars=1)
+
+    assert observer.events == ["candle", "quote"]
+    assert feed.quote_updates.empty()
+    assert not session._deferred_quote_updates
+
+
 async def test_closed_candle_triggers_full_pipeline(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed)
@@ -386,9 +529,10 @@ async def test_every_entry_path_rejects_edge_below_cost_wall(tmp_path):
     rejection = next(record for record in records if record["kind"] == "cost_rejected")
     assert rejection["payload"]["timeframe"] == "1h"
     assert rejection["payload"]["decision_price"] == 100.0
-    assert rejection["payload"]["bar_ts"] == pd.to_datetime(
-        BASE + 5 * MIN, unit="ms", utc=True
-    ).isoformat()
+    assert (
+        rejection["payload"]["bar_ts"]
+        == pd.to_datetime(BASE + 5 * MIN, unit="ms", utc=True).isoformat()
+    )
     assert session.last_reject_reason.startswith("cost_gate:")
 
 
@@ -433,9 +577,9 @@ def test_candle_gap_bars_arithmetic(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]))
     session.candles = _hourly(5)
     last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
-    assert session._candle_gap_bars(last + _HR_MS) == 0        # contiguous
-    assert session._candle_gap_bars(last + 3 * _HR_MS) == 2    # 2 skipped
-    assert session._candle_gap_bars(last - _HR_MS) == -1       # backward
+    assert session._candle_gap_bars(last + _HR_MS) == 0  # contiguous
+    assert session._candle_gap_bars(last + 3 * _HR_MS) == 2  # 2 skipped
+    assert session._candle_gap_bars(last - _HR_MS) == -1  # backward
 
 
 async def test_feed_gap_fails_closed_when_backfill_unavailable(tmp_path):
@@ -467,9 +611,7 @@ async def test_feed_gap_heals_when_backfill_succeeds(tmp_path):
     # the two missing bars were spliced in, so the series is contiguous again
     assert int(session.candles["timestamp"].iloc[-1].value // 1_000_000) == last + 2 * _HR_MS
     assert session._append_candle(_bar(last + 3 * _HR_MS))
-    await session._guard_candle_continuity(
-        _bar(last + 4 * _HR_MS), datetime.now(UTC)
-    )
+    await session._guard_candle_continuity(_bar(last + 4 * _HR_MS), datetime.now(UTC))
     assert session._degraded_reason is None
 
 
@@ -483,9 +625,7 @@ async def test_partial_gap_backfill_stays_blocked_and_is_persisted(tmp_path):
         return [_bar(since_ms)]  # two bars are missing; only one came back
 
     session._gap_fill = partial_fill
-    assert await session._guard_candle_continuity(
-        _bar(last + 3 * _HR_MS), datetime.now(UTC)
-    )
+    assert await session._guard_candle_continuity(_bar(last + 3 * _HR_MS), datetime.now(UTC))
     assert session._degraded_reason == "feed_gap:2_bars_unfilled"
     assert session._market_state().data_quality == "gap"
     records = session.gap_store.read("fake", SYM)
@@ -504,19 +644,13 @@ async def test_future_and_out_of_order_candles_are_withheld(tmp_path):
 
     assert not await session._guard_candle_continuity(_bar(future_open_ms), now)
     assert session._degraded_reason == "future_candle:clock_skew"
-    assert GapKind.CLOCK_SKEW in {
-        record.kind for record in session.gap_store.read("fake", SYM)
-    }
+    assert GapKind.CLOCK_SKEW in {record.kind for record in session.gap_store.read("fake", SYM)}
 
     session._clear_degraded("test reset")
     last = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
-    assert not await session._guard_candle_continuity(
-        _bar(last - _HR_MS), datetime.now(UTC)
-    )
+    assert not await session._guard_candle_continuity(_bar(last - _HR_MS), datetime.now(UTC))
     assert session._degraded_reason == "out_of_order_candle"
-    assert GapKind.OUT_OF_ORDER in {
-        record.kind for record in session.gap_store.read("fake", SYM)
-    }
+    assert GapKind.OUT_OF_ORDER in {record.kind for record in session.gap_store.read("fake", SYM)}
 
 
 def test_degraded_recoverable_semantics(tmp_path):
@@ -555,10 +689,10 @@ async def test_degraded_lane_blocks_new_entries(tmp_path):
 
 async def test_time_machine_wired_read_only(tmp_path):
     feed = FakeFeed(live_rows(n=1))
-    session, _ = build_session(tmp_path, feed)   # default tf 1h → TM created
+    session, _ = build_session(tmp_path, feed)  # default tf 1h → TM created
     await session.run(max_bars=1)
     lc = session.time_machine.get_last_closed(SYM, "1h")
-    assert lc is not None and lc.is_closed        # closed bar reached the TM
+    assert lc is not None and lc.is_closed  # closed bar reached the TM
     snap = session._tm_snapshot()
     assert snap is not None and "health" in snap and snap["degraded"] is False
 
@@ -574,10 +708,10 @@ async def test_time_machine_fault_never_breaks_trading(tmp_path):
         def check_health(self, *a, **k):
             raise RuntimeError("boom")
 
-    session.time_machine = Boom()               # fail-closed: must not propagate
+    session.time_machine = Boom()  # fail-closed: must not propagate
     report = await session.run(max_bars=1)
-    assert report.bars_processed == 1           # trading proceeded untouched
-    assert session._tm_degraded is True         # TM flagged degraded
+    assert report.bars_processed == 1  # trading proceeded untouched
+    assert session._tm_degraded is True  # TM flagged degraded
 
 
 async def test_stale_feed_blocks_entries(tmp_path):
@@ -597,7 +731,7 @@ async def test_candle_path_gate_allows_healthy_entry(tmp_path):
     report = await session.run(max_bars=1)
     assert report.orders_submitted == 1
     assert len(exchange.get_positions()) == 1
-    assert session._decision_skips == {}          # nothing blocked
+    assert session._decision_skips == {}  # nothing blocked
 
 
 async def test_candle_path_gate_blocks_entry_when_decision_tf_unhealthy(tmp_path):
@@ -618,18 +752,18 @@ async def test_candle_path_gate_never_blocks_exits(tmp_path):
     feed = FakeFeed(live_rows(start=5, n=1))
     session, exchange = build_session(tmp_path, feed)
     await session.run(max_bars=1)
-    assert len(exchange.get_positions()) == 1     # long open, stop at 95.0
+    assert len(exchange.get_positions()) == 1  # long open, stop at 95.0
     session.time_machine.health_of = lambda s, tf: "gapped"
     # next bar breaches the 95.0 stop (low 94); one minute later so no gap-degrade
     feed.closed_candles.put_nowait([BASE + 6 * MIN, 100.0, 100.5, 94.0, 96.0, 5.0])
     await session.run(max_bars=1)
-    assert exchange.get_positions() == []          # exit fired despite gapped TM
+    assert exchange.get_positions() == []  # exit fired despite gapped TM
 
 
 # --- D-lite: regime + plan overlays are OBSERVE-ONLY -------------------------
 async def test_overlays_recorded_without_changing_live_decision(tmp_path):
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)      # AlwaysLong, 1h -> swing
+    session, exchange = build_session(tmp_path, feed)  # AlwaysLong, 1h -> swing
     report = await session.run(max_bars=1)
     # live decision unchanged: the entry still submits exactly as before overlays
     assert report.orders_submitted == 1 and len(exchange.get_positions()) == 1
@@ -650,36 +784,48 @@ async def test_overlay_fault_never_breaks_trading(tmp_path):
     class Boom:
         def read_row(self, *a, **k):
             raise RuntimeError("overlay boom")
-    session._regime_model = Boom()                         # overlay fault
+
+    session._regime_model = Boom()  # overlay fault
     report = await session.run(max_bars=1)
-    assert report.orders_submitted == 1                    # trading proceeded untouched
-    assert session._overlay_plan is None                   # overlay simply recorded nothing
+    assert report.orders_submitted == 1  # trading proceeded untouched
+    assert session._overlay_plan is None  # overlay simply recorded nothing
 
 
 # --- trial scorecard + per-lane drawdown vs limit --------------------------
 def test_drawdown_pct_from_peak(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]))
-    session.tracker.peak_equity_usd = 550.0          # equity ~500 → 9.09% DD
+    session.tracker.peak_equity_usd = 550.0  # equity ~500 → 9.09% DD
     assert 8.5 < session._drawdown_pct() < 9.5
 
 
 def test_trial_scorecard_fails_on_drawdown_breach(tmp_path):
-    trial = {"trial_id": "funding_mr_btc_v1_20260703", "max_dd_pct": 6.0,
-             "min_trades": 10, "min_days": 14, "daily_stop_usd": 10.0, "started": "2026-07-03"}
+    trial = {
+        "trial_id": "funding_mr_btc_v1_20260703",
+        "max_dd_pct": 6.0,
+        "min_trades": 10,
+        "min_days": 14,
+        "daily_stop_usd": 10.0,
+        "started": "2026-07-03",
+    }
     session, _ = build_session(tmp_path, FakeFeed([]), trial_meta=trial)
-    session.tracker.peak_equity_usd = 550.0          # 9.09% DD > 6% hard limit
+    session.tracker.peak_equity_usd = 550.0  # 9.09% DD > 6% hard limit
     sc = session._trial_scorecard()
-    assert sc["verdict"] == "FAIL"                   # a HARD criterion breached
+    assert sc["verdict"] == "FAIL"  # a HARD criterion breached
     dd = next(c for c in sc["criteria"] if c["name"] == "max_drawdown")
     assert dd["hard"] and not dd["ok"] and dd["threshold"] == 6.0
 
 
 def test_trial_scorecard_pending_when_dd_ok_but_trades_short(tmp_path):
-    trial = {"trial_id": "t_20260703", "max_dd_pct": 6.0, "min_trades": 10,
-             "min_days": 14, "daily_stop_usd": 10.0}
+    trial = {
+        "trial_id": "t_20260703",
+        "max_dd_pct": 6.0,
+        "min_trades": 10,
+        "min_days": 14,
+        "daily_stop_usd": 10.0,
+    }
     session, _ = build_session(tmp_path, FakeFeed([]), trial_meta=trial)
-    sc = session._trial_scorecard()                  # no DD, 0 trades
-    assert sc["verdict"] == "PENDING"                # accumulation, not failure
+    sc = session._trial_scorecard()  # no DD, 0 trades
+    assert sc["verdict"] == "PENDING"  # accumulation, not failure
     trades = next(c for c in sc["criteria"] if c["name"] == "min_trades")
     assert trades["value"] == 0 and not trades["ok"] and not trades["hard"]
 
@@ -758,7 +904,7 @@ async def test_paper_mode_is_not_primed_on_startup(tmp_path):
 
     await session.run(max_bars=0)
 
-    assert session.orders_submitted == 0      # nothing submitted from a prime
+    assert session.orders_submitted == 0  # nothing submitted from a prime
     assert exchange.get_positions() == []
 
 
@@ -771,9 +917,7 @@ async def test_paper_runner_heartbeats_even_without_signals_or_new_bars(tmp_path
     assert session.orders_submitted == 0
     assert exchange.get_positions() == []
     heartbeats = [
-        r["payload"]
-        for r in session.journal.read_all()
-        if r["kind"] == "paper_lane_heartbeat"
+        r["payload"] for r in session.journal.read_all() if r["kind"] == "paper_lane_heartbeat"
     ]
     assert len(heartbeats) == 1
     assert heartbeats[0]["reason"] == "runner_started"
@@ -855,11 +999,7 @@ async def test_daily_factory_force_closes_live_paper_position(tmp_path):
     assert report.orders_submitted == 2
     assert report.fills == 2
     assert exchange.get_positions() == []
-    exits = [
-        r["payload"]
-        for r in session.journal.read_all()
-        if r["kind"] == "live_paper_exit"
-    ]
+    exits = [r["payload"] for r in session.journal.read_all() if r["kind"] == "live_paper_exit"]
     assert exits[-1]["reason"] == "daily_factory_close"
 
 
@@ -911,16 +1051,15 @@ async def test_max_holding_times_out_paper_position(tmp_path):
     rows = live_rows(n=1) + live_rows(start=6, n=3)
     feed = FakeFeed(rows)
     session, exchange = build_session(
-        tmp_path, feed, strategy=LongOnce(),
-        max_holding_bars=3, post_exit_cooldown_bars=0,
+        tmp_path,
+        feed,
+        strategy=LongOnce(),
+        max_holding_bars=3,
+        post_exit_cooldown_bars=0,
     )
     await session.run(max_bars=4)
     assert exchange.get_positions() == []  # timed out, flat
-    exits = [
-        r["payload"]
-        for r in session.journal.read_all()
-        if r["kind"] == "live_paper_exit"
-    ]
+    exits = [r["payload"] for r in session.journal.read_all() if r["kind"] == "live_paper_exit"]
     assert any(e["reason"] == "max_holding" for e in exits), exits
 
 
@@ -930,8 +1069,11 @@ async def test_position_held_below_max_holding_stays_open(tmp_path):
     rows = live_rows(n=1) + live_rows(start=6, n=2)
     feed = FakeFeed(rows)
     session, exchange = build_session(
-        tmp_path, feed, strategy=LongOnce(),
-        max_holding_bars=3, post_exit_cooldown_bars=0,
+        tmp_path,
+        feed,
+        strategy=LongOnce(),
+        max_holding_bars=3,
+        post_exit_cooldown_bars=0,
     )
     await session.run(max_bars=3)
     assert len(exchange.get_positions()) == 1  # still holding
@@ -951,11 +1093,7 @@ async def test_live_paper_ladder_partial_arms_breakeven(tmp_path):
     assert report.orders_submitted == 3
     assert report.fills == 3
     assert exchange.get_positions() == []
-    exits = [
-        r["payload"]
-        for r in session.journal.read_all()
-        if r["kind"] == "live_paper_exit"
-    ]
+    exits = [r["payload"] for r in session.journal.read_all() if r["kind"] == "live_paper_exit"]
     assert [e["reason"] for e in exits] == ["tp1_partial", "breakeven_stop"]
     assert exits[0]["final"] is False
     assert exits[1]["final"] is True
@@ -1033,10 +1171,7 @@ def test_reconciliation_mismatch_trips_live_session_fail_closed_once(tmp_path):
     session._reconcile()
 
     assert session.gateway.kill_switch.is_active
-    records = [
-        r for r in session.journal.read_all()
-        if r["kind"] == "reconciliation_fail_closed"
-    ]
+    records = [r for r in session.journal.read_all() if r["kind"] == "reconciliation_fail_closed"]
     assert len(records) == 1
     assert records[0]["payload"]["mismatches"] == ["internal vs venue"]
 
@@ -1071,11 +1206,10 @@ async def test_shadow_prime_backfills_observability_records(tmp_path):
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
     await session.run(max_bars=0)
 
-    evals = [r["payload"] for r in session.journal.read_all()
-             if r["kind"] == "lane_eval"]
+    evals = [r["payload"] for r in session.journal.read_all() if r["kind"] == "lane_eval"]
     assert len(evals) == 3
     assert [e["backfill"] for e in evals] == [True, True, True]
-    assert all(e["fired"] for e in evals)     # AlwaysLong
+    assert all(e["fired"] for e in evals)  # AlwaysLong
     # Backfilled bars journal observations only, including the latest seed.
     intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
     assert intents == []
@@ -1171,11 +1305,12 @@ async def test_legacy_snapshot_without_plan_synthesizes_for_funding_mr(tmp_path)
     # legacy restore: position exists, no plan stored
     exchange.set_quote(SYM, 100.0, 100.1)
     from vnedge.paper.simulated_exchange import PaperOrderRequest
+
     exchange.submit_order(PaperOrderRequest("legacy", SYM, False, 0.5))
     session.restore_plan(None)
     assert session._plan is not None
     assert session._plan.signal.side == "short"
-    assert session._plan.signal.stop_price > 100.0     # stop above short entry
+    assert session._plan.signal.stop_price > 100.0  # stop above short entry
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert "plan_rebuilt_on_resume" in kinds
 
@@ -1201,8 +1336,8 @@ async def test_tick_stop_breach_exits_between_bars(tmp_path):
     feed.quote = (94.0, 94.02)  # bid pierces the stop between bars
     await run_idle_ticks(session)
 
-    assert exchange.get_positions() == []      # flat — stopped out on the tick
-    assert session._plan is None               # plan cleared, entries re-enabled
+    assert exchange.get_positions() == []  # flat — stopped out on the tick
+    assert session._plan is None  # plan cleared, entries re-enabled
     assert session.tick_stop_exits == 1
     fills = exchange.get_fills()
     assert len(fills) == 2
@@ -1263,8 +1398,11 @@ async def test_rejected_tick_stop_preserves_plan_then_retries_with_new_key(tmp_p
 
     assert exchange.get_positions() == []
     assert session._plan is None
-    intents = [r["payload"]["intent_key"] for r in session.journal.read_all()
-               if r["kind"] == "order_intent"]
+    intents = [
+        r["payload"]["intent_key"]
+        for r in session.journal.read_all()
+        if r["kind"] == "order_intent"
+    ]
     assert intents[-2].startswith(f"exit|{SYM}|tick_stop|")
     assert intents[-1] == intents[-2] + "|retry=1"
 
@@ -1286,9 +1424,11 @@ async def test_timeout_lost_tick_stop_preserves_until_reconcile_then_retries(tmp
     assert session._plan is not None
     assert session.om.has_unresolved_orders
     await session._check_tick_stop(datetime.now(UTC))
-    exit_intents = [r for r in session.journal.read_all()
-                    if r["kind"] == "order_intent"
-                    and r["payload"]["intent"]["reduce_only"]]
+    exit_intents = [
+        r
+        for r in session.journal.read_all()
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
+    ]
     assert len(exit_intents) == 1
 
     session._reconcile()
@@ -1296,9 +1436,11 @@ async def test_timeout_lost_tick_stop_preserves_until_reconcile_then_retries(tmp
 
     assert exchange.get_positions() == []
     assert session._plan is None
-    intents = [r["payload"]["intent_key"] for r in session.journal.read_all()
-               if r["kind"] == "order_intent"
-               and r["payload"]["intent"]["reduce_only"]]
+    intents = [
+        r["payload"]["intent_key"]
+        for r in session.journal.read_all()
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
+    ]
     assert intents[-1] == intents[-2] + "|retry=1"
 
 
@@ -1312,16 +1454,14 @@ async def test_tick_quote_without_breach_does_not_exit(tmp_path):
 
     assert len(exchange.get_positions()) == 1  # still in the trade
     assert session._plan is not None
-    assert len(exchange.get_fills()) == 1      # entry fill only
+    assert len(exchange.get_fills()) == 1  # entry fill only
     assert session.tick_stop_exits == 0
     assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
 
 
 async def test_tick_stops_disabled_keeps_bar_close_behavior(tmp_path):
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(
-        tmp_path, feed, strategy=LongOnce(), tick_stops_enabled=False
-    )
+    session, exchange = build_session(tmp_path, feed, strategy=LongOnce(), tick_stops_enabled=False)
     await session.run(max_bars=1)
 
     feed.quote = (94.0, 94.02)  # breaches the stop, but tick stops are off
@@ -1346,14 +1486,14 @@ async def test_no_double_exit_when_next_bar_also_breaches(tmp_path):
     feed.quote = (94.0, 94.02)
     await run_idle_ticks(session)
     assert exchange.get_positions() == []
-    assert session.orders_submitted == 2       # entry + tick stop
+    assert session.orders_submitted == 2  # entry + tick stop
 
     # the following bar shows the same breach inside its OHLC range
     feed.closed_candles.put_nowait([BASE + 6 * MIN, 94.0, 94.5, 93.5, 94.0, 5.0])
     await session.run(max_bars=1)
 
-    assert session.orders_submitted == 2       # no second exit submitted
-    assert len(exchange.get_fills()) == 2      # entry + single exit
+    assert session.orders_submitted == 2  # no second exit submitted
+    assert len(exchange.get_fills()) == 2  # entry + single exit
     assert exchange.get_positions() == []
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert kinds.count("tick_stop_exit") == 1
@@ -1385,7 +1525,7 @@ async def test_shadow_lane_unaffected_by_tick_stops(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
     await session.run(max_bars=1)
-    assert session._plan is None               # shadow never arms a plan
+    assert session._plan is None  # shadow never arms a plan
 
     feed.quote = (10.0, 10.02)  # would breach any long stop if a plan existed
     await run_idle_ticks(session, seconds=0.1)
@@ -1410,7 +1550,7 @@ async def test_tick_stop_mode_guard_holds_even_with_forced_shadow_plan(tmp_path)
     await session._check_tick_stop(datetime.now(UTC))
 
     assert session.orders_submitted == 0
-    assert session._plan is not None           # untouched
+    assert session._plan is not None  # untouched
     assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
 
 
@@ -1438,6 +1578,7 @@ async def test_strategy_without_synthesis_still_orphans(tmp_path):
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
     exchange.set_quote(SYM, 100.0, 100.1)
     from vnedge.paper.simulated_exchange import PaperOrderRequest
+
     exchange.submit_order(PaperOrderRequest("orphan", SYM, True, 0.5))
     session.restore_plan(None)
     assert session._plan is None
@@ -1454,14 +1595,20 @@ async def test_synthesized_stop_clamped_after_volatility_gap(tmp_path):
 
     class WideStopStrategy(AlwaysLong):
         def synthesize_exit_plan(self, df, index, side, entry_price):
-            return SI("long", stop_price=entry_price * 0.80,  # 20% away — insane
-                      take_profit_price=entry_price * 1.1, reason="wide rebuild")
+            return SI(
+                "long",
+                stop_price=entry_price * 0.80,  # 20% away — insane
+                take_profit_price=entry_price * 1.1,
+                reason="wide rebuild",
+            )
 
     feed = FakeFeed([])
-    session, exchange = build_session(tmp_path, feed, strategy=WideStopStrategy(),
-                                      mode=RunnerMode.PAPER)
+    session, exchange = build_session(
+        tmp_path, feed, strategy=WideStopStrategy(), mode=RunnerMode.PAPER
+    )
     exchange.set_quote(SYM, 100.0, 100.1)
     from vnedge.paper.simulated_exchange import PaperOrderRequest
+
     exchange.submit_order(PaperOrderRequest("x", SYM, True, 0.5))
     session.restore_plan(None)
     assert session._plan is not None
@@ -1479,10 +1626,16 @@ async def test_corrupted_persisted_plan_rejected(tmp_path):
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.PAPER)
     exchange.set_quote(SYM, 100.0, 100.1)
     from vnedge.paper.simulated_exchange import PaperOrderRequest
+
     exchange.submit_order(PaperOrderRequest("x", SYM, True, 0.5))
-    session.restore_plan({"side": "long", "stop_price": 1.0,   # 99% away
-                          "take_profit_price": None,
-                          "entry_bar_ts": "2026-07-09T00:00:00+00:00"})
+    session.restore_plan(
+        {
+            "side": "long",
+            "stop_price": 1.0,  # 99% away
+            "take_profit_price": None,
+            "entry_bar_ts": "2026-07-09T00:00:00+00:00",
+        }
+    )
     assert session._plan is None
     kinds = [r["kind"] for r in session.journal.read_all()]
     assert "plan_restore_rejected" in kinds
@@ -1525,15 +1678,15 @@ async def test_maker_edge_entry_rests_as_limit_then_fills_maker_on_touch(tmp_pat
     # posted a passive buy limit at the bid (99.99); ask 100.01 > 99.99 -> rests
     assert session._pending_entry is not None
     assert session._plan is None
-    assert exchange.get_positions() == []           # NOT a position yet
+    assert exchange.get_positions() == []  # NOT a position yet
     # next bar: price drops so the ask touches the resting limit -> maker fill
-    feed.quote = (99.90, 99.98)                      # ask 99.98 <= 99.99
+    feed.quote = (99.90, 99.98)  # ask 99.98 <= 99.99
     feed.closed_candles.put_nowait(_mrow(6))
     await session.run(max_bars=1)
     assert session._pending_entry is None and session._plan is not None
     assert len(exchange.get_positions()) == 1
     fill = exchange.get_fills()[-1]
-    assert fill.price == pytest.approx(99.99)        # filled at the limit, no cross
+    assert fill.price == pytest.approx(99.99)  # filled at the limit, no cross
     assert fill.fee_usd == pytest.approx(fill.quantity * 99.99 * _MAKER_FEE)  # MAKER fee
 
 
@@ -1544,12 +1697,12 @@ async def test_maker_edge_entry_unfilled_is_cancelled_and_skipped(tmp_path):
     assert session._pending_entry is not None
     # price never comes down to the limit; TTL (2 bars) lapses -> cancel & skip
     for i in (6, 7):
-        feed.quote = (100.20, 100.30)                # stays above the buy limit
+        feed.quote = (100.20, 100.30)  # stays above the buy limit
         feed.closed_candles.put_nowait(_mrow(i, close=101.0))
         await session.run(max_bars=1)
-    assert session._pending_entry is None            # signalled once, not re-fired
+    assert session._pending_entry is None  # signalled once, not re-fired
     assert session._plan is None
-    assert exchange.get_positions() == []            # the trade was skipped
+    assert exchange.get_positions() == []  # the trade was skipped
     assert "maker_entry_unfilled" in [e["event"] for e in session.trade_log]
 
 
@@ -1558,7 +1711,7 @@ async def test_non_maker_strategy_still_uses_immediate_market_entry(tmp_path):
     session, exchange = build_session(tmp_path, feed, strategy=AlwaysLong())  # not maker-route
     await session.run(max_bars=1)
     assert session._pending_entry is None
-    assert len(exchange.get_positions()) == 1        # market fill, immediate
+    assert len(exchange.get_positions()) == 1  # market fill, immediate
     fill = exchange.get_fills()[-1]
     assert fill.fee_usd == pytest.approx(fill.quantity * fill.price * _TAKER_FEE)  # taker
 
@@ -1569,10 +1722,13 @@ def test_runner_config_trail_flows_into_the_exit_state(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, _ = build_session(tmp_path, feed)
     # rebuild the session's config with trailing on (frozen model → new instance)
-    session.config = session.config.model_copy(update={"trail_atr_mult": 3.0, "trail_atr_window": 10})
+    session.config = session.config.model_copy(
+        update={"trail_atr_mult": 3.0, "trail_atr_window": 10}
+    )
     plan = session._new_plan(
-        SignalIntent(side="long", stop_price=99.0, take_profit_price=None,
-                     take_profit_levels=(), reason="t"),
+        SignalIntent(
+            side="long", stop_price=99.0, take_profit_price=None, take_profit_levels=(), reason="t"
+        ),
         history()["timestamp"].iloc[-1],
     )
     assert plan.exit_state.trail_atr_mult == 3.0
@@ -1587,7 +1743,7 @@ async def test_append_replaces_partial_seam_bar(tmp_path):
     last_ts_ms = int(session.candles["timestamp"].iloc[-1].value // 1_000_000)
     # same interval delivered as its TRUE close → replace last bar, return True
     assert session._append_candle([last_ts_ms, 100.0, 105.0, 95.0, 103.0, 20.0]) is True
-    assert float(session.candles["close"].iloc[-1]) == 103.0     # partial replaced by true close
+    assert float(session.candles["close"].iloc[-1]) == 103.0  # partial replaced by true close
     assert len(session.candles) == 3 and session.dropped_candles == 0
     # a strictly-older bar is still dropped as non-forward
     assert session._append_candle([last_ts_ms - _HR_MS, 1.0, 1.0, 1.0, 1.0, 1.0]) is False
@@ -1611,8 +1767,13 @@ async def test_canonical_close_wait_retries_until_trade_bar_is_ready(tmp_path):
         timeframe="1h",
         open_time=opened.to_pydatetime(),
         close_time=(opened + pd.Timedelta(hours=1)).to_pydatetime(),
-        open=Decimal(100), high=Decimal(102), low=Decimal(99), close=Decimal(101),
-        volume=Decimal(10), quote_volume=Decimal(1005), trade_count=5,
+        open=Decimal(100),
+        high=Decimal(102),
+        low=Decimal(99),
+        close=Decimal(101),
+        volume=Decimal(10),
+        quote_volume=Decimal(1005),
+        trade_count=5,
         vwap=Decimal("100.5"),
     )
 
@@ -1631,19 +1792,14 @@ async def test_canonical_close_wait_retries_until_trade_bar_is_ready(tmp_path):
     assert await session._await_canonical_candle(raw) is True
     assert store.calls == 3
     assert not any(
-        record["kind"] == "canonical_bar_timeout"
-        for record in session.journal.read_all()
+        record["kind"] == "canonical_bar_timeout" for record in session.journal.read_all()
     )
 
 
 async def test_canonical_close_timeout_is_explicit_and_non_armable(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
-    session.config = session.config.model_copy(
-        update={"canonical_candle_wait_seconds": 0.0}
-    )
-    session.canonical_candle_store = type(
-        "_MissingStore", (), {"read_at": lambda *args: None}
-    )()
+    session.config = session.config.model_copy(update={"canonical_candle_wait_seconds": 0.0})
+    session.canonical_candle_store = type("_MissingStore", (), {"read_at": lambda *args: None})()
     opened = pd.Timestamp("2026-08-22 13:00", tz="UTC")
     raw = [int(opened.timestamp() * 1000), 100, 102, 99, 101, 10]
 
@@ -1663,16 +1819,10 @@ def test_scanner_prerequisite_health_blocks_only_new_arms(tmp_path, monkeypatch)
     health = tmp_path / "scanner_health.json"
     monkeypatch.setenv("SCANNER_PREREQ_HEALTH_PATH", str(health))
 
-    health.write_text(
-        '{"status":"recovering","arms_allowed":false}', encoding="utf-8"
-    )
-    assert session._candle_path_arm_block(datetime.now(UTC)) == (
-        "scanner_prerequisite_recovering"
-    )
+    health.write_text('{"status":"recovering","arms_allowed":false}', encoding="utf-8")
+    assert session._candle_path_arm_block(datetime.now(UTC)) == ("scanner_prerequisite_recovering")
 
-    health.write_text(
-        '{"status":"ready","arms_allowed":true}', encoding="utf-8"
-    )
+    health.write_text('{"status":"ready","arms_allowed":true}', encoding="utf-8")
     # No Time Machine in this unit session, so readiness removes this gate.
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
 
@@ -1754,8 +1904,7 @@ def test_next_close_bulk_reconciles_full_missing_canonical_warmup(tmp_path):
 
     session.canonical_candle_store = _BulkStore()
     next_ts = int(
-        (pd.Timestamp(session.candles["timestamp"].iloc[-1]) + pd.Timedelta(hours=1))
-        .timestamp()
+        (pd.Timestamp(session.candles["timestamp"].iloc[-1]) + pd.Timedelta(hours=1)).timestamp()
         * 1000
     )
     assert session._append_candle([next_ts, 100, 101, 99, 100, 1])

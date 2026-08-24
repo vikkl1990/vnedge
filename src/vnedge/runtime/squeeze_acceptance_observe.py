@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import cast
 
@@ -14,6 +14,8 @@ from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.squeeze_observe import FireGuard, JournalSink, ScannerApproval
+from vnedge.strategy.base_strategy import BaseStrategy
+from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.squeeze_expansion_breakout_v3 import PARAMS
 
 
@@ -24,12 +26,11 @@ class SqueezeAcceptanceObserveRunner:
     journal: JournalSink
     symbol: str
     strategy_id: str = "squeeze_expansion_breakout_v3"
+    strategy: BaseStrategy | None = None
     notional_usd: float = 3000.0
     margin_usd: float = 100.0
     approve_fire: FireGuard | None = None
-    acceptance: ExpansionAcceptanceEngine = field(
-        default_factory=ExpansionAcceptanceEngine
-    )
+    acceptance: ExpansionAcceptanceEngine = field(default_factory=ExpansionAcceptanceEngine)
     exits: ExitEngine = field(
         default_factory=lambda: ExitEngine(
             config=ExitConfig(
@@ -38,9 +39,7 @@ class SqueezeAcceptanceObserveRunner:
             )
         )
     )
-    costs: SessionCosts = field(
-        default_factory=lambda: SessionCosts.from_profile("delta_scalp")
-    )
+    costs: SessionCosts = field(default_factory=lambda: SessionCosts.from_profile("delta_scalp"))
     open_meta: dict | None = None
     candidates: int = 0
     fires: int = 0
@@ -64,10 +63,9 @@ class SqueezeAcceptanceObserveRunner:
     def __post_init__(self) -> None:
         if self.costs.cost_model is not None:
             self.exits = ExitEngine(
-                config=ExitConfig(
-                    breakeven_cost_bps=self.costs.cost_model.round_trip_bps(
-                        include_safety=False
-                    ),
+                config=replace(
+                    self.exits.config,
+                    breakeven_cost_bps=self.costs.cost_model.round_trip_bps(include_safety=False),
                     be_fee_buffer_bps=PARAMS.breakeven_buffer_bps,
                 )
             )
@@ -79,9 +77,7 @@ class SqueezeAcceptanceObserveRunner:
         for record in read_all():
             payload = record.get("payload", {})
             key = str(payload.get("intent_key") or "")
-            if record.get("kind") == "shadow_intent" and key.startswith(
-                f"{self.intent_prefix}|"
-            ):
+            if record.get("kind") == "shadow_intent" and key.startswith(f"{self.intent_prefix}|"):
                 self.candidates += 1
                 if payload.get("approved"):
                     intents[key] = payload
@@ -102,6 +98,7 @@ class SqueezeAcceptanceObserveRunner:
 
     def restore(self, df: pd.DataFrame) -> None:
         """Rebuild arm state and at most one durable virtual position."""
+        self._prepared_frame = df
         timestamps = pd.to_datetime(df.get("timestamp"), utc=True)
         pending = self._restore_payload
         decision_index: int | None = None
@@ -150,10 +147,13 @@ class SqueezeAcceptanceObserveRunner:
             if self.open_meta is not None and decision_index is not None and index > decision_index:
                 row = df.iloc[index]
                 decision = self.exits.on_bar(
-                    high=float(row["high"]), low=float(row["low"]),
-                    close=float(row["close"]), atr=float(row.get("sqz_atr", 0.0)),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    atr=self._row_atr(row),
                     bar_index=index,
                 )
+                decision = decision or self._strategy_exit(df, index, row)
                 if decision is not None:
                     net_won = self._journal_outcome(
                         decision, index, timestamps.iloc[index].to_pydatetime()
@@ -162,14 +162,18 @@ class SqueezeAcceptanceObserveRunner:
                     self.open_meta = None
 
     def on_prepared_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
+        self._prepared_frame = df
         self.current_bar_index = index
         row = df.iloc[index]
         if self.open_meta is not None:
             decision = self.exits.on_bar(
-                high=float(row["high"]), low=float(row["low"]),
-                close=float(row["close"]), atr=float(row.get("sqz_atr", 0.0)),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                atr=self._row_atr(row),
                 bar_index=index,
             )
+            decision = decision or self._strategy_exit(df, index, row)
             if decision is not None:
                 net_won = self._journal_outcome(decision, index, bar_ts)
                 self.acceptance.notify_flat(bar_index=index, net_won=net_won)
@@ -186,20 +190,18 @@ class SqueezeAcceptanceObserveRunner:
         sequence: int | str | None = None,
         source: str = "unknown",
         exchange_timestamped: bool = False,
+        overflow_drops: int = 0,
     ) -> FireDecision | None:
         if self._restore_error is not None:
             return None
+        self.acceptance.note_quote_overflow(overflow_drops)
         if self.open_meta is not None:
             pos = self.exits.pos
             price = bid if pos is not None and pos.side == "long" else ask
             decision = self.exits.on_tick(price=price)
             if decision is not None:
-                net_won = self._journal_outcome(
-                    decision, self.current_bar_index, ts
-                )
-                self.acceptance.notify_flat(
-                    bar_index=self.current_bar_index, net_won=net_won
-                )
+                net_won = self._journal_outcome(decision, self.current_bar_index, ts)
+                self.acceptance.notify_flat(bar_index=self.current_bar_index, net_won=net_won)
                 self.open_meta = None
             return None
 
@@ -245,40 +247,55 @@ class SqueezeAcceptanceObserveRunner:
         )
         self.last_approval = approval
         key = approval.intent_key or (
-            f"{self.intent_prefix}|{self.symbol}|{fire.side}|"
-            f"{int(ts.timestamp() * 1000)}"
+            f"{self.intent_prefix}|{self.symbol}|{fire.side}|{int(ts.timestamp() * 1000)}"
         )
-        self.journal.append("shadow_intent", {
-            "intent_key": key, "approved": approval.approved,
-            "failed_checks": list(approval.failed_checks),
-            "passed_checks": list(approval.passed_checks),
-            "explanation": approval.explanation or fire.reason,
-            "intent": approval.intent, "signal_reason": fire.reason,
-            "entry_price": fire.entry, "stop_price": fire.stop,
-            "box_edge": fire.box_edge, "risk": fire.risk,
-            "quote_event_ts": ts.isoformat(),
-            "quote_received_ts": (received_ts or ts).isoformat(),
-            "quote_sequence": sequence,
-            "quote_source": source,
-            "quote_exchange_timestamped": exchange_timestamped,
-            "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
-            "episode_id": fire.episode_id,
-            "margin_usd": approval.margin_usd or self.margin_usd,
-            "take_profit_price": None, "take_profit_levels": [],
-            "bar_ts": ts.isoformat(), "acceptance": "quote_hold",
-        })
+        self.journal.append(
+            "shadow_intent",
+            {
+                "intent_key": key,
+                "approved": approval.approved,
+                "failed_checks": list(approval.failed_checks),
+                "passed_checks": list(approval.passed_checks),
+                "explanation": approval.explanation or fire.reason,
+                "intent": approval.intent,
+                "signal_reason": fire.reason,
+                "entry_price": fire.entry,
+                "stop_price": fire.stop,
+                "box_edge": fire.box_edge,
+                "risk": fire.risk,
+                "quote_event_ts": ts.isoformat(),
+                "quote_received_ts": (received_ts or ts).isoformat(),
+                "quote_sequence": sequence,
+                "quote_source": source,
+                "quote_exchange_timestamped": exchange_timestamped,
+                "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
+                "episode_id": fire.episode_id,
+                "margin_usd": approval.margin_usd or self.margin_usd,
+                "take_profit_price": None,
+                "take_profit_levels": [],
+                "bar_ts": ts.isoformat(),
+                "acceptance": "quote_hold",
+            },
+        )
         if not approval.approved:
             self.rejected += 1
             self.acceptance.notify_rejected()
             return fire
         self.exits.open_from_fire(
-            side=fire.side, entry=fire.entry, stop=fire.stop, risk=fire.risk,
-            box_edge=fire.box_edge, entry_bar=self.current_bar_index,
+            side=fire.side,
+            entry=fire.entry,
+            stop=fire.stop,
+            risk=fire.risk,
+            box_edge=fire.box_edge,
+            entry_bar=self.current_bar_index,
         )
         self.open_meta = {
-            "side": fire.side, "entry": fire.entry,
-            "entry_bar": self.current_bar_index, "intent_key": key,
-            "reason": fire.reason, "bar_ts": ts,
+            "side": fire.side,
+            "entry": fire.entry,
+            "entry_bar": self.current_bar_index,
+            "intent_key": key,
+            "reason": fire.reason,
+            "bar_ts": ts,
             "notional_usd": approval.notional_usd or self.notional_usd,
             "margin_usd": approval.margin_usd or self.margin_usd,
         }
@@ -322,35 +339,100 @@ class SqueezeAcceptanceObserveRunner:
                 "quotes_seen": self.acceptance.quotes_seen,
                 "quotes_distinct": self.acceptance.quotes_distinct,
                 "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+                "quote_overflow_drops": self.acceptance.quote_overflow_drops,
             },
         )
 
     def _update_arm_from_row(self, row: pd.Series, index: int) -> None:
+        if self.strategy is not None:
+            # Give a concrete quote-entry strategy its complete causal frame.
+            # ``_prepared_frame`` is attached by on_prepared_bar/restore below;
+            # falling back to legacy squeeze columns preserves old revisions.
+            prepared = getattr(self, "_prepared_frame", None)
+            if isinstance(prepared, pd.DataFrame):
+                arm = self.strategy.realtime_arm(prepared, index)
+                if isinstance(arm, RealtimeEntryArm):
+                    self.acceptance.update_arm(self._compression_arm(arm, index))
+                    return
         values = {
             name: float(row.get(name, float("nan")))
             for name in (
-                "sqz_episode", "sqz_range_high", "sqz_range_low", "sqz_atr",
-                "sqz_vwap24", "sqz_compressed",
+                "sqz_episode",
+                "sqz_range_high",
+                "sqz_range_low",
+                "sqz_atr",
+                "sqz_vwap24",
+                "sqz_compressed",
             )
         }
         if not all(math.isfinite(values[n]) for n in values):
             return
-        self.acceptance.update_arm(CompressionArm(
-            episode_id=int(values["sqz_episode"]),
-            box_high=values["sqz_range_high"], box_low=values["sqz_range_low"],
-            atr=values["sqz_atr"], vwap=values["sqz_vwap24"],
-            bar_index=index, compressed=values["sqz_compressed"] > 0,
-        ))
+        self.acceptance.update_arm(
+            CompressionArm(
+                episode_id=int(values["sqz_episode"]),
+                box_high=values["sqz_range_high"],
+                box_low=values["sqz_range_low"],
+                atr=values["sqz_atr"],
+                vwap=values["sqz_vwap24"],
+                bar_index=index,
+                compressed=values["sqz_compressed"] > 0,
+            )
+        )
 
-    def _journal_outcome(
-        self, decision: ExitDecision, index: int, bar_ts: datetime
-    ) -> bool:
+    @staticmethod
+    def _compression_arm(arm: RealtimeEntryArm, index: int) -> CompressionArm:
+        return CompressionArm(
+            episode_id=arm.episode_id,
+            box_high=arm.long_level,
+            box_low=arm.short_level,
+            atr=arm.atr,
+            vwap=arm.reference_price,
+            bar_index=index,
+            compressed=True,
+            allow_long=arm.allow_long,
+            allow_short=arm.allow_short,
+            long_level=arm.long_level,
+            short_level=arm.short_level,
+            long_structural_stop=arm.long_structural_stop,
+            short_structural_stop=arm.short_structural_stop,
+            structural_stop_mode=arm.structural_stop_mode,
+            expires_after_bars=arm.expires_after_bars,
+            session_start_hour_utc=arm.session_start_hour_utc,
+            session_end_hour_utc=arm.session_end_hour_utc,
+            reason=arm.reason,
+        )
+
+    @staticmethod
+    def _row_atr(row: pd.Series) -> float:
+        for name in ("rt_atr", "sqz_atr", "bos15_bos_atr", "sc15_atr"):
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                return value
+        return 0.0
+
+    def _strategy_exit(self, df: pd.DataFrame, index: int, row: pd.Series) -> ExitDecision | None:
+        """Apply a causal strategy deterioration only after hard protection."""
+        pos = self.exits.pos
+        if self.strategy is None or pos is None:
+            return None
+        exit_intent = self.strategy.exit_signal(df, index, pos.side, pos.entry)
+        if exit_intent is None:
+            return None
+        close = float(row["close"])
+        return self.exits.close_now(
+            price=(float(exit_intent.exit_price) if exit_intent.exit_price is not None else close),
+            reason=exit_intent.reason,
+        )
+
+    def _journal_outcome(self, decision: ExitDecision, index: int, bar_ts: datetime) -> bool:
         meta = self.open_meta or {}
         side = str(meta.get("side") or "long")
         entry = float(meta.get("entry") or 1.0)
         gross_bps = (
-            (decision.price / entry - 1) if side == "long"
-            else (1 - decision.price / entry)
+            (decision.price / entry - 1) if side == "long" else (1 - decision.price / entry)
         ) * 10_000
         held = max(0, index - int(meta.get("entry_bar", index)))
         fee_bps = self.costs.round_trip_bps(held)
@@ -359,16 +441,27 @@ class SqueezeAcceptanceObserveRunner:
         net_usd = net_bps * notional / 10_000
         self.outcomes += 1
         self.net_usd += net_usd
-        self.journal.append("shadow_outcome", {
-            "intent_key": meta.get("intent_key"), "resolution": decision.reason,
-            "side": side, "entry_price": entry, "exit_price": decision.price,
-            "bars_held": held, "virtual_net_usd": net_usd,
-            "fees_usd": fee_bps * notional / 10_000, "notional_usd": notional,
-            "margin_usd": float(meta.get("margin_usd", self.margin_usd)),
-            "captured_bps": gross_bps, "net_bps": net_bps,
-            "captured_bps_basis": "gross", "net_won": net_bps > 0,
-            "signal_reason": meta.get("reason", ""), "bar_ts": bar_ts.isoformat(),
-        })
+        self.journal.append(
+            "shadow_outcome",
+            {
+                "intent_key": meta.get("intent_key"),
+                "resolution": decision.reason,
+                "side": side,
+                "entry_price": entry,
+                "exit_price": decision.price,
+                "bars_held": held,
+                "virtual_net_usd": net_usd,
+                "fees_usd": fee_bps * notional / 10_000,
+                "notional_usd": notional,
+                "margin_usd": float(meta.get("margin_usd", self.margin_usd)),
+                "captured_bps": gross_bps,
+                "net_bps": net_bps,
+                "captured_bps_basis": "gross",
+                "net_won": net_bps > 0,
+                "signal_reason": meta.get("reason", ""),
+                "bar_ts": bar_ts.isoformat(),
+            },
+        )
         return net_bps > 0
 
     @property
@@ -382,14 +475,14 @@ class SqueezeAcceptanceObserveRunner:
             "virtual_net_usd": round(self.net_usd, 4),
             "open_intents": int(self.has_open),
             "pending_shadow_intents": int(self.has_open),
-            "candidates": self.candidates, "approved": self.fires,
+            "candidates": self.candidates,
+            "approved": self.fires,
             "rejected": self.rejected,
             "acceptance_state": self.acceptance.last_reason,
             "quote_source": self.acceptance.last_quote_source,
-            "quote_ingest_lag_seconds": round(
-                self.acceptance.last_quote_lag_seconds, 6
-            ),
+            "quote_ingest_lag_seconds": round(self.acceptance.last_quote_lag_seconds, 6),
             "quotes_seen": self.acceptance.quotes_seen,
             "quotes_distinct": self.acceptance.quotes_distinct,
             "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+            "quote_overflow_drops": self.acceptance.quote_overflow_drops,
         }

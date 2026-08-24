@@ -45,7 +45,7 @@ def test_cost_profile_comes_from_strategy_family_then_venue() -> None:
     assert resolve_scanner_cost_profile(squeeze, exchange_id="binanceusdm") == "scalp"
     assert resolve_scanner_cost_profile(squeeze, exchange_id="delta_india") == "delta_scalp"
     assert resolve_scanner_cost_profile(bos, exchange_id="binanceusdm") == "swing"
-    assert resolve_scanner_cost_profile(bos, exchange_id="delta_india") == "swing"
+    assert resolve_scanner_cost_profile(bos, exchange_id="delta_india") == "delta_swing"
 
 
 def test_unknown_strategy_keeps_legacy_runtime_path() -> None:

@@ -18,6 +18,7 @@ protective stop between bars (the tick plane grows from here).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -138,8 +139,12 @@ class ExitEngine:
         if self.pos is not None:
             raise ValueError("exit engine already manages a position")
         self.pos = ExitPosition(
-            side=side, entry=entry, stop=stop, risk=risk,
-            box_edge=box_edge, entry_bar=entry_bar,
+            side=side,
+            entry=entry,
+            stop=stop,
+            risk=risk,
+            box_edge=box_edge,
+            entry_bar=entry_bar,
         )
 
     def clear(self) -> None:
@@ -181,24 +186,18 @@ class ExitEngine:
         if c.tp_ladder:
             for level_r, fraction in c.tp_ladder[p.rungs_filled :]:
                 target = (
-                    p.entry + level_r * p.risk
-                    if side == "long"
-                    else p.entry - level_r * p.risk
+                    p.entry + level_r * p.risk if side == "long" else p.entry - level_r * p.risk
                 )
                 reached = high >= target if side == "long" else low <= target
                 if not reached:
                     break
                 take = min(fraction, p.remaining)
-                p.realized += take * (
-                    (target - p.entry) if side == "long" else (p.entry - target)
-                )
+                p.realized += take * ((target - p.entry) if side == "long" else (p.entry - target))
                 p.remaining -= take
                 p.rungs_filled += 1
                 if p.rungs_filled == 1 and c.breakeven_after_tp1:
                     cost_bps = (
-                        c.breakeven_cost_bps
-                        if c.breakeven_cost_bps is not None
-                        else c.taker_bps
+                        c.breakeven_cost_bps if c.breakeven_cost_bps is not None else c.taker_bps
                     )
                     pad = (cost_bps + c.be_fee_buffer_bps) / 10_000.0
                     be = p.entry * (1 + pad) if side == "long" else p.entry * (1 - pad)
@@ -223,9 +222,11 @@ class ExitEngine:
                 return self._close(p, close, reason="failed_breakout")
 
         # 3) no progress -- research-only, off unless explicitly requested
-        if (c.no_progress_bars is not None
-                and held >= c.no_progress_bars
-                and p.mfe < c.no_progress_min_r * p.risk):
+        if (
+            c.no_progress_bars is not None
+            and held >= c.no_progress_bars
+            and p.mfe < c.no_progress_min_r * p.risk
+        ):
             self.clear()
             return self._close(p, close, reason="no_progress")
 
@@ -236,11 +237,7 @@ class ExitEngine:
 
         # 5) ratchets (no exit this bar)
         if p.mfe >= c.breakeven_arm_r * p.risk:
-            cost_bps = (
-                c.breakeven_cost_bps
-                if c.breakeven_cost_bps is not None
-                else c.taker_bps
-            )
+            cost_bps = c.breakeven_cost_bps if c.breakeven_cost_bps is not None else c.taker_bps
             pad = (cost_bps + c.be_fee_buffer_bps) / 10_000.0
             breakeven = p.entry * (1.0 + pad) if side == "long" else p.entry * (1.0 - pad)
             tightened = max(p.stop, breakeven) if side == "long" else min(p.stop, breakeven)
@@ -266,6 +263,23 @@ class ExitEngine:
             self.clear()
             return self._close(p, p.stop, reason="stop_tick")
         return None
+
+    def close_now(self, *, price: float, reason: str) -> ExitDecision | None:
+        """Close the managed position for a causal strategy invalidation.
+
+        Protective stop/TP checks must run before this method.  It exists so
+        strategy-owned, closed-bar deterioration rules still resolve through
+        the same exit accounting and journal shape as every other exit.
+        """
+        p = self.pos
+        if p is None:
+            return None
+        if price <= 0 or not math.isfinite(price):
+            raise ValueError("strategy exit price must be positive and finite")
+        if not reason:
+            raise ValueError("strategy exit reason must be non-empty")
+        self.clear()
+        return self._close(p, price, reason=reason)
 
     @staticmethod
     def _close(p: ExitPosition, price: float, *, reason: str) -> ExitDecision:

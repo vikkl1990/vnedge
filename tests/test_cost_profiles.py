@@ -9,7 +9,7 @@ from vnedge.plan.cost_model import COST_PROFILES
 
 
 def test_profiles_registered():
-    assert set(COST_PROFILES) == {"swing", "scalp", "delta_scalp"}
+    assert set(COST_PROFILES) == {"swing", "delta_swing", "scalp", "delta_scalp"}
 
 
 def test_for_profile_and_unknown():
@@ -20,6 +20,7 @@ def test_for_profile_and_unknown():
 
 def test_gate_multiple_is_profile_specific():
     assert CostModel.for_profile("swing").config.gate_safety_mult == 2.0
+    assert CostModel.for_profile("delta_swing").config.gate_safety_mult == 2.0
     assert CostModel.for_profile("scalp").config.gate_safety_mult == 3.0
     assert CostModel.for_profile("delta_scalp").config.gate_safety_mult == 3.5
 
@@ -32,6 +33,15 @@ def test_delta_scalp_does_not_assume_unverified_close_waiver():
     assert within == full
     assert beyond == full
     assert cm.round_trip_bps() == full
+
+
+def test_delta_swing_applies_gst_without_inheriting_scalp_slippage():
+    cm = CostModel.for_profile("delta_swing")
+    assert cm.fee_bps() * cm.config.fee_gst_mult == pytest.approx(5.9)
+    assert cm.config.default_slip_entry_bps == 2.0
+    assert cm.config.default_slip_exit_bps == 2.0
+    assert cm.round_trip_bps(include_safety=False) == pytest.approx(15.8)
+    assert cm.round_trip_bps() == pytest.approx(18.8)
 
 
 def test_swing_has_no_free_exit_window():

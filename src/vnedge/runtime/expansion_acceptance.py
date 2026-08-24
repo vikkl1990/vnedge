@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from enum import Enum
 
 from vnedge.execution.trigger_engine import FireDecision, Side
+from vnedge.strategy.realtime_entry import StructuralStopMode
 from vnedge.strategy.squeeze_expansion_breakout_v3 import (
     PARAMS,
     SqueezeExpansionV3Params,
@@ -37,6 +38,19 @@ class CompressionArm:
     vwap: float
     bar_index: int
     compressed: bool
+    # Generic quote-entry successors may arm one side only and may carry an
+    # opposite-structure stop.  Defaults preserve the frozen squeeze contract.
+    allow_long: bool = True
+    allow_short: bool = True
+    long_level: float | None = None
+    short_level: float | None = None
+    long_structural_stop: float | None = None
+    short_structural_stop: float | None = None
+    structural_stop_mode: StructuralStopMode = "risk_cap"
+    expires_after_bars: int | None = None
+    session_start_hour_utc: int | None = None
+    session_end_hour_utc: int | None = None
+    reason: str = "squeeze_acceptance_v3"
 
 
 @dataclass
@@ -73,25 +87,52 @@ class ExpansionAcceptanceEngine:
     quotes_seen: int = 0
     quotes_distinct: int = 0
     quote_contract_rejects: int = 0
+    quote_overflow_drops: int = 0
+
+    def note_quote_overflow(self, total_drops: int) -> None:
+        """Fail closed when acceptance evidence was evicted upstream.
+
+        A probe cannot prove an uninterrupted hold across missing quotes. Reset
+        only in-flight probes; intact arms remain eligible to start again from
+        the next distinct, valid observation.
+        """
+        if total_drops <= self.quote_overflow_drops:
+            return
+        delta = total_drops - self.quote_overflow_drops
+        self.quote_overflow_drops = total_drops
+        self.quote_contract_rejects += delta
+        for lifecycle in (self.long, self.short):
+            if lifecycle.state is AcceptanceState.PROBE:
+                lifecycle.rearm()
+        self.last_reason = "quote_buffer_overflow"
 
     def update_arm(self, arm: CompressionArm) -> None:
         """Refresh from one closed bar without manufacturing a quote fire."""
         if self.position_open:
             self.last_reason = "position_open_arm_deferred"
             return
-        valid = all(
-            math.isfinite(value) and value > 0
-            for value in (arm.box_high, arm.box_low, arm.atr, arm.vwap)
-        ) and arm.box_high > arm.box_low
+        valid = (
+            all(
+                math.isfinite(value) and value > 0
+                for value in (arm.box_high, arm.box_low, arm.atr, arm.vwap)
+            )
+            and arm.box_high > arm.box_low
+            and (arm.allow_long or arm.allow_short)
+        )
         if not valid:
             self.last_reason = "invalid_arm_features"
             return
         if arm.compressed:
             if self.arm is None or arm.episode_id != self.arm.episode_id:
-                self.long = _SideLifecycle(state=AcceptanceState.ARMED)
-                self.short = _SideLifecycle(state=AcceptanceState.ARMED)
+                self.long = _SideLifecycle(
+                    state=(AcceptanceState.ARMED if arm.allow_long else AcceptanceState.DORMANT)
+                )
+                self.short = _SideLifecycle(
+                    state=(AcceptanceState.ARMED if arm.allow_short else AcceptanceState.DORMANT)
+                )
             self.arm = arm
-            self.arm_expires_bar = arm.bar_index + self.config.arm_grace_bars
+            grace = arm.expires_after_bars or self.config.arm_grace_bars
+            self.arm_expires_bar = arm.bar_index + grace
             self.last_reason = "armed_both_sides"
             return
         if (
@@ -159,6 +200,14 @@ class ExpansionAcceptanceEngine:
         if self.arm is None:
             self.last_reason = "no_compression_arm"
             return None
+        if self.arm.session_start_hour_utc is not None:
+            hour = ts.astimezone(UTC).hour
+            session_end = self.arm.session_end_hour_utc
+            if not (
+                session_end is not None and self.arm.session_start_hour_utc <= hour < session_end
+            ):
+                self.last_reason = "quote_outside_session"
+                return None
         if bar_index > self.arm_expires_bar and not self.position_open:
             self._expire()
             return None
@@ -172,17 +221,27 @@ class ExpansionAcceptanceEngine:
             self.last_reason = "daily_fire_budget"
             return None
 
-        long_level = self.arm.box_high * (1 + self.config.break_buffer_bps / 10_000)
-        short_level = self.arm.box_low * (1 - self.config.break_buffer_bps / 10_000)
+        long_level = self.arm.long_level or (
+            self.arm.box_high * (1 + self.config.break_buffer_bps / 10_000)
+        )
+        short_level = self.arm.short_level or (
+            self.arm.box_low * (1 - self.config.break_buffer_bps / 10_000)
+        )
 
         # A quote back inside the box invalidates only that side's probe.
         self._advance_probe(
-            "long", ask, long_level, ts,
-            crossed=ask > long_level and ask > self.arm.vwap,
+            "long",
+            ask,
+            long_level,
+            ts,
+            crossed=self.arm.allow_long and ask > long_level and ask > self.arm.vwap,
         )
         self._advance_probe(
-            "short", bid, short_level, ts,
-            crossed=bid < short_level and bid < self.arm.vwap,
+            "short",
+            bid,
+            short_level,
+            ts,
+            crossed=self.arm.allow_short and bid < short_level and bid < self.arm.vwap,
         )
 
         candidates: tuple[tuple[Side, float, float, _SideLifecycle], ...] = (
@@ -212,7 +271,24 @@ class ExpansionAcceptanceEngine:
                 self.last_reason = f"{side}_fire_budget"
                 continue
             distance = self.config.atr_stop_mult * self.arm.atr
-            stop = level - distance if side == "long" else level + distance
+            if side == "long":
+                atr_stop = price - distance
+                structural = self.arm.long_structural_stop
+                if structural is None:
+                    stop = atr_stop
+                elif self.arm.structural_stop_mode == "structure_floor":
+                    stop = min(atr_stop, structural)
+                else:
+                    stop = max(atr_stop, structural)
+            else:
+                atr_stop = price + distance
+                structural = self.arm.short_structural_stop
+                if structural is None:
+                    stop = atr_stop
+                elif self.arm.structural_stop_mode == "structure_floor":
+                    stop = max(atr_stop, structural)
+                else:
+                    stop = min(atr_stop, structural)
             risk = price - stop if side == "long" else stop - price
             if stop <= 0 or risk <= 0:
                 lifecycle.state = AcceptanceState.BURNED
@@ -234,7 +310,7 @@ class ExpansionAcceptanceEngine:
                 episode_id=self.arm.episode_id,
                 chase_bps=chase,
                 reason=(
-                    f"squeeze_acceptance_v3 side={side} hold={held:.1f}s "
+                    f"{self.arm.reason} side={side} hold={held:.1f}s "
                     f"samples={lifecycle.probe_samples} chase={chase:.1f}bps "
                     f"episode={self.arm.episode_id} current_quote_entry virtual_only"
                 ),
@@ -279,7 +355,11 @@ class ExpansionAcceptanceEngine:
         self, side: Side, price: float, level: float, ts: datetime, *, crossed: bool
     ) -> None:
         lifecycle = self._side(side)
-        if lifecycle.state in {AcceptanceState.DORMANT, AcceptanceState.BURNED, AcceptanceState.ACCEPTED}:
+        if lifecycle.state in {
+            AcceptanceState.DORMANT,
+            AcceptanceState.BURNED,
+            AcceptanceState.ACCEPTED,
+        }:
             return
         if not crossed:
             if lifecycle.state is AcceptanceState.PROBE:

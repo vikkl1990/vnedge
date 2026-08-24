@@ -37,8 +37,8 @@ class SessionCosts:
     Two modes, and the difference matters:
 
     * ``cost_model`` set -- costs come from ``vnedge.plan.cost_model``, the
-      canonical source, and therefore include slippage and the safety buffer
-      as well as fees. This is what a lane should use.
+      canonical source, and include fees, slippage, and funding. The pre-trade
+      safety reserve is deliberately excluded from booked trade PnL.
     * ``cost_model`` None -- the legacy FEE-ONLY behaviour. It understates the
       true cost by slip_in + slip_out + safety (8 bps on delta_scalp) and is
       retained only so older measurements remain reproducible.
@@ -69,7 +69,11 @@ class SessionCosts:
                      free_close_within_bars: int = 0,
                      bar_minutes: float = 5.0,
                      funding_bps_per_8h: float = 0.0) -> SessionCosts:
-        """Costs from the canonical model, slippage and safety included."""
+        """Build booked execution costs from the canonical profile.
+
+        The profile still owns its safety reserve for entry gating; completed
+        scanner trades exclude that non-venue reserve in ``round_trip_bps``.
+        """
         model = CostModel.for_profile(profile)
         return cls(
             taker_bps=model.fee_bps() * model.config.fee_gst_mult,

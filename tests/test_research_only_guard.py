@@ -1,4 +1,5 @@
 """Capital eligibility is an allowlist, never an unknown-ID default."""
+
 from vnedge.runtime.multi_lane import LaneSpec
 from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.strategy_registry import (
@@ -12,8 +13,13 @@ from vnedge.strategy.strategy_registry import (
 
 
 def _spec(strategy_id, mode):
-    return LaneSpec(lane_id="t", exchange="binanceusdm", symbol="BTC/USDT:USDT",
-                    mode=mode, strategy_id=strategy_id)
+    return LaneSpec(
+        lane_id="t",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        mode=mode,
+        strategy_id=strategy_id,
+    )
 
 
 def test_measurement_runtime_is_explicitly_non_capital():
@@ -36,6 +42,10 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "trend_pullback_1h_v1",
         "trend_squeeze_continuation_1h_v1",
         "tick_accepted_breakout_v1",
+        "range_expansion_realtime_v1",
+        "structure_bos_realtime_v1",
+        "session_continuation_realtime_v1",
+        "htf_structure_continuation_realtime_v1",
     }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
@@ -48,12 +58,8 @@ def test_capital_permission_requires_an_explicit_promotion():
         "strategy has no explicit capital approval"
     )
     assert capital_denial_reason("funding_mean_reversion_v1") == "strategy is killed"
-    assert capital_denial_reason("measurement_only_v1") == (
-        "strategy is research/measurement only"
-    )
-    assert capital_denial_reason("structure_bos_1h") == (
-        "strategy is research/measurement only"
-    )
+    assert capital_denial_reason("measurement_only_v1") == ("strategy is research/measurement only")
+    assert capital_denial_reason("structure_bos_1h") == ("strategy is research/measurement only")
     assert capital_denial_reason("fee_wall_momentum_observer_v1") == (
         "strategy is research/measurement only"
     )
@@ -80,6 +86,10 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "session_continuation_15m_v1",
         "trend_pullback_1h_v1",
         "tick_accepted_breakout_v1",
+        "range_expansion_realtime_v1",
+        "structure_bos_realtime_v1",
+        "session_continuation_realtime_v1",
+        "htf_structure_continuation_realtime_v1",
     }
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v2")
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v3")
@@ -99,7 +109,7 @@ def test_shadow_observe_is_a_separate_narrow_permission():
 
 def test_paper_lane_for_research_only_is_downgraded_to_shadow():
     spec = _spec(next(iter(RESEARCH_ONLY)), RunnerMode.PAPER).capital_downgraded()
-    assert spec.mode is RunnerMode.SHADOW           # capital denied, observation kept
+    assert spec.mode is RunnerMode.SHADOW  # capital denied, observation kept
 
 
 def test_shadow_lane_for_research_only_is_untouched():
@@ -122,4 +132,4 @@ def test_downgrade_preserves_all_other_fields():
     spec = _spec(next(iter(RESEARCH_ONLY)), RunnerMode.PAPER)
     down = spec.capital_downgraded()
     assert down.lane_id == spec.lane_id and down.symbol == spec.symbol
-    assert down.strategy_id == spec.strategy_id     # only mode changed
+    assert down.strategy_id == spec.strategy_id  # only mode changed

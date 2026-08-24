@@ -185,11 +185,13 @@ def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
         "trend_pullback_1h_v1": "1h",
         "trend_squeeze_continuation_1h_v1": "1h",
         "tick_accepted_breakout_v1": "5m",
+        "range_expansion_realtime_v1": "15m",
+        "structure_bos_realtime_v1": "15m",
+        "session_continuation_realtime_v1": "15m",
+        "htf_structure_continuation_realtime_v1": "15m",
     }.get(strategy_id)
     if required is not None and timeframe != required:
-        raise ValueError(
-            f"{strategy_id} shadow observe requires timeframe {required}"
-        )
+        raise ValueError(f"{strategy_id} shadow observe requires timeframe {required}")
 
 
 def _manifest_float(
@@ -208,9 +210,7 @@ def _manifest_float(
     return parsed
 
 
-def _observer_lane_id(
-    strategy_id: str, exchange: str, symbol: str, timeframe: str
-) -> str:
+def _observer_lane_id(strategy_id: str, exchange: str, symbol: str, timeframe: str) -> str:
     return "_".join(
         (
             "shadow_observe",
@@ -240,23 +240,15 @@ def _validate_observer_revision(
         raise TypeError(f"observer {strategy_id} requires a revision contract")
     unknown = set(revision) - _REVISION_FIELDS
     if unknown:
-        raise ValueError(
-            f"observer {strategy_id} revision has unknown fields: {sorted(unknown)}"
-        )
+        raise ValueError(f"observer {strategy_id} revision has unknown fields: {sorted(unknown)}")
     missing = [
-        field
-        for field in sorted(_REVISION_FIELDS)
-        if not str(revision.get(field, "")).strip()
+        field for field in sorted(_REVISION_FIELDS) if not str(revision.get(field, "")).strip()
     ]
     if missing:
-        raise ValueError(
-            f"observer {strategy_id} revision requires fields: {missing}"
-        )
+        raise ValueError(f"observer {strategy_id} revision requires fields: {missing}")
     contract = scanner_runtime_contract(strategy_id)
     if contract is None:
-        raise ValueError(
-            f"observer {strategy_id} has no frozen scanner runtime contract"
-        )
+        raise ValueError(f"observer {strategy_id} has no frozen scanner runtime contract")
     expected = {
         "timeframe": contract.timeframe,
         "decision_engine": contract.decision_engine,
@@ -269,8 +261,7 @@ def _validate_observer_revision(
     }
     if actual != expected:
         raise ValueError(
-            f"observer {strategy_id} revision/runtime mismatch: "
-            f"expected {expected}, got {actual}"
+            f"observer {strategy_id} revision/runtime mismatch: expected {expected}, got {actual}"
         )
 
 
@@ -286,9 +277,10 @@ def build_shadow_observe_roster_specs(
     raw_path = str(environ.get(OBSERVER_ROSTER_PATH_ENV, "")).strip()
     if not raw_path:
         return []
-    if _truthy(environ, "MULTI_LANE_SHADOW_OBSERVE_ENABLED") or str(
-        environ.get("MULTI_LANE_SHADOW_OBSERVE_STRATEGY", "")
-    ).strip():
+    if (
+        _truthy(environ, "MULTI_LANE_SHADOW_OBSERVE_ENABLED")
+        or str(environ.get("MULTI_LANE_SHADOW_OBSERVE_STRATEGY", "")).strip()
+    ):
         raise ValueError("observer roster path cannot be mixed with legacy shadow observe")
     path = Path(raw_path)
     try:
@@ -307,8 +299,7 @@ def build_shadow_observe_roster_specs(
     roster_version = payload.get("version")
     if roster_version not in _SUPPORTED_OBSERVER_ROSTER_VERSIONS:
         raise ValueError(
-            "observer roster version must be one of "
-            f"{sorted(_SUPPORTED_OBSERVER_ROSTER_VERSIONS)}"
+            f"observer roster version must be one of {sorted(_SUPPORTED_OBSERVER_ROSTER_VERSIONS)}"
         )
     rows = payload.get("observers")
     if not isinstance(rows, list) or not rows:
@@ -320,9 +311,7 @@ def build_shadow_observe_roster_specs(
             raise TypeError(f"observer roster row {index} must be an object")
         unknown = set(row) - _OBSERVER_FIELDS
         if unknown:
-            raise ValueError(
-                f"observer roster row {index} has unknown fields: {sorted(unknown)}"
-            )
+            raise ValueError(f"observer roster row {index} has unknown fields: {sorted(unknown)}")
         strategy_id = str(row.get("strategy_id", "")).strip()
         exchange = str(row.get("exchange", "")).strip()
         timeframe = str(row.get("timeframe", "")).strip()
@@ -331,8 +320,10 @@ def build_shadow_observe_roster_specs(
             raise ValueError(
                 f"observer roster row {index} requires strategy_id, exchange, timeframe"
             )
-        if not isinstance(symbols, list) or not symbols or not all(
-            isinstance(symbol, str) and symbol.strip() for symbol in symbols
+        if (
+            not isinstance(symbols, list)
+            or not symbols
+            or not all(isinstance(symbol, str) and symbol.strip() for symbol in symbols)
         ):
             raise ValueError(f"observer roster row {index} requires non-empty symbols")
         get_strategy_class(strategy_id)
@@ -361,9 +352,7 @@ def build_shadow_observe_roster_specs(
             symbol = _venue_symbol(exchange, configured_symbol.strip())
             specs.append(
                 LaneSpec(
-                    lane_id=_observer_lane_id(
-                        strategy_id, exchange, symbol, timeframe
-                    ),
+                    lane_id=_observer_lane_id(strategy_id, exchange, symbol, timeframe),
                     exchange=exchange,
                     symbol=symbol,
                     timeframe=timeframe,
@@ -407,9 +396,7 @@ def build_shadow_observe_lane_specs(
     if not is_shadow_observe_eligible(strategy_id):
         raise ValueError(f"strategy {strategy_id!r} is not shadow-observe eligible")
 
-    exchange = environ.get(
-        "MULTI_LANE_SHADOW_OBSERVE_EXCHANGE", "binanceusdm"
-    ).strip()
+    exchange = environ.get("MULTI_LANE_SHADOW_OBSERVE_EXCHANGE", "binanceusdm").strip()
     configured_symbols = _csv(
         environ.get("MULTI_LANE_SHADOW_OBSERVE_SYMBOLS", "").strip()
         or environ.get("MULTI_LANE_SHADOW_OBSERVE_SYMBOL", "BTC/USDT:USDT")
@@ -418,15 +405,9 @@ def build_shadow_observe_lane_specs(
     if not exchange or not configured_symbols:
         raise ValueError("shadow observe exchange and symbols cannot be empty")
     _observer_timeframe(strategy_id, timeframe)
-    starting_equity = _positive_float(
-        environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500"
-    )
-    daily_loss_usd = _positive_float(
-        environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10"
-    )
-    trail_atr_mult = _nonnegative_float(
-        environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0"
-    )
+    starting_equity = _positive_float(environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500")
+    daily_loss_usd = _positive_float(environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10")
+    trail_atr_mult = _nonnegative_float(environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0")
     return [
         LaneSpec(
             lane_id=f"shadow_observe_{_slug(exchange)}_{_slug(symbol)}",
@@ -441,8 +422,7 @@ def build_shadow_observe_lane_specs(
             is_primary=False,
         )
         for symbol in (
-            _venue_symbol(exchange, configured_symbol)
-            for configured_symbol in configured_symbols
+            _venue_symbol(exchange, configured_symbol) for configured_symbol in configured_symbols
         )
     ]
 
@@ -464,12 +444,9 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
     observe = [
         spec
         for spec in specs
-        if spec.mode is RunnerMode.SHADOW
-        and is_shadow_observe_eligible(spec.strategy_id)
+        if spec.mode is RunnerMode.SHADOW and is_shadow_observe_eligible(spec.strategy_id)
     ]
-    measurement_lanes = sum(
-        spec.strategy_id == "measurement_only_v1" for spec in specs
-    )
+    measurement_lanes = sum(spec.strategy_id == "measurement_only_v1" for spec in specs)
     return {
         "lane_set_hash": lane_specs_fingerprint(specs),
         "configured_lanes": len(specs),
@@ -479,14 +456,12 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
         "shadow_observe_strategy": (
             observe[0].strategy_id
             if len({spec.strategy_id for spec in observe}) == 1 and observe
-            else "multiple" if observe else None
+            else "multiple"
+            if observe
+            else None
         ),
-        "shadow_observe_strategies": sorted(
-            {spec.strategy_id for spec in observe}
-        ),
-        "shadow_observe_timeframes": sorted(
-            {spec.timeframe for spec in observe}
-        ),
+        "shadow_observe_strategies": sorted({spec.strategy_id for spec in observe}),
+        "shadow_observe_timeframes": sorted({spec.timeframe for spec in observe}),
         "shadow_observe_lanes": len(observe),
         "shadow_shared_purse_usd": (
             min(spec.starting_equity for spec in observe) if observe else 0.0
@@ -496,9 +471,7 @@ def build_runtime_control(specs: list[LaneSpec]) -> dict[str, Any]:
         ),
         "measurement_lanes": measurement_lanes,
         "measurement_only_pct": round(100 * measurement_lanes / len(specs), 1),
-        "mode_ladder": (
-            "measurement/shadow-observe; optional explicit paper; no live adapter"
-        ),
+        "mode_ladder": ("measurement/shadow-observe; optional explicit paper; no live adapter"),
         "orders_allowed": paper_lanes > 0,
         "live_orders_allowed": False,
     }
@@ -564,8 +537,7 @@ async def main() -> int:
         server_task = asyncio.create_task(server.serve())
 
     logger.info(
-        "configured %d measurement, %d shadow-observe, and %d paper-capital lanes; "
-        "primary=%s",
+        "configured %d measurement, %d shadow-observe, and %d paper-capital lanes; primary=%s",
         len(lanes) - capital_lanes - observe_lanes,
         observe_lanes,
         capital_lanes,

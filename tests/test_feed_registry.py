@@ -12,7 +12,12 @@ from datetime import UTC, datetime
 import pytest
 
 from vnedge.exchange.feed_registry import SharedFeedRegistry
-from vnedge.exchange.live_feed import QuoteUpdate, _publish_latest_quote
+from vnedge.exchange.live_feed import (
+    QUOTE_ACCEPTANCE_BUFFER_SIZE,
+    QuoteUpdate,
+    _publish_latest_quote,
+    quote_overflow_drops,
+)
 from vnedge.risk.risk_manager import MarketState
 
 
@@ -100,7 +105,7 @@ async def test_fan_out_delivers_every_candle_to_all_views():
     await b.stop()
 
 
-async def test_quote_fanout_delivers_latest_to_every_view() -> None:
+async def test_quote_fanout_delivers_bounded_history_to_every_view() -> None:
     registry, created = make_registry()
     a = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
     b = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
@@ -112,11 +117,14 @@ async def test_quote_fanout_delivers_latest_to_every_view() -> None:
     assert await asyncio.wait_for(a.quote_updates.get(), timeout=1.0) == quote
     assert await asyncio.wait_for(b.quote_updates.get(), timeout=1.0) == quote
 
-    # Per-view queues are bounded and replace stale observations.
-    a._deliver_quote(QuoteUpdate(ts=datetime.now(UTC), bid=101.0, ask=101.1))
+    # Per-view queues retain ordered acceptance evidence instead of silently
+    # replacing every observation with the latest quote.
+    older = QuoteUpdate(ts=datetime.now(UTC), bid=101.0, ask=101.1)
+    a._deliver_quote(older)
     latest = QuoteUpdate(ts=datetime.now(UTC), bid=102.0, ask=102.1)
     a._deliver_quote(latest)
-    assert a.quote_updates.qsize() == 1
+    assert a.quote_updates.qsize() == 2
+    assert a.quote_updates.get_nowait() == older
     assert a.quote_updates.get_nowait() == latest
     await a.stop()
     await b.stop()
@@ -168,6 +176,26 @@ def test_quote_publisher_marks_exchange_time_and_replaces_stale_item() -> None:
     assert published.received_ts == received_ts
     assert published.ingest_lag_seconds == 0.25
     assert published.exchange_timestamped is True
+    assert quote_overflow_drops(queue) == 1
+
+
+def test_per_view_quote_overflow_is_explicit_and_evicts_oldest() -> None:
+    registry, _ = make_registry()
+    view = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
+    base = datetime(2026, 8, 20, tzinfo=UTC)
+
+    for index in range(QUOTE_ACCEPTANCE_BUFFER_SIZE + 1):
+        view._deliver_quote(
+            QuoteUpdate(
+                ts=base.replace(microsecond=index),
+                bid=100.0 + index / 10_000,
+                ask=100.1 + index / 10_000,
+            )
+        )
+
+    assert view.quote_updates.qsize() == QUOTE_ACCEPTANCE_BUFFER_SIZE
+    assert view.quote_overflow_drops == 1
+    assert view.quote_updates.get_nowait().ts.microsecond == 1
 
 
 async def test_refcounted_stop_only_last_release_stops_the_feed():

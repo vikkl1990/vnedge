@@ -63,8 +63,11 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     exchange = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
-            "open": [100.0], "high": [101.0], "low": [99.0],
-            "close": [100.5], "volume": [10.0],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10.0],
         }
     )
     overlaid = _overlay_canonical_history(exchange, pd.DataFrame())
@@ -218,20 +221,14 @@ def test_structure_bos_lane_factory_uses_frozen_cost_gated_strategy():
 
 
 def test_fee_wall_lane_factory_uses_frozen_virtual_observer():
-    strategy = _build_single_strategy(
-        "fee_wall_momentum_observer_v1", {}, None, None
-    )
+    strategy = _build_single_strategy("fee_wall_momentum_observer_v1", {}, None, None)
     assert isinstance(strategy, FeeWallMomentumObserver)
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "fee_wall_momentum_observer_v1", {"fee_wall_bps": 14}, None, None
-        )
+        _build_single_strategy("fee_wall_momentum_observer_v1", {"fee_wall_bps": 14}, None, None)
 
 
 def test_squeeze_lane_factory_uses_canonical_scanner_strategy():
-    strategy = _build_single_strategy(
-        "squeeze_expansion_breakout_v2", {}, None, None
-    )
+    strategy = _build_single_strategy("squeeze_expansion_breakout_v2", {}, None, None)
     assert isinstance(strategy, SqueezeExpansionBreakout)
     with pytest.raises(ValueError, match="parameters are frozen"):
         _build_single_strategy(
@@ -240,25 +237,17 @@ def test_squeeze_lane_factory_uses_canonical_scanner_strategy():
 
 
 def test_squeeze_v3_lane_factory_uses_quote_acceptance_strategy():
-    strategy = _build_single_strategy(
-        "squeeze_expansion_breakout_v3", {}, None, None
-    )
+    strategy = _build_single_strategy("squeeze_expansion_breakout_v3", {}, None, None)
     assert isinstance(strategy, SqueezeExpansionBreakoutV3)
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "squeeze_expansion_breakout_v3", {"arm_grace_bars": 4}, None, None
-        )
+        _build_single_strategy("squeeze_expansion_breakout_v3", {"arm_grace_bars": 4}, None, None)
 
 
 def test_squeeze_v4_lane_factory_uses_exact_volume_acceptance_strategy():
-    strategy = _build_single_strategy(
-        "squeeze_expansion_breakout_v4", {}, None, None
-    )
+    strategy = _build_single_strategy("squeeze_expansion_breakout_v4", {}, None, None)
     assert isinstance(strategy, SqueezeExpansionBreakoutV4)
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "squeeze_expansion_breakout_v4", {"exact_vwap_bars": 12}, None, None
-        )
+        _build_single_strategy("squeeze_expansion_breakout_v4", {"exact_vwap_bars": 12}, None, None)
 
 
 def test_15m_scanner_factories_use_new_frozen_registrations():
@@ -279,13 +268,9 @@ def test_15m_scanner_factories_use_new_frozen_registrations():
         StructureBos15mTriggerV3,
     )
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "structure_bos_15m_trigger_v2", {"volume_mult": 1.0}, None, None
-        )
+        _build_single_strategy("structure_bos_15m_trigger_v2", {"volume_mult": 1.0}, None, None)
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "range_expansion_observer_v4", {"volume_mult": 1.0}, None, None
-        )
+        _build_single_strategy("range_expansion_observer_v4", {"volume_mult": 1.0}, None, None)
 
 
 def test_squeeze_v3_shadow_roster_requires_5m() -> None:
@@ -301,9 +286,7 @@ def test_squeeze_v3_shadow_roster_requires_5m() -> None:
 
 
 def test_range_expansion_lane_factory_and_roster_are_frozen() -> None:
-    strategy = _build_single_strategy(
-        "range_expansion_observer_v1", {}, None, None
-    )
+    strategy = _build_single_strategy("range_expansion_observer_v1", {}, None, None)
     assert isinstance(strategy, RangeExpansionObserver)
     env = {
         "MULTI_LANE_SHADOW_OBSERVE_ENABLED": "1",
@@ -312,16 +295,12 @@ def test_range_expansion_lane_factory_and_roster_are_frozen() -> None:
     }
     assert build_shadow_observe_lane_specs(env)[0].strategy_id == strategy.strategy_id
     with pytest.raises(ValueError, match="parameters are frozen"):
-        _build_single_strategy(
-            "range_expansion_observer_v1", {"range_bars": 6}, None, None
-        )
+        _build_single_strategy("range_expansion_observer_v1", {"range_bars": 6}, None, None)
 
 
 def _write_observer_roster(tmp_path, observers: list[dict]):
     path = tmp_path / "observers.json"
-    path.write_text(
-        json.dumps({"version": 1, "observers": observers}), encoding="utf-8"
-    )
+    path.write_text(json.dumps({"version": 1, "observers": observers}), encoding="utf-8")
     return path
 
 
@@ -373,9 +352,8 @@ def test_checked_in_observer_roster_is_valid() -> None:
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
     assert len(specs) == 8
-    assert sum(
-        spec.strategy_id == "session_continuation_15m_v1" for spec in specs
-    ) == 2
+    assert sum(spec.strategy_id == "session_continuation_realtime_v1" for spec in specs) == 2
+    assert sum(spec.strategy_id == "htf_structure_continuation_realtime_v1" for spec in specs) == 2
     assert all(not spec.is_primary for spec in specs)
 
 
@@ -408,20 +386,20 @@ def test_v2_observer_roster_fails_closed_on_engine_contract_drift(tmp_path) -> N
     )
 
     with pytest.raises(ValueError, match="revision/runtime mismatch"):
-        build_shadow_observe_roster_specs(
-            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
-        )
+        build_shadow_observe_roster_specs({"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)})
 
 
 def test_observer_roster_cannot_mix_with_legacy_contract(tmp_path) -> None:
     path = _write_observer_roster(
         tmp_path,
-        [{
-            "strategy_id": "structure_bos_1h",
-            "exchange": "binanceusdm",
-            "symbols": ["BTC/USDT:USDT"],
-            "timeframe": "1h",
-        }],
+        [
+            {
+                "strategy_id": "structure_bos_1h",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT"],
+                "timeframe": "1h",
+            }
+        ],
     )
     with pytest.raises(ValueError, match="cannot be mixed"):
         build_shadow_observe_roster_specs(
@@ -457,30 +435,26 @@ def test_observer_roster_cannot_mix_with_legacy_contract(tmp_path) -> None:
         ),
     ],
 )
-def test_observer_roster_fails_closed_on_bad_contract(
-    tmp_path, observer, message
-) -> None:
+def test_observer_roster_fails_closed_on_bad_contract(tmp_path, observer, message) -> None:
     path = _write_observer_roster(tmp_path, [observer])
     with pytest.raises(ValueError, match=message):
-        build_shadow_observe_roster_specs(
-            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
-        )
+        build_shadow_observe_roster_specs({"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)})
 
 
 def test_observer_roster_rejects_duplicate_stable_lane_ids(tmp_path) -> None:
     path = _write_observer_roster(
         tmp_path,
-        [{
-            "strategy_id": "structure_bos_1h",
-            "exchange": "binanceusdm",
-            "symbols": ["BTC/USDT:USDT", "BTC/USDT:USDT"],
-            "timeframe": "1h",
-        }],
+        [
+            {
+                "strategy_id": "structure_bos_1h",
+                "exchange": "binanceusdm",
+                "symbols": ["BTC/USDT:USDT", "BTC/USDT:USDT"],
+                "timeframe": "1h",
+            }
+        ],
     )
     with pytest.raises(ValueError, match="duplicate lane ids"):
-        build_shadow_observe_roster_specs(
-            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
-        )
+        build_shadow_observe_roster_specs({"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)})
 
 
 @pytest.mark.parametrize(

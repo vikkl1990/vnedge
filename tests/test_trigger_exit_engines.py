@@ -22,9 +22,16 @@ def _arm(episode: int = 1, compressed: bool = True) -> ArmState:
     )
 
 
-def _fire(engine: TriggerEngine, *, close: float, bar_index: int = 100,
-          volume: float = 200.0, vwap: float = 59_000.0, episode: int = 1,
-          ts: int = TS0):
+def _fire(
+    engine: TriggerEngine,
+    *,
+    close: float,
+    bar_index: int = 100,
+    volume: float = 200.0,
+    vwap: float = 59_000.0,
+    episode: int = 1,
+    ts: int = TS0,
+):
     return engine.try_fire(
         arm=_arm(episode=episode),
         high=close + 5,
@@ -71,8 +78,11 @@ def test_cooldown_after_loss_blocks_refire() -> None:
 
 
 def test_day_budget_resets_on_utc_roll() -> None:
-    eng = TriggerEngine(config=TriggerConfig(max_fires_per_day=1, min_bars_between_fires=1,
-                                             cooldown_win_bars=0, cooldown_loss_bars=0))
+    eng = TriggerEngine(
+        config=TriggerConfig(
+            max_fires_per_day=1, min_bars_between_fires=1, cooldown_win_bars=0, cooldown_loss_bars=0
+        )
+    )
     assert _fire(eng, close=60_130.0, bar_index=10) is not None
     eng.notify_flat(11, won=True)
     assert _fire(eng, close=60_130.0, bar_index=20, episode=2) is None  # budget spent
@@ -86,10 +96,16 @@ def test_vwap_side_veto() -> None:
     assert _fire(eng, close=60_130.0, vwap=61_000.0) is None
 
 
-def _open_long(eng: ExitEngine, entry: float = 60_112.0, stop: float = 60_000.0,
-               risk: float = 102.0, box_edge: float = 60_100.0) -> None:
-    eng.open_from_fire(side="long", entry=entry, stop=stop, risk=risk,
-                       box_edge=box_edge, entry_bar=100)
+def _open_long(
+    eng: ExitEngine,
+    entry: float = 60_112.0,
+    stop: float = 60_000.0,
+    risk: float = 102.0,
+    box_edge: float = 60_100.0,
+) -> None:
+    eng.open_from_fire(
+        side="long", entry=entry, stop=stop, risk=risk, box_edge=box_edge, entry_bar=100
+    )
 
 
 def test_stop_first_within_bar() -> None:
@@ -111,8 +127,9 @@ def test_no_progress_time_stop() -> None:
     _open_long(eng)
     decision = None
     for k in range(1, 6):
-        decision = eng.on_bar(high=60_120.0, low=60_105.0, close=60_115.0,
-                              atr=60.0, bar_index=100 + k)
+        decision = eng.on_bar(
+            high=60_120.0, low=60_105.0, close=60_115.0, atr=60.0, bar_index=100 + k
+        )
         if decision:
             break
     assert decision is not None and decision.reason == "no_progress"
@@ -122,8 +139,9 @@ def test_breakeven_ratchet_after_one_r() -> None:
     eng = ExitEngine()
     _open_long(eng)
     # +1R excursion, close stays above the box -> no exit, stop ratchets to BE+fees
-    decision = eng.on_bar(high=60_112.0 + 102.0, low=60_110.0, close=60_200.0,
-                          atr=60.0, bar_index=101)
+    decision = eng.on_bar(
+        high=60_112.0 + 102.0, low=60_110.0, close=60_200.0, atr=60.0, bar_index=101
+    )
     assert decision is None
     assert eng.pos is not None
     assert eng.pos.stop >= 60_112.0 * (1 + 5.9 / 10_000)
@@ -132,12 +150,15 @@ def test_breakeven_ratchet_after_one_r() -> None:
 def test_trail_after_two_r_and_winning_stop_exit() -> None:
     eng = ExitEngine()
     _open_long(eng)
-    assert eng.on_bar(high=60_112.0 + 250.0, low=60_110.0, close=60_350.0,
-                      atr=60.0, bar_index=101) is None
+    assert (
+        eng.on_bar(high=60_112.0 + 250.0, low=60_110.0, close=60_350.0, atr=60.0, bar_index=101)
+        is None
+    )
     assert eng.pos is not None and eng.pos.stop >= 60_362.0 - 60.0  # extreme - 1*ATR
     trailed_stop = eng.pos.stop
-    decision = eng.on_bar(high=60_360.0, low=trailed_stop - 1, close=trailed_stop - 1,
-                          atr=60.0, bar_index=102)
+    decision = eng.on_bar(
+        high=60_360.0, low=trailed_stop - 1, close=trailed_stop - 1, atr=60.0, bar_index=102
+    )
     assert decision is not None and decision.won
     # the ratchet moved this stop, so it reports as a breakeven stop -- the same
     # name runtime.active_exit uses, so exit histograms merge across surfaces
@@ -150,6 +171,21 @@ def test_tick_protective_stop() -> None:
     assert eng.on_tick(price=60_050.0) is None
     decision = eng.on_tick(price=59_999.0)
     assert decision is not None and decision.reason == "stop_tick"
+    assert eng.pos is None
+
+
+def test_strategy_deterioration_closes_through_canonical_exit_engine() -> None:
+    eng = ExitEngine()
+    _open_long(eng)
+
+    decision = eng.close_now(
+        price=60_175.0,
+        reason="htf_structure_deterioration",
+    )
+
+    assert decision is not None
+    assert decision.reason == "htf_structure_deterioration"
+    assert decision.won is True
     assert eng.pos is None
 
 

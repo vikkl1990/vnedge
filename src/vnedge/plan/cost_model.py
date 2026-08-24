@@ -38,6 +38,16 @@ class CostModelConfig:
 
 # Named cost worlds. One CostModel per lane profile — no private fee assumptions.
 _SWING = CostModelConfig(profile="swing", gate_safety_mult=2.0)
+# Delta swing keeps the slower-lane execution assumptions (2 bps slippage per
+# leg and a 3 bps gate reserve) while applying the venue's real 18% GST to its
+# 5 bps taker / 2 bps maker tariff.  It is intentionally separate from
+# ``delta_scalp``: a swing lane must not silently inherit a thinner-book scalp
+# slippage model merely to get the tax right.
+_DELTA_SWING = CostModelConfig(
+    profile="delta_swing",
+    gate_safety_mult=2.0,
+    fee_gst_mult=1.18,
+)
 _SCALP = CostModelConfig(
     profile="scalp", default_slip_entry_bps=2.0, default_slip_exit_bps=2.0,
     safety_buffer_bps=2.0, gate_safety_mult=3.0,
@@ -52,7 +62,10 @@ _DELTA_SCALP = CostModelConfig(
     maker_adverse_bps=1.5, fee_gst_mult=1.18,
 )
 COST_PROFILES: dict[str, CostModelConfig] = {
-    "swing": _SWING, "scalp": _SCALP, "delta_scalp": _DELTA_SCALP,
+    "swing": _SWING,
+    "delta_swing": _DELTA_SWING,
+    "scalp": _SCALP,
+    "delta_scalp": _DELTA_SCALP,
 }
 
 
@@ -62,7 +75,7 @@ class CostModel:
 
     @classmethod
     def for_profile(cls, profile: str) -> CostModel:
-        """CostModel for a named lane profile (swing / scalp / delta_scalp)."""
+        """CostModel for a named lane/venue cost profile."""
         try:
             return cls(COST_PROFILES[profile])
         except KeyError as exc:

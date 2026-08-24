@@ -69,6 +69,7 @@ from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v2 import RangeExpansionObserverV2
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
 from vnedge.strategy.range_expansion_observer_v4 import RangeExpansionObserverV4
+from vnedge.strategy.realtime_scanners import REALTIME_SCANNERS
 from vnedge.strategy.research_scanners import NEW_RESEARCH_SCANNERS
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.squeeze_expansion_breakout import SqueezeExpansionBreakout
@@ -86,13 +87,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class LaneSpec:
-    lane_id: str          # unique, e.g. "binance_funding_mr"
-    exchange: str         # ccxt id, e.g. "binanceusdm" | "bybit"
+    lane_id: str  # unique, e.g. "binance_funding_mr"
+    exchange: str  # ccxt id, e.g. "binanceusdm" | "bybit"
     symbol: str
     timeframe: str = "1h"
     starting_equity: float = 500.0
     strategy_params: dict | None = None
-    is_primary: bool = False   # the governed lane shown as the flat snapshot
+    is_primary: bool = False  # the governed lane shown as the flat snapshot
     daily_loss_usd: float = 10.0
     mode: RunnerMode = RunnerMode.SHADOW
     strategy_id: str = "measurement_only_v1"
@@ -108,9 +109,11 @@ class LaneSpec:
         PAPER permission to a measurement-only or killed strategy.
         ``_paper_observation`` mirrors are PAPER-mode but non-capital (they submit
         no orders), so they are left untouched. See docs/SCANNER_REVIEW_20260813."""
-        if (self.mode is RunnerMode.PAPER
-                and not self.lane_id.endswith("_paper_observation")
-                and not is_capital_eligible(self.strategy_id)):
+        if (
+            self.mode is RunnerMode.PAPER
+            and not self.lane_id.endswith("_paper_observation")
+            and not is_capital_eligible(self.strategy_id)
+        ):
             return replace(self, mode=RunnerMode.SHADOW)
         return self
 
@@ -123,6 +126,7 @@ class _LaneRuntime:
 
 
 # --- snapshot fan-in --------------------------------------------------------------
+
 
 class _LaneSink:
     """A provider-shaped object one lane publishes to; tags + forwards."""
@@ -161,9 +165,7 @@ class MultiLaneProvider:
         self._health_cache: dict | None = None
         self._health_at = 0.0
         self._runtime_control = dict(runtime_control or {})
-        self._specs_by_id = {
-            spec.lane_id: spec for spec in (lane_specs or [])
-        }
+        self._specs_by_id = {spec.lane_id: spec for spec in (lane_specs or [])}
 
     def _lane_health(self) -> dict | None:
         """Cached desired-vs-active audit for the snapshot (never raises).
@@ -182,9 +184,7 @@ class MultiLaneProvider:
         try:
             from vnedge.runtime.lane_health import audit_lanes
 
-            report = audit_lanes(
-                self._health_journal_dir, desired=self._health_specs
-            )
+            report = audit_lanes(self._health_journal_dir, desired=self._health_specs)
             self._health_cache = report.to_snapshot()
         except Exception as exc:  # noqa: BLE001 — observability must not crash lanes
             logger.warning("lane-health audit failed: %s", exc)
@@ -223,44 +223,52 @@ class MultiLaneProvider:
         instead of a blank board until all builds finish. Overwritten by the
         lane's real snapshot as soon as it starts."""
         spec = self._specs_by_id.get(lane_id)
-        self._publish(lane_id, exchange, {
-            "mode": "warming up",
-            "symbol": symbol,
-            "strategy_id": spec.strategy_id if spec is not None else "",
-            "equity": 0.0,
-            "realized_pnl": 0.0,
-            "unrealized_pnl": 0.0,
-            "fills": 0,
-            "fees_usd": 0.0,
-            "risk_status": "warming",
-            "feed_health": {"candles": "warming", "last_update_ms": 0.0},
-            "positions": [],
-            "open_orders": [],
-            "session": {},
-        })
+        self._publish(
+            lane_id,
+            exchange,
+            {
+                "mode": "warming up",
+                "symbol": symbol,
+                "strategy_id": spec.strategy_id if spec is not None else "",
+                "equity": 0.0,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "fills": 0,
+                "fees_usd": 0.0,
+                "risk_status": "warming",
+                "feed_health": {"candles": "warming", "last_update_ms": 0.0},
+                "positions": [],
+                "open_orders": [],
+                "session": {},
+            },
+        )
 
-    def publish_error(
-        self, lane_id: str, exchange: str, symbol: str, error: str
-    ) -> None:
-        self._publish(lane_id, exchange, {
-            "mode": "shadow (live data)",
-            "symbol": symbol,
-            "equity": 0.0,
-            "realized_pnl": 0.0,
-            "unrealized_pnl": 0.0,
-            "fills": 0,
-            "fees_usd": 0.0,
-            "risk_status": "lane_error",
-            "feed_health": {"candles": "error", "last_update_ms": 0.0},
-            "positions": [],
-            "open_orders": [],
-            "recent_alerts": [{
-                "severity": "critical",
-                "message": error,
-                "rule_id": "lane_error",
-            }],
-            "session": {"lane_error": error},
-        })
+    def publish_error(self, lane_id: str, exchange: str, symbol: str, error: str) -> None:
+        self._publish(
+            lane_id,
+            exchange,
+            {
+                "mode": "shadow (live data)",
+                "symbol": symbol,
+                "equity": 0.0,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "fills": 0,
+                "fees_usd": 0.0,
+                "risk_status": "lane_error",
+                "feed_health": {"candles": "error", "last_update_ms": 0.0},
+                "positions": [],
+                "open_orders": [],
+                "recent_alerts": [
+                    {
+                        "severity": "critical",
+                        "message": error,
+                        "rule_id": "lane_error",
+                    }
+                ],
+                "session": {"lane_error": error},
+            },
+        )
 
     def latest(self) -> dict | None:
         if not self._lanes:
@@ -276,7 +284,11 @@ class MultiLaneProvider:
         out.setdefault("latency_recovery", primary_session.get("latency_recovery"))
         try:
             ts = primary.get("ts")
-            age_ms = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds() * 1000.0 if ts else None
+            age_ms = (
+                (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds() * 1000.0
+                if ts
+                else None
+            )
             out["snapshot_age_ms"] = round(max(0.0, age_ms), 1) if age_ms is not None else None
         except (TypeError, ValueError):
             out["snapshot_age_ms"] = None
@@ -288,10 +300,8 @@ class MultiLaneProvider:
                 # per-lane mode + strategy so the dashboard lane matrix can
                 # label paper vs shadow and which strategy each lane runs
                 "mode": self._lanes[lid].get("mode", ""),
-                "strategy_id": self._lanes[lid].get("strategy_id", "") or (
-                    self._specs_by_id[lid].strategy_id
-                    if lid in self._specs_by_id else ""
-                ),
+                "strategy_id": self._lanes[lid].get("strategy_id", "")
+                or (self._specs_by_id[lid].strategy_id if lid in self._specs_by_id else ""),
                 # per-lane last price + funding so the dashboard watchlist can
                 # show real per-symbol quotes (one live price per lane symbol)
                 "price": self._lanes[lid].get("price"),
@@ -318,9 +328,15 @@ class MultiLaneProvider:
                     "backfill_evals": self._lanes[lid].get("session", {}).get("backfill_evals", 0),
                     "signals": self._lanes[lid].get("session", {}).get("signals", 0),
                     "live_signals": self._lanes[lid].get("session", {}).get("live_signals", 0),
-                    "backfill_signals": self._lanes[lid].get("session", {}).get("backfill_signals", 0),
-                    "shadow_approved": self._lanes[lid].get("session", {}).get("shadow_approved", 0),
-                    "shadow_rejected": self._lanes[lid].get("session", {}).get("shadow_rejected", 0),
+                    "backfill_signals": self._lanes[lid]
+                    .get("session", {})
+                    .get("backfill_signals", 0),
+                    "shadow_approved": self._lanes[lid]
+                    .get("session", {})
+                    .get("shadow_approved", 0),
+                    "shadow_rejected": self._lanes[lid]
+                    .get("session", {})
+                    .get("shadow_rejected", 0),
                     "risk_rejects": self._lanes[lid].get("session", {}).get("risk_rejects", 0),
                     "sizing_skips": self._lanes[lid].get("session", {}).get("sizing_skips", 0),
                     "submitted": self._lanes[lid].get("session", {}).get("orders_submitted", 0),
@@ -329,15 +345,9 @@ class MultiLaneProvider:
                 # virtual performance of a shadow lane's approved intents
                 # (resolved with backtester semantics; observability only)
                 "shadow_perf": self._lanes[lid].get("session", {}).get("shadow_perf"),
-                "sizing_profile": self._lanes[lid].get("session", {}).get(
-                    "sizing_profile"
-                ),
-                "active_plan": self._lanes[lid].get("session", {}).get(
-                    "active_plan"
-                ),
-                "last_reject_reason": self._lanes[lid].get("session", {}).get(
-                    "last_reject_reason"
-                ),
+                "sizing_profile": self._lanes[lid].get("session", {}).get("sizing_profile"),
+                "active_plan": self._lanes[lid].get("session", {}).get("active_plan"),
+                "last_reject_reason": self._lanes[lid].get("session", {}).get("last_reject_reason"),
                 "observation_class": (
                     "shadow_observe"
                     if self._specs_by_id.get(lid) is not None
@@ -357,9 +367,7 @@ class MultiLaneProvider:
                 # pipeline latency: bar_close_processing_ms (close -> dequeue)
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
-                "latency_recovery": self._lanes[lid].get("session", {}).get(
-                    "latency_recovery"
-                ),
+                "latency_recovery": self._lanes[lid].get("session", {}).get("latency_recovery"),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
@@ -370,9 +378,7 @@ class MultiLaneProvider:
                 "arm_blocked": self._lanes[lid].get("session", {}).get("arm_blocked"),
                 # D-lite overlays (observe-only): cost world + regime + plan preview
                 "cost_profile": self._lanes[lid].get("session", {}).get("cost_profile"),
-                "runtime_contract": self._lanes[lid].get("session", {}).get(
-                    "runtime_contract"
-                ),
+                "runtime_contract": self._lanes[lid].get("session", {}).get("runtime_contract"),
                 "regime": self._lanes[lid].get("session", {}).get("regime"),
                 "regime_would_block": self._lanes[lid].get("session", {}).get("regime_would_block"),
                 "plan_overlay": self._lanes[lid].get("session", {}).get("plan_overlay"),
@@ -386,7 +392,8 @@ class MultiLaneProvider:
                 "trade_log": (self._lanes[lid].get("session", {}).get("trade_log") or [])[-10:],
                 "trade_compatibility": _lane_trade_compatibility(self._lanes[lid]),
             }
-            for lid in self._order if lid in self._lanes
+            for lid in self._order
+            if lid in self._lanes
         ]
         out["fleet"] = _fleet_aggregate(out["lanes"])
         health = self._lane_health()
@@ -394,7 +401,7 @@ class MultiLaneProvider:
             out["lane_health"] = health
         if self._runtime_control:
             out["runtime_control"] = dict(self._runtime_control)
-        annotate(out)   # server-computed chips + per-lane bands (one source for both UIs)
+        annotate(out)  # server-computed chips + per-lane bands (one source for both UIs)
         # A single inf/nan anywhere (e.g. a degenerate quote's spread_bps) makes
         # the whole snapshot fail JSON serialization — Starlette's JSONResponse
         # and websocket.send_json both use allow_nan=False — which 500s /state
@@ -403,6 +410,7 @@ class MultiLaneProvider:
 
 
 # --- lane construction ------------------------------------------------------------
+
 
 def _lane_trade_compatibility(snapshot: dict) -> dict:
     """Operator-facing state: whether this lane is clean enough to discuss promotion.
@@ -436,6 +444,7 @@ def _lane_trade_compatibility(snapshot: dict) -> dict:
         "gateway_required": True,
         "journal_required": True,
     }
+
 
 def _json_safe(obj):
     """Recursively replace non-finite floats (inf/-inf/nan) with None.
@@ -553,35 +562,37 @@ async def _delta_funding_seed(spec: LaneSpec, fallback: pd.DataFrame) -> pd.Data
     if spec.exchange not in DELTA_NATIVE_EXCHANGE_IDS:
         return fallback
     try:
-        seed = await fetch_delta_funding_history(
-            spec.symbol, days=_DELTA_FUNDING_BACKFILL_DAYS
-        )
+        seed = await fetch_delta_funding_history(spec.symbol, days=_DELTA_FUNDING_BACKFILL_DAYS)
     except Exception as exc:  # noqa: BLE001 — backfill is strictly best-effort
         logger.warning(
             "%s %s: native funding backfill failed (%s); lane keeps the "
             "live-accumulation warmup path",
-            spec.exchange, spec.symbol, exc,
+            spec.exchange,
+            spec.symbol,
+            exc,
         )
         return fallback
     if seed.empty:
         logger.warning(
             "%s %s: native funding backfill returned no data; lane keeps the "
             "live-accumulation warmup path",
-            spec.exchange, spec.symbol,
+            spec.exchange,
+            spec.symbol,
         )
         return fallback
     logger.info(
         "%s %s: seeded %d settled funding prints (%s -> %s) from the native "
         "FUNDING: candle API — percentile window warm from the start",
-        spec.exchange, spec.symbol, len(seed),
-        seed["timestamp"].iloc[0], seed["timestamp"].iloc[-1],
+        spec.exchange,
+        spec.symbol,
+        len(seed),
+        seed["timestamp"].iloc[0],
+        seed["timestamp"].iloc[-1],
     )
     return seed
 
 
-def _build_strategy(
-    spec: LaneSpec, seed_funding, feed, *, funding_store_path=None
-) -> BaseStrategy:
+def _build_strategy(spec: LaneSpec, seed_funding, feed, *, funding_store_path=None) -> BaseStrategy:
     """Construct the live strategy a lane runs, keyed by strategy_id."""
     params = spec.strategy_params or {}
     if spec.strategy_id == "signal_arbiter_v1":
@@ -589,7 +600,10 @@ def _build_strategy(
             spec, seed_funding, feed, funding_store_path=funding_store_path
         )
     return _build_single_strategy(
-        spec.strategy_id, params, seed_funding, feed,
+        spec.strategy_id,
+        params,
+        seed_funding,
+        feed,
         funding_store_path=funding_store_path,
     )
 
@@ -622,78 +636,66 @@ def _build_single_strategy(
         return MeasurementOnly(seed_funding, **params)
     if strategy_id == StructureBos1H.strategy_id:
         if params:
-            raise ValueError(
-                "structure_bos_1h parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError("structure_bos_1h parameters are frozen; configure a new strategy ID")
         return StructureBos1H(seed_funding, allow_price_only_live=True)
     if strategy_id == StructureBos15mTriggerV2.strategy_id:
         if params:
             raise ValueError(
-                "structure_bos_15m_trigger_v2 parameters are frozen; "
-                "configure a new strategy ID"
+                "structure_bos_15m_trigger_v2 parameters are frozen; configure a new strategy ID"
             )
         return StructureBos15mTriggerV2(seed_funding)
     if strategy_id == StructureBos15mTriggerV3.strategy_id:
         if params:
             raise ValueError(
-                "structure_bos_15m_trigger_v3 parameters are frozen; "
-                "configure a new strategy ID"
+                "structure_bos_15m_trigger_v3 parameters are frozen; configure a new strategy ID"
             )
         return StructureBos15mTriggerV3(seed_funding)
     if strategy_id == FeeWallMomentumObserver.strategy_id:
         if params:
             raise ValueError(
-                "fee_wall_momentum_observer_v1 parameters are frozen; "
-                "configure a new strategy ID"
+                "fee_wall_momentum_observer_v1 parameters are frozen; configure a new strategy ID"
             )
         return FeeWallMomentumObserver(seed_funding)
     if strategy_id == SqueezeExpansionBreakout.strategy_id:
         if params:
             raise ValueError(
-                "squeeze_expansion_breakout_v2 parameters are frozen; "
-                "configure a new strategy ID"
+                "squeeze_expansion_breakout_v2 parameters are frozen; configure a new strategy ID"
             )
         return SqueezeExpansionBreakout(seed_funding)
     if strategy_id == SqueezeExpansionBreakoutV3.strategy_id:
         if params:
             raise ValueError(
-                "squeeze_expansion_breakout_v3 parameters are frozen; "
-                "configure a new strategy ID"
+                "squeeze_expansion_breakout_v3 parameters are frozen; configure a new strategy ID"
             )
         return SqueezeExpansionBreakoutV3(seed_funding)
     if strategy_id == SqueezeExpansionBreakoutV4.strategy_id:
         if params:
             raise ValueError(
-                "squeeze_expansion_breakout_v4 parameters are frozen; "
-                "configure a new strategy ID"
+                "squeeze_expansion_breakout_v4 parameters are frozen; configure a new strategy ID"
             )
         return SqueezeExpansionBreakoutV4(seed_funding)
     if strategy_id == RangeExpansionObserver.strategy_id:
         if params:
             raise ValueError(
-                "range_expansion_observer_v1 parameters are frozen; "
-                "configure a new strategy ID"
+                "range_expansion_observer_v1 parameters are frozen; configure a new strategy ID"
             )
         return RangeExpansionObserver(seed_funding)
     if strategy_id == RangeExpansionObserverV2.strategy_id:
         if params:
             raise ValueError(
-                "range_expansion_observer_v2 parameters are frozen; "
-                "configure a new strategy ID"
+                "range_expansion_observer_v2 parameters are frozen; configure a new strategy ID"
             )
         return RangeExpansionObserverV2(seed_funding)
     if strategy_id == RangeExpansionObserverV3.strategy_id:
         if params:
             raise ValueError(
-                "range_expansion_observer_v3 parameters are frozen; "
-                "configure a new strategy ID"
+                "range_expansion_observer_v3 parameters are frozen; configure a new strategy ID"
             )
         return RangeExpansionObserverV3(seed_funding)
     if strategy_id == RangeExpansionObserverV4.strategy_id:
         if params:
             raise ValueError(
-                "range_expansion_observer_v4 parameters are frozen; "
-                "configure a new strategy ID"
+                "range_expansion_observer_v4 parameters are frozen; configure a new strategy ID"
             )
         return RangeExpansionObserverV4(seed_funding)
     for scanner_class in NEW_RESEARCH_SCANNERS:
@@ -706,6 +708,13 @@ def _build_single_strategy(
                 return scanner_class(seed_funding)
             except TypeError:
                 return scanner_class()
+    for realtime_scanner_class in REALTIME_SCANNERS:
+        if strategy_id == realtime_scanner_class.strategy_id:
+            if params:
+                raise ValueError(
+                    f"{strategy_id} parameters are frozen; configure a new strategy ID"
+                )
+            return realtime_scanner_class(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -752,18 +761,17 @@ def _build_signal_arbiter_strategy(
 
         strategies.append(
             _build_single_strategy(
-                child_strategy_id, child_params, seed_funding, feed,
+                child_strategy_id,
+                child_params,
+                seed_funding,
+                feed,
                 funding_store_path=funding_store_path,
             )
         )
         default_source_id = f"{child_strategy_id}#{index + 1}"
         source_id = str(child.get("source_id", default_source_id))
         candidate_defaults[default_source_id] = {"source_id": source_id}
-        candidate_defaults[source_id] = {
-            key: child[key]
-            for key in edge_keys
-            if key in child
-        }
+        candidate_defaults[source_id] = {key: child[key] for key in edge_keys if key in child}
 
     arbiter_params = params.get("arbiter", {})
     if not isinstance(arbiter_params, dict):
@@ -805,7 +813,12 @@ def _lane_risk_config(spec: LaneSpec, environ: Mapping[str, str] = os.environ) -
         except ValueError:
             target_lev = 30
         target_lev = max(1, min(target_lev, ABSOLUTE_MAX_LEVERAGE))  # never above the hard cap
-        halt_on = environ.get("MULTI_LANE_DAILY_LOSS_HALT", "0").lower() in ("1", "true", "yes", "on")
+        halt_on = environ.get("MULTI_LANE_DAILY_LOSS_HALT", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         cap = max(500.0, margin_usd * target_lev * 1.1)  # headroom for one full position
         return RiskConfig(
             max_daily_loss_usd=spec.daily_loss_usd,
@@ -885,8 +898,16 @@ def _lane_daily_factory_config(
 
 
 _TF_MS = {
-    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000, "1d": 86_400_000,
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "1d": 86_400_000,
 }
 _CANDLE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
@@ -915,9 +936,7 @@ def _canonical_candle_frame(
         return pd.DataFrame()
     return pd.DataFrame(
         {
-            "timestamp": pd.to_datetime(
-                [candle.open_time for candle in candles], utc=True
-            ),
+            "timestamp": pd.to_datetime([candle.open_time for candle in candles], utc=True),
             "open": [float(candle.open) for candle in candles],
             "high": [float(candle.high) for candle in candles],
             "low": [float(candle.low) for candle in candles],
@@ -978,10 +997,7 @@ def _canonical_runtime_store(
     venue remains fail-closed by receiving the empty canonical store until a
     venue recorder is explicitly built.
     """
-    if (
-        spec.exchange != "binanceusdm"
-        and spec.strategy_id == "measurement_only_v1"
-    ):
+    if spec.exchange != "binanceusdm" and spec.strategy_id == "measurement_only_v1":
         return None
     return store
 
@@ -1013,6 +1029,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     StructureBos15mTriggerV2.strategy_id: StructureBos15mTriggerV2.warmup_bars,
     StructureBos15mTriggerV3.strategy_id: StructureBos15mTriggerV3.warmup_bars,
     **{strategy.strategy_id: strategy.warmup_bars for strategy in NEW_RESEARCH_SCANNERS},
+    **{strategy.strategy_id: strategy.warmup_bars for strategy in REALTIME_SCANNERS},
 }
 
 
@@ -1035,9 +1052,7 @@ def _strategy_warmup_requirement(spec: LaneSpec) -> int:
     )
 
 
-def _required_warmup_bars(
-    spec: LaneSpec, environ: Mapping[str, str] = os.environ
-) -> int:
+def _required_warmup_bars(spec: LaneSpec, environ: Mapping[str, str] = os.environ) -> int:
     """Return a lane-specific history target with one evaluable bar of room.
 
     The old global 500-bar target was smaller than squeeze v3's frozen 2,065
@@ -1084,7 +1099,10 @@ async def _retry_transient(factory, *, retries: int, backoff_s: float, label: st
             if attempt + 1 < retries:
                 logger.warning(
                     "transient venue error building %s (attempt %d/%d): %s; retrying",
-                    label, attempt + 1, retries, exc,
+                    label,
+                    attempt + 1,
+                    retries,
+                    exc,
                 )
                 await asyncio.sleep(backoff_s * (attempt + 1))
     assert last is not None
@@ -1134,10 +1152,7 @@ async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, un
             .reset_index(drop=True)
         )
         tf_ms = _timeframe_ms(spec.timeframe)
-        opens = [
-            int(pd.Timestamp(value).timestamp() * 1000)
-            for value in cached["timestamp"]
-        ]
+        opens = [int(pd.Timestamp(value).timestamp() * 1000) for value in cached["timestamp"]]
         first_ms, last_ms = opens[0], opens[-1]
         if last_ms >= since and first_ms < until:  # requested window overlaps cache
             missing: list[tuple[int, int]] = []
@@ -1156,9 +1171,7 @@ async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, un
                 if gap_since >= gap_until:
                     continue
                 gap = normalize_candles(
-                    await rest.fetch_candles(
-                        spec.symbol, spec.timeframe, gap_since, gap_until
-                    )
+                    await rest.fetch_candles(spec.symbol, spec.timeframe, gap_since, gap_until)
                 )
                 if not gap.empty:
                     frames.append(gap)
@@ -1179,9 +1192,7 @@ async def _warmup_candles(rest, spec: LaneSpec, cache_path: Path, since: int, un
                 len(frame),
             )
             return frame
-    history = normalize_candles(
-        await rest.fetch_candles(spec.symbol, spec.timeframe, since, until)
-    )
+    history = normalize_candles(await rest.fetch_candles(spec.symbol, spec.timeframe, since, until))
     history = _closed_validated_warmup(history, spec, until)
     _save_candle_cache(cache_path, history)
     return history
@@ -1271,12 +1282,16 @@ async def build_lane(
                 logger.info(
                     "%s %s: no CCXT funding history; %s will seed from the "
                     "native backfill or accumulate funding live",
-                    spec.exchange, spec.symbol, spec.strategy_id,
+                    spec.exchange,
+                    spec.symbol,
+                    spec.strategy_id,
                 )
             else:
                 logger.info(
                     "%s %s: funding history unavailable; running %s with zero funding",
-                    spec.exchange, spec.symbol, spec.strategy_id,
+                    spec.exchange,
+                    spec.symbol,
+                    spec.strategy_id,
                 )
             raw_f = []
     seed_funding = normalize_funding(raw_f)
@@ -1305,54 +1320,61 @@ async def build_lane(
             f"{spec.strategy_id} runtime contract requires "
             f"{runtime_contract.timeframe}, got {spec.timeframe}"
         )
-    config = RunnerConfig(mode=spec.mode, symbol=spec.symbol,
-                          timeframe=spec.timeframe,
-                          starting_equity_usd=spec.starting_equity, risk=risk,
-                          limits=venue_symbol_limits(spec.exchange, spec.symbol),
-                          daily_factory=daily_factory,
-                          max_holding_bars=(
-                              runtime_contract.max_holding_bars
-                              if runtime_contract is not None else 48
-                          ),
-                          canonical_candle_wait_seconds=8.0,
-                          trail_atr_mult=spec.trail_atr_mult)
-    strategy = _build_strategy(
-        spec, seed_funding, feed, funding_store_path=funding_store_path
+    config = RunnerConfig(
+        mode=spec.mode,
+        symbol=spec.symbol,
+        timeframe=spec.timeframe,
+        starting_equity_usd=spec.starting_equity,
+        risk=risk,
+        limits=venue_symbol_limits(spec.exchange, spec.symbol),
+        daily_factory=daily_factory,
+        max_holding_bars=(
+            runtime_contract.max_holding_bars if runtime_contract is not None else 48
+        ),
+        canonical_candle_wait_seconds=8.0,
+        trail_atr_mult=spec.trail_atr_mult,
     )
-    exchange = SimulatedExchange(
-        venue_fill_model(spec.exchange), config.starting_equity_usd)
+    strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
+    exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange))
     session = LivePaperSession(
-        strategy, feed, history, config,
-        gateway=gateway, order_manager=om, exchange=exchange, journal=journal,
+        strategy,
+        feed,
+        history,
+        config,
+        gateway=gateway,
+        order_manager=om,
+        exchange=exchange,
+        journal=journal,
         snapshot_provider=provider.sink(spec.lane_id, spec.exchange),
-        account_store=PaperAccountStore(
-            journal_dir / f"{spec.lane_id}.account.json", spec.lane_id),
+        account_store=PaperAccountStore(journal_dir / f"{spec.lane_id}.account.json", spec.lane_id),
         equity_history_path=journal_dir / f"{spec.lane_id}.equity.jsonl",
         fill_ledger=FillLedger(journal_dir / f"{spec.lane_id}.fills.jsonl"),
-        funnel_store=LaneFunnelStore(
-            journal_dir / f"{spec.lane_id}.funnel.json", spec.lane_id),
-        latency_store=LaneLatencyStore(
-            journal_dir / f"{spec.lane_id}.latency.json", spec.lane_id
-        ),
-        gap_store=GapParquetStore(
-            Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
-        ),
+        funnel_store=LaneFunnelStore(journal_dir / f"{spec.lane_id}.funnel.json", spec.lane_id),
+        latency_store=LaneLatencyStore(journal_dir / f"{spec.lane_id}.latency.json", spec.lane_id),
+        gap_store=GapParquetStore(Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))),
         shadow_portfolio=shadow_portfolio,
         canonical_candle_store=_canonical_runtime_store(spec, canonical_store),
-        trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
-                    "min_days": 14, "preferred_days": 30, "min_trades": 10,
-                    "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,
-                    "promotion_source": spec.exchange,
-                    "daily_factory": daily_factory.model_dump()},
+        trial_meta={
+            "trial_id": spec.lane_id,
+            "started": "2026-07-04",
+            "min_days": 14,
+            "preferred_days": 30,
+            "min_trades": 10,
+            "max_dd_pct": 6.0,
+            "daily_stop_usd": spec.daily_loss_usd,
+            "promotion_source": spec.exchange,
+            "daily_factory": daily_factory.model_dump(),
+        },
     )
     # Expectations make a moved/edited store fail closed instead of injecting
     # a wrong-symbol position or absurd balance into the lane.
     resumed = session.account_store.restore_into(
-        exchange, session.tracker,
+        exchange,
+        session.tracker,
         expected_symbol=spec.symbol,
         expected_starting_equity=spec.starting_equity,
     )
@@ -1363,22 +1385,29 @@ async def build_lane(
     # on every deploy (display-only; never gates a trade).
     session.funnel_store.restore_into(session)
     session.latency_store.restore_into(session.latency)
-    logger.info("lane %s (%s %s %s %s) built; resumed=%s",
-                spec.lane_id, spec.exchange, spec.symbol, spec.strategy_id,
-                spec.mode.value, resumed)
+    logger.info(
+        "lane %s (%s %s %s %s) built; resumed=%s",
+        spec.lane_id,
+        spec.exchange,
+        spec.symbol,
+        spec.strategy_id,
+        spec.mode.value,
+        resumed,
+    )
     return _LaneRuntime(spec=spec, session=session, feed=feed)
 
 
 class MultiLaneShadowRunner:
-    def __init__(self, specs: list[LaneSpec], journal_dir: Path,
-                 provider: MultiLaneProvider) -> None:
+    def __init__(
+        self, specs: list[LaneSpec], journal_dir: Path, provider: MultiLaneProvider
+    ) -> None:
         self.specs = specs
         self.journal_dir = journal_dir
         self.provider = provider
         observers = [
-            spec for spec in specs
-            if spec.mode is RunnerMode.SHADOW
-            and spec.strategy_id != "measurement_only_v1"
+            spec
+            for spec in specs
+            if spec.mode is RunnerMode.SHADOW and spec.strategy_id != "measurement_only_v1"
         ]
         shared_equity = min(
             (Decimal(str(spec.starting_equity)) for spec in observers),
@@ -1428,11 +1457,16 @@ class MultiLaneShadowRunner:
             if isinstance(result, BaseException):
                 logger.error(
                     "lane %s (%s %s) failed to build: %s",
-                    spec.lane_id, spec.exchange, spec.symbol, result,
+                    spec.lane_id,
+                    spec.exchange,
+                    spec.symbol,
+                    result,
                     exc_info=(type(result), result, result.__traceback__),
                 )
                 self.provider.publish_error(
-                    spec.lane_id, spec.exchange, spec.symbol,
+                    spec.lane_id,
+                    spec.exchange,
+                    spec.symbol,
                     f"build failed: {result}",
                 )
                 continue
@@ -1445,13 +1479,17 @@ class MultiLaneShadowRunner:
             except Exception as exc:
                 logger.error(
                     "lane %s (%s %s) feed failed to start: %s",
-                    runtime.spec.lane_id, runtime.spec.exchange,
-                    runtime.spec.symbol, exc,
+                    runtime.spec.lane_id,
+                    runtime.spec.exchange,
+                    runtime.spec.symbol,
+                    exc,
                     exc_info=(type(exc), exc, exc.__traceback__),
                 )
                 self.provider.publish_error(
-                    runtime.spec.lane_id, runtime.spec.exchange,
-                    runtime.spec.symbol, f"feed start failed: {exc}",
+                    runtime.spec.lane_id,
+                    runtime.spec.exchange,
+                    runtime.spec.symbol,
+                    f"feed start failed: {exc}",
                 )
                 continue
             started.append(runtime)
@@ -1459,17 +1497,17 @@ class MultiLaneShadowRunner:
         if not started:
             raise RuntimeError("no multi-lane shadow lanes started")
 
-        logger.info("multi-lane shadow: %d/%d lanes running (%s)",
-                    len(started), len(self.specs),
-                    ", ".join(r.spec.lane_id for r in started))
-        await asyncio.gather(*[
-            self._run_lane(runtime, deadline_seconds=deadline_seconds)
-            for runtime in started
-        ])
+        logger.info(
+            "multi-lane shadow: %d/%d lanes running (%s)",
+            len(started),
+            len(self.specs),
+            ", ".join(r.spec.lane_id for r in started),
+        )
+        await asyncio.gather(
+            *[self._run_lane(runtime, deadline_seconds=deadline_seconds) for runtime in started]
+        )
 
-    async def _run_lane(
-        self, runtime: _LaneRuntime, *, deadline_seconds: float | None
-    ) -> None:
+    async def _run_lane(self, runtime: _LaneRuntime, *, deadline_seconds: float | None) -> None:
         try:
             await runtime.session.run(deadline_seconds=deadline_seconds)
         except asyncio.CancelledError:
@@ -1477,17 +1515,18 @@ class MultiLaneShadowRunner:
         except Exception as exc:
             logger.exception(
                 "lane %s (%s %s) stopped with error",
-                runtime.spec.lane_id, runtime.spec.exchange,
+                runtime.spec.lane_id,
+                runtime.spec.exchange,
                 runtime.spec.symbol,
             )
             self.provider.publish_error(
-                runtime.spec.lane_id, runtime.spec.exchange,
-                runtime.spec.symbol, f"session failed: {exc}",
+                runtime.spec.lane_id,
+                runtime.spec.exchange,
+                runtime.spec.symbol,
+                f"session failed: {exc}",
             )
         finally:
             try:
                 await runtime.feed.stop()
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "lane %s feed stop failed: %s", runtime.spec.lane_id, exc
-                )
+                logger.warning("lane %s feed stop failed: %s", runtime.spec.lane_id, exc)

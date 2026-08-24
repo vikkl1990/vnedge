@@ -172,6 +172,62 @@ def test_stale_and_out_of_order_exchange_quotes_fail_closed() -> None:
     assert engine.last_reason == "quote_out_of_order"
 
 
+def test_future_exchange_quote_does_not_count_toward_hold() -> None:
+    engine = _armed(_config(max_quote_future_skew_seconds=0.5))
+    received = datetime(2026, 8, 20, tzinfo=UTC)
+
+    assert engine.observe_quote(
+        bid=100.07,
+        ask=100.08,
+        ts=received + timedelta(seconds=1),
+        received_ts=received,
+        sequence=1,
+        source="binance:book",
+        exchange_timestamped=True,
+        bar_index=10,
+    ) is None
+    assert engine.last_reason == "quote_clock_skew"
+    assert engine.long.probe_samples == 0
+
+
+def test_quote_overflow_resets_probe_without_burning_arm() -> None:
+    engine = _armed()
+    t0 = datetime(2026, 8, 20, tzinfo=UTC)
+    assert engine.observe_quote(
+        bid=100.07,
+        ask=100.08,
+        ts=t0,
+        bar_index=10,
+    ) is None
+    assert engine.long.state is AcceptanceState.PROBE
+    assert engine.long.probe_samples == 1
+
+    engine.note_quote_overflow(2)
+
+    assert engine.last_reason == "quote_buffer_overflow"
+    assert engine.quote_overflow_drops == 2
+    assert engine.quote_contract_rejects == 2
+    assert engine.long.state is AcceptanceState.ARMED
+    assert engine.long.probe_samples == 0
+
+    # The missing interval cannot count toward the hold. Three new distinct
+    # observations over the complete five seconds are required.
+    for seconds in (1, 3):
+        assert engine.observe_quote(
+            bid=100.07,
+            ask=100.08,
+            ts=t0 + timedelta(seconds=seconds),
+            bar_index=10,
+        ) is None
+    fire = engine.observe_quote(
+        bid=100.07,
+        ask=100.08,
+        ts=t0 + timedelta(seconds=6),
+        bar_index=10,
+    )
+    assert fire is not None
+
+
 def test_full_round_trip_cost_controls_breakeven_ratchet() -> None:
     exits = ExitEngine(ExitConfig(
         breakeven_arm_r=1.0,
@@ -239,3 +295,48 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert outcomes[0]["net_won"] is False
     assert outcomes[0]["net_bps"] < outcomes[0]["captured_bps"]
     assert runner.acceptance.long.state is AcceptanceState.ARMED
+
+
+def test_shadow_runner_checks_protective_stop_on_each_quote() -> None:
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USDT:USDT")
+    bars = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime(2026, 8, 20, tzinfo=UTC),
+                "open": 99.5,
+                "high": 100.0,
+                "low": 99.0,
+                "close": 99.8,
+                "volume": 1000.0,
+                "sqz_episode": 7.0,
+                "sqz_range_high": 100.0,
+                "sqz_range_low": 99.0,
+                "sqz_atr": 0.25,
+                "sqz_vwap24": 99.5,
+                "sqz_compressed": 1.0,
+            }
+        ]
+    )
+    runner.on_prepared_bar(bars, 0, bars.iloc[0]["timestamp"])
+    t0 = datetime(2026, 8, 20, 0, 1, tzinfo=UTC)
+    for seconds in (0, 2, 5):
+        runner.on_quote(
+            bid=100.08,
+            ask=100.09,
+            ts=t0 + timedelta(seconds=seconds),
+        )
+    assert runner.has_open
+
+    # The very next BBO breaches the protective stop. No candle close is
+    # required and no acceptance rule is consulted for the exit.
+    runner.on_quote(
+        bid=99.0,
+        ask=99.01,
+        ts=t0 + timedelta(seconds=6),
+    )
+
+    assert not runner.has_open
+    outcomes = [payload for kind, payload in journal.records if kind == "shadow_outcome"]
+    assert len(outcomes) == 1
+    assert outcomes[0]["resolution"] == "stop_tick"

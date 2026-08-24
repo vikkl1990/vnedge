@@ -4,8 +4,9 @@ per-exchange cost model, and the observation-only paper TP ladder join."""
 from __future__ import annotations
 
 import json
-
 import math
+
+import pytest
 
 from vnedge.dashboard.app import _cost_model_payload
 from vnedge.dashboard.trade_journal import build_trade_journal
@@ -271,3 +272,6 @@ def test_cost_model_exposes_all_venues():
         assert prof["label"]
         assert prof["taker_round_trip_cost_bps"] > 0
     assert by["bybit"]["taker_bps"] == 5.5  # bybit's taker differs from binance
+    assert by["delta_india"]["profile"] == "delta_scalp"
+    assert by["delta_india"]["taker_bps"] == pytest.approx(5.9)
+    assert by["delta_india"]["taker_round_trip_cost_bps"] == pytest.approx(19.8)

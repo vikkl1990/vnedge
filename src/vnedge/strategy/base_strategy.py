@@ -21,6 +21,8 @@ from typing import Literal
 
 import pandas as pd
 
+from vnedge.strategy.realtime_entry import RealtimeEntryArm
+
 
 @dataclass(frozen=True)
 class SignalIntent:
@@ -73,6 +75,20 @@ class BaseStrategy(ABC):
     @abstractmethod
     def signal(self, df: pd.DataFrame, index: int) -> SignalIntent | None:
         """Entry decision at the close of bar ``index``. Read rows <= index only."""
+
+    def realtime_arm(
+        self, df: pd.DataFrame, index: int
+    ) -> RealtimeEntryArm | None:
+        """Optional closed-bar setup for a quote-triggered entry.
+
+        Returning an arm moves entry semantics to the runtime quote plane.
+        Such a strategy must keep ``signal()`` silent so one market setup can
+        never enter through both the bar and quote paths.  The untyped return
+        avoids a strategy/runtime import cycle; concrete implementations
+        return :class:`vnedge.strategy.realtime_entry.RealtimeEntryArm`.
+        """
+        del df, index
+        return None
 
     def exit_signal(
         self,

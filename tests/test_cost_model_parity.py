@@ -25,6 +25,19 @@ def test_session_costs_agree_with_the_canonical_model() -> None:
         ), held_bars
 
 
+def test_delta_swing_session_and_plan_costs_have_gst_parity() -> None:
+    model = CostModel.for_profile("delta_swing")
+    costs = SessionCosts.from_profile("delta_swing", bar_minutes=15.0)
+    for held_bars in (0, 1, 2, 8, 48):
+        assert costs.round_trip_bps(held_bars) == pytest.approx(
+            model.round_trip_bps(
+                hold_minutes=held_bars * 15.0,
+                include_safety=False,
+            )
+        )
+    assert costs.round_trip_bps(48) == pytest.approx(15.8)
+
+
 def test_unverified_scalper_offer_is_not_silently_recast_as_maker() -> None:
     """A close-fee waiver is neither a maker exit nor a generic entitlement."""
     model = CostModel.for_profile("delta_scalp")

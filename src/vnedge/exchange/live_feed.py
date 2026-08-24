@@ -42,6 +42,11 @@ _BACKOFF_SECONDS = 2.0
 _DEFAULT_REST_CANDLE_POLL_SECONDS = 10.0
 _DEFAULT_REST_QUOTE_POLL_SECONDS = 2.0
 _VALIDATED_CCXT_PRO_FEEDS = {"binanceusdm", "bybit"}
+# Short, bounded event history for quote-held acceptance. At 100 BBO updates/s
+# this retains roughly twenty seconds -- comfortably beyond the current 3-5s
+# hold contracts -- without turning the public feed into an unbounded tape.
+QUOTE_ACCEPTANCE_BUFFER_SIZE = 2_048
+_QUOTE_OVERFLOW_ATTR = "_vnedge_quote_overflow_drops"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +119,11 @@ def _publish_latest_quote(
     sequence: int | str | None = None,
     source: str = "unknown",
 ) -> QuoteUpdate:
-    """Publish without backpressure; a slow consumer needs the latest quote."""
+    """Publish into a bounded acceptance history without blocking ingress.
+
+    Overflow is explicit on the queue instead of silently replacing an
+    observation. Consumers reset any in-flight hold when the counter advances.
+    """
     received = received_ts or datetime.now(UTC)
     normalized_sequence = (
         sequence
@@ -133,10 +142,21 @@ def _publish_latest_quote(
     if queue.full():
         try:
             queue.get_nowait()
+            record_quote_overflow(queue)
         except asyncio.QueueEmpty:  # pragma: no cover - another task drained it
             pass
     queue.put_nowait(update)
     return update
+
+
+def quote_overflow_drops(queue: asyncio.Queue[QuoteUpdate]) -> int:
+    """Number of quote observations evicted from this bounded queue."""
+    return int(getattr(queue, _QUOTE_OVERFLOW_ATTR, 0))
+
+
+def record_quote_overflow(queue: asyncio.Queue[QuoteUpdate]) -> None:
+    """Increment the explicit eviction counter attached to a quote queue."""
+    queue.__dict__[_QUOTE_OVERFLOW_ATTR] = quote_overflow_drops(queue) + 1
 
 
 def _advance_forming(
@@ -198,7 +218,9 @@ class LiveMarketFeed:
         self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
-        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
+            maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
+        )
         self.quote: tuple[float, float] | None = None  # (bid, ask)
         self.funding_rate: float = 0.0
         # SETTLED funding prints [(ts_ms, rate), ...] refreshed with the rate.
@@ -439,7 +461,9 @@ class RestPollingMarketFeed:
         self.data_silence_seconds = data_silence_seconds
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
-        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(maxsize=1)
+        self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
+            maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
+        )
         self.quote: tuple[float, float] | None = None
         self.funding_rate: float = 0.0
         self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)

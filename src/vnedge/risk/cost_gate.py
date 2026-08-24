@@ -42,6 +42,7 @@ def _dec(x: object) -> Decimal:
 class CostProfile(str, Enum):
     SCALP = "scalp"  # aggressive HF (Binance USDT-M)
     SWING = "swing"  # fallback / slower holds
+    DELTA_SWING = "delta_swing"  # Delta India swing (18% GST, swing slippage)
     DELTA_SCALP = "delta_scalp"  # Delta India HF (adds 18% GST on fees)
 
 

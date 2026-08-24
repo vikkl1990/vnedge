@@ -20,6 +20,19 @@ output. Rates
 in `vnedge.risk.fee_model` are repository reference cards, not a claim about a
 current account; deployment must select a `schedule_id` backed by a statement.
 
+## Static fallback profiles
+
+| Profile | Fee assumption | Execution floor | Gate reserve | Taker RT gate |
+|---|---:|---:|---:|---:|
+| `swing` | 5 + 5 bps | 2 + 2 bps | 3 bps | 17.0 bps |
+| `delta_swing` | (5 + 5) x 1.18 GST | 2 + 2 bps | 3 bps | 18.8 bps |
+| `delta_scalp` | (5 + 5) x 1.18 GST | 3 + 3 bps | 2 bps | 19.8 bps |
+
+The reserve is a pre-trade margin, not a booked venue expense. Realized model
+costs exclude it: 14.0, 15.8, and 17.8 bps respectively before funding. A
+verified account fee schedule may apply a qualifying Scalper close waiver;
+static profiles never assume it.
+
 ## Safety contract
 
 - Features are frozen at order send, timezone-aware, schema-versioned, and contain no future price.
