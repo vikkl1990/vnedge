@@ -98,6 +98,7 @@ def test_data_products_separates_required_runtime_from_optional_research(client)
     assert rows["runtime_snapshot"]["state"] == "CURRENT"
     assert rows["ml_pipeline"]["required"] is False
     assert rows["research_scorecard"]["class"] == "historical_evidence"
+    assert rows["research_scorecard"]["state"] in {"HISTORICAL", "MISSING"}
 
 
 def test_strategy_workflow_endpoint_is_read_only_and_auth_gated(tmp_path):

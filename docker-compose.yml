@@ -336,6 +336,77 @@ services:
       driver: json-file
       options: {max-size: "5m", max-file: "3"}
 
+  # Read-only ML readiness publisher. It measures the resolved-label dataset
+  # and locked validation gates; it never trains a live model or changes a
+  # strategy. The System page declares this as a two-hour optional product, so
+  # it must have an explicit owner instead of serving a week-old JSON file.
+  ml-pipeline-status:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - vnedge.research.ml_pipeline_status
+      - --lane-dir
+      - logs/paper_trials
+      - --data-root
+      - data/normalized
+      - --output
+      - research/live_research/ml_pipeline_status.json
+      - --interval-seconds
+      - "3600"
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./data:/app/data:ro
+      - ./research/live_research:/app/research/live_research
+    mem_limit: 900m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time,sys; from datetime import datetime; p=json.load(open('research/live_research/ml_pipeline_status.json')); age=time.time()-datetime.fromisoformat(p['generated_at']).timestamp(); sys.exit(0 if age < 7200 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
+  # Research-only supervisor publisher. It joins existing evidence into an
+  # operator queue; it has no execution, mutation, or promotion authority.
+  agentic-research-os:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - vnedge.research.agentic_research_os
+      - --interval-seconds
+      - "900"
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    mem_limit: 300m
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,time,sys; from datetime import datetime; p=json.load(open('research/live_research/agentic_research_os_latest.json')); age=time.time()-datetime.fromisoformat(p['generated_at']).timestamp(); sys.exit(0 if age < 1800 else 1)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
   dashboard-tls:
     image: caddy:2-alpine
     restart: unless-stopped

@@ -36,6 +36,19 @@ from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV
 from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 
 
+def test_multi_lane_provider_reports_primary_snapshot_age():
+    provider = MultiLaneProvider("primary")
+
+    assert provider.age_seconds() is None
+    provider.sink("secondary", "bybit").publish({"ts": "2026-08-24T00:00:00+00:00"})
+    assert provider.age_seconds() is not None
+    provider.sink("primary", "binanceusdm").publish({"ts": "2026-08-24T00:00:00+00:00"})
+    age = provider.age_seconds()
+
+    assert age is not None
+    assert 0.0 <= age < 1.0
+
+
 def test_default_roster_is_measurement_only_and_has_no_capital_lane():
     specs = desired_lane_specs({})
     assert len(specs) == 3

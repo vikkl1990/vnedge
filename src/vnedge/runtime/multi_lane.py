@@ -152,6 +152,7 @@ class MultiLaneProvider:
     ) -> None:
         self.primary = primary_lane_id
         self._lanes: dict[str, dict] = {}
+        self._published_at: dict[str, float] = {}
         self._order: list[str] = []
         # optional lane-health audit (desired-vs-active); off unless both
         # the desired spec list and the journal dir are provided
@@ -199,6 +200,22 @@ class MultiLaneProvider:
         if lane_id not in self._lanes:
             self._order.append(lane_id)
         self._lanes[lane_id] = snap
+        self._published_at[lane_id] = time.monotonic()
+
+    def age_seconds(self) -> float | None:
+        """Age of the primary snapshot consumed by the dashboard.
+
+        ``SnapshotProvider`` has always exposed this contract.  The multi-lane
+        fan-in is the production provider, so omitting it made observability
+        endpoints fail with HTTP 500 even while the runtime itself was fresh.
+        """
+        if not self._order:
+            return None
+        lane_id = self.primary if self.primary in self._published_at else self._order[0]
+        published_at = self._published_at.get(lane_id)
+        if published_at is None:
+            return None
+        return max(0.0, time.monotonic() - published_at)
 
     def publish_warming(self, lane_id: str, exchange: str, symbol: str) -> None:
         """(C) A placeholder published for every lane BEFORE it builds, so the
