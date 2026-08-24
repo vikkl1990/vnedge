@@ -124,6 +124,20 @@ def test_lane_projection_uses_server_health_bands() -> None:
     assert projected["health_reason"] == "bar_close_lag_hard"
 
 
+def test_lane_projection_keeps_fresh_candle_separate_from_latency_block() -> None:
+    snap = snapshot()
+    lane = snap["lanes"][0]
+    lane["gapped_candles"] = 0
+    lane["arm_blocked"] = "bar_close_lag_hard"
+
+    projected = build_lanes_payload(snap, now=NOW)["lanes"][0]
+
+    assert projected["candle_status"] == "ok"
+    assert projected["candle_age_ms"] == 4200.0
+    assert projected["health"] == "blocked"
+    assert projected["health_reason"] == "bar_close_lag_hard"
+
+
 def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject() -> None:
     snap = snapshot()
     lane = snap["lanes"][0]

@@ -19,6 +19,13 @@ from vnedge.runtime import latency_thresholds as LT
 _BAND = {"ok": "ok", "soft": "degraded", "hard": "blocked", "unknown": "unknown"}
 _RANK = {"blocked": 3, "degraded": 2, "ok": 1, "unknown": 0}
 
+_CANDLE_ARM_BLOCK_REASONS = (
+    "canonical_bar_timeout",
+    "decision_tf_stale",
+    "decision_tf_gap",
+    "candle_gap",
+)
+
 
 def _worse(a: str, b: str) -> str:
     return a if _RANK[a] >= _RANK[b] else b
@@ -26,6 +33,19 @@ def _worse(a: str, b: str) -> str:
 
 def _skip_count(o) -> int:
     return sum(int(v) for v in o.values()) if isinstance(o, dict) else 0
+
+
+def _blocks_candle_path(lane: Mapping[str, object]) -> bool:
+    """Return whether the current arm block is a candle-integrity failure.
+
+    Bar-close processing and strategy-compute latency block new decisions, but
+    they do not make a fresh candle stale. Keeping those states separate stops
+    the lane table from rendering the contradictory ``degraded · 0s`` candle
+    cell while the operational HEALTH column still reports the arm block.
+    """
+    values = (lane.get("arm_blocked"), lane.get("degraded"))
+    text = " ".join(str(value or "").lower() for value in values)
+    return any(reason in text for reason in _CANDLE_ARM_BLOCK_REASONS)
 
 
 def lane_rows(snap: dict) -> list[dict]:
@@ -152,12 +172,8 @@ def timeframe_health(lane: Mapping[str, object]) -> tuple[str, float | None]:
         age = round(float(str(raw_age)), 3) if raw_age is not None else None
     except (TypeError, ValueError):
         age = None
-    blocked = str(lane.get("arm_blocked") or "").lower()
-    degraded = str(lane.get("degraded") or "").lower()
-    if "canonical_bar_timeout" in blocked or "canonical_bar_timeout" in degraded:
+    if _blocks_candle_path(lane):
         status = "blocked"
-    elif blocked or degraded:
-        status = "degraded"
     return status, age
 
 
@@ -222,7 +238,7 @@ def compute_chips(snap: dict) -> dict:
         h = health.get(lane.get("timeframe"))
         if h and h != "ok":
             candle, c_label = _worse(candle, "blocked"), f"decision-TF {h}"
-        if lane.get("arm_blocked"):       # CURRENT arm-gate state, not cumulative
+        if _blocks_candle_path(lane):      # candle-integrity arm blocks only
             candle, c_label = _worse(candle, "blocked"), "arms blocked"
         a1 = (tm.get("age_ms") or {}).get("1m")
         if a1 is not None and a1 > LT.TM_AGE_SOFT_P99_MS.get("1m", 1e18) and candle == "ok":

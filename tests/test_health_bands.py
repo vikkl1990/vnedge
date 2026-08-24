@@ -49,6 +49,14 @@ def test_decision_blocked_on_current_arm_block():
     assert c["DECISION"]["band"] == "blocked" and c["CANDLE"]["band"] == "blocked"
 
 
+def test_latency_arm_block_does_not_relabel_fresh_candle():
+    l = _lane(arm_blocked="bar_close_lag_hard")
+    c = compute_chips({"lanes": [l], "feed_health": {"candles": "ok"}})
+
+    assert c["CANDLE"] == {"band": "ok", "label": "ok"}
+    assert c["DECISION"] == {"band": "blocked", "label": "new arms blocked"}
+
+
 def test_measurement_only_block_does_not_block_active_scanner_lanes():
     measurement = _lane(
         strategy_id="measurement_only_v1",
