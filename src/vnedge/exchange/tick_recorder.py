@@ -28,7 +28,7 @@ import math
 import os
 import time
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -133,50 +133,68 @@ class CanonicalCandleSink:
         tick_root: Path,
         exchange: str,
         symbol: str,
-        bucket_open_ms: int,
+        replay_start_ms: int,
+        replay_through_ms: int,
     ) -> list[Path]:
-        day = datetime.fromtimestamp(bucket_open_ms / 1000, tz=UTC).strftime("%Y%m%d")
-        shard_dir = (
-            tick_root
-            / "ticks"
-            / f"exchange={exchange}"
-            / f"symbol={_canonical_symbol(symbol)}"
-            / "stream=trades"
-            / day
-        )
-        if not shard_dir.exists():
-            return []
-        # A timed flush can straddle the minute boundary. Include shards that
-        # began in the prior minute, then filter rows precisely below. This is
-        # bounded even on very active markets and avoids scanning a full day.
-        cutoff = bucket_open_ms - 60_000
+        start_day = datetime.fromtimestamp(replay_start_ms / 1000, tz=UTC).date()
+        end_day = datetime.fromtimestamp(replay_through_ms / 1000, tz=UTC).date()
+        # A timed flush can straddle the replay boundary. Include shards that
+        # began in the prior minute, then filter rows precisely below. The
+        # recorder flushes at least every 30 seconds, so this remains bounded.
+        cutoff = replay_start_ms - 60_000
         selected: list[Path] = []
-        for path in shard_dir.glob("*.parquet"):
-            try:
-                first_ts = int(path.stem.split("-", 1)[0])
-            except (ValueError, IndexError):
-                continue
-            if first_ts >= cutoff:
-                selected.append(path)
+        day = start_day
+        while day <= end_day:
+            shard_dir = (
+                tick_root
+                / "ticks"
+                / f"exchange={exchange}"
+                / f"symbol={_canonical_symbol(symbol)}"
+                / "stream=trades"
+                / day.strftime("%Y%m%d")
+            )
+            if shard_dir.exists():
+                for path in shard_dir.glob("*.parquet"):
+                    try:
+                        first_ts = int(path.stem.split("-", 1)[0])
+                    except (ValueError, IndexError):
+                        continue
+                    if cutoff <= first_ts <= replay_through_ms:
+                        selected.append(path)
+            day += timedelta(days=1)
         return sorted(selected)
 
     def restore_forming_from_tick_lake(self, tick_root: Path, *, at: datetime) -> int:
-        """Rebuild the current unclosed minute from durable trade shards.
+        """Rebuild the uncommitted tail from durable trade shards.
 
         Deployments commonly restart inside a minute. The old recorder began
-        with an empty builder, permanently dropping the pre-restart part of
-        that minute and, transitively, its 5m/15m/1h/4h parents. Replaying only
-        the current bucket is causal and never rewrites a closed candle.
+        with an empty builder, permanently dropping both the pre-restart part
+        of the current minute and, when shutdown crossed a boundary, the last
+        fully observed minute. That one missing 1m child suppresses its exact
+        5m/15m/1h parents and leaves scanner lanes timing out.
+
+        Each pipeline restores its immutable ``closed_through`` boundary from
+        Parquet. Replay starts exactly there and runs through ``at``: already
+        committed candles are never rewritten, a durable missed minute is
+        closed normally, and the current minute remains forming. This is the
+        delta-only restart path; historical repair remains the recovery
+        worker's responsibility.
         """
         if at.tzinfo is None or at.utcoffset() is None:
             raise ValueError("restore_at must be timezone-aware")
         bucket_open = floor_time(at.astimezone(UTC), "1m")
-        bucket_open_ms = int(bucket_open.timestamp() * 1000)
         through_ms = int(at.timestamp() * 1000)
         restored = 0
         for symbol in self.symbols:
+            pipeline = self.pipelines[symbol]
+            replay_start = pipeline.builder.closed_through or bucket_open
+            replay_start_ms = int(replay_start.timestamp() * 1000)
             shards = self._candidate_shards(
-                tick_root, self.exchange, symbol, bucket_open_ms
+                tick_root,
+                self.exchange,
+                symbol,
+                replay_start_ms,
+                through_ms,
             )
             if not shards:
                 continue
@@ -194,7 +212,9 @@ class CanonicalCandleSink:
                 logger.error("forming recovery skipped: trade shard schema incomplete for %s", symbol)
                 continue
             ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
-            frame = frame.loc[(ts >= bucket_open_ms) & (ts <= through_ms)].copy()
+            frame = frame.loc[
+                (ts >= replay_start_ms) & (ts <= through_ms)
+            ].copy()
             if frame.empty:
                 continue
             frame["ts_ms"] = pd.to_numeric(frame["ts_ms"], errors="raise").astype("int64")
@@ -226,15 +246,22 @@ class CanonicalCandleSink:
                         ),
                     )
                 )
-            self.pipelines[symbol].rebuild_forming(bucket_open, trades)
+            for trade in trades:
+                pipeline.on_trade(
+                    trade.timestamp,
+                    trade.price,
+                    trade.amount,
+                    trade.is_buyer_maker,
+                )
             self.restored_last_trade_ts_ms[symbol] = int(frame["ts_ms"].max())
             self.restored_trade_keys[symbol] = keys
             restored += len(trades)
             logger.info(
-                "restored forming candle from tick lake: exchange=%s symbol=%s "
-                "bucket=%s trades=%d",
+                "restored canonical tail from tick lake: exchange=%s symbol=%s "
+                "from=%s forming_bucket=%s trades=%d",
                 self.exchange,
                 symbol,
+                replay_start.isoformat(),
                 bucket_open.isoformat(),
                 len(trades),
             )

@@ -196,10 +196,23 @@ def compute_chips(snap: dict) -> dict:
     """The five safe-to-arm chips (SYSTEM/FEED/CANDLE/DECISION/RISK). UNKNOWN never
     fakes OK. SYSTEM is the kill-dominant rollup of the rest."""
     lanes = lane_rows(snap)
+    # Measurement lanes cannot arm by design. When real SHADOW/PAPER lanes are
+    # present, a measurement-only venue limitation (for example Delta lacking
+    # a canonical tick candle) must remain visible on that lane without
+    # declaring every scanner's CANDLE and DECISION path blocked. A genuinely
+    # measurement-only fleet still classifies all lanes so missing data is not
+    # hidden.
+    arm_lanes = [
+        lane
+        for lane in lanes
+        if str(lane.get("observation_class") or "").lower() != "measurement"
+        and str(lane.get("strategy_id") or "").lower() != "measurement_only_v1"
+    ]
+    decision_lanes = arm_lanes or lanes
     kill = bool(snap.get("kill_switch_active"))
 
     candle, c_label = "unknown", "no telemetry"
-    for lane in lanes:
+    for lane in decision_lanes:
         tm = lane.get("time_machine") or {}
         health = tm.get("health")
         if not health:
@@ -217,11 +230,11 @@ def compute_chips(snap: dict) -> dict:
 
     decision, d_label = "unknown", "no telemetry"
     # CURRENT block, not cumulative.
-    skips = any(lane.get("arm_blocked") for lane in lanes)
+    skips = any(lane.get("arm_blocked") for lane in decision_lanes)
     decision_bands: list[str] = []
     bar_bands: list[str] = []
     sample_counts: list[int] = []
-    for lane in lanes:
+    for lane in decision_lanes:
         lat = lane.get("latency")
         bands = lane.get("bands") if isinstance(lane.get("bands"), Mapping) else lane_bands(lane)
         decision_bands.append(str(bands.get("decision_lag") or "unknown"))

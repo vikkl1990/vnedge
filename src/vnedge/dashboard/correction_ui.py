@@ -475,14 +475,20 @@ def build_lanes_payload(
 
 
 def _feed_status(lanes: list[Mapping[str, Any]]) -> tuple[str, str]:
+    """Report public transport truth, not downstream candle/decision truth.
+
+    A canonical-candle timeout, historical gap counter, or strategy degradation
+    belongs to the CANDLE/DECISION surfaces. Folding those fields into the
+    public-feed badge produced the impossible operator view ``FEED LIVE`` next
+    to ``PUBLIC FEED GAP`` even when every venue websocket was current.
+    """
     feeds = [
         str(lane.get("feed") or _mapping(lane.get("feed_health")).get("candles") or "")
         .strip()
         .lower()
         for lane in lanes
     ]
-    degraded = any(lane.get("degraded") or lane.get("gapped_candles") for lane in lanes)
-    if degraded or any("gap" in feed or "error" in feed for feed in feeds):
+    if any("gap" in feed or "error" in feed for feed in feeds):
         return "gap", "gap / degraded"
     if any(feed and feed not in {"ok", "live"} for feed in feeds):
         return "stale", "stale / warming"

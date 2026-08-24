@@ -947,6 +947,28 @@ def _overlay_canonical_history(
     return out.reset_index().sort_values("timestamp").reset_index(drop=True)
 
 
+def _canonical_runtime_store(
+    spec: LaneSpec,
+    store: CandleParquetStore,
+) -> CandleParquetStore | None:
+    """Select whether live decisions must wait for a canonical tick candle.
+
+    Binance owns the production tick recorder and exact candle ladder, so all
+    Binance lanes consume it. Non-Binance measurement lanes are deliberately
+    read-only and use their validated public OHLCV feed; attaching an empty
+    Bybit/Delta candle partition made those non-arming lanes emit permanent
+    ``canonical_bar_timeout`` failures. A future non-measurement lane on either
+    venue remains fail-closed by receiving the empty canonical store until a
+    venue recorder is explicitly built.
+    """
+    if (
+        spec.exchange != "binanceusdm"
+        and spec.strategy_id == "measurement_only_v1"
+    ):
+        return None
+    return store
+
+
 def _timeframe_ms(timeframe: str) -> int:
     return _TF_MS.get(str(timeframe).strip(), 3_600_000)  # default 1h
 
@@ -1303,7 +1325,7 @@ async def build_lane(
             Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))
         ),
         shadow_portfolio=shadow_portfolio,
-        canonical_candle_store=canonical_store,
+        canonical_candle_store=_canonical_runtime_store(spec, canonical_store),
         trial_meta={"trial_id": spec.lane_id, "started": "2026-07-04",
                     "min_days": 14, "preferred_days": 30, "min_trades": 10,
                     "max_dd_pct": 6.0, "daily_stop_usd": spec.daily_loss_usd,

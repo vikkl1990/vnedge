@@ -49,6 +49,28 @@ def test_decision_blocked_on_current_arm_block():
     assert c["DECISION"]["band"] == "blocked" and c["CANDLE"]["band"] == "blocked"
 
 
+def test_measurement_only_block_does_not_block_active_scanner_lanes():
+    measurement = _lane(
+        strategy_id="measurement_only_v1",
+        observation_class="measurement",
+        arm_blocked="lane_degraded:canonical_bar_timeout",
+    )
+    scanner = _lane(
+        strategy_id="structure_bos_15m_trigger_v3",
+        observation_class="shadow_observe",
+    )
+    chips = compute_chips(
+        {
+            "lanes": [measurement, scanner],
+            "feed_health": {"candles": "ok"},
+        }
+    )
+
+    assert chips["CANDLE"] == {"band": "ok", "label": "ok"}
+    assert chips["DECISION"] == {"band": "ok", "label": "ok"}
+    assert chips["SYSTEM"] == {"band": "ok", "label": "nominal"}
+
+
 def test_cumulative_skips_alone_do_not_stick_blocked():
     # O2: decision_skips is a cumulative metric; the chip reflects CURRENT state
     # (arm_blocked), so a lane that hiccupped earlier but is fine now reads ok.

@@ -244,12 +244,14 @@ def test_risk_mode_reports_active_shadow_observer() -> None:
     assert payload["capital"] == {"enabled": False, "roster_size": 0}
 
 
-def test_risk_projection_never_hides_gap_journal_or_delta_blocker() -> None:
+def test_risk_projection_separates_feed_from_gap_journal_and_delta_blocker() -> None:
     payload = build_risk_payload(snapshot())
 
     assert payload["runtime_mode"] == "measurement"
     assert payload["capital"] == {"enabled": False, "roster_size": 0}
-    assert payload["feed"]["status"] == "gap"
+    # The public transport is healthy; the candle gap remains visible on the
+    # lane and must not be relabelled as a websocket/feed failure.
+    assert payload["feed"] == {"status": "healthy", "label": "healthy"}
     assert payload["journal"]["entries_blocked"] is True
     assert payload["journal"]["quarantine_path"].endswith(".corrupt")
     assert payload["daily_halt"]["used_usd"] == 3.0

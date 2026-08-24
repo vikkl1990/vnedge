@@ -5,10 +5,12 @@ import json
 import pandas as pd
 import pytest
 
+from vnedge.data.candles import CandleParquetStore
 from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
     _build_single_strategy,
+    _canonical_runtime_store,
     _overlay_canonical_history,
 )
 from vnedge.runtime.multi_lane_shadow import (
@@ -56,6 +58,37 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv"
     assert overlaid.iloc[0]["data_quality"] == "gap"
     assert bool(overlaid.iloc[0]["is_closed"]) is True
+
+
+def test_non_binance_measurement_does_not_wait_on_unowned_canonical_store(tmp_path):
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    bybit_measurement = LaneSpec(
+        lane_id="measurement_bybit_btc",
+        exchange="bybit",
+        symbol="BTC/USDT:USDT",
+    )
+    delta_measurement = LaneSpec(
+        lane_id="measurement_delta_btc",
+        exchange="delta_india",
+        symbol="BTC/USD:USD",
+    )
+    binance_measurement = LaneSpec(
+        lane_id="measurement_binance_btc",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+    )
+    future_bybit_scanner = LaneSpec(
+        lane_id="shadow_bybit_scanner",
+        exchange="bybit",
+        symbol="BTC/USDT:USDT",
+        strategy_id="structure_bos_1h",
+    )
+
+    assert _canonical_runtime_store(bybit_measurement, store) is None
+    assert _canonical_runtime_store(delta_measurement, store) is None
+    assert _canonical_runtime_store(binance_measurement, store) is store
+    # A future scanner cannot silently fall back to exchange candles.
+    assert _canonical_runtime_store(future_bybit_scanner, store) is store
 
 
 def test_measurement_grid_expands_and_normalizes_delta_symbol():

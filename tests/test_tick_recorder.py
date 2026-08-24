@@ -170,6 +170,76 @@ def test_canonical_sink_restart_rebuilds_current_minute_from_tick_shards(tmp_pat
     assert closed[0].trade_count == 2
 
 
+def test_canonical_sink_restart_replays_missing_closed_minute_delta(tmp_path):
+    tick_root = tmp_path / "lake"
+    candle_root = tmp_path / "candles"
+    start = datetime(2026, 8, 21, 4, 0, tzinfo=UTC)
+
+    # Persist the five minutes that existed before the recorder stopped. The
+    # immutable base boundary is therefore 04:05 and the 04:00 5m parent exists.
+    first = CanonicalCandleSink(
+        "binanceusdm", ["BTC/USDT:USDT"], candle_root
+    )
+    for minute in range(5):
+        first.on_trade(
+            "BTC/USDT:USDT",
+            {
+                "timestamp": int(
+                    (start + timedelta(minutes=minute, seconds=10)).timestamp()
+                    * 1000
+                ),
+                "price": 100 + minute,
+                "amount": 1,
+                "side": "buy",
+            },
+        )
+    first.advance_time(start + timedelta(minutes=5))
+
+    # The stopped recorder flushed the trade tape for 04:05..04:10, but the
+    # old candle builder never committed those rows. A restart at 04:10:50
+    # must replay only that missing delta, close the 04:05 5m parent, and leave
+    # 04:10 forming.
+    buffer = _Buffer(
+        tick_root, "binanceusdm", "BTC/USDT:USDT", "trades"
+    )
+    for minute in range(5, 11):
+        timestamp = int(
+            (start + timedelta(minutes=minute, seconds=10)).timestamp() * 1000
+        )
+        buffer.add(
+            {
+                "ts_ms": timestamp,
+                "price": 100 + minute,
+                "amount": 1.0,
+                "side": "buy",
+                "trade_id": str(minute),
+            }
+        )
+    buffer.flush(0.0)
+
+    restored = CanonicalCandleSink(
+        "binanceusdm",
+        ["BTC/USDT:USDT"],
+        candle_root,
+        tick_root=tick_root,
+        restore_at=start + timedelta(minutes=10, seconds=50),
+    )
+
+    from vnedge.data.candles import CandleParquetStore
+
+    store = CandleParquetStore(candle_root, exchange="binanceusdm")
+    assert [c.open_time for c in store.read("BTCUSDT", "5m")] == [
+        start,
+        start + timedelta(minutes=5),
+    ]
+    assert restored.pipelines["BTC/USDT:USDT"].forming().open_time == (
+        start + timedelta(minutes=10)
+    )
+    assert restored.restored_last_trade_ts_ms["BTC/USDT:USDT"] == int(
+        (start + timedelta(minutes=10, seconds=10)).timestamp() * 1000
+    )
+
+
 def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
     rows, rejected = _normalize_trade_batch(
         [
