@@ -2901,6 +2901,7 @@
       "<div class='s' style='margin-top:4px'>distance · "+(distanceRows.length?distanceRows.join(' · '):'not reported')+"</div>"+
       "<div class='s' style='margin-top:4px'>source · "+jEsc(String(source.candle_source||'unreported'))+" · fallback "+jEsc(String(!!source.exchange_fallback_used))+" · row "+jEsc(String(source.decision_row_sha256||'—').slice(0,12))+"</div>"+
       "<div class='s' style='margin-top:4px'>contract · "+jEsc(String((l&&l.cost_profile)||'—'))+" · "+jEsc(String(contract.max_holding_bars||'—'))+" bars / "+jEsc(String(contract.max_holding_hours||'—'))+"h</div>"+
+      "<div class='s' style='margin-top:4px'>engines · "+jEsc(String(contract.decision_engine||'unreported'))+" → "+jEsc(String(contract.exit_engine||'unreported'))+"</div>"+
       "</div>";
     var el=$("pipelineDetail"); if(el)el.innerHTML=head+gateDiag+"<div id='pldTrades' style='padding:12px 15px 4px'><div class='jempty'>loading trades…</div></div>";
     poll("/trade-journal?limit=25&lane="+encodeURIComponent(laneId), function(d){ if(pldLane===laneId) renderPldTrades(d); });

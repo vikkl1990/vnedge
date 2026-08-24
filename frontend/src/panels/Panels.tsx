@@ -204,6 +204,8 @@ export function DeskPanel() {
               <span className="text-faint">bars / evaluations</span><span className="text-right font-mono">{lane.funnel.bars ?? 0} / {lane.funnel.evals ?? 0}</span>
               <span className="text-faint">signals / approved</span><span className="text-right font-mono">{lane.funnel.signals ?? 0} / {lane.funnel.shadow_approved ?? 0}</span>
               <span className="text-faint">positions / pending</span><span className="text-right font-mono">{lane.open_positions} / {lane.shadow_perf?.pending_shadow_intents ?? 0}</span>
+              <span className="text-faint">decision engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_engine ?? "unreported"}</span>
+              <span className="text-faint">exit engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.exit_engine ?? "unreported"}</span>
               <span className="text-faint">last evaluation</span><span className="text-right font-mono break-all">{String(lane.last_eval?.reason ?? lane.last_signal_reason)}</span>
             </div>
           </details>

@@ -379,6 +379,40 @@ def test_checked_in_observer_roster_is_valid() -> None:
     assert all(not spec.is_primary for spec in specs)
 
 
+def test_v2_observer_roster_fails_closed_on_engine_contract_drift(tmp_path) -> None:
+    path = tmp_path / "observers-v2.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "registered_at": "2026-08-24T00:00:00+00:00",
+                "observers": [
+                    {
+                        "strategy_id": "squeeze_expansion_breakout_v4",
+                        "exchange": "binanceusdm",
+                        "symbols": ["BTC/USDT:USDT"],
+                        "timeframe": "5m",
+                        "revision": {
+                            "version": "4",
+                            "mechanism": "quote-held expansion",
+                            "decision_engine": "base_strategy_next_open_v1",
+                            "exit_engine": "active_exit_v1",
+                            "backtest_engine": "vnedge_event_backtester",
+                            "engine_version": "1",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="revision/runtime mismatch"):
+        build_shadow_observe_roster_specs(
+            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
+        )
+
+
 def test_observer_roster_cannot_mix_with_legacy_contract(tmp_path) -> None:
     path = _write_observer_roster(
         tmp_path,

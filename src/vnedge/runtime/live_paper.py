@@ -2622,6 +2622,8 @@ class LivePaperSession:
                     {
                         "cost_family": self.runtime_contract.cost_family,
                         "max_holding_bars": self.runtime_contract.max_holding_bars,
+                        "decision_engine": self.runtime_contract.decision_engine,
+                        "exit_engine": self.runtime_contract.exit_engine,
                         "max_holding_hours": (
                             self.runtime_contract.max_holding_bars
                             * (self._tf_seconds or 0)

@@ -194,6 +194,55 @@ def test_missing_registry_still_exposes_registered_strategy_catalog(tmp_path):
     assert all(row["can_trade"] is False for row in payload["revisions"])
 
 
+def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_path):
+    payload = build_strategy_workflow(
+        workflow_registry_path=tmp_path / "missing.jsonl",
+        feed_path=tmp_path / "missing-feed.jsonl",
+        burn_registry_path=tmp_path / "missing-burn.jsonl",
+        paper_trials_dir=tmp_path / "missing-paper",
+        prereg_dir=tmp_path / "missing-prereg",
+        scanner_evidence_path=tmp_path / "missing-scanner-evidence.json",
+    )
+
+    active = {
+        "squeeze_expansion_breakout_v4": (
+            "quote_acceptance_v1",
+            "scanner_exit_v1",
+        ),
+        "range_expansion_observer_v4": (
+            "base_strategy_next_open_v1",
+            "active_exit_v1",
+        ),
+        "structure_bos_15m_trigger_v3": (
+            "base_strategy_next_open_v1",
+            "active_exit_v1",
+        ),
+        "session_continuation_15m_v1": (
+            "base_strategy_next_open_v1",
+            "active_exit_v1",
+        ),
+    }
+    rows = {
+        row["strategy_id"]: row
+        for row in payload["revisions"]
+        if row["strategy_id"] in active
+    }
+
+    assert payload["provenance"]["active_roster_revisions"] == 4
+    assert payload["summary"]["explicit_revisions"] >= 4
+    assert set(rows) == set(active)
+    for strategy_id, (decision_engine, exit_engine) in active.items():
+        row = rows[strategy_id]
+        assert row["backtest_engine"]
+        assert row["engine_version"] == "1"
+        assert row["params"]["runtime"]["decision_engine"] == decision_engine
+        assert row["params"]["runtime"]["exit_engine"] == exit_engine
+        assert row["parity_status"] == "NOT_REPORTED"
+        assert "ENGINE_PARITY_NOT_REPORTED" in row["governance_flags"]
+        assert row["latest_judgment"] is None
+        assert row["can_trade"] is False
+
+
 def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path):
     scanner_evidence = tmp_path / "scanner-evidence.json"
     scanner_evidence.write_text(

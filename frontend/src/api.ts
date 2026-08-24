@@ -358,6 +358,14 @@ export interface TrialScorecard {
   verdict?: string;
   criteria?: TrialCriterion[];
 }
+export interface ScannerRuntimeContract {
+  cost_family?: string;
+  max_holding_bars?: number;
+  max_holding_hours?: number;
+  decision_engine?: string;
+  exit_engine?: string;
+  rationale?: string;
+}
 export interface LaneRow {
   lane_id?: string;
   strategy_id?: string;
@@ -412,6 +420,7 @@ export interface CorrectionLane {
   open_positions: number;
   funnel: Record<string, number>;
   sizing_profile: SizingProfile | null;
+  runtime_contract: ScannerRuntimeContract | null;
   active_plan: Record<string, unknown> | null;
   last_eval: Record<string, unknown> | null;
   why_no_fire: string;

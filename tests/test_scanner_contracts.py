@@ -50,3 +50,18 @@ def test_cost_profile_comes_from_strategy_family_then_venue() -> None:
 
 def test_unknown_strategy_keeps_legacy_runtime_path() -> None:
     assert scanner_runtime_contract("measurement_only_v1") is None
+
+
+def test_active_scanners_publish_their_real_decision_and_exit_engines() -> None:
+    squeeze = scanner_runtime_contract("squeeze_expansion_breakout_v4")
+    range_expansion = scanner_runtime_contract("range_expansion_observer_v4")
+    bos = scanner_runtime_contract("structure_bos_15m_trigger_v3")
+    session = scanner_runtime_contract("session_continuation_15m_v1")
+
+    assert squeeze is not None
+    assert squeeze.decision_engine == "quote_acceptance_v1"
+    assert squeeze.exit_engine == "scanner_exit_v1"
+    for contract in (range_expansion, bos, session):
+        assert contract is not None
+        assert contract.decision_engine == "base_strategy_next_open_v1"
+        assert contract.exit_engine == "active_exit_v1"

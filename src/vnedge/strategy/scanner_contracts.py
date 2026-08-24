@@ -15,6 +15,8 @@ from types import MappingProxyType
 from typing import Literal
 
 CostFamily = Literal["scalp", "swing"]
+DecisionEngine = Literal["base_strategy_next_open_v1", "quote_acceptance_v1"]
+ExitEngine = Literal["active_exit_v1", "scanner_exit_v1"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +26,8 @@ class ScannerRuntimeContract:
     cost_family: CostFamily
     max_holding_bars: int
     rationale: str
+    decision_engine: DecisionEngine = "base_strategy_next_open_v1"
+    exit_engine: ExitEngine = "active_exit_v1"
 
     def __post_init__(self) -> None:
         if not self.strategy_id or not self.timeframe:
@@ -39,6 +43,8 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         cost_family="scalp",
         max_holding_bars=48,  # custom acceptance exit: 4-hour backstop
         rationale="quote-accepted short-horizon expansion",
+        decision_engine="quote_acceptance_v1",
+        exit_engine="scanner_exit_v1",
     ),
     "range_expansion_observer_v3": ScannerRuntimeContract(
         strategy_id="range_expansion_observer_v3",
@@ -97,6 +103,8 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         strategy_id="tick_accepted_breakout_v1", timeframe="5m",
         cost_family="scalp", max_holding_bars=48,
         rationale="tick-held acceptance after a closed-bar range arm",
+        decision_engine="quote_acceptance_v1",
+        exit_engine="scanner_exit_v1",
     ),
 }
 
@@ -128,6 +136,8 @@ def resolve_scanner_cost_profile(
 
 __all__ = [
     "SCANNER_RUNTIME_CONTRACTS",
+    "DecisionEngine",
+    "ExitEngine",
     "ScannerRuntimeContract",
     "resolve_scanner_cost_profile",
     "scanner_runtime_contract",

@@ -114,3 +114,17 @@ A strategy produces stop-carrying entry intents from causal features. It does
 leverage, place or manage orders, or bypass any gate. Passing this contract and
 the promotion gates makes a strategy a *candidate*; a pre-registered judgment on
 untouched data and explicit human approval are still required before it trades.
+
+## Active observer execution identity
+
+The checked-in shadow observer roster uses schema version 2. Every active
+strategy revision must name its decision engine, exit engine, replay engine,
+and engine version. The runtime validates decision and exit identities against
+`ScannerRuntimeContract` before network startup and refuses a mismatch.
+
+Most active closed-bar strategies use
+`base_strategy_next_open_v1 -> active_exit_v1`. Quote-accepted breakout
+strategies are an explicit exception and use
+`quote_acceptance_v1 -> scanner_exit_v1`. A named engine is only an identity
+freeze: it does not imply engine parity or a successful backtest. Those remain
+separate evidence events in the strategy workflow.

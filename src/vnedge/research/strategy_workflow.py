@@ -29,7 +29,7 @@ import json
 import os
 import re
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -51,6 +51,7 @@ DEFAULT_WORKFLOW_OUT = Path("research/live_research/strategy_workflow_latest.jso
 DEFAULT_SCANNER_EVIDENCE = Path(
     "research/live_research/scanner_evidence_latest.json"
 )
+DEFAULT_ACTIVE_ROSTER = Path("config/shadow-observers.v1.json")
 DEFAULT_DASHBOARD_FEED_RECORD_LIMIT = 5_000
 
 EVENT_REGISTERED = "revision_registered"
@@ -659,6 +660,93 @@ def _synthetic_states(prereg_dir: Path) -> dict[str, RevisionState]:
     return out
 
 
+def _active_roster_states(path: Path) -> dict[str, RevisionState]:
+    """Build explicit revision identities from the reviewed active roster.
+
+    The append-only workflow ledger remains the authority for mutations and
+    parity events.  The checked-in roster is nevertheless a reviewed, Git-
+    versioned declaration of what is *actually running*, so its v2 revision
+    contracts must not be downgraded to synthetic catalog rows in the UI.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("version") != 2:
+        return {}
+    rows = payload.get("observers")
+    if not isinstance(rows, list):
+        return {}
+
+    from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+    from vnedge.strategy.strategy_registry import STRATEGIES
+
+    created_at = str(payload.get("registered_at") or "")
+    states: dict[str, RevisionState] = {}
+    seen: set[str] = set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        strategy_id = str(raw.get("strategy_id") or "").strip()
+        revision_raw = raw.get("revision")
+        strategy_cls = STRATEGIES.get(strategy_id)
+        contract = scanner_runtime_contract(strategy_id)
+        if (
+            not strategy_id
+            or strategy_id in seen
+            or strategy_cls is None
+            or contract is None
+            or not isinstance(revision_raw, dict)
+        ):
+            continue
+        seen.add(strategy_id)
+        params_obj = getattr(strategy_cls, "params", None)
+        params = asdict(params_obj) if is_dataclass(params_obj) else {}
+        runtime = asdict(contract)
+        frozen_params = {"strategy": params, "runtime": runtime}
+        version = str(revision_raw.get("version") or "").strip()
+        mechanism = str(revision_raw.get("mechanism") or "").strip()
+        symbols = tuple(sorted({str(v) for v in raw.get("symbols", ()) if str(v)}))
+        timeframe = str(raw.get("timeframe") or "").strip()
+        if not version or not mechanism or not symbols or not timeframe:
+            continue
+        config_hash = _canonical_hash(
+            {
+                "strategy_id": strategy_id,
+                "version": version,
+                "mechanism": mechanism,
+                "timeframes": [timeframe],
+                "symbols": list(symbols),
+                "params": frozen_params,
+            }
+        )
+        revision = StrategyRevision(
+            revision_id=_revision_id(strategy_id, version, config_hash),
+            strategy_id=strategy_id,
+            version=version,
+            mechanism=mechanism,
+            timeframes=(timeframe,),
+            symbols=symbols,
+            params=frozen_params,
+            config_hash=config_hash,
+            code_hash=_file_hash_for_strategy(strategy_id),
+            created_at=created_at,
+            preregistration="",
+            backtest_engine=str(revision_raw.get("backtest_engine") or ""),
+            engine_version=str(revision_raw.get("engine_version") or ""),
+            visibility="team",
+            note=(
+                "active shadow roster revision; engine identity is frozen, "
+                "parity and backtest evidence remain independently required"
+            ),
+        )
+        states[revision.revision_id] = RevisionState(
+            revision=revision,
+            last_event_at=created_at,
+        )
+    return states
+
+
 def build_strategy_workflow(
     *,
     workflow_registry_path: str | Path = DEFAULT_WORKFLOW_REGISTRY,
@@ -667,6 +755,7 @@ def build_strategy_workflow(
     paper_trials_dir: str | Path = DEFAULT_PAPER_TRIALS_DIR,
     prereg_dir: str | Path = Path("docs/prereg"),
     scanner_evidence_path: str | Path = DEFAULT_SCANNER_EVIDENCE,
+    active_roster_path: str | Path = DEFAULT_ACTIVE_ROSTER,
     feed_max_records: int | None = DEFAULT_DASHBOARD_FEED_RECORD_LIMIT,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -681,13 +770,26 @@ def build_strategy_workflow(
 
     store = StrategyWorkflowStore(workflow_registry_path)
     explicit = store.states()
+    active = _active_roster_states(Path(active_roster_path))
     states = _synthetic_states(Path(prereg_dir))
-    explicit_strategies = {state.revision.strategy_id for state in explicit.values()}
+    explicit_strategies = {
+        state.revision.strategy_id for state in (*active.values(), *explicit.values())
+    }
     states = {
         revision_id: state
         for revision_id, state in states.items()
         if state.revision.strategy_id not in explicit_strategies
     }
+    states.update(active)
+    # Append-only ledger events override a checked-in roster declaration for
+    # the same strategy (for example, a parity failure quarantine).
+    ledger_strategies = {state.revision.strategy_id for state in explicit.values()}
+    if ledger_strategies:
+        states = {
+            revision_id: state
+            for revision_id, state in states.items()
+            if state.revision.strategy_id not in ledger_strategies
+        }
     states.update(explicit)
     experiment = build_experiment_index(
         feed_path=Path(feed_path),
@@ -786,11 +888,12 @@ def build_strategy_workflow(
             "evidence_as_of": evidence_as_of,
             "feed_max_records": feed_max_records,
             "explicit_registry_events": len(explicit),
+            "active_roster_revisions": len(active),
             "shadow_evidence_as_of": scanner_evidence_generated_at,
         },
         "summary": {
             "revisions": len(rows),
-            "explicit_revisions": len(explicit),
+            "explicit_revisions": len(active) + len(explicit),
             "strategies": len({row["strategy_id"] for row in rows}),
             "by_stage": by_stage,
             "quarantined": sum(row["stage"] == "QUARANTINED" for row in rows),

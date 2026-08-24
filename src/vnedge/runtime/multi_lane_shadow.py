@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
 from vnedge.runtime.runner_config import RunnerMode
+from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.strategy_registry import (
     get_strategy_class,
     is_capital_eligible,
@@ -35,7 +36,8 @@ DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
 DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
 OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
-OBSERVER_ROSTER_VERSION = 1
+OBSERVER_ROSTER_VERSION = 2
+_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, OBSERVER_ROSTER_VERSION})
 _OBSERVER_FIELDS = frozenset(
     {
         "strategy_id",
@@ -45,6 +47,17 @@ _OBSERVER_FIELDS = frozenset(
         "starting_equity",
         "daily_loss_usd",
         "trail_atr_mult",
+        "revision",
+    }
+)
+_REVISION_FIELDS = frozenset(
+    {
+        "version",
+        "mechanism",
+        "decision_engine",
+        "exit_engine",
+        "backtest_engine",
+        "engine_version",
     }
 )
 
@@ -209,6 +222,58 @@ def _observer_lane_id(
     )
 
 
+def _validate_observer_revision(
+    row: Mapping[str, object], *, strategy_id: str, timeframe: str, roster_version: int
+) -> None:
+    """Pin the active lane to an operator-visible execution contract.
+
+    Version-one manifests remain readable for historical/tests use.  Version
+    two is the production contract: every active scanner names the decision,
+    exit, and replay engines, and those values must match the reviewed runtime
+    contract.  This prevents a roster edit from presenting a scanner as parity
+    tested by a different engine family.
+    """
+    revision = row.get("revision")
+    if roster_version == 1 and revision is None:
+        return
+    if not isinstance(revision, dict):
+        raise TypeError(f"observer {strategy_id} requires a revision contract")
+    unknown = set(revision) - _REVISION_FIELDS
+    if unknown:
+        raise ValueError(
+            f"observer {strategy_id} revision has unknown fields: {sorted(unknown)}"
+        )
+    missing = [
+        field
+        for field in sorted(_REVISION_FIELDS)
+        if not str(revision.get(field, "")).strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"observer {strategy_id} revision requires fields: {missing}"
+        )
+    contract = scanner_runtime_contract(strategy_id)
+    if contract is None:
+        raise ValueError(
+            f"observer {strategy_id} has no frozen scanner runtime contract"
+        )
+    expected = {
+        "timeframe": contract.timeframe,
+        "decision_engine": contract.decision_engine,
+        "exit_engine": contract.exit_engine,
+    }
+    actual = {
+        "timeframe": timeframe,
+        "decision_engine": str(revision["decision_engine"]),
+        "exit_engine": str(revision["exit_engine"]),
+    }
+    if actual != expected:
+        raise ValueError(
+            f"observer {strategy_id} revision/runtime mismatch: "
+            f"expected {expected}, got {actual}"
+        )
+
+
 def build_shadow_observe_roster_specs(
     environ: Mapping[str, str] = os.environ,
 ) -> list[LaneSpec]:
@@ -236,12 +301,14 @@ def build_shadow_observe_roster_specs(
         raise ValueError(f"observer roster is not valid JSON: {path}") from exc
     if not isinstance(payload, dict):
         raise TypeError("observer roster must be a JSON object")
-    unknown_top = set(payload) - {"version", "observers"}
+    unknown_top = set(payload) - {"version", "registered_at", "observers"}
     if unknown_top:
         raise ValueError(f"observer roster has unknown fields: {sorted(unknown_top)}")
-    if payload.get("version") != OBSERVER_ROSTER_VERSION:
+    roster_version = payload.get("version")
+    if roster_version not in _SUPPORTED_OBSERVER_ROSTER_VERSIONS:
         raise ValueError(
-            f"observer roster version must be {OBSERVER_ROSTER_VERSION}"
+            "observer roster version must be one of "
+            f"{sorted(_SUPPORTED_OBSERVER_ROSTER_VERSIONS)}"
         )
     rows = payload.get("observers")
     if not isinstance(rows, list) or not rows:
@@ -272,6 +339,12 @@ def build_shadow_observe_roster_specs(
         if not is_shadow_observe_eligible(strategy_id):
             raise ValueError(f"strategy {strategy_id!r} is not shadow-observe eligible")
         _observer_timeframe(strategy_id, timeframe)
+        _validate_observer_revision(
+            row,
+            strategy_id=strategy_id,
+            timeframe=timeframe,
+            roster_version=int(roster_version),
+        )
         starting_equity = _manifest_float(
             row.get("starting_equity", 500), field="starting_equity", minimum=0
         )

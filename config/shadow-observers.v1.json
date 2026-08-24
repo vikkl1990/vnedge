@@ -1,11 +1,20 @@
 {
-  "version": 1,
+  "version": 2,
+  "registered_at": "2026-08-24T00:00:00+00:00",
   "observers": [
     {
       "strategy_id": "squeeze_expansion_breakout_v4",
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "5m",
+      "revision": {
+        "version": "4",
+        "mechanism": "exact-volume squeeze followed by quote-held breakout acceptance",
+        "decision_engine": "quote_acceptance_v1",
+        "exit_engine": "scanner_exit_v1",
+        "backtest_engine": "vnedge_quote_acceptance_replay",
+        "engine_version": "1"
+      },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
@@ -15,6 +24,14 @@
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
+      "revision": {
+        "version": "4",
+        "mechanism": "session-conditioned range expansion on closed 15-minute bars",
+        "decision_engine": "base_strategy_next_open_v1",
+        "exit_engine": "active_exit_v1",
+        "backtest_engine": "vnedge_event_backtester",
+        "engine_version": "1"
+      },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
@@ -24,6 +41,14 @@
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
+      "revision": {
+        "version": "3",
+        "mechanism": "confirmed 1h/4h structure with a closed 15-minute break trigger",
+        "decision_engine": "base_strategy_next_open_v1",
+        "exit_engine": "active_exit_v1",
+        "backtest_engine": "vnedge_event_backtester",
+        "engine_version": "1"
+      },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
@@ -33,6 +58,14 @@
       "exchange": "binanceusdm",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
+      "revision": {
+        "version": "1",
+        "mechanism": "UTC-session continuation through prior range with volume confirmation",
+        "decision_engine": "base_strategy_next_open_v1",
+        "exit_engine": "active_exit_v1",
+        "backtest_engine": "vnedge_event_backtester",
+        "engine_version": "1"
+      },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
       "trail_atr_mult": 0
