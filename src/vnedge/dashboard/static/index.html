@@ -1842,21 +1842,32 @@
       wfMetric("Revisions",String(num(sum.revisions)))+
       wfMetric("Explicit",String(num(sum.explicit_revisions)),"var(--brand)")+
       wfMetric("OOS pass",String(num(sum.oos_pass)),"var(--long)")+
-      wfMetric("Shadow observe",String(num(sum.shadow_observe)),"var(--info)")+
+      wfMetric("Shadow active",String(num(sum.shadow_observed)),"var(--info)")+
       wfMetric("Quarantined",String(num(sum.quarantined)),num(sum.quarantined)?"var(--short)":"var(--txt)")+
     '</div>';
     if(!rows.length){el.innerHTML=metrics+'<div class="note">no revisions match these evidence filters.</div>';return;}
-    var head='<div class="wfrow head"><span>Revision / lineage</span><span>Stage</span><span>After cost</span><span>Trades</span><span class="wfhide">Engine parity</span><span class="wfhide">Governance</span></div>';
+    var head='<div class="wfrow head"><span>Revision / lineage</span><span>Stage</span><span>After-cost evidence</span><span>Outcomes</span><span class="wfhide">Engine parity</span><span class="wfhide">Governance</span></div>';
     var body=rows.slice(0,80).map(function(r){
-      var p=r.performance||{},net=p.after_cost_net_usd,netText=net==null?'—':((num(net)>=0?'+$':'-$')+Math.abs(num(net)).toFixed(2));
+      var p=r.performance||{},sh=r.shadow_evidence||null,hasBacktest=p.after_cost_net_usd!=null||p.trades!=null;
+      var hasShadow=!!(sh&&num(sh.evaluations)>0),net=hasBacktest?p.after_cost_net_usd:(hasShadow?sh.net_execution_usd:null);
+      var netText=net==null?'—':((num(net)>=0?'+$':'-$')+Math.abs(num(net)).toFixed(2));
       var netClass=net==null?'':num(net)>=0?'up':'dn',parent=r.parent_revision_id?('fork ← '+String(r.parent_revision_id).split('+')[0]):'root revision';
+      var evidenceLabel=hasBacktest?String((r.latest_run||{}).run_kind||'backtest').replace(/_/g,' '):(hasShadow?'shadow journal':'not reported');
+      var outcome=hasBacktest?p.trades:(hasShadow?sh.virtual_resolved:null);
+      var outcomeLabel=hasBacktest?(p.sample_qualified?'sample qualified':'under / not reported'):(hasShadow?(num(sh.fires)+' fires · '+num(sh.virtual_pending)+' pending'):'not reported');
+      var stageLabel=String(r.stage||'registered').toLowerCase();
+      var stageTone=wfTone(r.stage);
+      if(r.stage==='SHADOW_OBSERVE'){
+        stageLabel=hasShadow?'shadow active':'shadow eligible';
+        stageTone=hasShadow?'ok':'wait';
+      }
       var flags=r.governance_flags||[],flag=flags.length?flags[0].toLowerCase().replace(/_/g,' '):'contracts complete';
       var parity=r.parity_status||'NOT_REPORTED',parityTone=parity==='PASS'?'ok':parity==='FAIL'?'bad':'fix';
       return '<div class="wfrow">'+
         '<div title="'+safe(r.revision_id||'')+'"><b>'+safe(r.strategy_id||'--')+' <span class="num">v'+safe(r.version||'--')+'</span></b><small>'+safe(parent)+'</small></div>'+
-        '<div>'+lifeChip(String(r.stage||'registered').toLowerCase(),wfTone(r.stage))+'</div>'+
-        '<div><b class="num '+netClass+'">'+safe(netText)+'</b><small>PF '+(p.profit_factor==null?'—':num(p.profit_factor).toFixed(2))+'</small></div>'+
-        '<div><b class="num">'+(p.trades==null?'—':num(p.trades).toLocaleString())+'</b><small>'+(p.sample_qualified?'sample qualified':'under / not reported')+'</small></div>'+
+        '<div>'+lifeChip(stageLabel,stageTone)+'</div>'+
+        '<div><b class="num '+netClass+'">'+safe(netText)+'</b><small>'+safe(evidenceLabel)+(hasBacktest?' · PF '+(p.profit_factor==null?'—':num(p.profit_factor).toFixed(2)):'')+'</small></div>'+
+        '<div><b class="num">'+(outcome==null?'—':num(outcome).toLocaleString())+'</b><small>'+safe(outcomeLabel)+'</small></div>'+
         '<div class="wfhide">'+lifeChip(String(parity).toLowerCase().replace(/_/g,' '),parityTone)+'<small>'+safe([r.backtest_engine,r.engine_version].filter(Boolean).join(' · ')||'engine not frozen')+'</small></div>'+
         '<div class="wfhide"><b class="wfguard" title="'+safe(flags.join(' · '))+'">'+safe(flag)+'</b><small>'+safe(r.preregistration?'pre-registered':'no prereg linked')+' · read only</small></div>'+
       '</div>';

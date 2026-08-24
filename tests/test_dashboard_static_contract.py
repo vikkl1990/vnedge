@@ -142,6 +142,9 @@ def test_research_view_has_immutable_strategy_workflow():
     assert 'poll("/strategy-workflow"' in html
     assert "Forks require a new registered ID" in html
     assert "OOS PASS still cannot trade or promote" in html
+    assert "shadow journal" in html
+    assert "shadow eligible" in html
+    assert "After-cost evidence" in html
     assert '@app.get("/strategy-workflow")' in app
 
 

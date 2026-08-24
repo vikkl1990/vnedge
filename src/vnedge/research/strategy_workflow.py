@@ -48,6 +48,9 @@ from vnedge.research.experiment_index import (
 WORKFLOW_ID = "strategy_workflow_v1"
 DEFAULT_WORKFLOW_REGISTRY = Path("research/strategy_workflow/registry.jsonl")
 DEFAULT_WORKFLOW_OUT = Path("research/live_research/strategy_workflow_latest.json")
+DEFAULT_SCANNER_EVIDENCE = Path(
+    "research/live_research/scanner_evidence_latest.json"
+)
 DEFAULT_DASHBOARD_FEED_RECORD_LIMIT = 5_000
 
 EVENT_REGISTERED = "revision_registered"
@@ -536,6 +539,7 @@ def _workflow_row(
     state: RevisionState,
     *,
     runs: Sequence[RunRecord],
+    shadow_evidence: Mapping[str, Any] | None,
     research_only: Collection[str],
     shadow: Collection[str],
     killed: Collection[str],
@@ -609,6 +613,10 @@ def _workflow_row(
             "max_drawdown_pct": max_drawdown,
             "sample_qualified": sample_qualified,
         },
+        # Shadow outcomes are deliberately separate from backtest performance.
+        # They come from bounded decision-journal evidence and must never be
+        # presented as OOS, parity, or promotion proof.
+        "shadow_evidence": dict(shadow_evidence) if shadow_evidence else None,
         "governance_flags": governance_flags,
         "can_trade": False,
         "can_promote": False,
@@ -658,6 +666,7 @@ def build_strategy_workflow(
     burn_registry_path: str | Path = DEFAULT_BURN_REGISTRY,
     paper_trials_dir: str | Path = DEFAULT_PAPER_TRIALS_DIR,
     prereg_dir: str | Path = Path("docs/prereg"),
+    scanner_evidence_path: str | Path = DEFAULT_SCANNER_EVIDENCE,
     feed_max_records: int | None = DEFAULT_DASHBOARD_FEED_RECORD_LIMIT,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -688,6 +697,42 @@ def build_strategy_workflow(
         now=now,
     )
     records = [RunRecord(**row) for row in experiment["records"]]
+    scanner_evidence_generated_at: str | None = None
+    shadow_by_strategy: dict[str, dict[str, Any]] = {}
+    try:
+        scanner_payload = json.loads(Path(scanner_evidence_path).read_text())
+    except (OSError, json.JSONDecodeError):
+        scanner_payload = {}
+    if isinstance(scanner_payload, dict):
+        scanner_evidence_generated_at = str(
+            scanner_payload.get("generated_at") or ""
+        ) or None
+        scanner_rows = scanner_payload.get("strategies")
+        for raw in scanner_rows if isinstance(scanner_rows, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            strategy_id = str(raw.get("strategy_id") or "")
+            if not strategy_id:
+                continue
+            shadow_by_strategy[strategy_id] = {
+                "generated_at": scanner_evidence_generated_at,
+                "evaluations": raw.get("evaluations"),
+                "fires": raw.get("fires"),
+                "backfill_evaluations": raw.get("backfill_evaluations"),
+                "virtual_candidates": raw.get("virtual_candidates"),
+                "virtual_approved": raw.get("virtual_approved"),
+                "virtual_rejected": raw.get("virtual_rejected"),
+                "virtual_resolved": raw.get("virtual_resolved"),
+                "virtual_pending": raw.get("virtual_pending"),
+                "gross_usd": raw.get("gross_usd"),
+                "gross_bps": raw.get("gross_bps"),
+                "fees_usd": raw.get("fees_usd"),
+                "net_execution_usd": raw.get("net_execution_usd"),
+                "failed_gates": dict(raw.get("failed_gates") or {}),
+                "closest_near_miss": raw.get("closest_near_miss"),
+                "source": "bounded_shadow_journal",
+                "promotion_evidence": False,
+            }
     rows: list[dict[str, Any]] = []
     for state in states.values():
         strategy_runs = [
@@ -699,6 +744,7 @@ def build_strategy_workflow(
             _workflow_row(
                 state,
                 runs=strategy_runs,
+                shadow_evidence=shadow_by_strategy.get(state.revision.strategy_id),
                 research_only=RESEARCH_ONLY,
                 shadow=SHADOW_OBSERVE,
                 killed=KILLED,
@@ -740,6 +786,7 @@ def build_strategy_workflow(
             "evidence_as_of": evidence_as_of,
             "feed_max_records": feed_max_records,
             "explicit_registry_events": len(explicit),
+            "shadow_evidence_as_of": scanner_evidence_generated_at,
         },
         "summary": {
             "revisions": len(rows),
@@ -749,6 +796,15 @@ def build_strategy_workflow(
             "quarantined": sum(row["stage"] == "QUARANTINED" for row in rows),
             "shadow_observe": sum(row["stage"] == "SHADOW_OBSERVE" for row in rows),
             "oos_pass": sum(row["stage"] == "OOS_PASS" for row in rows),
+            "shadow_evidence": sum(
+                row["shadow_evidence"] is not None for row in rows
+            ),
+            "shadow_observed": sum(
+                row["stage"] == "SHADOW_OBSERVE"
+                and row["shadow_evidence"] is not None
+                and float(row["shadow_evidence"].get("evaluations") or 0) > 0
+                for row in rows
+            ),
         },
         "stages": [
             "REGISTERED",

@@ -157,3 +157,53 @@ def test_auto_explore_rows_are_labelled_and_non_promotable(tmp_path):
     recs = _records_from_feed(feed)
     assert recs[0].note == "auto_explore"
     assert recs[0].promotable is False
+
+
+def test_feed_reader_flattens_continuous_research_cycle_envelopes(tmp_path):
+    feed = tmp_path / "feed.jsonl"
+    _write_feed(
+        feed,
+        [
+            {
+                "generated_at": "2026-08-24T00:00:00+00:00",
+                "lookback_days": 365,
+                "results": [
+                    _feed_row(strategy="range_expansion_observer_v4"),
+                    _feed_row(
+                        strategy="session_continuation_15m_v1",
+                        symbol="ETH/USDT:USDT",
+                        oos_net_usd=27.0,
+                    ),
+                ],
+            }
+        ],
+    )
+
+    records = _records_from_feed(feed)
+
+    assert [record.strategy_id for record in records] == [
+        "range_expansion_observer_v4",
+        "session_continuation_15m_v1",
+    ]
+    assert records[1].metrics["oos_net_usd"] == 27.0
+    assert records[0].recorded_at == "2026-07-30T00:00:00+00:00"
+
+
+def test_feed_reader_uses_cycle_timestamp_and_skips_empty_strategy_rows(tmp_path):
+    feed = tmp_path / "feed.jsonl"
+    row = _feed_row(strategy="squeeze_expansion_breakout_v4")
+    row.pop("updated")
+    _write_feed(
+        feed,
+        [
+            {
+                "generated_at": "2026-08-24T01:02:03+00:00",
+                "results": [row, {"verdict": "REJECT"}, "invalid"],
+            }
+        ],
+    )
+
+    records = _records_from_feed(feed)
+
+    assert len(records) == 1
+    assert records[0].recorded_at == "2026-08-24T01:02:03+00:00"

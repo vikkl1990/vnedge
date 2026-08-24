@@ -183,6 +183,7 @@ def test_missing_registry_still_exposes_registered_strategy_catalog(tmp_path):
         burn_registry_path=tmp_path / "missing-burn.jsonl",
         paper_trials_dir=tmp_path / "missing-paper",
         prereg_dir=tmp_path / "missing-prereg",
+        scanner_evidence_path=tmp_path / "missing-scanner-evidence.json",
     )
 
     assert payload["summary"]["strategies"] > 0
@@ -191,3 +192,47 @@ def test_missing_registry_still_exposes_registered_strategy_catalog(tmp_path):
         for row in payload["revisions"]
     )
     assert all(row["can_trade"] is False for row in payload["revisions"])
+
+
+def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path):
+    scanner_evidence = tmp_path / "scanner-evidence.json"
+    scanner_evidence.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-08-24T02:14:00+00:00",
+                "strategies": [
+                    {
+                        "strategy_id": CHILD,
+                        "evaluations": 179,
+                        "fires": 2,
+                        "virtual_resolved": 1,
+                        "virtual_pending": 0,
+                        "gross_usd": -18.59,
+                        "fees_usd": 4.20,
+                        "net_execution_usd": -22.79,
+                        "failed_gates": {"session_closed": 148},
+                    }
+                ],
+            }
+        )
+    )
+
+    payload = build_strategy_workflow(
+        workflow_registry_path=tmp_path / "missing.jsonl",
+        feed_path=tmp_path / "missing-feed.jsonl",
+        burn_registry_path=tmp_path / "missing-burn.jsonl",
+        paper_trials_dir=tmp_path / "missing-paper",
+        prereg_dir=tmp_path / "missing-prereg",
+        scanner_evidence_path=scanner_evidence,
+    )
+    row = next(
+        row for row in payload["revisions"] if row["strategy_id"] == CHILD
+    )
+
+    assert row["performance"]["after_cost_net_usd"] is None
+    assert row["performance"]["trades"] is None
+    assert row["shadow_evidence"]["evaluations"] == 179
+    assert row["shadow_evidence"]["virtual_resolved"] == 1
+    assert row["shadow_evidence"]["net_execution_usd"] == -22.79
+    assert row["shadow_evidence"]["promotion_evidence"] is False
+    assert payload["summary"]["shadow_evidence"] == 1

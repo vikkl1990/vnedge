@@ -152,44 +152,75 @@ def _records_from_feed(
 ) -> list[RunRecord]:
     """Rolling walk-forward verdicts (continuous_research ``wf_record`` shape)."""
     out: list[RunRecord] = []
-    for i, rec in enumerate(_read_jsonl(feed_path, max_records=max_records)):
-        strategy = rec.get("strategy", "")
-        symbol = rec.get("symbol", "")
-        exchange = rec.get("exchange", "")
-        timeframe = rec.get("timeframe", "")
-        verdict = rec.get("verdict", "")
-        updated = rec.get("updated", "")
-        # Rolling research runs are NEVER promotable via this index — they run on
-        # seen/rolling data by construction; promotion needs an untouched judgment.
-        out.append(
-            RunRecord(
-                run_id=f"wf-{i}-{_lane(strategy, exchange, symbol, timeframe)}",
-                run_kind=KIND_WALK_FORWARD,
-                strategy_id=strategy,
-                symbol=symbol,
-                exchange=exchange,
-                timeframe=timeframe,
-                verdict=verdict,
-                data_provenance=PROV_ROLLING,
-                promotable=False,
-                recorded_at=updated,
-                metrics={
-                    "oos_net_usd": rec.get("oos_net_usd"),
-                    "oos_trades": rec.get("oos_trades"),
-                    "profit_factor": rec.get("profit_factor"),
-                    "payoff_ratio": rec.get("payoff_ratio"),
-                    "profitable_windows_pct": rec.get("profitable_windows_pct"),
-                    "windows": rec.get("windows"),
-                    "traded_windows": rec.get("traded_windows"),
-                    "total_fees_usd": rec.get("total_fees_usd"),
-                    "max_consecutive_stops": rec.get("max_consecutive_stops"),
-                },
-                gates_failed=list(rec.get("reasons", []) or []),
-                commit=str(rec.get("attribution", "") or ""),
-                source_artifact=feed_path.name,
-                note="auto_explore" if rec.get("auto") else "",
+    for envelope_index, envelope in enumerate(
+        _read_jsonl(feed_path, max_records=max_records)
+    ):
+        # ``continuous_research`` historically wrote two valid shapes. Early
+        # writers appended one result per line; later writers append a complete
+        # cycle with the strategy rows nested under ``results``. Treating a
+        # cycle envelope as a result silently creates an empty-strategy record
+        # and drops every metric in the cycle.
+        nested = envelope.get("results")
+        results = nested if isinstance(nested, list) else [envelope]
+        envelope_updated = str(envelope.get("generated_at", "") or "")
+        for result_index, raw in enumerate(results):
+            if not isinstance(raw, dict):
+                continue
+            strategy = str(raw.get("strategy", "") or "")
+            if not strategy:
+                continue
+            symbol = str(raw.get("symbol", "") or "")
+            exchange = str(raw.get("exchange", "") or "")
+            timeframe = str(raw.get("timeframe", "") or "")
+            verdict = str(raw.get("verdict", "") or "")
+            updated = str(raw.get("updated", "") or envelope_updated)
+            # Rolling research runs are NEVER promotable via this index — they
+            # run on seen/rolling data by construction; promotion needs an
+            # untouched judgment.
+            out.append(
+                RunRecord(
+                    run_id=(
+                        f"wf-{envelope_index}-{result_index}-"
+                        f"{_lane(strategy, exchange, symbol, timeframe)}"
+                    ),
+                    run_kind=KIND_WALK_FORWARD,
+                    strategy_id=strategy,
+                    symbol=symbol,
+                    exchange=exchange,
+                    timeframe=timeframe,
+                    verdict=verdict,
+                    data_provenance=PROV_ROLLING,
+                    promotable=False,
+                    recorded_at=updated,
+                    metrics={
+                        "oos_net_usd": raw.get("oos_net_usd"),
+                        "oos_trades": raw.get("oos_trades"),
+                        "profit_factor": raw.get("profit_factor"),
+                        "payoff_ratio": raw.get("payoff_ratio"),
+                        "profitable_windows_pct": raw.get(
+                            "profitable_windows_pct"
+                        ),
+                        "windows": raw.get("windows"),
+                        "traded_windows": raw.get("traded_windows"),
+                        "total_fees_usd": raw.get("total_fees_usd"),
+                        "max_consecutive_stops": raw.get(
+                            "max_consecutive_stops"
+                        ),
+                    },
+                    gates_failed=list(raw.get("reasons", []) or []),
+                    commit=str(
+                        raw.get("attribution")
+                        or envelope.get("attribution")
+                        or ""
+                    ),
+                    source_artifact=feed_path.name,
+                    note=(
+                        "auto_explore"
+                        if raw.get("auto") or envelope.get("auto")
+                        else ""
+                    ),
+                )
             )
-        )
     return out
 
 
