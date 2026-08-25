@@ -106,6 +106,12 @@ export function ScannerWorkspace({
   const failedGates = listFrom(evaluation?.all_failed_gates);
   const nearMiss = objectFrom(evaluation?.near_miss);
   const symbolConflict = conflicts?.[selected?.symbol ?? ""];
+  const quoteEngine = selected?.runtime_contract?.decision_engine?.startsWith("quote_acceptance") ?? false;
+  const quoteStats = selected?.shadow_perf;
+  const quoteDistinct = quoteStats?.quotes_distinct ?? 0;
+  const quoteSeen = quoteStats?.quotes_seen ?? 0;
+  const quoteRejects = quoteStats?.quote_contract_rejects ?? 0;
+  const quoteDrops = quoteStats?.quote_overflow_drops ?? 0;
 
   return (
     <section className="border border-line bg-panel/80" aria-label="Scanner decision workspace">
@@ -148,6 +154,12 @@ export function ScannerWorkspace({
             <Criterion label="decision" value={decisionWarm ? "measured" : "collecting p95"} detail={selected.decision_lag_ms == null ? `${selected.latency_samples.decision}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.decision_lag_ms.toFixed(1)} ms · ${selected.latency_samples.decision}/${selected.latency_samples.required}`} tone={decisionWarm ? "good" : "warn"} />
             <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />
             <Criterion label="engine path" value={selected.runtime_contract?.decision_engine ?? "unreported"} detail={`exit ${selected.runtime_contract?.exit_engine ?? "unreported"} · ${selected.runtime_contract?.max_holding_bars ?? "—"} bars`} tone={selected.runtime_contract?.decision_engine && selected.runtime_contract?.exit_engine ? "info" : "warn"} />
+            {quoteEngine && <Criterion
+              label="quote tape"
+              value={quoteDistinct ? `${quoteDistinct}/${quoteSeen}` : "no samples"}
+              detail={`${quoteRejects} rejected · ${quoteDrops} overflow drops · ${quoteStats?.quote_rearms ?? 0} re-arms · ${quoteStats?.quote_source ?? "unknown source"}`}
+              tone={!quoteDistinct ? "warn" : quoteDrops ? "warn" : "good"}
+            />}
             <Criterion label="risk" value={risk?.kill.active || risk?.daily_halt.active ? "blocked" : "clear"} detail={risk?.kill.active ? "kill is latched" : risk?.daily_halt.active ? "daily halt active" : "kill and daily halt clear; capital still disabled"} tone={risk?.kill.active || risk?.daily_halt.active ? "bad" : "good"} />
             <Criterion label="last result" value={outcomeNet == null ? "none" : usd(outcomeNet)} detail={latestOutcome ? String(latestOutcome.reason ?? latestOutcome.resolution ?? "resolved shadow observation") : "no recent resolved outcome"} tone={outcomeNet == null ? "neutral" : outcomeNet >= 0 ? "good" : "bad"} />
             <div className="mt-3 grid gap-2 md:grid-cols-2">

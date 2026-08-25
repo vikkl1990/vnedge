@@ -67,6 +67,22 @@ first-class evidence.
 Done when a recorded live day reproduces the live fires for every rostered
 quote scanner and legacy replay/session loops only delegate.
 
+Current implementation slice:
+
+- the runtime scanner protocol exposes `restore`, `on_closed_bar`, and
+  `on_quote`;
+- live and recorded quote replay construct the same quote-acceptance engine;
+- replay applies the canonical BBO cleaner, deterministic candle/quote event
+  ordering, and refuses to run quotes beyond the last causal forming bar;
+- `scanner_evidence` compares replay and live intent keys plus approval,
+  side, entry, stop, quote sequence, and episode inside the exact source
+  window;
+- quote contract rejects, buffer drops, probe resets, and re-arms are exposed
+  in runtime statistics and the scanner workspace.
+
+This is mechanism parity infrastructure, not completion evidence. Phase 4 is
+complete only after a recorded live day produces an exact parity artifact.
+
 ### 2. In-process event router (Phase 2 prime)
 
 Publish normalized trades, BBO, L2, funding, and canonical closed candles to a

@@ -355,6 +355,8 @@ class SqueezeAcceptanceObserveRunner:
                 "quotes_distinct": self.acceptance.quotes_distinct,
                 "quote_contract_rejects": self.acceptance.quote_contract_rejects,
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
+                "quote_rearms": self.acceptance.quote_rearms,
+                "overflow_probe_resets": self.acceptance.overflow_probe_resets,
             },
         )
 
@@ -510,6 +512,8 @@ class SqueezeAcceptanceObserveRunner:
             "quotes_distinct": self.acceptance.quotes_distinct,
             "quote_contract_rejects": self.acceptance.quote_contract_rejects,
             "quote_overflow_drops": self.acceptance.quote_overflow_drops,
+            "quote_rearms": self.acceptance.quote_rearms,
+            "overflow_probe_resets": self.acceptance.overflow_probe_resets,
         }
 
     def _open_position_stats(self) -> dict | None:

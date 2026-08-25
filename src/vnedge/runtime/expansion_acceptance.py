@@ -60,8 +60,10 @@ class _SideLifecycle:
     probe_samples: int = 0
     probes: int = 0
     fires: int = 0
+    rearms: int = 0
 
     def rearm(self) -> None:
+        self.rearms += 1
         self.state = AcceptanceState.ARMED
         self.probe_started_at = None
         self.probe_samples = 0
@@ -88,6 +90,7 @@ class ExpansionAcceptanceEngine:
     quotes_distinct: int = 0
     quote_contract_rejects: int = 0
     quote_overflow_drops: int = 0
+    overflow_probe_resets: int = 0
 
     def note_quote_overflow(self, total_drops: int) -> None:
         """Fail closed when acceptance evidence was evicted upstream.
@@ -104,7 +107,13 @@ class ExpansionAcceptanceEngine:
         for lifecycle in (self.long, self.short):
             if lifecycle.state is AcceptanceState.PROBE:
                 lifecycle.rearm()
+                self.overflow_probe_resets += 1
         self.last_reason = "quote_buffer_overflow"
+
+    @property
+    def quote_rearms(self) -> int:
+        """Number of side lifecycles re-armed since process start."""
+        return self.long.rearms + self.short.rearms
 
     def update_arm(self, arm: CompressionArm) -> None:
         """Refresh from one closed bar without manufacturing a quote fire."""
@@ -124,11 +133,15 @@ class ExpansionAcceptanceEngine:
             return
         if arm.compressed:
             if self.arm is None or arm.episode_id != self.arm.episode_id:
+                long_rearms = self.long.rearms
+                short_rearms = self.short.rearms
                 self.long = _SideLifecycle(
-                    state=(AcceptanceState.ARMED if arm.allow_long else AcceptanceState.DORMANT)
+                    state=(AcceptanceState.ARMED if arm.allow_long else AcceptanceState.DORMANT),
+                    rearms=long_rearms,
                 )
                 self.short = _SideLifecycle(
-                    state=(AcceptanceState.ARMED if arm.allow_short else AcceptanceState.DORMANT)
+                    state=(AcceptanceState.ARMED if arm.allow_short else AcceptanceState.DORMANT),
+                    rearms=short_rearms,
                 )
             self.arm = arm
             grace = arm.expires_after_bars or self.config.arm_grace_bars

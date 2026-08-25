@@ -444,6 +444,15 @@ export interface CorrectionLane {
     losses?: number;
     profit_factor?: number | null;
     bars_since_signal?: number | null;
+    acceptance_state?: string;
+    quote_source?: string;
+    quote_ingest_lag_seconds?: number;
+    quotes_seen?: number;
+    quotes_distinct?: number;
+    quote_contract_rejects?: number;
+    quote_overflow_drops?: number;
+    quote_rearms?: number;
+    overflow_probe_resets?: number;
   } | null;
 }
 

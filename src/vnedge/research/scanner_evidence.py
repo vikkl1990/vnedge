@@ -208,21 +208,35 @@ def replay_quote_scanner(
         raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
     strategy = get_strategy_class(strategy_id)()
     prepared = strategy.prepare(candles).reset_index(drop=True)
+    if prepared.empty:
+        raise ValueError("canonical candle frame is empty")
     if "timestamp" not in prepared.columns:
         raise ValueError("canonical candle frame requires timestamp")
     cleaned, cleaning = clean_book(quotes.copy())
     cleaned = cleaned.reset_index(drop=True)
-    event_rows = sorted(
+    tf_seconds = timeframe_to_seconds(contract.timeframe)
+    if tf_seconds is None:
+        raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
+    candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
+    window_start = candle_times.iloc[0].to_pydatetime()
+    # Quotes after the final closed bar remain causal during the immediately
+    # forming bar. At its close another candle event is required, so evidence
+    # beyond that boundary must not run against a stale arm.
+    window_end = (
+        candle_times.iloc[-1] + pd.Timedelta(seconds=tf_seconds * 2)
+    ).to_pydatetime()
+    all_event_rows = sorted(
         (
             (_event_time(row, "ts_ms", "timestamp", "ts"), row)
             for _, row in cleaned.iterrows()
         ),
         key=lambda item: item[0],
     )
+    event_rows = [
+        item for item in all_event_rows if window_start <= item[0] < window_end
+    ]
+    quotes_outside_window = len(all_event_rows) - len(event_rows)
     journal = _ReplayJournal()
-    tf_seconds = timeframe_to_seconds(contract.timeframe)
-    if tf_seconds is None:
-        raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
     engine = build_quote_acceptance_engine(
         journal=journal,
         symbol=symbol,
@@ -252,7 +266,6 @@ def replay_quote_scanner(
             overflow_drops=int(row.get("overflow_drops") or 0),
         )
 
-    candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
     for bar_index, open_ts in enumerate(candle_times):
         close_ts = (open_ts + pd.Timedelta(seconds=tf_seconds)).to_pydatetime()
         while quote_index < len(event_rows) and event_rows[quote_index][0] < close_ts:
@@ -275,15 +288,146 @@ def replay_quote_scanner(
         "symbol": symbol,
         "read_only": True,
         "data_source": "canonical_candles+clean_recorded_bbo",
+        "source_window": {
+            "start": window_start.isoformat(),
+            "end_exclusive": window_end.isoformat(),
+        },
         "bars": len(prepared),
         "quotes_in": cleaning.rows_in,
-        "quotes_used": cleaning.rows_out,
+        "quotes_clean": cleaning.rows_out,
+        "quotes_used": len(event_rows),
         "quotes_dropped": cleaning.dropped,
+        "quotes_outside_window": quotes_outside_window,
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
         "intents": len(intents),
         "outcomes": len(outcomes),
         "engine": engine.stats(),
         "records": journal.records,
+    }
+
+
+def _record_event_time(record: dict[str, Any]) -> datetime | None:
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    for value in (
+        payload.get("quote_event_ts"),
+        payload.get("bar_ts"),
+        record.get("ts"),
+    ):
+        if value in (None, ""):
+            continue
+        try:
+            return pd.to_datetime(value, utc=True).to_pydatetime()
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _intent_signature(payload: dict[str, Any]) -> dict[str, Any]:
+    intent_value = payload.get("intent")
+    intent: dict[str, Any] = intent_value if isinstance(intent_value, dict) else {}
+    return {
+        "approved": bool(payload.get("approved")),
+        "side": str(intent.get("side") or payload.get("side") or ""),
+        "entry_price": payload.get("entry_price"),
+        "stop_price": payload.get("stop_price"),
+        "quote_sequence": payload.get("quote_sequence"),
+        "episode_id": payload.get("episode_id"),
+    }
+
+
+def compare_quote_replay_to_live(
+    replay: dict[str, Any],
+    live_records: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare exact quote-scanner intents inside the replay source window.
+
+    The result is evidence only. It cannot mutate registry state or grant
+    promotion. Duplicate keys, missing keys, additional live keys, and
+    decision-payload mismatches all fail parity explicitly.
+    """
+    strategy_id = str(replay.get("strategy_id") or "")
+    symbol = str(replay.get("symbol") or "")
+    source_window = replay.get("source_window")
+    if not isinstance(source_window, dict):
+        raise TypeError("quote replay is missing source_window")
+    start = pd.to_datetime(source_window.get("start"), utc=True).to_pydatetime()
+    end = pd.to_datetime(source_window.get("end_exclusive"), utc=True).to_pydatetime()
+
+    def relevant(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        for record in records:
+            if record.get("kind") != "shadow_intent":
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            intent_value = payload.get("intent")
+            intent: dict[str, Any] = (
+                intent_value if isinstance(intent_value, dict) else {}
+            )
+            if str(intent.get("strategy_id") or payload.get("strategy_id") or "") != strategy_id:
+                continue
+            if str(intent.get("symbol") or payload.get("symbol") or "") != symbol:
+                continue
+            event_ts = _record_event_time(record)
+            if event_ts is None or not (start <= event_ts < end):
+                continue
+            selected.append(record)
+        return selected
+
+    replay_records = relevant(replay.get("records") or [])
+    live_selected = relevant(live_records)
+
+    def keyed(records: list[dict[str, Any]]) -> tuple[Counter[str], dict[str, dict[str, Any]]]:
+        counts: Counter[str] = Counter()
+        signatures: dict[str, dict[str, Any]] = {}
+        for record in records:
+            payload = record["payload"]
+            key = str(payload.get("intent_key") or "")
+            if not key:
+                continue
+            counts[key] += 1
+            signatures.setdefault(key, _intent_signature(payload))
+        return counts, signatures
+
+    replay_counts, replay_signatures = keyed(replay_records)
+    live_counts, live_signatures = keyed(live_selected)
+    replay_only = list((replay_counts - live_counts).elements())
+    live_only = list((live_counts - replay_counts).elements())
+    matched_keys = sorted(replay_counts.keys() & live_counts.keys())
+    payload_mismatches = [
+        {
+            "intent_key": key,
+            "replay": replay_signatures[key],
+            "live": live_signatures[key],
+        }
+        for key in matched_keys
+        if replay_signatures[key] != live_signatures[key]
+    ]
+    duplicate_replay = {key: count for key, count in replay_counts.items() if count > 1}
+    duplicate_live = {key: count for key, count in live_counts.items() if count > 1}
+    exact = not any(
+        (replay_only, live_only, payload_mismatches, duplicate_replay, duplicate_live)
+    )
+    matched = sum((replay_counts & live_counts).values())
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "read_only": True,
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+        "source_window": source_window,
+        "exact_parity": exact,
+        "replay_intents": sum(replay_counts.values()),
+        "live_intents": sum(live_counts.values()),
+        "matched_intents": matched,
+        "replay_only": replay_only,
+        "live_only": live_only,
+        "duplicate_replay": duplicate_replay,
+        "duplicate_live": duplicate_live,
+        "payload_mismatches": payload_mismatches,
     }
 
 
@@ -499,7 +643,7 @@ def build_journal_report(
                 "lifecycle": dict(row["lifecycle"]),
             }
         )
-    report = {
+    report: dict[str, Any] = {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
         "source_window": {
@@ -554,6 +698,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journal", action="append", type=Path, default=[])
     parser.add_argument("--candles", type=Path)
+    parser.add_argument("--quotes", type=Path)
+    parser.add_argument("--symbol", default="BTC/USDT:USDT")
+    parser.add_argument("--exchange-id", default="binanceusdm")
     parser.add_argument("--strategy", action="append", default=[])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
@@ -577,15 +724,51 @@ def main() -> None:
             if args.candles.suffix.lower() in {".parquet", ".pq"}
             else pd.read_csv(args.candles)
         )
-        atomic_write(
-            args.out,
-            {
+        if args.quotes:
+            quotes = (
+                pd.read_parquet(args.quotes)
+                if args.quotes.suffix.lower() in {".parquet", ".pq"}
+                else pd.read_csv(args.quotes)
+            )
+            quote_replays = [
+                replay_quote_scanner(
+                    strategy_id,
+                    candles,
+                    quotes,
+                    symbol=args.symbol,
+                    exchange_id=args.exchange_id,
+                )
+                for strategy_id in args.strategy
+            ]
+            payload: dict[str, Any] = {
                 "schema_version": 1,
                 "generated_at": datetime.now(UTC).isoformat(),
                 "read_only": True,
-                "replays": [replay_scanner(strategy_id, candles) for strategy_id in args.strategy],
-            },
-        )
+                "quote_replays": quote_replays,
+            }
+            if args.journal:
+                effective_bytes = min(
+                    args.max_bytes_per_journal,
+                    max(1, args.max_total_bytes // max(1, len(args.journal))),
+                )
+                live_records = list(
+                    iter_journal_records(
+                        args.journal,
+                        max_bytes_per_journal=effective_bytes,
+                    )
+                )
+                payload["live_parity"] = [
+                    compare_quote_replay_to_live(replay, live_records)
+                    for replay in quote_replays
+                ]
+            atomic_write(args.out, payload)
+            return
+        atomic_write(args.out, {
+            "schema_version": 1,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "read_only": True,
+            "replays": [replay_scanner(strategy_id, candles) for strategy_id in args.strategy],
+        })
         return
     atomic_write(
         args.out,
@@ -603,5 +786,6 @@ if __name__ == "__main__":
 
 __all__ = [
     "atomic_write", "build_daily_report", "build_journal_report",
-    "iter_journal_records", "read_journal_records", "read_lane_evals", "replay_scanner",
+    "compare_quote_replay_to_live", "iter_journal_records", "read_journal_records",
+    "read_lane_evals", "replay_quote_scanner", "replay_scanner",
 ]

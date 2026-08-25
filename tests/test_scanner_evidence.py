@@ -195,6 +195,7 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert result["quotes_in"] == 3
     assert result["quotes_dropped"] == 1
     assert result["quotes_used"] == 2
+    assert result["quotes_outside_window"] == 0
     assert result["intents"] == 1
     assert result["intent_keys"] == [
         "test_quote_scanner|BTC/USDT:USDT|long|1767225900600"
@@ -204,6 +205,62 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     )
     assert intent["entry_price"] == 101.11
     assert intent["quote_sequence"] == 2
+
+
+def test_quote_replay_live_parity_reports_keys_payloads_and_window():
+    replay = {
+        "strategy_id": "quote_v1",
+        "symbol": "BTC/USDT:USDT",
+        "source_window": {
+            "start": "2026-01-01T00:00:00+00:00",
+            "end_exclusive": "2026-01-01T01:00:00+00:00",
+        },
+        "records": [
+            {
+                "kind": "shadow_intent",
+                "payload": {
+                    "intent_key": "k1",
+                    "approved": True,
+                    "intent": {
+                        "strategy_id": "quote_v1",
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "long",
+                    },
+                    "entry_price": 101.0,
+                    "stop_price": 99.0,
+                    "quote_sequence": 7,
+                    "episode_id": 3,
+                    "quote_event_ts": "2026-01-01T00:30:00+00:00",
+                },
+            }
+        ],
+    }
+    live = [
+        replay["records"][0],
+        {
+            "kind": "shadow_intent",
+            "payload": {
+                "intent_key": "outside",
+                "approved": True,
+                "intent": {
+                    "strategy_id": "quote_v1",
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "long",
+                },
+                "quote_event_ts": "2026-01-01T02:00:00+00:00",
+            },
+        },
+    ]
+
+    exact = scanner_evidence.compare_quote_replay_to_live(replay, live)
+
+    assert exact["exact_parity"] is True
+    assert exact["matched_intents"] == 1
+    changed = json.loads(json.dumps(live))
+    changed[0]["payload"]["stop_price"] = 98.0
+    mismatch = scanner_evidence.compare_quote_replay_to_live(replay, changed)
+    assert mismatch["exact_parity"] is False
+    assert mismatch["payload_mismatches"][0]["intent_key"] == "k1"
 
 
 def test_journal_report_joins_intent_and_outcome(tmp_path: Path):

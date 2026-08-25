@@ -207,6 +207,8 @@ def test_quote_overflow_resets_probe_without_burning_arm() -> None:
     assert engine.last_reason == "quote_buffer_overflow"
     assert engine.quote_overflow_drops == 2
     assert engine.quote_contract_rejects == 2
+    assert engine.quote_rearms == 1
+    assert engine.overflow_probe_resets == 1
     assert engine.long.state is AcceptanceState.ARMED
     assert engine.long.probe_samples == 0
 
