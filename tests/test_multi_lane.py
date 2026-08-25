@@ -355,6 +355,27 @@ def test_checked_in_observer_roster_is_valid() -> None:
     assert sum(spec.strategy_id == "session_continuation_realtime_v1" for spec in specs) == 2
     assert sum(spec.strategy_id == "htf_structure_continuation_realtime_v1" for spec in specs) == 2
     assert all(not spec.is_primary for spec in specs)
+    assert all(spec.execution_cost_exchange == "delta_india" for spec in specs)
+
+
+def test_observer_roster_rejects_unknown_execution_cost_venue(tmp_path) -> None:
+    path = _write_observer_roster(
+        tmp_path,
+        [
+            {
+                "strategy_id": "squeeze_expansion_breakout_v3",
+                "exchange": "binanceusdm",
+                "cost_exchange": "mystery_venue",
+                "symbols": ["BTC/USDT:USDT"],
+                "timeframe": "5m",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="unsupported cost_exchange"):
+        build_shadow_observe_roster_specs(
+            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
+        )
 
 
 def test_v2_observer_roster_fails_closed_on_engine_contract_drift(tmp_path) -> None:

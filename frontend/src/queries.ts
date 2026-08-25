@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, fetchChartCandles, type AgenticResearchStatus, type ChartTimeframe, type CostModelPayload, type DataProductsPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
+import { apiGet, fetchChartCandles, type AgenticResearchStatus, type BacktestLabPayload, type ChartTimeframe, type CostModelPayload, type DataProductsPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
 
 export function useWhoAmI() {
   return useQuery({
@@ -118,6 +118,15 @@ export function useResearchScorecard() {
     queryKey: ["scorecard"],
     queryFn: () => apiGet<ResearchScorecard>("/scorecard"),
     staleTime: 60_000,
+  });
+}
+
+export function useBacktestLab(runId?: string) {
+  const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  return useQuery({
+    queryKey: ["backtest-lab", runId ?? "latest"],
+    queryFn: () => apiGet<BacktestLabPayload>(`/backtest-lab${suffix}`),
+    refetchInterval: 30_000,
   });
 }
 

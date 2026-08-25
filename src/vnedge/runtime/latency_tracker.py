@@ -4,9 +4,11 @@ The clocks are deliberately separate:
 
 * ``ingest_lag_ms`` — exchange event timestamp to local receipt. This measures
   how quickly VNEDGE sees a tick; it never authorizes a strategy decision.
-* ``bar_close_processing_ms`` — canonical bucket close to the point the closed
-  bar reaches the decision loop. ``feed_lag_ms`` is retained as a compatibility
-  alias for older snapshots and dashboards.
+* ``bar_close_receipt_ms`` — canonical bucket close to local feed receipt.
+  ``bar_close_processing_ms`` and ``feed_lag_ms`` are compatibility aliases
+  for this same transport observation.
+* ``canonical_wait_ms`` — bounded time spent waiting for the trade-derived
+  candle lake after the exchange close notification arrives.
 * ``decision_lag_ms`` — monotonic compute time from closed bar in hand through
   strategy preparation and signal evaluation.
 * ``clock_skew_ms`` — magnitude by which an exchange timestamp is ahead of the
@@ -26,8 +28,10 @@ from datetime import UTC, datetime
 from math import isfinite
 
 INGEST_LAG_MS = "ingest_lag_ms"
+BAR_CLOSE_RECEIPT_MS = "bar_close_receipt_ms"
 BAR_CLOSE_PROCESSING_MS = "bar_close_processing_ms"
 FEED_LAG_MS = "feed_lag_ms"  # legacy alias for BAR_CLOSE_PROCESSING_MS
+CANONICAL_WAIT_MS = "canonical_wait_ms"
 DECISION_LAG_MS = "decision_lag_ms"
 CLOCK_SKEW_MS = "clock_skew_ms"
 
@@ -102,8 +106,10 @@ class LatencyTracker:
         self.record(CLOCK_SKEW_MS, skew_ms)
         return {INGEST_LAG_MS: ingest_ms, CLOCK_SKEW_MS: skew_ms}
 
-    def record_bar_close(self, close_time: datetime, observed_at: datetime) -> dict[str, float]:
-        """Record closed-bucket arrival at the decision loop.
+    def record_bar_receipt(
+        self, close_time: datetime, received_at: datetime
+    ) -> dict[str, float]:
+        """Record closed-bucket arrival before any canonical-lake wait.
 
         ``close_time`` is the canonical boundary, not the last trade timestamp.
         Future closes are clamped out of latency and exposed through
@@ -111,15 +117,28 @@ class LatencyTracker:
         same sample during the migration window.
         """
         close = self._utc(close_time, label="close_time")
-        observed = self._utc(observed_at, label="observed_at")
-        delta_ms = (observed - close).total_seconds() * 1000.0
+        received = self._utc(received_at, label="received_at")
+        delta_ms = (received - close).total_seconds() * 1000.0
         lag_ms = max(0.0, delta_ms)
         skew_ms = max(0.0, -delta_ms)
+        self.record(BAR_CLOSE_RECEIPT_MS, lag_ms)
         self.record(BAR_CLOSE_PROCESSING_MS, lag_ms)
         self.record(FEED_LAG_MS, lag_ms)
         if skew_ms > 0.0:
             self.record(CLOCK_SKEW_MS, skew_ms)
-        return {BAR_CLOSE_PROCESSING_MS: lag_ms, CLOCK_SKEW_MS: skew_ms}
+        return {
+            BAR_CLOSE_RECEIPT_MS: lag_ms,
+            BAR_CLOSE_PROCESSING_MS: lag_ms,
+            CLOCK_SKEW_MS: skew_ms,
+        }
+
+    def record_bar_close(self, close_time: datetime, observed_at: datetime) -> dict[str, float]:
+        """Compatibility wrapper for callers not yet renamed to receipt."""
+        return self.record_bar_receipt(close_time, observed_at)
+
+    def record_canonical_wait(self, elapsed_ms: float) -> None:
+        """Record only bounded lake-wait duration, never transport latency."""
+        self.record(CANONICAL_WAIT_MS, max(0.0, elapsed_ms))
 
     def stats(self, name: str) -> dict | None:
         """Summary plus a short ordered recovery tail for one metric.
@@ -161,6 +180,7 @@ class LatencyTracker:
         """
         return {
             "version": 1,
+            "bar_close_semantics": "receipt_v2",
             "maxlen": self.maxlen,
             "series": {name: list(values) for name, values in self._series.items()},
         }
@@ -178,6 +198,7 @@ class LatencyTracker:
         raw_series = state.get("series")
         if not isinstance(raw_series, Mapping):
             raise TypeError("latency checkpoint series must be a mapping")
+        legacy_close_semantics = state.get("bar_close_semantics") != "receipt_v2"
 
         restored: dict[str, deque[float]] = {}
         count = 0
@@ -188,6 +209,15 @@ class LatencyTracker:
                 raise TypeError(
                     f"latency checkpoint metric {raw_name!r} must be a list"
                 )
+            if legacy_close_semantics and raw_name in {
+                BAR_CLOSE_PROCESSING_MS,
+                FEED_LAG_MS,
+                BAR_CLOSE_RECEIPT_MS,
+            }:
+                # Pre-v2 close samples included the bounded canonical-lake
+                # wait. Mixing them with receipt-only samples would keep lanes
+                # falsely blocked for an entire rolling window after deploy.
+                continue
             values: list[float] = []
             for raw_value in raw_values:
                 try:

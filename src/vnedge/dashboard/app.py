@@ -4,9 +4,9 @@ Hard invariants, enforced structurally:
 - No token, no dashboard: `create_app` refuses to start without at least one
   authorized user (legacy shared token or per-user store — see auth.py and
   docs/DASHBOARD_AUTH.md).
-- Zero order or promotion actions: operational/research data routes are GET or
-  read-only WebSockets. Scoped settings mutations can manage an operator
-  profile and encrypted credentials, but cannot mutate trading state.
+- Zero order or promotion actions: scoped mutations can manage operator
+  settings or queue a bounded research-only backtest, but cannot mutate
+  trading state, execute research inline, or promote a strategy.
 - Cannot slow the bot: the server only reads whatever snapshot the bot last
   published; a dead or slow browser drops its own socket and nothing else.
 """
@@ -42,6 +42,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from vnedge.agent_gateway.app import (
     AgentGatewayArtifacts,
+    BacktestRequest,
     env_agent_audit_path,
     env_agent_jobs_dir,
     mount_agent_gateway,
@@ -55,6 +56,7 @@ from vnedge.agent_gateway.jobs import (
     PENDING_STATUS,
     RUNNING_STATUS,
     TERMINAL_STATUSES,
+    create_backtest_job,
     list_jobs,
 )
 from vnedge.agent_gateway.task_registry import (
@@ -64,12 +66,14 @@ from vnedge.agent_gateway.task_registry import (
 )
 from vnedge.dashboard.auth import (
     PERM_MANAGE_SETTINGS,
+    PERM_REQUEST_BACKTEST,
     AuthResult,
     DashboardUser,
     TokenStore,
     has_permission,
     permissions_for,
 )
+from vnedge.dashboard.backtest_lab import load_backtest_lab
 from vnedge.dashboard.chart_series import candles_payload
 from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_payload
 from vnedge.dashboard.market_pulse import MarketPulseService
@@ -584,6 +588,7 @@ def create_app(
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
     agent_jobs_dir: Path | None = None,
+    backtest_runs_path: Path | None = None,
     v2_dist_path: Path | None = None,
     session_issuer: SessionIssuer | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
@@ -760,6 +765,8 @@ def create_app(
     )
 
     agent_jobs_path = agent_jobs_dir or env_agent_jobs_dir()
+    backtest_reports_path = backtest_runs_path or Path("research/backtest_runs")
+    backtest_artifacts_path = Path("research/live_research/agent_jobs")
     quant_os_gateway = QuantOSAgentGateway(
         quant_os_agent_gateway_dir or env_quant_os_agent_gateway_dir()
     )
@@ -1584,6 +1591,51 @@ def create_app(
         return JSONResponse(
             _read_json_payload(research_path, {"results": []}), headers=_identity(user)
         )
+
+    @app.get("/backtest-lab")
+    async def backtest_lab(request: Request) -> JSONResponse:
+        """Professional read model for queued and completed backtest runs.
+
+        Execution deliberately remains in the bounded Agent Gateway worker;
+        this route only renders durable evidence and cannot trade or promote.
+        """
+        user = _authorized(request)
+        selected = request.query_params.get("run_id", "").strip() or None
+        if selected is not None and not re.fullmatch(r"[A-Za-z0-9_.:@+-]{1,240}", selected):
+            raise HTTPException(status_code=400, detail="invalid backtest run id")
+        payload = load_backtest_lab(
+            jobs_dir=agent_jobs_path,
+            reports_dir=backtest_reports_path,
+            artifact_dir=backtest_artifacts_path,
+            selected_run_id=selected,
+        )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.post("/backtest-lab/runs", status_code=202)
+    async def queue_backtest_lab_run(
+        request: Request,
+        payload: BacktestRequest,
+    ) -> JSONResponse:
+        """Queue one bounded, research-only run for the external worker.
+
+        This is the only Backtest Lab mutation. It cannot execute inline,
+        alter source, create a runtime lane, promote a strategy, or route an
+        order. Operator permission and browser CSRF protection are mandatory.
+        """
+        user = _require_permission(PERM_REQUEST_BACKTEST)(request)
+        _require_csrf(request)
+        # The worker remains authoritative, but rejecting obvious catalog
+        # mistakes here prevents a useless queued job from looking valid.
+        from vnedge.strategy.strategy_registry import STRATEGIES
+
+        if payload.strategy_id not in STRATEGIES:
+            raise HTTPException(status_code=422, detail="strategy is not registered")
+        job = create_backtest_job(
+            jobs_dir=agent_jobs_path,
+            agent=f"dashboard:{user.name or 'operator'}",
+            request=payload.model_dump(mode="json"),
+        )
+        return JSONResponse(job, status_code=202, headers=_identity(user))
 
     @app.get("/cost-model")
     async def cost_model(request: Request) -> JSONResponse:

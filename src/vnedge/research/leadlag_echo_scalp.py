@@ -46,6 +46,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from vnedge.data.tape import clean_trades
 from vnedge.scalping.depth import OrderBookL2, load_l2_books
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 from vnedge.scalping.replay_backtester import _load_stream_frame
@@ -162,7 +163,7 @@ class EchoScalpParams:
             raise ValueError("min_events_for_candidate must be >= 1")
 
     @classmethod
-    def from_env(cls) -> "EchoScalpParams":
+    def from_env(cls) -> EchoScalpParams:
         d = cls()
         return cls(
             impulse_window_ms=_env_int("ECHO_IMPULSE_WINDOW_MS", d.impulse_window_ms),
@@ -234,7 +235,7 @@ class LeaderImpulseDetector:
             self._window.popleft()
         fired: Impulse | None = None
         if self._window:
-            ref_ts, ref_price = self._window[0]
+            _ref_ts, ref_price = self._window[0]
             move_bps = (tr.price - ref_price) / ref_price * 10_000.0
             if abs(move_bps) >= self.params.impulse_threshold_bps:
                 cooled = (self._last_impulse_ms is None
@@ -545,6 +546,7 @@ class EchoScalpReplayer:
 
         for ts_ms, kind, obj in merged:
             if kind == 0:
+                assert isinstance(obj, OrderBookL2)
                 book = obj
                 if scalp is not None:
                     self._on_book(scalp, book, ts_ms)
@@ -555,8 +557,8 @@ class EchoScalpReplayer:
                                    follower_symbol=follower_symbol, day=day)
                         scalp = None
             elif kind == 1:
+                assert isinstance(obj, FollowerTrade)
                 ft = obj
-                assert isinstance(ft, FollowerTrade)
                 if scalp is not None and book is not None:
                     self._on_follower_trade(scalp, ft, book)
                     if scalp.done():
@@ -566,8 +568,8 @@ class EchoScalpReplayer:
                                    follower_symbol=follower_symbol, day=day)
                         scalp = None
             else:
+                assert isinstance(obj, LeaderTrade)
                 lt = obj
-                assert isinstance(lt, LeaderTrade)
                 impulse = detector.on_trade(lt)
                 if impulse is None:
                     continue
@@ -814,6 +816,14 @@ def load_leader_trades(data_root: Path | str, pair: LeadLagPair,
             _symbol_root(data_root, source, pair.leader_symbol) / "stream=trades", day)
         if frame is None or frame.empty:
             continue
+        frame, clean = clean_trades(frame)
+        if clean.dropped:
+            logger.warning(
+                "lead-lag dropped %d/%d invalid %s leader trades",
+                clean.dropped,
+                clean.rows_in,
+                source,
+            )
         out: list[LeaderTrade] = []
         for r in frame.itertuples():
             try:
@@ -846,6 +856,11 @@ def load_follower_trades(data_root: Path | str, pair: LeadLagPair,
         / "stream=trades", day)
     if frame is None or frame.empty:
         return []
+    frame, clean = clean_trades(frame)
+    if clean.dropped:
+        logger.warning(
+            "lead-lag dropped %d/%d invalid follower trades", clean.dropped, clean.rows_in
+        )
     out: list[FollowerTrade] = []
     for r in frame.itertuples():
         try:

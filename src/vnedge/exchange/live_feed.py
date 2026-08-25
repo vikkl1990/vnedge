@@ -235,12 +235,12 @@ class LiveMarketFeed:
         self._consecutive_errors = 0
         self._forming: list | None = None
         self._tasks: list[asyncio.Task] = []
+        self._last_book_metrics_at = 0.0
 
     # --- Lifecycle ----------------------------------------------------------------
     async def start(self) -> None:
         self._tasks = [
             asyncio.create_task(self._watch_candles(), name="feed-candles"),
-            asyncio.create_task(self._watch_quotes(), name="feed-quotes"),
             asyncio.create_task(self._refresh_funding(), name="feed-funding"),
             asyncio.create_task(self._watch_book(), name="feed-book"),
         ]
@@ -319,34 +319,6 @@ class LiveMarketFeed:
                 self._mark_error("candles", exc)
                 await asyncio.sleep(_BACKOFF_SECONDS)
 
-    async def _watch_quotes(self) -> None:
-        # Top-of-book via watch_order_book: some venues' ticker streams
-        # (e.g. Binance USDT-M 24h ticker) carry no bid/ask at all.
-        # limit=50 is the common depth both Binance and Bybit accept for swaps
-        # (Bybit rejects 5: only {1,50,200,1000}). We only read level 0.
-        while True:
-            try:
-                book = await self._ex.watch_order_book(self.symbol, limit=50)
-                if book["bids"] and book["asks"]:
-                    bid = float(book["bids"][0][0])
-                    ask = float(book["asks"][0][0])
-                    if 0 < bid <= ask:
-                        self.quote = (bid, ask)
-                        _publish_latest_quote(
-                            self.quote_updates,
-                            bid=bid,
-                            ask=ask,
-                            event_ts=_event_datetime(book.get("timestamp")),
-                            sequence=book.get("nonce"),
-                            source=f"{self.exchange_id}:watch_order_book",
-                        )
-                        self._mark_ok()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                self._mark_error("quotes", exc)
-                await asyncio.sleep(_BACKOFF_SECONDS)
-
     async def _refresh_funding(self) -> None:
         while True:
             try:
@@ -362,20 +334,35 @@ class LiveMarketFeed:
             await asyncio.sleep(self.funding_refresh_seconds)
 
     async def _watch_book(self) -> None:
-        """L2 builder for the fast loop: maintain live book metrics.
+        """Single order-book subscription for quotes and throttled L2 metrics.
 
         Uses the venue-safe depth limit (Bybit rejects anything but
-        {1,50,200,1000}); metrics are throttled to ~1/s — the consumers
-        (dashboard, future scalper gates) don't need more.
+        {1,50,200,1000}). Every update publishes executable BBO immediately;
+        the heavier dashboard metrics are recomputed at most once per second.
         """
         while True:
             try:
                 ob = await self._ex.watch_order_book(self.symbol, limit=50)
                 if ob.get("bids") and ob.get("asks"):
-                    self.book_metrics = compute_book_metrics(
-                        self.symbol, ob["bids"], ob["asks"]
-                    )
-                await asyncio.sleep(1.0)
+                    bid = float(ob["bids"][0][0])
+                    ask = float(ob["asks"][0][0])
+                    if 0 < bid <= ask:
+                        self.quote = (bid, ask)
+                        _publish_latest_quote(
+                            self.quote_updates,
+                            bid=bid,
+                            ask=ask,
+                            event_ts=_event_datetime(ob.get("timestamp")),
+                            sequence=ob.get("nonce"),
+                            source=f"{self.exchange_id}:watch_order_book",
+                        )
+                        self._mark_ok()
+                    loop_now = asyncio.get_running_loop().time()
+                    if loop_now - self._last_book_metrics_at >= 1.0:
+                        self.book_metrics = compute_book_metrics(
+                            self.symbol, ob["bids"], ob["asks"]
+                        )
+                        self._last_book_metrics_at = loop_now
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -797,4 +784,9 @@ def create_market_feed(
     if exchange_id in _DELTA_NATIVE_WS_IDS:
         # Delta has no CCXT Pro class but does have a native public websocket.
         return DeltaWsFeed(exchange_id, symbol=symbol, timeframe=timeframe)
-    return RestPollingMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+    feed = RestPollingMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+    logger.warning(
+        "%s has no validated websocket feed; using explicit REST polling mode",
+        exchange_id,
+    )
+    return feed

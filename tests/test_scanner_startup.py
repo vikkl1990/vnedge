@@ -44,7 +44,8 @@ def test_prerequisite_commands_forward_versioned_roster(tmp_path) -> None:
     commands = prerequisite_commands(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(roster)}
     )
-    assert commands[0][commands[0].index("--days") + 1] == "3"
+    # Twelve 4h bars plus the bootstrap safety margin requires four days.
+    assert commands[0][commands[0].index("--days") + 1] == "4"
     assert commands[-1][-2:] == ("--roster", str(roster))
 
 

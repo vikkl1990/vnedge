@@ -16,12 +16,16 @@ does not place orders.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from vnedge.data.tape import clean_book
 from vnedge.scalping.microstructure import TopOfBook, _as_aware_utc
+
+logger = logging.getLogger(__name__)
 
 # (price, qty) pairs, best level first: bids descending in price, asks ascending
 Level = tuple[float, float]
@@ -141,7 +145,7 @@ class OrderBookL2:
 
     # --- construction from a recorded L2 row ----------------------------------
     @classmethod
-    def from_row(cls, row, symbol: str, levels: int = 10) -> "OrderBookL2":
+    def from_row(cls, row, symbol: str, levels: int = 10) -> OrderBookL2:
         """Build from a recorded book row (bid_px_i/bid_qty_i/... columns).
         NaN-price levels (padded empties) are dropped. `row` is any object with
         attribute access (e.g. an itertuples row) or a mapping."""
@@ -177,6 +181,9 @@ def load_l2_books(
     df = _load_stream_frame(root / f"symbol={safe}" / "stream=book", day)
     if df is None or "bid_px_0" not in df.columns:
         return []
+    df, clean = clean_book(df)
+    if clean.dropped:
+        logger.warning("L2 replay dropped %d/%d invalid book rows", clean.dropped, clean.rows_in)
     out: list[tuple[int, OrderBookL2]] = []
     for r in df.itertuples():
         try:

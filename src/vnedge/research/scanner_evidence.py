@@ -18,8 +18,14 @@ from typing import Any
 
 import pandas as pd  # type: ignore[import-untyped]
 
+from vnedge.data.tape import clean_book
 from vnedge.plan.cost_model import CostModel
-from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+from vnedge.runtime.latency_tracker import timeframe_to_seconds
+from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
+from vnedge.strategy.scanner_contracts import (
+    resolve_scanner_cost_profile,
+    scanner_runtime_contract,
+)
 from vnedge.strategy.scanner_observability import enrich_evaluation
 from vnedge.strategy.strategy_registry import get_strategy_class, is_capital_eligible
 
@@ -148,6 +154,136 @@ def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
         )),
         "lifecycle": dict(Counter(row["setup_lifecycle"] for row in rows)),
         "records": rows,
+    }
+
+
+class _ReplayJournal:
+    """Minimal in-memory journal implementing the runtime engine contract."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def append(self, kind: str, payload: dict[str, Any]) -> None:
+        self.records.append({"kind": kind, "payload": payload})
+
+    def read_all(self) -> list[dict[str, Any]]:
+        return list(self.records)
+
+
+def _event_time(row: pd.Series, *names: str) -> datetime:
+    for name in names:
+        if name not in row or pd.isna(row[name]):
+            continue
+        value = row[name]
+        stamp = (
+            pd.to_datetime(value, unit="ms", utc=True)
+            if name.endswith("_ms")
+            else pd.to_datetime(value, utc=True)
+        )
+        return stamp.to_pydatetime()
+    raise ValueError(f"quote row has no event timestamp ({', '.join(names)})")
+
+
+def replay_quote_scanner(
+    strategy_id: str,
+    candles: pd.DataFrame,
+    quotes: pd.DataFrame,
+    *,
+    symbol: str = "BTC/USDT:USDT",
+    exchange_id: str = "binanceusdm",
+) -> dict[str, Any]:
+    """Drive the runtime quote engine with recorded canonical bars and BBO.
+
+    Event ordering matches the live loop: quotes strictly before a close see
+    the previous arm; the closed bar is applied next; quotes exactly on the
+    boundary see the new arm. Invalid BBO rows are removed through the same
+    tape contract used by other raw-lake consumers and the dropped count is
+    part of the evidence artifact.
+
+    This is read-only evidence. The engine has no gateway callback and cannot
+    submit an order.
+    """
+    contract = scanner_runtime_contract(strategy_id)
+    if contract is None or not contract.decision_engine.startswith("quote_acceptance"):
+        raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
+    strategy = get_strategy_class(strategy_id)()
+    prepared = strategy.prepare(candles).reset_index(drop=True)
+    if "timestamp" not in prepared.columns:
+        raise ValueError("canonical candle frame requires timestamp")
+    cleaned, cleaning = clean_book(quotes.copy())
+    cleaned = cleaned.reset_index(drop=True)
+    event_rows = sorted(
+        (
+            (_event_time(row, "ts_ms", "timestamp", "ts"), row)
+            for _, row in cleaned.iterrows()
+        ),
+        key=lambda item: item[0],
+    )
+    journal = _ReplayJournal()
+    tf_seconds = timeframe_to_seconds(contract.timeframe)
+    if tf_seconds is None:
+        raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
+    engine = build_quote_acceptance_engine(
+        journal=journal,
+        symbol=symbol,
+        strategy=strategy,
+        contract=contract,
+        cost_profile=resolve_scanner_cost_profile(contract, exchange_id=exchange_id),
+        bar_minutes=tf_seconds / 60.0,
+    )
+
+    quote_index = 0
+
+    def feed_quote(event_ts: datetime, row: pd.Series) -> None:
+        received_ts = _event_time(row, "received_ts_ms", "received_ts") if (
+            ("received_ts_ms" in row and not pd.isna(row["received_ts_ms"]))
+            or ("received_ts" in row and not pd.isna(row["received_ts"]))
+        ) else event_ts
+        sequence_raw = row.get("sequence")
+        sequence = None if pd.isna(sequence_raw) else sequence_raw
+        engine.on_quote(
+            bid=float(row["bid"]),
+            ask=float(row["ask"]),
+            ts=event_ts,
+            received_ts=received_ts,
+            sequence=sequence,
+            source=str(row.get("source") or "recorded_book"),
+            exchange_timestamped=bool(row.get("exchange_timestamped", True)),
+            overflow_drops=int(row.get("overflow_drops") or 0),
+        )
+
+    candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
+    for bar_index, open_ts in enumerate(candle_times):
+        close_ts = (open_ts + pd.Timedelta(seconds=tf_seconds)).to_pydatetime()
+        while quote_index < len(event_rows) and event_rows[quote_index][0] < close_ts:
+            feed_quote(*event_rows[quote_index])
+            quote_index += 1
+        engine.on_closed_bar(prepared, bar_index, close_ts)
+        while quote_index < len(event_rows) and event_rows[quote_index][0] == close_ts:
+            feed_quote(*event_rows[quote_index])
+            quote_index += 1
+    while quote_index < len(event_rows):
+        feed_quote(*event_rows[quote_index])
+        quote_index += 1
+
+    intents = [r for r in journal.records if r["kind"] == "shadow_intent"]
+    outcomes = [r for r in journal.records if r["kind"] == "shadow_outcome"]
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+        "read_only": True,
+        "data_source": "canonical_candles+clean_recorded_bbo",
+        "bars": len(prepared),
+        "quotes_in": cleaning.rows_in,
+        "quotes_used": cleaning.rows_out,
+        "quotes_dropped": cleaning.dropped,
+        "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
+        "intents": len(intents),
+        "outcomes": len(outcomes),
+        "engine": engine.stats(),
+        "records": journal.records,
     }
 
 

@@ -101,6 +101,9 @@ class LaneSpec:
     #: legacy arm-and-lock). Set per-lane when a strategy was JUDGED with a trail,
     #: so the running lane uses the exit its promotion evidence was measured on.
     trail_atr_mult: float = 0.0
+    # Public-data venue is not an execution-cost assumption. Shadow scanners
+    # may observe Binance while conservatively modelling Delta India fees.
+    execution_cost_exchange: str | None = None
 
     def capital_downgraded(self) -> LaneSpec:
         """Fail-closed roster safety for non-capital and killed strategies.
@@ -363,6 +366,9 @@ class MultiLaneProvider:
                 # cumulative funnel survives restarts (LaneFunnelStore); these
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
+                "last_quote_signal": self._lanes[lid]
+                .get("session", {})
+                .get("last_quote_signal"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
                 # pipeline latency: bar_close_processing_ms (close -> dequeue)
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
@@ -378,6 +384,16 @@ class MultiLaneProvider:
                 "arm_blocked": self._lanes[lid].get("session", {}).get("arm_blocked"),
                 # D-lite overlays (observe-only): cost world + regime + plan preview
                 "cost_profile": self._lanes[lid].get("session", {}).get("cost_profile"),
+                "cost_profile_source": self._lanes[lid]
+                .get("session", {})
+                .get("cost_profile_source"),
+                "data_exchange": self._lanes[lid].get("session", {}).get("data_exchange"),
+                "execution_cost_exchange": self._lanes[lid]
+                .get("session", {})
+                .get("execution_cost_exchange"),
+                "scanner_cost_hypothesis": self._lanes[lid]
+                .get("session", {})
+                .get("scanner_cost_hypothesis"),
                 "runtime_contract": self._lanes[lid].get("session", {}).get("runtime_contract"),
                 "regime": self._lanes[lid].get("session", {}).get("regime"),
                 "regime_would_block": self._lanes[lid].get("session", {}).get("regime_would_block"),
@@ -479,6 +495,8 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
     paper_eq = paper_start = 0.0
     paper_n = shadow_n = profitable = losing = 0
     shadow_net = 0.0
+    shadow_open_net = 0.0
+    shadow_open_positions = 0
     shadow_trades = 0
     counted = 0
     for lane in lanes:
@@ -499,6 +517,8 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
             shadow_n += 1
             sp = lane.get("shadow_perf") or {}
             shadow_net += float(sp.get("net_usd") or 0.0)
+            shadow_open_net += float(sp.get("open_unrealized_net_usd") or 0.0)
+            shadow_open_positions += int(sp.get("open_intents") or 0)
             shadow_trades += int(sp.get("virtual_trades") or 0)
         else:
             paper_n += 1
@@ -525,6 +545,9 @@ def _fleet_aggregate(lanes: list[dict]) -> dict:
         "paper_starting_equity": round(paper_start, 2),
         "paper_return_pct": round(paper_ret_pct, 3),
         "shadow_virtual_net_usd": round(shadow_net, 2),
+        "shadow_open_unrealized_net_usd": round(shadow_open_net, 2),
+        "shadow_total_net_usd": round(shadow_net + shadow_open_net, 2),
+        "shadow_open_positions": shadow_open_positions,
         "shadow_virtual_trades": shadow_trades,
         "profitable_lanes": profitable,
         "losing_lanes": losing,
@@ -1333,6 +1356,7 @@ async def build_lane(
         ),
         canonical_candle_wait_seconds=8.0,
         trail_atr_mult=spec.trail_atr_mult,
+        execution_cost_exchange_id=spec.execution_cost_exchange,
     )
     strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)

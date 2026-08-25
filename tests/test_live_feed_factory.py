@@ -30,6 +30,36 @@ def test_forming_updates_are_monotonic_across_reconnect_replays() -> None:
     assert forming is newer and closed is same
 
 
+def test_feed_factory_rejects_an_unknown_exchange_instead_of_falling_back() -> None:
+    with pytest.raises(ValueError, match="unknown CCXT exchange id"):
+        create_market_feed("binance_typo", symbol="BTC/USDT:USDT")
+
+
+async def test_live_feed_starts_one_order_book_consumer() -> None:
+    feed = object.__new__(LiveMarketFeed)
+    blocker = asyncio.Event()
+
+    async def wait_forever() -> None:
+        await blocker.wait()
+
+    feed._watch_candles = wait_forever
+    feed._refresh_funding = wait_forever
+    feed._watch_book = wait_forever
+    feed._tasks = []
+
+    await feed.start()
+    try:
+        assert [task.get_name() for task in feed._tasks] == [
+            "feed-candles",
+            "feed-funding",
+            "feed-book",
+        ]
+    finally:
+        for task in feed._tasks:
+            task.cancel()
+        await asyncio.gather(*feed._tasks, return_exceptions=True)
+
+
 @pytest.mark.network
 async def test_delta_india_uses_india_rest_host():
     assert resolve_ccxt_exchange_id("delta_india") == "delta"

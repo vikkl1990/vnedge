@@ -37,6 +37,15 @@ class ScannerRuntimeContract:
 
 
 _CONTRACTS: dict[str, ScannerRuntimeContract] = {
+    "squeeze_expansion_breakout_v3": ScannerRuntimeContract(
+        strategy_id="squeeze_expansion_breakout_v3",
+        timeframe="5m",
+        cost_family="scalp",
+        max_holding_bars=48,
+        rationale="legacy quote-accepted squeeze baseline retained for parity evidence",
+        decision_engine="quote_acceptance_v1",
+        exit_engine="scanner_exit_v1",
+    ),
     "squeeze_expansion_breakout_v4": ScannerRuntimeContract(
         strategy_id="squeeze_expansion_breakout_v4",
         timeframe="5m",

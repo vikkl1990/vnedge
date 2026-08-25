@@ -293,11 +293,16 @@ def build_lanes_payload(
                 "bar_close_processing_ms": _latency_value_with_alias(
                     lane, "bar_close_processing_ms", "feed_lag_ms"
                 ),
+                "bar_close_receipt_ms": _latency_value_with_alias(
+                    lane, "bar_close_receipt_ms", "bar_close_processing_ms"
+                ),
+                "canonical_wait_ms": _latency_value(lane, "canonical_wait_ms"),
                 "decision_lag_ms": _latency_value(lane, "decision_lag_ms"),
                 "latency_samples": {
                     "bar_close": _latency_samples(
                         lane, "bar_close_processing_ms", "feed_lag_ms"
                     ),
+                    "canonical_wait": _latency_samples(lane, "canonical_wait_ms"),
                     "decision": _latency_samples(lane, "decision_lag_ms"),
                     "required": LATENCY_GATE_MIN_SAMPLES,
                 },

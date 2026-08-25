@@ -176,7 +176,7 @@ class OrderingAcceptanceObserver(SqueezeAcceptanceObserveRunner):
     def restore(self, df: pd.DataFrame) -> None:
         del df
 
-    def on_prepared_bar(
+    def on_closed_bar(
         self,
         df: pd.DataFrame,
         index: int,
@@ -208,6 +208,20 @@ class OrderingAcceptanceObserver(SqueezeAcceptanceObserveRunner):
             overflow_drops,
         )
         self.events.append("quote")
+
+
+class CountingQuoteObserver:
+    """Quote-path double that accepts one candidate per update."""
+
+    def __init__(self):
+        self.candidates = 0
+        self.fires = 0
+        self.rejected = 0
+
+    def on_quote(self, **kwargs):
+        del kwargs
+        self.candidates += 1
+        self.fires += 1
 
 
 def test_eval_threshold_extraction_reads_frozen_strategy_params():
@@ -262,6 +276,7 @@ def build_session(
     daily_factory=None,
     max_holding_bars=48,
     timeframe="1h",
+    execution_cost_exchange_id=None,
 ):
     config = RunnerConfig(
         mode=mode,
@@ -272,6 +287,7 @@ def build_session(
         post_exit_cooldown_bars=post_exit_cooldown_bars,
         max_holding_bars=max_holding_bars,
         daily_factory=daily_factory or DailySignalFactoryConfig(),
+        execution_cost_exchange_id=execution_cost_exchange_id,
     )
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
@@ -326,6 +342,60 @@ def test_delta_legacy_swing_lane_uses_gst_aware_profile(tmp_path):
     assert session.cost_model.round_trip_bps() == pytest.approx(18.8)
 
 
+def test_execution_cost_venue_is_explicit_and_independent_from_data_feed(tmp_path):
+    feed = FakeFeed([])
+    feed.exchange_id = "binanceusdm"
+    session, _ = build_session(
+        tmp_path,
+        feed,
+        timeframe="1h",
+        execution_cost_exchange_id="delta_india",
+    )
+
+    assert session.cost_profile == "delta_swing"
+    assert session.execution_cost_exchange_id == "delta_india"
+    assert session.cost_profile_source == "explicit_execution_venue"
+
+
+def test_realtime_scanner_cost_gate_uses_same_frozen_reward_hypothesis_as_arm(tmp_path):
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=HtfStructureContinuationRealtimeV1(),
+        mode=RunnerMode.SHADOW,
+        timeframe="15m",
+        max_holding_bars=48,
+    )
+
+    assert session._scanner_payoff_hypothesis_r() == pytest.approx(2.5)
+
+
+def test_quote_path_updates_canonical_live_signal_counter_and_timestamp(tmp_path):
+    feed = FakeFeed([])
+    session, _ = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    observer = CountingQuoteObserver()
+    queue: asyncio.Queue[QuoteUpdate] = asyncio.Queue()
+    ts = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+    update = QuoteUpdate(bid=100.0, ask=100.1, ts=ts)
+
+    session._handle_quote_batch(observer, queue, [update])  # type: ignore[arg-type]
+
+    assert session.signals == 1
+    assert session.live_signals == 1
+    assert session.shadow_approved == 1
+    assert session.last_fired_ts == ts.isoformat()
+    assert session.last_quote_signal == {
+        "ts": ts.isoformat(),
+        "side": None,
+        "entry_price": None,
+        "stop_price": None,
+        "reason": None,
+        "approved": True,
+        "failed_checks": [],
+        "path": "live_quote_acceptance",
+    }
+
+
 def test_active_scanner_rejects_silent_hold_horizon_drift(tmp_path):
     with pytest.raises(ValueError, match="requires max_holding_bars=192"):
         build_session(
@@ -368,6 +438,8 @@ def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
         FakeFeed([]),
         strategy=SqueezeExpansionBreakoutV3(),
         mode=RunnerMode.SHADOW,
+        timeframe="5m",
+        max_holding_bars=48,
     )
     assert isinstance(session.scanner_observer, SqueezeAcceptanceObserveRunner)
     assert session.shadow_outcomes is None
@@ -449,8 +521,19 @@ async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_pa
         feed,
         strategy=SqueezeExpansionBreakoutV3(),
         mode=RunnerMode.SHADOW,
+        timeframe="5m",
+        max_holding_bars=48,
     )
     session._IDLE_TICK_SECONDS = 0.005
+    housekeeping_calls = 0
+    original_housekeeping = session._idle_housekeeping
+
+    async def tracked_housekeeping(moment):
+        nonlocal housekeeping_calls
+        housekeeping_calls += 1
+        await original_housekeeping(moment)
+
+    session._idle_housekeeping = tracked_housekeeping
 
     async def publish_quotes() -> None:
         for _ in range(20):
@@ -463,6 +546,7 @@ async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_pa
     await producer
 
     assert session.time_machine is not None
+    assert housekeeping_calls > 0
     age = session.time_machine.age_ms(SYM, session.config.timeframe, datetime.now(UTC))
     assert age is not None and age < 1000
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
@@ -547,6 +631,8 @@ async def test_latency_is_measured_end_to_end(tmp_path):
     assert snap["feed_lag_ms"]["n"] >= 1
     assert snap["feed_lag_ms"]["last"] >= 0.0
     assert snap["bar_close_processing_ms"] == snap["feed_lag_ms"]
+    assert snap["bar_close_receipt_ms"] == snap["feed_lag_ms"]
+    assert snap["canonical_wait_ms"]["n"] >= 1
     assert snap["decision_lag_ms"]["n"] >= 1  # eval ran (plan was None)
     assert snap["decision_lag_ms"]["last"] >= 0.0
 

@@ -289,6 +289,12 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert transitions[-1]["state"] == "long_accepted"
     assert transitions[-1]["quotes_distinct"] == 3
 
+    open_stats = runner.stats()
+    assert open_stats["open_intents"] == 1
+    assert open_stats["open_position"]["mark_basis"] == "executable_bid"
+    assert open_stats["open_unrealized_net_usd"] < 0
+    assert open_stats["total_net_usd"] == open_stats["open_unrealized_net_usd"]
+
     runner.on_prepared_bar(bars, 1, bars.iloc[1]["timestamp"])
     outcomes = [payload for kind, payload in journal.records if kind == "shadow_outcome"]
     assert len(outcomes) == 1

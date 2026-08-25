@@ -48,12 +48,6 @@ from vnedge.exchange.live_feed import (
     QuoteUpdate,
     quote_overflow_drops,
 )
-from vnedge.execution.exit_engine import (
-    ExitConfig as ScannerExitConfig,
-)
-from vnedge.execution.exit_engine import (
-    ExitEngine as ScannerExitEngine,
-)
 from vnedge.execution.idempotency import make_intent_key
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
@@ -80,7 +74,6 @@ from vnedge.runtime.daily_factory import (
     session_day,
     should_force_flatten,
 )
-from vnedge.runtime.expansion_acceptance import ExpansionAcceptanceEngine
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
     DECISION_LAG_MS,
@@ -90,6 +83,7 @@ from vnedge.runtime.latency_tracker import (
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
@@ -107,7 +101,6 @@ from vnedge.strategy.scanner_contracts import (
     resolve_scanner_cost_profile,
     scanner_runtime_contract,
 )
-from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +239,7 @@ class LivePaperSession:
         # when this lane last fired a LIVE signal — lets the dashboard show
         # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
         self.last_fired_ts: str | None = None
+        self.last_quote_signal: dict | None = None
         # baseline against the EXCHANGE's fill list (resets each session), not
         # the ledger's total record count (survives restarts) — else every
         # post-restart fill would be sliced away and never chained/logged
@@ -291,7 +285,14 @@ class LivePaperSession:
         # regime_v0 and the cost-aware plan contract WOULD say each decision bar.
         # None of this changes the live decision; it only records for the cockpit.
         tf = config.timeframe
-        ex = getattr(feed, "exchange_id", "") or ""
+        data_exchange = getattr(feed, "exchange_id", "") or ""
+        ex = config.execution_cost_exchange_id or data_exchange
+        self.execution_cost_exchange_id = ex
+        self.cost_profile_source = (
+            "explicit_execution_venue"
+            if config.execution_cost_exchange_id
+            else "market_data_venue_fallback"
+        )
         runtime_contract = scanner_runtime_contract(strategy.strategy_id)
         self.runtime_contract = runtime_contract
         if runtime_contract is not None:
@@ -316,6 +317,7 @@ class LivePaperSession:
             self.cost_profile = "delta_swing" if "delta" in ex.lower() else "swing"
         self.cost_model = CostModel.for_profile(self.cost_profile)
         self.entry_cost_gate = CostGate(CostProfile(self.cost_profile))
+        self.last_scanner_cost_hypothesis: dict | None = None
         self._regime_model = RegimeV0()
         self._overlay_regime: dict | None = None
         self._overlay_plan: dict | None = None
@@ -341,46 +343,18 @@ class LivePaperSession:
                 "tick_accepted_breakout_v1",
             }
         )
-        acceptance_config = getattr(strategy, "acceptance_params", None)
-        if not isinstance(acceptance_config, SqueezeExpansionV3Params):
-            acceptance_config = (
-                SqueezeExpansionV3Params(
-                    acceptance_hold_seconds=3.0,
-                    min_acceptance_samples=3,
-                    break_buffer_bps=0.0,
-                )
-                if strategy.strategy_id == "tick_accepted_breakout_v1"
-                else SqueezeExpansionV3Params()
-            )
-        scanner_exit_config = ScannerExitConfig(
-            absolute_max_bars=(runtime_contract.max_holding_bars if runtime_contract else 48),
-            max_age_bars=(runtime_contract.max_holding_bars if runtime_contract else 48),
-            failed_breakout=bool(getattr(strategy, "realtime_failed_breakout", True)),
-            breakeven_arm_r=float(getattr(strategy, "realtime_breakeven_arm_r", 1.0)),
-            trail_arm_r=float(getattr(strategy, "realtime_trail_arm_r", 2.0)),
-            trail_atr_mult=float(getattr(strategy, "realtime_trail_atr_mult", 1.0)),
-            tp_ladder=(
-                ((float(getattr(strategy, "realtime_reward_r", 2.0)), 1.0),)
-                if bool(getattr(strategy, "realtime_fixed_target", False))
-                else ()
-            ),
-        )
         self.scanner_observer: SqueezeObserveRunner | SqueezeAcceptanceObserveRunner | None = (
             (
-                SqueezeAcceptanceObserveRunner(
+                build_quote_acceptance_engine(
                     journal=journal,
                     symbol=config.symbol,
-                    strategy_id=strategy.strategy_id,
                     strategy=strategy,
-                    acceptance=ExpansionAcceptanceEngine(config=acceptance_config),
-                    exits=ScannerExitEngine(config=scanner_exit_config),
+                    contract=runtime_contract,
+                    cost_profile=self.cost_profile,
+                    bar_minutes=(self._tf_seconds or 300) / 60.0,
                     approve_fire=self._approve_scanner_fire,
-                    costs=SessionCosts.from_profile(
-                        self.cost_profile,
-                        bar_minutes=(self._tf_seconds or 300) / 60.0,
-                    ),
                 )
-                if quote_acceptance
+                if quote_acceptance and runtime_contract is not None
                 else SqueezeObserveRunner(
                     journal=journal,
                     symbol=config.symbol,
@@ -548,7 +522,7 @@ class LivePaperSession:
             before_candidates = observer.candidates
             before_approved = observer.fires
             before_rejected = observer.rejected
-            observer.on_quote(
+            fire = observer.on_quote(
                 bid=update.bid,
                 ask=update.ask,
                 ts=update.ts,
@@ -558,10 +532,32 @@ class LivePaperSession:
                 exchange_timestamped=update.exchange_timestamped,
                 overflow_drops=overflow_drops,
             )
-            self.signals += observer.candidates - before_candidates
-            self.shadow_approved += observer.fires - before_approved
+            candidate_delta = observer.candidates - before_candidates
+            approved_delta = observer.fires - before_approved
+            self.signals += candidate_delta
+            self.live_signals += candidate_delta
+            self.shadow_approved += approved_delta
             self.shadow_rejected += observer.rejected - before_rejected
+            if candidate_delta > 0:
+                approval = getattr(observer, "last_approval", None)
+                self.last_quote_signal = {
+                    "ts": update.ts.isoformat(),
+                    "side": getattr(fire, "side", None),
+                    "entry_price": getattr(fire, "entry", None),
+                    "stop_price": getattr(fire, "stop", None),
+                    "reason": getattr(fire, "reason", None),
+                    "approved": bool(
+                        (approval is not None and approval.approved) or approved_delta > 0
+                    ),
+                    "failed_checks": (
+                        list(approval.failed_checks) if approval is not None else []
+                    ),
+                    "path": "live_quote_acceptance",
+                }
+                self.last_fired_ts = update.ts.isoformat()
             self._record_runner_heartbeat("quote_acceptance", update.ts)
+        if self.funnel_store is not None:
+            self.funnel_store.save_from(self)
         self._publish_snapshot()
 
     def _market_state(self) -> MarketState:
@@ -1290,6 +1286,8 @@ class LivePaperSession:
     _CONTINUITY_TOL = 0.01  # |open−prev_close|/prev_close above this is logged (soft)
 
     def _why_no_trade(self, reason: str) -> str:
+        if self.scanner_observer is not None and self.scanner_observer.has_open:
+            return "shadow_position_open: managing tick/bar exit"
         if self._plan is not None:
             return "position_open: managing exit plan"
         if self.feed.quote is None:
@@ -1331,7 +1329,12 @@ class LivePaperSession:
                 "symbol": self.config.symbol,
                 "timeframe": self.config.timeframe,
                 "mode": self.config.mode.value,
-                "runner_state": "in_position" if self._plan is not None else "waiting",
+                "runner_state": (
+                    "in_position"
+                    if self._plan is not None
+                    or (self.scanner_observer is not None and self.scanner_observer.has_open)
+                    else "waiting"
+                ),
                 "bars_processed": self.bars_processed,
                 "evals": self.evals,
                 "live_evals": self.live_evals,
@@ -1781,9 +1784,17 @@ class LivePaperSession:
             )
 
         risk_bps = abs(ref_price - float(fire.stop)) / ref_price * 10_000.0
-        features = getattr(self.strategy, "_features", None)
-        reward_r = float(getattr(getattr(features, "params", None), "reward_r", 2.0))
+        reward_r = self._scanner_payoff_hypothesis_r()
         signal_edge_bps = risk_bps * reward_r
+        self.last_scanner_cost_hypothesis = {
+            "basis": "stop_distance_times_frozen_reward_r_not_empirical_expectancy",
+            "risk_bps": round(risk_bps, 4),
+            "reward_r": round(reward_r, 4),
+            "gross_payoff_room_bps": round(signal_edge_bps, 4),
+            "gate_cost_bps": round(float(self.cost_model.round_trip_bps()), 4),
+            "execution_cost_exchange": self.execution_cost_exchange_id,
+            "cost_profile": self.cost_profile,
+        }
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
             side=fire.side,
@@ -1874,6 +1885,34 @@ class LivePaperSession:
             margin_usd=intent.notional_usd / leverage,
             intent_key=intent_key,
         )
+
+    def _scanner_payoff_hypothesis_r(self) -> float:
+        """Return the scanner's frozen payoff hypothesis without inventing EV.
+
+        Realtime wrappers expose ``realtime_reward_r``; the HTF continuation
+        scanner freezes ``edge_hypothesis_r`` on its params. Older scanners use
+        reward_r/projected_reward_r. A single resolver prevents the runtime
+        CostGate from silently assuming 2R when the arm was built at 2.5R.
+        """
+        direct = getattr(self.strategy, "realtime_reward_r", None)
+        params = getattr(self.strategy, "params", None)
+        feature_params = getattr(getattr(self.strategy, "_features", None), "params", None)
+        for source, name in (
+            (direct, None),
+            (params, "edge_hypothesis_r"),
+            (params, "reward_r"),
+            (params, "projected_reward_r"),
+            (feature_params, "reward_r"),
+            (feature_params, "projected_reward_r"),
+        ):
+            raw = source if name is None else getattr(source, name, None)
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                return value
+        return 2.0
 
     async def _manage_pending_entry(self, now: datetime) -> None:
         """Resolve a resting maker entry: promote to a position once a quote has
@@ -2294,6 +2333,26 @@ class LivePaperSession:
         self._ledger_new_fills(now)
         if self.account_store is not None:
             self.account_store.save_from(self.exchange, self.tracker, plan=self._serialize_plan())
+
+    async def _idle_housekeeping(self, now: datetime) -> None:
+        """Run safety/freshness work on every loop without a closed candle.
+
+        Quote-acceptance lanes can receive BBO updates continuously, so an
+        idle-timeout-only branch can be starved forever.  A quote event is not
+        a closed candle and must still advance stop checks, feed-stall checks,
+        the forming-bar clock, heartbeat persistence, and the dashboard.
+        """
+        await self._check_tick_stop(now)
+        if self.feed.quote is not None:
+            self._sync_quote()
+            await self._enforce_daily_factory_flatten(now, now)
+        if self._tf_seconds is not None and self._last_bar_wall is not None:
+            idle_s = (now - self._last_bar_wall).total_seconds()
+            if idle_s > self._STALL_BARS * self._tf_seconds:
+                self._enter_degraded(f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True)
+        self._feed_time_machine(now)
+        self._record_runner_heartbeat("waiting_for_closed_candle", now)
+        self._publish_snapshot()
 
     def _maybe_daily_report(self, now: datetime) -> None:
         """At each UTC day rollover, journal a summary of the finished day
@@ -2885,6 +2944,10 @@ class LivePaperSession:
                 # D-lite overlays (OBSERVE-ONLY): lane cost world + what regime_v0
                 # and the cost-aware plan contract WOULD say (never gates the lane)
                 "cost_profile": self.cost_profile,
+                "cost_profile_source": self.cost_profile_source,
+                "data_exchange": getattr(self.feed, "exchange_id", ""),
+                "execution_cost_exchange": self.execution_cost_exchange_id,
+                "scanner_cost_hypothesis": self.last_scanner_cost_hypothesis,
                 "runtime_contract": (
                     {
                         "cost_family": self.runtime_contract.cost_family,
@@ -2911,6 +2974,7 @@ class LivePaperSession:
                 "dd_limit_pct": (self.trial_meta or {}).get("max_dd_pct"),
                 "trial_scorecard": self._trial_scorecard(),
                 "last_fired_ts": self.last_fired_ts,
+                "last_quote_signal": self.last_quote_signal,
                 "last_eval": self.last_eval,
                 "last_reject_reason": self.last_reject_reason,
                 "shadow_perf": (
@@ -3150,20 +3214,24 @@ class LivePaperSession:
                 except TimeoutError:
                     pass
 
-            if quote_update is not None and raw is None:
-                if acceptance_observer is None:  # defensive type/runtime guard
-                    continue
-                if self._deferred_quote_updates:
-                    # A prior candle/quote tie is still waiting for a valid bar
-                    # transition. Preserve ordering instead of letting a newer
-                    # quote overtake it.
-                    self._defer_quote(quote_update)
-                    continue
-                self._handle_quote_batch(
-                    acceptance_observer,
-                    quote_queue,
-                    self._drain_quote_batch(quote_queue, quote_update),
-                )
+            if raw is None:
+                await self._idle_housekeeping(datetime.now(UTC))
+                if quote_update is not None:
+                    if acceptance_observer is None or quote_queue is None:
+                        # Defensive type/runtime guard: quote updates are only
+                        # produced by the branch that proves both objects.
+                        continue
+                    if self._deferred_quote_updates:
+                        # A prior candle/quote tie is still waiting for a valid
+                        # bar transition. Preserve ordering instead of letting
+                        # a newer quote overtake it.
+                        self._defer_quote(quote_update)
+                        continue
+                    self._handle_quote_batch(
+                        acceptance_observer,
+                        quote_queue,
+                        self._drain_quote_batch(quote_queue, quote_update),
+                    )
                 continue
 
             if quote_update is not None:
@@ -3172,27 +3240,12 @@ class LivePaperSession:
                 # invalidates the arm for this logical time.
                 self._defer_quote(quote_update)
 
-            if raw is None:
-                # capital protection between bars: stops (and ONLY stops) are
-                # evaluated against the current quote on every idle tick
-                idle_now = datetime.now(UTC)
-                await self._check_tick_stop(idle_now)
-                if self.feed.quote is not None:
-                    self._sync_quote()
-                    await self._enforce_daily_factory_flatten(idle_now, idle_now)
-                # stall guard: no closed bar in > _STALL_BARS × timeframe means
-                # the feed/loop is wedged — go reduce-only (recoverable: a clean
-                # bar resuming clears it) so we never sit silently late.
-                if self._tf_seconds is not None and self._last_bar_wall is not None:
-                    idle_s = (idle_now - self._last_bar_wall).total_seconds()
-                    if idle_s > self._STALL_BARS * self._tf_seconds:
-                        self._enter_degraded(f"feed_stall:{int(idle_s)}s_no_bar", recoverable=True)
-                self._feed_time_machine(idle_now)  # forming-bar progress (read-only)
-                self._record_runner_heartbeat("waiting_for_closed_candle", idle_now)
-                self._publish_snapshot()  # keep the dashboard honest while idle
-                continue
-
             now = datetime.now(UTC)
+            if self._tf_seconds is not None:
+                received_open = pd.to_datetime(raw[0], unit="ms", utc=True).to_pydatetime()
+                self.latency.record_bar_receipt(
+                    received_open + timedelta(seconds=self._tf_seconds), now
+                )
             # detect + heal (or fail-closed on) a feed gap BEFORE the bar reaches
             # the strategy, so contiguous-index indicators never span a hole.
             # Only the LIVE stream's internal continuity is guarded here — the
@@ -3203,7 +3256,11 @@ class LivePaperSession:
             ):
                 self._discard_deferred_quotes("candle_continuity_rejected")
                 continue
+            canonical_wait_started = time.perf_counter()
             canonical_ready = await self._await_canonical_candle(raw)
+            self.latency.record_canonical_wait(
+                (time.perf_counter() - canonical_wait_started) * 1000.0
+            )
             if not self._append_candle(raw) or not self._sync_quote():
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
                 continue
@@ -3218,15 +3275,6 @@ class LivePaperSession:
 
             bar = self.candles.iloc[-1]
             bar_clock = pd.Timestamp(bar["timestamp"]).to_pydatetime()
-            # closed-bar processing lag: how stale this candle is now that the
-            # bar path is allowed to act on it.
-            # bar_clock is the candle OPEN; it closed one timeframe later, so
-            # (now - close) captures network + exchange emit + any loop-
-            # saturation queue-wait. Clock skew can make it slightly negative
-            # (data-quality gate bounds skew separately) — floor at zero.
-            if self._tf_seconds is not None:
-                close_dt = bar_clock + timedelta(seconds=self._tf_seconds)
-                self.latency.record_bar_close(close_dt, now)
             await self._manage_exit(bar, now)
             await self._enforce_daily_factory_flatten(bar_clock, now)
             await self._manage_pending_entry(now)
@@ -3252,7 +3300,7 @@ class LivePaperSession:
                 before_candidates = self.scanner_observer.candidates
                 before_approved = self.scanner_observer.fires
                 before_rejected = self.scanner_observer.rejected
-                fire = self.scanner_observer.on_prepared_bar(scanner_df, scanner_idx, bar_clock)
+                fire = self.scanner_observer.on_closed_bar(scanner_df, scanner_idx, bar_clock)
                 self.signals += self.scanner_observer.candidates - before_candidates
                 self.shadow_approved += self.scanner_observer.fires - before_approved
                 self.shadow_rejected += self.scanner_observer.rejected - before_rejected

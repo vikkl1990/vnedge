@@ -164,10 +164,10 @@ class SqueezeObserveRunner:
             if self.open_meta is None:
                 break
 
-    def on_prepared_bar(
+    def on_closed_bar(
         self, df: pd.DataFrame, index: int, bar_ts: datetime
     ) -> FireDecision | None:
-        """Called once per closed 5m bar with the strategy's prepared frame."""
+        """Consume one causal closed-bar event."""
         row = df.iloc[index]
         needed = (
             "sqz_range_high", "sqz_range_low", "sqz_compressed", "sqz_episode",
@@ -274,6 +274,12 @@ class SqueezeObserveRunner:
         }
         self.fires += 1
         return fire
+
+    def on_prepared_bar(
+        self, df: pd.DataFrame, index: int, bar_ts: datetime
+    ) -> FireDecision | None:
+        """Compatibility alias; all behavior lives in :meth:`on_closed_bar`."""
+        return self.on_closed_bar(df, index, bar_ts)
 
     def _journal_outcome(self, decision, index: int, bar_ts: datetime) -> None:
         meta = self.open_meta or {}

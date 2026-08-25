@@ -22,9 +22,13 @@ from itertools import pairwise
 from pathlib import Path
 
 from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore, floor_time
+from vnedge.data.structure_mtf import MTF_PARAMS
 from vnedge.strategy.regime_router import DEFAULT_CONFIG as REGIME_CONFIG
 from vnedge.strategy.regime_router import EXPAND_NATIVE_IDS, RANGE_NATIVE_IDS
 from vnedge.strategy.strategy_registry import get_strategy_class
+
+HTF_STRUCTURE_MIN_BARS = 2 * (MTF_PARAMS.htf_left + MTF_PARAMS.htf_right) + 4
+
 
 DEFAULT_REQUIREMENTS: Mapping[str, int] = {
     # Active scanner causal contracts, including one evaluable bar after
@@ -33,7 +37,7 @@ DEFAULT_REQUIREMENTS: Mapping[str, int] = {
     "5m": 2066,
     "15m": 2018,
     "1h": 24,
-    "4h": 6,
+    "4h": HTF_STRUCTURE_MIN_BARS,
 }
 
 
@@ -48,7 +52,7 @@ def requirements_from_roster(path: Path | str) -> dict[str, int]:
     observers = payload.get("observers")
     if not isinstance(observers, list) or not observers:
         raise ValueError("scanner roster must contain a non-empty observers list")
-    requirements: dict[str, int] = {"1h": 24, "4h": 6}
+    requirements: dict[str, int] = {"1h": 24, "4h": HTF_STRUCTURE_MIN_BARS}
     routed = RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS
     for observer in observers:
         if not isinstance(observer, dict):
@@ -82,6 +86,12 @@ class PrerequisiteState:
     latest_close: str | None
     ready: bool
     reason: str
+    issues: tuple[str, ...]
+    missing_bars: int
+    lag_seconds: int | None
+    gap_count: int
+    first_gap_open: str | None
+    invalid_exact_volume_bars: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,27 +122,46 @@ def _validate_tail(
     ordered = sorted(candles, key=lambda candle: candle.open_time)
     tail = ordered[-required_bars:]
     latest_close = tail[-1].close_time if tail else None
-    reason = "ok"
-
-    if len(tail) < required_bars:
-        reason = "insufficient_history"
-    elif latest_close != expected_close:
-        reason = "stale_tail"
-    else:
-        step = timedelta(seconds=TF_SECONDS[timeframe])
-        for previous, current in pairwise(tail):
-            if current.open_time - previous.open_time != step:
-                reason = "non_contiguous"
-                break
-        if reason == "ok" and any(
+    missing_bars = max(0, required_bars - len(tail))
+    lag_seconds = (
+        max(0, int((expected_close - latest_close).total_seconds()))
+        if latest_close is not None
+        else None
+    )
+    step = timedelta(seconds=TF_SECONDS[timeframe])
+    gap_count = 0
+    first_gap_open: datetime | None = None
+    for previous, current in pairwise(tail):
+        delta = current.open_time - previous.open_time
+        if delta == step:
+            continue
+        if first_gap_open is None:
+            first_gap_open = previous.open_time + step
+        # A misaligned or reversed timestamp is one integrity defect. For a
+        # normal forward hole, report the exact number of absent buckets.
+        ratio, remainder = divmod(delta.total_seconds(), step.total_seconds())
+        gap_count += max(1, int(ratio) - 1) if remainder == 0 else 1
+    invalid_exact_volume_bars = sum(
+        1
+        for candle in tail
+        if (
             not candle.is_closed
             or candle.volume <= 0
             or candle.quote_volume <= 0
             or candle.trade_count <= 0
             or candle.vwap is None
-            for candle in tail
-        ):
-            reason = "non_exact_volume"
+        )
+    )
+    issues: list[str] = []
+    if missing_bars:
+        issues.append("insufficient_history")
+    if latest_close != expected_close:
+        issues.append("stale_tail")
+    if gap_count:
+        issues.append("non_contiguous")
+    if invalid_exact_volume_bars:
+        issues.append("non_exact_volume")
+    reason = issues[0] if issues else "ok"
 
     return PrerequisiteState(
         symbol=symbol,
@@ -143,6 +172,12 @@ def _validate_tail(
         latest_close=latest_close.isoformat() if latest_close is not None else None,
         ready=reason == "ok",
         reason=reason,
+        issues=tuple(issues),
+        missing_bars=missing_bars,
+        lag_seconds=lag_seconds,
+        gap_count=gap_count,
+        first_gap_open=(first_gap_open.isoformat() if first_gap_open else None),
+        invalid_exact_volume_bars=invalid_exact_volume_bars,
     )
 
 
@@ -217,9 +252,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     _write_report(Path(args.report), report)
     for row in report.rows:
+        diagnostics = (
+            f"missing={row.missing_bars} lag_s={row.lag_seconds} "
+            f"gaps={row.gap_count} first_gap={row.first_gap_open or '-'} "
+            f"invalid_exact={row.invalid_exact_volume_bars}"
+        )
         print(
             f"{row.symbol} {row.timeframe}: "
-            f"{row.available_bars}/{row.required_bars} {row.reason}"
+            f"{row.available_bars}/{row.required_bars} {row.reason} {diagnostics}"
         )
     return 0 if report.ready else 1
 

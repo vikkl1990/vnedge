@@ -5,6 +5,7 @@
     {
       "strategy_id": "squeeze_expansion_breakout_v4",
       "exchange": "binanceusdm",
+      "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "5m",
       "revision": {
@@ -22,6 +23,7 @@
     {
       "strategy_id": "range_expansion_realtime_v1",
       "exchange": "binanceusdm",
+      "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {
@@ -39,6 +41,7 @@
     {
       "strategy_id": "htf_structure_continuation_realtime_v1",
       "exchange": "binanceusdm",
+      "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {
@@ -56,6 +59,7 @@
     {
       "strategy_id": "session_continuation_realtime_v1",
       "exchange": "binanceusdm",
+      "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {

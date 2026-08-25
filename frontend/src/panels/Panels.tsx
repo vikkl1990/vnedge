@@ -2,10 +2,10 @@
 // the growing parity subset (header, book, risk, positions, journal); the
 // remaining classic panels port onto these same primitives incrementally.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useCostModel, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
-import type { ArtifactMetadata, CorrectionLane, JournalRow, LaneHealth, LaneHealthProblem, Position } from "../api";
+import { useAgenticResearchStatus, useBacktestLab, useCostModel, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
+import { apiPost, type ArtifactMetadata, type BacktestDay, type BacktestJobAccepted, type BacktestMonth, type BacktestRunSummary, type BacktestTrade, type CorrectionLane, type JournalRow, type LaneHealth, type LaneHealthProblem, type Position } from "../api";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
@@ -182,7 +182,7 @@ export function DeskPanel() {
     { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
     { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
     { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
-    { key: "close-lag", header: "Close p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} persisted runtime samples`}>{r.bar_close_processing_ms == null ? "—" : `${r.bar_close_processing_ms.toFixed(1)} ms`}<span className="block text-[9px] text-faint">n {r.latency_samples.bar_close}/{r.latency_samples.required}</span></span> },
+    { key: "close-lag", header: "Close path p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} persisted receipt samples`}><span className="block">receipt {r.bar_close_receipt_ms == null ? "—" : `${r.bar_close_receipt_ms.toFixed(1)} ms`}</span><span className="block text-[9px] text-faint">lake wait {r.canonical_wait_ms == null ? "—" : `${r.canonical_wait_ms.toFixed(1)} ms`} · n {r.latency_samples.bar_close}/{r.latency_samples.required}</span></span> },
     { key: "lag", header: "Decision p95", align: "right", render: (r) => <span title={`${r.latency_samples.decision}/${r.latency_samples.required} persisted runtime samples`}>{r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms`}<span className="block text-[9px] text-faint">n {r.latency_samples.decision}/{r.latency_samples.required}</span></span> },
     { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString("en-US") },
     { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.current_waiting_reason}</span></span> },
@@ -421,6 +421,289 @@ export function RiskPanel() {
   );
 }
 
+type BacktestTab = "overview" | "trades" | "days" | "months" | "runs";
+
+const compactDate = (value: string | null | undefined) => {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit", timeZone: "UTC" })
+    : value;
+};
+
+function BacktestEquityChart({ points }: { points: Array<{ ts: string; equity_usd: number; drawdown_pct: number }> }) {
+  const width = 1_000;
+  const height = 310;
+  const pad = { left: 62, right: 18, top: 20, bottom: 34 };
+  const equityBottom = 205;
+  const drawdownTop = 235;
+  const drawdownBottom = 280;
+  if (points.length < 2) {
+    return <div className="grid h-[310px] place-items-center font-mono text-[11px] text-faint">Equity curve requires at least two samples.</div>;
+  }
+  const equities = points.map((point) => point.equity_usd);
+  const minEquity = Math.min(...equities);
+  const maxEquity = Math.max(...equities);
+  const equitySpan = Math.max(1, maxEquity - minEquity);
+  const minDrawdown = Math.min(...points.map((point) => point.drawdown_pct), -0.01);
+  const x = (index: number) => pad.left + index / (points.length - 1) * (width - pad.left - pad.right);
+  const y = (value: number) => equityBottom - (value - minEquity) / equitySpan * (equityBottom - pad.top);
+  const ddY = (value: number) => drawdownTop + value / minDrawdown * (drawdownBottom - drawdownTop);
+  const line = points.map((point, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(point.equity_usd).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(points.length - 1).toFixed(1)},${equityBottom} L${x(0).toFixed(1)},${equityBottom} Z`;
+  const drawdown = points.map((point, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${ddY(point.drawdown_pct).toFixed(1)}`).join(" ");
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-[310px] w-full" role="img" aria-label="Backtest equity and drawdown curve">
+      <defs>
+        <linearGradient id="backtest-equity-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#3FB950" stopOpacity=".26" /><stop offset="1" stopColor="#3FB950" stopOpacity=".015" /></linearGradient>
+      </defs>
+      {ticks.map((tick) => {
+        const tickY = pad.top + tick * (equityBottom - pad.top);
+        const value = maxEquity - tick * equitySpan;
+        return <g key={tick}><line x1={pad.left} x2={width - pad.right} y1={tickY} y2={tickY} stroke="#30363D" strokeWidth="1" /><text x={pad.left - 9} y={tickY + 4} textAnchor="end" fill="#6E7681" fontSize="11" fontFamily="monospace">${value.toFixed(0)}</text></g>;
+      })}
+      <path d={area} fill="url(#backtest-equity-fill)" />
+      <path d={line} fill="none" stroke="#3FB950" strokeWidth="2.2" vectorEffect="non-scaling-stroke" />
+      <line x1={pad.left} x2={width - pad.right} y1={drawdownTop} y2={drawdownTop} stroke="#30363D" />
+      <line x1={pad.left} x2={width - pad.right} y1={drawdownBottom} y2={drawdownBottom} stroke="#30363D" />
+      <path d={drawdown} fill="none" stroke="#F85149" strokeWidth="1.7" vectorEffect="non-scaling-stroke" />
+      <text x={pad.left - 9} y={drawdownTop + 4} textAnchor="end" fill="#6E7681" fontSize="10" fontFamily="monospace">0%</text>
+      <text x={pad.left - 9} y={drawdownBottom + 4} textAnchor="end" fill="#F85149" fontSize="10" fontFamily="monospace">{minDrawdown.toFixed(1)}%</text>
+      <text x={pad.left} y={height - 8} fill="#6E7681" fontSize="10" fontFamily="monospace">{compactDate(points[0]?.ts)}</text>
+      <text x={width - pad.right} y={height - 8} textAnchor="end" fill="#6E7681" fontSize="10" fontFamily="monospace">{compactDate(points[points.length - 1]?.ts)}</text>
+    </svg>
+  );
+}
+
+function BacktestLabPanel() {
+  const identity = useWhoAmI();
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [compareRunId, setCompareRunId] = useState("");
+  const [tab, setTab] = useState<BacktestTab>("overview");
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionMessage, setSubmissionMessage] = useState("");
+  const [draft, setDraft] = useState({
+    strategy_id: "",
+    exchange: "binanceusdm",
+    symbol: "BTC/USDT:USDT",
+    timeframe: "1h",
+    start: "",
+    end: "",
+    initial_capital_usd: "1000",
+    commission_bps: "5",
+    slippage_bps: "1",
+    max_holding_bars: "48",
+  });
+  const lab = useBacktestLab(selectedRunId || undefined);
+  const comparison = useBacktestLab(compareRunId || undefined);
+  const report = lab.data?.selected;
+  const overview = report?.overview;
+  const activeRunId = selectedRunId || lab.data?.selected_run_id || "";
+  const compareReport = compareRunId ? comparison.data?.selected : null;
+  const runs = lab.data?.runs ?? [];
+  const canQueue = identity.data?.permissions.includes("request_backtest") ?? false;
+  const selectedStrategy = draft.strategy_id || lab.data?.catalog.strategies[0] || "";
+
+  const queueRun = async () => {
+    if (!selectedStrategy) {
+      setSubmissionMessage("No registered strategy is available.");
+      return;
+    }
+    if (draft.start && draft.end && draft.start > draft.end) {
+      setSubmissionMessage("The start date must not be after the end date.");
+      return;
+    }
+    if (!(Number(draft.initial_capital_usd) > 0) || !(Number(draft.max_holding_bars) >= 1)) {
+      setSubmissionMessage("Start equity and max-hold bars must be positive.");
+      return;
+    }
+    setSubmitting(true);
+    setSubmissionMessage("");
+    try {
+      const job = await apiPost<BacktestJobAccepted>("/backtest-lab/runs", {
+        strategy_id: selectedStrategy,
+        exchange: draft.exchange,
+        symbol: draft.symbol,
+        timeframe: draft.timeframe,
+        start: draft.start || null,
+        end: draft.end || null,
+        initial_capital_usd: Number(draft.initial_capital_usd),
+        commission_bps: draft.commission_bps === "" ? null : Number(draft.commission_bps),
+        slippage_bps: draft.slippage_bps === "" ? null : Number(draft.slippage_bps),
+        strict_mode: true,
+        live_orders_enabled: false,
+        parameters: { max_holding_bars: Number(draft.max_holding_bars) },
+        hypothesis_id: null,
+        notes: "Queued from the VNEDGE Backtest Lab",
+      });
+      setSelectedRunId(job.job_id);
+      setTab("runs");
+      setSubmissionMessage(`${job.job_id} queued for the bounded research worker.`);
+      await lab.refetch();
+    } catch (error) {
+      setSubmissionMessage(error instanceof Error ? error.message : "Backtest request failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const exportReport = () => {
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${report.run.run_id}.backtest.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const metric = (label: string, value: string, tone = "", sub?: string) => (
+    <div className="min-h-[84px] border border-line bg-inset p-3">
+      <div className="font-mono text-[9px] uppercase tracking-wider text-faint">{label}</div>
+      <div className={`mt-1 font-mono text-xl font-black tabular-nums ${tone}`}>{value}</div>
+      {sub && <div className="mt-1 truncate text-[9px] text-faint" title={sub}>{sub}</div>}
+    </div>
+  );
+  const comparisonDelta = compareReport && overview ? {
+    net: overview.net_profit_usd - compareReport.overview.net_profit_usd,
+    trades: overview.num_trades - compareReport.overview.num_trades,
+    sharpe: overview.sharpe - compareReport.overview.sharpe,
+    drawdown: overview.max_drawdown_pct - compareReport.overview.max_drawdown_pct,
+  } : null;
+
+  const tradeCols: Column<BacktestTrade>[] = [
+    { key: "entry", header: "Entry UTC", render: (row) => <span className="whitespace-nowrap font-mono">{new Date(row.entry_ts).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })}</span> },
+    { key: "side", header: "Side", render: (row) => <TerminalBadge tone={row.side.toLowerCase() === "long" ? "good" : "bad"}>{row.side}</TerminalBadge> },
+    { key: "price", header: "Entry → exit", align: "right", render: (row) => <span className="whitespace-nowrap font-mono">{priceText(row.entry_price)} → {priceText(row.exit_price)}</span> },
+    { key: "hold", header: "Hold", align: "right", render: (row) => ageSec(row.hold_seconds) },
+    { key: "gross", header: "Gross", align: "right", render: (row) => <span className={signed(row.gross_pnl_usd)}>{usd(row.gross_pnl_usd)}</span> },
+    { key: "cost", header: "Fees + funding", align: "right", render: (row) => usd(row.fees_usd - row.funding_usd) },
+    { key: "net", header: "Net", align: "right", render: (row) => <span className={signed(row.net_pnl_usd)}>{usd(row.net_pnl_usd)}</span> },
+    { key: "bps", header: "Net bps", align: "right", render: (row) => row.net_bps_on_entry_notional == null ? "—" : `${row.net_bps_on_entry_notional.toFixed(1)}` },
+    { key: "path", header: "MAE / MFE", align: "right", render: (row) => <span className="whitespace-nowrap font-mono">{usd(row.mae_usd)} / {usd(row.mfe_usd)}</span> },
+    { key: "exit", header: "Exit", render: (row) => <span className="font-mono text-[10px]">{row.exit_reason}</span> },
+  ];
+  const dayCols: Column<BacktestDay>[] = [
+    { key: "date", header: "Day UTC", render: (row) => <span className="font-mono">{row.date}</span> },
+    { key: "pnl", header: "Realized net", align: "right", render: (row) => <span className={signed(row.net_pnl_usd)}>{usd(row.net_pnl_usd)}</span> },
+    { key: "trades", header: "Trades", align: "right", render: (row) => row.trade_count },
+    { key: "wl", header: "W / L", align: "right", render: (row) => `${row.wins} / ${row.losses}` },
+    { key: "equity", header: "Close equity", align: "right", render: (row) => usd(row.equity_usd) },
+    { key: "change", header: "Equity change", align: "right", render: (row) => <span className={signed(row.equity_change_usd)}>{usd(row.equity_change_usd)}</span> },
+    { key: "dd", header: "Drawdown", align: "right", render: (row) => <span className={row.drawdown_pct < 0 ? "text-short" : ""}>{row.drawdown_pct.toFixed(2)}%</span> },
+  ];
+  const monthCols: Column<BacktestMonth>[] = [
+    { key: "month", header: "Month", render: (row) => <span className="font-mono">{row.month}</span> },
+    { key: "pnl", header: "Net", align: "right", render: (row) => <span className={signed(row.net_pnl_usd)}>{usd(row.net_pnl_usd)}</span> },
+    { key: "days", header: "Traded days", align: "right", render: (row) => row.traded_days },
+    { key: "trades", header: "Trades", align: "right", render: (row) => row.trade_count },
+    { key: "wl", header: "Win / loss days", align: "right", render: (row) => `${row.win_days} / ${row.loss_days}` },
+    { key: "best", header: "Best day", align: "right", render: (row) => <span className="text-long">{usd(row.best_day_usd)}</span> },
+    { key: "worst", header: "Worst day", align: "right", render: (row) => <span className="text-short">{usd(row.worst_day_usd)}</span> },
+    { key: "dd", header: "Max DD", align: "right", render: (row) => <span className="text-short">{row.max_drawdown_pct.toFixed(2)}%</span> },
+  ];
+  const runCols: Column<BacktestRunSummary>[] = [
+    { key: "run", header: "Run", render: (row) => <button type="button" onClick={() => { setSelectedRunId(row.run_id); setTab("overview"); }} className="max-w-[240px] truncate font-mono text-info hover:underline" title={row.run_id}>{row.run_id}</button> },
+    { key: "status", header: "Status", render: (row) => <TerminalBadge tone={row.has_report ? "good" : row.status === "FAILED" || row.status === "BLOCKED" ? "bad" : "warn"}>{row.status}</TerminalBadge> },
+    { key: "strategy", header: "Strategy", render: (row) => <span className="font-mono">{row.strategy_id ?? "—"}</span> },
+    { key: "market", header: "Market / TF", render: (row) => <span className="whitespace-nowrap font-mono">{row.exchange ?? "—"} · {row.symbol ?? "—"} · {row.timeframe ?? "—"}</span> },
+    { key: "net", header: "Net", align: "right", render: (row) => <span className={signed(row.net_profit_usd)}>{usd(row.net_profit_usd)}</span> },
+    { key: "trades", header: "Trades", align: "right", render: (row) => row.num_trades ?? "—" },
+    { key: "updated", header: "Updated UTC", align: "right", render: (row) => compactDate(row.updated_at) },
+    { key: "reason", header: "Reason", render: (row) => <span className="max-w-[260px] truncate text-[10px] text-dim" title={row.error ?? row.blocked_reason ?? ""}>{row.error ?? row.blocked_reason ?? (row.has_report ? "canonical report" : "awaiting worker")}</span> },
+  ];
+
+  const monthlyScale = useMemo(() => Math.max(1, ...(report?.monthly ?? []).map((row) => Math.abs(row.net_pnl_usd))), [report?.monthly]);
+  const fieldClass = "w-full border border-line bg-bg px-2.5 py-2 font-mono text-[11px] text-txt focus:border-brand focus:outline-none";
+  return (
+    <TerminalPanel title="Backtest Lab" meta="canonical engine · complete audit trail · research only">
+      <details className="mb-3 border border-line bg-inset" open={!report}>
+        <summary className="cursor-pointer list-none px-3 py-2 font-mono text-[11px] text-info">New bounded run <span className="float-right text-faint">research worker · strict mode · no orders ▾</span></summary>
+        <div className="grid gap-px border-t border-line bg-line p-px sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Strategy</span><select value={selectedStrategy} onChange={(event) => setDraft({ ...draft, strategy_id: event.target.value })} className={fieldClass}>{(lab.data?.catalog.strategies ?? []).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Exchange</span><select value={draft.exchange} onChange={(event) => setDraft({ ...draft, exchange: event.target.value })} className={fieldClass}>{(lab.data?.catalog.exchanges ?? [draft.exchange]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Market</span><select value={draft.symbol} onChange={(event) => setDraft({ ...draft, symbol: event.target.value })} className={fieldClass}>{(lab.data?.catalog.symbols ?? [draft.symbol]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Timeframe</span><select value={draft.timeframe} onChange={(event) => setDraft({ ...draft, timeframe: event.target.value })} className={fieldClass}>{(lab.data?.catalog.timeframes ?? [draft.timeframe]).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">From UTC</span><input type="date" value={draft.start} onChange={(event) => setDraft({ ...draft, start: event.target.value })} className={fieldClass} /></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">To UTC</span><input type="date" value={draft.end} onChange={(event) => setDraft({ ...draft, end: event.target.value })} className={fieldClass} /></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Start equity USD</span><input type="number" min="1" max="1000000" value={draft.initial_capital_usd} onChange={(event) => setDraft({ ...draft, initial_capital_usd: event.target.value })} className={fieldClass} /></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Fee / leg bps</span><input type="number" min="0" max="100" step="0.1" value={draft.commission_bps} onChange={(event) => setDraft({ ...draft, commission_bps: event.target.value })} className={fieldClass} /></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Slip / leg bps</span><input type="number" min="0" max="100" step="0.1" value={draft.slippage_bps} onChange={(event) => setDraft({ ...draft, slippage_bps: event.target.value })} className={fieldClass} /></label>
+          <label className="bg-inset p-2"><span className="mb-1 block font-mono text-[9px] uppercase text-faint">Max hold bars</span><input type="number" min="1" max="10000" value={draft.max_holding_bars} onChange={(event) => setDraft({ ...draft, max_holding_bars: event.target.value })} className={fieldClass} /></label>
+          <div className="flex items-end bg-inset p-2 sm:col-span-2"><button type="button" onClick={() => void queueRun()} disabled={submitting || !selectedStrategy || !canQueue} className="w-full border border-brand/50 bg-brand/10 px-3 py-2 font-mono text-[11px] font-bold uppercase text-brand hover:bg-brand/20 disabled:cursor-not-allowed disabled:opacity-40">{submitting ? "Queueing…" : canQueue ? "Run backtest" : "Operator permission required"}</button></div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2 text-[10px] text-faint"><span>Close-decision → next-open fills · sizing/risk reused · costs and funding explicit</span><span className={submissionMessage.toLowerCase().includes("failed") || submissionMessage.toLowerCase().includes("required") ? "text-short" : "text-info"}>{submissionMessage || "Operator-only queue; execution remains outside the dashboard process."}</span></div>
+      </details>
+      <div className="flex flex-wrap items-end gap-3 border-b border-line pb-3">
+        <label className="min-w-[280px] flex-1"><span className="mb-1 block font-mono text-[9px] uppercase tracking-wider text-faint">Selected run</span><select aria-label="Selected backtest run" value={activeRunId} onChange={(event) => setSelectedRunId(event.target.value)} className="w-full border border-line bg-inset px-2.5 py-2 font-mono text-[11px] text-txt focus:border-brand focus:outline-none"><option value="">latest completed report</option>{runs.map((row) => <option key={row.run_id} value={row.run_id}>{row.status} · {row.strategy_id ?? "unknown"} · {row.symbol ?? "—"} {row.timeframe ?? "—"} · {row.run_id}</option>)}</select></label>
+        <label className="min-w-[220px]"><span className="mb-1 block font-mono text-[9px] uppercase tracking-wider text-faint">Compare to</span><select aria-label="Compare backtest run" value={compareRunId} onChange={(event) => setCompareRunId(event.target.value)} className="w-full border border-line bg-inset px-2.5 py-2 font-mono text-[11px] text-txt focus:border-brand focus:outline-none"><option value="">none</option>{runs.filter((row) => row.has_report && row.run_id !== activeRunId).map((row) => <option key={row.run_id} value={row.run_id}>{row.strategy_id ?? "unknown"} · {row.symbol ?? "—"} · {row.run_id}</option>)}</select></label>
+        <button type="button" onClick={exportReport} disabled={!report} className="border border-line px-3 py-2 font-mono text-[11px] text-dim hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-40">Export JSON</button>
+        <TerminalBadge tone={report?.run.evidence_class === "SEALED_OOS" ? "good" : "warn"}>{report?.run.evidence_class ?? "no report"}</TerminalBadge>
+      </div>
+
+      {lab.isError && <div className="mt-3 border border-short/40 bg-short/5 px-3 py-3 text-[11px] text-short" role="alert">Backtest catalog unavailable. No result is being asserted.</div>}
+      {!lab.isLoading && !report && <div className="mt-3 rounded-md border border-warn/40 bg-warn/5 p-4"><div className="font-semibold text-warn">No canonical backtest report yet.</div><div className="mt-1 text-[11px] text-dim">Queue a bounded Agent Gateway backtest, then run the isolated worker. The dashboard never executes research inline.</div><code className="mt-3 block overflow-x-auto border border-line bg-bg px-3 py-2 font-mono text-[10px] text-info">{lab.data?.submission.worker_command ?? "python -m vnedge.agent_gateway.job_runner --once --json"}</code></div>}
+
+      {report && overview && <>
+        <div className="mt-3 grid grid-cols-2 gap-px border border-line bg-line md:grid-cols-4 xl:grid-cols-8">
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">STRATEGY</div><div className="mt-1 truncate font-mono text-[11px]" title={report.run.strategy_id}>{report.run.strategy_id}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">MARKET</div><div className="mt-1 truncate font-mono text-[11px]">{report.run.exchange} · {report.run.symbol}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">TIMEFRAME / BARS</div><div className="mt-1 font-mono text-[11px]">{report.run.timeframe} · {report.run.bars.toLocaleString("en-US")}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">WINDOW UTC</div><div className="mt-1 font-mono text-[11px]">{compactDate(report.run.window.start)} → {compactDate(report.run.window.end)}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">START EQUITY</div><div className="mt-1 font-mono text-[11px]">{usd(report.run.initial_equity_usd)}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">TAKER RT</div><div className="mt-1 font-mono text-[11px] text-warn">{report.run.costs.modeled_taker_round_trip_bps.toFixed(1)} bps</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">FUNDING</div><div className="mt-1 font-mono text-[11px]">{report.run.costs.funding_included ? "included" : "excluded"}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">ENGINE</div><div className="mt-1 truncate font-mono text-[11px]" title={report.run.engine}>{report.run.engine}</div></div>
+        </div>
+
+        <div className="my-3 flex flex-wrap gap-1 border-b border-line pb-2">
+          {(["overview", "trades", "days", "months", "runs"] as BacktestTab[]).map((name) => <button key={name} type="button" onClick={() => setTab(name)} className={`border px-3 py-1.5 font-mono text-[11px] uppercase ${tab === name ? "border-brand/50 bg-brand/10 text-brand" : "border-transparent text-dim hover:text-txt"}`}>{name}{name === "trades" ? ` ${report.trades.length}` : name === "runs" ? ` ${runs.length}` : ""}</button>)}
+        </div>
+
+        {comparisonDelta && <div className="mb-3 flex flex-wrap items-center gap-4 border-l-2 border-info bg-info/5 px-3 py-2 font-mono text-[10px]"><span className="text-info">VS {compareReport?.run.run_id}</span><span>net <b className={signed(comparisonDelta.net)}>{usd(comparisonDelta.net)}</b></span><span>trades {comparisonDelta.trades > 0 ? "+" : ""}{comparisonDelta.trades}</span><span>Sharpe {comparisonDelta.sharpe > 0 ? "+" : ""}{comparisonDelta.sharpe.toFixed(2)}</span><span>DD {comparisonDelta.drawdown > 0 ? "+" : ""}{comparisonDelta.drawdown.toFixed(2)}pp</span></div>}
+
+        {tab === "overview" && <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-px border border-line bg-line md:grid-cols-4 xl:grid-cols-7">
+            {metric("Gross P&L", usd(overview.gross_profit_usd), signed(overview.gross_profit_usd), "before costs")}
+            {metric("Net P&L", usd(overview.net_profit_usd), signed(overview.net_profit_usd), `${usd(overview.total_cost_usd)} modeled cost`)}
+            {metric("Return", `${overview.return_pct >= 0 ? "+" : ""}${overview.return_pct.toFixed(2)}%`, signed(overview.return_pct), "on starting equity")}
+            {metric("Sharpe", overview.sharpe.toFixed(2), overview.sharpe > 1 ? "text-long" : overview.sharpe < 0 ? "text-short" : "", "annualized bar returns")}
+            {metric("Profit factor", overview.profit_factor == null ? "undefined" : overview.profit_factor.toFixed(2), overview.profit_factor != null && overview.profit_factor >= 1.25 ? "text-long" : "text-warn", overview.num_trades < 30 ? "under-sampled" : "after cost")}
+            {metric("Max drawdown", `-${overview.max_drawdown_pct.toFixed(2)}%`, "text-short", `${overview.longest_underwater_days.toFixed(1)} days underwater`)}
+            {metric("Win rate", `${overview.win_rate_pct.toFixed(1)}%`, "", `${overview.num_trades} closed trades`)}
+          </div>
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,.75fr)]">
+            <div className="border border-line bg-inset"><div className="flex items-center justify-between border-b border-line px-3 py-2"><div className="font-mono text-[10px] uppercase text-faint">Equity + drawdown</div><div className={`font-mono text-[12px] font-bold ${signed(overview.net_profit_usd)}`}>{usd(report.run.initial_equity_usd + overview.net_profit_usd)}</div></div><BacktestEquityChart points={report.equity_curve} /></div>
+            <div className="grid grid-cols-2 gap-px border border-line bg-line">
+              {metric("Traded days", String(overview.traded_days), "", `${overview.win_days} win · ${overview.loss_days} loss`)}
+              {metric("Average day", usd(overview.avg_day_pnl_usd), signed(overview.avg_day_pnl_usd))}
+              {metric("Best day", usd(overview.best_day_usd), "text-long")}
+              {metric("Worst day", usd(overview.worst_day_usd), "text-short")}
+              {metric("Avg win", usd(overview.avg_win_usd), "text-long")}
+              {metric("Avg loss", usd(overview.avg_loss_usd), "text-short")}
+              {metric("Payoff", `1 : ${overview.payoff_ratio.toFixed(2)}`, "", "average win / average loss")}
+              {metric("Avg hold", `${overview.avg_hold_hours.toFixed(1)}h`, "", `max ${report.run.exit_contract.max_holding_bars} bars`)}
+              {metric("Win streak", String(overview.max_win_streak), "text-long")}
+              {metric("Loss streak", String(overview.max_loss_streak), "text-short")}
+              {metric("Calmar", overview.calmar == null ? "—" : overview.calmar.toFixed(2))}
+              {metric("Best-trade share", overview.best_trade_profit_share_pct == null ? "—" : `${overview.best_trade_profit_share_pct.toFixed(1)}%`, overview.best_trade_profit_share_pct != null && overview.best_trade_profit_share_pct > 35 ? "text-warn" : "")}
+            </div>
+          </div>
+          <div className="border border-line bg-inset p-3"><div className="font-mono text-[10px] uppercase text-faint">Monthly attribution</div><div className="mt-3 flex h-36 items-center gap-2 overflow-x-auto border-b border-line px-2">{report.monthly.map((row) => <div key={row.month} className="flex h-full min-w-[58px] flex-col items-center justify-end"><div title={`${row.month}: ${usd(row.net_pnl_usd)}`} className={`w-8 ${row.net_pnl_usd >= 0 ? "bg-long/70" : "bg-short/70"}`} style={{ height: `${Math.max(3, Math.abs(row.net_pnl_usd) / monthlyScale * 100)}px` }} /><span className={`mt-1 font-mono text-[9px] ${signed(row.net_pnl_usd)}`}>{row.month.slice(5)}</span></div>)}{!report.monthly.length && <div className="m-auto font-mono text-[11px] text-faint">No monthly attribution.</div>}</div></div>
+          {!!report.warnings.length && <div className="border-l-2 border-warn bg-warn/5 px-3 py-2"><div className="font-mono text-[9px] uppercase text-warn">Evidence warnings</div>{report.warnings.map((warning) => <div key={warning} className="mt-1 text-[10px] text-dim">• {warning}</div>)}</div>}
+        </div>}
+        {tab === "trades" && <DenseTable columns={tradeCols} rows={report.trades} rowKey={(row) => `${row.entry_ts}:${row.side}`} empty="No closed trades in this run." />}
+        {tab === "days" && <DenseTable columns={dayCols} rows={report.daily} rowKey={(row) => row.date} empty="No daily equity samples." />}
+        {tab === "months" && <DenseTable columns={monthCols} rows={report.monthly} rowKey={(row) => row.month} empty="No monthly attribution." />}
+        {tab === "runs" && <DenseTable columns={runCols} rows={runs} rowKey={(row) => row.run_id} empty="No bounded backtest jobs recorded." />}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-[10px] text-faint"><span>Generated {new Date(report.run.generated_at).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC · source {report.run.data_source}</span><span>Read only · cannot trade · cannot promote</span></div>
+      </>}
+    </TerminalPanel>
+  );
+}
+
 function StrategyWorkflowPanel() {
   const workflow = useStrategyWorkflow();
   const [stage, setStage] = useState("all");
@@ -555,6 +838,7 @@ export function ResearchPanel() {
   ];
   return (
     <div className="space-y-4">
+      <BacktestLabPanel />
       <StrategyWorkflowPanel />
       <TerminalPanel title="Research" meta="evidence only · no mutation">
       <div className="mb-4 rounded-lg border border-line bg-inset px-3 py-2 text-[11px] text-dim"><strong className="text-txt">Scorecard {scoreFreshness.state.toLowerCase()}.</strong> Evidence as of {scoreFreshness.age}; historical age is provenance, not a runtime outage.</div>

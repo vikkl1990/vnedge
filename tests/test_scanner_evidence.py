@@ -6,6 +6,9 @@ import pandas as pd
 from vnedge.research import scanner_evidence
 from vnedge.research.scanner_evidence import build_daily_report, read_lane_evals
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.realtime_entry import RealtimeEntryArm
+from vnedge.strategy.scanner_contracts import ScannerRuntimeContract
+from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
 
 def test_daily_report_groups_exact_strategy_and_failed_gates(tmp_path: Path):
@@ -119,6 +122,88 @@ def test_replay_gap_through_stop_never_gets_fictional_stop_fill(monkeypatch):
     assert outcome["entry"] == 85.0
     assert outcome["exit"] == 85.0
     assert outcome["gross_bps"] == 0.0
+
+
+def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monkeypatch):
+    class _QuoteStrategy(BaseStrategy):
+        strategy_id = "test_quote_scanner"
+        warmup_bars = 0
+        acceptance_params = SqueezeExpansionV3Params(
+            acceptance_hold_seconds=0.5,
+            min_acceptance_samples=2,
+            break_buffer_bps=0.0,
+        )
+
+        def prepare(self, candles):
+            frame = candles.copy()
+            frame["rt_atr"] = 1.0
+            return frame
+
+        def signal(self, df, index):
+            del df, index
+
+        def realtime_arm(self, df, index):
+            del df
+            return RealtimeEntryArm(
+                episode_id=index + 1,
+                bar_index=index,
+                long_level=101.0,
+                short_level=99.0,
+                atr=1.0,
+                reference_price=100.0,
+                allow_long=True,
+                allow_short=False,
+                expires_after_bars=2,
+                reason=self.strategy_id,
+            )
+
+    contract = ScannerRuntimeContract(
+        strategy_id="test_quote_scanner",
+        timeframe="5m",
+        cost_family="scalp",
+        max_holding_bars=4,
+        rationale="test",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    )
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _QuoteStrategy)
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: contract)
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=2, freq="5min", tz="UTC"),
+            "open": [100.0, 101.1],
+            "high": [100.5, 101.3],
+            "low": [99.5, 100.8],
+            "close": [100.0, 101.15],
+            "volume": [10.0, 12.0],
+        }
+    )
+    boundary_ms = int(pd.Timestamp("2026-01-01T00:05:00Z").timestamp() * 1000)
+    quotes = pd.DataFrame(
+        {
+            "ts_ms": [boundary_ms - 1, boundary_ms, boundary_ms + 600],
+            "bid": [0.0, 101.09, 101.10],
+            "ask": [101.1, 101.10, 101.11],
+            "sequence": [0, 1, 2],
+        }
+    )
+
+    result = scanner_evidence.replay_quote_scanner(
+        "test_quote_scanner", candles, quotes
+    )
+
+    assert result["quotes_in"] == 3
+    assert result["quotes_dropped"] == 1
+    assert result["quotes_used"] == 2
+    assert result["intents"] == 1
+    assert result["intent_keys"] == [
+        "test_quote_scanner|BTC/USDT:USDT|long|1767225900600"
+    ]
+    intent = next(
+        row["payload"] for row in result["records"] if row["kind"] == "shadow_intent"
+    )
+    assert intent["entry_price"] == 101.11
+    assert intent["quote_sequence"] == 2
 
 
 def test_journal_report_joins_intent_and_outcome(tmp_path: Path):

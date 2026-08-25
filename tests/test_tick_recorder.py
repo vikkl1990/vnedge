@@ -265,7 +265,7 @@ class _TradeSink:
         self.timestamps.append((symbol, trade["timestamp"]))
 
 
-def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
+def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_path):
     rec = TickRecorder.__new__(TickRecorder)
     rec.candle_sink = _TradeSink()
     rec.trade_count = 0
@@ -274,6 +274,10 @@ def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
     rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
     rec._skipped_trade_counts = {"BTC/USDT:USDT": [0, 0, 0, 0]}
     rec._next_skip_log = {"BTC/USDT:USDT": 0.0}
+    rec._trade_reorder = {"BTC/USDT:USDT": []}
+    rec._pending_trade_ids = {"BTC/USDT:USDT": set()}
+    rec._max_seen_trade_ts_ms = {}
+    rec._trade_arrival_seq = 0
     buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
     batch = [
         {"id": "2", "timestamp": 2000, "price": 101, "amount": 1},
@@ -290,11 +294,13 @@ def test_recorder_batch_deduplicates_replays_and_skips_late_rows(tmp_path):
         ],
         buf,
     )
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
 
-    assert rec.trade_count == 3
-    assert [row["ts_ms"] for row in buf._rows] == [1000, 2000, 3000]
+    assert rec.trade_count == 4
+    assert [row["ts_ms"] for row in buf._rows] == [1000, 1500, 2000, 3000]
     assert rec.candle_sink.timestamps == [
         ("BTC/USDT:USDT", 1000),
+        ("BTC/USDT:USDT", 1500),
         ("BTC/USDT:USDT", 2000),
         ("BTC/USDT:USDT", 3000),
     ]
@@ -309,6 +315,10 @@ def test_skip_warnings_are_rate_limited_per_symbol(caplog):
     rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
     rec._skipped_trade_counts = {"BTC/USDT:USDT": [0, 0, 0, 0]}
     rec._next_skip_log = {"BTC/USDT:USDT": 0.0}
+    rec._trade_reorder = {"BTC/USDT:USDT": []}
+    rec._pending_trade_ids = {"BTC/USDT:USDT": set()}
+    rec._max_seen_trade_ts_ms = {}
+    rec._trade_arrival_seq = 0
     buf = _Buffer(Path("/tmp"), "binanceusdm", "BTC/USDT:USDT", "trades")
 
     with caplog.at_level(logging.WARNING):

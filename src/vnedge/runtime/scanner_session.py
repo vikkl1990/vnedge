@@ -255,7 +255,8 @@ class ScannerSession:
             if self.on_pending is not None:
                 self.on_pending({
                     "symbol": self.symbol, "placed_bar": i, "placed_ts_ms": bars[i][0],
-                    "expires_ts_ms": bars[i][0] + (fire.expires_bar - i) * 300_000
+                    "expires_ts_ms": bars[i][0]
+                    + (fire.expires_bar - i) * int(self.costs.bar_minutes * 60_000)
                     if fire.expires_bar is not None else None,
                     **self._pending,
                 })

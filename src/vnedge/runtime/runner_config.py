@@ -69,6 +69,11 @@ class RunnerConfig(BaseModel):
     # production multi-lane config supplies the bounded wait explicitly.
     canonical_candle_wait_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
     canonical_candle_poll_seconds: float = Field(default=0.20, gt=0.0, le=5.0)
+    # The public market-data venue and the assumed execution-cost venue are
+    # different contracts.  Leave this unset only when they are intentionally
+    # the same; shadow deployments that model Delta fees while reading Binance
+    # must name ``delta_india`` explicitly.
+    execution_cost_exchange_id: str | None = None
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: SymbolLimits = Field(
         default=SymbolLimits(

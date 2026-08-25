@@ -5,6 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "src/vnedge/dashboard/static/index.html"
+
+
+def test_research_view_contains_canonical_backtest_lab():
+    page = INDEX.read_text(encoding="utf-8")
+    assert 'id="backtestLab"' in page
+    assert 'id="btRunSelect"' in page
+    assert 'id="btExport"' in page
+    assert "/backtest-lab" in page
 QUANTIFIED = ROOT / "src/vnedge/dashboard/static/quantified_strategy_lab.html"
 APP = ROOT / "src/vnedge/dashboard/app.py"
 

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXCHANGES = "binanceusdm,bybit,delta_india"
 DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
+_SUPPORTED_COST_EXCHANGES = frozenset({"binanceusdm", "bybit", "delta", "delta_india"})
 OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
 OBSERVER_ROSTER_VERSION = 2
 _SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, OBSERVER_ROSTER_VERSION})
@@ -47,6 +48,7 @@ _OBSERVER_FIELDS = frozenset(
         "starting_equity",
         "daily_loss_usd",
         "trail_atr_mult",
+        "cost_exchange",
         "revision",
     }
 )
@@ -167,30 +169,13 @@ def _nonnegative_float(environ: Mapping[str, str], name: str, default: str) -> f
 
 
 def _observer_timeframe(strategy_id: str, timeframe: str) -> None:
-    required = {
-        "structure_bos_1h": "1h",
-        "structure_bos_15m_trigger_v2": "15m",
-        "structure_bos_15m_trigger_v3": "15m",
-        "range_expansion_observer_v1": "1h",
-        "range_expansion_observer_v2": "1h",
-        "range_expansion_observer_v3": "15m",
-        "range_expansion_observer_v4": "15m",
-        "fee_wall_momentum_observer_v1": "5m",
-        "squeeze_expansion_breakout_v2": "5m",
-        "squeeze_expansion_breakout_v3": "5m",
-        "squeeze_expansion_breakout_v4": "5m",
-        "avwap_reclaim_15m_v1": "15m",
-        "session_continuation_15m_v1": "15m",
-        "liquidity_sweep_reversal_15m_v1": "15m",
-        "trend_pullback_1h_v1": "1h",
-        "trend_squeeze_continuation_1h_v1": "1h",
-        "tick_accepted_breakout_v1": "5m",
-        "range_expansion_realtime_v1": "15m",
-        "structure_bos_realtime_v1": "15m",
-        "session_continuation_realtime_v1": "15m",
-        "htf_structure_continuation_realtime_v1": "15m",
-    }.get(strategy_id)
-    if required is not None and timeframe != required:
+    contract = scanner_runtime_contract(strategy_id)
+    if contract is not None:
+        required = contract.timeframe
+    else:
+        strategy = get_strategy_class(strategy_id)
+        required = str(getattr(strategy, "timeframe", "") or "")
+    if required and timeframe != required:
         raise ValueError(f"{strategy_id} shadow observe requires timeframe {required}")
 
 
@@ -348,6 +333,11 @@ def build_shadow_observe_roster_specs(
             minimum=0,
             allow_equal=True,
         )
+        cost_exchange = str(row.get("cost_exchange", "")).strip() or exchange
+        if cost_exchange not in _SUPPORTED_COST_EXCHANGES:
+            raise ValueError(
+                f"observer {strategy_id} has unsupported cost_exchange {cost_exchange!r}"
+            )
         for configured_symbol in symbols:
             symbol = _venue_symbol(exchange, configured_symbol.strip())
             specs.append(
@@ -361,6 +351,7 @@ def build_shadow_observe_roster_specs(
                     starting_equity=starting_equity,
                     daily_loss_usd=daily_loss_usd,
                     trail_atr_mult=trail_atr_mult,
+                    execution_cost_exchange=cost_exchange,
                     is_primary=False,
                 )
             )
@@ -408,6 +399,11 @@ def build_shadow_observe_lane_specs(
     starting_equity = _positive_float(environ, "MULTI_LANE_SHADOW_OBSERVE_EQUITY", "500")
     daily_loss_usd = _positive_float(environ, "MULTI_LANE_SHADOW_OBSERVE_DAILY_LOSS_USD", "10")
     trail_atr_mult = _nonnegative_float(environ, "MULTI_LANE_SHADOW_OBSERVE_TRAIL_ATR_MULT", "0")
+    cost_exchange = (
+        environ.get("MULTI_LANE_SHADOW_OBSERVE_COST_EXCHANGE", "").strip() or exchange
+    )
+    if cost_exchange not in _SUPPORTED_COST_EXCHANGES:
+        raise ValueError(f"unsupported shadow-observe cost exchange {cost_exchange!r}")
     return [
         LaneSpec(
             lane_id=f"shadow_observe_{_slug(exchange)}_{_slug(symbol)}",
@@ -419,6 +415,7 @@ def build_shadow_observe_lane_specs(
             starting_equity=starting_equity,
             daily_loss_usd=daily_loss_usd,
             trail_atr_mult=trail_atr_mult,
+            execution_cost_exchange=cost_exchange,
             is_primary=False,
         )
         for symbol in (
@@ -487,6 +484,7 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
             "mode": spec.mode.value,
             "strategy_id": spec.strategy_id,
             "strategy_params": spec.strategy_params or {},
+            "execution_cost_exchange": spec.execution_cost_exchange,
         }
         for spec in specs
     ]

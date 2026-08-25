@@ -592,7 +592,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
                 (pullback, "no_meaningful_pullback_reclaim"),
                 (volume_ok, "volume_below_setup_floor"),
                 (body_ok, "reclaim_body_too_small"),
-                (edge_ok, "projected_net_below_threshold"),
+                (edge_ok, "payoff_hypothesis_below_threshold"),
             )
             if not ok
         ]
@@ -608,7 +608,8 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
                 "pullback_reclaim": pullback,
                 "volume_ratio": volume_ratio,
                 "body_bps": body_bps,
-                "projected_net_bps": projected,
+                "payoff_hypothesis_after_cost_bps": projected,
+                "payoff_hypothesis_basis": "stop_distance_x_reward_r_minus_cost_not_expected_ev",
                 "entry_mode": "live_quote_hold",
             },
             "thresholds": {
@@ -616,7 +617,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
                 "min_reclaim_body_bps": p.min_reclaim_body_bps,
                 "stop_atr_mult": p.stop_atr_mult,
                 "edge_hypothesis_r": p.edge_hypothesis_r,
-                "min_projected_net_bps": p.min_projected_net_bps,
+                "min_payoff_hypothesis_after_cost_bps": p.min_projected_net_bps,
             },
         }
 

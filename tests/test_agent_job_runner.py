@@ -118,6 +118,11 @@ def test_registered_strategy_job_backtests_local_parquet_data(tmp_path):
     assert result["accepted_parameters"] == {"breakout_bars": 5}
     assert result["ignored_parameters"] == ["note"]
     assert result["metrics"]["num_trades"] >= 0
+    assert result["backtest_report"]["schema"] == "vnedge.backtest_report.v1"
+    assert result["backtest_report"]["run"]["run_id"] == job["job_id"]
+    assert isinstance(result["backtest_report"]["equity_curve"], list)
+    assert isinstance(result["backtest_report"]["daily"], list)
+    assert isinstance(result["backtest_report"]["trades"], list)
     assert result["promotion_verdict"] == "NOT_EVALUATED_AGENT_JOB"
     assert result["can_trade"] is False
     assert result["can_promote"] is False

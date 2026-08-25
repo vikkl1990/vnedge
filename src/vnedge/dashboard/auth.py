@@ -57,6 +57,7 @@ PERM_PROMOTE = "promote"  # promote a strategy up the mode ladder
 PERM_FLIP_LIVE_GATE = "flip_live_gate"  # toggle a live_* mode / live gate
 PERM_KILL_SWITCH = "kill_switch"  # trip / reset the kill switch
 PERM_MANAGE_SETTINGS = "manage_settings"  # profile + encrypted connection lifecycle
+PERM_REQUEST_BACKTEST = "request_backtest"  # queue bounded research-only jobs
 
 PERMISSIONS: dict[str, frozenset[str]] = {
     "viewer": frozenset({PERM_VIEW}),
@@ -69,6 +70,7 @@ PERMISSIONS: dict[str, frozenset[str]] = {
             PERM_FLIP_LIVE_GATE,
             PERM_KILL_SWITCH,
             PERM_MANAGE_SETTINGS,
+            PERM_REQUEST_BACKTEST,
         }
     ),
 }

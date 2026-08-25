@@ -90,9 +90,11 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["candle_status"] == "ok"
     assert measurement["candle_age_ms"] == 4200.0
     assert measurement["bar_close_processing_ms"] == 120.0
+    assert measurement["bar_close_receipt_ms"] == 120.0
+    assert measurement["canonical_wait_ms"] is None
     assert measurement["decision_lag_ms"] == 4.5
     assert measurement["latency_samples"] == {
-        "bar_close": 20, "decision": 20, "required": 20
+        "bar_close": 20, "canonical_wait": 0, "decision": 20, "required": 20
     }
     assert measurement["arm_skips"] == 2
     assert measurement["last_signal_reason"] == "observe_only"

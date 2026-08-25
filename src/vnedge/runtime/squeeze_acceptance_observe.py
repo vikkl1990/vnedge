@@ -51,6 +51,8 @@ class SqueezeAcceptanceObserveRunner:
     _restore_payload: dict | None = field(default=None, init=False, repr=False)
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
+    _last_bid: float | None = field(default=None, init=False, repr=False)
+    _last_ask: float | None = field(default=None, init=False, repr=False)
 
     @property
     def intent_prefix(self) -> str:
@@ -161,7 +163,13 @@ class SqueezeAcceptanceObserveRunner:
                     self.acceptance.notify_flat(bar_index=index, net_won=net_won)
                     self.open_meta = None
 
-    def on_prepared_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
+    def on_closed_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
+        """Consume one causal closed-bar event.
+
+        This is the canonical engine method used by both live and recorded
+        replay. ``on_prepared_bar`` remains a compatibility delegate while
+        callers migrate; it contains no independent scanner logic.
+        """
         self._prepared_frame = df
         self.current_bar_index = index
         row = df.iloc[index]
@@ -180,6 +188,10 @@ class SqueezeAcceptanceObserveRunner:
                 self.open_meta = None
         self._update_arm_from_row(row, index)
 
+    def on_prepared_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
+        """Compatibility alias; all behavior lives in :meth:`on_closed_bar`."""
+        self.on_closed_bar(df, index, bar_ts)
+
     def on_quote(
         self,
         *,
@@ -192,6 +204,9 @@ class SqueezeAcceptanceObserveRunner:
         exchange_timestamped: bool = False,
         overflow_drops: int = 0,
     ) -> FireDecision | None:
+        if math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask:
+            self._last_bid = bid
+            self._last_ask = ask
         if self._restore_error is not None:
             return None
         self.acceptance.note_quote_overflow(overflow_drops)
@@ -469,10 +484,20 @@ class SqueezeAcceptanceObserveRunner:
         return self.open_meta is not None
 
     def stats(self) -> dict:
+        open_position = self._open_position_stats()
+        open_net_usd = (
+            float(open_position["unrealized_net_usd"]) if open_position is not None else 0.0
+        )
         return {
             "virtual_trades": self.outcomes,
+            # Compatibility: net_usd remains CLOSED/resolved PnL. Consumers
+            # that want current shadow equity must use total_net_usd.
             "net_usd": round(self.net_usd, 4),
             "virtual_net_usd": round(self.net_usd, 4),
+            "resolved_net_usd": round(self.net_usd, 4),
+            "open_unrealized_net_usd": round(open_net_usd, 4),
+            "total_net_usd": round(self.net_usd + open_net_usd, 4),
+            "open_position": open_position,
             "open_intents": int(self.has_open),
             "pending_shadow_intents": int(self.has_open),
             "candidates": self.candidates,
@@ -485,4 +510,40 @@ class SqueezeAcceptanceObserveRunner:
             "quotes_distinct": self.acceptance.quotes_distinct,
             "quote_contract_rejects": self.acceptance.quote_contract_rejects,
             "quote_overflow_drops": self.acceptance.quote_overflow_drops,
+        }
+
+    def _open_position_stats(self) -> dict | None:
+        """Mark the virtual position to the last executable quote.
+
+        Longs exit at bid and shorts at ask. The estimate includes the full
+        booked round-trip profile, so it cannot present a gross winner as net
+        profit. It is display-only and never feeds sizing or exits.
+        """
+        meta = self.open_meta
+        pos = self.exits.pos
+        if meta is None or pos is None or self._last_bid is None or self._last_ask is None:
+            return None
+        side = str(meta.get("side") or pos.side)
+        entry = float(meta.get("entry") or pos.entry)
+        mark = self._last_bid if side == "long" else self._last_ask
+        if not (math.isfinite(entry) and math.isfinite(mark) and entry > 0 and mark > 0):
+            return None
+        gross_bps = ((mark / entry - 1) if side == "long" else (1 - mark / entry)) * 10_000
+        held = max(0, self.current_bar_index - int(meta.get("entry_bar", self.current_bar_index)))
+        cost_bps = self.costs.round_trip_bps(held)
+        net_bps = gross_bps - cost_bps
+        notional = float(meta.get("notional_usd", self.notional_usd))
+        return {
+            "side": side,
+            "entry_price": round(entry, 10),
+            "mark_price": round(mark, 10),
+            "mark_basis": "executable_bid" if side == "long" else "executable_ask",
+            "bars_held": held,
+            "notional_usd": round(notional, 4),
+            "margin_usd": round(float(meta.get("margin_usd", self.margin_usd)), 4),
+            "unrealized_gross_bps": round(gross_bps, 4),
+            "estimated_round_trip_cost_bps": round(cost_bps, 4),
+            "unrealized_net_bps": round(net_bps, 4),
+            "unrealized_gross_usd": round(gross_bps * notional / 10_000, 4),
+            "unrealized_net_usd": round(net_bps * notional / 10_000, 4),
         }

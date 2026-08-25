@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from vnedge.dashboard.app import SnapshotProvider, create_app
 from vnedge.dashboard.auth import (
     PERM_KILL_SWITCH,
+    PERM_REQUEST_BACKTEST,
     PERM_VIEW,
     PERM_VIEW_AUDIT,
     DashboardUser,
@@ -66,6 +67,8 @@ def test_permission_map_per_role():
     assert has_permission("auditor", PERM_VIEW_AUDIT)
     assert not has_permission("auditor", PERM_KILL_SWITCH)  # auditor cannot control
     assert has_permission("operator", PERM_KILL_SWITCH)
+    assert has_permission("operator", PERM_REQUEST_BACKTEST)
+    assert not has_permission("viewer", PERM_REQUEST_BACKTEST)
     assert not has_permission(None, PERM_VIEW)  # unknown role → nothing
 
 

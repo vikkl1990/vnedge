@@ -14,11 +14,12 @@ import logging
 import math
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 
@@ -33,6 +34,7 @@ from vnedge.agent_gateway.jobs import (
 from vnedge.backtest.backtester import BacktestConfig, Trade, run_backtest
 from vnedge.backtest.fee_model import FeeModel
 from vnedge.backtest.metrics import BacktestMetrics, compute_metrics
+from vnedge.backtest.report import build_backtest_report
 from vnedge.backtest.slippage_model import SlippageModel
 from vnedge.data.parquet_store import ParquetStore
 from vnedge.research.ai_candidate_research import (
@@ -40,11 +42,13 @@ from vnedge.research.ai_candidate_research import (
     run_ai_candidate_research,
 )
 from vnedge.research.candidate_replay_executor import (
-    EXECUTOR_ID as CANDIDATE_REPLAY_EXECUTOR_ID,
     DEFAULT_EVENT_LEADLAG,
     DEFAULT_ORDERFLOW,
     CandidateReplayConfig,
     run_candidate_replay,
+)
+from vnedge.research.candidate_replay_executor import (
+    EXECUTOR_ID as CANDIDATE_REPLAY_EXECUTOR_ID,
 )
 from vnedge.strategy.ai_sandbox import AI_STRATEGY_ID_PREFIX
 from vnedge.strategy.strategy_registry import get_strategy_class
@@ -225,21 +229,41 @@ def _execute_registered_strategy_job(
                 **_base_result(job),
                 "accepted_parameters": params,
                 "ignored_parameters": ignored,
-                "bars": int(len(candles)),
+                "bars": len(candles),
                 "data_source": source,
             },
         )
 
+    report = build_backtest_report(
+        result,
+        run_id=str(job.get("job_id") or "unknown"),
+        strategy_id=strategy_id,
+        exchange=str(request["exchange"]),
+        data_source=source,
+        bars=len(candles),
+        parameters={
+            **params,
+            **{
+                key: value
+                for key, value in (request.get("parameters") or {}).items()
+                if key in CONFIG_PARAMETER_KEYS
+            },
+        },
+        generated_at=datetime.now(UTC).isoformat(),
+        evidence_class="EXPLORATORY_AGENT_JOB",
+        engine=RUNNER_VERSION,
+    )
     payload = {
         **_base_result(job),
         "execution": "registered_strategy_backtest",
         "data_source": source,
-        "bars": int(len(candles)),
+        "bars": len(candles),
         "window": _window_payload(candles),
         "accepted_parameters": params,
         "ignored_parameters": ignored,
         "metrics": _metrics_payload(metrics),
         "sample_trades": [_trade_payload(t) for t in result.trades[-20:]],
+        "backtest_report": report,
         "promotion_verdict": "NOT_EVALUATED_AGENT_JOB",
         "promotion_note": (
             "Agent jobs produce exploratory research evidence only. Promotion "

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
+
 import numpy as np
 import pytest
 
 from vnedge.runtime.scanner_session import (
     ScannerSession,
+    SessionConfig,
     SessionCosts,
     summarize,
 )
@@ -123,6 +125,54 @@ def test_scalper_offer_waives_the_closing_leg() -> None:
     costs = SessionCosts(taker_bps=5.9, free_close_within_bars=6)
     assert costs.round_trip_bps(3) == pytest.approx(5.9)
     assert costs.round_trip_bps(9) == pytest.approx(11.8)
+
+
+def test_pending_expiry_uses_the_session_timeframe() -> None:
+    from vnedge.execution.trigger_engine import ArmState, FireDecision
+
+    class _Arm:
+        name = "test"
+
+        def observe(self, ctx):
+            return ArmState(
+                episode_id=1,
+                box_high=101.0,
+                box_low=99.0,
+                compressed=True,
+                atr=ctx.atr,
+                vol_ma=ctx.vol_ma,
+                prev_close=ctx.prev_close,
+            )
+
+    class _Trigger:
+        def try_fire(self, *, bar_index, **kwargs):
+            return FireDecision(
+                side="long",
+                level=101.0,
+                box_edge=101.0,
+                entry=101.0,
+                stop=99.0,
+                risk=2.0,
+                episode_id=1,
+                chase_bps=0.0,
+                reason="test",
+                pending=True,
+                expires_bar=bar_index + 2,
+            )
+
+    pending: list[dict] = []
+    bars = _bars(np.full(5, 100.0))
+    session = ScannerSession(
+        symbol="TEST",
+        arm_source=_Arm(),
+        trigger=_Trigger(),  # type: ignore[arg-type]
+        costs=SessionCosts(bar_minutes=15.0),
+        config=SessionConfig(atr_period=1, volume_lookback=1, vwap_bars=1),
+        on_pending=pending.append,
+    )
+    session.step(bars, 2)
+
+    assert pending[0]["expires_ts_ms"] == bars[2][0] + 2 * 900_000
 
 
 def test_session_runs_a_full_trade_and_reports() -> None:

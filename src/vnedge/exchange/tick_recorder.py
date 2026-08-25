@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import heapq
 import logging
 import math
 import os
@@ -45,6 +46,10 @@ FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
 _SEEN_TRADE_IDS = 50_000
 _SKIP_LOG_SECONDS = 60.0
+# Public trade websocket batches can cross in flight. Hold the newest quarter
+# second so a slightly late predecessor is ordered before the canonical candle
+# builder sees it. This is bounded event-time ordering, not a data rewrite.
+_TRADE_REORDER_MS = 250
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
 
@@ -430,6 +435,18 @@ class TickRecorder:
         self._next_skip_log: dict[str, float] = {
             symbol: 0.0 for symbol in symbols
         }
+        self._trade_bufs: dict[str, _Buffer] = {
+            symbol: _Buffer(root, exchange_id, symbol, "trades")
+            for symbol in symbols
+        }
+        self._trade_reorder: dict[
+            str, list[tuple[int, int, dict[str, Any], str | None]]
+        ] = {symbol: [] for symbol in symbols}
+        self._pending_trade_ids: dict[str, set[str]] = {
+            symbol: set() for symbol in symbols
+        }
+        self._max_seen_trade_ts_ms: dict[str, int] = {}
+        self._trade_arrival_seq = 0
         if self.candle_sink is not None:
             self._last_trade_ts_ms.update(
                 self.candle_sink.restored_last_trade_ts_ms
@@ -484,16 +501,64 @@ class TickRecorder:
         candidates, malformed = _normalize_trade_batch(trades)
         late = 0
         duplicate = 0
-        candle_rejected = 0
         last_timestamp = self._last_trade_ts_ms.get(symbol)
         seen = self._seen_trade_ids[symbol]
+        pending_ids = self._pending_trade_ids[symbol]
+        pending = self._trade_reorder[symbol]
         for row, key in candidates:
             timestamp = int(row["ts_ms"])
             if last_timestamp is not None and timestamp < last_timestamp:
                 late += 1
                 continue
-            if key is not None and key in seen:
+            if key is not None and (key in seen or key in pending_ids):
                 duplicate += 1
+                continue
+            self._trade_arrival_seq += 1
+            heapq.heappush(
+                pending,
+                (timestamp, self._trade_arrival_seq, row, key),
+            )
+            if key is not None:
+                pending_ids.add(key)
+            self._max_seen_trade_ts_ms[symbol] = max(
+                timestamp,
+                self._max_seen_trade_ts_ms.get(symbol, timestamp),
+            )
+        watermark = self._max_seen_trade_ts_ms.get(symbol)
+        drained_late, candle_rejected = self._drain_trade_reorder(
+            symbol,
+            buf,
+            through_ms=(watermark - _TRADE_REORDER_MS if watermark is not None else None),
+        )
+        late += drained_late
+        self._report_skipped_trades(
+            symbol,
+            malformed=malformed,
+            late=late,
+            duplicate=duplicate,
+            candle_rejected=candle_rejected,
+        )
+
+    def _drain_trade_reorder(
+        self,
+        symbol: str,
+        buf: _Buffer,
+        *,
+        through_ms: int | None = None,
+        force: bool = False,
+    ) -> tuple[int, int]:
+        """Publish event-time ordered trades through a bounded watermark."""
+        pending = self._trade_reorder[symbol]
+        pending_ids = self._pending_trade_ids[symbol]
+        late = 0
+        candle_rejected = 0
+        last_timestamp = self._last_trade_ts_ms.get(symbol)
+        while pending and (force or (through_ms is not None and pending[0][0] <= through_ms)):
+            timestamp, _, row, key = heapq.heappop(pending)
+            if key is not None:
+                pending_ids.discard(key)
+            if last_timestamp is not None and timestamp < last_timestamp:
+                late += 1
                 continue
             if self.candle_sink is not None:
                 try:
@@ -521,16 +586,10 @@ class TickRecorder:
             last_timestamp = timestamp
         if last_timestamp is not None:
             self._last_trade_ts_ms[symbol] = last_timestamp
-        self._report_skipped_trades(
-            symbol,
-            malformed=malformed,
-            late=late,
-            duplicate=duplicate,
-            candle_rejected=candle_rejected,
-        )
+        return late, candle_rejected
 
     async def _watch_trades(self, symbol: str, clock) -> None:
-        buf = _Buffer(self.root, self.exchange_id, symbol, "trades")
+        buf = self._trade_bufs[symbol]
         while True:
             try:
                 trades = await self._ex.watch_trades(symbol)
@@ -539,16 +598,44 @@ class TickRecorder:
                 if buf.should_flush(now):
                     buf.flush(now)
             except asyncio.CancelledError:
+                late, candle_rejected = self._drain_trade_reorder(
+                    symbol, buf, force=True
+                )
+                self._report_skipped_trades(
+                    symbol,
+                    malformed=0,
+                    late=late,
+                    duplicate=0,
+                    candle_rejected=candle_rejected,
+                )
                 buf.flush(clock())
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s trades error: %s", symbol, exc)
                 await asyncio.sleep(_BACKOFF)
 
-    async def _advance_candles(self) -> None:
-        assert self.candle_sink is not None
+    async def _maintain_trade_streams(self, clock) -> None:
+        """Flush quiet streams and close candles behind the reorder watermark."""
         while True:
-            self.candle_sink.advance_time(datetime.now(UTC))
+            now = datetime.now(UTC)
+            through_ms = int(now.timestamp() * 1000) - _TRADE_REORDER_MS
+            for symbol, buf in self._trade_bufs.items():
+                late, candle_rejected = self._drain_trade_reorder(
+                    symbol, buf, through_ms=through_ms
+                )
+                self._report_skipped_trades(
+                    symbol,
+                    malformed=0,
+                    late=late,
+                    duplicate=0,
+                    candle_rejected=candle_rejected,
+                )
+                if buf.should_flush(clock()):
+                    buf.flush(clock())
+            if self.candle_sink is not None:
+                self.candle_sink.advance_time(
+                    now - timedelta(milliseconds=_TRADE_REORDER_MS)
+                )
             await asyncio.sleep(1.0)
 
     async def _watch_book(self, symbol: str, clock) -> None:
@@ -595,8 +682,8 @@ class TickRecorder:
                     self._watch_trades if stream == "trades" else self._watch_book
                 )
                 tasks.append(asyncio.create_task(watcher(symbol, clock)))
-        if self.candle_sink is not None:
-            tasks.append(asyncio.create_task(self._advance_candles()))
+        if not self.books_only:
+            tasks.append(asyncio.create_task(self._maintain_trade_streams(clock)))
         if self.lake_health is not None:
             tasks.append(asyncio.create_task(self.lake_health.run()))
         logger.info("tick recorder: %s %s -> %s", self.exchange_id, self.symbols, self.root)

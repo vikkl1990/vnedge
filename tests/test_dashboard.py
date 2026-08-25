@@ -80,6 +80,106 @@ def test_scorecard_endpoint_auth_gated_and_shaped(client):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_backtest_lab_is_auth_gated_and_reads_canonical_report(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report = {
+        "schema": "vnedge.backtest_report.v1",
+        "run": {
+            "run_id": "run_20260825",
+            "status": "COMPLETE",
+            "generated_at": "2026-08-25T00:00:00+00:00",
+            "strategy_id": "trend_continuation_v1",
+            "exchange": "binanceusdm",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1h",
+        },
+        "overview": {"net_profit_usd": 12.5, "num_trades": 42},
+        "equity_curve": [],
+        "daily": [],
+        "monthly": [],
+        "trades": [],
+        "warnings": [],
+        "governance": {"can_trade": False, "can_promote": False},
+    }
+    (reports / "run_20260825.json").write_text(json.dumps(report))
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    app = create_app(
+        provider,
+        token="t3st-token",
+        agent_jobs_dir=tmp_path / "jobs",
+        backtest_runs_path=reports,
+    )
+    c = TestClient(app)
+
+    assert c.get("/backtest-lab").status_code == 401
+    response = c.get(
+        "/backtest-lab?run_id=run_20260825",
+        headers={"Authorization": "Bearer t3st-token"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_run_id"] == "run_20260825"
+    assert payload["selected"]["overview"]["num_trades"] == 42
+    assert payload["read_only"] is True
+    assert payload["can_trade"] is False and payload["can_promote"] is False
+
+    assert c.get(
+        "/backtest-lab?run_id=../../secret",
+        headers={"Authorization": "Bearer t3st-token"},
+    ).status_code == 400
+
+
+def test_backtest_lab_queues_only_bounded_registered_research_jobs(tmp_path):
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    jobs = tmp_path / "jobs"
+    users = TokenStore(
+        [
+            DashboardUser(name="operator", token="op-token", role="operator"),
+            DashboardUser(name="viewer", token="view-token", role="viewer"),
+        ]
+    )
+    c = TestClient(create_app(provider, token_store=users, agent_jobs_dir=jobs))
+    request = {
+        "strategy_id": "trend_continuation_v1",
+        "exchange": "binanceusdm",
+        "symbol": "BTC/USDT:USDT",
+        "timeframe": "1h",
+        "initial_capital_usd": 1_000,
+        "commission_bps": 5,
+        "slippage_bps": 1,
+        "strict_mode": True,
+        "live_orders_enabled": False,
+        "parameters": {"max_holding_bars": 48},
+    }
+
+    assert c.post(
+        "/backtest-lab/runs",
+        json=request,
+        headers={"Authorization": "Bearer view-token"},
+    ).status_code == 403
+    response = c.post(
+        "/backtest-lab/runs",
+        json=request,
+        headers={"Authorization": "Bearer op-token"},
+    )
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "PENDING_RESEARCH_ONLY"
+    assert payload["created_by"] == "dashboard:operator"
+    assert payload["can_trade"] is False
+    assert payload["live_orders_enabled"] is False
+
+    invalid = {**request, "strategy_id": "unregistered_curve_fit_v99"}
+    assert c.post(
+        "/backtest-lab/runs",
+        json=invalid,
+        headers={"Authorization": "Bearer op-token"},
+    ).status_code == 422
+
+
 def test_scanner_evidence_endpoint_is_read_only_and_auth_gated(client):
     assert client.get("/scanner-evidence").status_code == 401
     response = client.get("/scanner-evidence?token=t3st-token")

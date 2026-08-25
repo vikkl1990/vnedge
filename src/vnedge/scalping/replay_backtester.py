@@ -31,6 +31,7 @@ dies here is dead.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from typing import Protocol
 
 import pandas as pd
 
+from vnedge.data.tape import clean_book, clean_trades
 from vnedge.scalping.features import IncrementalFeatureEngine, ScalperFeatures
 from vnedge.scalping.microstructure import TopOfBook, TradeTick
 from vnedge.scalping.parameter_registry import ExitPolicy
@@ -46,6 +48,8 @@ from vnedge.scalping.queue_position import (
     QueuePositionModel,
     QueueSide,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -165,6 +169,9 @@ def load_tick_events(
     trade_df = _load_stream_frame(root / f"symbol={safe}" / "stream=trades", day)
     events: list[tuple[int, str, object]] = []
     if book_df is not None:
+        book_df, clean = clean_book(book_df)
+        if clean.dropped:
+            logger.warning("tick replay dropped %d/%d invalid book rows", clean.dropped, clean.rows_in)
         for r in book_df.itertuples():
             try:
                 top = TopOfBook(
@@ -176,6 +183,11 @@ def load_tick_events(
                 continue  # crossed/invalid book snapshot — skip
             events.append((int(r.ts_ms), "book", top))
     if trade_df is not None:
+        trade_df, clean = clean_trades(trade_df)
+        if clean.dropped:
+            logger.warning(
+                "tick replay dropped %d/%d invalid trade rows", clean.dropped, clean.rows_in
+            )
         for r in trade_df.itertuples():
             try:
                 tick = TradeTick(

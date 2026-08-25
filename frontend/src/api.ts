@@ -403,8 +403,10 @@ export interface CorrectionLane {
   candle_status: string;
   candle_age_ms: number | null;
   bar_close_processing_ms: number | null;
+  bar_close_receipt_ms: number | null;
+  canonical_wait_ms: number | null;
   decision_lag_ms: number | null;
-  latency_samples: { bar_close: number; decision: number; required: number };
+  latency_samples: { bar_close: number; canonical_wait: number; decision: number; required: number };
   latency_recovery: Record<string, LatencyRecoveryState>;
   arm_skips: number;
   last_signal_age_seconds: number | null;
@@ -726,6 +728,192 @@ export interface DataProductsPayload {
     source_as_of: string | null;
   }>;
   read_only: true;
+}
+
+export interface BacktestRunSummary {
+  run_id: string;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  strategy_id: string | null;
+  exchange: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  net_profit_usd: number | null;
+  num_trades: number | null;
+  has_report: boolean;
+  blocked_reason?: string | null;
+  error?: string | null;
+  execution?: string | null;
+}
+
+export interface BacktestCurvePoint {
+  ts: string;
+  equity_usd: number;
+  drawdown_pct: number;
+}
+
+export interface BacktestTrade {
+  side: string;
+  quantity: number;
+  entry_ts: string;
+  entry_price: number;
+  exit_ts: string;
+  exit_price: number;
+  exit_reason: string;
+  entry_reason: string;
+  gross_pnl_usd: number;
+  fees_usd: number;
+  funding_usd: number;
+  net_pnl_usd: number;
+  net_bps_on_entry_notional: number | null;
+  return_on_initial_equity_pct: number;
+  mae_usd: number;
+  mfe_usd: number;
+  hold_seconds: number;
+}
+
+export interface BacktestDay {
+  date: string;
+  net_pnl_usd: number;
+  trade_count: number;
+  wins: number;
+  losses: number;
+  equity_usd: number;
+  equity_change_usd: number;
+  drawdown_pct: number;
+}
+
+export interface BacktestMonth {
+  month: string;
+  net_pnl_usd: number;
+  traded_days: number;
+  trade_count: number;
+  win_days: number;
+  loss_days: number;
+  best_day_usd: number;
+  worst_day_usd: number;
+  max_drawdown_pct: number;
+  close_equity_usd: number;
+}
+
+export interface BacktestOverview {
+  num_trades: number;
+  skipped_by_sizing: number;
+  net_profit_usd: number;
+  gross_profit_usd: number;
+  total_cost_usd: number;
+  return_pct: number;
+  annualized_return_pct: number | null;
+  max_drawdown_pct: number;
+  sharpe: number;
+  sortino: number;
+  calmar: number | null;
+  profit_factor: number | null;
+  win_rate_pct: number;
+  avg_win_usd: number;
+  avg_loss_usd: number;
+  payoff_ratio: number;
+  total_fees_usd: number;
+  total_funding_usd: number;
+  exit_reasons: Record<string, number>;
+  avg_mae_usd: number;
+  avg_mfe_usd: number;
+  traded_days: number;
+  win_days: number;
+  loss_days: number;
+  avg_day_pnl_usd: number;
+  median_day_pnl_usd: number;
+  best_day_usd: number;
+  worst_day_usd: number;
+  best_trade_usd: number;
+  worst_trade_usd: number;
+  max_win_streak: number;
+  max_loss_streak: number;
+  longest_underwater_days: number;
+  avg_hold_hours: number;
+  best_trade_profit_share_pct: number | null;
+}
+
+export interface BacktestReport {
+  schema: "vnedge.backtest_report.v1";
+  run: {
+    run_id: string;
+    status: string;
+    generated_at: string;
+    engine: string;
+    evidence_class: string;
+    strategy_id: string;
+    exchange: string;
+    symbol: string;
+    timeframe: string;
+    data_source: string;
+    bars: number;
+    window: { start: string | null; end: string | null; duration_days: number };
+    parameters: Record<string, unknown>;
+    initial_equity_usd: number;
+    costs: {
+      maker_bps_per_leg: number;
+      taker_bps_per_leg: number;
+      slippage_bps_per_leg: number;
+      modeled_taker_round_trip_bps: number;
+      funding_included: boolean;
+    };
+    exit_contract: {
+      max_holding_bars: number;
+      active_exit: boolean;
+      partial_take_profit: boolean;
+      trail_atr_mult: number;
+      fee_aware_breakeven_bps: number;
+    };
+  };
+  overview: BacktestOverview;
+  equity_curve: BacktestCurvePoint[];
+  daily: BacktestDay[];
+  monthly: BacktestMonth[];
+  trades: BacktestTrade[];
+  warnings: string[];
+  governance: {
+    can_trade: false;
+    can_promote: false;
+    read_only: true;
+    promotion_requires_separate_untouched_judgment: boolean;
+  };
+}
+
+export interface BacktestLabPayload {
+  lab_id: string;
+  selected_run_id: string | null;
+  selected: BacktestReport | null;
+  selected_summary: BacktestRunSummary | null;
+  runs: BacktestRunSummary[];
+  catalog: {
+    strategies: string[];
+    exchanges: string[];
+    symbols: string[];
+    timeframes: string[];
+  };
+  submission: {
+    mode: "AGENT_GATEWAY_JOB";
+    inline_execution: false;
+    reason: string;
+    worker_command: string;
+  };
+  read_only: true;
+  can_trade: false;
+  can_promote: false;
+}
+
+export interface BacktestJobAccepted {
+  job_id: string;
+  kind: "backtest_request";
+  status: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  can_trade: false;
+  can_promote: false;
+  live_orders_enabled: false;
 }
 
 export interface ResearchScorecard {

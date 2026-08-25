@@ -25,7 +25,8 @@ def test_fleet_aggregate_splits_paper_shadow_and_excludes_errors():
          "realized_pnl": -17.0, "unrealized_pnl": 0.0, "fees_usd": 2.0, "risk_status": "ok"},
         {"lane_id": "c", "mode": "shadow (live data)", "equity": 500.0,
          "realized_pnl": 0.0, "unrealized_pnl": 0.0, "fees_usd": 0.0, "risk_status": "ok",
-         "shadow_perf": {"net_usd": -131.0, "virtual_trades": 103}},
+         "shadow_perf": {"net_usd": -131.0, "virtual_trades": 103,
+                         "open_unrealized_net_usd": -5.0, "open_intents": 1}},
         {"lane_id": "err", "mode": "shadow (live data)", "equity": 0.0,
          "realized_pnl": 0.0, "unrealized_pnl": 0.0, "risk_status": "lane_error"},
     ]
@@ -36,6 +37,9 @@ def test_fleet_aggregate_splits_paper_shadow_and_excludes_errors():
     assert f["realized_pnl"] == -7.0
     assert f["paper_lanes"] == 2 and f["shadow_lanes"] == 1
     assert f["shadow_virtual_net_usd"] == -131.0 and f["shadow_virtual_trades"] == 103
+    assert f["shadow_open_unrealized_net_usd"] == -5.0
+    assert f["shadow_total_net_usd"] == -136.0
+    assert f["shadow_open_positions"] == 1
     assert f["profitable_lanes"] == 1 and f["losing_lanes"] == 1
     assert f["return_pct"] < 0  # honest: the fleet is net negative
     # paper book excludes the static shadow account (500) — undiluted return

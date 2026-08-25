@@ -6,6 +6,8 @@ import pytest
 from vnedge.runtime.latency_thresholds import decision_compute_limits
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
+    BAR_CLOSE_RECEIPT_MS,
+    CANONICAL_WAIT_MS,
     CLOCK_SKEW_MS,
     INGEST_LAG_MS,
     LatencyTracker,
@@ -142,6 +144,25 @@ def test_restore_uses_current_bound_and_rejects_partial_corruption():
     assert restarted.stats("x")["n"] == 3
 
 
+def test_restore_rebaselines_pre_receipt_close_history() -> None:
+    tracker = LatencyTracker()
+    restored = tracker.restore_state(
+        {
+            "version": 1,
+            "series": {
+                "bar_close_processing_ms": [8_000.0],
+                "feed_lag_ms": [8_000.0],
+                "decision_lag_ms": [12.0],
+            },
+        }
+    )
+
+    assert restored == 1
+    assert tracker.stats(BAR_CLOSE_PROCESSING_MS) is None
+    assert tracker.stats("feed_lag_ms") is None
+    assert tracker.stats("decision_lag_ms")["last"] == 12.0
+
+
 def test_event_latency_separates_ingest_from_future_clock_skew():
     tracker = LatencyTracker()
     base = datetime(2026, 8, 16, 12, tzinfo=UTC)
@@ -162,7 +183,12 @@ def test_closed_bar_metric_keeps_legacy_alias_exactly_equal():
     result = tracker.record_bar_close(close, close + timedelta(milliseconds=320))
 
     assert result[BAR_CLOSE_PROCESSING_MS] == 320.0
+    assert result[BAR_CLOSE_RECEIPT_MS] == 320.0
+    assert tracker.stats(BAR_CLOSE_RECEIPT_MS) == tracker.stats("feed_lag_ms")
     assert tracker.stats(BAR_CLOSE_PROCESSING_MS) == tracker.stats("feed_lag_ms")
+
+    tracker.record_canonical_wait(48.0)
+    assert tracker.stats(CANONICAL_WAIT_MS)["last"] == 48.0
 
 
 def test_latency_boundaries_reject_naive_datetimes():

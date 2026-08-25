@@ -15,7 +15,7 @@ def test_default_requirements_cover_active_scanner_warmups() -> None:
         "5m": 2066,
         "15m": 2018,
         "1h": 24,
-        "4h": 6,
+        "4h": 12,
     }
 
 
@@ -37,7 +37,7 @@ def test_roster_requirements_follow_active_strategy_dependencies(tmp_path) -> No
         ),
         encoding="utf-8",
     )
-    assert requirements_from_roster(roster) == {"1h": 24, "4h": 6, "15m": 65}
+    assert requirements_from_roster(roster) == {"1h": 24, "4h": 12, "15m": 65}
 
 
 def _candles(symbol: str, timeframe: str, count: int, close: datetime) -> list[Candle]:
@@ -105,6 +105,9 @@ def test_scanner_prerequisites_fail_closed_on_stale_or_inexact_tail(tmp_path):
 
     assert report.ready is False
     assert report.rows[0].reason == "stale_tail"
+    assert report.rows[0].issues == ("stale_tail",)
+    assert report.rows[0].lag_seconds == 300
+    assert report.rows[0].missing_bars == 0
 
 
 def test_scanner_prerequisites_fail_closed_on_non_exact_volume(tmp_path):
@@ -140,3 +143,28 @@ def test_scanner_prerequisites_fail_closed_on_non_exact_volume(tmp_path):
 
     assert report.ready is False
     assert report.rows[0].reason == "non_exact_volume"
+    assert report.rows[0].invalid_exact_volume_bars == 1
+
+
+def test_scanner_prerequisites_report_exact_gap_diagnostics(tmp_path):
+    now = datetime(2026, 8, 22, 12, 3, tzinfo=UTC)
+    candles = _candles(
+        "BTCUSDT", "5m", 4, datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+    )
+    # Remove 11:50 while retaining a current 12:00 close.
+    del candles[-2]
+    CandleParquetStore(tmp_path, exchange="binanceusdm").upsert(candles)
+
+    report = scanner_prerequisites(
+        tmp_path,
+        exchange="binanceusdm",
+        symbols=["BTC/USDT:USDT"],
+        requirements={"5m": 3},
+        now=now,
+    )
+
+    row = report.rows[0]
+    assert report.ready is False
+    assert row.reason == "non_contiguous"
+    assert row.gap_count == 1
+    assert row.first_gap_open == "2026-08-22T11:50:00+00:00"
