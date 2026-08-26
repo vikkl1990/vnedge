@@ -660,7 +660,7 @@ def _build_single_strategy(
     if strategy_id == StructureBos1H.strategy_id:
         if params:
             raise ValueError("structure_bos_1h parameters are frozen; configure a new strategy ID")
-        return StructureBos1H(seed_funding, allow_price_only_live=True)
+        return StructureBos1H(seed_funding, allow_price_only_live=False)
     if strategy_id == StructureBos15mTriggerV2.strategy_id:
         if params:
             raise ValueError(
@@ -1359,6 +1359,29 @@ async def build_lane(
         execution_cost_exchange_id=spec.execution_cost_exchange,
     )
     strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
+    context_timeframes = tuple(
+        str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
+    )
+    context_binder = getattr(strategy, "bind_canonical_context", None)
+    if context_timeframes and callable(context_binder):
+        for context_timeframe in context_timeframes:
+            try:
+                context_history = await asyncio.to_thread(
+                    _canonical_candle_frame,
+                    canonical_store,
+                    spec.symbol,
+                    context_timeframe,
+                    since_ms=since,
+                    until_ms=until,
+                )
+            except (OSError, ValueError):
+                logger.exception(
+                    "lane %s canonical %s context unavailable; scanner remains fail-closed",
+                    spec.lane_id,
+                    context_timeframe,
+                )
+                context_history = pd.DataFrame()
+            context_binder(context_timeframe, context_history)
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")

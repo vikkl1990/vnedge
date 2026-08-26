@@ -184,6 +184,24 @@ def test_closed_candle_api_fails_closed_on_quality_and_forming_bar() -> None:
     assert engine.on_closed_candle("BTCUSDT", forming, bars_4h) == []
 
 
+def test_runtime_canonical_htf_binding_advances_and_fails_closed() -> None:
+    frame = _htf_frame()
+    strategy = StructureBos1H()
+    strategy.bind_canonical_context("4h", frame.iloc[:-1])
+    assert len(strategy.htf_candles) == len(frame) - 1
+
+    latest = _bars(frame)[-1]
+    strategy.ingest_canonical_context(latest)
+    strategy.ingest_canonical_context(latest)
+    assert len(strategy.htf_candles) == len(frame)
+    assert strategy.htf_candles.iloc[-1]["timestamp"] == pd.Timestamp(latest.open_time)
+
+    strategy.set_canonical_context_health("4h", False)
+    prepared = strategy.prepare(_canonical_frame())
+    assert prepared.iloc[-1]["mtf_alignment"] == "blocked"
+    assert prepared.iloc[-1]["mtf_reason"] == "canonical_htf_unavailable"
+
+
 def test_closed_candle_api_applies_dual_avwap_conflict_only() -> None:
     engine = StructureBos1H()
     bars = _bars(_canonical_frame())

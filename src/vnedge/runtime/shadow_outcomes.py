@@ -43,6 +43,7 @@ nothing, and trade nothing.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -93,6 +94,10 @@ class _PendingIntent:
     mfe_price: float = 0.0  # max-favourable price since entry — observation only
     filled: bool = False  # every virtual entry fills after the decision bar
     bars_waiting: int = 0  # maker-route only: bars the resting limit has waited
+    funding_usd: float = 0.0
+    funding_events: int = 0
+    funding_complete: bool = True
+    last_funding_event_ts: pd.Timestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,9 @@ class VirtualOutcome:
     exit_price: float
     fees_usd: float
     resolved_bar_ts: str
+    funding_usd: float = 0.0
+    funding_events: int = 0
+    funding_complete: bool = True
     take_profit_levels: tuple[float, ...] = ()
     tp_reached: int = 0  # how many ladder levels the trade's excursion crossed
     route: str = "taker"  # "maker" if the entry filled as a resting limit
@@ -167,6 +175,8 @@ class ShadowOutcomeTracker:
         self._net_taker_usd = 0.0  # same trades, priced all-taker (transparency)
         self._gross_win_usd = 0.0
         self._gross_loss_usd = 0.0
+        self._funding_usd = 0.0
+        self._funding_complete = True
         self._unfilled = 0  # maker limits that never got a touch (missed trades)
         self._semantic_gap = False
         self._recent_outcomes: list[dict] = []
@@ -187,12 +197,19 @@ class ShadowOutcomeTracker:
                 if key is None or key in self._resolved_keys:
                     continue
                 self._resolved_keys.add(key)
+                # Outcomes written before funding accrual was implemented do
+                # not constitute cost-complete evidence.  Do not silently
+                # reinterpret an absent field as a verified zero charge.
+                self._funding_complete = self._funding_complete and bool(
+                    payload.get("funding_complete", False)
+                )
                 self._remember_outcome(payload)
                 self._accumulate(
                     str(payload.get("resolution", "")),
                     float(payload.get("virtual_net_usd", 0.0)),
                     float(payload.get("virtual_net_taker_usd",
                                       payload.get("virtual_net_usd", 0.0))),
+                    float(payload.get("funding_usd", 0.0)),
                 )
             elif kind == "shadow_maker_unfilled":
                 key = payload.get("intent_key")
@@ -301,6 +318,7 @@ class ShadowOutcomeTracker:
             # Taker shadow fills use the first post-decision bar's open, which
             # is the same convention as PaperRunner and the offline scanner
             # replay. The decision-time quote remains only a sizing reference.
+            filled_before_bar = pending.filled
             if not self.maker_route and not pending.filled:
                 pending.entry_price = open_price
                 pending.notional_usd = pending.quantity * open_price
@@ -321,6 +339,8 @@ class ShadowOutcomeTracker:
                         self._cancel_unfilled(pending, bar_ts)
                     continue
                 pending.filled = True  # touched -> fills this bar as the fill bar
+            if filled_before_bar and pending.filled:
+                self._accrue_funding(pending, bar_ts, bar)
             pending.bars_held += 1  # fill bar counts as 0, like run_backtest
             # Track max-favourable excursion for the observation-only ladder.
             if pending.side == "long":
@@ -348,6 +368,50 @@ class ShadowOutcomeTracker:
                 continue
             outcomes.append(self._close(pending, resolution, exit_price, bar_ts))
         return outcomes
+
+    @staticmethod
+    def _is_funding_stamp(bar_ts: pd.Timestamp) -> bool:
+        stamp = pd.Timestamp(bar_ts)
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize("UTC")
+        else:
+            stamp = stamp.tz_convert("UTC")
+        return (
+            stamp.hour % 8 == 0
+            and stamp.minute == 0
+            and stamp.second == 0
+            and stamp.microsecond == 0
+        )
+
+    def _accrue_funding(
+        self,
+        pending: _PendingIntent,
+        bar_ts: pd.Timestamp,
+        bar: pd.Series,
+    ) -> None:
+        """Book the settled funding print at a UTC 00/08/16 boundary.
+
+        A position filled on the boundary does not retroactively pay that
+        stamp. Existing positions do. Positive rates charge longs and credit
+        shorts; negative rates do the inverse. Missing settlement data is
+        operator-visible and prevents the outcome from claiming cost-complete
+        parity instead of silently assuming zero.
+        """
+        stamp = pd.Timestamp(bar_ts)
+        if not self._is_funding_stamp(stamp) or pending.last_funding_event_ts == stamp:
+            return
+        pending.last_funding_event_ts = stamp
+        pending.funding_events += 1
+        raw = bar.get("funding_rate")
+        try:
+            rate = float(raw)
+        except (TypeError, ValueError):
+            rate = math.nan
+        if not math.isfinite(rate):
+            pending.funding_complete = False
+            return
+        direction = 1.0 if pending.side == "long" else -1.0
+        pending.funding_usd += direction * rate * pending.notional_usd
 
     def replay(self, candles: pd.DataFrame) -> list[VirtualOutcome]:
         """Resolve restored pending intents against already-seen candles —
@@ -422,7 +486,7 @@ class ShadowOutcomeTracker:
                 include_safety=False,
             )
             fees = pending.notional_usd * realized_bps / 10_000.0
-        net = gross - fees
+        net = gross - fees - pending.funding_usd
         # The all-taker equivalent on the SAME trade — the conservative figure
         # stays visible next to the maker number, never replaced by it.
         fees_taker = self.fill_model.fee_usd(pending.notional_usd) + exit_fee
@@ -432,7 +496,7 @@ class ShadowOutcomeTracker:
                 maker_exit=False,
                 include_safety=False,
             ) / 10_000.0
-        net_taker = gross - fees_taker
+        net_taker = gross - fees_taker - pending.funding_usd
         route = "maker" if self.maker_route else "taker"
         tp_reached = _tp_reached(pending.side, pending.mfe_price, pending.take_profit_levels)
         outcome = VirtualOutcome(
@@ -445,6 +509,9 @@ class ShadowOutcomeTracker:
             exit_price=round(exit_price, 8),
             fees_usd=round(fees, 6),
             resolved_bar_ts=bar_ts.isoformat(),
+            funding_usd=round(pending.funding_usd, 6),
+            funding_events=pending.funding_events,
+            funding_complete=pending.funding_complete,
             take_profit_levels=pending.take_profit_levels,
             tp_reached=tp_reached,
             route=route,
@@ -453,7 +520,8 @@ class ShadowOutcomeTracker:
         )
         del self._pending[pending.intent_key]
         self._resolved_keys.add(pending.intent_key)
-        self._accumulate(resolution, net, net_taker)
+        self._funding_complete = self._funding_complete and pending.funding_complete
+        self._accumulate(resolution, net, net_taker, pending.funding_usd)
         self.journal.append("shadow_outcome", {
             "intent_key": outcome.intent_key,
             "resolution": outcome.resolution,
@@ -463,6 +531,9 @@ class ShadowOutcomeTracker:
             "entry_price": outcome.entry_price,
             "exit_price": outcome.exit_price,
             "fees_usd": outcome.fees_usd,
+            "funding_usd": outcome.funding_usd,
+            "funding_events": outcome.funding_events,
+            "funding_complete": outcome.funding_complete,
             "route": outcome.route,
             "fees_taker_usd": outcome.fees_taker_usd,
             "virtual_net_taker_usd": outcome.virtual_net_taker_usd,
@@ -482,6 +553,9 @@ class ShadowOutcomeTracker:
                 "entry_price": outcome.entry_price,
                 "exit_price": outcome.exit_price,
                 "fees_usd": outcome.fees_usd,
+                "funding_usd": outcome.funding_usd,
+                "funding_events": outcome.funding_events,
+                "funding_complete": outcome.funding_complete,
                 "bar_ts": outcome.resolved_bar_ts,
             }
         )
@@ -512,10 +586,17 @@ class ShadowOutcomeTracker:
             pending.side, pending.intent_key, pending.bars_waiting,
         )
 
-    def _accumulate(self, resolution: str, net: float, net_taker: float | None = None) -> None:
+    def _accumulate(
+        self,
+        resolution: str,
+        net: float,
+        net_taker: float | None = None,
+        funding_usd: float = 0.0,
+    ) -> None:
         self._trades += 1
         self._net_usd += net
         self._net_taker_usd += net if net_taker is None else net_taker
+        self._funding_usd += funding_usd
         if net > 0:
             self._wins += 1
             self._gross_win_usd += net
@@ -535,7 +616,9 @@ class ShadowOutcomeTracker:
         else:
             pf = None  # no losing virtual trades yet — PF undefined, not infinite
         status = (
-            "EXIT_SEMANTIC_GAP"
+            "FUNDING_INCOMPLETE"
+            if not self._funding_complete
+            else "EXIT_SEMANTIC_GAP"
             if self._semantic_gap
             else "SHADOW_PROBATION"
             if self._trades > 0 and self._net_usd < 0
@@ -546,6 +629,8 @@ class ShadowOutcomeTracker:
             "wins": self._wins,
             "losses": self._trades - self._wins,
             "net_usd": round(self._net_usd, 4),
+            "funding_usd": round(self._funding_usd, 4),
+            "funding_complete": self._funding_complete,
             "profit_factor": pf,
             "open_intents": len(self._pending),
             "pending_shadow_intents": len(self._pending),
@@ -562,6 +647,9 @@ class ShadowOutcomeTracker:
                     ),
                     "decision_bar_ts": pending.decision_bar_ts.isoformat(),
                     "signal_reason": pending.signal_reason,
+                    "funding_usd": round(pending.funding_usd, 6),
+                    "funding_events": pending.funding_events,
+                    "funding_complete": pending.funding_complete,
                 }
                 for pending in self._pending.values()
             ],

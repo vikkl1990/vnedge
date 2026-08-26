@@ -47,6 +47,27 @@ def bar(i: int, high: float = 100.5, low: float = 99.5, close: float = 100.0) ->
     })
 
 
+def bar_at(
+    timestamp: str,
+    *,
+    high: float = 100.5,
+    low: float = 99.5,
+    close: float = 100.0,
+    funding_rate: float | None = None,
+) -> pd.Series:
+    row = {
+        "timestamp": pd.Timestamp(timestamp),
+        "open": 100.0,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": 5.0,
+    }
+    if funding_rate is not None:
+        row["funding_rate"] = funding_rate
+    return pd.Series(row)
+
+
 def journal_intent(
     journal: DecisionJournal, key: str, *, side: str = "long", qty: float = 1.0,
     notional: float = 100.0, stop: float = 95.0, tp: float | None = 110.0,
@@ -119,6 +140,68 @@ def test_target_resolution_and_fee_math(tmp_path):
     assert outcomes[0].virtual_net_usd == pytest.approx(10.0 - (0.05 + 0.055))
 
 
+def test_settled_funding_accrues_at_utc_boundary_for_existing_position(tmp_path):
+    tracker, _ = tracker_for(tmp_path)
+    tracker.track(
+        intent_key="funded",
+        side="long",
+        quantity=1.0,
+        notional_usd=100.0,
+        stop_price=90.0,
+        take_profit_price=110.0,
+        decision_bar_ts=pd.Timestamp("2026-08-25T22:00:00Z"),
+    )
+    assert tracker.resolve_bar(bar_at("2026-08-25T23:00:00Z")) == []
+    assert tracker.resolve_bar(
+        bar_at("2026-08-26T00:00:00Z", funding_rate=0.0001)
+    ) == []
+    outcome = tracker.resolve_bar(
+        bar_at("2026-08-26T01:00:00Z", high=111.0, funding_rate=0.0001)
+    )[0]
+
+    assert outcome.funding_events == 1
+    assert outcome.funding_usd == pytest.approx(0.01)
+    assert outcome.funding_complete is True
+    assert outcome.virtual_net_usd == pytest.approx(10.0 - 0.105 - 0.01)
+    assert tracker.stats()["funding_usd"] == pytest.approx(0.01)
+
+
+def test_boundary_fill_does_not_pay_prior_funding_and_missing_rate_is_visible(tmp_path):
+    tracker, _ = tracker_for(tmp_path)
+    tracker.track(
+        intent_key="boundary-fill",
+        side="long",
+        quantity=1.0,
+        notional_usd=100.0,
+        stop_price=90.0,
+        take_profit_price=110.0,
+        decision_bar_ts=pd.Timestamp("2026-08-25T23:00:00Z"),
+    )
+    assert tracker.resolve_bar(
+        bar_at("2026-08-26T00:00:00Z", funding_rate=0.0001)
+    ) == []
+    outcome = tracker.resolve_bar(bar_at("2026-08-26T01:00:00Z", high=111.0))[0]
+    assert outcome.funding_events == 0
+    assert outcome.funding_usd == 0.0
+
+    tracker.track(
+        intent_key="missing-rate",
+        side="short",
+        quantity=1.0,
+        notional_usd=100.0,
+        stop_price=120.0,
+        take_profit_price=90.0,
+        decision_bar_ts=pd.Timestamp("2026-08-26T06:00:00Z"),
+    )
+    assert tracker.resolve_bar(bar_at("2026-08-26T07:00:00Z")) == []
+    assert tracker.resolve_bar(bar_at("2026-08-26T08:00:00Z")) == []
+    missing = tracker.resolve_bar(bar_at("2026-08-26T09:00:00Z", low=89.0))[0]
+    assert missing.funding_events == 1
+    assert missing.funding_complete is False
+    assert tracker.stats()["status"] == "FUNDING_INCOMPLETE"
+    assert tracker.stats()["trade_compatible"] is False
+
+
 # --- maker route: touch-to-fill + maker fee, all-taker figure kept visible --------
 
 
@@ -132,7 +215,7 @@ def test_is_maker_route_strategy_matches_maker_edge_set():
 
 
 def test_default_route_is_taker_and_byte_identical(tmp_path):
-    tracker, journal = tracker_for(tmp_path)  # maker_route defaults False
+    tracker, _journal = tracker_for(tmp_path)  # maker_route defaults False
     tracker.track(intent_key="t", side="long", quantity=1.0, notional_usd=100.0,
                   stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
     out = tracker.resolve_bar(bar(1, high=111.0, low=99.0))[0]
@@ -154,7 +237,9 @@ def test_maker_route_fills_on_touch_and_charges_maker_fee(tmp_path):
     # the conservative all-taker figure is still recorded, and is strictly worse
     assert out.virtual_net_taker_usd == pytest.approx(10.0 - (100 * 0.0005 + 110 * 0.0005))
     assert out.virtual_net_usd > out.virtual_net_taker_usd
-    payload = [r for r in journal.read_all() if r["kind"] == "shadow_outcome"][0]["payload"]
+    payload = next(
+        r for r in journal.read_all() if r["kind"] == "shadow_outcome"
+    )["payload"]
     assert payload["route"] == "maker"
     assert tracker.stats()["route"] == "maker" and tracker.stats()["maker_unfilled"] == 0
 
@@ -173,7 +258,7 @@ def test_maker_route_misses_the_untouched_runner(tmp_path):
 
 
 def test_maker_route_fills_within_ttl_on_a_later_touch(tmp_path):
-    tracker, journal = tracker_for(tmp_path, maker_route=True, maker_fill_ttl_bars=2)
+    tracker, _journal = tracker_for(tmp_path, maker_route=True, maker_fill_ttl_bars=2)
     tracker.track(intent_key="m", side="long", quantity=1.0, notional_usd=100.0,
                   stop_price=95.0, take_profit_price=110.0, decision_bar_ts=ts(0))
     assert tracker.resolve_bar(bar(1, high=112.0, low=101.0)) == []  # bar1: no touch
@@ -183,7 +268,7 @@ def test_maker_route_fills_within_ttl_on_a_later_touch(tmp_path):
 
 
 def test_maker_route_short_fills_on_upward_touch(tmp_path):
-    tracker, journal = tracker_for(tmp_path, maker_route=True)
+    tracker, _journal = tracker_for(tmp_path, maker_route=True)
     # short: resting sell limit at 100 fills if price rises to touch it
     tracker.track(intent_key="s", side="short", quantity=1.0, notional_usd=100.0,
                   stop_price=105.0, take_profit_price=90.0, decision_bar_ts=ts(0))
@@ -210,7 +295,9 @@ def test_tp_ladder_records_max_reached_without_changing_exit(tmp_path):
     # ...but we record how far it travelled: reached TP2 of 3.
     assert out.tp_reached == 2
     assert out.take_profit_levels == (102.0, 105.0, 110.0)
-    payload = [r for r in journal.read_all() if r["kind"] == "shadow_outcome"][0]["payload"]
+    payload = next(
+        r for r in journal.read_all() if r["kind"] == "shadow_outcome"
+    )["payload"]
     assert payload["tp_reached"] == 2
     assert payload["take_profit_levels"] == [102.0, 105.0, 110.0]
     assert tracker.stats()["status"] == "EXIT_SEMANTIC_GAP"
@@ -219,7 +306,7 @@ def test_tp_ladder_records_max_reached_without_changing_exit(tmp_path):
 
 
 def test_tp_ladder_short_side_and_empty_default(tmp_path):
-    tracker, journal = tracker_for(tmp_path)
+    tracker, _journal = tracker_for(tmp_path)
     # short: favourable = price DOWN. tp1=98, tp2=95 (=stop). Runs to 96 then stops.
     tracker.track(
         intent_key="s", side="short", quantity=1.0, notional_usd=100.0,
@@ -387,6 +474,9 @@ def test_stats_aggregate_wins_net_and_profit_factor(tmp_path):
         "take_profit_price": None,
         "decision_bar_ts": pd.Timestamp(BASE, unit="ms", tz="UTC").isoformat(),
         "signal_reason": "test intent",
+        "funding_usd": 0.0,
+        "funding_events": 0,
+        "funding_complete": True,
     }]
     assert len(stats["shadow_outcomes_recent"]) == 2
     assert stats["shadow_outcomes_recent"][-1]["resolution"] == "target"
@@ -562,6 +652,7 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
     pending = stats.pop("pending_intents")
     assert stats == {
         "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
+        "funding_usd": 0.0, "funding_complete": True,
         "profit_factor": None, "open_intents": 1,
         "pending_shadow_intents": 1,
         "shadow_outcomes_recent": [],

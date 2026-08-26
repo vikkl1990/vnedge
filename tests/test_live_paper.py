@@ -170,6 +170,30 @@ class DiagnosticLong(AlwaysLong):
         }
 
 
+class CanonicalContextLong(AlwaysLong):
+    canonical_context_timeframes = ("4h",)
+
+    def __init__(self):
+        self.context: list[Candle] = []
+        self.context_health: list[tuple[str, bool]] = []
+
+    def ingest_canonical_context(self, candle: Candle) -> None:
+        self.context.append(candle)
+
+    def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
+        self.context_health.append((timeframe, healthy))
+
+
+class IndexedCanonicalStore:
+    def __init__(self, candle: Candle | None):
+        self.candle = candle
+        self.reads: list[tuple[str, str, datetime]] = []
+
+    def read_at(self, symbol: str, timeframe: str, opened: datetime) -> Candle | None:
+        self.reads.append((symbol, timeframe, opened))
+        return self.candle
+
+
 class OrderingAcceptanceObserver(SqueezeAcceptanceObserveRunner):
     """Minimal observer used to pin the runtime's close/quote tie-break."""
 
@@ -277,6 +301,7 @@ def build_session(
     max_holding_bars=48,
     timeframe="1h",
     execution_cost_exchange_id=None,
+    canonical_candle_store=None,
 ):
     config = RunnerConfig(
         mode=mode,
@@ -304,8 +329,46 @@ def build_session(
         exchange=exchange,
         journal=journal,
         trial_meta=trial_meta,
+        canonical_candle_store=canonical_candle_store,
     )
     return session, exchange
+
+
+@pytest.mark.asyncio
+async def test_runtime_advances_canonical_htf_only_on_close_boundary(tmp_path):
+    opened = datetime(2026, 8, 26, 0, tzinfo=UTC)
+    context = Candle(
+        symbol=SYM,
+        timeframe="4h",
+        open_time=opened,
+        close_time=opened + timedelta(hours=4),
+        open=Decimal(100),
+        high=Decimal(104),
+        low=Decimal(99),
+        close=Decimal(103),
+        volume=Decimal(10),
+        quote_volume=Decimal(1020),
+        trade_count=20,
+    )
+    store = IndexedCanonicalStore(context)
+    strategy = CanonicalContextLong()
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=strategy,
+        timeframe="1h",
+        canonical_candle_store=store,
+    )
+
+    non_boundary = int(datetime(2026, 8, 26, 2, tzinfo=UTC).timestamp() * 1000)
+    await session._refresh_canonical_strategy_context([non_boundary, 1, 1, 1, 1, 1])
+    assert store.reads == []
+
+    boundary = int(datetime(2026, 8, 26, 3, tzinfo=UTC).timestamp() * 1000)
+    await session._refresh_canonical_strategy_context([boundary, 1, 1, 1, 1, 1])
+    assert strategy.context == [context]
+    assert strategy.context_health == [("4h", True)]
+    assert store.reads[0][1:] == ("4h", opened)
 
 
 def test_active_scanner_runtime_contract_controls_cost_and_hold(tmp_path):
@@ -785,7 +848,7 @@ async def test_time_machine_wired_read_only(tmp_path):
 
 async def test_time_machine_fault_never_breaks_trading(tmp_path):
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)
+    session, _exchange = build_session(tmp_path, feed)
 
     class Boom:
         def on_kline_update(self, *a, **k):
@@ -865,7 +928,7 @@ async def test_overlays_recorded_without_changing_live_decision(tmp_path):
 
 async def test_overlay_fault_never_breaks_trading(tmp_path):
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)
+    session, _exchange = build_session(tmp_path, feed)
 
     class Boom:
         def read_row(self, *a, **k):
@@ -1040,7 +1103,7 @@ async def test_paper_observation_prime_journals_without_restart_order(tmp_path):
 async def test_non_forward_candles_dropped(tmp_path):
     stale_row = [[BASE + 2 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]]  # inside history
     feed = FakeFeed(stale_row + live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)
+    session, _exchange = build_session(tmp_path, feed)
     report = await session.run(max_bars=1)
     assert session.dropped_candles == 1
     assert report.bars_processed == 1  # only the valid candle counted
@@ -1336,7 +1399,7 @@ async def test_trade_log_records_fills_in_paper(tmp_path):
     from vnedge.execution.fill_ledger import FillLedger
 
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed)
+    session, _exchange = build_session(tmp_path, feed)
     session.fill_ledger = FillLedger(tmp_path / "fills.jsonl")
     await session.run(max_bars=1)
 
@@ -1350,7 +1413,7 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
 
     # session 1: trade opens, plan saved with the account
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed, strategy=LadderLong())
+    session, _exchange = build_session(tmp_path, feed, strategy=LadderLong())
     session.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
     await session.run(max_bars=1)
     assert session._plan is not None
@@ -1632,7 +1695,7 @@ async def test_tick_stop_mode_guard_holds_even_with_forced_shadow_plan(tmp_path)
     from vnedge.runtime.live_paper import _LivePlan
 
     feed = FakeFeed([])
-    session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    session, _exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
     sig = SignalIntent("long", stop_price=95.0, take_profit_price=110.0)
     session._plan = _LivePlan(sig, pd.Timestamp(BASE, unit="ms", tz="UTC"))
     feed.quote = (94.0, 94.02)
@@ -1648,7 +1711,7 @@ async def test_tick_stop_persists_account_state_immediately(tmp_path):
     from vnedge.paper.account_store import PaperAccountStore
 
     feed = FakeFeed(live_rows(n=1))
-    session, exchange = build_session(tmp_path, feed, strategy=LongOnce())
+    session, _exchange = build_session(tmp_path, feed, strategy=LongOnce())
     session.account_store = PaperAccountStore(tmp_path / "acct.json", "t1")
     await session.run(max_bars=1)
     assert session.account_store.load()["plan"] is not None

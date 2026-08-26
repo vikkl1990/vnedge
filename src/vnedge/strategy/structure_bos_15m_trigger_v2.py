@@ -113,10 +113,20 @@ class StructureBos15mTriggerV2(BaseStrategy):
     params = PARAMS
     # 50 complete 1h bars plus room for 4h context and one trigger child.
     warmup_bars = 224
+    canonical_context_timeframes = ("4h",)
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         self.funding = funding
-        self._hourly = StructureBos1H(funding, allow_price_only_live=True)
+        self._hourly = StructureBos1H(funding, allow_price_only_live=False)
+
+    def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
+        self._hourly.bind_canonical_context(timeframe, candles)
+
+    def ingest_canonical_context(self, candle) -> None:
+        self._hourly.ingest_canonical_context(candle)
+
+    def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
+        self._hourly.set_canonical_context_health(timeframe, healthy)
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         required = {"timestamp", "open", "high", "low", "close", "volume"}

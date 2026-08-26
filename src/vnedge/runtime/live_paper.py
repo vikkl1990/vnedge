@@ -40,7 +40,7 @@ from pathlib import Path
 import pandas as pd
 
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
-from vnedge.data.candles import CandleParquetStore
+from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.time_machine import TimeMachine
 from vnedge.exchange.live_feed import (
@@ -724,6 +724,82 @@ class LivePaperSession:
                 )
                 return False
             await asyncio.sleep(min(poll, max(0.0, deadline - loop.time())))
+
+    async def _refresh_canonical_strategy_context(self, raw_row: list) -> None:
+        """Advance canonical HTF context only at its actual close boundary.
+
+        The venue LTF close is merely the clock event. A structure scanner may
+        consume a new 4h state only after the exact trade-derived 4h candle is
+        durable. Missing context blocks that scanner's newest decision without
+        degrading unrelated exits or measurement lanes.
+        """
+        timeframes = tuple(
+            str(value) for value in getattr(self.strategy, "canonical_context_timeframes", ())
+        )
+        ingest = getattr(self.strategy, "ingest_canonical_context", None)
+        set_health = getattr(self.strategy, "set_canonical_context_health", None)
+        if not timeframes or not callable(ingest) or self.canonical_candle_store is None:
+            return
+        if self._tf_ms is None:
+            return
+        base_close_ms = int(raw_row[0]) + self._tf_ms
+        loop = asyncio.get_running_loop()
+        for timeframe in timeframes:
+            context_ms = {
+                "1h": 3_600_000,
+                "4h": 14_400_000,
+            }.get(timeframe)
+            if context_ms is None:
+                raise ValueError(f"unsupported canonical context timeframe: {timeframe}")
+            if base_close_ms % context_ms != 0:
+                continue
+            opened = pd.to_datetime(base_close_ms - context_ms, unit="ms", utc=True)
+            deadline = loop.time() + float(self.config.canonical_candle_wait_seconds)
+            canonical: Candle | None = None
+            while canonical is None:
+                try:
+                    canonical = await asyncio.to_thread(
+                        self.canonical_candle_store.read_at,
+                        self.config.symbol,
+                        timeframe,
+                        opened.to_pydatetime(),
+                    )
+                except (OSError, ValueError):
+                    canonical = None
+                if canonical is not None or loop.time() >= deadline:
+                    break
+                await asyncio.sleep(
+                    min(
+                        float(self.config.canonical_candle_poll_seconds),
+                        max(0.0, deadline - loop.time()),
+                    )
+                )
+            if canonical is None:
+                if callable(set_health):
+                    set_health(timeframe, False)
+                self.journal.append(
+                    "canonical_context_timeout",
+                    {
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": self.config.symbol,
+                        "timeframe": timeframe,
+                        "bar_ts": opened.isoformat(),
+                        "decision_blocked": True,
+                    },
+                )
+                continue
+            ingest(canonical)
+            if callable(set_health):
+                set_health(timeframe, True)
+            self.journal.append(
+                "canonical_context_advanced",
+                {
+                    "strategy_id": self.strategy.strategy_id,
+                    "symbol": self.config.symbol,
+                    "timeframe": timeframe,
+                    "bar_ts": opened.isoformat(),
+                },
+            )
 
     def _refresh_canonical_tail(self) -> None:
         """Repair every exchange-only row that now exists in the tick lake.
@@ -3296,7 +3372,11 @@ class LivePaperSession:
             self.latency.record_canonical_wait(
                 (time.perf_counter() - canonical_wait_started) * 1000.0
             )
-            if not self._append_candle(raw) or not self._sync_quote():
+            if not self._append_candle(raw):
+                self._discard_deferred_quotes("candle_or_quote_sync_rejected")
+                continue
+            await self._refresh_canonical_strategy_context(raw)
+            if not self._sync_quote():
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
                 continue
             if not canonical_ready:

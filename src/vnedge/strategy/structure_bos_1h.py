@@ -729,6 +729,7 @@ class StructureBos1H(BaseStrategy):
     # Bar index 49 is the 50th closed bar and is therefore the first eligible
     # decision boundary under ``min_bars=50``.
     warmup_bars = PARAMS.min_bars - 1
+    canonical_context_timeframes = ("4h",)
 
     def __init__(
         self,
@@ -744,6 +745,9 @@ class StructureBos1H(BaseStrategy):
         self.params = selected
         self.funding = funding
         self.htf_candles = htf_candles
+        self._canonical_htf_current: bool | None = (
+            None if htf_candles is None else not htf_candles.empty
+        )
         self.allow_price_only_live = allow_price_only_live
         self._swing_config = SwingDetectConfig(
             left=self.params.left,
@@ -756,6 +760,54 @@ class StructureBos1H(BaseStrategy):
             min_room_cost_multiple=self.params.min_room_cost_multiple,
         )
         self.last_evaluation: StructureBosEvaluation | None = None
+
+    def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
+        """Seed the runtime with persisted, fully closed canonical HTF bars."""
+        if timeframe != "4h":
+            raise ValueError(f"unsupported structure context timeframe: {timeframe}")
+        frame = candles.copy().sort_values("timestamp").drop_duplicates(
+            subset="timestamp", keep="last"
+        )
+        self.htf_candles = frame.tail(2_048).reset_index(drop=True)
+        self._canonical_htf_current = not self.htf_candles.empty
+
+    def ingest_canonical_context(self, candle: Candle) -> None:
+        """Append one canonical 4h close without deriving it from LTF bars."""
+        if candle.timeframe != "4h":
+            raise ValueError("structure_bos_1h accepts only canonical 4h context")
+        row = pd.DataFrame(
+            [
+                {
+                    "timestamp": pd.Timestamp(candle.open_time),
+                    "symbol": candle.symbol,
+                    "timeframe": candle.timeframe,
+                    "open": float(candle.open),
+                    "high": float(candle.high),
+                    "low": float(candle.low),
+                    "close": float(candle.close),
+                    "volume": float(candle.volume),
+                    "quote_volume": float(candle.quote_volume),
+                    "trade_count": candle.trade_count,
+                    "taker_buy_volume": float(candle.taker_buy_volume),
+                    "data_quality": "ok",
+                    "is_closed": candle.is_closed,
+                }
+            ]
+        )
+        existing = self.htf_candles if self.htf_candles is not None else pd.DataFrame()
+        self.htf_candles = (
+            pd.concat([existing, row], ignore_index=True)
+            .sort_values("timestamp")
+            .drop_duplicates(subset="timestamp", keep="last")
+            .tail(2_048)
+            .reset_index(drop=True)
+        )
+        self._canonical_htf_current = True
+
+    def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
+        if timeframe != "4h":
+            raise ValueError(f"unsupported structure context timeframe: {timeframe}")
+        self._canonical_htf_current = bool(healthy)
 
     def on_closed_candle(
         self,
@@ -892,14 +944,24 @@ class StructureBos1H(BaseStrategy):
             allow_price_only=self.allow_price_only_live,
         )
         htf = self.htf_candles
+        # Retained only for explicit legacy/offline callers. Production lane
+        # construction now sets allow_price_only_live=False and binds the
+        # canonical 4h lake, so runtime can never enter this derivation path.
         if htf is None and self.allow_price_only_live:
             htf = _derive_closed_4h(funded, allow_price_only=True)
-        return _add_mtf_features(
+        out = _add_mtf_features(
             structured,
             htf,
             self.params,
             allow_price_only=self.allow_price_only_live,
         )
+        if self._canonical_htf_current is False and not out.empty:
+            last = out.index[-1]
+            out.at[last, "mtf_alignment"] = Alignment.BLOCKED.value
+            out.at[last, "mtf_reason"] = "canonical_htf_unavailable"
+            out.at[last, "htf_structure_trend"] = StructureTrend.NONE.value
+            out.at[last, "htf_structure_labels"] = ""
+        return out
 
     def _candidate(self, df: pd.DataFrame, index: int) -> BacktestSignalIntent | None:
         if index <= 0 or index >= len(df) or index + 1 < self.params.min_bars:
