@@ -29,6 +29,59 @@ from vnedge.strategy.scanner_contracts import (
 from vnedge.strategy.scanner_observability import enrich_evaluation
 from vnedge.strategy.strategy_registry import get_strategy_class, is_capital_eligible
 
+#: Canonical lake columns stored as Decimal; strategies expect float math.
+_CANONICAL_NUMERIC_COLUMNS = (
+    "open", "high", "low", "close", "volume",
+    "quote_volume", "trade_count", "taker_buy_volume", "vwap",
+)
+
+
+def load_evidence_frame(path: Path) -> pd.DataFrame:
+    """Load one evidence input from a file or a shard directory.
+
+    The recorder writes many small parquet shards per day (a single BBO day is
+    thousands of files), and the canonical candle lake is one parquet file per
+    day or month. A directory therefore concatenates every ``*.parquet`` under
+    it, recursively, in sorted path order; a file loads as parquet or CSV by
+    suffix. Sorting and dedup stay with the caller's normalizer because the
+    time column differs per stream.
+    """
+    if path.is_dir():
+        shards = sorted(path.rglob("*.parquet"))
+        if not shards:
+            raise ValueError(f"no parquet shards under directory {path}")
+        return pd.concat(
+            [pd.read_parquet(shard) for shard in shards], ignore_index=True
+        )
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(path)
+    return pd.read_csv(path)
+
+
+def normalize_canonical_candles(candles: pd.DataFrame) -> pd.DataFrame:
+    """Adapt canonical-lake candle frames to the runtime frame contract.
+
+    The lake stores ``open_time`` (the runtime frame calls it ``timestamp``)
+    and keeps prices as ``Decimal`` objects, which silently poison float
+    feature math. Frames already in runtime form pass through unchanged, so
+    every replay entrypoint can call this unconditionally.
+    """
+    frame = candles.copy()
+    if "timestamp" not in frame.columns and "open_time" in frame.columns:
+        frame = frame.rename(columns={"open_time": "timestamp"})
+    if "timestamp" not in frame.columns:
+        raise ValueError("canonical candle frame requires timestamp or open_time")
+    for column in _CANONICAL_NUMERIC_COLUMNS:
+        if column in frame.columns and frame[column].dtype == object:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame = (
+        frame.sort_values("timestamp", kind="stable")
+        .drop_duplicates(subset="timestamp", keep="last")
+        .reset_index(drop=True)
+    )
+    return frame
+
 
 def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
     """Replay one frozen scanner with the runtime's single-book semantics.
@@ -191,6 +244,8 @@ def replay_quote_scanner(
     *,
     symbol: str = "BTC/USDT:USDT",
     exchange_id: str = "binanceusdm",
+    evidence_start: datetime | None = None,
+    evidence_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Drive the runtime quote engine with recorded canonical bars and BBO.
 
@@ -207,7 +262,7 @@ def replay_quote_scanner(
     if contract is None or not contract.decision_engine.startswith("quote_acceptance"):
         raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
     strategy = get_strategy_class(strategy_id)()
-    prepared = strategy.prepare(candles).reset_index(drop=True)
+    prepared = strategy.prepare(normalize_canonical_candles(candles)).reset_index(drop=True)
     if prepared.empty:
         raise ValueError("canonical candle frame is empty")
     if "timestamp" not in prepared.columns:
@@ -236,6 +291,19 @@ def replay_quote_scanner(
         item for item in all_event_rows if window_start <= item[0] < window_end
     ]
     quotes_outside_window = len(all_event_rows) - len(event_rows)
+    # The audited evidence window is where BOTH sides could have acted: replay
+    # needs warm-up candles from before BBO coverage begins, but comparing that
+    # span against live journals would count every pre-coverage live intent as
+    # a replay miss. Default start is therefore the first clean recorded quote;
+    # explicit bounds are clamped inside the causal source window.
+    first_quote_ts = event_rows[0][0] if event_rows else window_start
+    if evidence_start is None:
+        audit_start = first_quote_ts
+        audit_basis = "first_clean_quote"
+    else:
+        audit_start = max(window_start, evidence_start)
+        audit_basis = "explicit"
+    audit_end = window_end if evidence_end is None else min(window_end, evidence_end)
     journal = _ReplayJournal()
     engine = build_quote_acceptance_engine(
         journal=journal,
@@ -291,6 +359,11 @@ def replay_quote_scanner(
         "source_window": {
             "start": window_start.isoformat(),
             "end_exclusive": window_end.isoformat(),
+        },
+        "evidence_window": {
+            "start": audit_start.isoformat(),
+            "end_exclusive": audit_end.isoformat(),
+            "basis": audit_basis,
         },
         "bars": len(prepared),
         "quotes_in": cleaning.rows_in,
@@ -352,8 +425,14 @@ def compare_quote_replay_to_live(
     source_window = replay.get("source_window")
     if not isinstance(source_window, dict):
         raise TypeError("quote replay is missing source_window")
-    start = pd.to_datetime(source_window.get("start"), utc=True).to_pydatetime()
-    end = pd.to_datetime(source_window.get("end_exclusive"), utc=True).to_pydatetime()
+    # Audit inside the evidence window when the replay declares one: the
+    # source window includes warm-up history from before BBO coverage, where
+    # only the live side could have produced intents.
+    audit_window = replay.get("evidence_window")
+    if not isinstance(audit_window, dict):
+        audit_window = source_window
+    start = pd.to_datetime(audit_window.get("start"), utc=True).to_pydatetime()
+    end = pd.to_datetime(audit_window.get("end_exclusive"), utc=True).to_pydatetime()
 
     def relevant(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
@@ -419,6 +498,7 @@ def compare_quote_replay_to_live(
         "strategy_id": strategy_id,
         "symbol": symbol,
         "source_window": source_window,
+        "evidence_window": audit_window,
         "exact_parity": exact,
         "replay_intents": sum(replay_counts.values()),
         "live_intents": sum(live_counts.values()),
@@ -702,6 +782,14 @@ def main() -> None:
     parser.add_argument("--symbol", default="BTC/USDT:USDT")
     parser.add_argument("--exchange-id", default="binanceusdm")
     parser.add_argument("--strategy", action="append", default=[])
+    parser.add_argument(
+        "--evidence-start",
+        help="ISO start of the audited parity window (default: first clean recorded quote)",
+    )
+    parser.add_argument(
+        "--evidence-end",
+        help="ISO exclusive end of the audited parity window (default: end of causal source window)",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--max-bytes-per-journal",
@@ -719,16 +807,18 @@ def main() -> None:
     if args.candles:
         if not args.strategy:
             parser.error("--candles requires at least one --strategy")
-        candles = (
-            pd.read_parquet(args.candles)
-            if args.candles.suffix.lower() in {".parquet", ".pq"}
-            else pd.read_csv(args.candles)
-        )
+        candles = load_evidence_frame(args.candles)
         if args.quotes:
-            quotes = (
-                pd.read_parquet(args.quotes)
-                if args.quotes.suffix.lower() in {".parquet", ".pq"}
-                else pd.read_csv(args.quotes)
+            quotes = load_evidence_frame(args.quotes)
+            evidence_start = (
+                pd.to_datetime(args.evidence_start, utc=True).to_pydatetime()
+                if args.evidence_start
+                else None
+            )
+            evidence_end = (
+                pd.to_datetime(args.evidence_end, utc=True).to_pydatetime()
+                if args.evidence_end
+                else None
             )
             quote_replays = [
                 replay_quote_scanner(
@@ -737,6 +827,8 @@ def main() -> None:
                     quotes,
                     symbol=args.symbol,
                     exchange_id=args.exchange_id,
+                    evidence_start=evidence_start,
+                    evidence_end=evidence_end,
                 )
                 for strategy_id in args.strategy
             ]
@@ -786,6 +878,8 @@ if __name__ == "__main__":
 
 __all__ = [
     "atomic_write", "build_daily_report", "build_journal_report",
-    "compare_quote_replay_to_live", "iter_journal_records", "read_journal_records",
-    "read_lane_evals", "replay_quote_scanner", "replay_scanner",
+    "compare_quote_replay_to_live", "iter_journal_records",
+    "load_evidence_frame", "normalize_canonical_candles",
+    "read_journal_records", "read_lane_evals",
+    "replay_quote_scanner", "replay_scanner",
 ]

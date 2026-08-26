@@ -322,6 +322,11 @@ services:
         done
     volumes:
       - ./logs:/app/logs:ro
+      # Read-only lake access so one-shot parity captures (docker compose run
+      # scanner-evidence python -m vnedge.research.scanner_evidence --candles
+      # /app/data/candles/... --quotes /app/data/ticks/.../stream=book ...)
+      # can reach canonical candles and recorded BBO shards.
+      - ./data:/app/data:ro
       - ./research/live_research:/app/research/live_research
     mem_limit: 300m
     healthcheck:

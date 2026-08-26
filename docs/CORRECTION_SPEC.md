@@ -75,13 +75,37 @@ Current implementation slice:
 - replay applies the canonical BBO cleaner, deterministic candle/quote event
   ordering, and refuses to run quotes beyond the last causal forming bar;
 - `scanner_evidence` compares replay and live intent keys plus approval,
-  side, entry, stop, quote sequence, and episode inside the exact source
-  window;
+  side, entry, stop, quote sequence, and episode inside the audited
+  evidence window;
 - quote contract rejects, buffer drops, probe resets, and re-arms are exposed
-  in runtime statistics and the scanner workspace.
+  in runtime statistics and the scanner workspace;
+- the evidence CLI accepts canonical lake candles directly (`open_time` and
+  Decimal columns are normalized), loads sharded BBO directories, and audits
+  an explicit evidence window that excludes warm-up history from parity
+  (default window start: first clean recorded quote).
 
 This is mechanism parity infrastructure, not completion evidence. Phase 4 is
 complete only after a recorded live day produces an exact parity artifact.
+
+Parity capture runbook (run where the recorded data and journals live):
+
+```
+docker compose run --rm scanner-evidence \
+  python -m vnedge.research.scanner_evidence \
+    --strategy range_expansion_realtime_v1 \
+    --symbol "BTC/USDT:USDT" \
+    --candles /app/data/candles/exchange=binanceusdm/BTCUSDT/15m \
+    --quotes "/app/data/ticks/exchange=binanceusdm/symbol=BTCUSDT/stream=book/<YYYYMMDD>" \
+    --journal "/app/logs/paper_trials/<lane_id>.journal.jsonl" \
+    --evidence-start <YYYY-MM-DD>T00:00:00Z \
+    --evidence-end <YYYY-MM-DD+1>T00:00:00Z \
+    --out /app/research/live_research/scanner_parity_<YYYYMMDD>.json
+```
+
+One invocation per (strategy, symbol) pair; the artifact's `live_parity`
+entries must report `exact_parity: true` inside the evidence window. Pin the
+capture to the commit the journals were produced by before changing any
+runtime event behavior.
 
 ### 2. In-process event router (Phase 2 prime)
 
