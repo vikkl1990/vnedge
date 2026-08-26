@@ -328,7 +328,10 @@ services:
       # can reach canonical candles and recorded BBO shards.
       - ./data:/app/data:ro
       - ./research/live_research:/app/research/live_research
-    mem_limit: 300m
+    # Full-day quote parity replays load the recorded BBO window and can peak
+    # above 2 GiB.  The steady-state journal aggregate remains small, but
+    # `docker compose run scanner-evidence ...` inherits this service limit.
+    mem_limit: 4g
     healthcheck:
       test:
         - CMD-SHELL

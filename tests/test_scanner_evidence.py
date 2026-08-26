@@ -4,11 +4,59 @@ from pathlib import Path
 import pandas as pd
 
 from vnedge.research import scanner_evidence
-from vnedge.research.scanner_evidence import build_daily_report, read_lane_evals
+from vnedge.research.scanner_evidence import (
+    build_daily_report,
+    normalize_canonical_candles,
+    read_lane_evals,
+)
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.scanner_contracts import ScannerRuntimeContract
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
+
+
+def test_canonical_storage_normalization_restores_live_closed_quality_contract():
+    stored = pd.DataFrame(
+        {
+            "open_time": [pd.Timestamp("2026-01-01T00:00:00Z")],
+            "open": ["100.0"],
+            "high": ["101.0"],
+            "low": ["99.0"],
+            "close": ["100.5"],
+            "volume": ["2.0"],
+            "quote_volume": ["200.5"],
+            "trade_count": [3],
+        }
+    )
+
+    normalized = normalize_canonical_candles(stored)
+
+    assert normalized.loc[0, "timestamp"] == pd.Timestamp("2026-01-01T00:00:00Z")
+    assert bool(normalized.loc[0, "is_closed"]) is True
+    assert normalized.loc[0, "data_quality"] == "ok"
+    assert normalized.loc[0, "candle_source"] == "canonical_tick_lake"
+
+
+def test_runtime_frame_normalization_preserves_explicit_non_ok_state():
+    runtime = pd.DataFrame(
+        {
+            "timestamp": [pd.Timestamp("2026-01-01T00:00:00Z")],
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [2.0],
+            "data_quality": ["gap"],
+            "is_closed": [False],
+            "candle_source": ["exchange_ohlcv"],
+        }
+    )
+
+    normalized = normalize_canonical_candles(runtime)
+
+    assert normalized.loc[0, "data_quality"] == "gap"
+    assert bool(normalized.loc[0, "is_closed"]) is False
+    assert normalized.loc[0, "candle_source"] == "exchange_ohlcv"
 
 
 def test_daily_report_groups_exact_strategy_and_failed_gates(tmp_path: Path):

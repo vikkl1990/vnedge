@@ -67,13 +67,25 @@ def normalize_canonical_candles(candles: pd.DataFrame) -> pd.DataFrame:
     every replay entrypoint can call this unconditionally.
     """
     frame = candles.copy()
-    if "timestamp" not in frame.columns and "open_time" in frame.columns:
+    # CandleStore's Parquet schema contains closed candles only; ``read()``
+    # reconstructs this same truth on the live path.  Preserve that contract
+    # when the evidence input is the raw storage shape instead of making
+    # exact-volume scanners fail readiness only in replay.
+    storage_shape = "timestamp" not in frame.columns and "open_time" in frame.columns
+    if storage_shape:
         frame = frame.rename(columns={"open_time": "timestamp"})
     if "timestamp" not in frame.columns:
         raise ValueError("canonical candle frame requires timestamp or open_time")
     for column in _CANONICAL_NUMERIC_COLUMNS:
         if column in frame.columns and frame[column].dtype == object:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
+    if storage_shape:
+        if "is_closed" not in frame.columns:
+            frame["is_closed"] = True
+        if "data_quality" not in frame.columns:
+            frame["data_quality"] = "ok"
+        if "candle_source" not in frame.columns:
+            frame["candle_source"] = "canonical_tick_lake"
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
     frame = (
         frame.sort_values("timestamp", kind="stable")

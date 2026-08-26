@@ -99,13 +99,17 @@ docker compose run --rm scanner-evidence \
     --journal "/app/logs/paper_trials/<lane_id>.journal.jsonl" \
     --evidence-start <YYYY-MM-DD>T00:00:00Z \
     --evidence-end <YYYY-MM-DD+1>T00:00:00Z \
+    --max-bytes-per-journal 134217728 \
+    --max-total-bytes 134217728 \
     --out /app/research/live_research/scanner_parity_<YYYYMMDD>.json
 ```
 
 One invocation per (strategy, symbol) pair; the artifact's `live_parity`
 entries must report `exact_parity: true` inside the evidence window. Pin the
 capture to the commit the journals were produced by before changing any
-runtime event behavior.
+runtime event behavior. The journal byte budget must cover the entire pinned
+window; the default 8 MiB tail is intended for the rolling dashboard aggregate
+and can silently exclude early-window live intents from a full-day comparison.
 
 ### 2. In-process event router (Phase 2 prime)
 
