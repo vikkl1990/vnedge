@@ -120,19 +120,41 @@ fi
 # here; Compose still only recreates services whose config/image changed.
 #
 # WAVED recreate (retained from the former large fleet): a source change rebuilds
-# the shared image and can recreate every app service together. The current
-# default topology is intentionally small, but keeping the dashboard runtime
-# first and batching the remaining services avoids a future topology change
-# silently reintroducing the old load spike.
+# the shared image and can recreate every app service together. The canonical
+# recorder must restore its exact tick delta BEFORE newly recreated scanner
+# lanes start. Starting lanes first caused a deterministic restart race: the
+# venue delivered a close while pulse-recorder was still restoring, the row
+# missed the lane's eight-second deadline, and that lane stayed reduce-only
+# until another clean bar. The old scanner can remain online while the recorder
+# restarts; it is replaced only after the recorder logs that restoration is
+# complete. Remaining services are still batched to cap memory pressure.
 # On a daemon race (name-in-use mid-recreate — took the fleet down 2026-07-31),
 # self-heal once with down --remove-orphans, then fall back to a plain up.
 recreate_in_waves() {
     local wave="${DEPLOY_WAVE_SIZE:-6}" pause="${DEPLOY_WAVE_PAUSE:-25}"
+    if [ "$NEED_BUILD" = 1 ]; then
+        docker compose up -d --no-build pulse-recorder || return 1
+        local recorder_ready=0
+        for _ in $(seq 1 "${DEPLOY_RECORDER_WAIT_ATTEMPTS:-120}"); do
+            if docker compose logs --since "$DEPLOY_START" pulse-recorder 2>/dev/null \
+                    | grep -q "tick recorder:"; then
+                recorder_ready=1
+                break
+            fi
+            sleep 2
+        done
+        if [ "$recorder_ready" != 1 ]; then
+            echo "canonical recorder did not finish restart restoration" >&2
+            return 1
+        fi
+        echo "canonical recorder restored before lane recreation"
+    fi
     docker compose up -d --no-build multi-lane-shadow || return 1
     sleep "$pause"
     local rest svc
     local -a batch=()
-    rest=$(docker compose config --services 2>/dev/null | grep -vx "multi-lane-shadow")
+    rest=$(docker compose config --services 2>/dev/null \
+        | grep -vE '^(multi-lane-shadow|pulse-recorder)$')
     for svc in $rest; do
         batch+=("$svc")
         if [ "${#batch[@]}" -ge "$wave" ]; then

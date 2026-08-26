@@ -35,6 +35,22 @@ def test_sanctioned_deploy_path_runs_fleet_policy_after_recreate() -> None:
     assert '--expected-build-sha "$HEAD_SHA"' in deploy
 
 
+def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+    start = deploy.index("recreate_in_waves()")
+    end = deploy.index("if ! recreate_in_waves", start)
+    recreate = deploy[start:end]
+
+    recorder_start = recreate.index(
+        "docker compose up -d --no-build pulse-recorder"
+    )
+    recorder_proof = recreate.index('grep -q "tick recorder:"')
+    lane_start = recreate.index(
+        "docker compose up -d --no-build multi-lane-shadow"
+    )
+    assert recorder_start < recorder_proof < lane_start
+
+
 def test_tls_edge_has_an_explicit_healthcheck() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     healthcheck = compose["services"]["dashboard-tls"]["healthcheck"]
