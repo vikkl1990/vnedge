@@ -268,6 +268,8 @@ class SqueezeAcceptanceObserveRunner:
             "shadow_intent",
             {
                 "intent_key": key,
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
                 "approved": approval.approved,
                 "failed_checks": list(approval.failed_checks),
                 "passed_checks": list(approval.passed_checks),

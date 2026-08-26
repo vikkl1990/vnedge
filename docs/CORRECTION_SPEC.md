@@ -97,6 +97,7 @@ docker compose run --rm scanner-evidence \
     --candles /app/data/candles/exchange=binanceusdm/BTCUSDT/15m \
     --quotes "/app/data/ticks/exchange=binanceusdm/symbol=BTCUSDT/stream=book/<YYYYMMDD>" \
     --journal "/app/logs/paper_trials/<lane_id>.journal.jsonl" \
+    --runtime-start <runner-started-at-ISO> \
     --evidence-start <YYYY-MM-DD>T00:00:00Z \
     --evidence-end <YYYY-MM-DD+1>T00:00:00Z \
     --max-bytes-per-journal 134217728 \
@@ -110,6 +111,9 @@ capture to the commit the journals were produced by before changing any
 runtime event behavior. The journal byte budget must cover the entire pinned
 window; the default 8 MiB tail is intended for the rolling dashboard aggregate
 and can silently exclude early-window live intents from a full-day comparison.
+The audited window must belong to one uninterrupted runner instance; use the
+lane heartbeat's durable `started_at` as `--runtime-start` so replay seeds the
+same bounded feature history and process-local episode clock.
 
 ### 2. In-process event router (Phase 2 prime)
 

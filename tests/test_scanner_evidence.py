@@ -255,6 +255,103 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert intent["quote_sequence"] == 2
 
 
+def test_quote_replay_runtime_start_rebuilds_same_bounded_episode_clock(monkeypatch):
+    class _BoundedStrategy(BaseStrategy):
+        strategy_id = "test_bounded_quote"
+        warmup_bars = 2
+
+        def prepare(self, candles):
+            frame = candles.copy()
+            frame["episode"] = range(1, len(frame) + 1)
+            return frame
+
+        def signal(self, df, index):
+            del df, index
+
+        def realtime_arm(self, df, index):
+            return RealtimeEntryArm(
+                episode_id=int(df.iloc[index]["episode"]),
+                bar_index=index,
+                long_level=101.0,
+                short_level=99.0,
+                atr=1.0,
+                reference_price=100.0,
+                allow_long=True,
+                allow_short=False,
+                expires_after_bars=2,
+                reason=self.strategy_id,
+            )
+
+    contract = ScannerRuntimeContract(
+        strategy_id="test_bounded_quote",
+        timeframe="5m",
+        cost_family="scalp",
+        max_holding_bars=4,
+        rationale="test",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    )
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _BoundedStrategy)
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: contract)
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=8, freq="5min", tz="UTC"),
+            "open": [100.0] * 8,
+            "high": [100.5] * 8,
+            "low": [99.5] * 8,
+            "close": [100.0] * 8,
+            "volume": [10.0] * 8,
+        }
+    )
+    quotes = pd.DataFrame(
+        {
+            "ts_ms": [int(pd.Timestamp("2026-01-01T00:25:01Z").timestamp() * 1000)],
+            "bid": [100.0],
+            "ask": [100.01],
+        }
+    )
+
+    result = scanner_evidence.replay_quote_scanner(
+        "test_bounded_quote",
+        candles,
+        quotes,
+        runtime_start=pd.Timestamp("2026-01-01T00:20:30Z").to_pydatetime(),
+    )
+
+    # Seed is warmup+1 rows (00:05, 00:10, 00:15); the 00:20 close then has
+    # the same process-local episode ordinal as a live runner started at 00:20:30.
+    transition = next(r for r in result["records"] if r["kind"] == "scanner_transition")
+    assert transition["payload"]["episode_id"] == 4
+
+
+def test_live_parity_keeps_rejected_intent_with_empty_order_payload():
+    replay = {
+        "strategy_id": "quote_v1",
+        "symbol": "BTC/USDT:USDT",
+        "source_window": {
+            "start": "2026-01-01T00:00:00+00:00",
+            "end_exclusive": "2026-01-01T01:00:00+00:00",
+        },
+        "records": [],
+    }
+    live = [
+        {
+            "kind": "shadow_intent",
+            "payload": {
+                "intent_key": "quote_v1|BTC/USDT:USDT|short|1",
+                "approved": False,
+                "intent": {},
+                "quote_event_ts": "2026-01-01T00:30:00+00:00",
+            },
+        }
+    ]
+
+    result = scanner_evidence.compare_quote_replay_to_live(replay, live)
+
+    assert result["live_intents"] == 1
+    assert result["live_only"] == ["quote_v1|BTC/USDT:USDT|short|1"]
+
+
 def test_quote_replay_live_parity_reports_keys_payloads_and_window():
     replay = {
         "strategy_id": "quote_v1",

@@ -287,7 +287,16 @@ class CanonicalCandleSink:
             pipeline.advance_time(now)
 
 
-def _book_row(ob: dict, levels: int, ts_ms: int) -> dict:
+def _book_row(
+    ob: dict,
+    levels: int,
+    ts_ms: int,
+    *,
+    received_ts_ms: int | None = None,
+    sequence: int | str | None = None,
+    source: str | None = None,
+    exchange_timestamped: bool | None = None,
+) -> dict:
     """Flatten a CCXT order book into one L2 row: level-0 L1 aliases
     (bid/bid_qty/ask/ask_qty, kept for the top-of-book replay engine) plus the
     bid_px_i/bid_qty_i/ask_px_i/ask_qty_i ladder for i in [0, levels). Missing
@@ -298,6 +307,14 @@ def _book_row(ob: dict, levels: int, ts_ms: int) -> dict:
         "bid": float(bids[0][0]), "bid_qty": float(bids[0][1]),
         "ask": float(asks[0][0]), "ask_qty": float(asks[0][1]),
     }
+    if received_ts_ms is not None:
+        row["received_ts_ms"] = int(received_ts_ms)
+    if sequence is not None and not isinstance(sequence, bool):
+        row["sequence"] = sequence
+    if source:
+        row["source"] = source
+    if exchange_timestamped is not None:
+        row["exchange_timestamped"] = bool(exchange_timestamped)
     for i in range(levels):
         b = bids[i] if i < len(bids) else (float("nan"), 0.0)
         a = asks[i] if i < len(asks) else (float("nan"), 0.0)
@@ -644,8 +661,20 @@ class TickRecorder:
             try:
                 ob = await self._ex.watch_order_book(symbol, limit=self._book_limit)
                 if ob["bids"] and ob["asks"]:
-                    ts_ms = int(ob.get("timestamp") or clock() * 1000)
-                    buf.add(_book_row(ob, self.levels, ts_ms))
+                    received_ts_ms = int(datetime.now(UTC).timestamp() * 1000)
+                    exchange_timestamped = ob.get("timestamp") is not None
+                    ts_ms = int(ob.get("timestamp") or received_ts_ms)
+                    buf.add(
+                        _book_row(
+                            ob,
+                            self.levels,
+                            ts_ms,
+                            received_ts_ms=received_ts_ms,
+                            sequence=ob.get("nonce"),
+                            source=f"{self.exchange_id}:watch_order_book",
+                            exchange_timestamped=exchange_timestamped,
+                        )
+                    )
                     self.book_count += 1
                 now = clock()
                 if buf.should_flush(now):
@@ -797,7 +826,21 @@ class DeltaTickRecorder:
         ts_raw = msg.get("timestamp")
         ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._epoch_ms()
         try:
-            buf.add(_book_row(_delta_ob(buy, sell), self.levels, ts_ms))
+            buf.add(
+                _book_row(
+                    _delta_ob(buy, sell),
+                    self.levels,
+                    ts_ms,
+                    received_ts_ms=self._epoch_ms(),
+                    sequence=(
+                        msg.get("sequence")
+                        or msg.get("sequence_no")
+                        or msg.get("nonce")
+                    ),
+                    source=f"{self.exchange_id}:l2_orderbook",
+                    exchange_timestamped=ts_raw is not None,
+                )
+            )
         except (KeyError, TypeError, ValueError):
             return
         self.book_count += 1

@@ -43,6 +43,23 @@ def test_book_row_captures_full_ladder_with_l1_aliases():
     assert "bid_px_10" not in row
 
 
+def test_book_row_preserves_replay_clock_and_sequence_contract():
+    row = _book_row(
+        _ob(2, 2),
+        levels=2,
+        ts_ms=DAY_TS,
+        received_ts_ms=DAY_TS + 25,
+        sequence=1234,
+        source="binanceusdm:watch_order_book",
+        exchange_timestamped=True,
+    )
+
+    assert row["received_ts_ms"] == DAY_TS + 25
+    assert row["sequence"] == 1234
+    assert row["source"] == "binanceusdm:watch_order_book"
+    assert row["exchange_timestamped"] is True
+
+
 def test_book_row_pads_missing_levels_with_nan():
     row = _book_row(_ob(3, 3), levels=10, ts_ms=DAY_TS)
     assert row["bid_px_2"] == pytest.approx(100.0 - 2 * 0.1)

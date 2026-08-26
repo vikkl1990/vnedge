@@ -258,6 +258,7 @@ def replay_quote_scanner(
     exchange_id: str = "binanceusdm",
     evidence_start: datetime | None = None,
     evidence_end: datetime | None = None,
+    runtime_start: datetime | None = None,
 ) -> dict[str, Any]:
     """Drive the runtime quote engine with recorded canonical bars and BBO.
 
@@ -274,16 +275,28 @@ def replay_quote_scanner(
     if contract is None or not contract.decision_engine.startswith("quote_acceptance"):
         raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
     strategy = get_strategy_class(strategy_id)()
-    prepared = strategy.prepare(normalize_canonical_candles(candles)).reset_index(drop=True)
+    tf_seconds = timeframe_to_seconds(contract.timeframe)
+    if tf_seconds is None:
+        raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
+    normalized = normalize_canonical_candles(candles)
+    if runtime_start is not None:
+        if runtime_start.tzinfo is None or runtime_start.utcoffset() is None:
+            raise ValueError("runtime_start must be timezone-aware")
+        times = pd.to_datetime(normalized["timestamp"], utc=True)
+        closed_before_start = times + pd.Timedelta(seconds=tf_seconds) <= runtime_start
+        seed_indices = normalized.index[closed_before_start]
+        if seed_indices.empty:
+            raise ValueError("runtime_start has no causal warm-up candles")
+        last_seed = int(seed_indices[-1])
+        first_seed = max(0, last_seed - int(strategy.warmup_bars))
+        normalized = normalized.iloc[first_seed:].reset_index(drop=True)
+    prepared = strategy.prepare(normalized).reset_index(drop=True)
     if prepared.empty:
         raise ValueError("canonical candle frame is empty")
     if "timestamp" not in prepared.columns:
         raise ValueError("canonical candle frame requires timestamp")
     cleaned, cleaning = clean_book(quotes.copy())
     cleaned = cleaned.reset_index(drop=True)
-    tf_seconds = timeframe_to_seconds(contract.timeframe)
-    if tf_seconds is None:
-        raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
     candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
     window_start = candle_times.iloc[0].to_pydatetime()
     # Quotes after the final closed bar remain causal during the immediately
@@ -299,8 +312,9 @@ def replay_quote_scanner(
         ),
         key=lambda item: item[0],
     )
+    replay_event_start = max(window_start, runtime_start) if runtime_start else window_start
     event_rows = [
-        item for item in all_event_rows if window_start <= item[0] < window_end
+        item for item in all_event_rows if replay_event_start <= item[0] < window_end
     ]
     quotes_outside_window = len(all_event_rows) - len(event_rows)
     # The audited evidence window is where BOTH sides could have acted: replay
@@ -313,7 +327,7 @@ def replay_quote_scanner(
         audit_start = first_quote_ts
         audit_basis = "first_clean_quote"
     else:
-        audit_start = max(window_start, evidence_start)
+        audit_start = max(replay_event_start, evidence_start)
         audit_basis = "explicit"
     audit_end = window_end if evidence_end is None else min(window_end, evidence_end)
     journal = _ReplayJournal()
@@ -377,6 +391,7 @@ def replay_quote_scanner(
             "end_exclusive": audit_end.isoformat(),
             "basis": audit_basis,
         },
+        "runtime_start": runtime_start.isoformat() if runtime_start is not None else None,
         "bars": len(prepared),
         "quotes_in": cleaning.rows_in,
         "quotes_clean": cleaning.rows_out,
@@ -459,8 +474,10 @@ def compare_quote_replay_to_live(
                 intent_value if isinstance(intent_value, dict) else {}
             )
             if str(intent.get("strategy_id") or payload.get("strategy_id") or "") != strategy_id:
-                continue
-            if str(intent.get("symbol") or payload.get("symbol") or "") != symbol:
+                key = str(payload.get("intent_key") or "")
+                if not key.startswith(f"{strategy_id}|{symbol}|"):
+                    continue
+            elif str(intent.get("symbol") or payload.get("symbol") or "") != symbol:
                 continue
             event_ts = _record_event_time(record)
             if event_ts is None or not (start <= event_ts < end):
@@ -802,6 +819,10 @@ def main() -> None:
         "--evidence-end",
         help="ISO exclusive end of the audited parity window (default: end of causal source window)",
     )
+    parser.add_argument(
+        "--runtime-start",
+        help="ISO start of the uninterrupted live runner instance being replayed",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--max-bytes-per-journal",
@@ -832,6 +853,11 @@ def main() -> None:
                 if args.evidence_end
                 else None
             )
+            runtime_start = (
+                pd.to_datetime(args.runtime_start, utc=True).to_pydatetime()
+                if args.runtime_start
+                else None
+            )
             quote_replays = [
                 replay_quote_scanner(
                     strategy_id,
@@ -841,6 +867,7 @@ def main() -> None:
                     exchange_id=args.exchange_id,
                     evidence_start=evidence_start,
                     evidence_end=evidence_end,
+                    runtime_start=runtime_start,
                 )
                 for strategy_id in args.strategy
             ]
