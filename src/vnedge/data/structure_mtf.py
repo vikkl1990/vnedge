@@ -7,8 +7,9 @@ HTF candles are clipped by their actual close time before classification.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
@@ -24,7 +25,7 @@ from vnedge.data.structure import (
     detect_bos_choch,
     structure_from_bars,
 )
-from vnedge.data.swings import SwingDetectConfig
+from vnedge.data.swings import SwingAnchor, SwingDetectConfig, SwingKind, streaming_update
 
 
 class Alignment(str, Enum):
@@ -68,6 +69,171 @@ class MTFStructureSnapshot:
     ltf_event: StructureEvent | None
     alignment: Alignment
     reason: str
+
+
+class IncrementalStructureState:
+    """Causal O(1)-memory swing/structure state for one closed-candle stream.
+
+    Only the L/R confirmation window and the latest two confirmed anchors per
+    side are required to reproduce ``structure_from_bars``.  Anchor indexes
+    remain absolute even though the working window is bounded.
+    """
+
+    def __init__(self, config: SwingDetectConfig) -> None:
+        self.config = config
+        self._width = config.left + config.right + 1
+        self._bars: deque[Candle] = deque(maxlen=self._width)
+        self._eligible: deque[bool] = deque(maxlen=self._width)
+        self._anchors: dict[SwingKind, deque[SwingAnchor]] = {
+            SwingKind.HIGH: deque(maxlen=2),
+            SwingKind.LOW: deque(maxlen=2),
+        }
+        self._seen = 0
+        self._symbol: str | None = None
+        self._timeframe: str | None = None
+        self._last_open: datetime | None = None
+        self._last_close: datetime | None = None
+
+    @property
+    def bars_seen(self) -> int:
+        return self._seen
+
+    @property
+    def last_close_time(self) -> datetime | None:
+        return self._last_close
+
+    def update(self, candle: Candle, *, eligible: bool = True) -> tuple[SwingAnchor, ...]:
+        if not candle.is_closed:
+            raise ValueError("incremental structure requires closed candles")
+        opened = _utc(candle.open_time, label="incremental candle open_time")
+        closed = _utc(candle.close_time, label="incremental candle close_time")
+        if closed <= opened:
+            raise ValueError("incremental candle close_time must follow open_time")
+        if self._symbol is None:
+            self._symbol = candle.symbol
+            self._timeframe = candle.timeframe
+        elif candle.symbol != self._symbol or candle.timeframe != self._timeframe:
+            raise ValueError("incremental candle stream changed symbol or timeframe")
+        if self._last_open is not None and opened <= self._last_open:
+            raise ValueError("incremental candles must be strictly ordered")
+
+        self._bars.append(candle)
+        self._eligible.append(bool(eligible))
+        self._seen += 1
+        self._last_open = opened
+        self._last_close = closed
+        if len(self._bars) < self._width:
+            return ()
+
+        local = streaming_update(
+            tuple(self._bars),
+            self.config,
+            eligible=tuple(self._eligible),
+        )
+        candidate_index = self._seen - 1 - self.config.right
+        confirmed = tuple(replace(anchor, index=candidate_index) for anchor in local)
+        for anchor in confirmed:
+            self._anchors[anchor.kind].append(anchor)
+        return confirmed
+
+    def state(self, as_of: datetime | None = None) -> StructureState:
+        visible_at = as_of or self._last_close or datetime.fromtimestamp(0, tz=UTC)
+        anchors = sorted(
+            (*self._anchors[SwingKind.HIGH], *self._anchors[SwingKind.LOW]),
+            key=lambda anchor: (anchor.confirmed_at, anchor.index, anchor.kind.value),
+        )
+        return build_structure_state(anchors, visible_at)
+
+
+class IncrementalMTFState:
+    """Incremental canonical HTF/LTF alignment with bounded working state."""
+
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        htf_tf: str = "4h",
+        ltf_tf: str = "1h",
+        params: MTFParams | None = None,
+    ) -> None:
+        self.symbol = symbol
+        self.htf_tf = htf_tf
+        self.ltf_tf = ltf_tf
+        self.params = params or MTF_PARAMS
+        self.htf = IncrementalStructureState(
+            SwingDetectConfig(
+                self.params.htf_left,
+                self.params.htf_right,
+                strict=True,
+            )
+        )
+        self.ltf = IncrementalStructureState(
+            SwingDetectConfig(
+                self.params.ltf_left,
+                self.params.ltf_right,
+                strict=True,
+            )
+        )
+
+    def on_htf_candle(self, candle: Candle, *, eligible: bool = True) -> None:
+        self._validate_stream_candle(candle, self.htf_tf)
+        self.htf.update(candle, eligible=eligible)
+
+    def on_ltf_candle(
+        self,
+        candle: Candle,
+        *,
+        data_quality: Literal["ok", "degraded", "gap"] = "ok",
+    ) -> MTFStructureSnapshot:
+        self._validate_stream_candle(candle, self.ltf_tf)
+        eligible = data_quality == "ok"
+        self.ltf.update(candle, eligible=eligible)
+        as_of = _utc(candle.close_time, label="MTF LTF close_time")
+        if data_quality != "ok":
+            empty = _empty_state(as_of)
+            return MTFStructureSnapshot(
+                as_of,
+                self.htf_tf,
+                self.ltf_tf,
+                empty,
+                empty,
+                None,
+                Alignment.BLOCKED,
+                f"data_quality_{data_quality}",
+            )
+        if self.htf.bars_seen == 0:
+            empty = _empty_state(as_of)
+            return MTFStructureSnapshot(
+                as_of,
+                self.htf_tf,
+                self.ltf_tf,
+                empty,
+                self.ltf.state(as_of),
+                None,
+                Alignment.BLOCKED,
+                "missing_series",
+            )
+        if self.htf.last_close_time is not None and self.htf.last_close_time > as_of:
+            raise ValueError("incremental HTF state contains a future candle")
+
+        htf_state = self.htf.state(as_of)
+        ltf_state = self.ltf.state(as_of)
+        event = detect_bos_choch(ltf_state, candle.close, self.params.break_buffer_bps)
+        alignment, reason = align_structure(htf_state, ltf_state, event, self.params)
+        return MTFStructureSnapshot(
+            as_of,
+            self.htf_tf,
+            self.ltf_tf,
+            htf_state,
+            ltf_state,
+            event,
+            alignment,
+            reason,
+        )
+
+    def _validate_stream_candle(self, candle: Candle, timeframe: str) -> None:
+        if candle.symbol != self.symbol or candle.timeframe != timeframe:
+            raise ValueError("incremental MTF candle symbol/timeframe mismatch")
 
 
 def _utc(value: datetime, *, label: str) -> datetime:
@@ -256,6 +422,8 @@ def build_mtf_snapshot(
 __all__ = [
     "MTF_PARAMS",
     "Alignment",
+    "IncrementalMTFState",
+    "IncrementalStructureState",
     "MTFParams",
     "MTFStructureSnapshot",
     "align_structure",

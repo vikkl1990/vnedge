@@ -159,10 +159,14 @@ class _LivePlan:
     signal: SignalIntent
     entry_bar_ts: pd.Timestamp
     exit_state: ActiveExitState | None = None
+    bars_held: int = 0
+    last_counted_bar_ts: pd.Timestamp | None = None
 
     def __post_init__(self) -> None:
         if self.exit_state is None:
             self.exit_state = ActiveExitState.from_signal(self.signal)
+        if self.last_counted_bar_ts is None:
+            self.last_counted_bar_ts = self.entry_bar_ts
 
 
 @dataclass
@@ -207,8 +211,13 @@ class LivePaperSession:
     ) -> None:
         self.strategy = strategy
         self.feed = feed
-        self.candles = history.reset_index(drop=True)
         self.config = config
+        self._working_frame_limit = max(
+            config.working_frame_bars,
+            int(strategy.warmup_bars) + config.max_holding_bars + 32,
+            config.trail_atr_window + config.max_holding_bars + 32,
+        )
+        self.candles = history.tail(self._working_frame_limit).reset_index(drop=True)
         self.gateway = gateway
         self.om = order_manager
         self.exchange = exchange
@@ -658,7 +667,20 @@ class LivePaperSession:
                 logger.warning("dropped non-forward candle %s", ts)
                 return False
         self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
+        self._trim_working_frame()
         return True
+
+    def _trim_working_frame(self) -> None:
+        """Retain only the bounded runtime feature tail.
+
+        Full history belongs in the canonical Parquet lake.  The in-process
+        frame only needs enough rows for the frozen strategy warmup, the full
+        holding contract, and exit indicators.  Resetting the index preserves
+        the strategy contract that the newest decision row is ``len(df)-1``.
+        """
+        excess = len(self.candles) - self._working_frame_limit
+        if excess > 0:
+            self.candles = self.candles.iloc[excess:].reset_index(drop=True)
 
     async def _await_canonical_candle(self, raw_row: list) -> bool:
         """Wait briefly for the exact current candle before scanner evaluation.
@@ -719,40 +741,32 @@ class LivePaperSession:
         if source is None:
             candidates = self.candles.index
         else:
-            candidates = self.candles.index[source.fillna("exchange_ohlcv").eq("exchange_ohlcv")]
+            pending = source.fillna("exchange_ohlcv").eq("exchange_ohlcv")
+            repair_state = self.candles.get("canonical_repair_state")
+            if repair_state is not None:
+                pending &= repair_state.fillna("pending").ne("terminal_missing")
+            candidates = self.candles.index[pending]
         if len(candidates) == 0:
             return
-
-        # Real stores expose a bulk read.  One indexed map is dramatically
-        # cheaper than opening the same daily Parquet partition once for each
-        # of a strategy's 2,000 warm-up rows.  Tiny test/fake stores may keep
-        # the single-row contract and fall back below.
-        read_all = getattr(self.canonical_candle_store, "read", None)
-        canonical_by_open: dict[pd.Timestamp, object] = {}
-        if callable(read_all):
-            try:
-                canonical_by_open = {
-                    pd.Timestamp(candle.open_time): candle
-                    for candle in read_all(
-                        self.config.symbol,
-                        self.config.timeframe,
-                    )
-                }
-            except (OSError, ValueError):
-                canonical_by_open = {}
+        newest = pd.Timestamp(self.candles["timestamp"].iloc[-1])
+        terminal_before = (
+            newest - pd.Timedelta(milliseconds=2 * self._tf_ms)
+            if self._tf_ms is not None
+            else None
+        )
         for index in candidates:
             opened = pd.Timestamp(self.candles.at[index, "timestamp"])
-            canonical = canonical_by_open.get(opened)
-            if canonical is None and not callable(read_all):
-                try:
-                    canonical = self.canonical_candle_store.read_at(
-                        self.config.symbol,
-                        self.config.timeframe,
-                        opened.to_pydatetime(),
-                    )
-                except (OSError, ValueError):
-                    continue
+            try:
+                canonical = self.canonical_candle_store.read_at(
+                    self.config.symbol,
+                    self.config.timeframe,
+                    opened.to_pydatetime(),
+                )
+            except (OSError, ValueError):
+                continue
             if canonical is None:
+                if terminal_before is not None and opened < terminal_before:
+                    self.candles.at[index, "canonical_repair_state"] = "terminal_missing"
                 continue
             values: dict[str, object] = {
                 "open": float(canonical.open),
@@ -769,6 +783,7 @@ class LivePaperSession:
                 "timeframe": self.config.timeframe,
                 "symbol": self.config.symbol,
                 "candle_source": "canonical_tick_lake",
+                "canonical_repair_state": "repaired",
             }
             for name, value in values.items():
                 self.candles.at[index, name] = value
@@ -2046,13 +2061,12 @@ class LivePaperSession:
     def _bars_held(self, bar: pd.Series) -> int:
         if self._plan is None:
             return 0
-        entry_ts = self._plan.entry_bar_ts
         current_ts = pd.Timestamp(bar["timestamp"])
-        return int(
-            (
-                (self.candles["timestamp"] > entry_ts) & (self.candles["timestamp"] <= current_ts)
-            ).sum()
-        )
+        last_counted = self._plan.last_counted_bar_ts or self._plan.entry_bar_ts
+        if current_ts > last_counted:
+            self._plan.bars_held += 1
+            self._plan.last_counted_bar_ts = current_ts
+        return self._plan.bars_held
 
     async def _manage_exit(self, bar: pd.Series, now: datetime) -> None:
         if self._plan is None:
@@ -2398,6 +2412,7 @@ class LivePaperSession:
         if self._plan is None:
             return None
         sig = self._plan.signal
+        last_counted = self._plan.last_counted_bar_ts or self._plan.entry_bar_ts
         return {
             "side": sig.side,
             "stop_price": sig.stop_price,
@@ -2405,6 +2420,8 @@ class LivePaperSession:
             "take_profit_levels": list(sig.take_profit_levels),
             "reason": sig.reason,
             "entry_bar_ts": self._plan.entry_bar_ts.isoformat(),
+            "bars_held": self._plan.bars_held,
+            "last_counted_bar_ts": last_counted.isoformat(),
             "active_exit": self._plan.exit_state.to_dict(),
         }
 
@@ -2447,6 +2464,24 @@ class LivePaperSession:
                 reason=stored.get("reason", "restored plan"),
             )
             self._plan = self._new_plan(sig, pd.Timestamp(stored["entry_bar_ts"]))
+            stored_last_counted = stored.get("last_counted_bar_ts")
+            if stored_last_counted is not None:
+                self._plan.last_counted_bar_ts = pd.Timestamp(stored_last_counted)
+            else:
+                # Legacy snapshots did not persist the counter. Reconstruct it
+                # once from the bounded restart seed; the configured frame
+                # floor always exceeds the maximum holding contract.
+                entry_ts = self._plan.entry_bar_ts
+                held = self.candles.loc[self.candles["timestamp"] > entry_ts, "timestamp"]
+                self._plan.last_counted_bar_ts = (
+                    pd.Timestamp(held.iloc[-1]) if not held.empty else entry_ts
+                )
+            self._plan.bars_held = int(
+                stored.get(
+                    "bars_held",
+                    (self.candles["timestamp"] > self._plan.entry_bar_ts).sum(),
+                )
+            )
             self._plan.exit_state.restore(stored.get("active_exit"))
             self._seed_plan_from_venue(self._plan)
             self.journal.append("plan_restored", dict(stored))

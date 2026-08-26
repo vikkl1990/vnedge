@@ -1358,6 +1358,8 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
     assert stored["plan"]["side"] == "long"
     assert stored["plan"]["stop_price"] == session._plan.signal.stop_price
     assert stored["plan"]["take_profit_levels"] == list(session._plan.signal.take_profit_levels)
+    assert stored["plan"]["bars_held"] == 0
+    assert stored["plan"]["last_counted_bar_ts"] == session._plan.entry_bar_ts.isoformat()
 
     # session 2 (restart): restore -> plan re-armed, orphan guard NOT tripped
     feed2 = FakeFeed([])
@@ -1368,6 +1370,8 @@ async def test_plan_survives_restart_via_account_store(tmp_path):
     session2.restore_plan(session2.account_store.load().get("plan"))
     assert session2._plan is not None
     assert session2._plan.signal.take_profit_levels == tuple(stored["plan"]["take_profit_levels"])
+    assert session2._plan.bars_held == stored["plan"]["bars_held"]
+    assert session2._plan.last_counted_bar_ts.isoformat() == stored["plan"]["last_counted_bar_ts"]
     await session2.run(max_bars=0)
     assert not session2.gateway.kill_switch.is_active  # no orphan trip
     records = [r["kind"] for r in session2.journal.read_all()]
@@ -1839,6 +1843,22 @@ async def test_append_replaces_partial_seam_bar(tmp_path):
     assert len(session.candles) == 4
 
 
+def test_runtime_candle_frame_is_bounded_and_keeps_newest_rows(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session._working_frame_limit = 4
+    session.candles = _hourly(4)
+    first = session.candles["timestamp"].iloc[0]
+    next_ts = int(
+        (pd.Timestamp(session.candles["timestamp"].iloc[-1]) + pd.Timedelta(hours=1)).timestamp()
+        * 1000
+    )
+
+    assert session._append_candle([next_ts, 100, 101, 99, 100, 1])
+    assert len(session.candles) == 4
+    assert session.candles.index.tolist() == [0, 1, 2, 3]
+    assert session.candles["timestamp"].iloc[0] > first
+
+
 async def test_canonical_close_wait_retries_until_trade_bar_is_ready(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
     session.config = session.config.model_copy(
@@ -1979,16 +1999,13 @@ def test_next_close_bulk_reconciles_full_missing_canonical_warmup(tmp_path):
             )
         )
 
-    class _BulkStore:
-        def read(self, symbol, timeframe):
+    class _IndexedStore:
+        def read_at(self, symbol, timeframe, open_time):
             assert symbol == SYM
             assert timeframe == session.config.timeframe
-            return canonical
+            return next((bar for bar in canonical if bar.open_time == open_time), None)
 
-        def read_at(self, symbol, timeframe, open_time):
-            del symbol, timeframe, open_time
-
-    session.canonical_candle_store = _BulkStore()
+    session.canonical_candle_store = _IndexedStore()
     next_ts = int(
         (pd.Timestamp(session.candles["timestamp"].iloc[-1]) + pd.Timedelta(hours=1)).timestamp()
         * 1000
@@ -1997,3 +2014,28 @@ def test_next_close_bulk_reconciles_full_missing_canonical_warmup(tmp_path):
     repaired = session.candles.iloc[:5]
     assert repaired["candle_source"].eq("canonical_tick_lake").all()
     assert repaired["trade_count"].eq(2).all()
+
+
+def test_old_unrepairable_canonical_row_reaches_terminal_state(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]))
+    session.candles = _hourly(6)
+    session.candles["timestamp"] = pd.date_range(
+        end="2026-08-22 12:00", periods=6, freq="h", tz="UTC"
+    )
+    session.candles["candle_source"] = "exchange_ohlcv"
+
+    class _MissingStore:
+        calls = 0
+
+        def read_at(self, symbol, timeframe, open_time):
+            del symbol, timeframe, open_time
+            self.calls += 1
+
+    store = _MissingStore()
+    session.canonical_candle_store = store
+    session._refresh_canonical_tail()
+    first_calls = store.calls
+
+    assert session.candles.iloc[0]["canonical_repair_state"] == "terminal_missing"
+    session._refresh_canonical_tail()
+    assert store.calls < first_calls * 2

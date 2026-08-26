@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from vnedge.data.candles import Candle
+from vnedge.data.candles import Candle, aggregate_candle_series
 from vnedge.data.structure import (
     StructureEvent,
     StructureEventType,
@@ -14,6 +14,7 @@ from vnedge.data.structure import (
 )
 from vnedge.data.structure_mtf import (
     Alignment,
+    IncrementalMTFState,
     align_structure,
     build_mtf_snapshot,
     fully_closed_htf,
@@ -121,3 +122,52 @@ def test_snapshot_is_blocked_for_missing_or_degraded_series() -> None:
     assert missing.reason == "missing_series"
     assert degraded.alignment is Alignment.BLOCKED
     assert degraded.reason == "data_quality_degraded"
+
+
+def test_incremental_mtf_is_bit_exact_to_full_recompute_for_90_days() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    ltf: list[Candle] = []
+    for index in range(90 * 24):
+        opened = start + timedelta(hours=index)
+        # Deterministic multi-scale wave: enough alternating pivots to exercise
+        # HH/HL, LH/LL, range, BoS, and CHoCH classifications.
+        cycle = Decimal((index % 37) - 18) / Decimal(8)
+        drift = Decimal(index) / Decimal(250)
+        close = Decimal(100) + drift + cycle
+        ltf.append(
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                open_time=opened,
+                close_time=opened + timedelta(hours=1),
+                open=close - Decimal("0.2"),
+                high=close + Decimal("0.8") + Decimal(index % 3) / Decimal(10),
+                low=close - Decimal("0.8") - Decimal(index % 5) / Decimal(10),
+                close=close,
+                volume=Decimal(10 + index % 7),
+                quote_volume=close * Decimal(10 + index % 7),
+                trade_count=10 + index % 11,
+            )
+        )
+    htf = list(aggregate_candle_series("BTCUSDT", "1h", "4h", ltf))
+    incremental = IncrementalMTFState(symbol="BTCUSDT")
+    htf_position = 0
+
+    for position, bar in enumerate(ltf):
+        while htf_position < len(htf) and htf[htf_position].close_time <= bar.close_time:
+            incremental.on_htf_candle(htf[htf_position])
+            htf_position += 1
+        actual = incremental.on_ltf_candle(bar)
+        expected = build_mtf_snapshot(htf[:htf_position], ltf[: position + 1])
+
+        assert actual.alignment == expected.alignment
+        assert actual.reason == expected.reason
+        assert actual.htf.trend == expected.htf.trend
+        assert actual.htf.labels == expected.htf.labels
+        assert actual.htf.last_swing_high == expected.htf.last_swing_high
+        assert actual.htf.last_swing_low == expected.htf.last_swing_low
+        assert actual.ltf.trend == expected.ltf.trend
+        assert actual.ltf.labels == expected.ltf.labels
+        assert actual.ltf.last_swing_high == expected.ltf.last_swing_high
+        assert actual.ltf.last_swing_low == expected.ltf.last_swing_low
+        assert actual.ltf_event == expected.ltf_event

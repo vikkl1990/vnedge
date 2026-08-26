@@ -69,6 +69,11 @@ class RunnerConfig(BaseModel):
     # production multi-lane config supplies the bounded wait explicitly.
     canonical_candle_wait_seconds: float = Field(default=0.0, ge=0.0, le=30.0)
     canonical_candle_poll_seconds: float = Field(default=0.20, gt=0.0, le=5.0)
+    # Runtime feature frames are working state, not the historical lake.  Keep
+    # them bounded so per-close preparation cost and memory stay flat with
+    # process uptime.  The session raises this floor automatically when a
+    # strategy warmup/hold/trailing contract needs more rows.
+    working_frame_bars: int = Field(default=4096, ge=256, le=100_000)
     # The public market-data venue and the assumed execution-cost venue are
     # different contracts.  Leave this unset only when they are intentionally
     # the same; shadow deployments that model Delta fees while reading Binance
