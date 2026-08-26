@@ -197,6 +197,30 @@ def test_pipeline_never_publishes_forming_bar() -> None:
     assert seen == [published[0]]
 
 
+def test_pipeline_delivers_closed_event_before_durable_sink() -> None:
+    seen: list[Candle] = []
+
+    class BrokenStore:
+        def read(self, _symbol, _timeframe):
+            return []
+
+        def upsert(self, _candles):
+            raise OSError("durable sink unavailable")
+
+    pipeline = CandlePipeline(
+        "BTCUSDT",
+        subscribers=(seen.append,),
+        store=BrokenStore(),  # type: ignore[arg-type]
+    )
+    pipeline.on_trade(START, D("100"), D("1"))
+
+    with pytest.raises(OSError, match="durable sink unavailable"):
+        pipeline.advance_time(START + timedelta(minutes=1))
+
+    assert len(seen) == 1
+    assert seen[0].is_closed is True
+
+
 def test_pipeline_restart_repairs_higher_bars_from_persisted_base(tmp_path) -> None:
     trades = [
         Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"))

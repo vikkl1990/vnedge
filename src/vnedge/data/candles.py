@@ -801,11 +801,16 @@ class CandlePipeline:
     def _publish(self, candle: Candle, published: list[Candle]) -> None:
         if not candle.is_closed:
             raise ValueError("pipeline may publish closed candles only")
-        if self.store is not None:
-            self.store.upsert((candle,))
         published.append(candle)
+        # Strategy/runtime delivery is the primary live path; Parquet is the
+        # durable audit sink.  Publish first so a synchronous file write cannot
+        # add decision latency.  Persistence failures remain operator-visible
+        # through recorder/lake health and never mutate the already emitted
+        # immutable candle.
         for subscriber in self.subscribers:
             subscriber(candle)
+        if self.store is not None:
+            self.store.upsert((candle,))
         aggregator = self._aggregators.get(candle.timeframe)
         if aggregator is not None:
             higher = aggregator.on_candle(candle)

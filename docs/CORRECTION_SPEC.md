@@ -124,6 +124,24 @@ decision code performs no parquet polling. Venue candles remain a heartbeat
 cross-check and REST candles remain research bootstrap with explicit
 provenance.
 
+Implementation status (2026-08-26): the typed canonical-candle router and
+bounded per-lane subscriptions exist in
+`vnedge.runtime.canonical_candle_router`. Exact duplicates are idempotent;
+conflicting identities, reverse time, non-closed candles, and consumer queue
+overflow fail explicitly. `CandlePipeline` now invokes subscribers before its
+durable upsert, and `CanonicalCandleSink` exposes the subscriber seam. This is
+the dark transport foundation, not the production cutover.
+
+The current Docker topology still runs `pulse-recorder` and
+`multi-lane-shadow` as separate processes. Therefore the scanner cannot claim
+an *in-process* canonical feed yet: it still uses the exact Parquet row as its
+decision authority. The next cutover step is to colocate the public-trade
+canonical producer with the lane runner (without duplicating tick shards),
+record seven days of router-vs-Parquet journal parity, then remove
+`_await_canonical_candle`. Adding an ungoverned IPC bus merely to bridge the
+existing containers is explicitly out of scope for the v1 single-process
+decision.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.
@@ -134,6 +152,12 @@ Use incremental swing updates and canonical 1h/4h events, cap each working
 frame, accrue funding into live/paper outcomes, and preserve the full open
 round trip across restart. Long-hold contracts express days explicitly and
 require a non-zero funding hypothesis.
+
+Implementation status (2026-08-26): runtime frames are bounded, structure
+lanes bind canonical 4h context and fail closed when it is absent, and shadow
+outcomes accrue observed UTC funding events with completeness surfaced. Phase
+3 remains open until the 90-day incremental-vs-full bit-exact artifact and
+flat-cost uptime evidence are recorded.
 
 Done when incremental and full MTF results are bit-exact on a 90-day sample
 and per-bar decision cost stays flat with uptime.

@@ -29,6 +29,7 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -36,7 +37,13 @@ from typing import Any
 
 import pandas as pd
 
-from vnedge.data.candles import CandleParquetStore, CandlePipeline, Trade, floor_time
+from vnedge.data.candles import (
+    Candle,
+    CandleParquetStore,
+    CandlePipeline,
+    Trade,
+    floor_time,
+)
 from vnedge.data.lake_health import LakeHealthMonitor
 
 logger = logging.getLogger(__name__)
@@ -116,12 +123,18 @@ class CanonicalCandleSink:
         *,
         tick_root: Path | str | None = None,
         restore_at: datetime | None = None,
+        subscribers: Iterable[Callable[[Candle], None]] = (),
     ) -> None:
         store = CandleParquetStore(root, exchange=exchange)
         self.exchange = exchange
         self.symbols = tuple(symbols)
+        bound_subscribers = tuple(subscribers)
         self.pipelines = {
-            symbol: CandlePipeline(_canonical_symbol(symbol), store=store)
+            symbol: CandlePipeline(
+                _canonical_symbol(symbol),
+                store=store,
+                subscribers=bound_subscribers,
+            )
             for symbol in symbols
         }
         self.restored_last_trade_ts_ms: dict[str, int] = {}
@@ -302,7 +315,7 @@ def _book_row(
     bid_px_i/bid_qty_i/ask_px_i/ask_qty_i ladder for i in [0, levels). Missing
     levels are padded with NaN price / 0.0 qty so the schema is fixed-width."""
     bids, asks = ob["bids"], ob["asks"]
-    row = {
+    row: dict[str, Any] = {
         "ts_ms": ts_ms,
         "bid": float(bids[0][0]), "bid_qty": float(bids[0][1]),
         "ask": float(asks[0][0]), "ask_qty": float(asks[0][1]),

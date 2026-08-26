@@ -135,6 +135,32 @@ def test_canonical_sink_persists_only_closed_trade_built_hour(tmp_path):
     assert hours[0].trade_count == 60
 
 
+def test_canonical_sink_exposes_closed_candles_to_router_subscriber(tmp_path):
+    seen = []
+    start = datetime(2026, 8, 16, 10, tzinfo=UTC)
+    sink = CanonicalCandleSink(
+        "binanceusdm",
+        ["BTC/USDT:USDT"],
+        tmp_path / "candles",
+        subscribers=(seen.append,),
+    )
+    sink.on_trade(
+        "BTC/USDT:USDT",
+        {
+            "timestamp": int(start.timestamp() * 1000),
+            "price": 60_000,
+            "amount": 1,
+            "side": "buy",
+        },
+    )
+
+    sink.advance_time(start + timedelta(minutes=1))
+
+    assert [(candle.symbol, candle.timeframe) for candle in seen] == [
+        ("BTCUSDT", "1m")
+    ]
+
+
 def test_canonical_sink_restart_rebuilds_current_minute_from_tick_shards(tmp_path):
     tick_root = tmp_path / "lake"
     candle_root = tmp_path / "candles"
