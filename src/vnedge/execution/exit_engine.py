@@ -93,6 +93,7 @@ class ExitPosition:
     box_edge: float
     entry_bar: int
     mfe: float = 0.0
+    mae: float = 0.0
     extreme: float = 0.0
     remaining: float = 1.0
     breakeven_armed: bool = False
@@ -119,6 +120,9 @@ class ExitDecision:
     #: adjudicate; that single ratio exposed a 12-strategy public catalogue as
     #: one unrealisable exit artifact.
     mfe: float = 0.0
+    #: Maximum adverse excursion reached before the exit, in price units.
+    #: Positive means price travelled against the position by this amount.
+    mae: float = 0.0
 
 
 @dataclass
@@ -158,6 +162,7 @@ class ExitEngine:
         close: float,
         atr: float,
         bar_index: int,
+        partial_entry_bar: bool = False,
     ) -> ExitDecision | None:
         p = self.pos
         if p is None:
@@ -166,14 +171,26 @@ class ExitEngine:
         side = p.side
         held = bar_index - p.entry_bar
 
-        favorable = (high - p.entry) if side == "long" else (p.entry - low)
-        p.mfe = max(p.mfe, favorable)
-        p.extreme = max(p.extreme, high) if side == "long" else min(p.extreme, low)
+        # A quote-driven entry can occur midway through a candle.  Its full
+        # OHLC includes prices from before the position existed, so those
+        # extremes must never trigger a stop or manufacture MFE/MAE.  Quotes
+        # already monitor the position after entry; the partial candle may
+        # contribute only its causal close-based invalidation.
+        if not partial_entry_bar:
+            favorable = (high - p.entry) if side == "long" else (p.entry - low)
+            adverse = (p.entry - low) if side == "long" else (high - p.entry)
+            p.mfe = max(p.mfe, favorable)
+            p.mae = max(p.mae, adverse)
+            p.extreme = max(p.extreme, high) if side == "long" else min(p.extreme, low)
 
         # 1) hard SL first (pessimistic within-bar ordering): a bar that
         # touches both a rung and the stop is booked as the stop, matching the
         # stop-wins-ties convention used everywhere else.
-        stop_hit = low <= p.stop if side == "long" else high >= p.stop
+        stop_hit = (
+            False
+            if partial_entry_bar
+            else (low <= p.stop if side == "long" else high >= p.stop)
+        )
         if stop_hit:
             # runtime.active_exit distinguishes a stop that has ratcheted to
             # breakeven from the original one; matching the name keeps exit
@@ -215,7 +232,7 @@ class ExitEngine:
             return self._close(p, close, reason="max_age")
 
         # 2) failed breakout: close back inside the box (from the bar after entry)
-        if c.failed_breakout and held >= 1:
+        if c.failed_breakout and (held >= 1 or partial_entry_bar):
             back_inside = close < p.box_edge if side == "long" else close > p.box_edge
             if back_inside:
                 self.clear()
@@ -258,10 +275,19 @@ class ExitEngine:
         p = self.pos
         if p is None:
             return None
+        favorable = (price - p.entry) if p.side == "long" else (p.entry - price)
+        adverse = (p.entry - price) if p.side == "long" else (price - p.entry)
+        p.mfe = max(p.mfe, favorable)
+        p.mae = max(p.mae, adverse)
+        p.extreme = max(p.extreme, price) if p.side == "long" else min(p.extreme, price)
         stop_hit = price <= p.stop if p.side == "long" else price >= p.stop
         if stop_hit:
             self.clear()
-            return self._close(p, p.stop, reason="stop_tick")
+            # The executable quote is the best price currently available.  If
+            # price gaps through a stop, booking the unreachable stop level is
+            # optimistic and violates the same pessimistic-fill convention as
+            # the bar engine.
+            return self._close(p, price, reason="stop_tick")
         return None
 
     def close_now(self, *, price: float, reason: str) -> ExitDecision | None:
@@ -292,4 +318,10 @@ class ExitEngine:
         final = (price - p.entry) if p.side == "long" else (p.entry - price)
         total = p.realized + p.remaining * final
         effective = p.entry + total if p.side == "long" else p.entry - total
-        return ExitDecision(reason=reason, price=effective, won=total > 0, mfe=p.mfe)
+        return ExitDecision(
+            reason=reason,
+            price=effective,
+            won=total > 0,
+            mfe=p.mfe,
+            mae=p.mae,
+        )

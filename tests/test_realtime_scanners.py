@@ -55,6 +55,30 @@ def test_range_successor_exposes_only_a_closed_bar_arm() -> None:
     assert arm.session_end_hour_utc == 16
 
 
+def test_range_refreshes_share_one_episode_within_the_hour() -> None:
+    strategy = RangeExpansionRealtimeV1()
+    strategy.warmup_bars = 0
+    rows = []
+    for minute in (0, 15, 45):
+        rows.append(
+            {
+                "timestamp": pd.Timestamp(f"2026-08-24T14:{minute:02d}:00Z"),
+                "close": 100.0,
+                "rt_arm_ready": 1.0,
+                "rt_long_level": 101.0,
+                "rt_short_level": 99.0,
+                "rt_atr": 1.5,
+                "rt_allow_long": 1.0,
+                "rt_allow_short": 1.0,
+            }
+        )
+    frame = pd.DataFrame(rows)
+
+    episodes = [strategy.realtime_arm(frame, index).episode_id for index in range(3)]
+
+    assert len(set(episodes)) == 1
+
+
 def test_quote_hold_supplies_entry_and_uses_structural_stop() -> None:
     config = SqueezeExpansionV3Params(
         acceptance_hold_seconds=0.5,

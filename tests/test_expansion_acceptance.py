@@ -302,7 +302,52 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert len(outcomes) == 1
     assert outcomes[0]["net_won"] is False
     assert outcomes[0]["net_bps"] < outcomes[0]["captured_bps"]
+    assert outcomes[0]["gross_pnl_usd"] == pytest.approx(
+        outcomes[0]["captured_bps"] * runner.notional_usd / 10_000
+    )
+    assert outcomes[0]["entry_ts"] == (t0 + timedelta(seconds=5)).isoformat()
+    assert outcomes[0]["cost_profile"] == "delta_scalp"
+    assert outcomes[0]["cost_contract_version"] == "scanner_cost_v1"
+    assert outcomes[0]["funding_complete"] is True
+    assert "mfe_bps" in outcomes[0] and "mae_bps" in outcomes[0]
     assert runner.acceptance.long.state is AcceptanceState.ARMED
+
+
+def test_runner_ignores_pre_entry_low_in_first_closed_candle() -> None:
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="ETH/USDT:USDT")
+    bars = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime(2026, 8, 20, 0, 40, tzinfo=UTC),
+                "open": 99.5, "high": 100.0, "low": 99.0, "close": 99.8,
+                "volume": 1000.0, "sqz_episode": 7.0,
+                "sqz_range_high": 100.0, "sqz_range_low": 99.0,
+                "sqz_atr": 0.25, "sqz_vwap24": 99.5, "sqz_compressed": 1.0,
+            },
+            {
+                "timestamp": datetime(2026, 8, 20, 0, 45, tzinfo=UTC),
+                "open": 99.0, "high": 100.5, "low": 98.0, "close": 100.2,
+                "volume": 1200.0, "sqz_episode": 7.0,
+                "sqz_range_high": 100.0, "sqz_range_low": 99.0,
+                "sqz_atr": 0.25, "sqz_vwap24": 99.5, "sqz_compressed": 1.0,
+            },
+        ]
+    )
+    runner.on_closed_bar(bars, 0, bars.iloc[0]["timestamp"])
+    entry_start = datetime(2026, 8, 20, 0, 43, tzinfo=UTC)
+    for seconds in (0, 2, 5):
+        runner.on_quote(bid=100.08, ask=100.09, ts=entry_start + timedelta(seconds=seconds))
+
+    assert runner.has_open
+    assert runner.open_meta is not None and runner.open_meta["entry_bar"] == 1
+    runner.on_closed_bar(bars, 1, bars.iloc[1]["timestamp"])
+
+    assert runner.has_open
+    assert not [payload for kind, payload in journal.records if kind == "shadow_outcome"]
+    assert runner.exits.pos is not None
+    assert runner.exits.pos.mfe == 0.0
+    assert runner.exits.pos.mae == 0.0
 
 
 def test_shadow_runner_checks_protective_stop_on_each_quote() -> None:

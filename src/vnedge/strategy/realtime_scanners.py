@@ -36,6 +36,21 @@ def _episode(row: pd.Series, index: int) -> int:
     return int(ts.timestamp() * 1000) + index
 
 
+def _hour_episode(row: pd.Series) -> int:
+    """Stable identifier for one hourly range-expansion hypothesis.
+
+    Range arms refresh every 15 minutes, but a chased/burned breakout remains
+    the same economic move until the hour changes.  A per-row episode let the
+    next candle silently resurrect a setup already rejected as too late.
+    """
+    ts = pd.Timestamp(row["timestamp"])
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return int(ts.floor("h").timestamp() * 1000)
+
+
 def _finite_positive(*values: float) -> bool:
     return all(math.isfinite(value) and value > 0 for value in values)
 
@@ -113,7 +128,7 @@ class RangeExpansionRealtimeV1(_QuoteEntryOnly, RangeExpansionObserverV4):
         if not _finite_positive(long_level, short_level, atr, close):
             return None
         return RealtimeEntryArm(
-            episode_id=_episode(row, index),
+            episode_id=_hour_episode(row),
             bar_index=index,
             long_level=long_level,
             short_level=short_level,

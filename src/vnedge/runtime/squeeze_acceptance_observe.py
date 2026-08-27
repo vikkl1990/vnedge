@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import cast
@@ -103,22 +104,33 @@ class SqueezeAcceptanceObserveRunner:
         self._prepared_frame = df
         timestamps = pd.to_datetime(df.get("timestamp"), utc=True)
         pending = self._restore_payload
-        decision_index: int | None = None
+        entry_index: int | None = None
+        decision_ts: pd.Timestamp | None = None
         if pending is not None:
             decision_ts = pd.Timestamp(pending.get("bar_ts"))
-            # V3 decisions are quote-timestamped, not candle-open stamped.
-            # Reattach them to the latest causal closed-bar row at or before
-            # the quote; never use a future candle during restart recovery.
-            matches = [i for i, ts in enumerate(timestamps) if ts <= decision_ts]
-            if not matches:
+            if decision_ts.tzinfo is None:
+                decision_ts = decision_ts.tz_localize("UTC")
+            else:
+                decision_ts = decision_ts.tz_convert("UTC")
+            # Quote entries belong to the candle that was FORMING at the
+            # decision timestamp.  Mapping to the previous closed candle made
+            # its already-observed low/high eligible to stop a future entry.
+            entry_open = decision_ts.floor(f"{int(self.costs.bar_minutes)}min")
+            exact = [i for i, ts in enumerate(timestamps) if ts == entry_open]
+            if exact:
+                entry_index = exact[-1]
+            else:
+                prior = [i for i, ts in enumerate(timestamps) if ts < entry_open]
+                entry_index = (prior[-1] + 1) if prior else 0
+            if entry_index < 0:
                 self._restore_error = "v3 scanner decision bar absent from warmup"
                 return
-            decision_index = matches[-1]
 
         for index in range(len(df)):
             self.current_bar_index = index
             self._update_arm_from_row(df.iloc[index], index)
-            if pending is not None and index == decision_index:
+            if pending is not None and index == entry_index:
+                assert decision_ts is not None
                 intent = pending.get("intent") or {}
                 side = str(intent.get("side") or "")
                 if side not in {"long", "short"}:
@@ -141,12 +153,12 @@ class SqueezeAcceptanceObserveRunner:
                     "intent_key": pending.get("intent_key"),
                     "reason": pending.get("signal_reason", ""),
                     "bar_ts": decision_ts.to_pydatetime(),
+                    "entry_ts": decision_ts.to_pydatetime(),
                     "notional_usd": float(intent.get("notional_usd") or self.notional_usd),
                     "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
                 }
                 self._restore_payload = None
-                continue
-            if self.open_meta is not None and decision_index is not None and index > decision_index:
+            if self.open_meta is not None and entry_index is not None and index >= entry_index:
                 row = df.iloc[index]
                 decision = self.exits.on_bar(
                     high=float(row["high"]),
@@ -154,6 +166,7 @@ class SqueezeAcceptanceObserveRunner:
                     close=float(row["close"]),
                     atr=self._row_atr(row),
                     bar_index=index,
+                    partial_entry_bar=index == entry_index,
                 )
                 decision = decision or self._strategy_exit(df, index, row)
                 if decision is not None:
@@ -162,6 +175,38 @@ class SqueezeAcceptanceObserveRunner:
                     )
                     self.acceptance.notify_flat(bar_index=index, net_won=net_won)
                     self.open_meta = None
+
+        # The entry candle can still be forming and therefore absent from the
+        # closed-bar frame.  Restore the durable position at its future index;
+        # the next close will be processed as a partial entry candle.
+        if pending is not None and entry_index == len(df):
+            intent = pending.get("intent") or {}
+            side = str(intent.get("side") or "")
+            if side not in {"long", "short"} or decision_ts is None:
+                self._restore_error = "v3 scanner restore has invalid side"
+                return
+            self.exits.open_from_fire(
+                side=cast(Side, side),
+                entry=float(pending["entry_price"]),
+                stop=float(pending["stop_price"]),
+                risk=float(pending["risk"]),
+                box_edge=float(pending["box_edge"]),
+                entry_bar=entry_index,
+            )
+            self.acceptance.position_open = True
+            self.acceptance.active_side = cast(Side, side)
+            self.open_meta = {
+                "side": side,
+                "entry": float(pending["entry_price"]),
+                "entry_bar": entry_index,
+                "intent_key": pending.get("intent_key"),
+                "reason": pending.get("signal_reason", ""),
+                "bar_ts": decision_ts.to_pydatetime(),
+                "entry_ts": decision_ts.to_pydatetime(),
+                "notional_usd": float(intent.get("notional_usd") or self.notional_usd),
+                "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
+            }
+            self._restore_payload = None
 
     def on_closed_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
         """Consume one causal closed-bar event.
@@ -174,12 +219,14 @@ class SqueezeAcceptanceObserveRunner:
         self.current_bar_index = index
         row = df.iloc[index]
         if self.open_meta is not None:
+            entry_bar = int(self.open_meta.get("entry_bar", index))
             decision = self.exits.on_bar(
                 high=float(row["high"]),
                 low=float(row["low"]),
                 close=float(row["close"]),
                 atr=self._row_atr(row),
                 bar_index=index,
+                partial_entry_bar=index == entry_bar,
             )
             decision = decision or self._strategy_exit(df, index, row)
             if decision is not None:
@@ -304,15 +351,18 @@ class SqueezeAcceptanceObserveRunner:
             stop=fire.stop,
             risk=fire.risk,
             box_edge=fire.box_edge,
-            entry_bar=self.current_bar_index,
+            # The last index is a closed candle.  This quote belongs to the
+            # next, currently-forming candle.
+            entry_bar=self.current_bar_index + 1,
         )
         self.open_meta = {
             "side": fire.side,
             "entry": fire.entry,
-            "entry_bar": self.current_bar_index,
+            "entry_bar": self.current_bar_index + 1,
             "intent_key": key,
             "reason": fire.reason,
             "bar_ts": ts,
+            "entry_ts": ts,
             "notional_usd": approval.notional_usd or self.notional_usd,
             "margin_usd": approval.margin_usd or self.margin_usd,
         }
@@ -454,10 +504,22 @@ class SqueezeAcceptanceObserveRunner:
             (decision.price / entry - 1) if side == "long" else (1 - decision.price / entry)
         ) * 10_000
         held = max(0, index - int(meta.get("entry_bar", index)))
-        fee_bps = self.costs.round_trip_bps(held)
-        net_bps = gross_bps - fee_bps
+        total_cost_bps = self.costs.round_trip_bps(held)
+        funding_bps = self.costs.funding_bps(held)
+        execution_cost_bps = total_cost_bps - funding_bps
+        net_bps = gross_bps - total_cost_bps
         notional = float(meta.get("notional_usd", self.notional_usd))
         net_usd = net_bps * notional / 10_000
+        gross_usd = gross_bps * notional / 10_000
+        profile = (
+            self.costs.cost_model.profile
+            if self.costs.cost_model is not None
+            else "legacy_fee_only"
+        )
+        entry_ts = meta.get("entry_ts") or meta.get("bar_ts")
+        entry_ts_text = entry_ts.isoformat() if isinstance(entry_ts, datetime) else str(entry_ts)
+        mfe_bps = decision.mfe / entry * 10_000
+        mae_bps = decision.mae / entry * 10_000
         self.outcomes += 1
         self.net_usd += net_usd
         self.journal.append(
@@ -470,11 +532,26 @@ class SqueezeAcceptanceObserveRunner:
                 "exit_price": decision.price,
                 "bars_held": held,
                 "virtual_net_usd": net_usd,
-                "fees_usd": fee_bps * notional / 10_000,
+                "gross_pnl_usd": gross_usd,
+                "fees_usd": execution_cost_bps * notional / 10_000,
+                "funding_usd": funding_bps * notional / 10_000,
+                "funding_bps": funding_bps,
+                "funding_complete": True,
                 "notional_usd": notional,
                 "margin_usd": float(meta.get("margin_usd", self.margin_usd)),
                 "captured_bps": gross_bps,
                 "net_bps": net_bps,
+                "execution_cost_bps": execution_cost_bps,
+                "round_trip_cost_bps": total_cost_bps,
+                "cost_profile": profile,
+                "cost_contract_version": "scanner_cost_v1",
+                "build_sha": os.environ.get("VNEDGE_BUILD_SHA", "unknown"),
+                "entry_ts": entry_ts_text,
+                "exit_ts": bar_ts.isoformat(),
+                "mfe_price_delta": decision.mfe,
+                "mae_price_delta": decision.mae,
+                "mfe_bps": mfe_bps,
+                "mae_bps": mae_bps,
                 "captured_bps_basis": "gross",
                 "net_won": net_bps > 0,
                 "signal_reason": meta.get("reason", ""),

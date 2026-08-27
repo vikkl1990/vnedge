@@ -171,7 +171,41 @@ def test_tick_protective_stop() -> None:
     assert eng.on_tick(price=60_050.0) is None
     decision = eng.on_tick(price=59_999.0)
     assert decision is not None and decision.reason == "stop_tick"
+    assert decision.price == 59_999.0
+    assert decision.mae == pytest.approx(113.0)
     assert eng.pos is None
+
+
+def test_partial_entry_candle_cannot_stop_on_pre_entry_extreme() -> None:
+    eng = ExitEngine()
+    _open_long(eng, entry=100.1, stop=99.5, risk=0.6, box_edge=100.0)
+
+    # This candle's low happened before the quote entry.  Its close remains a
+    # valid causal observation, but its historical extremes are forbidden.
+    decision = eng.on_bar(
+        high=100.5,
+        low=99.0,
+        close=100.2,
+        atr=0.25,
+        bar_index=100,
+        partial_entry_bar=True,
+    )
+
+    assert decision is None
+    assert eng.pos is not None
+    assert eng.pos.mfe == 0.0
+    assert eng.pos.mae == 0.0
+
+
+def test_tick_stop_books_executable_gap_price_not_unreachable_stop() -> None:
+    eng = ExitEngine()
+    _open_long(eng, entry=100.0, stop=99.5, risk=0.5, box_edge=99.8)
+
+    decision = eng.on_tick(price=99.2)
+
+    assert decision is not None
+    assert decision.price == 99.2
+    assert decision.mae == pytest.approx(0.8)
 
 
 def test_strategy_deterioration_closes_through_canonical_exit_engine() -> None:
