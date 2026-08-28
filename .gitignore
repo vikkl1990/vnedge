@@ -30,6 +30,8 @@ __pycache__/
 KILL
 /research/live_research/*
 !/research/live_research/README.md
+/research/evidence_bundles/*
+!/research/evidence_bundles/README.md
 
 # OS / editor
 .DS_Store

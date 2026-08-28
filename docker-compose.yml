@@ -76,6 +76,7 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./research/live_research:/app/research/live_research:ro
+      - ./research/evidence_bundles:/app/research/evidence_bundles:ro
     logging:
       driver: json-file
       options: {max-size: "20m", max-file: "5"}
@@ -293,6 +294,30 @@ services:
       - ./data:/app/data
       - ./research/live_research:/app/research/live_research
       - ./logs:/app/logs:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # Bounded backtest worker. It can write research evidence and Agent Gateway
+  # job state, but has no exchange credentials, order adapter, or promotion API.
+  agent-job-runner:
+    profiles: ["research"]
+    build: .
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - vnedge.agent_gateway.job_runner
+      - --seed-defaults
+    environment:
+      VNEDGE_BUILD_SHA: "${VNEDGE_BUILD_SHA:-dev}"
+      AGENT_JOB_RUNNER_INTERVAL_SECONDS: "${AGENT_JOB_RUNNER_INTERVAL_SECONDS:-60}"
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+      - ./research/live_research:/app/research/live_research
+      - ./research/evidence_bundles:/app/research/evidence_bundles
+    mem_limit: 2g
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}

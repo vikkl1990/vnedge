@@ -50,6 +50,7 @@ from vnedge.research.candidate_replay_executor import (
 from vnedge.research.candidate_replay_executor import (
     EXECUTOR_ID as CANDIDATE_REPLAY_EXECUTOR_ID,
 )
+from vnedge.research.evidence_bundle import publish_backtest_bundle
 from vnedge.strategy.ai_sandbox import AI_STRATEGY_ID_PREFIX
 from vnedge.strategy.strategy_registry import get_strategy_class
 
@@ -113,6 +114,8 @@ def run_pending_jobs(
     jobs_dir: Path | str,
     data_root: Path | str = "data",
     artifact_dir: Path | str | None = "research/live_research/agent_jobs",
+    evidence_bundle_dir: Path | str | None = None,
+    evidence_index_path: Path | str | None = None,
     max_jobs: int = 1,
     executor: JobExecutor | None = None,
 ) -> list[dict[str, Any]]:
@@ -128,7 +131,7 @@ def run_pending_jobs(
                 if executor is not None
                 else execute_job(running, data_root=data_root, artifact_dir=artifact_dir)
             )
-        except Exception as exc:  # noqa: BLE001 - one bad job must not stop the worker
+        except Exception as exc:
             logger.exception("agent job %s failed unexpectedly", running["job_id"])
             outcome = JobOutcome(
                 status=FAILED_STATUS,
@@ -137,6 +140,29 @@ def run_pending_jobs(
             )
 
         result = _research_only_payload(outcome.result)
+        report = result.get("backtest_report")
+        if (
+            outcome.status == DONE_STATUS
+            and evidence_bundle_dir is not None
+            and isinstance(report, dict)
+        ):
+            try:
+                manifest = publish_backtest_bundle(
+                    report,
+                    root=evidence_bundle_dir,
+                    index_path=evidence_index_path,
+                    code_sha=os.environ.get("VNEDGE_BUILD_SHA", "UNKNOWN"),
+                    engine_version=RUNNER_VERSION,
+                    parity_status="NOT_REPORTED",
+                )
+                result["evidence_bundle"] = manifest.model_dump(mode="json")
+            except Exception as exc:
+                logger.exception("agent job %s evidence publication failed", running["job_id"])
+                outcome = JobOutcome(
+                    status=FAILED_STATUS,
+                    error=f"evidence publication failed: {exc}",
+                    result=result,
+                )
         terminal_doc = {
             **running,
             "status": outcome.status,
@@ -641,6 +667,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("AGENT_JOB_RUNNER_ARTIFACT_DIR", "research/live_research/agent_jobs"),
     )
     parser.add_argument(
+        "--evidence-bundle-dir",
+        default=os.environ.get(
+            "AGENT_JOB_RUNNER_EVIDENCE_BUNDLE_DIR", "research/evidence_bundles"
+        ),
+    )
+    parser.add_argument(
+        "--evidence-index",
+        default=os.environ.get(
+            "AGENT_JOB_RUNNER_EVIDENCE_INDEX", "research/evidence_bundles/index.sqlite"
+        ),
+    )
+    parser.add_argument(
         "--interval-seconds",
         type=float,
         default=float(os.environ.get("AGENT_JOB_RUNNER_INTERVAL_SECONDS", "60")),
@@ -677,6 +715,8 @@ def main(argv: list[str] | None = None) -> int:
             jobs_dir=args.jobs_dir,
             data_root=args.data_root,
             artifact_dir=args.artifact_dir,
+            evidence_bundle_dir=args.evidence_bundle_dir,
+            evidence_index_path=args.evidence_index,
             max_jobs=max(1, args.max_per_cycle),
         )
         if args.json and completed:

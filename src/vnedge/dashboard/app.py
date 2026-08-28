@@ -20,6 +20,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -174,7 +175,7 @@ def _safe_float(value: object) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    if parsed != parsed:
+    if not math.isfinite(parsed):
         return None
     return parsed
 
@@ -399,11 +400,15 @@ def _render_runbooks_html(markdown: str) -> str:
     everything else is escaped verbatim inside <pre> blocks."""
     parts: list[str] = [
         "<!doctype html><meta charset='utf-8'><title>VNEDGE runbooks</title>",
-        "<style>body{background:#05070a;color:#e8eef6;font:14px/1.55 ui-monospace,"
-        "SFMono-Regular,Menlo,Consolas,monospace;max-width:860px;margin:24px auto;"
-        "padding:0 16px}h1,h2,h3{color:#4cb7ff;scroll-margin-top:12px}"
-        "h2{border-top:1px solid #263241;padding-top:18px}"
-        "pre{white-space:pre-wrap;margin:4px 0}:target{color:#f7bd54}</style>",
+        (
+            "<style>body{background:#05070a;color:#e8eef6;"
+            "font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"
+            "max-width:860px;margin:24px auto;padding:0 16px}"
+            "h1,h2,h3{color:#4cb7ff;scroll-margin-top:12px}"
+            "h2{border-top:1px solid #263241;padding-top:18px}"
+            "pre{white-space:pre-wrap;margin:4px 0}"
+            ":target{color:#f7bd54}</style>"
+        ),
     ]
     buffer: list[str] = []
 
@@ -589,6 +594,8 @@ def create_app(
     agent_audit_path: Path | None = None,
     agent_jobs_dir: Path | None = None,
     backtest_runs_path: Path | None = None,
+    evidence_bundle_root_path: Path | None = None,
+    evidence_bundle_catalog_path: Path | None = None,
     v2_dist_path: Path | None = None,
     session_issuer: SessionIssuer | None = None,
     quant_os_agent_gateway_dir: Path | None = None,
@@ -767,6 +774,10 @@ def create_app(
     agent_jobs_path = agent_jobs_dir or env_agent_jobs_dir()
     backtest_reports_path = backtest_runs_path or Path("research/backtest_runs")
     backtest_artifacts_path = Path("research/live_research/agent_jobs")
+    evidence_bundle_root = evidence_bundle_root_path or Path("research/evidence_bundles")
+    evidence_bundle_catalog = evidence_bundle_catalog_path or (
+        evidence_bundle_root / "index.sqlite"
+    )
     quant_os_gateway = QuantOSAgentGateway(
         quant_os_agent_gateway_dir or env_quant_os_agent_gateway_dir()
     )
@@ -1607,6 +1618,8 @@ def create_app(
             jobs_dir=agent_jobs_path,
             reports_dir=backtest_reports_path,
             artifact_dir=backtest_artifacts_path,
+            evidence_bundle_dir=evidence_bundle_root,
+            evidence_index_path=evidence_bundle_catalog,
             selected_run_id=selected,
         )
         return JSONResponse(payload, headers=_identity(user))

@@ -108,6 +108,8 @@ def test_registered_strategy_job_backtests_local_parquet_data(tmp_path):
         jobs_dir=jobs_dir,
         data_root=data_root,
         artifact_dir=tmp_path / "artifacts",
+        evidence_bundle_dir=tmp_path / "evidence",
+        evidence_index_path=tmp_path / "evidence" / "index.sqlite",
     )
 
     assert completed[0]["job_id"] == job["job_id"]
@@ -126,6 +128,10 @@ def test_registered_strategy_job_backtests_local_parquet_data(tmp_path):
     assert result["promotion_verdict"] == "NOT_EVALUATED_AGENT_JOB"
     assert result["can_trade"] is False
     assert result["can_promote"] is False
+    bundle = result["evidence_bundle"]
+    assert bundle["schema"] == "vnedge.research_evidence_bundle.v2"
+    assert bundle["governance"]["can_trade"] is False
+    assert (tmp_path / "evidence" / bundle["bundle_id"] / "report.json").exists()
 
 
 def test_runner_blocks_missing_data_and_live_enabled_requests(tmp_path):
