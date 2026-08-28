@@ -25,6 +25,7 @@ with fakes now (no keys) and wired to a live CcxtAccountProvider later.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -47,6 +48,8 @@ from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
 )
+from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
+from vnedge.runtime.execution_kernel import ExecutionKernel
 from vnedge.runtime.run_report import RunReport
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
@@ -144,6 +147,12 @@ class LiveTraderSession:
         self.settings = settings
         self.gateway = gateway
         self.om = order_manager
+        self.execution_context = ExecutionContext.from_trading_mode(settings.trading_mode)
+        self.execution_kernel = ExecutionKernel(
+            context=self.execution_context,
+            order_manager=order_manager,
+            adapter_kind=AdapterKind.LIVE,
+        )
         self.reconciler = reconciler
         self.accounts = account_provider
         self.symbol = symbol
@@ -406,7 +415,9 @@ class LiveTraderSession:
 
         key = make_intent_key(self.strategy.strategy_id, self.symbol, sig.side,
                               self.candles["timestamp"].iloc[-1])
-        order = await self.om.submit(intent, account, self.feed.market_state(), key, now=now)
+        order = await self.execution_kernel.submit(
+            intent, account, self.feed.market_state(), key, now=now
+        )
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
         elif order.state is OrderState.ACKNOWLEDGED:
@@ -455,7 +466,7 @@ class LiveTraderSession:
             ):
                 return
             self._pending_exit_orders.pop(base_key, None)
-        order = await self.om.submit(
+        order = await self.execution_kernel.submit(
             intent, account, self.feed.market_state(),
             intent_key=self._exit_intent_key(base_key), now=now,
         )
@@ -501,7 +512,7 @@ class LiveTraderSession:
             v = float(_atr_indicator(self.candles, self._trail_atr_window).iloc[-1])
         except Exception:  # noqa: BLE001 — trailing must never break the exit loop
             return 0.0
-        return v if v == v else 0.0
+        return v if math.isfinite(v) else 0.0
 
     def _max_holding_hit(self) -> bool:
         cap = self._max_holding_bars

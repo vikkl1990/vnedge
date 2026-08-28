@@ -35,13 +35,15 @@ from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.risk_manager import OrderIntent, PreTradeRiskGateway
-from vnedge.runtime.market_replay import MarketReplay, quote_from_price
 from vnedge.runtime.active_exit import (
     ActiveExitDecision,
     ActiveExitState,
     ExitEngine,
     ExitEngineConfig,
 )
+from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
+from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.market_replay import MarketReplay, quote_from_price
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -83,6 +85,15 @@ class PaperRunner:
         self.on_bar = on_bar
         self.gateway = gateway
         self.om = order_manager
+        self.execution_context = ExecutionContext.from_runner_mode(
+            config.mode,
+            live_clock=False,
+        )
+        self.execution_kernel = ExecutionKernel(
+            self.execution_context,
+            order_manager,
+            AdapterKind.SIMULATED,
+        )
         self.exchange = exchange
         self.journal = journal
         self.tracker = PortfolioTracker(exchange, config.starting_equity_usd)
@@ -165,7 +176,7 @@ class PaperRunner:
             quantity=close_qty, notional_usd=0.0, leverage=1.0,
             reduce_only=True, strategy_id=self.strategy.strategy_id,
         )
-        order = await self.om.submit(
+        order = await self.execution_kernel.submit(
             intent, self.tracker.account_state(), self.replay.market_state(self._bar_index),
             intent_key=f"exit|{self.config.symbol}|{reason}|{int(bar_ts.value)}",
             now=bar_ts.to_pydatetime(),
@@ -314,7 +325,7 @@ class PaperRunner:
                         else:
                             self.shadow_rejected += 1
                     else:
-                        order = await self.om.submit(
+                        order = await self.execution_kernel.submit(
                             intent, self.tracker.account_state(), market, key,
                             now=ts.to_pydatetime(),
                         )

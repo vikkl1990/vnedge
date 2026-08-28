@@ -74,6 +74,8 @@ from vnedge.runtime.daily_factory import (
     session_day,
     should_force_flatten,
 )
+from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
+from vnedge.runtime.execution_kernel import ExecutionKernel
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
     DECISION_LAG_MS,
@@ -220,6 +222,12 @@ class LivePaperSession:
         self.candles = history.tail(self._working_frame_limit).reset_index(drop=True)
         self.gateway = gateway
         self.om = order_manager
+        self.execution_context = ExecutionContext.from_runner_mode(config.mode)
+        self.execution_kernel = ExecutionKernel(
+            context=self.execution_context,
+            order_manager=order_manager,
+            adapter_kind=AdapterKind.SIMULATED,
+        )
         self.exchange = exchange
         self.journal = journal
         self._backfill_eval_keys: set[tuple[str, str, str, str]] = {
@@ -1420,6 +1428,8 @@ class LivePaperSession:
                 "symbol": self.config.symbol,
                 "timeframe": self.config.timeframe,
                 "mode": self.config.mode.value,
+                "data_clock": self.execution_context.clock.value,
+                "execution_stage": self.execution_context.stage.value,
                 "runner_state": (
                     "in_position"
                     if self._plan is not None
@@ -1798,7 +1808,7 @@ class LivePaperSession:
                     now,
                 )
             return
-        order = await self.om.submit(
+        order = await self.execution_kernel.submit(
             intent, self.tracker.account_state(), self._market_state(), key, now=now
         )
         if order.state is OrderState.RISK_REJECTED:
@@ -2273,7 +2283,7 @@ class LivePaperSession:
             strategy_id=self.strategy.strategy_id,
         )
         intent_key = self._exit_intent_key(base_key)
-        order = await self.om.submit(
+        order = await self.execution_kernel.submit(
             intent,
             self.tracker.account_state(),
             self._market_state(),
@@ -2862,6 +2872,8 @@ class LivePaperSession:
                 else round(float(row["close"]), 10)
             ),
             "mode": self.config.mode.value,
+            "data_clock": self.execution_context.clock.value,
+            "execution_stage": self.execution_context.stage.value,
             "fired": sig is not None,
             "signal_reason": sig.reason if sig is not None else None,
             "skip_reason": skip_reason,
@@ -3016,6 +3028,8 @@ class LivePaperSession:
             funding_rate=getattr(self.feed, "funding_rate", 0.0),
             session_stats={
                 "started_at": self._started_at.isoformat(),
+                "data_clock": self.execution_context.clock.value,
+                "execution_stage": self.execution_context.stage.value,
                 "bars_processed": self.bars_processed,
                 "evals": self.evals,
                 "live_evals": self.live_evals,

@@ -1,4 +1,9 @@
-"""Runner configuration for paper/shadow loops."""
+"""Runner configuration for legacy observe/simulated-execution loops.
+
+``SHADOW`` maps to the canonical OBSERVE stage and ``PAPER`` maps to the
+canonical SHADOW execution stage.  Keep the enum values for configuration
+compatibility; runtime authority comes from ``ExecutionContext``.
+"""
 
 from __future__ import annotations
 

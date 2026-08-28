@@ -3,12 +3,13 @@
 Loads from environment variables (prefix ``VNEDGE_``) and ``.env``. Nested
 models use ``__`` as the delimiter, e.g. ``VNEDGE_RISK__MAX_DAILY_LOSS_USD=20``.
 
-Operating-mode ladder (each step must be validated before the next):
+Runtime authority is defined by ``runtime.execution_contract`` as two axes:
+data clock (replay/live) and execution stage
+(observe/shadow_execution/live_small/live_full).  The historical PAPER and
+SHADOW enum values remain configuration aliases during migration:
 
-    backtest -> paper -> shadow -> live_small -> live_full
-
-    shadow                 live data through the full pipeline; orders are
-                           journaled and evaluated, never sent.
+    shadow                 observe-only; candidates/evidence, no OrderManager
+    paper                  canonical OrderManager with simulated adapter
     live_small             real orders, equity capped by live_small_capital_cap_usd.
     emergency_reduce_only  real orders allowed, but ONLY position-reducing ones.
 
