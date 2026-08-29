@@ -69,11 +69,17 @@ class QuoteUpdate:
     exchange_timestamped: bool = False
 
     def __post_init__(self) -> None:
-        if self.ts.tzinfo is None:
+        if self.ts.tzinfo is None or self.ts.utcoffset() is None:
             raise ValueError("quote event timestamp must be timezone-aware")
         received = self.received_ts or self.ts
-        if received.tzinfo is None:
+        if received.tzinfo is None or received.utcoffset() is None:
             raise ValueError("quote receive timestamp must be timezone-aware")
+        if not math.isfinite(self.bid) or self.bid <= 0:
+            raise ValueError("quote bid must be finite and positive")
+        if not math.isfinite(self.ask) or self.ask <= 0:
+            raise ValueError("quote ask must be finite and positive")
+        if self.ask < self.bid:
+            raise ValueError("quote ask must not be below bid")
         if self.sequence is not None and (
             isinstance(self.sequence, bool)
             or not isinstance(self.sequence, (int, str))
@@ -81,7 +87,8 @@ class QuoteUpdate:
             raise ValueError("quote sequence must be an integer, string, or None")
         if not self.source.strip():
             raise ValueError("quote source cannot be empty")
-        object.__setattr__(self, "received_ts", received)
+        object.__setattr__(self, "ts", self.ts.astimezone(UTC))
+        object.__setattr__(self, "received_ts", received.astimezone(UTC))
 
     @property
     def ingest_lag_seconds(self) -> float:

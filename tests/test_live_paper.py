@@ -635,8 +635,8 @@ async def test_shadow_outcome_reuses_scanner_frame_for_same_bar(tmp_path):
     assert strategy.prepare_calls == 2
 
 
-async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_path):
-    """A busy BBO must not starve the candle-path freshness clock."""
+async def test_continuous_quotes_do_not_repaint_the_candle_clock(tmp_path):
+    """A busy BBO is executable evidence, never a forming candle update."""
     now = datetime.now(UTC)
     feed = QuoteDrivenFeed(now=now)
     session, _ = build_session(
@@ -671,7 +671,7 @@ async def test_continuous_quotes_keep_time_machine_fresh_for_scanner_arms(tmp_pa
     assert session.time_machine is not None
     assert housekeeping_calls > 0
     age = session.time_machine.age_ms(SYM, session.config.timeframe, datetime.now(UTC))
-    assert age is not None and age < 1000
+    assert age is None
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
 
 
@@ -904,6 +904,7 @@ async def test_time_machine_wired_read_only(tmp_path):
     assert lc is not None and lc.is_closed  # closed bar reached the TM
     snap = session._tm_snapshot()
     assert snap is not None and "health" in snap and snap["degraded"] is False
+    assert snap["forming"] == {}  # recorder owns the only forming 1m market record
 
 
 async def test_time_machine_fault_never_breaks_trading(tmp_path):

@@ -64,3 +64,12 @@ def test_quote_evidence_queue_overflow_invalidates_window(tmp_path: Path) -> Non
     assert snapshot["rows_accepted"] == 1
     assert snapshot["queue_overflow_drops"] == 1
     assert snapshot["healthy"] is False
+
+
+def test_quote_evidence_refuses_crossed_input_before_persistence(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="below bid"):
+        QuoteUpdate(
+            ts=datetime(2026, 8, 29, 5, tzinfo=UTC),
+            bid=101.0,
+            ask=100.0,
+        )

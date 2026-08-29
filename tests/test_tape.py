@@ -46,12 +46,12 @@ def test_the_drop_count_is_reported_not_hidden() -> None:
 
 
 def test_book_rows_need_a_positive_top_of_book() -> None:
-    book = pd.DataFrame({"ts_ms": [1, 2, 3],
-                         "bid": [100.0, 0.0, 101.0],
-                         "ask": [100.5, 101.0, 0.0]})
+    book = pd.DataFrame({"ts_ms": [1, 2, 3, 4],
+                         "bid": [100.0, 0.0, 101.0, 102.0],
+                         "ask": [100.5, 101.0, 0.0, 101.5]})
     cleaned, result = clean_book(book)
     assert list(cleaned.ts_ms) == [1]
-    assert result.dropped == 2
+    assert result.dropped == 3
 
 
 def test_empty_and_columnless_frames_are_safe() -> None:

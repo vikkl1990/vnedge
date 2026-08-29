@@ -322,6 +322,19 @@ def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
     assert [row["trade_id"] for row, _ in rows] == ["a", "b"]
 
 
+def test_trade_batch_rejects_missing_id_and_future_timestamp():
+    rows, rejected = _normalize_trade_batch(
+        [
+            {"timestamp": 1_000, "price": 100, "amount": 1},
+            {"id": "future", "timestamp": 20_001, "price": 100, "amount": 1},
+            {"id": "ok", "timestamp": 10_000, "price": 100, "amount": 1},
+        ],
+        received_at_ms=15_000,
+    )
+    assert rejected == 2
+    assert [row["trade_id"] for row, _ in rows] == ["ok"]
+
+
 class _TradeSink:
     def __init__(self):
         self.timestamps = []
@@ -528,6 +541,7 @@ async def test_delta_recorder_writes_book_and_trade_shards(tmp_path):
     assert trades.loc[0, "price"] == 62698.0
     assert trades.loc[0, "amount"] == 3.0
     assert trades.loc[0, "side"] == "buy"  # buyer is the taker/aggressor
+    assert trades.loc[0, "trade_id"].startswith("delta-synthetic:")
 
 
 def test_books_only_does_not_subscribe_to_trades() -> None:

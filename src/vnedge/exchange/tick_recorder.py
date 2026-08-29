@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import heapq
 import logging
 import math
@@ -45,6 +46,7 @@ from vnedge.data.candles import (
     floor_time,
 )
 from vnedge.data.lake_health import LakeHealthMonitor
+from vnedge.data.market_records import PublicTrade
 from vnedge.data.symbols import canonical_symbol
 from vnedge.runtime.latency_store import RecorderLatencyStore
 from vnedge.runtime.latency_tracker import TRADE_INGEST_MS, LatencyTracker
@@ -60,11 +62,14 @@ _SKIP_LOG_SECONDS = 60.0
 # second so a slightly late predecessor is ordered before the canonical candle
 # builder sees it. This is bounded event-time ordering, not a data rewrite.
 _TRADE_REORDER_MS = 250
+_TRADE_FUTURE_SLACK_MS = 5_000
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
 
 def _normalize_trade_batch(
     trades: list[dict[str, Any]],
+    *,
+    received_at_ms: int | None = None,
 ) -> tuple[list[tuple[dict[str, Any], str | None]], int]:
     """Validate and stably order one CCXT trade update.
 
@@ -74,6 +79,7 @@ def _normalize_trade_batch(
     """
     accepted: list[tuple[dict[str, Any], str | None]] = []
     rejected = 0
+    now_ms = received_at_ms or int(datetime.now(UTC).timestamp() * 1000)
     for trade in trades:
         try:
             timestamp = int(trade["timestamp"])
@@ -82,14 +88,22 @@ def _normalize_trade_batch(
         except (KeyError, TypeError, ValueError, OverflowError):
             rejected += 1
             continue
-        if timestamp <= 0 or not math.isfinite(price) or price <= 0:
+        if (
+            timestamp <= 0
+            or timestamp > now_ms + _TRADE_FUTURE_SLACK_MS
+            or not math.isfinite(price)
+            or price <= 0
+        ):
             rejected += 1
             continue
         if not math.isfinite(amount) or amount <= 0:
             rejected += 1
             continue
         trade_id = trade.get("id")
-        key = f"{timestamp}:{trade_id}" if trade_id not in (None, "") else None
+        if trade_id in (None, ""):
+            rejected += 1
+            continue
+        key = f"{timestamp}:{trade_id}"
         accepted.append(
             (
                 {
@@ -97,7 +111,7 @@ def _normalize_trade_batch(
                     "price": price,
                     "amount": amount,
                     "side": str(trade.get("side") or ""),
-                    "trade_id": str(trade_id) if trade_id not in (None, "") else None,
+                    "trade_id": str(trade_id),
                 },
                 key,
             )
@@ -354,11 +368,21 @@ def _book_row(
     bid_px_i/bid_qty_i/ask_px_i/ask_qty_i ladder for i in [0, levels). Missing
     levels are padded with NaN price / 0.0 qty so the schema is fixed-width."""
     bids, asks = ob["bids"], ob["asks"]
+    if not bids or not asks:
+        raise ValueError("book must contain at least one bid and ask")
+    best_bid = float(bids[0][0])
+    best_ask = float(asks[0][0])
+    if not math.isfinite(best_bid) or best_bid <= 0:
+        raise ValueError("book bid must be finite and positive")
+    if not math.isfinite(best_ask) or best_ask <= 0:
+        raise ValueError("book ask must be finite and positive")
+    if best_ask < best_bid:
+        raise ValueError("book ask must not be below bid")
     row: dict[str, Any] = {
         "ts_ms": ts_ms,
-        "bid": float(bids[0][0]),
+        "bid": best_bid,
         "bid_qty": float(bids[0][1]),
-        "ask": float(asks[0][0]),
+        "ask": best_ask,
         "ask_qty": float(asks[0][1]),
     }
     if received_ts_ms is not None:
@@ -431,7 +455,17 @@ class _Buffer:
             final = d / name
             tmp = d / f".{name}.tmp"
             chunk.to_parquet(tmp, index=False)
+            # Atomic rename protects concurrent readers; fsync protects the
+            # rebuild tape across a host crash. A boundary trade cannot reach
+            # CandlePipeline until this method returns.
+            with tmp.open("rb") as handle:
+                os.fsync(handle.fileno())
             os.replace(tmp, final)  # atomic publish; readers only see complete shards
+            directory_fd = os.open(d, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         self._seq += 1
         self._rows.clear()
         self._last_flush = now
@@ -645,10 +679,24 @@ class TickRecorder:
             if last_timestamp is not None and timestamp < last_timestamp:
                 late += 1
                 continue
+            side = str(row.get("side") or "").lower()
+            public_trade = PublicTrade(
+                exchange=getattr(self, "exchange_id", buf.exchange),
+                symbol=symbol,
+                trade_id=str(row["trade_id"]),
+                timestamp=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
+                price=row["price"],
+                amount=row["amount"],
+                is_buyer_maker=(
+                    False if side == "buy" else True if side == "sell" else None
+                ),
+            )
+            public_trade.validate_clock(datetime.now(UTC))
+            durable_row = public_trade.storage_row()
             # The raw row is the rebuild tape. Add it first and atomically
             # publish the shard before a boundary trade is allowed to emit the
             # prior closed candle. Forming-candle trades remain batched.
-            buf.add(row)
+            buf.add(durable_row)
             needs_durable_flush = bool(
                 self.candle_sink is not None
                 and callable(getattr(self.candle_sink, "would_publish_on_trade", None))
@@ -662,9 +710,9 @@ class TickRecorder:
                         symbol,
                         {
                             "timestamp": timestamp,
-                            "price": row["price"],
-                            "amount": row["amount"],
-                            "side": row["side"],
+                            "price": public_trade.price,
+                            "amount": public_trade.amount,
+                            "side": durable_row["side"],
                         },
                     )
                 except ValueError as exc:
@@ -898,6 +946,8 @@ class DeltaTickRecorder:
         )
         self.trade_count = 0
         self.book_count = 0
+        self._seen_trade_ids: set[str] = set()
+        self._seen_trade_order: deque[str] = deque()
         self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols}
         self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
         channels = tuple(
@@ -951,13 +1001,52 @@ class DeltaTickRecorder:
         buf = self._trade_bufs.get(sym)
         if buf is None:
             return
-        row = {
-            "ts_ms": int(trade["ts_ms"]),
-            "price": float(trade["price"]),
-            "amount": float(trade["size"]),
-            "side": trade.get("side", ""),
-            "trade_id": trade.get("trade_id"),
-        }
+        trade_id = trade.get("trade_id")
+        if trade_id in (None, ""):
+            # Delta's public ``all_trades`` payload currently omits a native
+            # trade id. Keep the raw-tape identity mandatory by deriving a
+            # stable, explicitly-labelled fallback from every available event
+            # identity field. Exact websocket replays then deduplicate; two
+            # indistinguishable prints cannot honestly be separated without a
+            # venue sequence and remain one measurement atom.
+            identity = "|".join(
+                str(trade.get(field) or "")
+                for field in (
+                    "ts_ms",
+                    "price",
+                    "size",
+                    "buyer_role",
+                    "seller_role",
+                    "sequence",
+                )
+            )
+            digest = hashlib.sha256(f"{sym}|{identity}".encode()).hexdigest()[:24]
+            trade_id = f"delta-synthetic:{digest}"
+        trade_id = str(trade_id)
+        if trade_id in self._seen_trade_ids:
+            return
+        side = str(trade.get("side") or "").lower()
+        try:
+            public_trade = PublicTrade(
+                exchange=self.exchange_id,
+                symbol=sym,
+                trade_id=str(trade_id),
+                timestamp=datetime.fromtimestamp(int(trade["ts_ms"]) / 1000, tz=UTC),
+                price=trade["price"],
+                amount=trade["size"],
+                is_buyer_maker=(
+                    False if side == "buy" else True if side == "sell" else None
+                ),
+            )
+            public_trade.validate_clock(datetime.now(UTC))
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            logger.warning("%s trade skipped: %s", sym, exc)
+            return
+        row = public_trade.storage_row()
+        if len(self._seen_trade_order) >= _SEEN_TRADE_IDS:
+            self._seen_trade_ids.discard(self._seen_trade_order.popleft())
+        self._seen_trade_ids.add(trade_id)
+        self._seen_trade_order.append(trade_id)
         self.recorder_latency.record(
             TRADE_INGEST_MS,
             max(0.0, float(self._epoch_ms() - int(row["ts_ms"]))),

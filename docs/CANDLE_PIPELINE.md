@@ -5,6 +5,44 @@ depending on exchange-provided OHLCV. The implementation is in
 `vnedge.data.candles`; existing exchange OHLCV ingestion remains compatible and
 unchanged.
 
+## Frozen market records
+
+The canonical data plane has three persisted record contracts and one mutable
+memory bucket. They are deliberately not interchangeable:
+
+| Record | Authority | Persisted | Consumer |
+|---|---|---|---|
+| `PublicTrade` | trade price/size/aggressor | raw trade shard | `CandlePipeline` only |
+| `LaneBBO` | executable bid/ask seen by one lane | quote evidence shard | accept/chase/tick-stop replay |
+| closed `Candle` | causal OHLCV for one identity | candle Parquet | scanner `prepare` / arm |
+| forming 1m `Candle` | current observed trade bucket | never | UI ghost + recorder health |
+
+`PublicTrade` logically includes `(exchange, canonical_symbol, trade_id)`;
+exchange and symbol live in Parquet partition names. Quote notional and taker
+buy volume are derived once from price, amount, and `is_buyer_maker`. Invalid,
+future-clock, and id-less public prints are rejected at ingress. Delta's public
+feed currently omits a native trade id, so its recorder assigns an explicit
+`delta-synthetic:` content identity and deduplicates it within a bounded
+window.
+
+`LaneBBO` is captured after lane dequeue with event time, receipt time, native
+sequence, source, overflow counters, lane id, and capture time. Non-positive or
+crossed books are invalid. Replay order is `(event time, receipt time, native
+sequence, stable input order)`. BBO/mid never creates or repaints OHLC.
+
+The hot/warm/cold split is therefore:
+
+```text
+hot:   one forming 1m candle + last BBO + bounded quote queue
+warm:  immutable router closed-candle objects
+cold:  fsync'd raw-trade shards + atomic canonical-candle Parquet
+```
+
+The raw trade shard is fsync'd before a boundary trade may publish a closed
+candle. Parquet candle persistence remains the audit/restart sink; any persist
+failure marks the producer unhealthy and blocks new arms without blocking
+reduce-only exits.
+
 ```mermaid
 flowchart TD
     WS["Exchange public trade stream"] --> INTEGRITY["StreamIntegrityGuard"]

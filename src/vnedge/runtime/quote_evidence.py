@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from vnedge.data.market_records import LaneBBO
 from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.live_feed import QuoteUpdate
 
@@ -77,23 +78,21 @@ class QuoteEvidenceRecorder:
     def record(self, quote: QuoteUpdate, *, source_overflow_drops: int) -> None:
         """Enqueue one quote without blocking the decision loop."""
         received = quote.received_ts or quote.ts
-        row = {
-            "ts_ms": int(quote.ts.timestamp() * 1000),
-            "received_ts_ms": int(received.timestamp() * 1000),
-            "bid": float(quote.bid),
-            "ask": float(quote.ask),
-            # Keep a stable Parquet type across venues that mix integer and
-            # string native update ids.
-            "sequence": "" if quote.sequence is None else str(quote.sequence),
-            "source": str(quote.source),
-            "exchange_timestamped": bool(quote.exchange_timestamped),
-            "overflow_drops": int(source_overflow_drops),
-            "capture_overflow_drops": self.queue_overflow_drops,
-            "captured_at_ms": int(datetime.now(UTC).timestamp() * 1000),
-            "lane_id": self.lane_id,
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-        }
+        row = LaneBBO(
+            lane_id=self.lane_id,
+            exchange=self.exchange,
+            symbol=self.symbol,
+            bid=quote.bid,
+            ask=quote.ask,
+            ts=quote.ts,
+            received_ts=received,
+            sequence=quote.sequence,
+            source=quote.source,
+            overflow_drops=int(source_overflow_drops),
+            capture_overflow_drops=self.queue_overflow_drops,
+            captured_at_ms=int(datetime.now(UTC).timestamp() * 1000),
+            exchange_timestamped=quote.exchange_timestamped,
+        ).storage_row()
         try:
             self._queue.put_nowait(row)
             self.rows_accepted += 1

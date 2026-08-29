@@ -317,9 +317,10 @@ class LivePaperSession:
         self.gap_fills = 0  # gaps healed by REST backfill
         self.discontinuity_events = 0  # large open≠prev-close jumps (soft)
         self.future_candles = 0  # bar claims to close in the future (skew/convention)
-        # Time Machine (read-only observability) — multi-TF forming+closed
-        # awareness for this lane's timeframe. FAIL-CLOSED: any error updating it
-        # is swallowed and never touches the decision/execution path.
+        # Time Machine (read-only observability) tracks the lane's CLOSED
+        # decision clock only. The market-data producer owns the sole forming
+        # 1m trade bucket; a venue forming 5m/15m/1h kline would be a competing
+        # market record and is deliberately not copied into lane state.
         self.time_machine: TimeMachine | None = (
             TimeMachine([config.symbol], [config.timeframe])
             if config.timeframe in {"1m", "5m", "15m", "1h", "4h"}
@@ -582,10 +583,7 @@ class LivePaperSession:
             # being evaluated, not a newer shared-feed value.
             self.exchange.set_quote(self.config.symbol, update.bid, update.ask)
             quote_clock = update.received_ts or update.ts
-            self._feed_time_machine(
-                quote_clock,
-                live_mid=(update.bid + update.ask) / 2.0,
-            )
+            self._feed_time_machine(quote_clock)
             before_candidates = observer.candidates
             before_approved = observer.fires
             before_rejected = observer.rejected
@@ -1245,8 +1243,6 @@ class LivePaperSession:
         self,
         now: datetime,
         closed_row: list | None = None,
-        *,
-        live_mid: float | None = None,
     ) -> None:
         """Feed the Time Machine. FAIL-CLOSED: never raises into the run loop.
 
@@ -1260,25 +1256,6 @@ class LivePaperSession:
             if closed_row is not None:
                 self.time_machine.on_kline_update(
                     sym, tf, self._tm_kline(closed_row, now), is_closed=True
-                )
-            forming = getattr(self.feed, "forming_candle", None)
-            if forming:
-                forming_row = list(forming)
-                if live_mid is not None and live_mid > 0:
-                    # Quote-acceptance lanes can receive thousands of BBO
-                    # updates between exchange OHLCV events.  Fold the
-                    # executable midpoint into the read-only forming view so
-                    # Time Machine freshness follows real market evidence,
-                    # not the much slower kline publisher.  Volume remains the
-                    # exchange-reported value; only H/L/C are advanced.
-                    forming_row[2] = max(float(forming_row[2]), live_mid)
-                    forming_row[3] = min(float(forming_row[3]), live_mid)
-                    forming_row[4] = live_mid
-                self.time_machine.on_kline_update(
-                    sym,
-                    tf,
-                    self._tm_kline(forming_row, now),
-                    is_closed=False,
                 )
             self.time_machine.check_health(now)
             self._tm_degraded = False

@@ -54,8 +54,12 @@ def clean_trades(frame):
 
 
 def clean_book(frame):
-    """Drop unusable book snapshots (non-positive top of book)."""
+    """Drop unusable book snapshots (non-positive or crossed top of book)."""
     rows_in = len(frame)
     if rows_in and {"bid", "ask"} <= set(frame.columns):
-        frame = frame[(frame["bid"] > 0) & (frame["ask"] > 0)]
+        frame = frame[
+            (frame["bid"] > 0)
+            & (frame["ask"] > 0)
+            & (frame["ask"] >= frame["bid"])
+        ]
     return frame, TapeCleanResult(rows_in=rows_in, rows_out=len(frame))
