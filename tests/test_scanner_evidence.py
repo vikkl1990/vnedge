@@ -11,6 +11,7 @@ from vnedge.research.scanner_evidence import (
     normalize_canonical_candles,
     read_lane_evals,
 )
+from vnedge.runtime.squeeze_observe import ScannerApproval
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.scanner_contracts import ScannerRuntimeContract
@@ -61,7 +62,7 @@ def test_runtime_frame_normalization_preserves_explicit_non_ok_state():
     assert normalized.loc[0, "candle_source"] == "exchange_ohlcv"
 
 
-def test_gap_contaminates_exactly_the_causal_warmup_horizon():
+def test_skipped_empty_bucket_does_not_contaminate_warmup():
     frame = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(
@@ -75,6 +76,24 @@ def test_gap_contaminates_exactly_the_causal_warmup_horizon():
                 ]
             ),
             "data_quality": ["ok"] * 6,
+        }
+    )
+
+    qualified, breaks = apply_contiguous_warmup_quality(
+        frame, timeframe_seconds=900, warmup_bars=2
+    )
+
+    assert breaks == 0
+    assert qualified["data_quality"].tolist() == ["ok"] * 6
+
+
+def test_explicit_gap_contaminates_exactly_the_causal_warmup_horizon():
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2026-01-01", periods=6, freq="15min", tz="UTC"
+            ),
+            "data_quality": ["ok", "ok", "gap", "ok", "ok", "ok"],
         }
     )
 
@@ -493,7 +512,13 @@ def test_quote_replay_runtime_start_rebuilds_same_bounded_episode_clock(monkeypa
 
     # Seed is warmup+1 rows (00:05, 00:10, 00:15); the 00:20 close then has
     # the same process-local episode ordinal as a live runner started at 00:20:30.
-    transition = next(r for r in result["records"] if r["kind"] == "scanner_transition")
+    transition = next(
+        r
+        for r in result["records"]
+        if r["kind"] == "scanner_transition"
+        and r["payload"].get("source") == "canonical_close"
+        and r["payload"].get("episode_id") == 4
+    )
     assert transition["payload"]["episode_id"] == 4
 
 
@@ -552,6 +577,7 @@ def test_quote_replay_live_parity_reports_keys_payloads_and_window():
                 },
             }
         ],
+        "approval_parity_eligible": True,
     }
     live = [
         replay["records"][0],
@@ -617,7 +643,8 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     assert row["virtual_resolved"] == 1
     assert row["virtual_pending"] == 0
     assert row["gross_usd"] == 10.0
-    assert row["net_execution_usd"] == 9.7
+    assert row["observed_shadow_net_usd"] == 9.7
+    assert report["performance_eligible"] is False
 
 
 def test_journal_report_reads_only_a_bounded_recent_tail(tmp_path: Path):
@@ -645,6 +672,8 @@ def test_journal_report_reads_only_a_bounded_recent_tail(tmp_path: Path):
     assert "recent_v1" in rows
     assert rows.get("old_v1", {}).get("evaluations", 0) < 100
     assert report["source_window"]["effective_bytes_per_journal"] == 256
+    assert report["source_window"]["complete"] is False
+    assert "bounded_journal_tail" in report["performance_blockers"]
     assert report["fires"] == 1
 
 
@@ -827,6 +856,7 @@ def test_live_parity_audits_evidence_window_not_warmup_history():
                 },
             }
         ],
+        "approval_parity_eligible": True,
     }
     live = [
         replay["records"][0],
@@ -886,6 +916,7 @@ def test_live_parity_normalizes_historical_native_symbol_intent_keys():
             "end_exclusive": "2026-01-01T01:00:00+00:00",
         },
         "records": [replay_record],
+        "approval_parity_eligible": True,
     }
 
     result = scanner_evidence.compare_quote_replay_to_live(replay, [live_record])
@@ -916,7 +947,8 @@ def test_live_parity_rejects_external_book_capture_even_when_intents_match():
     assert result["exact_parity"] is False
     assert result["input_eligible"] is False
     assert result["input_ineligible_reasons"] == [
-        "quote_capture_not_parity_eligible:external_book"
+        "quote_capture_not_parity_eligible:external_book",
+        "approval_fire_guard_not_replayed",
     ]
 
 
@@ -930,3 +962,99 @@ def test_load_evidence_frame_concatenates_shard_directories(tmp_path: Path):
 
     assert len(frame) == 2
     assert set(frame.columns) == {"ts_ms", "bid", "ask"}
+
+
+def test_quote_replay_uses_shared_approval_guard(monkeypatch):
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _quote_strategy_class())
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: _quote_contract())
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=2, freq="5min", tz="UTC"),
+            "open": [100.0, 101.1], "high": [100.5, 101.3],
+            "low": [99.5, 100.8], "close": [100.0, 101.15],
+            "volume": [10.0, 12.0],
+        }
+    )
+    boundary = pd.Timestamp("2026-01-01T00:05:00Z")
+    quotes = pd.DataFrame(
+        {
+            "ts_ms": [int(boundary.timestamp() * 1000), int(boundary.timestamp() * 1000) + 600],
+            "bid": [101.09, 101.10], "ask": [101.10, 101.11], "sequence": [1, 2],
+        }
+    )
+
+    result = scanner_evidence.replay_quote_scanner(
+        "test_quote_scanner",
+        candles,
+        quotes,
+        approve_fire=lambda fire, index, ts: ScannerApproval(
+            approved=False,
+            intent={},
+            failed_checks=("cost_gate:test",),
+            explanation="test reject",
+            intent_key=f"test_quote_scanner|BTCUSDT|{fire.side}|{int(ts.timestamp() * 1000)}",
+        ),
+    )
+
+    intent = next(row for row in result["records"] if row["kind"] == "shadow_intent")
+    assert intent["payload"]["approved"] is False
+    assert intent["payload"]["failed_checks"] == ["cost_gate:test"]
+    assert result["approval_parity_eligible"] is True
+    assert "risk_gateway_not_replayed" not in result["performance_blockers"]
+
+
+def test_lane_consumed_quote_replay_preserves_invalid_rows(monkeypatch):
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _quote_strategy_class())
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: _quote_contract())
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=2, freq="5min", tz="UTC"),
+            "open": [100.0, 100.0], "high": [101.0, 101.0],
+            "low": [99.0, 99.0], "close": [100.0, 100.0], "volume": [1.0, 1.0],
+        }
+    )
+    ts_ms = int(pd.Timestamp("2026-01-01T00:05:00Z").timestamp() * 1000)
+    quotes = pd.DataFrame(
+        {
+            "ts_ms": [ts_ms], "received_ts_ms": [ts_ms],
+            "bid": [0.0], "ask": [0.0], "sequence": [1],
+            "lane_id": ["lane"], "captured_at_ms": [1], "capture_overflow_drops": [0],
+        }
+    )
+
+    result = scanner_evidence.replay_quote_scanner("test_quote_scanner", candles, quotes)
+
+    assert result["quotes_clean"] == 1
+    assert result["quotes_dropped"] == 0
+    assert any(
+        row["kind"] == "scanner_transition"
+        and row["payload"].get("state") == "invalid_quote"
+        for row in result["records"]
+    )
+
+
+def test_journal_report_counts_transitions_and_unmatched_outcome(tmp_path: Path):
+    journal = tmp_path / "lifecycle.journal.jsonl"
+    records = [
+        {"kind": "scanner_transition", "payload": {
+            "strategy_id": "quote_v1", "symbol": "BTCUSDT",
+            "state": "armed_long", "episode_id": 7,
+        }},
+        {"kind": "shadow_outcome", "payload": {
+            "intent_key": "quote_v1|BTCUSDT|long|1",
+            "strategy_id": "quote_v1", "symbol": "BTCUSDT",
+            "captured_bps": 10.0, "gross_pnl_usd": 3.0,
+            "fees_usd": 1.0, "virtual_net_usd": 2.0,
+        }},
+    ]
+    journal.write_text("\n".join(json.dumps(row) for row in records) + "\n")
+
+    report = scanner_evidence.build_journal_report([journal])
+    row = report["strategies"][0]
+
+    assert row["armed_entries"] == 1
+    assert row["quote_lifecycle"] == {"armed_long": 1}
+    assert row["virtual_resolved"] == 1
+    assert row["unmatched_outcomes"] == 1
+    assert row["observed_shadow_net_usd"] == 2.0
+    assert "unmatched_outcome_lifecycle" in report["performance_blockers"]

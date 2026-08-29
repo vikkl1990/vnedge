@@ -19,10 +19,12 @@ from typing import Any
 import pandas as pd  # type: ignore[import-untyped]
 
 from vnedge.data.symbols import canonical_symbol
-from vnedge.data.tape import clean_book
+from vnedge.data.tape import TapeCleanResult, clean_book
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.latency_tracker import timeframe_to_seconds
+from vnedge.runtime.quote_ordering import quote_order_key
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
+from vnedge.runtime.squeeze_observe import FireGuard
 from vnedge.strategy.scanner_contracts import (
     resolve_scanner_cost_profile,
     scanner_runtime_contract,
@@ -102,33 +104,40 @@ def apply_contiguous_warmup_quality(
     timeframe_seconds: int,
     warmup_bars: int,
 ) -> tuple[pd.DataFrame, int]:
-    """Block decisions until a gap has rolled fully out of feature warm-up.
+    """Propagate explicit canonical faults through the feature warm-up.
 
-    Canonical storage intentionally omits synthetic bars, so a raw Parquet
-    frame cannot claim every row is decision-safe merely because each stored
-    candle is internally valid. A missing identity contaminates rolling
-    features through the scanner's causal warm-up horizon.
+    Canonical storage deliberately skips empty buckets. Timestamp spacing is
+    therefore not evidence of corruption and must not quarantine valid sparse
+    tape. Only an existing non-OK state or an explicit timeout/repair marker
+    starts a causal quarantine window.
     """
     if timeframe_seconds <= 0 or warmup_bars < 0:
         raise ValueError("timeframe_seconds must be positive and warmup_bars non-negative")
     frame = candles.copy()
-    times = pd.to_datetime(frame["timestamp"], utc=True)
-    breaks = times.diff().ne(pd.Timedelta(seconds=timeframe_seconds))
-    if len(breaks):
-        breaks.iloc[0] = False
-    break_count = int(breaks.sum())
-    contaminated = (
-        breaks.astype(int)
-        .rolling(window=max(1, warmup_bars + 1), min_periods=1)
-        .max()
-        .astype(bool)
-    )
+    # Validate the boundary type, but never infer a fault from time spacing.
+    pd.to_datetime(frame["timestamp"], utc=True)
     existing_ok = (
         frame["data_quality"].astype(str).str.lower().eq("ok")
         if "data_quality" in frame.columns
         else pd.Series(True, index=frame.index)
     )
-    frame["data_quality"] = (existing_ok & ~contaminated).map(
+    explicit_breaks = ~existing_ok
+    for column in (
+        "canonical_bar_timeout",
+        "continuity_break",
+        "missing_expected_child",
+        "repair_hole",
+    ):
+        if column in frame.columns:
+            explicit_breaks |= frame[column].fillna(False).astype(bool)
+    break_count = int(explicit_breaks.sum())
+    contaminated = (
+        explicit_breaks.astype(int)
+        .rolling(window=max(1, warmup_bars + 1), min_periods=1)
+        .max()
+        .astype(bool)
+    )
+    frame["data_quality"] = (~contaminated).map(
         {True: "ok", False: "gap"}
     )
     return frame, break_count
@@ -301,9 +310,10 @@ def replay_scanner(
                 "entry": entry,
                 "exit": exit_price,
                 "gross_bps": gross,
-                # Backward-compatible aliases retain the conservative number.
-                "cost_bps": conservative_cost,
-                "net_bps": gross - conservative_cost,
+                # Unqualified cost/net fields mean booked execution economics.
+                # The conservative pre-trade reserve remains explicitly gated.
+                "cost_bps": realized_cost,
+                "net_bps": gross - realized_cost,
                 "execution_cost_bps": realized_cost,
                 "gate_cost_bps": conservative_cost,
                 "net_execution_bps": gross - realized_cost,
@@ -355,7 +365,7 @@ def replay_scanner(
         "gross_bps": sum(float(item["gross_bps"]) for item in outcomes),
         "net_execution_bps": sum(float(item["net_execution_bps"]) for item in outcomes),
         "net_gate_bps": sum(float(item["net_gate_bps"]) for item in outcomes),
-        "net_bps": sum(float(item["net_gate_bps"]) for item in outcomes),
+        "net_bps": sum(float(item["net_execution_bps"]) for item in outcomes),
         "failed_gates": dict(Counter(
             gate for row in rows for gate in row.get("all_failed_gates", [])
         )),
@@ -419,17 +429,19 @@ def replay_quote_scanner(
     evidence_end: datetime | None = None,
     runtime_start: datetime | None = None,
     context_candles: dict[str, pd.DataFrame] | None = None,
+    approve_fire: FireGuard | None = None,
 ) -> dict[str, Any]:
     """Drive the runtime quote engine with recorded canonical bars and BBO.
 
     Event ordering matches the live loop: quotes strictly before a close see
     the previous arm; the closed bar is applied next; quotes exactly on the
-    boundary see the new arm. Invalid BBO rows are removed through the same
-    tape contract used by other raw-lake consumers and the dropped count is
-    part of the evidence artifact.
+    boundary see the new arm. Lane-consumed evidence is not cleaned again:
+    replay must feed the exact rows the live engine consumed. External book
+    evidence is cleaned for diagnostics but remains parity-ineligible.
 
-    This is read-only evidence. The engine has no gateway callback and cannot
-    submit an order.
+    This is read-only evidence and cannot submit an order. Approval parity is
+    eligible only when the caller supplies the same deterministic ``FireGuard``
+    as the lane; the default artifact proves quote mechanism only.
     """
     symbol = canonical_symbol(symbol)
     contract = scanner_runtime_contract(strategy_id)
@@ -480,7 +492,11 @@ def replay_quote_scanner(
         "captured_at_ms",
         "capture_overflow_drops",
     }.issubset(quotes.columns)
-    cleaned, cleaning = clean_book(quotes.copy())
+    if lane_consumed_capture:
+        cleaned = quotes.copy()
+        cleaning = TapeCleanResult(rows_in=len(quotes), rows_out=len(quotes))
+    else:
+        cleaned, cleaning = clean_book(quotes.copy())
     cleaned = cleaned.reset_index(drop=True)
     candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
     window_start = candle_times.iloc[0].to_pydatetime()
@@ -490,13 +506,24 @@ def replay_quote_scanner(
     window_end = (
         candle_times.iloc[-1] + pd.Timedelta(seconds=tf_seconds * 2)
     ).to_pydatetime()
-    all_event_rows = sorted(
-        (
-            (_event_time(row, "ts_ms", "timestamp", "ts"), row)
-            for _, row in cleaned.iterrows()
-        ),
-        key=lambda item: item[0],
+    ordered_rows: list[tuple[datetime, datetime, Any, int, pd.Series]] = []
+    for ordinal, (_, row) in enumerate(cleaned.iterrows()):
+        event_ts = _event_time(row, "ts_ms", "timestamp", "ts")
+        received_ts = (
+            _event_time(row, "received_ts_ms", "received_ts")
+            if (
+                ("received_ts_ms" in row and not pd.isna(row["received_ts_ms"]))
+                or ("received_ts" in row and not pd.isna(row["received_ts"]))
+            )
+            else event_ts
+        )
+        sequence_raw = row.get("sequence")
+        sequence = None if pd.isna(sequence_raw) else sequence_raw
+        ordered_rows.append((event_ts, received_ts, sequence, ordinal, row))
+    ordered_rows.sort(
+        key=lambda item: quote_order_key(item[0], item[1], item[2], item[3])
     )
+    all_event_rows = [(item[0], item[4]) for item in ordered_rows]
     replay_event_start = max(window_start, runtime_start) if runtime_start else window_start
     event_rows = [
         item for item in all_event_rows if replay_event_start <= item[0] < window_end
@@ -523,6 +550,7 @@ def replay_quote_scanner(
         contract=contract,
         cost_profile=resolve_scanner_cost_profile(contract, exchange_id=exchange_id),
         bar_minutes=tf_seconds / 60.0,
+        approve_fire=approve_fire,
     )
 
     quote_index = 0
@@ -567,7 +595,11 @@ def replay_quote_scanner(
         "symbol": symbol,
         "read_only": True,
         "evidence_class": "quote_mechanism_parity",
-        "data_source": "canonical_candles+clean_recorded_bbo",
+        "data_source": (
+            "canonical_candles+lane_consumed_bbo"
+            if lane_consumed_capture
+            else "canonical_candles+clean_external_bbo"
+        ),
         "source_window": {
             "start": window_start.isoformat(),
             "end_exclusive": window_end.isoformat(),
@@ -598,14 +630,17 @@ def replay_quote_scanner(
                 lane_consumed_capture and capture_overflow_drops == 0
             ),
         },
-        # This runner proves arm/quote/intent mechanism parity. It deliberately
-        # has no gateway callback and no historical funding cashflow, so its
-        # outcomes must not be presented as a promotion-grade PnL backtest.
+        "approval_parity_eligible": approve_fire is not None,
+        "approval_mode": (
+            "shared_fire_guard" if approve_fire is not None else "mechanism_only"
+        ),
+        # Historical funding is absent, so even a shared approval guard cannot
+        # make this a promotion-grade PnL backtest.
         "performance_eligible": False,
-        "performance_blockers": [
-            "risk_gateway_not_replayed",
-            "funding_history_not_replayed",
-        ],
+        "performance_blockers": (
+            ([] if approve_fire is not None else ["risk_gateway_not_replayed"])
+            + ["funding_history_not_replayed"]
+        ),
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
         "intents": len(intents),
         "outcomes": len(outcomes),
@@ -632,17 +667,41 @@ def _record_event_time(record: dict[str, Any]) -> datetime | None:
     return None
 
 
-def _intent_signature(payload: dict[str, Any]) -> dict[str, Any]:
+def _intent_signature(
+    payload: dict[str, Any], *, include_approval: bool
+) -> dict[str, Any]:
     intent_value = payload.get("intent")
     intent: dict[str, Any] = intent_value if isinstance(intent_value, dict) else {}
-    return {
-        "approved": bool(payload.get("approved")),
-        "side": str(intent.get("side") or payload.get("side") or ""),
+    key_parts = str(payload.get("intent_key") or "").split("|")
+    signature = {
+        "side": str(
+            intent.get("side")
+            or payload.get("side")
+            or (key_parts[2] if len(key_parts) >= 3 else "")
+        ),
         "entry_price": payload.get("entry_price"),
         "stop_price": payload.get("stop_price"),
         "quote_sequence": payload.get("quote_sequence"),
         "episode_id": payload.get("episode_id"),
     }
+    if include_approval:
+        normalized_intent = dict(intent)
+        if normalized_intent.get("symbol"):
+            try:
+                normalized_intent["symbol"] = canonical_symbol(
+                    str(normalized_intent["symbol"])
+                )
+            except (TypeError, ValueError):
+                pass
+        signature.update(
+            {
+                "approved": bool(payload.get("approved")),
+                "failed_checks": tuple(payload.get("failed_checks") or ()),
+                "passed_checks": tuple(payload.get("passed_checks") or ()),
+                "intent": normalized_intent,
+            }
+        )
+    return signature
 
 
 def _canonical_intent_key(key: str) -> str:
@@ -681,8 +740,9 @@ def compare_quote_replay_to_live(
     start = pd.to_datetime(audit_window.get("start"), utc=True).to_pydatetime()
     end = pd.to_datetime(audit_window.get("end_exclusive"), utc=True).to_pydatetime()
 
-    def relevant(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    def relevant(records: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
         selected: list[dict[str, Any]] = []
+        malformed = 0
         for record in records:
             if record.get("kind") != "shadow_intent":
                 continue
@@ -693,46 +753,56 @@ def compare_quote_replay_to_live(
             intent: dict[str, Any] = (
                 intent_value if isinstance(intent_value, dict) else {}
             )
-            record_symbol = str(intent.get("symbol") or payload.get("symbol") or "")
-            if str(intent.get("strategy_id") or payload.get("strategy_id") or "") != strategy_id:
-                key = str(payload.get("intent_key") or "")
-                parts = key.split("|")
-                try:
-                    key_matches = (
-                        len(parts) >= 2
-                        and parts[0] == strategy_id
-                        and canonical_symbol(parts[1]) == symbol
-                    )
-                except (TypeError, ValueError):
-                    key_matches = False
-                if not key_matches:
-                    continue
-            else:
-                try:
-                    if not record_symbol or canonical_symbol(record_symbol) != symbol:
-                        continue
-                except (TypeError, ValueError):
-                    continue
+            key = str(payload.get("intent_key") or "")
+            parts = key.split("|")
+            record_strategy = str(
+                intent.get("strategy_id")
+                or payload.get("strategy_id")
+                or (parts[0] if len(parts) >= 2 else "")
+            )
+            record_symbol = str(
+                intent.get("symbol")
+                or payload.get("symbol")
+                or (parts[1] if len(parts) >= 2 else "")
+            )
+            try:
+                identity_matches = (
+                    record_strategy == strategy_id
+                    and bool(record_symbol)
+                    and canonical_symbol(record_symbol) == symbol
+                )
+            except (TypeError, ValueError):
+                identity_matches = False
+            if not identity_matches:
+                if record_strategy == strategy_id or not record_strategy:
+                    malformed += 1
+                continue
             event_ts = _record_event_time(record)
             if event_ts is None or not (start <= event_ts < end):
                 continue
             selected.append(record)
-        return selected
+        return selected, malformed
 
-    replay_records = relevant(replay.get("records") or [])
-    live_selected = relevant(live_records)
+    replay_records, malformed_replay = relevant(replay.get("records") or [])
+    live_selected, malformed_live = relevant(live_records)
 
-    def keyed(records: list[dict[str, Any]]) -> tuple[Counter[str], dict[str, dict[str, Any]]]:
+    approval_eligible = bool(replay.get("approval_parity_eligible", False))
+
+    def keyed(
+        records: list[dict[str, Any]],
+    ) -> tuple[Counter[str], dict[str, list[dict[str, Any]]]]:
         counts: Counter[str] = Counter()
-        signatures: dict[str, dict[str, Any]] = {}
+        signatures: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for record in records:
             payload = record["payload"]
             key = _canonical_intent_key(str(payload.get("intent_key") or ""))
             if not key:
                 continue
             counts[key] += 1
-            signatures.setdefault(key, _intent_signature(payload))
-        return counts, signatures
+            signatures[key].append(
+                _intent_signature(payload, include_approval=approval_eligible)
+            )
+        return counts, dict(signatures)
 
     replay_counts, replay_signatures = keyed(replay_records)
     live_counts, live_signatures = keyed(live_selected)
@@ -758,9 +828,20 @@ def compare_quote_replay_to_live(
         if not input_eligible:
             mode = str(capture_quality.get("mode") or "unknown")
             input_ineligible_reasons.append(f"quote_capture_not_parity_eligible:{mode}")
-    exact = input_eligible and not any(
-        (replay_only, live_only, payload_mismatches, duplicate_replay, duplicate_live)
+    mechanism_exact = input_eligible and not any(
+        (
+            replay_only,
+            live_only,
+            payload_mismatches,
+            duplicate_replay,
+            duplicate_live,
+            malformed_replay,
+            malformed_live,
+        )
     )
+    exact = mechanism_exact and approval_eligible
+    if not approval_eligible:
+        input_ineligible_reasons.append("approval_fire_guard_not_replayed")
     matched = sum((replay_counts & live_counts).values())
     return {
         "schema_version": 1,
@@ -773,6 +854,8 @@ def compare_quote_replay_to_live(
         "capture_quality": capture_quality,
         "input_eligible": input_eligible,
         "input_ineligible_reasons": input_ineligible_reasons,
+        "mechanism_exact_parity": mechanism_exact,
+        "approval_parity_eligible": approval_eligible,
         "exact_parity": exact,
         "replay_intents": sum(replay_counts.values()),
         "live_intents": sum(live_counts.values()),
@@ -781,6 +864,8 @@ def compare_quote_replay_to_live(
         "live_only": live_only,
         "duplicate_replay": duplicate_replay,
         "duplicate_live": duplicate_live,
+        "malformed_replay_records": malformed_replay,
+        "malformed_live_records": malformed_live,
         "payload_mismatches": payload_mismatches,
     }
 
@@ -874,11 +959,16 @@ def build_daily_report(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 default=None,
             ),
             "capital_eligible": is_capital_eligible(strategy_id),
+            "accepted_entries": None,
+            "quote_lifecycle_complete": False,
         })
     return {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
         "read_only": True,
+        "evidence_scope": "closed_bar_evaluations_only",
+        "accepted_entries": None,
+        "quote_lifecycle_complete": False,
         "evaluations": sum(item["evaluations"] for item in strategies),
         "fires": sum(item["fires"] for item in strategies),
         "strategies": strategies,
@@ -888,17 +978,44 @@ def build_daily_report(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
 def build_journal_report(
     paths: Iterable[Path],
     *,
-    max_bytes_per_journal: int = 8 * 1024 * 1024,
-    max_total_bytes: int = 64 * 1024 * 1024,
+    max_bytes_per_journal: int | None = None,
+    max_total_bytes: int | None = None,
 ) -> dict[str, Any]:
-    """Join evaluations, virtual intents and outcomes by durable intent key."""
+    """Build a lifecycle report from unique durable keys and transitions.
+
+    Full streaming reads are the correctness default. Callers may request a
+    bounded tail, but that artifact is explicitly incomplete and never treated
+    as performance evidence.
+    """
     journal_paths = tuple(paths)
-    effective_bytes = min(
-        max_bytes_per_journal,
-        max(1, max_total_bytes // max(1, len(journal_paths))),
+    positive_per = (
+        max_bytes_per_journal
+        if max_bytes_per_journal is not None and max_bytes_per_journal > 0
+        else None
     )
+    positive_total = (
+        max_total_bytes if max_total_bytes is not None and max_total_bytes > 0 else None
+    )
+    if positive_per is not None and positive_total is not None:
+        effective_bytes: int | None = min(
+            positive_per, max(1, positive_total // max(1, len(journal_paths)))
+        )
+    else:
+        effective_bytes = positive_per
     grouped: dict[str, dict[str, Any]] = {}
-    pending_intents: dict[str, dict[str, Any]] = {}
+    intents: dict[str, dict[str, Any]] = {}
+    outcomes: dict[str, dict[str, Any]] = {}
+    intent_duplicates: Counter[str] = Counter()
+    outcome_duplicates: Counter[str] = Counter()
+
+    def payload_strategy(payload: dict[str, Any], key: str = "") -> str:
+        intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+        parts = key.split("|")
+        return str(
+            intent.get("strategy_id")
+            or payload.get("strategy_id")
+            or (parts[0] if len(parts) >= 2 else "unknown")
+        )
 
     def strategy_row(strategy_id: str) -> dict[str, Any]:
         return grouped.setdefault(
@@ -910,6 +1027,9 @@ def build_journal_report(
                 "backfill_evaluations": 0,
                 "failed_gates": Counter(),
                 "lifecycle": Counter(),
+                "quote_lifecycle": Counter(),
+                "scanner_transitions": 0,
+                "armed_episodes": set(),
                 "closest_near_miss": None,
                 "capital_eligible": is_capital_eligible(strategy_id),
                 "virtual_candidates": 0,
@@ -919,7 +1039,11 @@ def build_journal_report(
                 "gross_usd": 0.0,
                 "gross_bps": 0.0,
                 "fees_usd": 0.0,
-                "net_execution_usd": 0.0,
+                "funding_usd": 0.0,
+                "observed_shadow_net_usd": 0.0,
+                "unmatched_outcomes": 0,
+                "duplicate_intents": 0,
+                "duplicate_outcomes": 0,
             },
         )
 
@@ -948,66 +1072,124 @@ def build_journal_report(
                 < float(current.get("closest_distance") or float("inf"))
             ):
                 row["closest_near_miss"] = near
+        if record["kind"] == "scanner_transition":
+            strategy_id = payload_strategy(payload)
+            row = strategy_row(strategy_id)
+            state = str(payload.get("state") or "unknown")
+            row["quote_lifecycle"].update((state,))
+            row["scanner_transitions"] += 1
+            episode = payload.get("episode_id")
+            if state.startswith("armed_") and episode is not None:
+                row["armed_episodes"].add(
+                    (str(payload.get("symbol") or ""), str(episode))
+                )
         key = str(payload.get("intent_key") or "")
         if record["kind"] == "shadow_intent" and key:
-            intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
-            strategy_id = str(
-                intent.get("strategy_id") or payload.get("strategy_id") or "unknown"
-            )
-            row = strategy_row(strategy_id)
-            row["virtual_candidates"] += 1
-            if bool(payload.get("approved")):
-                row["virtual_approved"] += 1
-                pending_intents.setdefault(
-                    key,
-                    {"strategy_id": strategy_id, "intent": dict(intent)},
-                )
-            else:
-                row["virtual_rejected"] += 1
+            if key in intents:
+                intent_duplicates[key] += 1
+            # Latest durable verdict wins; retries no longer create phantom
+            # candidates and a later approval is not hidden by setdefault.
+            intents[key] = dict(payload)
         elif record["kind"] == "shadow_outcome" and key:
-            matched = pending_intents.pop(key, None)
-            if matched is None:
-                continue
-            intent = matched["intent"]
-            row = strategy_row(str(matched["strategy_id"]))
-            side = str(intent.get("side") or payload.get("side") or "long")
-            entry = float(payload.get("entry_price") or 0.0)
-            exit_price = float(payload.get("exit_price") or 0.0)
-            quantity = float(intent.get("quantity") or 0.0)
-            direction = 1.0 if side == "long" else -1.0
-            gross_usd = direction * quantity * (exit_price - entry)
-            gross_bps = (
-                direction * (exit_price - entry) / entry * 10_000.0
-                if entry > 0
-                else 0.0
-            )
-            row["virtual_resolved"] += 1
-            row["gross_usd"] += gross_usd
-            row["gross_bps"] += gross_bps
-            row["fees_usd"] += float(payload.get("fees_usd") or 0.0)
-            row["net_execution_usd"] += float(payload.get("virtual_net_usd") or 0.0)
+            if key in outcomes:
+                outcome_duplicates[key] += 1
+            outcomes[key] = dict(payload)
+
+    approved_keys: set[str] = set()
+    for key, payload in intents.items():
+        strategy_id = payload_strategy(payload, key)
+        row = strategy_row(strategy_id)
+        row["virtual_candidates"] += 1
+        row["duplicate_intents"] += intent_duplicates[key]
+        if bool(payload.get("approved")):
+            row["virtual_approved"] += 1
+            approved_keys.add(key)
+        else:
+            row["virtual_rejected"] += 1
+
+    resolved_approved: set[str] = set()
+    for key, payload in outcomes.items():
+        matched = intents.get(key)
+        strategy_id = (
+            payload_strategy(payload, key)
+            if payload.get("strategy_id")
+            else payload_strategy(matched, key)
+            if matched is not None
+            else payload_strategy(payload, key)
+        )
+        row = strategy_row(strategy_id)
+        row["virtual_resolved"] += 1
+        row["duplicate_outcomes"] += outcome_duplicates[key]
+        if matched is None:
+            row["unmatched_outcomes"] += 1
+        elif bool(matched.get("approved")):
+            resolved_approved.add(key)
+
+        intent = (
+            matched.get("intent")
+            if matched is not None and isinstance(matched.get("intent"), dict)
+            else {}
+        )
+        side = str(intent.get("side") or payload.get("side") or "long")
+        entry = float(payload.get("entry_price") or 0.0)
+        exit_price = float(payload.get("exit_price") or 0.0)
+        quantity = float(intent.get("quantity") or 0.0)
+        direction = 1.0 if side == "long" else -1.0
+        computed_gross_usd = direction * quantity * (exit_price - entry)
+        computed_gross_bps = (
+            direction * (exit_price - entry) / entry * 10_000.0
+            if entry > 0
+            else 0.0
+        )
+        row["gross_usd"] += float(
+            payload.get("gross_pnl_usd")
+            if payload.get("gross_pnl_usd") is not None
+            else computed_gross_usd
+        )
+        row["gross_bps"] += float(
+            payload.get("captured_bps")
+            if payload.get("captured_bps") is not None
+            else computed_gross_bps
+        )
+        row["fees_usd"] += float(payload.get("fees_usd") or 0.0)
+        row["funding_usd"] += float(payload.get("funding_usd") or 0.0)
+        row["observed_shadow_net_usd"] += float(
+            payload.get("virtual_net_usd") or 0.0
+        )
 
     strategies = []
     for strategy_id in sorted(grouped):
         row = grouped[strategy_id]
         strategies.append(
             {
-                **row,
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key != "armed_episodes"
+                },
                 "failed_gates": dict(row["failed_gates"]),
                 "lifecycle": dict(row["lifecycle"]),
+                "quote_lifecycle": dict(row["quote_lifecycle"]),
+                "armed_entries": len(row["armed_episodes"]),
             }
         )
     report: dict[str, Any] = {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
         "source_window": {
-            "mode": "bounded_journal_tail",
+            "mode": "full_journal_stream" if effective_bytes is None else "bounded_journal_tail",
+            "complete": effective_bytes is None,
             "max_bytes_per_journal": max_bytes_per_journal,
             "effective_bytes_per_journal": effective_bytes,
             "max_total_bytes": max_total_bytes,
             "journals": len(journal_paths),
         },
         "read_only": True,
+        "performance_eligible": False,
+        "performance_blockers": [
+            "shadow_observation_not_backtest",
+            *([] if effective_bytes is None else ["bounded_journal_tail"]),
+        ],
         "evaluations": sum(int(row["evaluations"]) for row in strategies),
         "fires": sum(int(row["fires"]) for row in strategies),
         "strategies": strategies,
@@ -1016,12 +1198,16 @@ def build_journal_report(
     by_strategy = {row["strategy_id"]: row for row in report["strategies"]}
     for strategy_id, row in by_strategy.items():
         approved = int(row.get("virtual_approved") or 0)
-        resolved = int(row.get("virtual_resolved") or 0)
         row.setdefault("virtual_candidates", 0)
         row.setdefault("virtual_approved", 0)
         row.setdefault("virtual_rejected", 0)
         row.setdefault("virtual_resolved", 0)
-        row["virtual_pending"] = max(0, approved - resolved)
+        row["virtual_pending"] = sum(
+            key in approved_keys
+            and key not in resolved_approved
+            and payload_strategy(payload, key) == strategy_id
+            for key, payload in intents.items()
+        )
         # ``fires`` is deliberately the closed-bar decision count.  Quote
         # scanners arm on a closed bar and fire only after live acceptance,
         # so expose the actual accepted-entry count separately instead of
@@ -1030,7 +1216,7 @@ def build_journal_report(
         row.setdefault("gross_usd", 0.0)
         row.setdefault("gross_bps", 0.0)
         row.setdefault("fees_usd", 0.0)
-        row.setdefault("net_execution_usd", 0.0)
+        row.setdefault("observed_shadow_net_usd", 0.0)
         row["strategy_id"] = strategy_id
     report["schema_version"] = 2
     report["strategies"] = [by_strategy[key] for key in sorted(by_strategy)]
@@ -1043,9 +1229,17 @@ def build_journal_report(
     report["accepted_entries"] = sum(
         int(row["accepted_entries"]) for row in report["strategies"]
     )
-    report["net_execution_usd"] = sum(
-        float(row["net_execution_usd"]) for row in report["strategies"]
+    report["observed_shadow_net_usd"] = sum(
+        float(row["observed_shadow_net_usd"]) for row in report["strategies"]
     )
+    report["armed_entries"] = sum(
+        int(row["armed_entries"]) for row in report["strategies"]
+    )
+    report["unmatched_outcomes"] = sum(
+        int(row["unmatched_outcomes"]) for row in report["strategies"]
+    )
+    if report["unmatched_outcomes"]:
+        report["performance_blockers"].append("unmatched_outcome_lifecycle")
     return report
 
 
@@ -1102,14 +1296,14 @@ def main() -> None:
     parser.add_argument(
         "--max-bytes-per-journal",
         type=int,
-        default=8 * 1024 * 1024,
-        help="bounded tail read per journal (default 8 MiB)",
+        default=0,
+        help="optional bounded tail per journal; 0 scans the full journal",
     )
     parser.add_argument(
         "--max-total-bytes",
         type=int,
-        default=64 * 1024 * 1024,
-        help="hard read budget across all journals (default 64 MiB)",
+        default=0,
+        help="optional total read budget; 0 scans the full journal",
     )
     args = parser.parse_args()
     if args.candles:
@@ -1158,10 +1352,14 @@ def main() -> None:
                 "quote_replays": quote_replays,
             }
             if args.journal:
-                effective_bytes = min(
-                    args.max_bytes_per_journal,
-                    max(1, args.max_total_bytes // max(1, len(args.journal))),
-                )
+                effective_bytes = None
+                if args.max_bytes_per_journal > 0:
+                    effective_bytes = args.max_bytes_per_journal
+                    if args.max_total_bytes > 0:
+                        effective_bytes = min(
+                            effective_bytes,
+                            max(1, args.max_total_bytes // max(1, len(args.journal))),
+                        )
                 live_records = list(
                     iter_journal_records(
                         args.journal,

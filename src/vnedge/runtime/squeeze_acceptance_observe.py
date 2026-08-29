@@ -60,6 +60,7 @@ class SqueezeAcceptanceObserveRunner:
     _restore_payload: dict | None = field(default=None, init=False, repr=False)
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
+    _last_journaled_episode: int | None = field(default=None, init=False, repr=False)
     _last_bid: float | None = field(default=None, init=False, repr=False)
     _last_ask: float | None = field(default=None, init=False, repr=False)
 
@@ -241,7 +242,7 @@ class SqueezeAcceptanceObserveRunner:
                 net_won = self._journal_outcome(decision, index, bar_ts)
                 self.acceptance.notify_flat(bar_index=index, net_won=net_won)
                 self.open_meta = None
-        self._update_arm_from_row(row, index)
+        self._update_arm_from_row(row, index, journal_event_ts=bar_ts)
 
     def on_prepared_bar(self, df: pd.DataFrame, index: int, bar_ts: datetime) -> None:
         """Compatibility alias; all behavior lives in :meth:`on_closed_bar`."""
@@ -413,6 +414,7 @@ class SqueezeAcceptanceObserveRunner:
             return
         self._last_journaled_acceptance = reason
         arm = self.acceptance.arm
+        self._last_journaled_episode = arm.episode_id if arm is not None else None
         self.journal.append(
             "scanner_transition",
             {
@@ -440,7 +442,14 @@ class SqueezeAcceptanceObserveRunner:
             },
         )
 
-    def _update_arm_from_row(self, row: pd.Series, index: int) -> None:
+    def _update_arm_from_row(
+        self,
+        row: pd.Series,
+        index: int,
+        *,
+        journal_event_ts: datetime | None = None,
+    ) -> None:
+        previous_reason = self.acceptance.last_reason
         if self.strategy is not None:
             # Give a concrete quote-entry strategy its complete causal frame.
             # ``_prepared_frame`` is attached by on_prepared_bar/restore below;
@@ -450,6 +459,7 @@ class SqueezeAcceptanceObserveRunner:
                 arm = self.strategy.realtime_arm(prepared, index)
                 if isinstance(arm, RealtimeEntryArm):
                     self.acceptance.update_arm(self._compression_arm(arm, index))
+                    self._journal_arm_transition(previous_reason, journal_event_ts)
                     return
         values = {
             name: float(row.get(name, float("nan")))
@@ -474,6 +484,51 @@ class SqueezeAcceptanceObserveRunner:
                 bar_index=index,
                 compressed=values["sqz_compressed"] > 0,
             )
+        )
+        self._journal_arm_transition(previous_reason, journal_event_ts)
+
+    def _journal_arm_transition(
+        self, previous_reason: str, event_ts: datetime | None
+    ) -> None:
+        """Persist the close-driven arm state that quote-only logs cannot see."""
+        reason = self.acceptance.last_reason
+        arm = self.acceptance.arm
+        episode = arm.episode_id if arm is not None else None
+        if (
+            event_ts is None
+            or (
+                reason == previous_reason
+                and reason == self._last_journaled_acceptance
+                and episode == self._last_journaled_episode
+            )
+        ):
+            return
+        self._last_journaled_acceptance = reason
+        self._last_journaled_episode = episode
+        self.journal.append(
+            "scanner_transition",
+            {
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
+                "state": reason,
+                "event_ts": event_ts.isoformat(),
+                "received_ts": event_ts.isoformat(),
+                "sequence": None,
+                "source": "canonical_close",
+                "exchange_timestamped": False,
+                "bid": self._last_bid,
+                "ask": self._last_ask,
+                "bar_index": self.current_bar_index,
+                "episode_id": episode,
+                "long_state": self.acceptance.long.state.value,
+                "short_state": self.acceptance.short.state.value,
+                "quotes_seen": self.acceptance.quotes_seen,
+                "quotes_distinct": self.acceptance.quotes_distinct,
+                "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+                "quote_overflow_drops": self.acceptance.quote_overflow_drops,
+                "quote_rearms": self.acceptance.quote_rearms,
+                "overflow_probe_resets": self.acceptance.overflow_probe_resets,
+            },
         )
 
     @staticmethod
@@ -554,6 +609,8 @@ class SqueezeAcceptanceObserveRunner:
             "shadow_outcome",
             {
                 "intent_key": meta.get("intent_key"),
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
                 "resolution": decision.reason,
                 "side": side,
                 "entry_price": entry,

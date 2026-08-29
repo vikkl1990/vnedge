@@ -72,8 +72,9 @@ Current implementation slice:
 - the runtime scanner protocol exposes `restore`, `on_closed_bar`, and
   `on_quote`;
 - live and recorded quote replay construct the same quote-acceptance engine;
-- replay applies the canonical BBO cleaner, deterministic candle/quote event
-  ordering, and refuses to run quotes beyond the last causal forming bar;
+- replay preserves lane-consumed BBO exactly, cleans only external diagnostic
+  books, applies the same event/receipt/sequence order as live, and refuses to
+  run quotes beyond the last causal forming bar;
 - `scanner_evidence` compares replay and live intent keys plus approval,
   side, entry, stop, quote sequence, and episode inside the audited
   evidence window;
@@ -84,8 +85,12 @@ Current implementation slice:
   an explicit evidence window that excludes warm-up history from parity
   (default window start: first clean recorded quote).
 
-This is mechanism parity infrastructure, not completion evidence. Phase 4 is
-complete only after a recorded live day produces an exact parity artifact.
+This is mechanism parity infrastructure, not completion evidence. A replay
+without the lane's deterministic approval `FireGuard` reports
+`mechanism_exact_parity` only and keeps `exact_parity=false`; default approval
+must never stand in for CostGate, sizing, risk, or shared shadow-book state.
+Phase 4 is complete only after a recorded live day produces exact mechanism
+and approval parity.
 
 Parity capture runbook (run where the recorded data and journals live):
 
@@ -106,11 +111,13 @@ docker compose run --rm scanner-evidence \
 ```
 
 One invocation per (strategy, symbol) pair; the artifact's `live_parity`
-entries must report `exact_parity: true` inside the evidence window. Pin the
+entries must first report `mechanism_exact_parity: true` inside the evidence
+window. Full `exact_parity: true` additionally requires an in-process run with
+the same approval callback as the lane. Pin the
 capture to the commit the journals were produced by before changing any
-runtime event behavior. The journal byte budget must cover the entire pinned
-window; the default 8 MiB tail is intended for the rolling dashboard aggregate
-and can silently exclude early-window live intents from a full-day comparison.
+runtime event behavior. A bounded journal byte budget makes the artifact
+explicitly incomplete; the rolling aggregate now streams full journals by
+default so early intents are not silently detached from later outcomes.
 The audited window must belong to one uninterrupted runner instance; use the
 lane heartbeat's durable `started_at` as `--runtime-start` so replay seeds the
 same bounded feature history and process-local episode clock.

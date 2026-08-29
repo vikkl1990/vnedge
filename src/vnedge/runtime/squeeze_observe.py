@@ -299,6 +299,8 @@ class SqueezeObserveRunner:
         entry_bar_ts = meta.get("bar_ts")
         self.journal.append("shadow_outcome", {
             "intent_key": meta.get("intent_key"),
+            "strategy_id": "squeeze_expansion_breakout_v2",
+            "symbol": self.symbol,
             "resolution": decision.reason,
             "side": side,
             # entry bar is carried on the outcome so a reader can reconcile

@@ -821,6 +821,8 @@ def build_strategy_workflow(
                 "evaluations": raw.get("evaluations"),
                 "fires": raw.get("fires"),
                 "accepted_entries": raw.get("accepted_entries"),
+                "armed_entries": raw.get("armed_entries"),
+                "scanner_transitions": raw.get("scanner_transitions"),
                 "backfill_evaluations": raw.get("backfill_evaluations"),
                 "virtual_candidates": raw.get("virtual_candidates"),
                 "virtual_approved": raw.get("virtual_approved"),
@@ -830,10 +832,21 @@ def build_strategy_workflow(
                 "gross_usd": raw.get("gross_usd"),
                 "gross_bps": raw.get("gross_bps"),
                 "fees_usd": raw.get("fees_usd"),
-                "net_execution_usd": raw.get("net_execution_usd"),
+                "observed_shadow_net_usd": raw.get("observed_shadow_net_usd"),
+                "performance_eligible": bool(
+                    raw.get(
+                        "performance_eligible",
+                        scanner_payload.get("performance_eligible", False),
+                    )
+                ),
+                "unmatched_outcomes": raw.get("unmatched_outcomes"),
+                "quote_lifecycle": dict(raw.get("quote_lifecycle") or {}),
                 "failed_gates": dict(raw.get("failed_gates") or {}),
                 "closest_near_miss": raw.get("closest_near_miss"),
-                "source": "bounded_shadow_journal",
+                "source": str(
+                    (scanner_payload.get("source_window") or {}).get("mode")
+                    or "shadow_journal"
+                ),
                 "promotion_evidence": False,
             }
     rows: list[dict[str, Any]] = []

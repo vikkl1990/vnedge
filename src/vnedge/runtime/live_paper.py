@@ -95,6 +95,7 @@ from vnedge.runtime.latency_tracker import (
 )
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
+from vnedge.runtime.quote_ordering import quote_update_order_key
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
@@ -545,9 +546,9 @@ class LivePaperSession:
                 updates.append(queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
-        # Python's sort is stable. Receive time preserves ingress order for
-        # equal event timestamps; sequence validation remains in the engine.
-        return sorted(updates, key=lambda item: (item.ts, item.received_ts or item.ts))
+        # Live and evidence replay use this exact total order. Native sequence
+        # only breaks a true event+receipt tie; Python keeps final input order.
+        return sorted(updates, key=quote_update_order_key)
 
     def _handle_quote_batch(
         self,
