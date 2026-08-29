@@ -2056,6 +2056,30 @@ def test_scanner_prerequisite_health_blocks_only_new_arms(tmp_path, monkeypatch)
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
 
 
+def test_integrated_persist_health_blocks_only_new_arms(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+    session.canonical_arm_health = lambda: "canonical_persist_unhealthy"
+
+    assert session._candle_path_arm_block(datetime.now(UTC)) == (
+        "canonical_persist_unhealthy"
+    )
+
+    session.canonical_arm_health = lambda: None
+    assert session._candle_path_arm_block(datetime.now(UTC)) is None
+
+
+def test_integrated_persist_health_probe_failure_fails_closed(tmp_path):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+
+    def broken_probe():
+        raise OSError("health unavailable")
+
+    session.canonical_arm_health = broken_probe
+    assert session._candle_path_arm_block(datetime.now(UTC)) == (
+        "canonical_producer_health_unreadable"
+    )
+
+
 def test_next_close_reconciles_recent_exchange_row_from_canonical_lake(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]))
     session.candles = _hourly(3)

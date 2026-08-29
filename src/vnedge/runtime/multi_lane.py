@@ -22,7 +22,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -97,6 +97,8 @@ class CanonicalProducer(Protocol):
     """Minimal lifecycle owned by the colocated dark runtime."""
 
     async def run(self) -> None: ...
+
+    def new_arm_block_reason(self, symbol: str) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -1298,6 +1300,7 @@ async def build_lane(
     shadow_portfolio: ShadowPortfolioGate | None = None,
     canonical_router: CanonicalCandleRouter | None = None,
     canonical_router_exchanges: frozenset[str] = frozenset(),
+    canonical_arm_health: Callable[[], str | None] | None = None,
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     # (A) Bars-based warmup: the operator baseline or the strategy's causal
@@ -1487,6 +1490,7 @@ async def build_lane(
         canonical_candle_store=_canonical_runtime_store(spec, canonical_store),
         canonical_candle_subscription=canonical_subscription,
         quote_evidence=quote_evidence,
+        canonical_arm_health=canonical_arm_health,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",
@@ -1565,6 +1569,37 @@ class MultiLaneShadowRunner:
             daily_loss_limit_usd=shared_daily_loss,
         )
 
+    def _canonical_arm_health(self, spec: LaneSpec) -> Callable[[], str | None] | None:
+        """Bind an integrated producer's durability probe to one lane.
+
+        External-Parquet lanes retain their existing lake/prerequisite gates.
+        In integrated-dark mode, missing or unreadable producer health fails
+        closed for new arms while leaving reduce-only exits untouched.
+        """
+        if spec.exchange not in self.canonical_router_exchanges:
+            return None
+        producers = tuple(
+            producer
+            for producer in self.canonical_producers
+            if str(getattr(producer, "exchange_id", "")) == spec.exchange
+        )
+
+        def probe() -> str | None:
+            if not producers:
+                return "canonical_producer_missing"
+            for producer in producers:
+                check = getattr(producer, "new_arm_block_reason", None)
+                if not callable(check):
+                    return "canonical_producer_health_unavailable"
+                reason = check(spec.symbol)
+                if reason is None:
+                    return None
+                if reason != "canonical_producer_symbol_unowned":
+                    return reason
+            return "canonical_producer_symbol_unowned"
+
+        return probe
+
     async def run(self, *, deadline_seconds: float | None = None) -> None:
         # (C) Show the whole fleet immediately as "warming up" while it builds,
         # so the dashboard is never a blank board mid-startup.
@@ -1585,6 +1620,7 @@ class MultiLaneShadowRunner:
                         self.shadow_portfolio,
                         self.canonical_router,
                         self.canonical_router_exchanges,
+                        self._canonical_arm_health(spec),
                     ),
                     retries=_LANE_BUILD_RETRIES,
                     backoff_s=_LANE_BUILD_BACKOFF_S,

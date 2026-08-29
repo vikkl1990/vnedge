@@ -32,6 +32,7 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -223,6 +224,7 @@ class LivePaperSession:
         canonical_candle_store: CandleParquetStore | None = None,
         canonical_candle_subscription: CanonicalCandleSubscription | None = None,
         quote_evidence: QuoteEvidenceRecorder | None = None,
+        canonical_arm_health: Callable[[], str | None] | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -268,6 +270,7 @@ class LivePaperSession:
         self.canonical_candle_store = canonical_candle_store
         self.canonical_candle_subscription = canonical_candle_subscription
         self.quote_evidence = quote_evidence
+        self.canonical_arm_health = canonical_arm_health
         self._last_canonical_transport = "parquet_poll"
         self._last_router_wait_ms: float | None = None
         # In router-dark mode the venue kline is a watchdog, never decision
@@ -1280,6 +1283,14 @@ class LivePaperSession:
         Returns the coarse block reason, or None to allow.  Any unreadable state
         blocks arming a new position; exits bypass this gate entirely.
         """
+        canonical_arm_health = getattr(self, "canonical_arm_health", None)
+        if canonical_arm_health is not None:
+            try:
+                producer_reason = canonical_arm_health()
+            except Exception:  # noqa: BLE001 - unreadable durability is unsafe
+                return "canonical_producer_health_unreadable"
+            if producer_reason is not None:
+                return producer_reason
         prerequisite_path = os.environ.get("SCANNER_PREREQ_HEALTH_PATH", "").strip()
         if prerequisite_path:
             try:

@@ -167,6 +167,23 @@ class CanonicalCandleSink:
             for pipeline in self.pipelines.values()
         )
 
+    def new_arm_block_reason(self, symbol: str) -> str | None:
+        """Return why a colocated lane must not open new risk.
+
+        Raw trades are flushed synchronously before a boundary candle can be
+        published.  The remaining publish-before-upsert durability window is
+        represented by ``CandlePipeline.persistence_healthy``.  Exits do not
+        call this probe; it exists only for the lane new-arm gate.
+        """
+        wanted = canonical_symbol(symbol)
+        for venue_symbol, pipeline in self.pipelines.items():
+            if canonical_symbol(venue_symbol) != wanted:
+                continue
+            if not pipeline.persistence_healthy:
+                return "canonical_persist_unhealthy"
+            return None
+        return "canonical_producer_symbol_unowned"
+
     @staticmethod
     def _candidate_shards(
         tick_root: Path,
@@ -777,6 +794,12 @@ class TickRecorder:
             streams.append("book")
         return tuple(streams)
 
+    def new_arm_block_reason(self, symbol: str) -> str | None:
+        """Expose integrated-producer durability to scanner arm gates."""
+        if self.candle_sink is None or self.books_only:
+            return "canonical_producer_unavailable"
+        return self.candle_sink.new_arm_block_reason(symbol)
+
     async def run(self, clock=None) -> None:
         import time as _t
 
@@ -990,6 +1013,12 @@ class DeltaTickRecorder:
         if not self.trades_only:
             streams.append("book")
         return tuple(streams)
+
+    def new_arm_block_reason(self, symbol: str) -> str | None:
+        """Expose integrated-producer durability to scanner arm gates."""
+        if self.candle_sink is None or self.books_only:
+            return "canonical_producer_unavailable"
+        return self.candle_sink.new_arm_block_reason(symbol)
 
     async def run(self, clock=None) -> None:
         import time as _t

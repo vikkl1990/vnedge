@@ -1,6 +1,7 @@
 """Measurement-first roster and remaining multi-lane primitives."""
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -12,6 +13,7 @@ from vnedge.runtime.latency_tracker import LatencyTracker
 from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
+    MultiLaneShadowRunner,
     _build_single_strategy,
     _canonical_runtime_store,
     _overlay_canonical_history,
@@ -137,6 +139,27 @@ def test_integrated_canonical_runtime_defaults_to_external_parquet():
     assert producers == ()
     assert exchanges == frozenset()
     assert build_shadow_observe_lane_specs({}) == []
+
+
+def test_integrated_producer_persist_health_is_bound_per_lane():
+    class Producer:
+        exchange_id = "binanceusdm"
+
+        def new_arm_block_reason(self, symbol):
+            return "canonical_persist_unhealthy" if "BTC" in symbol else None
+
+    spec = LaneSpec("btc", "binanceusdm", "BTC/USDT:USDT", timeframe="15m")
+    runner = MultiLaneShadowRunner(
+        [spec],
+        Path("logs"),
+        MultiLaneProvider("btc"),
+        canonical_producers=(Producer(),),
+        canonical_router_exchanges=frozenset({"binanceusdm"}),
+    )
+
+    probe = runner._canonical_arm_health(spec)
+    assert probe is not None
+    assert probe() == "canonical_persist_unhealthy"
 
 
 def test_lane_keeps_venue_symbol_separate_from_canonical_data_identity():
