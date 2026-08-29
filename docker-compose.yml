@@ -8,8 +8,8 @@ services:
       args:
         VNEDGE_BUILD_SHA: "${VNEDGE_BUILD_SHA:-dev}"
     restart: unless-stopped
-    # The entrypoint reruns delta-backfill + exact-volume readiness before the
-    # runtime on every container start, including daemon/host restarts.
+    # The scanner entrypoint is read-only in the default topology. Canonical
+    # maintenance is owned by pulse-recorder and exposed through health.
     command: ["python", "-m", "vnedge.runtime.scanner_startup"]
     environment:
       VNEDGE_HOST: "${VNEDGE_HOST:-}"
@@ -63,6 +63,9 @@ services:
       # the shared writer lease refuses dual ownership, router events become
       # the lane clock, and matching Parquet rows remain decision truth.
       VNEDGE_CANONICAL_PRODUCER_MODE: "${VNEDGE_CANONICAL_PRODUCER_MODE:-external_parquet}"
+      # Canonical repair is owned by pulse-recorder under the same writer
+      # lease. Scanner startup only consumes the fail-closed health artifact.
+      VNEDGE_CANONICAL_MAINTENANCE_OWNER: "pulse_recorder"
       VNEDGE_INTEGRATED_RECORDER_EXCHANGES: "${VNEDGE_INTEGRATED_RECORDER_EXCHANGES:-binanceusdm}"
       VNEDGE_INTEGRATED_RECORDER_SYMBOLS: "${VNEDGE_INTEGRATED_RECORDER_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT}"
       # Exact lane-consumed BBO capture for bounded parity windows. Off by
@@ -101,7 +104,7 @@ services:
     command:
       - python
       - -m
-      - vnedge.exchange.tick_recorder
+      - vnedge.exchange.canonical_owner
       - --exchange
       - binanceusdm
       - --symbols
@@ -110,10 +113,20 @@ services:
       - data
       - --candle-root
       - data/candles
-      - --trades-only
+    environment:
+      SCANNER_PREREQ_HEALTH_PATH: data/reports/scanner_startup_health.json
+      SCANNER_PREREQ_SYMBOLS: "${SCANNER_PREREQ_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
+      VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-24}"
+      MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH: "${MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH:-}"
+      VNEDGE_CANONICAL_TAIL_REPAIR_INTERVAL_SECONDS: "${VNEDGE_CANONICAL_TAIL_REPAIR_INTERVAL_SECONDS:-900}"
+      VNEDGE_CANONICAL_FULL_REPAIR_INTERVAL_SECONDS: "${VNEDGE_CANONICAL_FULL_REPAIR_INTERVAL_SECONDS:-86400}"
+      VNEDGE_CANONICAL_REPAIR_RETRY_SECONDS: "${VNEDGE_CANONICAL_REPAIR_RETRY_SECONDS:-60}"
     volumes:
       - ./data:/app/data
-    mem_limit: 600m
+    # The owner now contains the former 600 MiB recorder plus the bounded
+    # historical repair workload that previously had a separate 1.4 GiB
+    # container. Archive conversion remains concurrency=1.
+    mem_limit: 2g
     healthcheck:
       test:
         - CMD
@@ -131,27 +144,19 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
 
-  # Explicit fail-closed repair worker. The recorder only detects/publishes
-  # holes; this worker repairs Binance storage_hole records from aggregate
-  # trades with strict contiguous trade-ID proof, then deterministically
-  # rebuilds the canonical candle ladder. A failed proof leaves the gap open.
+  # Legacy offline repair command. The default owner performs the same strict
+  # aggregate-ID proof and canonical rebuild under its inherited lease.
   gap-recovery:
+    # Legacy direct writer. Canonical maintenance is now owner-mediated inside
+    # pulse-recorder; this profile exists only for controlled offline repair.
+    profiles: ["legacy-canonical-repair"]
     build: .
     restart: unless-stopped
-    depends_on:
-      pulse-recorder:
-        condition: service_started
-      # The scanner entrypoint owns the serialized cold-start repair. Do not
-      # let the periodic worker mutate the same candle store until that proof
-      # has completed and the runtime is healthy.
-      multi-lane-shadow:
-        condition: service_healthy
     command:
       - sh
       - -c
       - |
         set -e
-        until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           python -m vnedge.data.binance_gap_recovery \
             --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT \
@@ -182,12 +187,10 @@ services:
   # archives own older storage holes; replay stays trade-derived and never
   # substitutes exchange OHLCV. Existing day archives are skipped.
   vision-recovery:
+    # Legacy direct writer; never run beside the canonical market-data owner.
+    profiles: ["legacy-canonical-repair"]
     build: .
     restart: unless-stopped
-    depends_on:
-      # Avoid concurrent historical candle rebuilds against scanner_startup.
-      multi-lane-shadow:
-        condition: service_healthy
     environment:
       VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-24}"
     command:
@@ -195,7 +198,6 @@ services:
       - -c
       - |
         set -e
-        until python -c "import json,sys; p=json.load(open('data/reports/scanner_startup_health.json')); sys.exit(0 if p.get('status') == 'ready' else 1)" 2>/dev/null; do sleep 15; done
         while true; do
           required_days="$${VISION_BACKFILL_DAYS}"
           if [ "$${required_days}" -lt 24 ]; then required_days=24; fi

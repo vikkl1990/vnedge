@@ -211,6 +211,19 @@ overflow, identity mismatch, or live/replay divergence fails that lane. The
 roster-wide artifact can report `cutover_ready`; it has no producer, router,
 registry, promotion, capital, or order authority.
 
+Canonical maintenance ownership (implemented 2026-08-29): the default
+`pulse-recorder` entrypoint is now `vnedge.exchange.canonical_owner`. It holds
+the Binance venue writer lease for its full lifetime and owns both the live
+trade recorder and bounded repair cycles. Bootstrap and gap-recovery children
+inherit that locked descriptor and verify its inode before any canonical
+mutation. Standalone mutation commands acquire the same lease and therefore
+fail closed while the owner is live. The scanner process consumes the atomic
+prerequisite-health artifact but no longer spawns a second canonical repair
+writer. Former `gap-recovery` and `vision-recovery` services are retained only
+behind the explicit `legacy-canonical-repair` profile for controlled offline
+maintenance. This closes concurrent-writer ownership; it does not grant the
+router decision or capital authority.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.

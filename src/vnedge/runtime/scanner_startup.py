@@ -21,6 +21,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = "BTC/USDT:USDT,ETH/USDT:USDT"
@@ -63,7 +65,7 @@ def prerequisite_commands(
         raise ValueError("SCANNER_PREREQ_SYMBOLS must not be empty")
     days = str(_archive_days(environ))
     roster = str(environ.get("MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH") or "").strip()
-    commands = (
+    commands: tuple[tuple[str, ...], ...] = (
         (
             python,
             "-m",
@@ -134,10 +136,32 @@ def prerequisite_commands(
     return commands
 
 
-def run_prerequisites(commands: Sequence[Sequence[str]]) -> None:
+def run_prerequisites(
+    commands: Sequence[Sequence[str]],
+    *,
+    inherited_lease_fd: int | None = None,
+) -> None:
+    inherited = str(
+        inherited_lease_fd
+        if inherited_lease_fd is not None
+        else os.environ.get(INHERITED_WRITER_LEASE_FD, "")
+    ).strip()
+    pass_fds: tuple[int, ...] = ()
+    child_env = os.environ.copy()
+    if inherited:
+        try:
+            pass_fds = (int(inherited),)
+        except ValueError as exc:
+            raise ValueError("canonical writer lease descriptor must be an integer") from exc
+        child_env[INHERITED_WRITER_LEASE_FD] = inherited
     for index, command in enumerate(commands, start=1):
         logger.info("scanner startup prerequisite %d/%d: %s", index, len(commands), command[2])
-        subprocess.run(tuple(command), check=True)
+        subprocess.run(
+            tuple(command),
+            check=True,
+            env=child_env,
+            pass_fds=pass_fds,
+        )
 
 
 def _health_path(environ: Mapping[str, str] = os.environ) -> Path:
@@ -224,12 +248,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Keep recoverable journal moves single-threaded and ahead of the runtime;
     # the background worker only owns canonical data repair/readiness.
     archive_retired_lane_artifacts()
-    write_health("recovering", detail="startup worker launching")
-    subprocess.Popen(
-        (sys.executable, "-m", "vnedge.runtime.scanner_startup", "--recover-only"),
-        close_fds=True,
+    maintenance_owner = (
+        str(os.environ.get("VNEDGE_CANONICAL_MAINTENANCE_OWNER", "scanner_startup")).strip().lower()
     )
-    logger.info("starting read-only runtime while scanner prerequisites recover")
+    if maintenance_owner == "pulse_recorder":
+        logger.info(
+            "canonical prerequisite repair is owned by pulse-recorder; "
+            "starting runtime behind its fail-closed health artifact"
+        )
+    elif maintenance_owner == "scanner_startup":
+        write_health("recovering", detail="startup worker launching")
+        subprocess.Popen(
+            (sys.executable, "-m", "vnedge.runtime.scanner_startup", "--recover-only"),
+            close_fds=True,
+        )
+        logger.info("starting read-only runtime while scanner prerequisites recover")
+    else:
+        raise ValueError(
+            "VNEDGE_CANONICAL_MAINTENANCE_OWNER must be pulse_recorder or scanner_startup"
+        )
     os.execv(
         sys.executable,
         (sys.executable, "-m", "vnedge.runtime.multi_lane_shadow"),

@@ -108,7 +108,7 @@ if [ "$NEED_BUILD" = 1 ]; then
     # Tag ALL services' images (force every profile), so the `research` fleet can
     # be opted in later (COMPOSE_PROFILES=research) without a rebuild. Only the
     # RECREATE below is profile-scoped — tagging must cover everything.
-    for svc in $(COMPOSE_PROFILES=research docker compose config --services); do
+    for svc in $(COMPOSE_PROFILES=research,legacy-canonical-repair,standalone-book-evidence docker compose config --services); do
         case "$svc" in
             "$APP_BUILD_SERVICE"|dashboard-tls) continue ;;
         esac
@@ -130,8 +130,20 @@ fi
 # complete. Remaining services are still batched to cap memory pressure.
 # On a daemon race (name-in-use mid-recreate — took the fleet down 2026-07-31),
 # self-heal once with down --remove-orphans, then fall back to a plain up.
+retire_legacy_canonical_writers() {
+    # Profiles control service selection; they do not stop a container that an
+    # older revision already started.  Retire the former repair writers before
+    # pulse-recorder acquires the process-lifetime writer lease.  Their data is
+    # bind-mounted and remains intact; only the obsolete containers are removed.
+    docker compose --profile legacy-canonical-repair stop gap-recovery vision-recovery \
+        >/dev/null 2>&1 || true
+    docker compose --profile legacy-canonical-repair rm -f gap-recovery vision-recovery \
+        >/dev/null 2>&1 || true
+}
+
 recreate_in_waves() {
     local wave="${DEPLOY_WAVE_SIZE:-6}" pause="${DEPLOY_WAVE_PAUSE:-25}"
+    retire_legacy_canonical_writers
     if [ "$NEED_BUILD" = 1 ]; then
         docker compose up -d --no-build pulse-recorder || return 1
         local recorder_ready=0

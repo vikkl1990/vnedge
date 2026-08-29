@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD
 from vnedge.runtime.multi_lane import LaneSpec
 from vnedge.runtime.scanner_startup import (
     archive_retired_lane_artifacts,
@@ -52,9 +54,11 @@ def test_prerequisite_commands_forward_versioned_roster(tmp_path) -> None:
 def test_prerequisites_stop_at_first_failed_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_run(command, *, check):
+    def fake_run(command, *, check, env, pass_fds):
         calls.append(tuple(command))
         assert check is True
+        assert isinstance(env, dict)
+        assert pass_fds == ()
         if len(calls) == 2:
             raise subprocess.CalledProcessError(1, command)
 
@@ -65,6 +69,26 @@ def test_prerequisites_stop_at_first_failed_gate(monkeypatch: pytest.MonkeyPatch
         run_prerequisites(commands)
 
     assert [command[2] for command in calls] == ["one", "two"]
+
+
+def test_prerequisites_forward_owner_lease_to_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lease_file = tmp_path / "lease.lock"
+    lease_file.touch()
+    calls = []
+
+    def fake_run(command, *, check, env, pass_fds):
+        calls.append((tuple(command), check, env, pass_fds))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with lease_file.open("r") as handle:
+        run_prerequisites(
+            (("python", "-m", "one"),),
+            inherited_lease_fd=handle.fileno(),
+        )
+        assert calls[0][3] == (handle.fileno(),)
+        assert calls[0][2][INHERITED_WRITER_LEASE_FD] == str(handle.fileno())
 
 
 def test_invalid_archive_days_fail_closed() -> None:

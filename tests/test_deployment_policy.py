@@ -22,6 +22,10 @@ def test_container_default_and_compose_are_measurement_only() -> None:
     environment = service["environment"]
     assert environment["MULTI_LANE_CAPITAL_ENABLED"].endswith(":-0}")
     assert environment["MULTI_LANE_CAPITAL_STRATEGY"].endswith(":-}")
+    assert environment["VNEDGE_CANONICAL_MAINTENANCE_OWNER"] == "pulse_recorder"
+    assert compose["services"]["pulse-recorder"]["command"][2] == (
+        "vnedge.exchange.canonical_owner"
+    )
 
 
 def test_sanctioned_deploy_path_runs_fleet_policy_after_recreate() -> None:
@@ -41,6 +45,7 @@ def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
     end = deploy.index("if ! recreate_in_waves", start)
     recreate = deploy[start:end]
 
+    legacy_stop = recreate.index("retire_legacy_canonical_writers")
     recorder_start = recreate.index(
         "docker compose up -d --no-build pulse-recorder"
     )
@@ -48,7 +53,7 @@ def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
     lane_start = recreate.index(
         "docker compose up -d --no-build multi-lane-shadow"
     )
-    assert recorder_start < recorder_proof < lane_start
+    assert legacy_stop < recorder_start < recorder_proof < lane_start
 
 
 def test_tls_edge_has_an_explicit_healthcheck() -> None:
@@ -59,10 +64,9 @@ def test_tls_edge_has_an_explicit_healthcheck() -> None:
     assert "127.0.0.1:8765" in command
 
 
-def test_background_recovery_waits_for_scanner_startup_proof() -> None:
+def test_legacy_recovery_writers_are_not_default_services() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     for service_name in ("gap-recovery", "vision-recovery"):
-        dependency = compose["services"][service_name]["depends_on"][
-            "multi-lane-shadow"
+        assert compose["services"][service_name]["profiles"] == [
+            "legacy-canonical-repair"
         ]
-        assert dependency["condition"] == "service_healthy"

@@ -105,8 +105,7 @@ def _shard_interval(path: Path) -> tuple[int, int] | None:
 
 def _interval_minutes(start_ms: int, end_ms: int) -> set[int]:
     first = int(
-        floor_time(datetime.fromtimestamp(start_ms / 1_000, tz=UTC), "1m").timestamp()
-        * 1_000
+        floor_time(datetime.fromtimestamp(start_ms / 1_000, tz=UTC), "1m").timestamp() * 1_000
     )
     return set(range(first, end_ms, 60_000))
 
@@ -132,8 +131,7 @@ def bootstrap_candles(
         symbol_count += 1
         canonical = _symbol_key(symbol)
         existing_minute_ms = {
-            int(candle.open_time.timestamp() * 1_000)
-            for candle in store.read(canonical, "1m")
+            int(candle.open_time.timestamp() * 1_000) for candle in store.read(canonical, "1m")
         }
         skipped_minutes: set[int] = set()
         captured: list[Candle] = []
@@ -161,9 +159,7 @@ def bootstrap_candles(
                     # ignore the websocket's partial overlap after a restart.
                     continue
                 minute_ms = int(
-                    floor_time(
-                        datetime.fromtimestamp(ts_ms / 1_000, tz=UTC), "1m"
-                    ).timestamp()
+                    floor_time(datetime.fromtimestamp(ts_ms / 1_000, tz=UTC), "1m").timestamp()
                     * 1_000
                 )
                 if minute_ms in existing_minute_ms:
@@ -223,14 +219,17 @@ def main(argv: list[str] | None = None) -> int:
     symbols = _csv(args.symbols)
     if not symbols:
         parser.error("--symbols must name at least one symbol")
-    report = bootstrap_candles(
-        args.data_root,
-        args.candle_root,
-        source_exchange=args.source_exchange,
-        target_exchange=args.target_exchange,
-        symbols=symbols,
-        days=args.days,
-    )
+    from vnedge.exchange.writer_lease import canonical_write_authority
+
+    with canonical_write_authority(Path(args.data_root), args.target_exchange):
+        report = bootstrap_candles(
+            args.data_root,
+            args.candle_root,
+            source_exchange=args.source_exchange,
+            target_exchange=args.target_exchange,
+            symbols=symbols,
+            days=args.days,
+        )
     print(
         "canonical candle bootstrap: "
         f"{report.symbols} symbols, {report.shards} shards, "

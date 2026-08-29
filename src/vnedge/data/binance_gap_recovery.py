@@ -113,9 +113,7 @@ class RecoveryReport:
     exchange: str
     recovered: tuple[RecoveredGap, ...]
     skipped_symbols: tuple[str, ...]
-    generated_at: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    generated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -439,9 +437,7 @@ def recover_storage_gaps(
             closed_tail = sorted(
                 (
                     candle
-                    for candle in candle_store.read(
-                        _market_id(symbol), tail_timeframe
-                    )
+                    for candle in candle_store.read(_market_id(symbol), tail_timeframe)
                     if candle.is_closed and candle.close_time <= completed_tail_end
                 ),
                 key=lambda candle: candle.open_time,
@@ -520,9 +516,7 @@ def recover_storage_gaps(
             grouped.setdefault((gap.start, gap.end), []).append(gap)
         for (start, end), duplicate_records in grouped.items():
             gap = duplicate_records[-1]
-            coverage_timeframe = (
-                "5m" if "coverage_timeframe=5m" in gap.detail else "1h"
-            )
+            coverage_timeframe = "5m" if "coverage_timeframe=5m" in gap.detail else "1h"
             if _canonical_gap_covered(
                 candle_store,
                 symbol,
@@ -530,10 +524,7 @@ def recover_storage_gaps(
                 end,
                 coverage_timeframe,
             ):
-                proof = (
-                    "recovered: canonical closed "
-                    f"{coverage_timeframe} coverage already present"
-                )
+                proof = f"recovered: canonical closed {coverage_timeframe} coverage already present"
                 gap_store.upsert(
                     replace(
                         record,
@@ -569,9 +560,7 @@ def recover_storage_gaps(
                         chunk_start.isoformat(),
                         chunk_end.isoformat(),
                     )
-                    skipped.append(
-                        f"{_market_id(symbol)}:{chunk_start.isoformat()}:vision"
-                    )
+                    skipped.append(f"{_market_id(symbol)}:{chunk_start.isoformat()}:vision")
                     chunk_failed = True
                     break
                 paths = _write_tape(tape, data_path, exchange=exchange)
@@ -582,9 +571,7 @@ def recover_storage_gaps(
                     chunk_start,
                     chunk_end,
                     coverage_timeframe,
-                ) or not _canonical_ladder_covered(
-                    candle_store, symbol, chunk_start, chunk_end
-                ):
+                ) or not _canonical_ladder_covered(candle_store, symbol, chunk_start, chunk_end):
                     logger.error(
                         "%s recovery replay did not produce complete closed %s "
                         "coverage for %s..%s; gap remains open",
@@ -593,9 +580,7 @@ def recover_storage_gaps(
                         chunk_start.isoformat(),
                         chunk_end.isoformat(),
                     )
-                    skipped.append(
-                        f"{_market_id(symbol)}:{chunk_start.isoformat()}:unproven"
-                    )
+                    skipped.append(f"{_market_id(symbol)}:{chunk_start.isoformat()}:unproven")
                     chunk_failed = True
                     break
                 recovered_chunks += 1
@@ -627,13 +612,17 @@ def recover_storage_gaps(
                         unrelated_replay_rejections=0,
                     )
                 )
-            if chunk_failed or not _canonical_gap_covered(
-                candle_store,
-                symbol,
-                start,
-                end,
-                coverage_timeframe,
-            ) or not _canonical_ladder_covered(candle_store, symbol, start, end):
+            if (
+                chunk_failed
+                or not _canonical_gap_covered(
+                    candle_store,
+                    symbol,
+                    start,
+                    end,
+                    coverage_timeframe,
+                )
+                or not _canonical_ladder_covered(candle_store, symbol, start, end)
+            ):
                 continue
             proof = (
                 "recovered from Binance REST aggTrades in independently durable "
@@ -716,7 +705,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_tail_passes < 1:
         parser.error("--max-tail-passes must be >= 1")
 
-    with BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher:
+    from vnedge.exchange.writer_lease import canonical_write_authority
+
+    with (
+        canonical_write_authority(Path(args.data_root), args.exchange),
+        BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher,
+    ):
         recovered: list[RecoveredGap] = []
         skipped: list[str] = []
         candle_store = CandleParquetStore(args.candle_root, exchange=args.exchange)

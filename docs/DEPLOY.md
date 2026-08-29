@@ -35,16 +35,22 @@ docker compose ps
 docker compose logs -f multi-lane-shadow
 ```
 
-`multi-lane-shadow` starts through `vnedge.runtime.scanner_startup`. On every
-container start—including Docker daemon and host restarts—it downloads at least 24
-complete Binance Vision aggTrade days for BTC/ETH, deterministically rebuilds
-the canonical 1m→4h ladder, and fills the unpublished closed 5m tail from
-the recent aggregate-trade API. Existing archive days and canonical minutes
-are skipped, so ordinary restarts fetch only the missing delta. The read-only
-runtime and UI start immediately while a serialized recovery worker retries a
-failed continuity proof. Until the proof succeeds, the atomic prerequisite
-health artifact blocks every new scanner arm; exits and observability continue.
-It never falls back to exchange OHLCV as exact VWAP history.
+`pulse-recorder` starts through `vnedge.exchange.canonical_owner`. It holds the
+venue writer lease for its full process lifetime and owns both public-trade
+recording and canonical repair. On restart it refreshes at least 24 complete
+Binance Vision aggTrade days for BTC/ETH, deterministically rebuilds the
+canonical 1m→4h ladder, and fills the unpublished closed 5m tail from the
+recent aggregate-trade API. Existing archive days and canonical minutes are
+skipped, so ordinary restarts process only the missing delta. Repair children
+inherit and prove the owner's locked descriptor; a standalone repair command
+is refused while the owner is active.
+
+`multi-lane-shadow` still starts through `vnedge.runtime.scanner_startup`, but
+it no longer launches a canonical mutation worker in the default deployment.
+The read-only runtime and UI start immediately and consume the owner's atomic
+prerequisite-health artifact. Until the proof succeeds, every new scanner arm
+is blocked while exits and observability continue. The flow never falls back
+to exchange OHLCV as exact VWAP history.
 
 The final proof is persisted at
 `data/reports/scanner_prerequisites.json`. It verifies current contiguous
@@ -115,8 +121,8 @@ paper lane, change `CAPITAL_APPROVED`, or enable live orders. Startup fails on
 unknown fields, wrong timeframes, duplicate stable lane IDs, or an ineligible
 strategy.
 
-Container startup serves the read-only control plane immediately and launches
-canonical recovery as a retrying worker. Until
+Container startup serves the read-only control plane immediately while the
+canonical owner runs recovery under its existing writer lease. Until
 `data/reports/scanner_startup_health.json` is `ready`, `/ready` reports the
 blocker and every new scanner arm fails closed; exits and observability remain
 available. Recovery is delta/idempotent on ordinary restarts.

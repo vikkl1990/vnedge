@@ -51,7 +51,7 @@ from vnedge.runtime.latency_tracker import TRADE_INGEST_MS, LatencyTracker
 
 logger = logging.getLogger(__name__)
 
-FLUSH_EVERY = 500       # records
+FLUSH_EVERY = 500  # records
 FLUSH_SECONDS = 30.0
 _BACKOFF = 2.0
 _SEEN_TRADE_IDS = 50_000
@@ -138,13 +138,9 @@ class CanonicalCandleSink:
             for symbol in symbols
         }
         self.restored_last_trade_ts_ms: dict[str, int] = {}
-        self.restored_trade_keys: dict[str, set[str]] = {
-            symbol: set() for symbol in symbols
-        }
+        self.restored_trade_keys: dict[str, set[str]] = {symbol: set() for symbol in symbols}
         if tick_root is not None:
-            self.restore_forming_from_tick_lake(
-                Path(tick_root), at=restore_at or datetime.now(UTC)
-            )
+            self.restore_forming_from_tick_lake(Path(tick_root), at=restore_at or datetime.now(UTC))
 
     def would_publish_on_trade(self, symbol: str, timestamp_ms: int) -> bool:
         """Whether this trade will close the current base candle.
@@ -162,8 +158,7 @@ class CanonicalCandleSink:
     def would_publish_on_advance(self, now: datetime) -> bool:
         """Return whether wall-clock advancement can close any base candle."""
         return any(
-            (forming := pipeline.builder.forming()) is not None
-            and now >= forming.close_time
+            (forming := pipeline.builder.forming()) is not None and now >= forming.close_time
             for pipeline in self.pipelines.values()
         )
 
@@ -265,12 +260,12 @@ class CanonicalCandleSink:
             frame = pd.concat(frames, ignore_index=True)
             required = {"ts_ms", "price", "amount"}
             if not required.issubset(frame.columns):
-                logger.error("forming recovery skipped: trade shard schema incomplete for %s", symbol)
+                logger.error(
+                    "forming recovery skipped: trade shard schema incomplete for %s", symbol
+                )
                 continue
             ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
-            frame = frame.loc[
-                (ts >= replay_start_ms) & (ts <= through_ms)
-            ].copy()
+            frame = frame.loc[(ts >= replay_start_ms) & (ts <= through_ms)].copy()
             if frame.empty:
                 continue
             frame["ts_ms"] = pd.to_numeric(frame["ts_ms"], errors="raise").astype("int64")
@@ -361,8 +356,10 @@ def _book_row(
     bids, asks = ob["bids"], ob["asks"]
     row: dict[str, Any] = {
         "ts_ms": ts_ms,
-        "bid": float(bids[0][0]), "bid_qty": float(bids[0][1]),
-        "ask": float(asks[0][0]), "ask_qty": float(asks[0][1]),
+        "bid": float(bids[0][0]),
+        "bid_qty": float(bids[0][1]),
+        "ask": float(asks[0][0]),
+        "ask_qty": float(asks[0][1]),
     }
     if received_ts_ms is not None:
         row["received_ts_ms"] = int(received_ts_ms)
@@ -400,8 +397,14 @@ class _Buffer:
 
     def _shard_dir(self, day: str) -> Path:
         safe = canonical_symbol(self.symbol)
-        d = (self.root / "ticks" / f"exchange={self.exchange}"
-             / f"symbol={safe}" / f"stream={self.stream}" / day)
+        d = (
+            self.root
+            / "ticks"
+            / f"exchange={self.exchange}"
+            / f"symbol={safe}"
+            / f"stream={self.stream}"
+            / day
+        )
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -428,7 +431,7 @@ class _Buffer:
             final = d / name
             tmp = d / f".{name}.tmp"
             chunk.to_parquet(tmp, index=False)
-            os.replace(tmp, final)   # atomic publish; readers only see complete shards
+            os.replace(tmp, final)  # atomic publish; readers only see complete shards
         self._seq += 1
         self._rows.clear()
         self._last_flush = now
@@ -436,10 +439,18 @@ class _Buffer:
 
 
 class TickRecorder:
-    def __init__(self, exchange_id: str, symbols: list[str], root: Path,
-                 *, levels: int = 10, candle_root: Path | None = None,
-                 trades_only: bool = False, books_only: bool = False,
-                 candle_subscribers: Iterable[Callable[[Candle], None]] = ()) -> None:
+    def __init__(
+        self,
+        exchange_id: str,
+        symbols: list[str],
+        root: Path,
+        *,
+        levels: int = 10,
+        candle_root: Path | None = None,
+        trades_only: bool = False,
+        books_only: bool = False,
+        candle_subscribers: Iterable[Callable[[Candle], None]] = (),
+    ) -> None:
         import ccxt.pro as ccxtpro
 
         root = Path(root)
@@ -448,9 +459,7 @@ class TickRecorder:
             raise ValueError(f"unknown CCXT Pro exchange id: {exchange_id}")
         if levels < 1:
             raise ValueError("levels must be >= 1")
-        self._ex = getattr(ccxtpro, exchange_id)(
-            {"enableRateLimit": True, "newUpdates": True}
-        )
+        self._ex = getattr(ccxtpro, exchange_id)({"enableRateLimit": True, "newUpdates": True})
         self.exchange_id = exchange_id
         self.symbols = symbols
         self.root = root
@@ -508,33 +517,24 @@ class TickRecorder:
             for symbol in symbols
         }
         self._seen_trade_order: dict[str, deque[str]] = {
-            symbol: deque(
-                sorted(self._seen_trade_ids[symbol])[-_SEEN_TRADE_IDS:]
-            )
+            symbol: deque(sorted(self._seen_trade_ids[symbol])[-_SEEN_TRADE_IDS:])
             for symbol in symbols
         }
         self._skipped_trade_counts: dict[str, list[int]] = {
             symbol: [0, 0, 0, 0] for symbol in symbols
         }
-        self._next_skip_log: dict[str, float] = {
-            symbol: 0.0 for symbol in symbols
-        }
+        self._next_skip_log: dict[str, float] = {symbol: 0.0 for symbol in symbols}
         self._trade_bufs: dict[str, _Buffer] = {
-            symbol: _Buffer(root, exchange_id, symbol, "trades")
-            for symbol in symbols
+            symbol: _Buffer(root, exchange_id, symbol, "trades") for symbol in symbols
         }
-        self._trade_reorder: dict[
-            str, list[tuple[int, int, dict[str, Any], str | None]]
-        ] = {symbol: [] for symbol in symbols}
-        self._pending_trade_ids: dict[str, set[str]] = {
-            symbol: set() for symbol in symbols
+        self._trade_reorder: dict[str, list[tuple[int, int, dict[str, Any], str | None]]] = {
+            symbol: [] for symbol in symbols
         }
+        self._pending_trade_ids: dict[str, set[str]] = {symbol: set() for symbol in symbols}
         self._max_seen_trade_ts_ms: dict[str, int] = {}
         self._trade_arrival_seq = 0
         if self.candle_sink is not None:
-            self._last_trade_ts_ms.update(
-                self.candle_sink.restored_last_trade_ts_ms
-            )
+            self._last_trade_ts_ms.update(self.candle_sink.restored_last_trade_ts_ms)
 
     def _remember_trade(self, symbol: str, key: str | None) -> None:
         if key is None:
@@ -560,16 +560,13 @@ class TickRecorder:
                 logger.debug("%s skipped %d replayed trade rows", symbol, duplicate)
             return
         totals = self._skipped_trade_counts[symbol]
-        for index, count in enumerate(
-            (malformed, late, duplicate, candle_rejected)
-        ):
+        for index, count in enumerate((malformed, late, duplicate, candle_rejected)):
             totals[index] += count
         now = time.monotonic()
         if now < self._next_skip_log[symbol]:
             return
         logger.warning(
-            "%s skipped trade rows (60s summary): malformed=%d late=%d "
-            "duplicate=%d candle=%d",
+            "%s skipped trade rows (60s summary): malformed=%d late=%d duplicate=%d candle=%d",
             symbol,
             *totals,
         )
@@ -600,9 +597,7 @@ class TickRecorder:
             latency = getattr(self, "recorder_latency", None)
             if latency is not None:
                 received_ms = int(datetime.now(UTC).timestamp() * 1000)
-                latency.record(
-                    TRADE_INGEST_MS, max(0.0, float(received_ms - timestamp))
-                )
+                latency.record(TRADE_INGEST_MS, max(0.0, float(received_ms - timestamp)))
             self._trade_arrival_seq += 1
             heapq.heappush(
                 pending,
@@ -697,9 +692,7 @@ class TickRecorder:
                 if buf.should_flush(now):
                     buf.flush(now)
             except asyncio.CancelledError:
-                late, candle_rejected = self._drain_trade_reorder(
-                    symbol, buf, force=True
-                )
+                late, candle_rejected = self._drain_trade_reorder(symbol, buf, force=True)
                 self._report_skipped_trades(
                     symbol,
                     malformed=0,
@@ -739,9 +732,7 @@ class TickRecorder:
                     # pipeline publish its closed candle.
                     for trade_buf in self._trade_bufs.values():
                         trade_buf.flush(clock())
-                self.candle_sink.advance_time(
-                    boundary
-                )
+                self.candle_sink.advance_time(boundary)
             await asyncio.sleep(1.0)
 
     async def _maintain_latency_snapshot(self) -> None:
@@ -800,19 +791,21 @@ class TickRecorder:
             return "canonical_producer_unavailable"
         return self.candle_sink.new_arm_block_reason(symbol)
 
-    async def run(self, clock=None) -> None:
+    async def run(self, clock=None, *, acquire_writer_lease: bool = True) -> None:
         import time as _t
 
         from vnedge.exchange.writer_lease import CanonicalWriterLease
 
         clock = clock or _t.monotonic
-        lease = CanonicalWriterLease(self.root, self.exchange_id).acquire()
+        lease = (
+            CanonicalWriterLease(self.root, self.exchange_id).acquire()
+            if acquire_writer_lease
+            else None
+        )
         tasks = []
         for symbol in self.symbols:
             for stream in self.streams_for(symbol):
-                watcher = (
-                    self._watch_trades if stream == "trades" else self._watch_book
-                )
+                watcher = self._watch_trades if stream == "trades" else self._watch_book
                 tasks.append(asyncio.create_task(watcher(symbol, clock)))
         if not self.books_only:
             tasks.append(asyncio.create_task(self._maintain_trade_streams(clock)))
@@ -827,7 +820,8 @@ class TickRecorder:
                 self.recorder_latency_store.save_from(self.recorder_latency)
                 await self._ex.close()
             finally:
-                lease.release()
+                if lease is not None:
+                    lease.release()
 
 
 def _delta_ob(buy: list, sell: list) -> dict:
@@ -904,12 +898,8 @@ class DeltaTickRecorder:
         )
         self.trade_count = 0
         self.book_count = 0
-        self._trade_bufs = {
-            s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols
-        }
-        self._book_bufs = {
-            s: _Buffer(root, exchange_id, s, "book") for s in self.symbols
-        }
+        self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols}
+        self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
         channels = tuple(
             channel
             for channel, enabled in (
@@ -948,11 +938,7 @@ class DeltaTickRecorder:
                     self.levels,
                     ts_ms,
                     received_ts_ms=self._epoch_ms(),
-                    sequence=(
-                        msg.get("sequence")
-                        or msg.get("sequence_no")
-                        or msg.get("nonce")
-                    ),
+                    sequence=(msg.get("sequence") or msg.get("sequence_no") or msg.get("nonce")),
                     source=f"{self.exchange_id}:l2_orderbook",
                     exchange_timestamped=ts_raw is not None,
                 )
@@ -980,9 +966,8 @@ class DeltaTickRecorder:
         # rebuild tape and must be visible before a boundary trade can publish
         # the prior closed candle to an in-memory subscriber.
         buf.add(row)
-        if (
-            self.candle_sink is not None
-            and self.candle_sink.would_publish_on_trade(sym, int(row["ts_ms"]))
+        if self.candle_sink is not None and self.candle_sink.would_publish_on_trade(
+            sym, int(row["ts_ms"])
         ):
             buf.flush((self._clock or time.monotonic)())
         if self.candle_sink is not None:
@@ -1020,18 +1005,24 @@ class DeltaTickRecorder:
             return "canonical_producer_unavailable"
         return self.candle_sink.new_arm_block_reason(symbol)
 
-    async def run(self, clock=None) -> None:
+    async def run(self, clock=None, *, acquire_writer_lease: bool = True) -> None:
         import time as _t
 
         from vnedge.exchange.writer_lease import CanonicalWriterLease
 
         clock = clock or self._clock or _t.monotonic
-        lease = CanonicalWriterLease(self.root, self.exchange_id).acquire()
+        lease = (
+            CanonicalWriterLease(self.root, self.exchange_id).acquire()
+            if acquire_writer_lease
+            else None
+        )
         try:
             await self._client.start()
             logger.info(
                 "delta tick recorder: %s %s -> %s",
-                self.exchange_id, self.symbols, self.root,
+                self.exchange_id,
+                self.symbols,
+                self.root,
             )
             next_latency_snapshot = 0.0
             while True:
@@ -1039,9 +1030,8 @@ class DeltaTickRecorder:
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
-                if (
-                    self.candle_sink is not None
-                    and self.candle_sink.would_publish_on_advance(datetime.now(UTC))
+                if self.candle_sink is not None and self.candle_sink.would_publish_on_advance(
+                    datetime.now(UTC)
                 ):
                     for trade_buf in self._trade_bufs.values():
                         trade_buf.flush(now)
@@ -1061,7 +1051,8 @@ class DeltaTickRecorder:
                 self.recorder_latency_store.save_from(self.recorder_latency)
                 await self._client.stop()
             finally:
-                lease.release()
+                if lease is not None:
+                    lease.release()
 
 
 def main(argv=None) -> int:
@@ -1083,7 +1074,7 @@ def main(argv=None) -> int:
         "--books-only",
         action="store_true",
         help="record the L2 book without the trade stream (use when a separate "
-             "recorder already owns trades for these symbols)",
+        "recorder already owns trades for these symbols)",
     )
     p.add_argument("--levels", type=int, default=10, help="L2 depth levels per side")
     args = p.parse_args(argv)
