@@ -257,6 +257,10 @@ services:
   # the whole point of this entry is that the L2 lake now has an owner with a
   # restart policy and a healthcheck that fails when book files go stale.
   book-recorder:
+    # A standalone websocket has a different clock from the lane consumer and
+    # is mechanically ineligible for runtime parity. Keep it opt-in for L2
+    # research so default/capture deploys cannot accidentally run both tapes.
+    profiles: ["standalone-book-evidence"]
     build: .
     restart: unless-stopped
     command:

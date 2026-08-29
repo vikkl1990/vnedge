@@ -196,6 +196,11 @@ Artifacts now label captures as `lane_consumed` or `external_book`; the
 comparator forces `exact_parity=false` when the input is not lane-consumed,
 even when both sides emitted zero intents.
 
+The standalone `book-recorder` is now behind the explicit
+`standalone-book-evidence` Compose profile. Default and quote-parity capture
+deployments do not start it, preventing a second websocket clock from being
+mistaken for lane-consumed evidence.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.
