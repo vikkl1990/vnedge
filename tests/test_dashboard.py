@@ -187,6 +187,18 @@ def test_scanner_evidence_endpoint_is_read_only_and_auth_gated(client):
     assert response.json()["read_only"] is True
 
 
+def test_quote_parity_endpoint_is_read_only_and_cannot_change_authority(client):
+    assert client.get("/quote-parity").status_code == 401
+    response = client.get("/quote-parity?token=t3st-token")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["read_only"] is True
+    assert payload["authority_changed"] is False
+    assert payload["router_decision_authority"] is False
+    assert payload["capital_enabled"] is False
+    assert payload["summary"]["cutover_ready"] is False
+
+
 def test_data_products_separates_required_runtime_from_optional_research(client):
     assert client.get("/data-products").status_code == 401
 
@@ -196,6 +208,8 @@ def test_data_products_separates_required_runtime_from_optional_research(client)
     assert payload["read_only"] is True
     assert rows["runtime_snapshot"]["required"] is True
     assert rows["runtime_snapshot"]["state"] == "CURRENT"
+    assert rows["quote_parity"]["required"] is False
+    assert rows["quote_parity"]["class"] == "cutover_evidence"
     assert rows["ml_pipeline"]["required"] is False
     assert rows["research_scorecard"]["class"] == "historical_evidence"
     assert rows["research_scorecard"]["state"] in {"HISTORICAL", "MISSING"}

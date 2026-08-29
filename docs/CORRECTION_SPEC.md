@@ -201,6 +201,16 @@ The standalone `book-recorder` is now behind the explicit
 deployments do not start it, preventing a second websocket clock from being
 mistaken for lane-consumed evidence.
 
+The default deployment also runs a read-only `quote-parity-evidence` monitor.
+It binds each active quote-acceptance lane to its latest exact runner-start
+heartbeat, loads only that lane's consumed BBO shards, replays the frozen
+scanner contract, and compares the resulting intent payloads with the durable
+lane journal. A lane remains `collecting` until the same uninterrupted runner
+has at least two hours, 1,000 quotes, and one exactly matched intent. Capture
+overflow, identity mismatch, or live/replay divergence fails that lane. The
+roster-wide artifact can report `cutover_ready`; it has no producer, router,
+registry, promotion, capital, or order authority.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.

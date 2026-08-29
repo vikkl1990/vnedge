@@ -2575,6 +2575,11 @@ def create_app(
             {},
             expected_interval_seconds=15 * 60,
         )["artifact"]
+        quote_parity = _artifact_payload(
+            Path("research/live_research/quote_parity_status.json"),
+            {},
+            expected_interval_seconds=30 * 60,
+        )["artifact"]
         maintenance = _artifact_payload(
             Path("data/reports/tick_lake_maintenance.json"),
             {},
@@ -2606,6 +2611,12 @@ def create_app(
                 "source_as_of": None,
             },
             {"product": "scanner_evidence", "class": "derived", "required": False, **scanner},
+            {
+                "product": "quote_parity",
+                "class": "cutover_evidence",
+                "required": False,
+                **quote_parity,
+            },
             {"product": "gap_recovery", "class": "canonical_recovery", "required": True, **recovery},
             {"product": "tick_lake_maintenance", "class": "maintenance", "required": True, **maintenance},
             {"product": "ml_pipeline", "class": "optional_research", "required": False, **ml_artifact},
@@ -2644,6 +2655,35 @@ def create_app(
                 "status": "artifact_unavailable",
             },
             expected_interval_seconds=15 * 60,
+        )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/quote-parity")
+    async def quote_parity(request: Request) -> JSONResponse:
+        """Read-only live-versus-replay evidence for lane-consumed BBO.
+
+        ``cutover_ready`` is an evidence result only. It cannot switch the
+        canonical producer, enable router decision authority, or grant orders.
+        """
+        user = _authorized(request)
+        payload = _artifact_payload(
+            Path("research/live_research/quote_parity_status.json"),
+            {
+                "schema_version": 1,
+                "generated_at": None,
+                "read_only": True,
+                "authority_changed": False,
+                "router_decision_authority": False,
+                "capital_enabled": False,
+                "summary": {
+                    "lanes": 0,
+                    "applicable_lanes": 0,
+                    "statuses": {},
+                    "cutover_ready": False,
+                },
+                "lanes": [],
+            },
+            expected_interval_seconds=30 * 60,
         )
         return JSONResponse(payload, headers=_identity(user))
 
