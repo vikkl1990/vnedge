@@ -832,6 +832,7 @@ def build_strategy_workflow(
                 "gross_usd": raw.get("gross_usd"),
                 "gross_bps": raw.get("gross_bps"),
                 "fees_usd": raw.get("fees_usd"),
+                "net_execution_usd": raw.get("net_execution_usd"),
                 "observed_shadow_net_usd": raw.get("observed_shadow_net_usd"),
                 "performance_eligible": bool(
                     raw.get(

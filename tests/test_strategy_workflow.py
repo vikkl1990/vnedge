@@ -260,6 +260,7 @@ def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path)
                         "virtual_pending": 0,
                         "gross_usd": -18.59,
                         "fees_usd": 4.20,
+                        "net_execution_usd": -22.79,
                         "observed_shadow_net_usd": -22.79,
                         "failed_gates": {"session_closed": 148},
                     }
@@ -283,5 +284,6 @@ def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path)
     assert row["shadow_evidence"]["evaluations"] == 179
     assert row["shadow_evidence"]["virtual_resolved"] == 1
     assert row["shadow_evidence"]["observed_shadow_net_usd"] == -22.79
+    assert row["shadow_evidence"]["net_execution_usd"] == -22.79
     assert row["shadow_evidence"]["promotion_evidence"] is False
     assert payload["summary"]["shadow_evidence"] == 1

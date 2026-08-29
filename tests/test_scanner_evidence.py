@@ -187,6 +187,10 @@ def test_replay_uses_single_book_next_open_and_dual_costs(monkeypatch):
     outcome = next(row["outcome"] for row in result["records"] if row.get("admitted"))
     assert outcome["entry"] == 100.0
     assert outcome["exit"] == 110.0
+    assert result["schema_version"] == 2
+    assert outcome["net_bps"] == outcome["net_execution_bps"]
+    assert outcome["cost_bps"] == outcome["execution_cost_bps"]
+    assert outcome["funding_bps"] == 0.0
     assert outcome["net_execution_bps"] > outcome["net_gate_bps"]
 
 
@@ -238,6 +242,14 @@ def test_closed_replay_uses_venue_contract_cost_not_private_strategy_cost(monkey
     outcome = next(row["outcome"] for row in result["records"] if row.get("admitted"))
     assert outcome["execution_cost_bps"] == pytest.approx(15.8)
     assert outcome["gate_cost_bps"] == pytest.approx(18.8)
+    assert outcome["cost_bps"] == pytest.approx(15.8)
+    assert outcome["net_bps"] == outcome["net_execution_bps"]
+    assert outcome["net_gate_bps"] == pytest.approx(
+        outcome["gross_bps"] - outcome["gate_cost_bps"]
+    )
+    assert outcome["net_gate_bps"] <= outcome["net_execution_bps"]
+    assert result["net_bps"] == result["net_execution_bps"]
+    assert result["funding_bps"] == 0.0
     assert result["performance_eligible"] is False
 
 
@@ -643,7 +655,9 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     assert row["virtual_resolved"] == 1
     assert row["virtual_pending"] == 0
     assert row["gross_usd"] == 10.0
+    assert row["net_execution_usd"] == 9.7
     assert row["observed_shadow_net_usd"] == 9.7
+    assert report["net_execution_usd"] == 9.7
     assert report["performance_eligible"] is False
 
 
@@ -1057,6 +1071,7 @@ def test_journal_report_counts_transitions_and_unmatched_outcome(tmp_path: Path)
     assert row["virtual_resolved"] == 1
     assert row["unmatched_outcomes"] == 1
     assert row["observed_shadow_net_usd"] == 2.0
+    assert row["net_execution_usd"] == 2.0
     assert report["scanner_transitions"] == 1
     assert report["quote_lifecycle"] == {"armed_long": 1}
     assert report["virtual_approved"] == 0
@@ -1065,4 +1080,5 @@ def test_journal_report_counts_transitions_and_unmatched_outcome(tmp_path: Path)
     assert report["gross_usd"] == 3.0
     assert report["fees_usd"] == 1.0
     assert report["observed_shadow_net_usd"] == 2.0
+    assert report["net_execution_usd"] == 2.0
     assert "unmatched_outcome_lifecycle" in report["performance_blockers"]

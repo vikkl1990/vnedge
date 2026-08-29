@@ -316,6 +316,7 @@ def replay_scanner(
                 "net_bps": gross - realized_cost,
                 "execution_cost_bps": realized_cost,
                 "gate_cost_bps": conservative_cost,
+                "funding_bps": 0.0,
                 "net_execution_bps": gross - realized_cost,
                 "net_gate_bps": gross - conservative_cost,
                 "entry_index": entry_index,
@@ -339,7 +340,7 @@ def replay_scanner(
     )
     evaluable_bars = max(0, len(prepared) - int(strategy.warmup_bars) - 1)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(UTC).isoformat(),
         "strategy_id": strategy_id,
         "capital_eligible": is_capital_eligible(strategy_id),
@@ -348,6 +349,7 @@ def replay_scanner(
         "cost_profile": cost_profile,
         "execution_cost_bps": execution_cost,
         "gate_cost_bps": gate_cost,
+        "funding_bps": 0.0,
         "funding_included": False,
         "performance_eligible": False,
         "performance_blockers": [
@@ -1040,6 +1042,7 @@ def build_journal_report(
                 "gross_bps": 0.0,
                 "fees_usd": 0.0,
                 "funding_usd": 0.0,
+                "net_execution_usd": 0.0,
                 "observed_shadow_net_usd": 0.0,
                 "unmatched_outcomes": 0,
                 "duplicate_intents": 0,
@@ -1153,9 +1156,11 @@ def build_journal_report(
         )
         row["fees_usd"] += float(payload.get("fees_usd") or 0.0)
         row["funding_usd"] += float(payload.get("funding_usd") or 0.0)
-        row["observed_shadow_net_usd"] += float(
-            payload.get("virtual_net_usd") or 0.0
-        )
+        booked_net_usd = float(payload.get("virtual_net_usd") or 0.0)
+        row["net_execution_usd"] += booked_net_usd
+        # Compatibility name for the dashboard. It remains explicitly
+        # shadow-only and is never converted into a replay ``net_bps``.
+        row["observed_shadow_net_usd"] += booked_net_usd
 
     strategies = []
     for strategy_id in sorted(grouped):
@@ -1216,6 +1221,7 @@ def build_journal_report(
         row.setdefault("gross_usd", 0.0)
         row.setdefault("gross_bps", 0.0)
         row.setdefault("fees_usd", 0.0)
+        row.setdefault("net_execution_usd", 0.0)
         row.setdefault("observed_shadow_net_usd", 0.0)
         row["strategy_id"] = strategy_id
     report["schema_version"] = 2
@@ -1259,6 +1265,9 @@ def build_journal_report(
     )
     report["funding_usd"] = sum(
         float(row["funding_usd"]) for row in report["strategies"]
+    )
+    report["net_execution_usd"] = sum(
+        float(row["net_execution_usd"]) for row in report["strategies"]
     )
     report["observed_shadow_net_usd"] = sum(
         float(row["observed_shadow_net_usd"]) for row in report["strategies"]

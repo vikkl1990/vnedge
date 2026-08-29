@@ -92,6 +92,25 @@ must never stand in for CostGate, sizing, risk, or shared shadow-book state.
 Phase 4 is complete only after a recorded live day produces exact mechanism
 and approval parity.
 
+Closed-bar replay cost fields use schema version 2:
+
+- `execution_cost_bps` is the booked round-trip cost and is the only cost
+  subtracted for execution P&L;
+- `gate_cost_bps` is booked cost plus the safety reserve and is used only by
+  CostGate;
+- `funding_bps` is zero until funding history is actually replayed;
+- `net_execution_bps = gross_bps - execution_cost_bps`;
+- `net_gate_bps = gross_bps - gate_cost_bps`;
+- `net_bps` and `cost_bps` are deprecated compatibility aliases for booked
+  execution net and booked execution cost respectively.
+
+Schema version 1 historically used `net_bps == net_gate_bps` and therefore
+over-penalized reported P&L. Readers of legacy JSON must prefer
+`net_execution_bps` when present; otherwise they must classify schema-1
+`net_bps` as gate-net, never booked execution-net. Quote replay remains
+performance-ineligible and does not synthesize net bps without fills, funding,
+and the lane's real approval path.
+
 Parity capture runbook (run where the recorded data and journals live):
 
 ```
