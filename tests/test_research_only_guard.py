@@ -45,7 +45,9 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "range_expansion_realtime_v1",
         "range_expansion_realtime_v2",
         "structure_bos_realtime_v1",
+        "structure_bos_realtime_v2",
         "session_continuation_realtime_v1",
+        "session_continuation_realtime_v2",
         "htf_structure_continuation_realtime_v1",
     }
     for sid in RESEARCH_ONLY:
@@ -90,7 +92,9 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "range_expansion_realtime_v1",
         "range_expansion_realtime_v2",
         "structure_bos_realtime_v1",
+        "structure_bos_realtime_v2",
         "session_continuation_realtime_v1",
+        "session_continuation_realtime_v2",
         "htf_structure_continuation_realtime_v1",
     }
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v2")

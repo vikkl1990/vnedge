@@ -57,14 +57,14 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "structure_bos_realtime_v1",
+      "strategy_id": "structure_bos_realtime_v2",
       "exchange": "binanceusdm",
       "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {
-        "version": "1",
-        "mechanism": "confirmed 1h/4h structure arm with current-quote break acceptance",
+        "version": "2",
+        "mechanism": "decision-time aligned 1h/4h structure arm with stable-swing quote acceptance",
         "decision_engine": "quote_acceptance_v2",
         "exit_engine": "scanner_exit_v1",
         "backtest_engine": "vnedge_quote_acceptance_replay",
@@ -75,14 +75,14 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "session_continuation_realtime_v1",
+      "strategy_id": "session_continuation_realtime_v2",
       "exchange": "binanceusdm",
       "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {
-        "version": "1",
-        "mechanism": "UTC-session continuation arm with current-quote acceptance and fill-time gate",
+        "version": "2",
+        "mechanism": "decision-time aligned UTC-session continuation arm with fill-time quote gate",
         "decision_engine": "quote_acceptance_v2",
         "exit_engine": "scanner_exit_v1",
         "backtest_engine": "vnedge_quote_acceptance_replay",

@@ -237,6 +237,8 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "range_expansion_realtime_v1",
         "range_expansion_realtime_v2",
         "structure_bos_realtime_v1",
+        "structure_bos_realtime_v2",
         "session_continuation_realtime_v1",
+        "session_continuation_realtime_v2",
         "htf_structure_continuation_realtime_v1",
     }

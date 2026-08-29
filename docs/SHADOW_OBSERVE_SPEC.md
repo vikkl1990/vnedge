@@ -12,8 +12,9 @@ or live permission.
   remain replayable; the active roster uses `squeeze_expansion_breakout_v4`
   plus the historical quote-triggered `range_expansion_realtime_v1` and its
   pre-armed successor `range_expansion_realtime_v2`,
-  `htf_structure_continuation_realtime_v1`, and
-  `session_continuation_realtime_v1`.
+  `htf_structure_continuation_realtime_v1`, and the decision-time aligned
+  `structure_bos_realtime_v2` and `session_continuation_realtime_v2`
+  successors.
 - `KILLED` strategies cannot be observed or capital-enabled.
 - The multi-lane process contains no live execution adapter. Its observe lane
   uses `RunnerMode.SHADOW`, `SimulatedExchange`, the risk gateway, the decision
@@ -106,9 +107,11 @@ EMA reclaim, then arms only the aligned side above/below the setup bar. Its
 structure/ATR stop deliberately treats small adverse movement as noise; it has
 no fixed profit cap and exits on hard protection, confirmed structure
 deterioration, a late ATR trail, or the frozen time limit. It never flips from
-one side to the other on a single dip. Session
-continuation arms its prior four-bar range and enforces the 12:00-16:00 UTC
-window again at quote/fill time. A raw touch is insufficient: three distinct
+one side to the other on a single dip. Session continuation arms its prior
+four-bar range at the candle's close-time boundary and enforces the
+12:00-16:00 UTC window again at quote/fill time. BoS uses one stable episode
+per confirmed swing pair, so a rejected swing does not silently receive a new
+probe budget every 15 minutes. A raw touch is insufficient: three distinct
 quotes must remain through the level for three seconds, and excessive chase,
 stale, duplicate, out-of-order, or post-session quotes fail closed.
 
@@ -121,7 +124,8 @@ inferred from timeframe:
 | `range_expansion_realtime_v1` | swing | 48 x 15m = 12h |
 | `range_expansion_realtime_v2` | swing | 48 x 15m = 12h |
 | `htf_structure_continuation_realtime_v1` | swing | 48 x 15m = 12h |
-| `session_continuation_realtime_v1` | swing | 32 x 15m = 8h |
+| `structure_bos_realtime_v2` | swing | 192 x 15m = 48h |
+| `session_continuation_realtime_v2` | swing | 32 x 15m = 8h |
 
 Startup refuses a registered scanner when its roster timeframe or hold differs
 from this contract. Every closed-bar evaluation journals its primary failed

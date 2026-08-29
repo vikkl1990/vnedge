@@ -12,7 +12,9 @@ orders or acquire capital permission.
 from __future__ import annotations
 
 import math
+import struct
 from dataclasses import dataclass
+from hashlib import sha256
 from types import MappingProxyType
 from typing import Final
 
@@ -50,6 +52,17 @@ def _hour_episode(row: pd.Series) -> int:
     else:
         ts = ts.tz_convert("UTC")
     return int(ts.floor("h").timestamp() * 1000)
+
+
+def _level_episode(long_level: float, short_level: float) -> int:
+    """Stable identity for one structural boundary pair.
+
+    A confirmed swing remains the same economic hypothesis across several
+    15-minute refreshes.  Row timestamps must not silently create a fresh
+    probe budget for the same swing on every close.
+    """
+    payload = struct.pack("!dd", long_level, short_level)
+    return int.from_bytes(sha256(payload).digest()[:8], "big", signed=False)
 
 
 def _finite_positive(*values: float) -> bool:
@@ -367,6 +380,145 @@ class StructureBosRealtimeV1(_QuoteEntryOnly, StructureBos15mTriggerV3):
         )
 
 
+class StructureBosRealtimeV2(StructureBosRealtimeV1):
+    """Decision-time aligned BoS pre-arm with stable swing identity.
+
+    V1 inherited a session flag calculated from the 15-minute candle's open
+    time even though the arm becomes available at its close.  It also used a
+    row-based episode, replenishing probe state for the same confirmed swing
+    every 15 minutes.  V2 fixes both contracts without changing V1 evidence.
+    """
+
+    strategy_id = "structure_bos_realtime_v2"
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
+        out = super().prepare(candles)
+        p = self.params
+        timestamp = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+        decision_at = timestamp + pd.Timedelta(minutes=15)
+        session_ok = decision_at.dt.hour.ge(p.session_start_hour_utc) & decision_at.dt.hour.lt(
+            p.session_end_hour_utc
+        )
+        close = pd.to_numeric(out["close"], errors="coerce")
+        long_level = pd.to_numeric(out["rt_long_level"], errors="coerce")
+        short_level = pd.to_numeric(out["rt_short_level"], errors="coerce")
+        trend = out["bos15_structure_trend"].astype(str)
+        htf = out["bos15_htf_structure_trend"].astype(str)
+        bias = out["bos15_dual_avwap_bias"].astype(str)
+        common = (
+            out["bos15_structure_ready"].fillna(False).astype(bool)
+            & out["bos15_quality_ok"].eq(1)
+            & session_ok
+            & out["bos15_volume_ok"].eq(1)
+        )
+        allow_long = (
+            common
+            & trend.eq("up")
+            & htf.eq("up")
+            & ~bias.eq("strong_short")
+            & close.le(long_level)
+            & out["bos15_projected_net_long_bps"].ge(p.min_projected_net_bps)
+        )
+        allow_short = (
+            common
+            & trend.eq("down")
+            & htf.eq("down")
+            & ~bias.eq("strong_long")
+            & close.ge(short_level)
+            & out["bos15_projected_net_short_bps"].ge(p.min_projected_net_bps)
+        )
+        out["rt_decision_at"] = decision_at
+        out["rt_session_ok"] = session_ok.astype(float)
+        out["rt_allow_long"] = allow_long.astype(float)
+        out["rt_allow_short"] = allow_short.astype(float)
+        out["rt_arm_ready"] = (allow_long | allow_short).astype(float)
+        return out
+
+    def realtime_arm(self, df: pd.DataFrame, index: int) -> RealtimeEntryArm | None:
+        arm = super().realtime_arm(df, index)
+        if arm is None:
+            return None
+        return RealtimeEntryArm(
+            episode_id=_level_episode(arm.long_level, arm.short_level),
+            bar_index=arm.bar_index,
+            long_level=arm.long_level,
+            short_level=arm.short_level,
+            atr=arm.atr,
+            reference_price=arm.reference_price,
+            allow_long=arm.allow_long,
+            allow_short=arm.allow_short,
+            long_structural_stop=arm.long_structural_stop,
+            short_structural_stop=arm.short_structural_stop,
+            structural_stop_mode=arm.structural_stop_mode,
+            expires_after_bars=arm.expires_after_bars,
+            session_start_hour_utc=arm.session_start_hour_utc,
+            session_end_hour_utc=arm.session_end_hour_utc,
+            reason=self.strategy_id,
+        )
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        def flag(name: str) -> bool:
+            return bool(number(name) or 0)
+
+        trend = str(row.get("bos15_structure_trend", "unavailable"))
+        htf = str(row.get("bos15_htf_structure_trend", "unavailable"))
+        bias = str(row.get("bos15_dual_avwap_bias", "unavailable"))
+        long_context = trend == "up" and htf == "up"
+        short_context = trend == "down" and htf == "down"
+        aligned = long_context or short_context
+        bias_ok = not (
+            (long_context and bias == "strong_short") or (short_context and bias == "strong_long")
+        )
+        projected = number(
+            "bos15_projected_net_long_bps" if long_context else "bos15_projected_net_short_bps"
+        )
+        edge_ok = projected is not None and projected >= self.params.min_projected_net_bps
+        inside = flag("rt_allow_long") or flag("rt_allow_short")
+        ready_raw = row.get("bos15_structure_ready", False)
+        structure_ready = False if pd.isna(ready_raw) else bool(ready_raw)
+        checks = (
+            (flag("bos15_quality_ok"), "data_quality_not_ok"),
+            (flag("rt_session_ok"), "fill_session_not_open"),
+            (structure_ready, "confirmed_swing_pair_not_ready"),
+            (flag("bos15_volume_ok"), "setup_volume_below_floor"),
+            (aligned, "htf_structure_conflict"),
+            (bias_ok, "dual_avwap_conflict"),
+            (edge_ok, "payoff_hypothesis_below_threshold"),
+            (inside, "boundary_already_crossed"),
+        )
+        failures = [reason for ok, reason in checks if not ok]
+        return {
+            "eligible": flag("rt_arm_ready"),
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "entry_mode": "prearmed_live_quote_hold",
+                "decision_at": str(row.get("rt_decision_at", "unavailable")),
+                "structure_1h": trend,
+                "structure_4h": htf,
+                "dual_avwap_bias": bias,
+                "projected_net_bps": projected,
+                "long_level": number("rt_long_level"),
+                "short_level": number("rt_short_level"),
+            },
+            "thresholds": {
+                "min_projected_net_bps": self.params.min_projected_net_bps,
+                "acceptance_hold_seconds": self.acceptance_params.acceptance_hold_seconds,
+                "min_acceptance_samples": self.acceptance_params.min_acceptance_samples,
+                "max_chase_bps": self.acceptance_params.max_chase_bps,
+            },
+        }
+
+
 SESSION_ACCEPTANCE: Final = SqueezeExpansionV3Params(
     arm_grace_bars=1,
     acceptance_hold_seconds=3.0,
@@ -447,6 +599,78 @@ class SessionContinuationRealtimeV1(_QuoteEntryOnly, SessionContinuation15mV1):
             session_end_hour_utc=self.params.end_hour,
             reason=self.strategy_id,
         )
+
+
+class SessionContinuationRealtimeV2(SessionContinuationRealtimeV1):
+    """Session breakout pre-arm aligned to the candle's close timestamp."""
+
+    strategy_id = "session_continuation_realtime_v2"
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
+        out = super().prepare(candles)
+        p = self.params
+        timestamp = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+        decision_at = timestamp + pd.Timedelta(minutes=15)
+        session_ok = decision_at.dt.hour.ge(p.start_hour) & decision_at.dt.hour.lt(p.end_hour)
+        close = pd.to_numeric(out["close"], errors="coerce")
+        high = pd.to_numeric(out["rt_long_level"], errors="coerce")
+        low = pd.to_numeric(out["rt_short_level"], errors="coerce")
+        common = (
+            out["rs_quality_ok"].eq(1)
+            & out["rs_route_ok"].eq(1)
+            & session_ok
+            & out["sc15_volume_ok"].eq(1)
+        )
+        allow_long = common & close.le(high)
+        allow_short = common & close.ge(low)
+        out["rt_decision_at"] = decision_at
+        out["rt_session_ok"] = session_ok.astype(float)
+        out["rt_allow_long"] = allow_long.astype(float)
+        out["rt_allow_short"] = allow_short.astype(float)
+        out["rt_arm_ready"] = (allow_long | allow_short).astype(float)
+        return out
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        def flag(name: str) -> bool:
+            return bool(number(name) or 0)
+
+        inside = flag("rt_allow_long") or flag("rt_allow_short")
+        checks = (
+            (flag("rs_quality_ok"), "data_quality_not_ok"),
+            (flag("rs_route_ok"), "regime_route_blocked"),
+            (flag("rt_session_ok"), "fill_session_not_open"),
+            (flag("sc15_volume_ok"), "setup_volume_below_floor"),
+            (inside, "boundary_already_crossed"),
+        )
+        failures = [reason for ok, reason in checks if not ok]
+        return {
+            "eligible": flag("rt_arm_ready"),
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "entry_mode": "prearmed_live_quote_hold",
+                "decision_at": str(row.get("rt_decision_at", "unavailable")),
+                "volume_ratio": number("sc15_volume_ratio"),
+                "long_level": number("rt_long_level"),
+                "short_level": number("rt_short_level"),
+            },
+            "thresholds": {
+                "session_start_hour": self.params.start_hour,
+                "session_end_hour": self.params.end_hour,
+                "acceptance_hold_seconds": self.acceptance_params.acceptance_hold_seconds,
+                "min_acceptance_samples": self.acceptance_params.min_acceptance_samples,
+                "max_chase_bps": self.acceptance_params.max_chase_bps,
+            },
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -785,7 +1009,9 @@ REALTIME_SCANNERS = (
     RangeExpansionRealtimeV1,
     RangeExpansionRealtimeV2,
     StructureBosRealtimeV1,
+    StructureBosRealtimeV2,
     SessionContinuationRealtimeV1,
+    SessionContinuationRealtimeV2,
     HtfStructureContinuationRealtimeV1,
 )
 

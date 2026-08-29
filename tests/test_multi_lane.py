@@ -55,9 +55,7 @@ def test_multi_lane_provider_reports_primary_snapshot_age():
     assert 0.0 <= age < 1.0
 
 
-def test_multi_lane_imports_recorder_latency_as_read_only_process_gauges(
-    tmp_path, monkeypatch
-):
+def test_multi_lane_imports_recorder_latency_as_read_only_process_gauges(tmp_path, monkeypatch):
     root = tmp_path / "recorder_latency"
     tracker = LatencyTracker()
     tracker.record("trade_ingest_ms", 7.0)
@@ -462,9 +460,9 @@ def test_checked_in_observer_roster_is_valid() -> None:
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
     assert len(specs) == 10
-    assert sum(spec.strategy_id == "session_continuation_realtime_v1" for spec in specs) == 2
+    assert sum(spec.strategy_id == "session_continuation_realtime_v2" for spec in specs) == 2
     assert sum(spec.strategy_id == "htf_structure_continuation_realtime_v1" for spec in specs) == 2
-    assert sum(spec.strategy_id == "structure_bos_realtime_v1" for spec in specs) == 2
+    assert sum(spec.strategy_id == "structure_bos_realtime_v2" for spec in specs) == 2
     assert all(not spec.is_primary for spec in specs)
     assert all(spec.execution_cost_exchange == "delta_india" for spec in specs)
 
@@ -484,9 +482,7 @@ def test_observer_roster_rejects_unknown_execution_cost_venue(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="unsupported cost_exchange"):
-        build_shadow_observe_roster_specs(
-            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
-        )
+        build_shadow_observe_roster_specs({"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)})
 
 
 def test_v2_observer_roster_fails_closed_on_engine_contract_drift(tmp_path) -> None:

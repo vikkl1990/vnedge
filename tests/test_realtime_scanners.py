@@ -14,7 +14,9 @@ from vnedge.strategy.realtime_scanners import (
     RangeExpansionRealtimeV1,
     RangeExpansionRealtimeV2,
     SessionContinuationRealtimeV1,
+    SessionContinuationRealtimeV2,
     StructureBosRealtimeV1,
+    StructureBosRealtimeV2,
 )
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
@@ -25,7 +27,9 @@ def test_realtime_scanner_ids_can_never_emit_bar_close_entries() -> None:
         RangeExpansionRealtimeV1(),
         RangeExpansionRealtimeV2(),
         StructureBosRealtimeV1(),
+        StructureBosRealtimeV2(),
         SessionContinuationRealtimeV1(),
+        SessionContinuationRealtimeV2(),
         HtfStructureContinuationRealtimeV1(),
     ):
         assert strategy.signal(frame, 0) is None
@@ -115,6 +119,106 @@ def test_range_v2_prearms_before_the_expanding_candle_exists() -> None:
     diagnostics = new.evaluation_diagnostics(new_frame, index)
     assert diagnostics["eligible"] is True
     assert diagnostics["features"]["setup_bar_requires_expansion"] is False
+
+
+def test_session_v2_uses_close_time_for_the_session_boundary(monkeypatch) -> None:
+    base = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-08-24T11:45:00Z"),
+                "close": 100.0,
+                "rs_quality_ok": 1.0,
+                "rs_route_ok": 1.0,
+                "sc15_session_ok": 0.0,
+                "sc15_volume_ok": 1.0,
+                "sc15_volume_ratio": 1.2,
+                "rt_long_level": 101.0,
+                "rt_short_level": 99.0,
+                "rt_atr": 1.0,
+                "rt_allow_long": 0.0,
+                "rt_allow_short": 0.0,
+                "rt_arm_ready": 0.0,
+            },
+            {
+                "timestamp": pd.Timestamp("2026-08-24T15:45:00Z"),
+                "close": 100.0,
+                "rs_quality_ok": 1.0,
+                "rs_route_ok": 1.0,
+                "sc15_session_ok": 1.0,
+                "sc15_volume_ok": 1.0,
+                "sc15_volume_ratio": 1.2,
+                "rt_long_level": 101.0,
+                "rt_short_level": 99.0,
+                "rt_atr": 1.0,
+                "rt_allow_long": 1.0,
+                "rt_allow_short": 1.0,
+                "rt_arm_ready": 1.0,
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        SessionContinuationRealtimeV1,
+        "prepare",
+        lambda self, candles: base.copy(),
+    )
+    strategy = SessionContinuationRealtimeV2()
+    strategy.warmup_bars = 0
+
+    prepared = strategy.prepare(pd.DataFrame())
+    arm = strategy.realtime_arm(prepared, 0)
+
+    assert prepared.iloc[0]["rt_decision_at"] == pd.Timestamp("2026-08-24T12:00:00Z")
+    assert prepared.iloc[0]["rt_session_ok"] == 1.0
+    assert prepared.iloc[1]["rt_decision_at"] == pd.Timestamp("2026-08-24T16:00:00Z")
+    assert prepared.iloc[1]["rt_session_ok"] == 0.0
+    assert strategy.realtime_arm(prepared, 1) is None
+    assert arm is not None
+    diagnostics = strategy.evaluation_diagnostics(prepared, 0)
+    assert diagnostics["eligible"] is True
+    assert "continuation_level_not_broken" not in diagnostics["all_failed_gates"]
+
+
+def test_bos_v2_uses_close_time_and_keeps_one_episode_for_the_same_swing(monkeypatch) -> None:
+    rows = []
+    for minute in (45,):
+        rows.append(
+            {
+                "timestamp": pd.Timestamp(f"2026-08-24T11:{minute:02d}:00Z"),
+                "close": 100.0,
+                "bos15_structure_ready": True,
+                "bos15_quality_ok": 1.0,
+                "bos15_session_ok": 0.0,
+                "bos15_volume_ok": 1.0,
+                "bos15_structure_trend": "up",
+                "bos15_htf_structure_trend": "up",
+                "bos15_dual_avwap_bias": "between",
+                "bos15_projected_net_long_bps": 20.0,
+                "bos15_projected_net_short_bps": 20.0,
+                "rt_long_level": 101.0,
+                "rt_short_level": 99.0,
+                "rt_long_structural_stop": 98.0,
+                "rt_short_structural_stop": 102.0,
+                "rt_atr": 1.0,
+                "rt_allow_long": 0.0,
+                "rt_allow_short": 0.0,
+                "rt_arm_ready": 0.0,
+            }
+        )
+    base = pd.DataFrame(rows)
+    monkeypatch.setattr(StructureBosRealtimeV1, "prepare", lambda self, candles: base.copy())
+    strategy = StructureBosRealtimeV2()
+    strategy.warmup_bars = 0
+
+    prepared = strategy.prepare(pd.DataFrame())
+    first = strategy.realtime_arm(prepared, 0)
+    second = strategy.realtime_arm(prepared, 0)
+
+    assert prepared.iloc[0]["rt_session_ok"] == 1.0
+    assert first is not None and second is not None
+    assert first.episode_id == second.episode_id
+    diagnostics = strategy.evaluation_diagnostics(prepared, 0)
+    assert diagnostics["eligible"] is True
+    assert "confirmed_swing_not_broken" not in diagnostics["all_failed_gates"]
 
 
 def test_quote_hold_supplies_entry_and_uses_structural_stop() -> None:

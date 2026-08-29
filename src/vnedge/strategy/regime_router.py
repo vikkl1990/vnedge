@@ -43,6 +43,7 @@ STRUCTURE: Final = "structure_bos_1h"
 TICK_ACCEPTED: Final = "tick_accepted_breakout_v1"
 SESSION_CONTINUATION: Final = "session_continuation_15m_v1"
 SESSION_CONTINUATION_REALTIME: Final = "session_continuation_realtime_v1"
+SESSION_CONTINUATION_REALTIME_V2: Final = "session_continuation_realtime_v2"
 SWEEP_REVERSAL: Final = "liquidity_sweep_reversal_15m_v1"
 AVWAP_RECLAIM: Final = "avwap_reclaim_15m_v1"
 TREND_PULLBACK: Final = "trend_pullback_1h_v1"
@@ -56,6 +57,7 @@ EXPAND_NATIVE_IDS: Final = frozenset(
         TICK_ACCEPTED,
         SESSION_CONTINUATION,
         SESSION_CONTINUATION_REALTIME,
+        SESSION_CONTINUATION_REALTIME_V2,
         TREND_PULLBACK,
     }
 )
@@ -101,18 +103,25 @@ DEFAULT_CONFIG: Final = RegimeRouterConfig()
 
 
 def build_policy(config: RegimeRouterConfig) -> Mapping[Regime, frozenset[str]]:
-    range_set = RANGE_NATIVE_IDS | TRANSITION_IDS | (FAST_IDS if config.allow_fast_in_range else frozenset()) | (
-        SLOW_IDS if config.allow_slow_in_range else frozenset()
+    range_set = (
+        RANGE_NATIVE_IDS
+        | TRANSITION_IDS
+        | (FAST_IDS if config.allow_fast_in_range else frozenset())
+        | (SLOW_IDS if config.allow_slow_in_range else frozenset())
     )
-    expand_set = EXPAND_NATIVE_IDS | TRANSITION_IDS | (FAST_IDS if config.allow_fast_in_expand else frozenset()) | (
-        SLOW_IDS if config.allow_slow_in_expand else frozenset()
+    expand_set = (
+        EXPAND_NATIVE_IDS
+        | TRANSITION_IDS
+        | (FAST_IDS if config.allow_fast_in_expand else frozenset())
+        | (SLOW_IDS if config.allow_slow_in_expand else frozenset())
     )
     return {
         Regime.RANGE: range_set,
         Regime.EXPAND: expand_set,
         Regime.STRESS: (
             FAST_IDS | SLOW_IDS | RANGE_NATIVE_IDS | EXPAND_NATIVE_IDS | TRANSITION_IDS
-            if config.allow_any_in_stress else frozenset()
+            if config.allow_any_in_stress
+            else frozenset()
         ),
         Regime.UNKNOWN: frozenset(),
     }
@@ -150,9 +159,7 @@ class RegimeRouter:
     def allows(self, strategy_id: str) -> bool:
         return strategy_id in self.allowed_sleeves()
 
-    def classify(
-        self, vr: float, er: float, bar_range_bps: float, atr_pct_rank: float
-    ) -> Regime:
+    def classify(self, vr: float, er: float, bar_range_bps: float, atr_pct_rank: float) -> Regime:
         """Stateless label for one bar's features (no hysteresis)."""
         cfg = self.config
         values = (vr, er, bar_range_bps, atr_pct_rank)
@@ -167,9 +174,7 @@ class RegimeRouter:
             return Regime.RANGE
         return Regime.RANGE
 
-    def update(
-        self, *, vr: float, er: float, bar_range_bps: float, atr_pct_rank: float
-    ) -> Regime:
+    def update(self, *, vr: float, er: float, bar_range_bps: float, atr_pct_rank: float) -> Regime:
         """Online step with confirmation hysteresis.
 
         A competing regime must persist ``hysteresis_bars`` consecutive bars
@@ -245,9 +250,7 @@ class RegimeRouter:
         mid = (high.shift(1) + low.shift(1)) / 2.0
         bar_range_bps = (high.shift(1) - low.shift(1)) / mid.replace(0, np.nan) * 10_000.0
         atr_pct = atr_l / close.shift(1).replace(0, np.nan)
-        atr_pct_rank = atr_pct.rolling(
-            cfg.atr_long * 10, min_periods=cfg.min_bars
-        ).rank(pct=True)
+        atr_pct_rank = atr_pct.rolling(cfg.atr_long * 10, min_periods=cfg.min_bars).rank(pct=True)
 
         out["regime_vr"] = vr
         out["regime_er"] = er
@@ -256,7 +259,10 @@ class RegimeRouter:
         out["regime_raw"] = [
             self.classify(v, e, b, a).value
             for v, e, b, a in zip(
-                vr.tolist(), er.tolist(), bar_range_bps.tolist(), atr_pct_rank.tolist(),
+                vr.tolist(),
+                er.tolist(),
+                bar_range_bps.tolist(),
+                atr_pct_rank.tolist(),
                 strict=True,
             )
         ]
@@ -300,8 +306,7 @@ def annotate_strategy_route(
     out = annotate_with_hysteresis(candles, cfg)
     policy = build_policy(cfg)
     out["regime_route_allowed"] = [
-        strategy_id in policy.get(Regime(str(label)), frozenset())
-        for label in out["regime"]
+        strategy_id in policy.get(Regime(str(label)), frozenset()) for label in out["regime"]
     ]
     return out
 

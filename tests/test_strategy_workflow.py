@@ -212,7 +212,7 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
             "scanner_exit_v1",
             "2",
         ),
-        "structure_bos_realtime_v1": (
+        "structure_bos_realtime_v2": (
             "quote_acceptance_v2",
             "scanner_exit_v1",
             "2",
@@ -222,7 +222,7 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
             "scanner_exit_v1",
             "2",
         ),
-        "session_continuation_realtime_v1": (
+        "session_continuation_realtime_v2": (
             "quote_acceptance_v2",
             "scanner_exit_v1",
             "2",
