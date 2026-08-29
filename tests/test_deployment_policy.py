@@ -54,6 +54,11 @@ def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
         "docker compose up -d --no-build multi-lane-shadow"
     )
     assert legacy_stop < recorder_start < recorder_proof < lane_start
+    assert "legacy canonical writer is still running after retirement" in deploy
+    retirement = deploy[
+        deploy.index("retire_legacy_canonical_writers()") : start
+    ]
+    assert "|| true" not in retirement
 
 
 def test_tls_edge_has_an_explicit_healthcheck() -> None:

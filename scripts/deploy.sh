@@ -135,10 +135,27 @@ retire_legacy_canonical_writers() {
     # older revision already started.  Retire the former repair writers before
     # pulse-recorder acquires the process-lifetime writer lease.  Their data is
     # bind-mounted and remains intact; only the obsolete containers are removed.
-    docker compose --profile legacy-canonical-repair stop gap-recovery vision-recovery \
-        >/dev/null 2>&1 || true
-    docker compose --profile legacy-canonical-repair rm -f gap-recovery vision-recovery \
-        >/dev/null 2>&1 || true
+    if ! docker compose --profile legacy-canonical-repair stop \
+            gap-recovery vision-recovery; then
+        echo "failed to stop legacy canonical writers" >&2
+        return 1
+    fi
+    if ! docker compose --profile legacy-canonical-repair rm -f \
+            gap-recovery vision-recovery; then
+        echo "failed to remove legacy canonical writers" >&2
+        return 1
+    fi
+    local svc running
+    for svc in gap-recovery vision-recovery; do
+        running=$(docker ps -q \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+            --filter "label=com.docker.compose.service=${svc}")
+        if [ -n "$running" ]; then
+            echo "legacy canonical writer is still running after retirement: $svc" >&2
+            return 1
+        fi
+    done
+    echo "legacy canonical writers retired before owner startup"
 }
 
 recreate_in_waves() {
