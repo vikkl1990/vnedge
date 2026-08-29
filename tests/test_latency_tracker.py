@@ -112,6 +112,18 @@ def test_snapshot_multi_metric():
             assert not (isinstance(v, float) and (math.isnan(v) or math.isinf(v)))
 
 
+def test_labeled_sample_keeps_one_aggregate_and_one_deterministic_split():
+    tracker = LatencyTracker()
+
+    tracker.record_labeled(
+        "close_to_arm_ms", 125.0, source="parquet_hit", armed="yes"
+    )
+
+    assert tracker.stats("close_to_arm_ms")["n"] == 1
+    split = "close_to_arm_ms{armed=yes,source=parquet_hit}"
+    assert tracker.stats(split)["last"] == 125.0
+
+
 def test_raw_state_resumes_only_missing_samples_and_keeps_order():
     before = LatencyTracker(maxlen=20)
     for value in range(12):

@@ -54,6 +54,8 @@ def test_failed_long_probe_rearms_without_burning_short() -> None:
     assert engine.long.state is AcceptanceState.ARMED
     assert engine.short.state is AcceptanceState.ARMED
     assert engine.long.probes == 1
+    assert engine.hold_observation_id == 1
+    assert engine.last_hold_ms == 1000.0
 
 
 def test_quote_hold_accepts_at_current_ask_not_old_level() -> None:
@@ -73,6 +75,8 @@ def test_quote_hold_accepts_at_current_ask_not_old_level() -> None:
     assert fire.entry > fire.level
     assert engine.position_open
     assert engine.short.state is AcceptanceState.ARMED
+    assert engine.hold_observation_id == 1
+    assert engine.last_hold_ms == 5000.0
 
 
 def test_loss_rearms_same_side_but_net_win_burns_it() -> None:

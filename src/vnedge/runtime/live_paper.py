@@ -42,6 +42,7 @@ import pandas as pd
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
 from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
+from vnedge.data.symbols import canonical_symbol
 from vnedge.data.time_machine import TimeMachine
 from vnedge.exchange.live_feed import (
     QUOTE_ACCEPTANCE_BUFFER_SIZE,
@@ -69,6 +70,10 @@ from vnedge.runtime.active_exit import (
     ExitEngine,
     ExitEngineConfig,
 )
+from vnedge.runtime.canonical_candle_router import (
+    CanonicalCandleSubscription,
+    next_durable_candle,
+)
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
@@ -78,7 +83,12 @@ from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
 from vnedge.runtime.execution_kernel import ExecutionKernel
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
+    CLOSE_TO_ARM_MS,
     DECISION_LAG_MS,
+    GATE_EVAL_MS,
+    HTF_CONTEXT_WAIT_MS,
+    QUOTE_INGEST_MS,
+    QUOTE_ON_QUOTE_MS,
     LatencyTracker,
     timeframe_to_seconds,
 )
@@ -210,6 +220,7 @@ class LivePaperSession:
         gap_store: GapParquetStore | None = None,
         shadow_portfolio: ShadowPortfolioGate | None = None,
         canonical_candle_store: CandleParquetStore | None = None,
+        canonical_candle_subscription: CanonicalCandleSubscription | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -253,6 +264,14 @@ class LivePaperSession:
         self.gap_store = gap_store
         self.shadow_portfolio = shadow_portfolio
         self.canonical_candle_store = canonical_candle_store
+        self.canonical_candle_subscription = canonical_candle_subscription
+        self._last_canonical_transport = "parquet_poll"
+        self._last_router_wait_ms: float | None = None
+        # In router-dark mode the venue kline is a watchdog, never decision
+        # truth.  Keep draining it while we wait for the canonical event so
+        # the feed queue cannot overflow merely because ownership moved to
+        # the trade-built candle pipeline.
+        self._venue_close_watchdog_count = 0
         # when this lane last fired a LIVE signal — lets the dashboard show
         # "last fired 2d ago" so a slow, quiet lane reads as waiting, not dead
         self.last_fired_ts: str | None = None
@@ -294,6 +313,10 @@ class LivePaperSession:
             if config.timeframe in {"1m", "5m", "15m", "1h", "4h"}
             else None
         )
+        # Exchange calls keep the venue-native config symbol. Router/storage,
+        # replay identity, and newly minted shadow intent keys use one stable
+        # canonical symbol.
+        self.data_symbol = canonical_symbol(config.symbol)
         self._tm_degraded = False
         # candle-path arm-gate skip counter, keyed by coarse reason
         # (decision_tf_stale / _gapped / _future / tm_error / tm_age_hard).
@@ -364,7 +387,7 @@ class LivePaperSession:
             (
                 build_quote_acceptance_engine(
                     journal=journal,
-                    symbol=config.symbol,
+                    symbol=self.data_symbol,
                     strategy=strategy,
                     contract=runtime_contract,
                     cost_profile=self.cost_profile,
@@ -374,7 +397,7 @@ class LivePaperSession:
                 if quote_acceptance and runtime_contract is not None
                 else SqueezeObserveRunner(
                     journal=journal,
-                    symbol=config.symbol,
+                    symbol=self.data_symbol,
                     approve_fire=self._approve_scanner_fire,
                     costs=SessionCosts.from_profile(
                         self.cost_profile,
@@ -388,6 +411,8 @@ class LivePaperSession:
             )
             else None
         )
+        if isinstance(self.scanner_observer, SqueezeAcceptanceObserveRunner):
+            self.scanner_observer.latency = self.latency
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
@@ -539,16 +564,26 @@ class LivePaperSession:
             before_candidates = observer.candidates
             before_approved = observer.fires
             before_rejected = observer.rejected
-            fire = observer.on_quote(
-                bid=update.bid,
-                ask=update.ask,
-                ts=update.ts,
-                received_ts=update.received_ts,
-                sequence=update.sequence,
-                source=update.source,
-                exchange_timestamped=update.exchange_timestamped,
-                overflow_drops=overflow_drops,
-            )
+            quote_entry = datetime.now(UTC)
+            quote_event = self.latency.record_event(update.ts, quote_entry)
+            self.latency.record(QUOTE_INGEST_MS, quote_event["ingest_lag_ms"])
+            quote_compute_started = time.perf_counter()
+            try:
+                fire = observer.on_quote(
+                    bid=update.bid,
+                    ask=update.ask,
+                    ts=update.ts,
+                    received_ts=update.received_ts,
+                    sequence=update.sequence,
+                    source=update.source,
+                    exchange_timestamped=update.exchange_timestamped,
+                    overflow_drops=overflow_drops,
+                )
+            finally:
+                self.latency.record(
+                    QUOTE_ON_QUOTE_MS,
+                    (time.perf_counter() - quote_compute_started) * 1000.0,
+                )
             candidate_delta = observer.candidates - before_candidates
             approved_delta = observer.fires - before_approved
             self.signals += candidate_delta
@@ -690,6 +725,72 @@ class LivePaperSession:
         if excess > 0:
             self.candles = self.candles.iloc[excess:].reset_index(drop=True)
 
+    @staticmethod
+    def _canonical_raw_row(candle: Candle) -> list[float | int]:
+        """Convert durable canonical truth to the venue OHLCV loop shape."""
+        return [
+            int(candle.open_time.timestamp() * 1000),
+            float(candle.open),
+            float(candle.high),
+            float(candle.low),
+            float(candle.close),
+            float(candle.volume),
+        ]
+
+    async def _next_closed_candle(self) -> list:
+        """Return the next decision-clock candle.
+
+        In the dark rollout the in-process router owns event ordering while
+        the exact Parquet row remains decision truth.  The legacy venue queue
+        remains the source only when no canonical subscription was supplied.
+        """
+        subscription = self.canonical_candle_subscription
+        if subscription is None:
+            self._last_canonical_transport = "parquet_poll"
+            self._last_router_wait_ms = None
+            return await self.feed.closed_candles.get()
+        if self.canonical_candle_store is None:
+            raise RuntimeError("canonical router dark mode requires a durable store")
+        canonical_task = asyncio.create_task(
+            next_durable_candle(
+                subscription,
+                self.canonical_candle_store,
+                timeout_seconds=float(self.config.canonical_candle_wait_seconds),
+                poll_seconds=float(self.config.canonical_candle_poll_seconds),
+            )
+        )
+        venue_queue = getattr(self.feed, "closed_candles", None)
+        venue_task = (
+            asyncio.create_task(venue_queue.get()) if venue_queue is not None else None
+        )
+        try:
+            while True:
+                waiting = {canonical_task}
+                if venue_task is not None:
+                    waiting.add(venue_task)
+                done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                if venue_task is not None and venue_task in done:
+                    # Receipt proves only that the venue observed a close.  It
+                    # must never replace or mutate the trade-built candle.
+                    venue_task.result()
+                    self._venue_close_watchdog_count += 1
+                    venue_task = asyncio.create_task(venue_queue.get())
+                if canonical_task in done:
+                    matched = canonical_task.result()
+                    self._last_canonical_transport = "router_dark"
+                    self._last_router_wait_ms = matched.wait_ms
+                    return self._canonical_raw_row(matched.candle)
+        finally:
+            pending = [
+                task
+                for task in (canonical_task, venue_task)
+                if task is not None and not task.done()
+            ]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
     async def _await_canonical_candle(self, raw_row: list) -> bool:
         """Wait briefly for the exact current candle before scanner evaluation.
 
@@ -699,6 +800,11 @@ class LivePaperSession:
         and journal the precise reason. The bar is never silently evaluated
         and then repaired after its decision opportunity has passed.
         """
+        if self._last_canonical_transport == "router_dark":
+            # ``_next_closed_candle`` already proved byte-equivalent durable
+            # truth for this identity. Re-reading here would reintroduce the
+            # very disk race the dark adapter exists to measure.
+            return True
         if self.canonical_candle_store is None:
             return True
         opened = pd.to_datetime(raw_row[0], unit="ms", utc=True)
@@ -733,7 +839,7 @@ class LivePaperSession:
                 return False
             await asyncio.sleep(min(poll, max(0.0, deadline - loop.time())))
 
-    async def _refresh_canonical_strategy_context(self, raw_row: list) -> None:
+    async def _refresh_canonical_strategy_context(self, raw_row: list) -> bool:
         """Advance canonical HTF context only at its actual close boundary.
 
         The venue LTF close is merely the clock event. A structure scanner may
@@ -747,11 +853,12 @@ class LivePaperSession:
         ingest = getattr(self.strategy, "ingest_canonical_context", None)
         set_health = getattr(self.strategy, "set_canonical_context_health", None)
         if not timeframes or not callable(ingest) or self.canonical_candle_store is None:
-            return
+            return False
         if self._tf_ms is None:
-            return
+            return False
         base_close_ms = int(raw_row[0]) + self._tf_ms
         loop = asyncio.get_running_loop()
+        boundary_observed = False
         for timeframe in timeframes:
             context_ms = {
                 "1h": 3_600_000,
@@ -761,6 +868,7 @@ class LivePaperSession:
                 raise ValueError(f"unsupported canonical context timeframe: {timeframe}")
             if base_close_ms % context_ms != 0:
                 continue
+            boundary_observed = True
             opened = pd.to_datetime(base_close_ms - context_ms, unit="ms", utc=True)
             deadline = loop.time() + float(self.config.canonical_candle_wait_seconds)
             canonical: Candle | None = None
@@ -808,6 +916,7 @@ class LivePaperSession:
                     "bar_ts": opened.isoformat(),
                 },
             )
+        return boundary_observed
 
     def _refresh_canonical_tail(self) -> None:
         """Repair every exchange-only row that now exists in the tick lake.
@@ -1840,6 +1949,16 @@ class LivePaperSession:
                 self._parked_entries[order.client_order_id] = plan
 
     def _approve_scanner_fire(self, fire, bar_index: int, bar_ts: datetime) -> ScannerApproval:
+        """Measure the complete read-only gate verdict without changing it."""
+        started = time.perf_counter()
+        try:
+            return self._approve_scanner_fire_impl(fire, bar_index, bar_ts)
+        finally:
+            self.latency.record(GATE_EVAL_MS, (time.perf_counter() - started) * 1000.0)
+
+    def _approve_scanner_fire_impl(
+        self, fire, bar_index: int, bar_ts: datetime
+    ) -> ScannerApproval:
         """Run a scanner candidate through the normal sizing+risk boundary.
 
         This returns data to the read-only scanner runner; it never calls
@@ -1954,7 +2073,7 @@ class LivePaperSession:
             "squeeze_expansion_breakout_v4": "squeeze_expansion_breakout_v4",
         }.get(self.strategy.strategy_id, self.strategy.strategy_id)
         intent_key = (
-            f"{key_prefix}|{self.config.symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
+            f"{key_prefix}|{self.data_symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
         )
         if decision.approved and self.shadow_portfolio is not None:
             shared = self.shadow_portfolio.evaluate_entry(
@@ -3316,7 +3435,7 @@ class LivePaperSession:
                 else None
             )
             if acceptance_observer is not None and quote_queue is not None:
-                candle_task = asyncio.create_task(self.feed.closed_candles.get())
+                candle_task = asyncio.create_task(self._next_closed_candle())
                 quote_task = asyncio.create_task(quote_queue.get())
                 done, pending = await asyncio.wait(
                     {candle_task, quote_task},
@@ -3334,7 +3453,7 @@ class LivePaperSession:
             else:
                 try:
                     raw = await asyncio.wait_for(
-                        self.feed.closed_candles.get(), timeout=self._IDLE_TICK_SECONDS
+                        self._next_closed_candle(), timeout=self._IDLE_TICK_SECONDS
                     )
                 except TimeoutError:
                     pass
@@ -3366,11 +3485,14 @@ class LivePaperSession:
                 self._defer_quote(quote_update)
 
             now = datetime.now(UTC)
+            close_receipt_lag_ms: float | None = None
+            close_receipt_started = time.perf_counter()
             if self._tf_seconds is not None:
                 received_open = pd.to_datetime(raw[0], unit="ms", utc=True).to_pydatetime()
-                self.latency.record_bar_receipt(
+                close_receipt = self.latency.record_bar_receipt(
                     received_open + timedelta(seconds=self._tf_seconds), now
                 )
+                close_receipt_lag_ms = close_receipt["bar_close_receipt_ms"]
             # detect + heal (or fail-closed on) a feed gap BEFORE the bar reaches
             # the strategy, so contiguous-index indicators never span a hole.
             # Only the LIVE stream's internal continuity is guarded here — the
@@ -3383,13 +3505,23 @@ class LivePaperSession:
                 continue
             canonical_wait_started = time.perf_counter()
             canonical_ready = await self._await_canonical_candle(raw)
-            self.latency.record_canonical_wait(
-                (time.perf_counter() - canonical_wait_started) * 1000.0
+            canonical_wait_ms = (
+                self._last_router_wait_ms
+                if self._last_canonical_transport == "router_dark"
+                and self._last_router_wait_ms is not None
+                else (time.perf_counter() - canonical_wait_started) * 1000.0
             )
+            self.latency.record_canonical_wait(canonical_wait_ms)
             if not self._append_candle(raw):
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
                 continue
-            await self._refresh_canonical_strategy_context(raw)
+            htf_wait_started = time.perf_counter()
+            htf_boundary = await self._refresh_canonical_strategy_context(raw)
+            if htf_boundary:
+                self.latency.record(
+                    HTF_CONTEXT_WAIT_MS,
+                    (time.perf_counter() - htf_wait_started) * 1000.0,
+                )
             if not self._sync_quote():
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
                 continue
@@ -3456,6 +3588,24 @@ class LivePaperSession:
                 )
                 self._record_overlays(scanner_df, scanner_idx, scanner_sig)
                 self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
+                if close_receipt_lag_ms is not None:
+                    acceptance = getattr(self.scanner_observer, "acceptance", None)
+                    armed = bool(
+                        acceptance is not None
+                        and acceptance.arm is not None
+                        and not acceptance.position_open
+                    )
+                    self.latency.record_labeled(
+                        CLOSE_TO_ARM_MS,
+                        close_receipt_lag_ms
+                        + (time.perf_counter() - close_receipt_started) * 1000.0,
+                        source=(
+                            "router"
+                            if self._last_canonical_transport == "router_dark"
+                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                        ),
+                        armed="yes" if armed else "no",
+                    )
 
             # Always complete the deterministic close -> quote transition,
             # including during feature warmup. This prevents old deferred
@@ -3518,6 +3668,18 @@ class LivePaperSession:
                     sig = self.strategy.signal(df, idx)
                     self._record_eval(df, idx, sig)
                 self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
+                if close_receipt_lag_ms is not None:
+                    self.latency.record_labeled(
+                        CLOSE_TO_ARM_MS,
+                        close_receipt_lag_ms
+                        + (time.perf_counter() - close_receipt_started) * 1000.0,
+                        source=(
+                            "router"
+                            if self._last_canonical_transport == "router_dark"
+                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                        ),
+                        armed="yes" if sig is not None else "no",
+                    )
                 self._record_overlays(df, idx, sig)  # OBSERVE-ONLY: regime + plan
                 if sig is not None:
                     self.signals += 1

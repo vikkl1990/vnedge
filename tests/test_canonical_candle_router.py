@@ -3,14 +3,17 @@ from decimal import Decimal
 
 import pytest
 
-from vnedge.data.candles import Candle
+from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.runtime.canonical_candle_router import (
     CanonicalCandleConflictError,
+    CanonicalCandleDurabilityError,
     CanonicalCandleEvent,
     CanonicalCandleOrderError,
     CanonicalCandleOverflowError,
     CanonicalCandleRouter,
     CanonicalCandleRouterError,
+    next_durable_candle,
+    warm_subscription_from_store,
 )
 
 
@@ -55,6 +58,7 @@ def test_router_fans_out_only_to_exact_stream_key():
 
 def test_exact_duplicate_is_idempotent_but_conflict_fails_closed():
     router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", "BTCUSDT", "1h")
     event = _event(10)
 
     assert router.publish(event) is True
@@ -66,6 +70,11 @@ def test_exact_duplicate_is_idempotent_but_conflict_fails_closed():
     assert snapshot.published == 1
     assert snapshot.duplicates == 1
     assert snapshot.conflicts == 1
+    assert subscription.failed is True
+    with pytest.raises(CanonicalCandleConflictError):
+        subscription.get_nowait()
+    subscription.reset_after_recovery()
+    assert subscription.failed is False
 
 
 def test_out_of_order_publish_fails_closed():
@@ -142,3 +151,59 @@ def test_pipeline_publisher_adapter_normalizes_exchange_and_clock():
     event = subscription.get_nowait()
     assert event.exchange == "binanceusdm"
     assert event.published_at == published_at
+
+
+def test_router_symbol_key_is_canonical_across_venue_and_storage_forms():
+    router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", "BTC/USDT:USDT", "1h")
+
+    router.publish(_event(10))
+
+    assert subscription.key == ("binanceusdm", "BTCUSDT", "1h")
+    assert subscription.get_nowait().candle.symbol == "BTCUSDT"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_first_warmup_uses_watermark_and_keeps_forward_bar(tmp_path):
+    store = CandleParquetStore(tmp_path, exchange="BINANCEUSDM")
+    store.upsert((_candle(9), _candle(10)))
+    router = CanonicalCandleRouter()
+    router.publish(_event(10))
+    subscription = router.subscribe("binanceusdm", "BTC/USDT:USDT", "1h")
+    store.upsert((_candle(11),))
+    router.publish(_event(11))
+
+    result = await warm_subscription_from_store(subscription, store)
+
+    assert [c.open_time.hour for c in result.candles] == [9, 10]
+    assert result.watermark_open_time is not None
+    assert result.watermark_open_time.hour == 10
+    assert subscription.pending == 1
+    assert (await subscription.get()).candle.open_time.hour == 11
+
+
+@pytest.mark.asyncio
+async def test_dark_consumer_requires_exact_durable_candle(tmp_path):
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", "BTCUSDT", "1h")
+    event = _event(10)
+    store.upsert((event.candle,))
+    router.publish(event)
+
+    matched = await next_durable_candle(subscription, store)
+
+    assert matched.candle == event.candle
+    assert matched.wait_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_dark_consumer_fails_closed_on_parquet_conflict(tmp_path):
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", "BTCUSDT", "1h")
+    store.upsert((_candle(10, close="100.5"),))
+    router.publish(_event(10))
+
+    with pytest.raises(CanonicalCandleDurabilityError, match="mismatch"):
+        await next_durable_candle(subscription, store)

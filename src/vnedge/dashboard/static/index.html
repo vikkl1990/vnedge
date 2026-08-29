@@ -2923,7 +2923,7 @@
     var sc=l?scoreByStrat[stratShort(l.strategy_id)]:null;
     var ml=l?(mlByStrat[l.strategy_id]!=null?mlByStrat[l.strategy_id]:mlByStrat[String(l.strategy_id||"").replace(/_v1$/,"")]):null;
     var sp=(l&&l.shadow_perf)||{},tc=(l&&l.trade_compatibility)||{},ev=(l&&l.last_eval)||{};
-    var lt=(l&&l.latency)||{},flat=lt.feed_lag_ms,dlat=lt.decision_lag_ms;
+    var lt=(l&&l.latency)||{},flat=lt.feed_lag_ms,dlat=lt.decision_lag_ms,cta=lt.close_to_arm_ms;
     var deg=l&&l.degraded,gc=num(l&&l.gapped_candles);
     var feedGuard="<div class='kpi'><div class='lbl'>Feed guard</div><div class='v' style='font-size:14px;color:"+(deg?'var(--short)':'var(--long)')+"'>"+(deg?'REDUCE-ONLY':'ok')+"</div><div class='s'>"+(deg?jEsc(String(deg).slice(0,40)):(gc?gc+' gap(s) healed':'contiguous'))+"</div></div>";
     var tm=(l&&l.time_machine)||{},tmf=tm.forming||{},tmh=tm.health||{},tmk=Object.keys(tmf),tmCell="";
@@ -2932,7 +2932,7 @@
     var factory=l?dailyFactoryView(l.daily_factory):null;
     var head="<div class='kpis' style='padding:14px 15px 0'>"+
       "<div class='kpi'><div class='lbl'>Gate</div><div class='v' style='font-size:14px'>"+jEsc(String(tc.state||(l&&l.mode)||"—").replace(/_/g,' ').toLowerCase())+"</div><div class='s'>"+jEsc(String(tc.reason||(ev.signal_reason||ev.primary_failed_gate||ev.skip_reason)||'').slice(0,42))+"</div></div>"+
-      "<div class='kpi'><div class='lbl'>Latency</div><div class='v num' style='font-size:14px'>"+(flat&&flat.p50!=null?ageMs(flat.p50):'—')+"</div><div class='s'>candle→act p50 · →signal "+(dlat&&dlat.p50!=null?ageMs(dlat.p50):'—')+"</div></div>"+
+      "<div class='kpi'><div class='lbl'>Close → arm</div><div class='v num' style='font-size:14px'>"+(cta&&cta.p50!=null?ageMs(cta.p50):'—')+"</div><div class='s'>direct p50 · receipt "+(flat&&flat.p50!=null?ageMs(flat.p50):'—')+" · decision "+(dlat&&dlat.p50!=null?ageMs(dlat.p50):'—')+"</div></div>"+
       feedGuard+tmCell+
       "<div class='kpi'><div class='lbl'>Shadow total</div><div class='v num "+(num(sp.total_net_usd!=null?sp.total_net_usd:sp.net_usd)>=0?'up':'dn')+"'>"+usd(num(sp.total_net_usd!=null?sp.total_net_usd:sp.net_usd))+"</div><div class='s'>"+usd(num(sp.resolved_net_usd!=null?sp.resolved_net_usd:sp.net_usd))+" closed · "+usd(num(sp.open_unrealized_net_usd))+" open</div></div>"+
       "<div class='kpi'><div class='lbl'>Research</div><div class='v num'>"+(sc?((num(sc.best_net_bps)>=0?'+':'')+num(sc.best_net_bps).toFixed(0)+' bps'):'—')+"</div><div class='s'>"+(sc?jEsc(String(sc.verdict||'').toLowerCase().replace(/_/g,' '))+' · '+num(sc.samples).toLocaleString()+' smpl':'not on scorecard')+"</div></div>"+
@@ -2997,6 +2997,13 @@
     var lhTrade=(lh.production_healthy!=null?lh.production_healthy:lh.healthy);
     rows+='<div class="kvrow"><span class="k">Lane production ready</span><span class="num" style="color:'+(lhTrade?"var(--long)":"var(--warn)")+'">'+(lh.production_summary||lh.summary||"--")+'</span></div>';
     rows+='<div class="kvrow"><span class="k">Trade-compatible lanes</span><span class="num '+(lhTrade?"up":"")+'">'+(tot.trade_compatible!=null?tot.trade_compatible+" / "+tot.desired:"--")+'</span></div>';
+    ((s&&s.recorder_latency)||[]).forEach(function(rec){
+      var lat=rec.latency||{},name=String(rec.process||"recorder").replace("pulse-recorder:","");
+      rows+='<div class="kvrow"><span class="k">'+jEsc(name)+' trade ingest p95</span><span class="num">'+(lat.trade_ingest_ms?ageMs(lat.trade_ingest_ms.p95):"—")+'</span></div>';
+      rows+='<div class="kvrow"><span class="k">'+jEsc(name)+' base close publish p95</span><span class="num">'+(lat.base_close_publish_ms?ageMs(lat.base_close_publish_ms.p95):"—")+'</span></div>';
+      rows+='<div class="kvrow"><span class="k">'+jEsc(name)+' aggregate publish p95</span><span class="num">'+(lat.aggregate_publish_ms?ageMs(lat.aggregate_publish_ms.p95):"—")+'</span></div>';
+      rows+='<div class="kvrow"><span class="k">'+jEsc(name)+' parquet persist p95</span><span class="num">'+(lat.parquet_persist_ms?ageMs(lat.parquet_persist_ms.p95):"—")+'</span></div>';
+    });
     el.innerHTML=rows;
   }
   function renderDeployProv(s){
@@ -3012,7 +3019,15 @@
       row("Lane set",(rc.configured_lanes!=null?rc.configured_lanes+" lanes":"--")+(rc.lane_set_hash?" · "+String(rc.lane_set_hash).slice(0,8):""))+
       row("Bars / signals",num(se.bars_processed).toLocaleString()+" / "+num(se.signals).toLocaleString())+
       latRow("Feed lag · candle→act",lat.feed_lag_ms)+
-      latRow("Decision lag · candle→signal",lat.decision_lag_ms);
+      latRow("Canonical wait",lat.canonical_wait_ms)+
+      latRow("Decision compute",lat.decision_lag_ms)+
+      latRow("Close → arm (direct)",lat.close_to_arm_ms)+
+      latRow("Quote ingest",lat.quote_ingest_ms)+
+      latRow("Quote on_quote",lat.quote_on_quote_ms)+
+      latRow("Acceptance hold",lat.acceptance_hold_ms)+
+      latRow("Gate eval",lat.gate_eval_ms)+
+      latRow("Shadow journal",lat.shadow_journal_ms)+
+      latRow("Tick stop",lat.tick_stop_ms);
   }
   function renderBuildMeta(m){
     var b=(m&&m.build_sha)?String(m.build_sha).slice(0,10):"--";

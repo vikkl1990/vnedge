@@ -58,6 +58,13 @@ services:
       MULTI_LANE_DAILY_LOSS_HALT: "${MULTI_LANE_DAILY_LOSS_HALT:-1}"
       VISION_BACKFILL_DAYS: "${VISION_BACKFILL_DAYS:-24}"
       SCANNER_PREREQ_SYMBOLS: "${SCANNER_PREREQ_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
+      # Safe default keeps the separately deployed pulse recorder authoritative.
+      # integrated_dark is an atomic cutover mode: stop pulse-recorder first;
+      # the shared writer lease refuses dual ownership, router events become
+      # the lane clock, and matching Parquet rows remain decision truth.
+      VNEDGE_CANONICAL_PRODUCER_MODE: "${VNEDGE_CANONICAL_PRODUCER_MODE:-external_parquet}"
+      VNEDGE_INTEGRATED_RECORDER_EXCHANGES: "${VNEDGE_INTEGRATED_RECORDER_EXCHANGES:-binanceusdm}"
+      VNEDGE_INTEGRATED_RECORDER_SYMBOLS: "${VNEDGE_INTEGRATED_RECORDER_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
       interval: 30s

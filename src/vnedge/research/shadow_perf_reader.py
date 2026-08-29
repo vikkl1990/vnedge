@@ -29,6 +29,8 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from vnedge.data.symbols import canonical_symbol
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_JOURNAL_DIR = Path("logs/paper_trials")
@@ -68,7 +70,7 @@ def shadow_perf_key(strategy: str, exchange: str, symbol: str) -> str:
 
 
 def _normalize_symbol(symbol: str) -> str:
-    return symbol.split(":")[0].replace("/", "").replace("-", "").upper()
+    return canonical_symbol(symbol)
 
 
 def read_shadow_perf(

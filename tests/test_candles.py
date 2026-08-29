@@ -219,6 +219,54 @@ def test_pipeline_delivers_closed_event_before_durable_sink() -> None:
 
     assert len(seen) == 1
     assert seen[0].is_closed is True
+    assert pipeline.persistence_healthy is False
+    assert pipeline.last_persistence_error == "OSError: durable sink unavailable"
+
+
+def test_failed_subscriber_isolated_and_durable_store_still_advances(tmp_path) -> None:
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    seen: list[Candle] = []
+
+    def broken(_candle: Candle) -> None:
+        raise RuntimeError("lane consumer failed")
+
+    pipeline = CandlePipeline(
+        "BTC/USDT:USDT",
+        subscribers=(broken, seen.append),
+        store=store,
+    )
+    pipeline.on_trade(START, D("100"), D("1"))
+
+    pipeline.advance_time(START + timedelta(minutes=1))
+
+    assert pipeline.subscriber_failures == 1
+    assert pipeline.persistence_healthy is True
+    assert seen == store.read("BTCUSDT", "1m")
+
+
+def test_pipeline_reports_publish_and_persist_clocks_without_changing_delivery() -> None:
+    timings: list[tuple[str, float]] = []
+
+    class Store:
+        def read(self, _symbol, _timeframe):
+            return []
+
+        def upsert(self, _candles):
+            return None
+
+    pipeline = CandlePipeline(
+        "BTCUSDT",
+        store=Store(),  # type: ignore[arg-type]
+        timing_sink=lambda name, ms: timings.append((name, ms)),
+    )
+    for minute in range(6):
+        pipeline.on_trade(START + timedelta(minutes=minute), D("100"), D("1"))
+
+    names = [name for name, _ in timings]
+    assert names.count("base_close_publish_ms") == 5
+    assert "aggregate_publish_ms" in names
+    assert names.count("parquet_persist_ms") == 6
+    assert all(ms >= 0 for _, ms in timings)
 
 
 def test_pipeline_restart_repairs_higher_bars_from_persisted_base(tmp_path) -> None:

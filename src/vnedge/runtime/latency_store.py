@@ -91,3 +91,37 @@ class LaneLatencyStore:
             "resumed latency for %s: %d bounded samples", self.lane_id, restored
         )
         return True
+
+
+class RecorderLatencyStore:
+    """Atomic read-only handoff from recorder process to dashboard/runtime."""
+
+    def __init__(self, path: Path | str, process_id: str = "pulse-recorder") -> None:
+        self.path = Path(path)
+        self.process_id = process_id
+
+    def save_from(self, tracker: LatencyTracker) -> None:
+        payload = {
+            "schema_version": 1,
+            "process": self.process_id,
+            "saved_at": datetime.now(UTC).isoformat(),
+            "latency": tracker.snapshot(),
+        }
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = Path(f"{self.path}.tmp")
+            tmp.write_text(json.dumps(payload, allow_nan=False, separators=(",", ":")))
+            tmp.replace(self.path)
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("recorder latency snapshot save failed: %s", exc)
+
+    def load(self) -> dict | None:
+        if not self.path.exists():
+            return None
+        try:
+            payload = json.loads(self.path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return None
+        return payload

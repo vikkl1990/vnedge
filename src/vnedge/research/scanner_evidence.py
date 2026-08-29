@@ -18,6 +18,7 @@ from typing import Any
 
 import pandas as pd  # type: ignore[import-untyped]
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.data.tape import clean_book
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.latency_tracker import timeframe_to_seconds
@@ -95,7 +96,96 @@ def normalize_canonical_candles(candles: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
+def apply_contiguous_warmup_quality(
+    candles: pd.DataFrame,
+    *,
+    timeframe_seconds: int,
+    warmup_bars: int,
+) -> tuple[pd.DataFrame, int]:
+    """Block decisions until a gap has rolled fully out of feature warm-up.
+
+    Canonical storage intentionally omits synthetic bars, so a raw Parquet
+    frame cannot claim every row is decision-safe merely because each stored
+    candle is internally valid. A missing identity contaminates rolling
+    features through the scanner's causal warm-up horizon.
+    """
+    if timeframe_seconds <= 0 or warmup_bars < 0:
+        raise ValueError("timeframe_seconds must be positive and warmup_bars non-negative")
+    frame = candles.copy()
+    times = pd.to_datetime(frame["timestamp"], utc=True)
+    breaks = times.diff().ne(pd.Timedelta(seconds=timeframe_seconds))
+    if len(breaks):
+        breaks.iloc[0] = False
+    break_count = int(breaks.sum())
+    contaminated = (
+        breaks.astype(int)
+        .rolling(window=max(1, warmup_bars + 1), min_periods=1)
+        .max()
+        .astype(bool)
+    )
+    existing_ok = (
+        frame["data_quality"].astype(str).str.lower().eq("ok")
+        if "data_quality" in frame.columns
+        else pd.Series(True, index=frame.index)
+    )
+    frame["data_quality"] = (existing_ok & ~contaminated).map(
+        {True: "ok", False: "gap"}
+    )
+    return frame, break_count
+
+
+def _bind_replay_context(
+    strategy: Any,
+    context_candles: dict[str, pd.DataFrame] | None,
+) -> tuple[tuple[str, ...], dict[str, dict[str, int]]]:
+    """Bind the same canonical HTF inputs required by the runtime strategy.
+
+    A structure replay without its registered 4h context is not negative
+    evidence; it is an incomplete engine.  Require every declared timeframe
+    explicitly so a CLI mistake cannot silently become a zero-signal report.
+    """
+    required = tuple(
+        str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
+    )
+    if not required:
+        return (), {}
+    binder = getattr(strategy, "bind_canonical_context", None)
+    if not callable(binder):
+        raise TypeError("strategy declares canonical context without a binder")
+    supplied = context_candles or {}
+    missing = [timeframe for timeframe in required if timeframe not in supplied]
+    if missing:
+        raise ValueError(
+            "replay requires canonical context candle(s): " + ", ".join(missing)
+        )
+    diagnostics: dict[str, dict[str, int]] = {}
+    for timeframe in required:
+        frame = normalize_canonical_candles(supplied[timeframe])
+        seconds = timeframe_to_seconds(timeframe)
+        if seconds is None:
+            raise ValueError(f"unsupported canonical context timeframe: {timeframe}")
+        frame, breaks = apply_contiguous_warmup_quality(
+            frame,
+            timeframe_seconds=seconds,
+            warmup_bars=0,
+        )
+        diagnostics[timeframe] = {
+            "bars": len(frame),
+            "continuity_breaks": breaks,
+            "quarantined_bars": int(
+                (~frame["data_quality"].astype(str).str.lower().eq("ok")).sum()
+            ),
+        }
+        binder(timeframe, frame)
+    return required, diagnostics
+
+
+def replay_scanner(
+    strategy_id: str,
+    candles: pd.DataFrame,
+    *,
+    context_candles: dict[str, pd.DataFrame] | None = None,
+) -> dict[str, Any]:
     """Replay one frozen scanner with the runtime's single-book semantics.
 
     ``signals`` remains the raw mechanism count. ``trades`` is the number the
@@ -105,8 +195,22 @@ def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
     the conservative pre-trade gate cost are reported explicitly.
     """
     strategy = get_strategy_class(strategy_id)()
-    prepared = strategy.prepare(candles)
+    bound_context, context_quality = _bind_replay_context(strategy, context_candles)
     contract = scanner_runtime_contract(strategy_id)
+    normalized = normalize_canonical_candles(candles)
+    if contract is not None:
+        tf_seconds = timeframe_to_seconds(contract.timeframe)
+    else:
+        diffs = pd.to_datetime(normalized["timestamp"], utc=True).diff().dropna()
+        tf_seconds = int(diffs.median().total_seconds()) if not diffs.empty else 1
+    if tf_seconds is None:
+        raise ValueError(f"unsupported scanner timeframe for {strategy_id}")
+    normalized, continuity_breaks = apply_contiguous_warmup_quality(
+        normalized,
+        timeframe_seconds=tf_seconds,
+        warmup_bars=int(strategy.warmup_bars),
+    )
+    prepared = strategy.prepare(normalized)
     hold = contract.max_holding_bars if contract else 24
     cost_model = CostModel.for_profile(contract.cost_family if contract else "swing")
     execution_cost = float(cost_model.round_trip_bps(include_safety=False))
@@ -199,6 +303,18 @@ def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
         rows.append(record)
     fired = [row for row in rows if row["fired"]]
     outcomes = [row["outcome"] for row in fired if row.get("admitted")]
+    blocked_by = Counter(
+        gate for row in rows if not row["fired"] for gate in row.get("all_failed_gates", [])
+    )
+    closest_threshold: Counter[str] = Counter()
+    for row in rows:
+        near_miss = row.get("near_miss") or {}
+        if not row["fired"] and near_miss.get("closest_metric"):
+            closest_threshold[str(near_miss["closest_metric"])] += 1
+    quarantined_bars = int(
+        (~normalized["data_quality"].astype(str).str.lower().eq("ok")).sum()
+    )
+    evaluable_bars = max(0, len(prepared) - int(strategy.warmup_bars) - 1)
     return {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -206,6 +322,9 @@ def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
         "capital_eligible": is_capital_eligible(strategy_id),
         "read_only": True,
         "bars": len(prepared),
+        "canonical_context_timeframes": list(bound_context),
+        "context_quality": context_quality,
+        "continuity_breaks": continuity_breaks,
         "evaluations": len(rows),
         "signals": len(fired),
         "trades": admitted_trades,
@@ -218,6 +337,23 @@ def replay_scanner(strategy_id: str, candles: pd.DataFrame) -> dict[str, Any]:
             gate for row in rows for gate in row.get("all_failed_gates", [])
         )),
         "lifecycle": dict(Counter(row["setup_lifecycle"] for row in rows)),
+        "setup_funnel": {
+            "engine_status": (
+                "ready" if evaluable_bars > 0 else "insufficient_warmup_window"
+            ),
+            "warmup_bars_required": int(strategy.warmup_bars),
+            "evaluable_bars": evaluable_bars,
+            "bars_quarantined": quarantined_bars,
+            "evaluations": len(rows),
+            "eligible_evaluations": sum(bool(row.get("eligible")) for row in rows),
+            "signals": len(fired),
+            "admitted_trades": admitted_trades,
+            "near_misses": sum(
+                not row["fired"] and bool(row.get("near_miss") or {}) for row in rows
+            ),
+            "blocked_by": dict(blocked_by),
+            "closest_threshold": dict(closest_threshold),
+        },
         "records": rows,
     }
 
@@ -259,6 +395,7 @@ def replay_quote_scanner(
     evidence_start: datetime | None = None,
     evidence_end: datetime | None = None,
     runtime_start: datetime | None = None,
+    context_candles: dict[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
     """Drive the runtime quote engine with recorded canonical bars and BBO.
 
@@ -271,14 +408,21 @@ def replay_quote_scanner(
     This is read-only evidence. The engine has no gateway callback and cannot
     submit an order.
     """
+    symbol = canonical_symbol(symbol)
     contract = scanner_runtime_contract(strategy_id)
     if contract is None or not contract.decision_engine.startswith("quote_acceptance"):
         raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
     strategy = get_strategy_class(strategy_id)()
+    bound_context, context_quality = _bind_replay_context(strategy, context_candles)
     tf_seconds = timeframe_to_seconds(contract.timeframe)
     if tf_seconds is None:
         raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
     normalized = normalize_canonical_candles(candles)
+    normalized, continuity_breaks = apply_contiguous_warmup_quality(
+        normalized,
+        timeframe_seconds=tf_seconds,
+        warmup_bars=int(strategy.warmup_bars),
+    )
     if runtime_start is not None:
         if runtime_start.tzinfo is None or runtime_start.utcoffset() is None:
             raise ValueError("runtime_start must be timezone-aware")
@@ -393,6 +537,9 @@ def replay_quote_scanner(
         },
         "runtime_start": runtime_start.isoformat() if runtime_start is not None else None,
         "bars": len(prepared),
+        "canonical_context_timeframes": list(bound_context),
+        "context_quality": context_quality,
+        "continuity_breaks": continuity_breaks,
         "quotes_in": cleaning.rows_in,
         "quotes_clean": cleaning.rows_out,
         "quotes_used": len(event_rows),
@@ -448,7 +595,7 @@ def compare_quote_replay_to_live(
     decision-payload mismatches all fail parity explicitly.
     """
     strategy_id = str(replay.get("strategy_id") or "")
-    symbol = str(replay.get("symbol") or "")
+    symbol = canonical_symbol(str(replay.get("symbol") or ""))
     source_window = replay.get("source_window")
     if not isinstance(source_window, dict):
         raise TypeError("quote replay is missing source_window")
@@ -473,12 +620,26 @@ def compare_quote_replay_to_live(
             intent: dict[str, Any] = (
                 intent_value if isinstance(intent_value, dict) else {}
             )
+            record_symbol = str(intent.get("symbol") or payload.get("symbol") or "")
             if str(intent.get("strategy_id") or payload.get("strategy_id") or "") != strategy_id:
                 key = str(payload.get("intent_key") or "")
-                if not key.startswith(f"{strategy_id}|{symbol}|"):
+                parts = key.split("|")
+                try:
+                    key_matches = (
+                        len(parts) >= 2
+                        and parts[0] == strategy_id
+                        and canonical_symbol(parts[1]) == symbol
+                    )
+                except (TypeError, ValueError):
+                    key_matches = False
+                if not key_matches:
                     continue
-            elif str(intent.get("symbol") or payload.get("symbol") or "") != symbol:
-                continue
+            else:
+                try:
+                    if not record_symbol or canonical_symbol(record_symbol) != symbol:
+                        continue
+                except (TypeError, ValueError):
+                    continue
             event_ts = _record_event_time(record)
             if event_ts is None or not (start <= event_ts < end):
                 continue
@@ -811,10 +972,32 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _load_context_arguments(values: list[str]) -> dict[str, pd.DataFrame]:
+    contexts: dict[str, pd.DataFrame] = {}
+    for value in values:
+        timeframe, separator, raw_path = value.partition("=")
+        if not separator or not timeframe.strip() or not raw_path.strip():
+            raise ValueError("--context-candles must be TIMEFRAME=PATH")
+        key = timeframe.strip()
+        if key in contexts:
+            raise ValueError(f"duplicate canonical context timeframe: {key}")
+        contexts[key] = normalize_canonical_candles(
+            load_evidence_frame(Path(raw_path.strip()))
+        )
+    return contexts
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journal", action="append", type=Path, default=[])
     parser.add_argument("--candles", type=Path)
+    parser.add_argument(
+        "--context-candles",
+        action="append",
+        default=[],
+        metavar="TIMEFRAME=PATH",
+        help="canonical HTF frame required by a scanner; repeat per timeframe",
+    )
     parser.add_argument("--quotes", type=Path)
     parser.add_argument("--symbol", default="BTC/USDT:USDT")
     parser.add_argument("--exchange-id", default="binanceusdm")
@@ -848,7 +1031,11 @@ def main() -> None:
     if args.candles:
         if not args.strategy:
             parser.error("--candles requires at least one --strategy")
-        candles = load_evidence_frame(args.candles)
+        candles = normalize_canonical_candles(load_evidence_frame(args.candles))
+        try:
+            context_candles = _load_context_arguments(args.context_candles)
+        except ValueError as exc:
+            parser.error(str(exc))
         if args.quotes:
             quotes = load_evidence_frame(args.quotes)
             evidence_start = (
@@ -876,6 +1063,7 @@ def main() -> None:
                     evidence_start=evidence_start,
                     evidence_end=evidence_end,
                     runtime_start=runtime_start,
+                    context_candles=context_candles,
                 )
                 for strategy_id in args.strategy
             ]
@@ -906,7 +1094,14 @@ def main() -> None:
             "schema_version": 1,
             "generated_at": datetime.now(UTC).isoformat(),
             "read_only": True,
-            "replays": [replay_scanner(strategy_id, candles) for strategy_id in args.strategy],
+            "replays": [
+                replay_scanner(
+                    strategy_id,
+                    candles,
+                    context_candles=context_candles,
+                )
+                for strategy_id in args.strategy
+            ],
         })
         return
     atomic_write(

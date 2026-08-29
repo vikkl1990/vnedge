@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import cast
@@ -13,6 +14,12 @@ import pandas as pd
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
+from vnedge.runtime.latency_tracker import (
+    ACCEPTANCE_HOLD_MS,
+    SHADOW_JOURNAL_MS,
+    TICK_STOP_MS,
+    LatencyTracker,
+)
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.squeeze_observe import FireGuard, JournalSink, ScannerApproval
 from vnedge.strategy.base_strategy import BaseStrategy
@@ -41,6 +48,7 @@ class SqueezeAcceptanceObserveRunner:
         )
     )
     costs: SessionCosts = field(default_factory=lambda: SessionCosts.from_profile("delta_scalp"))
+    latency: LatencyTracker | None = None
     open_meta: dict | None = None
     candidates: int = 0
     fires: int = 0
@@ -256,11 +264,17 @@ class SqueezeAcceptanceObserveRunner:
             self._last_ask = ask
         if self._restore_error is not None:
             return None
-        self.acceptance.note_quote_overflow(overflow_drops)
+        hold_observation = self.acceptance.hold_observation_id
+        self.acceptance.note_quote_overflow(overflow_drops, observed_at=ts)
         if self.open_meta is not None:
             pos = self.exits.pos
             price = bid if pos is not None and pos.side == "long" else ask
-            decision = self.exits.on_tick(price=price)
+            tick_started = time.perf_counter()
+            try:
+                decision = self.exits.on_tick(price=price)
+            finally:
+                if self.latency is not None:
+                    self.latency.record(TICK_STOP_MS, (time.perf_counter() - tick_started) * 1000.0)
             if decision is not None:
                 net_won = self._journal_outcome(decision, self.current_bar_index, ts)
                 self.acceptance.notify_flat(bar_index=self.current_bar_index, net_won=net_won)
@@ -277,6 +291,12 @@ class SqueezeAcceptanceObserveRunner:
             source=source,
             exchange_timestamped=exchange_timestamped,
         )
+        if (
+            self.latency is not None
+            and self.acceptance.hold_observation_id != hold_observation
+            and self.acceptance.last_hold_ms is not None
+        ):
+            self.latency.record(ACCEPTANCE_HOLD_MS, self.acceptance.last_hold_ms)
         self._journal_acceptance_transition(
             bid=bid,
             ask=ask,
@@ -311,36 +331,44 @@ class SqueezeAcceptanceObserveRunner:
         key = approval.intent_key or (
             f"{self.intent_prefix}|{self.symbol}|{fire.side}|{int(ts.timestamp() * 1000)}"
         )
-        self.journal.append(
-            "shadow_intent",
-            {
-                "intent_key": key,
-                "strategy_id": self.strategy_id,
-                "symbol": self.symbol,
-                "approved": approval.approved,
-                "failed_checks": list(approval.failed_checks),
-                "passed_checks": list(approval.passed_checks),
-                "explanation": approval.explanation or fire.reason,
-                "intent": approval.intent,
-                "signal_reason": fire.reason,
-                "entry_price": fire.entry,
-                "stop_price": fire.stop,
-                "box_edge": fire.box_edge,
-                "risk": fire.risk,
-                "quote_event_ts": ts.isoformat(),
-                "quote_received_ts": (received_ts or ts).isoformat(),
-                "quote_sequence": sequence,
-                "quote_source": source,
-                "quote_exchange_timestamped": exchange_timestamped,
-                "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
-                "episode_id": fire.episode_id,
-                "margin_usd": approval.margin_usd or self.margin_usd,
-                "take_profit_price": None,
-                "take_profit_levels": [],
-                "bar_ts": ts.isoformat(),
-                "acceptance": "quote_hold",
-            },
-        )
+        journal_started = time.perf_counter()
+        try:
+            self.journal.append(
+                "shadow_intent",
+                {
+                    "intent_key": key,
+                    "strategy_id": self.strategy_id,
+                    "symbol": self.symbol,
+                    "approved": approval.approved,
+                    "failed_checks": list(approval.failed_checks),
+                    "passed_checks": list(approval.passed_checks),
+                    "explanation": approval.explanation or fire.reason,
+                    "intent": approval.intent,
+                    "signal_reason": fire.reason,
+                    "entry_price": fire.entry,
+                    "stop_price": fire.stop,
+                    "box_edge": fire.box_edge,
+                    "risk": fire.risk,
+                    "quote_event_ts": ts.isoformat(),
+                    "quote_received_ts": (received_ts or ts).isoformat(),
+                    "quote_sequence": sequence,
+                    "quote_source": source,
+                    "quote_exchange_timestamped": exchange_timestamped,
+                    "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
+                    "episode_id": fire.episode_id,
+                    "margin_usd": approval.margin_usd or self.margin_usd,
+                    "take_profit_price": None,
+                    "take_profit_levels": [],
+                    "bar_ts": ts.isoformat(),
+                    "acceptance": "quote_hold",
+                },
+            )
+        finally:
+            if self.latency is not None:
+                self.latency.record(
+                    SHADOW_JOURNAL_MS,
+                    (time.perf_counter() - journal_started) * 1000.0,
+                )
         if not approval.approved:
             self.rejected += 1
             self.acceptance.notify_rejected()

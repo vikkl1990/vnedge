@@ -23,6 +23,7 @@ from pathlib import Path
 
 from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore, floor_time
 from vnedge.data.structure_mtf import MTF_PARAMS
+from vnedge.data.symbols import canonical_symbol
 from vnedge.strategy.regime_router import DEFAULT_CONFIG as REGIME_CONFIG
 from vnedge.strategy.regime_router import EXPAND_NATIVE_IDS, RANGE_NATIVE_IDS
 from vnedge.strategy.strategy_registry import get_strategy_class
@@ -73,7 +74,7 @@ def requirements_from_roster(path: Path | str) -> dict[str, int]:
 
 
 def _symbol_key(symbol: str) -> str:
-    return symbol.split(":", 1)[0].replace("/", "").upper()
+    return canonical_symbol(symbol)
 
 
 @dataclass(frozen=True, slots=True)

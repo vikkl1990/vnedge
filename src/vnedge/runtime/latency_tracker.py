@@ -11,13 +11,16 @@ The clocks are deliberately separate:
   candle lake after the exchange close notification arrives.
 * ``decision_lag_ms`` — monotonic compute time from closed bar in hand through
   strategy preparation and signal evaluation.
+* ``close_to_arm_ms`` — one correlated sample from canonical close boundary to
+  the arm state update. This is measured directly; component percentiles are
+  never added together.
 * ``clock_skew_ms`` — magnitude by which an exchange timestamp is ahead of the
   receiving UTC clock. A future event is a data-quality observation, not a
   negative/fast latency sample.
 
-Only the two bar-path measurements compose into candle-to-decision latency.
-Tick ingest freshness is observability and stop-management input; it cannot
-make a closed-bar strategy evaluate early.
+Every metric in this module is report-only unless ``latency_thresholds`` names
+it explicitly. Tick ingest freshness is observability and stop-management
+input; it cannot make a closed-bar strategy evaluate early.
 """
 
 from __future__ import annotations
@@ -28,11 +31,23 @@ from datetime import UTC, datetime
 from math import isfinite
 
 INGEST_LAG_MS = "ingest_lag_ms"
+QUOTE_INGEST_MS = "quote_ingest_ms"
 BAR_CLOSE_RECEIPT_MS = "bar_close_receipt_ms"
 BAR_CLOSE_PROCESSING_MS = "bar_close_processing_ms"
 FEED_LAG_MS = "feed_lag_ms"  # legacy alias for BAR_CLOSE_PROCESSING_MS
 CANONICAL_WAIT_MS = "canonical_wait_ms"
 DECISION_LAG_MS = "decision_lag_ms"
+CLOSE_TO_ARM_MS = "close_to_arm_ms"
+HTF_CONTEXT_WAIT_MS = "htf_context_wait_ms"
+QUOTE_ON_QUOTE_MS = "quote_on_quote_ms"
+ACCEPTANCE_HOLD_MS = "acceptance_hold_ms"
+GATE_EVAL_MS = "gate_eval_ms"
+SHADOW_JOURNAL_MS = "shadow_journal_ms"
+TICK_STOP_MS = "tick_stop_ms"
+TRADE_INGEST_MS = "trade_ingest_ms"
+BASE_CLOSE_PUBLISH_MS = "base_close_publish_ms"
+AGGREGATE_PUBLISH_MS = "aggregate_publish_ms"
+PARQUET_PERSIST_MS = "parquet_persist_ms"
 CLOCK_SKEW_MS = "clock_skew_ms"
 
 _TF_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
@@ -81,6 +96,23 @@ class LatencyTracker:
         if series is None:
             series = self._series[name] = deque(maxlen=self.maxlen)
         series.append(float(ms))
+
+    def record_labeled(self, name: str, ms: float, **labels: str) -> None:
+        """Record an aggregate sample and a deterministic labelled split.
+
+        Labels are deliberately encoded as a second metric key so the existing
+        checkpoint and dashboard schemas remain backwards compatible.  The
+        aggregate series remains addressable by ``name`` for SLO work, while
+        operators can distinguish, for example, a Parquet hit from a timeout
+        without combining unrelated samples.
+        """
+        self.record(name, ms)
+        if not labels:
+            return
+        normalized = ",".join(
+            f"{key}={str(value).strip().lower()}" for key, value in sorted(labels.items())
+        )
+        self.record(f"{name}{{{normalized}}}", ms)
 
     @staticmethod
     def _utc(value: datetime, *, label: str) -> datetime:

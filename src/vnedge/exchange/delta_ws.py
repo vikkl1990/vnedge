@@ -56,6 +56,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.heartbeat import (
     HeartbeatConfig,
     HeartbeatStatus,
@@ -77,8 +78,7 @@ def delta_native_symbol(symbol: str) -> str:
 
     ``BTC/USD:USD`` -> ``BTCUSD``. Already-native symbols pass through.
     """
-    base = symbol.split(":", 1)[0]  # drop settlement suffix
-    return base.replace("/", "").replace("-", "").upper()
+    return canonical_symbol(symbol)
 
 
 class DeltaPublicWsClient:

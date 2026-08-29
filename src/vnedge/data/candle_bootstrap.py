@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 
 from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline, floor_time
 from vnedge.data.parquet_store import sanitize_symbol
+from vnedge.data.symbols import canonical_symbol
 
 _GAPFILL_NAME = re.compile(r"^\d+-gapfill-(\d+)-[0-9a-f]+\.parquet$")
 
@@ -39,7 +40,7 @@ def _csv(value: str) -> list[str]:
 
 
 def _symbol_key(symbol: str) -> str:
-    return symbol.split(":", 1)[0].replace("/", "")
+    return canonical_symbol(symbol)
 
 
 def trade_shards(

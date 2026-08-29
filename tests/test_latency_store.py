@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from vnedge.runtime.latency_store import LaneLatencyStore
+from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.latency_tracker import LatencyTracker
 
 
@@ -68,3 +68,19 @@ def test_latency_store_missing_corrupt_or_nonfinite_is_ignored(tmp_path):
     restored = LatencyTracker()
     assert LaneLatencyStore(invalid_path, "x").restore_into(restored) is False
     assert restored.snapshot() == {}
+
+
+def test_recorder_latency_store_is_a_separate_atomic_snapshot(tmp_path):
+    path = tmp_path / "recorder" / "binanceusdm.json"
+    tracker = LatencyTracker()
+    tracker.record("trade_ingest_ms", 12.5)
+    tracker.record("parquet_persist_ms", 4.0)
+
+    store = RecorderLatencyStore(path, process_id="pulse-recorder:binanceusdm")
+    store.save_from(tracker)
+
+    payload = store.load()
+    assert payload["process"] == "pulse-recorder:binanceusdm"
+    assert payload["latency"]["trade_ingest_ms"]["p95"] == 12.5
+    assert payload["latency"]["parquet_persist_ms"]["p95"] == 4.0
+    assert not path.with_suffix(".json.tmp").exists()

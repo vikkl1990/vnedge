@@ -22,6 +22,7 @@ Binance/others 5.0.
 
 from __future__ import annotations
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.paper.fill_model import FillModel
 from vnedge.risk.position_sizer import SymbolLimits
 
@@ -78,7 +79,7 @@ def scalper_offer_window_minutes(exchange: str, symbol: str) -> float | None:
     """
     if exchange.lower() not in ("delta", "delta_india"):
         return None
-    base = symbol.split(":")[0].replace("/", "").upper()
+    base = canonical_symbol(symbol)
     return _SCALPER_WINDOW_MINUTES.get(base, _SCALPER_DEFAULT_WINDOW_MINUTES)
 
 

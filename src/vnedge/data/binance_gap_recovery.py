@@ -40,6 +40,7 @@ from vnedge.data.candles import (
 )
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.lake_health import LakeHealthMonitor
+from vnedge.data.symbols import canonical_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def _utc(value: datetime, *, label: str) -> datetime:
 
 
 def _market_id(symbol: str) -> str:
-    return symbol.split(":", 1)[0].replace("/", "").upper()
+    return canonical_symbol(symbol)
 
 
 def _recovery_chunks(start: datetime, end: datetime) -> tuple[tuple[datetime, datetime], ...]:

@@ -6,6 +6,9 @@ import pandas as pd
 import pytest
 
 from vnedge.data.candles import CandleParquetStore
+from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
+from vnedge.runtime.latency_store import RecorderLatencyStore
+from vnedge.runtime.latency_tracker import LatencyTracker
 from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
@@ -15,6 +18,7 @@ from vnedge.runtime.multi_lane import (
 )
 from vnedge.runtime.multi_lane_shadow import (
     build_capital_lane_specs,
+    build_integrated_canonical_runtime,
     build_lane_specs_from_env,
     build_runtime_control,
     build_shadow_observe_lane_specs,
@@ -49,6 +53,39 @@ def test_multi_lane_provider_reports_primary_snapshot_age():
     assert 0.0 <= age < 1.0
 
 
+def test_multi_lane_imports_recorder_latency_as_read_only_process_gauges(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "recorder_latency"
+    tracker = LatencyTracker()
+    tracker.record("trade_ingest_ms", 7.0)
+    RecorderLatencyStore(
+        root / "binanceusdm.json", process_id="pulse-recorder:binanceusdm"
+    ).save_from(tracker)
+    monkeypatch.setenv("RECORDER_LATENCY_ROOT", str(root))
+    provider = MultiLaneProvider("primary")
+    provider.sink("primary", "binanceusdm").publish(
+        {"ts": "2026-08-24T00:00:00+00:00", "session": {}}
+    )
+
+    imported = provider.latest()["recorder_latency"]
+    assert imported[0]["process"] == "pulse-recorder:binanceusdm"
+    assert imported[0]["latency"]["trade_ingest_ms"]["p95"] == 7.0
+
+
+def test_multi_lane_exposes_router_transport_counters_without_permissions():
+    router = CanonicalCandleRouter()
+    provider = MultiLaneProvider("primary", canonical_router=router)
+    provider.sink("primary", "binanceusdm").publish(
+        {"ts": "2026-08-24T00:00:00+00:00", "session": {}}
+    )
+
+    snapshot = provider.latest()
+    assert snapshot["canonical_router"]["published"] == 0
+    assert snapshot["canonical_router"]["subscriber_overflows"] == 0
+    assert "orders_allowed" not in snapshot["canonical_router"]
+
+
 def test_default_roster_is_measurement_only_and_has_no_capital_lane():
     specs = desired_lane_specs({})
     assert len(specs) == 3
@@ -56,7 +93,57 @@ def test_default_roster_is_measurement_only_and_has_no_capital_lane():
     assert all(spec.strategy_id == "measurement_only_v1" for spec in specs)
     assert all(spec.mode is RunnerMode.SHADOW for spec in specs)
     assert build_capital_lane_specs({}) == []
+
+
+def test_integrated_canonical_runtime_is_explicit_and_partitioned(monkeypatch, tmp_path):
+    built = []
+
+    class FakeRecorder:
+        def __init__(self, exchange, symbols, root, **kwargs):
+            built.append((exchange, tuple(symbols), root, kwargs))
+
+    monkeypatch.setattr("vnedge.runtime.multi_lane_shadow.TickRecorder", FakeRecorder)
+    lanes = [
+        LaneSpec("btc", "binanceusdm", "BTC/USDT:USDT", timeframe="15m"),
+        LaneSpec("eth", "binanceusdm", "ETH/USDT:USDT", timeframe="1h"),
+        LaneSpec("bybit", "bybit", "BTC/USDT:USDT", timeframe="1h"),
+    ]
+    router, producers, exchanges = build_integrated_canonical_runtime(
+        lanes,
+        {
+            "VNEDGE_CANONICAL_PRODUCER_MODE": "integrated_dark",
+            "VNEDGE_INTEGRATED_RECORDER_EXCHANGES": "binanceusdm",
+            "VNEDGE_DATA_ROOT": str(tmp_path),
+            "VNEDGE_CANDLE_ROOT": str(tmp_path / "candles"),
+            "VNEDGE_INTEGRATED_RECORDER_SYMBOLS": "",
+        },
+    )
+
+    assert router is not None
+    assert len(producers) == 1
+    assert exchanges == frozenset({"binanceusdm"})
+    assert built[0][0:3] == (
+        "binanceusdm",
+        ("BTC/USDT:USDT", "ETH/USDT:USDT"),
+        tmp_path,
+    )
+    assert built[0][3]["trades_only"] is True
+    assert len(built[0][3]["candle_subscribers"]) == 1
+
+
+def test_integrated_canonical_runtime_defaults_to_external_parquet():
+    router, producers, exchanges = build_integrated_canonical_runtime([], {})
+    assert router is None
+    assert producers == ()
+    assert exchanges == frozenset()
     assert build_shadow_observe_lane_specs({}) == []
+
+
+def test_lane_keeps_venue_symbol_separate_from_canonical_data_identity():
+    spec = LaneSpec("btc", "BINANCEUSDM", "BTC/USDT:USDT", timeframe="1h")
+
+    assert spec.symbol == "BTC/USDT:USDT"
+    assert spec.data_symbol == "BTCUSDT"
 
 
 def test_missing_canonical_history_is_explicitly_non_armable():

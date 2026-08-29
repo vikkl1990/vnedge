@@ -298,6 +298,14 @@ def build_lanes_payload(
                 ),
                 "canonical_wait_ms": _latency_value(lane, "canonical_wait_ms"),
                 "decision_lag_ms": _latency_value(lane, "decision_lag_ms"),
+                "close_to_arm_ms": _latency_value(lane, "close_to_arm_ms"),
+                "htf_context_wait_ms": _latency_value(lane, "htf_context_wait_ms"),
+                "quote_ingest_ms": _latency_value(lane, "quote_ingest_ms"),
+                "quote_on_quote_ms": _latency_value(lane, "quote_on_quote_ms"),
+                "acceptance_hold_ms": _latency_value(lane, "acceptance_hold_ms"),
+                "gate_eval_ms": _latency_value(lane, "gate_eval_ms"),
+                "shadow_journal_ms": _latency_value(lane, "shadow_journal_ms"),
+                "tick_stop_ms": _latency_value(lane, "tick_stop_ms"),
                 "latency_samples": {
                     "bar_close": _latency_samples(
                         lane, "bar_close_processing_ms", "feed_lag_ms"

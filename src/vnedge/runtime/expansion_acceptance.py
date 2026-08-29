@@ -91,8 +91,17 @@ class ExpansionAcceptanceEngine:
     quote_contract_rejects: int = 0
     quote_overflow_drops: int = 0
     overflow_probe_resets: int = 0
+    hold_observation_id: int = 0
+    last_hold_ms: float | None = None
 
-    def note_quote_overflow(self, total_drops: int) -> None:
+    def _observe_hold(self, started_at: datetime | None, ended_at: datetime) -> None:
+        """Expose terminal probe duration as telemetry without changing state."""
+        if started_at is None:
+            return
+        self.last_hold_ms = max(0.0, (ended_at - started_at).total_seconds() * 1000.0)
+        self.hold_observation_id += 1
+
+    def note_quote_overflow(self, total_drops: int, *, observed_at: datetime | None = None) -> None:
         """Fail closed when acceptance evidence was evicted upstream.
 
         A probe cannot prove an uninterrupted hold across missing quotes. Reset
@@ -106,6 +115,8 @@ class ExpansionAcceptanceEngine:
         self.quote_contract_rejects += delta
         for lifecycle in (self.long, self.short):
             if lifecycle.state is AcceptanceState.PROBE:
+                if observed_at is not None:
+                    self._observe_hold(lifecycle.probe_started_at, observed_at)
                 lifecycle.rearm()
                 self.overflow_probe_resets += 1
         self.last_reason = "quote_buffer_overflow"
@@ -273,6 +284,7 @@ class ExpansionAcceptanceEngine:
                 (price - level) / level if side == "long" else (level - price) / level
             ) * 10_000
             if chase > self.config.max_chase_bps:
+                self._observe_hold(lifecycle.probe_started_at, ts)
                 lifecycle.state = AcceptanceState.BURNED
                 lifecycle.probe_started_at = None
                 self.last_reason = f"{side}_chase_burn"
@@ -313,6 +325,7 @@ class ExpansionAcceptanceEngine:
                 self.last_reason = f"{side}_bad_stop"
                 continue
             lifecycle.state = AcceptanceState.ACCEPTED
+            self._observe_hold(lifecycle.probe_started_at, ts)
             lifecycle.fires += 1
             self.fires_today += 1
             self.position_open = True
@@ -381,6 +394,7 @@ class ExpansionAcceptanceEngine:
             return
         if not crossed:
             if lifecycle.state is AcceptanceState.PROBE:
+                self._observe_hold(lifecycle.probe_started_at, ts)
                 lifecycle.rearm()
                 self.last_reason = f"{side}_probe_failed_rearmed"
             return

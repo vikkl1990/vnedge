@@ -8,7 +8,7 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 
-from vnedge.data.candles import Candle
+from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore
 from vnedge.data.schemas import normalize_candles
 from vnedge.exchange.live_feed import QuoteUpdate
@@ -20,6 +20,7 @@ from vnedge.paper.paper_reconciliation import ReconciliationReport
 from vnedge.paper.simulated_exchange import PaperOrderRequest, SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
+from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -302,6 +303,8 @@ def build_session(
     timeframe="1h",
     execution_cost_exchange_id=None,
     canonical_candle_store=None,
+    canonical_candle_subscription=None,
+    canonical_candle_wait_seconds=0.0,
 ):
     config = RunnerConfig(
         mode=mode,
@@ -313,6 +316,7 @@ def build_session(
         max_holding_bars=max_holding_bars,
         daily_factory=daily_factory or DailySignalFactoryConfig(),
         execution_cost_exchange_id=execution_cost_exchange_id,
+        canonical_candle_wait_seconds=canonical_candle_wait_seconds,
     )
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
@@ -330,8 +334,64 @@ def build_session(
         journal=journal,
         trial_meta=trial_meta,
         canonical_candle_store=canonical_candle_store,
+        canonical_candle_subscription=canonical_candle_subscription,
     )
     return session, exchange
+
+
+@pytest.mark.asyncio
+async def test_router_dark_source_uses_matching_durable_candle_as_decision_row(tmp_path):
+    opened = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    candle = Candle(
+        symbol=SYM,
+        timeframe="1h",
+        open_time=opened,
+        close_time=opened + timedelta(hours=1),
+        open=Decimal(100),
+        high=Decimal(102),
+        low=Decimal(99),
+        close=Decimal(101),
+        volume=Decimal(12),
+        quote_volume=Decimal(1210),
+        trade_count=42,
+    )
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", SYM, "1h")
+    router.publisher(
+        "binanceusdm", clock=lambda: candle.close_time + timedelta(milliseconds=5)
+    )(candle)
+    store.upsert([candle])
+    venue_watchdog_row = [
+        int(opened.timestamp() * 1000),
+        100.0,
+        102.5,
+        98.5,
+        100.5,
+        13.0,
+    ]
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([venue_watchdog_row]),
+        canonical_candle_store=store,
+        canonical_candle_subscription=subscription,
+        canonical_candle_wait_seconds=1.0,
+    )
+
+    raw = await session._next_closed_candle()
+
+    assert raw == [
+        int(opened.timestamp() * 1000),
+        100.0,
+        102.0,
+        99.0,
+        101.0,
+        12.0,
+    ]
+    assert session._last_canonical_transport == "router_dark"
+    assert session._venue_close_watchdog_count == 1
+    assert session.feed.closed_candles.empty()
+    assert await session._await_canonical_candle(raw) is True
 
 
 @pytest.mark.asyncio

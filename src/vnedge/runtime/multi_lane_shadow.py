@@ -20,7 +20,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from vnedge.runtime.multi_lane import LaneSpec, MultiLaneProvider, MultiLaneShadowRunner
+from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
+from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
+from vnedge.runtime.multi_lane import (
+    CanonicalProducer,
+    LaneSpec,
+    MultiLaneProvider,
+    MultiLaneShadowRunner,
+)
 from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.strategy_registry import (
@@ -80,6 +87,76 @@ def _venue_symbol(exchange: str, symbol: str) -> str:
     if exchange == DELTA_EXCHANGE:
         return symbol.replace("/USDT:USDT", "/USD:USD")
     return symbol
+
+
+def build_integrated_canonical_runtime(
+    lanes: list[LaneSpec],
+    environ: Mapping[str, str] = os.environ,
+) -> tuple[CanonicalCandleRouter | None, tuple[CanonicalProducer, ...], frozenset[str]]:
+    """Build the opt-in colocated canonical producer for dark parity.
+
+    ``external_parquet`` preserves the deployed baseline. ``integrated_dark``
+    is deliberately explicit: its writer lease refuses startup while the
+    legacy pulse recorder still owns the venue, and lane decisions continue
+    to use matched Parquet rows until parity evidence permits a later cutover.
+    """
+    mode = str(
+        environ.get("VNEDGE_CANONICAL_PRODUCER_MODE", "external_parquet")
+    ).strip().lower()
+    if mode == "external_parquet":
+        return None, (), frozenset()
+    if mode != "integrated_dark":
+        raise ValueError(
+            "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet or integrated_dark"
+        )
+    requested = frozenset(
+        _csv(environ.get("VNEDGE_INTEGRATED_RECORDER_EXCHANGES", "binanceusdm"))
+    )
+    if not requested:
+        raise ValueError("integrated canonical mode requires at least one exchange")
+    router = CanonicalCandleRouter(default_queue_size=32)
+    data_root = Path(environ.get("VNEDGE_DATA_ROOT", "data"))
+    candle_root = Path(environ.get("VNEDGE_CANDLE_ROOT", "data/candles"))
+    producers: list[CanonicalProducer] = []
+    active: set[str] = set()
+    extra_symbols = _csv(
+        environ.get(
+            "VNEDGE_INTEGRATED_RECORDER_SYMBOLS",
+            "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT",
+        )
+    )
+    for exchange in sorted(requested):
+        symbols = sorted(
+            {lane.symbol for lane in lanes if lane.exchange == exchange}
+            | ({_venue_symbol(exchange, symbol) for symbol in extra_symbols})
+        )
+        if not symbols:
+            continue
+        subscriber = router.publisher(exchange)
+        producer: CanonicalProducer
+        if exchange == DELTA_EXCHANGE:
+            producer = DeltaTickRecorder(
+                symbols,
+                data_root,
+                exchange_id=exchange,
+                candle_root=candle_root,
+                trades_only=True,
+                candle_subscribers=(subscriber,),
+            )
+        else:
+            producer = TickRecorder(
+                exchange,
+                symbols,
+                data_root,
+                candle_root=candle_root,
+                trades_only=True,
+                candle_subscribers=(subscriber,),
+            )
+        producers.append(producer)
+        active.add(exchange)
+    if not producers:
+        raise ValueError("integrated canonical mode matched no configured lane exchanges")
+    return router, tuple(producers), frozenset(active)
 
 
 def build_lane_specs_from_env(
@@ -496,6 +573,9 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
 async def main() -> int:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
     lanes = desired_lane_specs()
+    canonical_router, canonical_producers, canonical_exchanges = (
+        build_integrated_canonical_runtime(lanes)
+    )
     primary = next(spec.lane_id for spec in lanes if spec.is_primary)
     runtime_control = build_runtime_control(lanes)
     capital_lanes = int(runtime_control["paper_lanes"])
@@ -505,6 +585,7 @@ async def main() -> int:
         lane_specs=lanes,
         journal_dir=journal_dir,
         runtime_control=runtime_control,
+        canonical_router=canonical_router,
     )
 
     server_task: asyncio.Task | None = None
@@ -542,7 +623,14 @@ async def main() -> int:
         primary,
     )
     try:
-        await MultiLaneShadowRunner(lanes, journal_dir, provider).run()
+        await MultiLaneShadowRunner(
+            lanes,
+            journal_dir,
+            provider,
+            canonical_router=canonical_router,
+            canonical_producers=canonical_producers,
+            canonical_router_exchanges=canonical_exchanges,
+        ).run()
         return 0
     finally:
         if server_task is not None:

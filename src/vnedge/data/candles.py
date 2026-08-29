@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -32,6 +33,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from vnedge.data.parquet_store import sanitize_symbol
+from vnedge.data.symbols import canonical_symbol
 from vnedge.data.vwap import vwap_from_sums
 
 if TYPE_CHECKING:
@@ -144,8 +146,7 @@ class Candle:
     is_closed: bool = True
 
     def __post_init__(self) -> None:
-        if not self.symbol.strip():
-            raise ValueError("candle symbol must not be empty")
+        symbol = canonical_symbol(self.symbol)
         seconds = _timeframe_seconds(self.timeframe)
         open_time = _utc(self.open_time)
         close_time = _utc(self.close_time)
@@ -178,6 +179,7 @@ class Candle:
         if vwap is not None and vwap <= 0:
             raise ValueError("candle vwap must be positive")
 
+        object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "open_time", open_time)
         object.__setattr__(self, "close_time", close_time)
         for name, value in values.items():
@@ -267,8 +269,7 @@ class CandleBuilder:
     _closed_through: datetime | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if not self.symbol.strip():
-            raise ValueError("builder symbol must not be empty")
+        self.symbol = canonical_symbol(self.symbol)
         _timeframe_seconds(self.timeframe)
 
     def on_trade(
@@ -367,6 +368,7 @@ class CandleBuilder:
 
 def merge_candles(symbol: str, timeframe: str, parts: Sequence[Candle]) -> Candle:
     """Merge one complete target bucket of consecutive, closed lower bars."""
+    symbol = canonical_symbol(symbol)
     if not parts:
         raise ValueError("cannot merge an empty candle sequence")
     target_seconds = _timeframe_seconds(timeframe)
@@ -425,6 +427,7 @@ class CandleAggregator:
     _last_source_open: datetime | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.symbol = canonical_symbol(self.symbol)
         source_seconds = _timeframe_seconds(self.source_timeframe)
         target_seconds = _timeframe_seconds(self.target_timeframe)
         if source_seconds >= target_seconds or target_seconds % source_seconds:
@@ -488,7 +491,7 @@ class CandleParquetStore:
 
     def __init__(self, root: Path | str, *, exchange: str | None = None) -> None:
         self.root = Path(root)
-        self.exchange = exchange.strip() if exchange else None
+        self.exchange = exchange.strip().lower() if exchange else None
 
     def partition_path(self, candle: Candle) -> Path:
         root = self.root
@@ -592,6 +595,7 @@ class CandleParquetStore:
 
     def read(self, symbol: str, timeframe: str) -> list[Candle]:
         _timeframe_seconds(timeframe)
+        symbol = canonical_symbol(symbol)
         root = self.root
         if self.exchange:
             root = root / f"exchange={self.exchange}"
@@ -639,6 +643,7 @@ class CandleParquetStore:
         without rebuilding history on every bar.
         """
         _timeframe_seconds(timeframe)
+        symbol = canonical_symbol(symbol)
         opened = _utc(open_time)
         root = self.root
         if self.exchange:
@@ -698,17 +703,22 @@ class CandlePipeline:
         store: CandleParquetStore | None = None,
         subscribers: Iterable[Callable[[Candle], None]] = (),
         rejected_trade_sink: Callable[[RejectedTrade], None] | None = None,
+        timing_sink: Callable[[str, float], None] | None = None,
     ) -> None:
         if base_timeframe not in {"1s", "1m"}:
             raise ValueError("live candle pipeline base_timeframe must be '1s' or '1m'")
-        self.symbol = symbol
-        self.builder = CandleBuilder(symbol, base_timeframe)
+        self.symbol = canonical_symbol(symbol)
+        self.builder = CandleBuilder(self.symbol, base_timeframe)
         self.store = store
         self.subscribers = tuple(subscribers)
         self.rejected_trade_sink = rejected_trade_sink
+        self.timing_sink = timing_sink
+        self.subscriber_failures = 0
+        self.persistence_healthy = True
+        self.last_persistence_error: str | None = None
         start = 0 if base_timeframe == "1s" else 1
         self._aggregators = {
-            source: CandleAggregator(symbol, source, target)
+            source: CandleAggregator(self.symbol, source, target)
             for source, target in _AGGREGATION_CHAIN[start:]
         }
         if self.store is not None:
@@ -807,10 +817,43 @@ class CandlePipeline:
         # add decision latency.  Persistence failures remain operator-visible
         # through recorder/lake health and never mutate the already emitted
         # immutable candle.
-        for subscriber in self.subscribers:
-            subscriber(candle)
+        publish_started = time.perf_counter()
+        try:
+            for subscriber in self.subscribers:
+                try:
+                    subscriber(candle)
+                except Exception:
+                    self.subscriber_failures += 1
+                    logger.exception(
+                        "canonical subscriber failed: symbol=%s timeframe=%s",
+                        candle.symbol,
+                        candle.timeframe,
+                    )
+        finally:
+            if self.timing_sink is not None:
+                metric = (
+                    "base_close_publish_ms"
+                    if candle.timeframe == self.builder.timeframe
+                    else "aggregate_publish_ms"
+                )
+                self.timing_sink(metric, (time.perf_counter() - publish_started) * 1000.0)
         if self.store is not None:
-            self.store.upsert((candle,))
+            persist_started = time.perf_counter()
+            try:
+                self.store.upsert((candle,))
+            except Exception as exc:
+                self.persistence_healthy = False
+                self.last_persistence_error = f"{type(exc).__name__}: {exc}"
+                raise
+            else:
+                self.persistence_healthy = True
+                self.last_persistence_error = None
+            finally:
+                if self.timing_sink is not None:
+                    self.timing_sink(
+                        "parquet_persist_ms",
+                        (time.perf_counter() - persist_started) * 1000.0,
+                    )
         aggregator = self._aggregators.get(candle.timeframe)
         if aggregator is not None:
             higher = aggregator.on_candle(candle)

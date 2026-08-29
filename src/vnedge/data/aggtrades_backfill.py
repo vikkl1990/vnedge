@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from vnedge.data.symbols import canonical_symbol
+
 logger = logging.getLogger(__name__)
 
 HIST_EXCHANGE_ID = "binanceusdm_hist"
@@ -49,12 +51,12 @@ _RETRY_BACKOFF = 2.0
 
 def binance_market_id(symbol: str) -> str:
     """"BTC/USDT:USDT" -> "BTCUSDT" (Binance Vision file naming)."""
-    return symbol.split(":")[0].replace("/", "")
+    return canonical_symbol(symbol)
 
 
 def lake_symbol(symbol: str) -> str:
     """Symbol directory name used by the tick lake (same rule as the recorder)."""
-    return symbol.split(":")[0].replace("/", "")
+    return canonical_symbol(symbol)
 
 
 def daily_zip_url(symbol: str, day: date) -> str:

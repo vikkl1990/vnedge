@@ -45,6 +45,9 @@ from vnedge.data.candles import (
     floor_time,
 )
 from vnedge.data.lake_health import LakeHealthMonitor
+from vnedge.data.symbols import canonical_symbol
+from vnedge.runtime.latency_store import RecorderLatencyStore
+from vnedge.runtime.latency_tracker import TRADE_INGEST_MS, LatencyTracker
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +61,6 @@ _SKIP_LOG_SECONDS = 60.0
 # builder sees it. This is bounded event-time ordering, not a data rewrite.
 _TRADE_REORDER_MS = 250
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
-
-
-def _canonical_symbol(symbol: str) -> str:
-    """Match the tick-lake/candle-store symbol key used by the dashboard."""
-    return symbol.split(":", 1)[0].replace("/", "")
 
 
 def _normalize_trade_batch(
@@ -124,6 +122,7 @@ class CanonicalCandleSink:
         tick_root: Path | str | None = None,
         restore_at: datetime | None = None,
         subscribers: Iterable[Callable[[Candle], None]] = (),
+        timing_sink: Callable[[str, float], None] | None = None,
     ) -> None:
         store = CandleParquetStore(root, exchange=exchange)
         self.exchange = exchange
@@ -131,9 +130,10 @@ class CanonicalCandleSink:
         bound_subscribers = tuple(subscribers)
         self.pipelines = {
             symbol: CandlePipeline(
-                _canonical_symbol(symbol),
+                canonical_symbol(symbol),
                 store=store,
                 subscribers=bound_subscribers,
+                timing_sink=timing_sink,
             )
             for symbol in symbols
         }
@@ -145,6 +145,27 @@ class CanonicalCandleSink:
             self.restore_forming_from_tick_lake(
                 Path(tick_root), at=restore_at or datetime.now(UTC)
             )
+
+    def would_publish_on_trade(self, symbol: str, timestamp_ms: int) -> bool:
+        """Whether this trade will close the current base candle.
+
+        The recorder uses this boundary to make the raw-trade shard durable
+        before the candle can be published to an in-memory subscriber.
+        """
+        pipeline = self.pipelines[symbol]
+        forming = pipeline.builder.forming()
+        if forming is None:
+            return False
+        timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
+        return timestamp >= forming.close_time
+
+    def would_publish_on_advance(self, now: datetime) -> bool:
+        """Return whether wall-clock advancement can close any base candle."""
+        return any(
+            (forming := pipeline.builder.forming()) is not None
+            and now >= forming.close_time
+            for pipeline in self.pipelines.values()
+        )
 
     @staticmethod
     def _candidate_shards(
@@ -167,7 +188,7 @@ class CanonicalCandleSink:
                 tick_root
                 / "ticks"
                 / f"exchange={exchange}"
-                / f"symbol={_canonical_symbol(symbol)}"
+                / f"symbol={canonical_symbol(symbol)}"
                 / "stream=trades"
                 / day.strftime("%Y%m%d")
             )
@@ -296,8 +317,14 @@ class CanonicalCandleSink:
         )
 
     def advance_time(self, now: datetime) -> None:
-        for pipeline in self.pipelines.values():
-            pipeline.advance_time(now)
+        for symbol, pipeline in self.pipelines.items():
+            try:
+                pipeline.advance_time(now)
+            except Exception:
+                logger.exception(
+                    "canonical pipeline advance failed; symbol isolated: %s",
+                    symbol,
+                )
 
 
 def _book_row(
@@ -355,7 +382,7 @@ class _Buffer:
         self._seq = 0
 
     def _shard_dir(self, day: str) -> Path:
-        safe = self.symbol.split(":")[0].replace("/", "")
+        safe = canonical_symbol(self.symbol)
         d = (self.root / "ticks" / f"exchange={self.exchange}"
              / f"symbol={safe}" / f"stream={self.stream}" / day)
         d.mkdir(parents=True, exist_ok=True)
@@ -394,8 +421,11 @@ class _Buffer:
 class TickRecorder:
     def __init__(self, exchange_id: str, symbols: list[str], root: Path,
                  *, levels: int = 10, candle_root: Path | None = None,
-                 trades_only: bool = False, books_only: bool = False) -> None:
+                 trades_only: bool = False, books_only: bool = False,
+                 candle_subscribers: Iterable[Callable[[Candle], None]] = ()) -> None:
         import ccxt.pro as ccxtpro
+
+        root = Path(root)
 
         if not hasattr(ccxtpro, exchange_id):
             raise ValueError(f"unknown CCXT Pro exchange id: {exchange_id}")
@@ -419,13 +449,18 @@ class TickRecorder:
         # L2 also subscribes to trades and duplicate shards land in the same
         # partition, double-counting volume for anything that reads them.
         self.books_only = books_only
+        self.recorder_latency = LatencyTracker()
+        self.recorder_latency_store = RecorderLatencyStore(
+            self.root / "reports" / "recorder_latency" / f"{exchange_id}.json",
+            process_id=f"pulse-recorder:{exchange_id}",
+        )
         # Lake health is checked on a cycle, not assumed: an unchecked lake
         # reports UNKNOWN rather than healthy (2026-08-19 audit -- three
         # symbols silently lost an hour while the cockpit said "ok").
         self.lake_health = (
             LakeHealthMonitor(
                 exchange=exchange_id,
-                symbols=[_canonical_symbol(sym) for sym in symbols],
+                symbols=[canonical_symbol(sym) for sym in symbols],
                 candle_root=Path(candle_root),
                 gap_root=Path(candle_root).parent / "gaps",
             )
@@ -438,6 +473,8 @@ class TickRecorder:
                 symbols,
                 candle_root,
                 tick_root=root,
+                subscribers=candle_subscribers,
+                timing_sink=self.recorder_latency.record,
             )
             if candle_root is not None
             else None
@@ -543,6 +580,12 @@ class TickRecorder:
             if key is not None and (key in seen or key in pending_ids):
                 duplicate += 1
                 continue
+            latency = getattr(self, "recorder_latency", None)
+            if latency is not None:
+                received_ms = int(datetime.now(UTC).timestamp() * 1000)
+                latency.record(
+                    TRADE_INGEST_MS, max(0.0, float(received_ms - timestamp))
+                )
             self._trade_arrival_seq += 1
             heapq.heappush(
                 pending,
@@ -590,6 +633,17 @@ class TickRecorder:
             if last_timestamp is not None and timestamp < last_timestamp:
                 late += 1
                 continue
+            # The raw row is the rebuild tape. Add it first and atomically
+            # publish the shard before a boundary trade is allowed to emit the
+            # prior closed candle. Forming-candle trades remain batched.
+            buf.add(row)
+            needs_durable_flush = bool(
+                self.candle_sink is not None
+                and callable(getattr(self.candle_sink, "would_publish_on_trade", None))
+                and self.candle_sink.would_publish_on_trade(symbol, timestamp)
+            )
+            if needs_durable_flush:
+                buf.flush(time.monotonic())
             if self.candle_sink is not None:
                 try:
                     self.candle_sink.on_trade(
@@ -609,8 +663,6 @@ class TickRecorder:
                         timestamp,
                         exc,
                     )
-                    continue
-            buf.add(row)
             self.trade_count += 1
             self._remember_trade(symbol, key)
             last_timestamp = timestamp
@@ -663,10 +715,22 @@ class TickRecorder:
                 if buf.should_flush(clock()):
                     buf.flush(clock())
             if self.candle_sink is not None:
+                boundary = now - timedelta(milliseconds=_TRADE_REORDER_MS)
+                if self.candle_sink.would_publish_on_advance(boundary):
+                    # Quiet-minute closure has no boundary trade to force the
+                    # shard. Flush every symbol first: only then may any
+                    # pipeline publish its closed candle.
+                    for trade_buf in self._trade_bufs.values():
+                        trade_buf.flush(clock())
                 self.candle_sink.advance_time(
-                    now - timedelta(milliseconds=_TRADE_REORDER_MS)
+                    boundary
                 )
             await asyncio.sleep(1.0)
+
+    async def _maintain_latency_snapshot(self) -> None:
+        while True:
+            self.recorder_latency_store.save_from(self.recorder_latency)
+            await asyncio.sleep(5.0)
 
     async def _watch_book(self, symbol: str, clock) -> None:
         buf = _Buffer(self.root, self.exchange_id, symbol, "book")
@@ -716,7 +780,10 @@ class TickRecorder:
     async def run(self, clock=None) -> None:
         import time as _t
 
+        from vnedge.exchange.writer_lease import CanonicalWriterLease
+
         clock = clock or _t.monotonic
+        lease = CanonicalWriterLease(self.root, self.exchange_id).acquire()
         tasks = []
         for symbol in self.symbols:
             for stream in self.streams_for(symbol):
@@ -726,13 +793,18 @@ class TickRecorder:
                 tasks.append(asyncio.create_task(watcher(symbol, clock)))
         if not self.books_only:
             tasks.append(asyncio.create_task(self._maintain_trade_streams(clock)))
+        tasks.append(asyncio.create_task(self._maintain_latency_snapshot()))
         if self.lake_health is not None:
             tasks.append(asyncio.create_task(self.lake_health.run()))
         logger.info("tick recorder: %s %s -> %s", self.exchange_id, self.symbols, self.root)
         try:
             await asyncio.gather(*tasks)
         finally:
-            await self._ex.close()
+            try:
+                self.recorder_latency_store.save_from(self.recorder_latency)
+                await self._ex.close()
+            finally:
+                lease.release()
 
 
 def _delta_ob(buy: list, sell: list) -> dict:
@@ -767,6 +839,7 @@ class DeltaTickRecorder:
         candle_root: Path | None = None,
         trades_only: bool = False,
         books_only: bool = False,
+        candle_subscribers: Iterable[Callable[[Candle], None]] = (),
         url: str | None = None,
         connect=None,
         clock=None,
@@ -788,6 +861,11 @@ class DeltaTickRecorder:
         self.levels = levels
         self.trades_only = trades_only
         self.books_only = books_only
+        self.recorder_latency = LatencyTracker()
+        self.recorder_latency_store = RecorderLatencyStore(
+            root / "reports" / "recorder_latency" / f"{exchange_id}.json",
+            process_id=f"pulse-recorder:{exchange_id}",
+        )
         self._clock = clock
         self.candle_sink = (
             CanonicalCandleSink(
@@ -795,6 +873,8 @@ class DeltaTickRecorder:
                 self.symbols,
                 candle_root,
                 tick_root=root,
+                subscribers=candle_subscribers,
+                timing_sink=self.recorder_latency.record,
             )
             if candle_root is not None
             else None
@@ -869,6 +949,19 @@ class DeltaTickRecorder:
             "side": trade.get("side", ""),
             "trade_id": trade.get("trade_id"),
         }
+        self.recorder_latency.record(
+            TRADE_INGEST_MS,
+            max(0.0, float(self._epoch_ms() - int(row["ts_ms"]))),
+        )
+        # Match the CCXT recorder's durability contract: the raw trade is the
+        # rebuild tape and must be visible before a boundary trade can publish
+        # the prior closed candle to an in-memory subscriber.
+        buf.add(row)
+        if (
+            self.candle_sink is not None
+            and self.candle_sink.would_publish_on_trade(sym, int(row["ts_ms"]))
+        ):
+            buf.flush((self._clock or time.monotonic)())
         if self.candle_sink is not None:
             self.candle_sink.on_trade(
                 sym,
@@ -879,7 +972,6 @@ class DeltaTickRecorder:
                     "side": row["side"],
                 },
             )
-        buf.add(row)
         self.trade_count += 1
 
     def _all_buffers(self):
@@ -902,20 +994,33 @@ class DeltaTickRecorder:
     async def run(self, clock=None) -> None:
         import time as _t
 
+        from vnedge.exchange.writer_lease import CanonicalWriterLease
+
         clock = clock or self._clock or _t.monotonic
-        await self._client.start()
-        logger.info(
-            "delta tick recorder: %s %s -> %s",
-            self.exchange_id, self.symbols, self.root,
-        )
+        lease = CanonicalWriterLease(self.root, self.exchange_id).acquire()
         try:
+            await self._client.start()
+            logger.info(
+                "delta tick recorder: %s %s -> %s",
+                self.exchange_id, self.symbols, self.root,
+            )
+            next_latency_snapshot = 0.0
             while True:
                 now = clock()
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
+                if (
+                    self.candle_sink is not None
+                    and self.candle_sink.would_publish_on_advance(datetime.now(UTC))
+                ):
+                    for trade_buf in self._trade_bufs.values():
+                        trade_buf.flush(now)
                 if self.candle_sink is not None:
                     self.candle_sink.advance_time(datetime.now(UTC))
+                if now >= next_latency_snapshot:
+                    self.recorder_latency_store.save_from(self.recorder_latency)
+                    next_latency_snapshot = now + 5.0
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             now = clock()
@@ -923,7 +1028,11 @@ class DeltaTickRecorder:
                 buf.flush(now)
             raise
         finally:
-            await self._client.stop()
+            try:
+                self.recorder_latency_store.save_from(self.recorder_latency)
+                await self._client.stop()
+            finally:
+                lease.release()
 
 
 def main(argv=None) -> int:

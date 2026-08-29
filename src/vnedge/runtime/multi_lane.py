@@ -23,11 +23,12 @@ import math
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 from ccxt.base.errors import NetworkError, NotSupported
@@ -39,6 +40,7 @@ from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.data_quality_gate import validate_candles
 from vnedge.data.gaps import GapParquetStore
 from vnedge.data.schemas import normalize_candles, normalize_funding
+from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.feed_registry import SharedFeedView, acquire_market_feed
 from vnedge.exchange.live_feed import LiveMarketFeed, RestPollingMarketFeed
 from vnedge.exchange.venue_specs import venue_fill_model, venue_symbol_limits
@@ -51,9 +53,14 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.canonical_candle_router import (
+    CanonicalCandleRouter,
+    CanonicalCandleSubscription,
+    warm_subscription_from_store,
+)
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.funnel_store import LaneFunnelStore
-from vnedge.runtime.latency_store import LaneLatencyStore
+from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -85,6 +92,12 @@ from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 logger = logging.getLogger(__name__)
 
 
+class CanonicalProducer(Protocol):
+    """Minimal lifecycle owned by the colocated dark runtime."""
+
+    async def run(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class LaneSpec:
     lane_id: str  # unique, e.g. "binance_funding_mr"
@@ -104,6 +117,11 @@ class LaneSpec:
     # Public-data venue is not an execution-cost assumption. Shadow scanners
     # may observe Binance while conservatively modelling Delta India fees.
     execution_cost_exchange: str | None = None
+
+    @property
+    def data_symbol(self) -> str:
+        """Stable storage/router identity; ``symbol`` remains venue-native."""
+        return canonical_symbol(self.symbol)
 
     def capital_downgraded(self) -> LaneSpec:
         """Fail-closed roster safety for non-capital and killed strategies.
@@ -156,6 +174,7 @@ class MultiLaneProvider:
         lane_specs: list[LaneSpec] | None = None,
         journal_dir: Path | None = None,
         runtime_control: dict | None = None,
+        canonical_router: CanonicalCandleRouter | None = None,
     ) -> None:
         self.primary = primary_lane_id
         self._lanes: dict[str, dict] = {}
@@ -168,7 +187,30 @@ class MultiLaneProvider:
         self._health_cache: dict | None = None
         self._health_at = 0.0
         self._runtime_control = dict(runtime_control or {})
+        self._canonical_router = canonical_router
         self._specs_by_id = {spec.lane_id: spec for spec in (lane_specs or [])}
+        self._recorder_latency_root = Path(
+            os.environ.get("RECORDER_LATENCY_ROOT", "data/reports/recorder_latency")
+        )
+        self._recorder_latency_cache: list[dict] = []
+        self._recorder_latency_at = 0.0
+
+    def _recorder_latency(self) -> list[dict]:
+        """Import recorder-process gauges; never infer them in lane process."""
+        now = time.monotonic()
+        if now - self._recorder_latency_at < 5.0:
+            return list(self._recorder_latency_cache)
+        self._recorder_latency_at = now
+        snapshots: list[dict] = []
+        try:
+            for path in sorted(self._recorder_latency_root.glob("*.json")):
+                payload = RecorderLatencyStore(path).load()
+                if payload is not None:
+                    snapshots.append(payload)
+        except OSError as exc:
+            logger.warning("recorder latency import failed: %s", exc)
+        self._recorder_latency_cache = snapshots
+        return list(snapshots)
 
     def _lane_health(self) -> dict | None:
         """Cached desired-vs-active audit for the snapshot (never raises).
@@ -285,6 +327,11 @@ class MultiLaneProvider:
         out.setdefault("time_machine", primary_session.get("time_machine"))
         out.setdefault("latency", primary_session.get("latency"))
         out.setdefault("latency_recovery", primary_session.get("latency_recovery"))
+        out["recorder_latency"] = self._recorder_latency()
+        if self._canonical_router is not None:
+            # Report-only transport truth. These counters never grant arm or
+            # order permission; stream failures already fail subscriptions.
+            out["canonical_router"] = asdict(self._canonical_router.snapshot())
         try:
             ts = primary.get("ts")
             age_ms = (
@@ -1248,6 +1295,8 @@ async def build_lane(
     provider: MultiLaneProvider,
     journal_dir: Path,
     shadow_portfolio: ShadowPortfolioGate | None = None,
+    canonical_router: CanonicalCandleRouter | None = None,
+    canonical_router_exchanges: frozenset[str] = frozenset(),
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     # (A) Bars-based warmup: the operator baseline or the strategy's causal
@@ -1267,6 +1316,21 @@ async def build_lane(
         Path(os.environ.get("VNEDGE_CANDLE_ROOT", "data/candles")),
         exchange=spec.exchange,
     )
+    canonical_subscription: CanonicalCandleSubscription | None = None
+    if canonical_router is not None and spec.exchange in canonical_router_exchanges:
+        # Subscribe before any durable warm-up read. Events published while a
+        # lane builds remain queued; duplicates through the captured watermark
+        # are discarded only after Parquet proves the handoff boundary.
+        canonical_subscription = canonical_router.subscribe(
+            spec.exchange,
+            spec.data_symbol,
+            spec.timeframe,
+        )
+        await warm_subscription_from_store(
+            canonical_subscription,
+            canonical_store,
+            not_before=datetime.fromtimestamp(since / 1000, tz=UTC),
+        )
     funding_history_unsupported = False
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
@@ -1405,6 +1469,7 @@ async def build_lane(
         gap_store=GapParquetStore(Path(os.environ.get("VNEDGE_GAP_ROOT", "data/gaps"))),
         shadow_portfolio=shadow_portfolio,
         canonical_candle_store=_canonical_runtime_store(spec, canonical_store),
+        canonical_candle_subscription=canonical_subscription,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",
@@ -1446,11 +1511,21 @@ async def build_lane(
 
 class MultiLaneShadowRunner:
     def __init__(
-        self, specs: list[LaneSpec], journal_dir: Path, provider: MultiLaneProvider
+        self,
+        specs: list[LaneSpec],
+        journal_dir: Path,
+        provider: MultiLaneProvider,
+        *,
+        canonical_router: CanonicalCandleRouter | None = None,
+        canonical_producers: tuple[CanonicalProducer, ...] = (),
+        canonical_router_exchanges: frozenset[str] = frozenset(),
     ) -> None:
         self.specs = specs
         self.journal_dir = journal_dir
         self.provider = provider
+        self.canonical_router = canonical_router
+        self.canonical_producers = canonical_producers
+        self.canonical_router_exchanges = canonical_router_exchanges
         observers = [
             spec
             for spec in specs
@@ -1489,6 +1564,8 @@ class MultiLaneShadowRunner:
                         self.provider,
                         self.journal_dir,
                         self.shadow_portfolio,
+                        self.canonical_router,
+                        self.canonical_router_exchanges,
                     ),
                     retries=_LANE_BUILD_RETRIES,
                     backoff_s=_LANE_BUILD_BACKOFF_S,
@@ -1550,9 +1627,24 @@ class MultiLaneShadowRunner:
             len(self.specs),
             ", ".join(r.spec.lane_id for r in started),
         )
-        await asyncio.gather(
-            *[self._run_lane(runtime, deadline_seconds=deadline_seconds) for runtime in started]
-        )
+        producer_tasks = [
+            asyncio.create_task(producer.run(), name=f"canonical-producer-{index}")
+            for index, producer in enumerate(self.canonical_producers)
+        ]
+        lane_tasks = [
+            asyncio.create_task(
+                self._run_lane(runtime, deadline_seconds=deadline_seconds),
+                name=f"lane-{runtime.spec.lane_id}",
+            )
+            for runtime in started
+        ]
+        try:
+            await asyncio.gather(*producer_tasks, *lane_tasks)
+        finally:
+            for task in (*producer_tasks, *lane_tasks):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*producer_tasks, *lane_tasks, return_exceptions=True)
 
     async def _run_lane(self, runtime: _LaneRuntime, *, deadline_seconds: float | None) -> None:
         try:

@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from vnedge.research import scanner_evidence
 from vnedge.research.scanner_evidence import (
+    apply_contiguous_warmup_quality,
     build_daily_report,
     normalize_canonical_candles,
     read_lane_evals,
@@ -57,6 +59,38 @@ def test_runtime_frame_normalization_preserves_explicit_non_ok_state():
     assert normalized.loc[0, "data_quality"] == "gap"
     assert bool(normalized.loc[0, "is_closed"]) is False
     assert normalized.loc[0, "candle_source"] == "exchange_ohlcv"
+
+
+def test_gap_contaminates_exactly_the_causal_warmup_horizon():
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                [
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-01T00:15:00Z",
+                    "2026-01-01T00:45:00Z",
+                    "2026-01-01T01:00:00Z",
+                    "2026-01-01T01:15:00Z",
+                    "2026-01-01T01:30:00Z",
+                ]
+            ),
+            "data_quality": ["ok"] * 6,
+        }
+    )
+
+    qualified, breaks = apply_contiguous_warmup_quality(
+        frame, timeframe_seconds=900, warmup_bars=2
+    )
+
+    assert breaks == 1
+    assert qualified["data_quality"].tolist() == [
+        "ok",
+        "ok",
+        "gap",
+        "gap",
+        "gap",
+        "ok",
+    ]
 
 
 def test_daily_report_groups_exact_strategy_and_failed_gates(tmp_path: Path):
@@ -135,6 +169,56 @@ def test_replay_uses_single_book_next_open_and_dual_costs(monkeypatch):
     assert outcome["entry"] == 100.0
     assert outcome["exit"] == 110.0
     assert outcome["net_execution_bps"] > outcome["net_gate_bps"]
+
+
+def test_replay_requires_and_binds_declared_canonical_context(monkeypatch):
+    class _ContextStrategy(BaseStrategy):
+        strategy_id = "test_context"
+        warmup_bars = 0
+        canonical_context_timeframes = ("4h",)
+
+        def __init__(self):
+            self.context = None
+
+        def bind_canonical_context(self, timeframe, candles):
+            assert timeframe == "4h"
+            self.context = candles
+
+        def prepare(self, candles):
+            assert self.context is not None
+            return candles.copy()
+
+        def signal(self, df, index):
+            del df, index
+
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=3, freq="15min", tz="UTC"),
+            "open": [100.0] * 3,
+            "high": [101.0] * 3,
+            "low": [99.0] * 3,
+            "close": [100.0] * 3,
+            "volume": [1.0] * 3,
+        }
+    )
+    context = candles.iloc[:1].copy()
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _ContextStrategy)
+
+    with pytest.raises(ValueError, match="requires canonical context.*4h"):
+        scanner_evidence.replay_scanner("test_context", candles)
+
+    result = scanner_evidence.replay_scanner(
+        "test_context", candles, context_candles={"4h": context}
+    )
+    assert result["canonical_context_timeframes"] == ["4h"]
+    assert result["context_quality"]["4h"] == {
+        "bars": 1,
+        "continuity_breaks": 0,
+        "quarantined_bars": 0,
+    }
+    assert result["setup_funnel"]["evaluations"] == 2
+    assert result["setup_funnel"]["engine_status"] == "ready"
+    assert result["setup_funnel"]["evaluable_bars"] == 2
 
 
 def test_replay_gap_through_stop_never_gets_fictional_stop_fill(monkeypatch):
@@ -246,7 +330,7 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert result["quotes_outside_window"] == 0
     assert result["intents"] == 1
     assert result["intent_keys"] == [
-        "test_quote_scanner|BTC/USDT:USDT|long|1767225900600"
+        "test_quote_scanner|BTCUSDT|long|1767225900600"
     ]
     intent = next(
         row["payload"] for row in result["records"] if row["kind"] == "shadow_intent"
@@ -553,7 +637,7 @@ def test_quote_replay_normalizes_canonical_open_time_and_decimal_frames(monkeypa
 
     assert result["intents"] == 1
     assert result["intent_keys"] == [
-        "test_quote_scanner|BTC/USDT:USDT|long|1767225900600"
+        "test_quote_scanner|BTCUSDT|long|1767225900600"
     ]
     assert result["evidence_window"]["basis"] == "first_clean_quote"
     assert result["evidence_window"]["start"] == "2026-01-01T00:05:00+00:00"

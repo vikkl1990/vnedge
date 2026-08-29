@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from vnedge.data.symbols import canonical_symbol
+
 _ZERO = Decimal(0)
 DEFAULT_VALUE_AREA_FRACTION = Decimal("0.70")
 DEFAULT_BIN_SIZE_BY_SYMBOL: Mapping[str, Decimal] = {
@@ -58,7 +60,7 @@ def _partition_value(value: str, *, label: str) -> str:
 
 def profile_bin_size(symbol: str) -> Decimal:
     """Return the frozen fixed-price bin for a supported Pulse symbol."""
-    canonical = symbol.upper().replace("/", "").split(":", 1)[0]
+    canonical = canonical_symbol(symbol)
     try:
         return DEFAULT_BIN_SIZE_BY_SYMBOL[canonical]
     except KeyError as exc:
@@ -245,7 +247,7 @@ class VolumeProfileArtifactStore:
         window_kind: str,
         window_start: datetime,
     ) -> str:
-        canonical = symbol.upper().replace("/", "").split(":", 1)[0]
+        canonical = canonical_symbol(symbol)
         start = _utc(window_start, label="artifact window_start")
         safe_exchange = _partition_value(exchange, label="exchange")
         safe_symbol = _partition_value(canonical, label="symbol")
@@ -262,7 +264,7 @@ class VolumeProfileArtifactStore:
         window_kind: str,
         window_start: datetime,
     ) -> Path:
-        canonical = symbol.upper().replace("/", "").split(":", 1)[0]
+        canonical = canonical_symbol(symbol)
         start = _utc(window_start, label="artifact window_start")
         safe_exchange = _partition_value(exchange, label="exchange")
         safe_symbol = _partition_value(canonical, label="symbol")
@@ -292,7 +294,7 @@ class VolumeProfileArtifactStore:
             "schema_version": "1.0",
             "window_id": window_id,
             "exchange": exchange,
-            "symbol": symbol.upper().replace("/", "").split(":", 1)[0],
+            "symbol": canonical_symbol(symbol),
             "window": window_kind,
             "source_exchange": source_exchange,
             "profile": profile.to_dict(),
@@ -343,7 +345,7 @@ class TickLakeVolumeProfileStore:
         end: datetime,
     ) -> list[Path]:
         safe_exchange = _partition_value(exchange, label="exchange")
-        canonical = symbol.upper().replace("/", "").split(":", 1)[0]
+        canonical = canonical_symbol(symbol)
         safe_symbol = _partition_value(canonical, label="symbol")
         base = (
             self.data_root

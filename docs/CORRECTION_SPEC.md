@@ -142,6 +142,45 @@ record seven days of router-vs-Parquet journal parity, then remove
 existing containers is explicitly out of scope for the v1 single-process
 decision.
 
+The code now exposes the controlled first cutover as
+`VNEDGE_CANONICAL_PRODUCER_MODE=integrated_dark`. In that mode the lane process
+owns the public-trade recorder and router, subscribes before durable warm-up,
+and consumes a router event only after the matching Parquet candle proves
+exact equality. A process-lifetime writer lease refuses startup if the legacy
+`pulse-recorder` still owns that venue. The default remains
+`external_parquet`; operators must stop the legacy writer before enabling the
+dark mode. This is transport/parity evidence only and does not unlock capital.
+
+The cutover contract additionally freezes one canonical symbol function across
+router keys, lake partitions, lane subscriptions, and replay. A subscriber is
+created before durable warm-up; its watermark bounds the Parquet read and
+queued identities at or below the watermark are de-duplicated before forward
+evaluation. Router transport statistics (publish count, conflicts,
+out-of-order events, subscriber overflow, depth, and failed subscriptions) are
+report-only in the runtime snapshot. Publish-before-upsert is allowed only
+while the raw trade is durable and the persist worker is healthy; persist
+failure blocks new arms and leaves exits available.
+
+Local scanner-evidence status (2026-08-29, already-seen August sample):
+
+- the 15m replay requires and binds the declared canonical 4h context instead
+  of silently substituting an empty frame;
+- BTC BoS evaluated 683 bars and produced no signals. Its dominant near-miss
+  gates were session_closed (571), htf_structure_conflict (515),
+  projected_net_below_threshold (515), and
+  volume_confirmation_failed (348);
+- ETH BoS produced one observed trade only after the 4h context was correctly
+  attached. That is a path-correction finding, not promotion evidence;
+- Range v3/v4 have a frozen warm-up longer than the available 908-bar frame.
+  The evidence artifact reports insufficient_warmup_window, not a false
+  zero-edge or zero-setup verdict;
+- continuity and HTF quarantine counts are written into every replay artifact.
+
+The VM still needs an uninterrupted BBO/journal capture and exact live-vs-
+replay parity before router decision authority is enabled. The default Docker
+topology and empty capital allowlist remain unchanged until that artifact is
+clean.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.

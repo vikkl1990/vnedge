@@ -161,6 +161,28 @@ def test_canonical_sink_exposes_closed_candles_to_router_subscriber(tmp_path):
     ]
 
 
+def test_canonical_sink_advance_isolates_symbol_failure():
+    class Pipeline:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.calls = 0
+
+        def advance_time(self, _now):
+            self.calls += 1
+            if self.fail:
+                raise OSError("one symbol failed")
+
+    failed = Pipeline(fail=True)
+    healthy = Pipeline()
+    sink = CanonicalCandleSink.__new__(CanonicalCandleSink)
+    sink.pipelines = {"BTC/USDT:USDT": failed, "ETH/USDT:USDT": healthy}
+
+    sink.advance_time(datetime(2026, 8, 29, tzinfo=UTC))
+
+    assert failed.calls == 1
+    assert healthy.calls == 1
+
+
 def test_canonical_sink_restart_rebuilds_current_minute_from_tick_shards(tmp_path):
     tick_root = tmp_path / "lake"
     candle_root = tmp_path / "candles"
@@ -308,9 +330,9 @@ class _TradeSink:
         self.timestamps.append((symbol, trade["timestamp"]))
 
 
-def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_path):
+def _bare_recorder(candle_sink):
     rec = TickRecorder.__new__(TickRecorder)
-    rec.candle_sink = _TradeSink()
+    rec.candle_sink = candle_sink
     rec.trade_count = 0
     rec._last_trade_ts_ms = {}
     rec._seen_trade_ids = {"BTC/USDT:USDT": set()}
@@ -321,6 +343,11 @@ def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_pat
     rec._pending_trade_ids = {"BTC/USDT:USDT": set()}
     rec._max_seen_trade_ts_ms = {}
     rec._trade_arrival_seq = 0
+    return rec
+
+
+def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_path):
+    rec = _bare_recorder(_TradeSink())
     buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
     batch = [
         {"id": "2", "timestamp": 2000, "price": 101, "amount": 1},
@@ -347,6 +374,47 @@ def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_pat
         ("BTC/USDT:USDT", 2000),
         ("BTC/USDT:USDT", 3000),
     ]
+
+
+def test_raw_trade_shard_is_durable_before_closed_candle_publish(tmp_path):
+    tick_root = tmp_path / "lake"
+    candle_root = tmp_path / "candles"
+    durable_counts = []
+
+    def observe(_candle):
+        paths = list((tick_root / "ticks").rglob("*.parquet"))
+        durable_counts.append(sum(len(pd.read_parquet(path)) for path in paths))
+
+    sink = CanonicalCandleSink(
+        "binanceusdm",
+        ["BTC/USDT:USDT"],
+        candle_root,
+        subscribers=(observe,),
+    )
+    rec = _bare_recorder(sink)
+    buf = _Buffer(tick_root, "binanceusdm", "BTC/USDT:USDT", "trades")
+    opened = datetime(2026, 8, 29, 10, tzinfo=UTC)
+    rec._ingest_trade_batch(
+        "BTC/USDT:USDT",
+        [{"id": "a", "timestamp": int(opened.timestamp() * 1000), "price": 100, "amount": 1}],
+        buf,
+    )
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+    rec._ingest_trade_batch(
+        "BTC/USDT:USDT",
+        [
+            {
+                "id": "b",
+                "timestamp": int((opened + timedelta(minutes=1)).timestamp() * 1000),
+                "price": 101,
+                "amount": 1,
+            }
+        ],
+        buf,
+    )
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+
+    assert durable_counts == [2]
 
 
 def test_skip_warnings_are_rate_limited_per_symbol(caplog):

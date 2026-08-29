@@ -13,17 +13,17 @@ deduplicated on timestamp (newest write wins), sorted, and written atomically
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
+from vnedge.data.symbols import canonical_symbol
+
 
 def sanitize_symbol(symbol: str) -> str:
     """'BTC/USDT:USDT' -> 'BTCUSDT'. Keeps directory names filesystem-safe."""
-    base = symbol.split(":")[0]
-    return re.sub(r"[^A-Za-z0-9]+", "", base).upper()
+    return canonical_symbol(symbol)
 
 
 @dataclass(frozen=True)

@@ -44,6 +44,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.tick_recorder import _Buffer
 
 logger = logging.getLogger(__name__)
@@ -209,7 +210,7 @@ class LiquidationRecorder:
 
 def binance_stream_name(symbol: str) -> str:
     """CCXT-style symbol -> Binance stream id: ``BTC/USDT:USDT`` -> ``btcusdt``."""
-    return symbol.split(":", 1)[0].replace("/", "").lower()
+    return canonical_symbol(symbol).lower()
 
 
 def _binance_force_order_row(o: dict) -> dict | None:
