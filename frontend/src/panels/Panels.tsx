@@ -205,6 +205,8 @@ export function DeskPanel() {
               <span className="text-faint">signals / approved</span><span className="text-right font-mono">{lane.funnel.signals ?? 0} / {lane.funnel.shadow_approved ?? 0}</span>
               <span className="text-faint">positions / pending</span><span className="text-right font-mono">{lane.open_positions} / {lane.shadow_perf?.pending_shadow_intents ?? 0}</span>
               <span className="text-faint">decision engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_engine ?? "unreported"}</span>
+              <span className="text-faint">clock contract</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_tf ?? lane.timeframe} close → {lane.runtime_contract?.entry_clock === "bbo_acceptance" ? "BBO" : "next open"} → {lane.runtime_contract?.protection_clock ?? "ticks"}</span>
+              <span className="text-faint">last-closed context</span><span className="text-right font-mono break-all">{(lane.runtime_contract?.context_tfs ?? []).map((tf) => `${tf} ${ageSec(lane.runtime_contract?.context_age_seconds?.[tf])}`).join(" · ") || "none"}</span>
               <span className="text-faint">exit engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.exit_engine ?? "unreported"}</span>
               <span className="text-faint">last evaluation</span><span className="text-right font-mono break-all">{String(lane.last_eval?.reason ?? lane.last_signal_reason)}</span>
             </div>

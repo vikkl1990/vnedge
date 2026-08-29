@@ -9,13 +9,14 @@ orders, fills, resolved trades, and event chronology.
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ def build_trade_journal(
     since: str | None = None,
     limit: int = 200,
     offset: int = 0,
-    config: TradeJournalConfig = TradeJournalConfig(),
+    config: TradeJournalConfig | None = None,
 ) -> dict[str, Any]:
     """Build a dashboard trade journal from snapshot + append-only artifacts.
 
@@ -41,6 +42,7 @@ def build_trade_journal(
     lane journal/fill ledger and include the current primary snapshot's live
     positions/orders.
     """
+    config = config or TradeJournalConfig()
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     root = Path(journal_dir) if journal_dir is not None else None
     lane = lane.strip()
@@ -300,7 +302,7 @@ def _float(value: object, default: float = 0.0) -> float:
         parsed = float(value)
     except (TypeError, ValueError):
         return default
-    if parsed != parsed:
+    if math.isnan(parsed):
         return default
     return parsed
 
@@ -459,7 +461,9 @@ def _scanner_audit_events(
             fired = bool(payload.get("fired"))
             row = {
                 "lane": lane,
-                "ts": ts,
+                # Signal markers belong to the close that made the structure
+                # causal, never the open identity of the decision candle.
+                "ts": str(payload.get("decision_at") or ts),
                 "bar_ts": str(payload.get("bar_ts") or ts),
                 "kind": "signal" if fired else "evaluation",
                 "source_event": kind,
@@ -904,10 +908,8 @@ def _lane_cohort(lane_id: str) -> str:
     if lane.startswith("velocity_"):
         return "control"
     if (
-        lane.startswith("papertrial_")
-        or lane.startswith("evidence_")
+        lane.startswith(("papertrial_", "evidence_", "funding_mr"))
         or "_paper_probe" in lane
-        or lane.startswith("funding_mr")
     ):
         return "tracked"
     return "research"

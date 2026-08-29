@@ -112,6 +112,13 @@ export function ScannerWorkspace({
   const quoteSeen = quoteStats?.quotes_seen ?? 0;
   const quoteRejects = quoteStats?.quote_contract_rejects ?? 0;
   const quoteDrops = quoteStats?.quote_overflow_drops ?? 0;
+  const clock = selected?.runtime_contract;
+  const contextTfs = clock?.context_tfs ?? [];
+  const contextAges = clock?.context_age_seconds ?? {};
+  const contextDetail = contextTfs.length
+    ? contextTfs.map((tf) => `${tf} ${age(contextAges[tf])} since close`).join(" · ")
+    : "no higher-timeframe veto";
+  const entryLabel = clock?.entry_clock === "bbo_acceptance" ? "BBO" : "next open";
 
   return (
     <section className="border border-line bg-panel/80" aria-label="Scanner decision workspace">
@@ -149,7 +156,12 @@ export function ScannerWorkspace({
 
           <div className="border-b border-line p-3 xl:border-b-0 xl:border-r">
             <div className="mb-2 flex items-center justify-between gap-3"><div className="font-mono text-[10px] uppercase tracking-wide text-faint">Arm criteria · current evidence</div><span className="font-mono text-[10px] text-dim">{selected.symbol} / {selected.timeframe}</span></div>
+            <div className="mb-2 border-l-2 border-info bg-info/5 px-3 py-2 font-mono text-[10px] text-info">
+              structure={clock?.decision_tf ?? selected.timeframe} close · entry={entryLabel} · protect={clock?.protection_clock ?? "ticks"}
+              <span className="mt-1 block text-[9px] text-faint">context {contextDetail} · forming bars are display only</span>
+            </div>
             <Criterion label="data" value={selected.candle_status} detail={selected.candle_age_ms == null ? "age not reported" : `${Math.round(selected.candle_age_ms / 1000)}s since candle evidence`} tone={dataTone} />
+            <Criterion label="clock" value={`${clock?.decision_tf ?? selected.timeframe} close`} detail={`entry ${entryLabel} · protect ${clock?.protection_clock ?? "ticks"} · context ${contextTfs.join("/") || "none"}`} tone={clock?.structure_clock === "closed_bar" ? "good" : "warn"} />
             <Criterion label="close path" value={closeWarm ? "measured" : "collecting p95"} detail={selected.bar_close_processing_ms == null ? `${selected.latency_samples.bar_close}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.bar_close_processing_ms.toFixed(1)} ms · ${selected.latency_samples.bar_close}/${selected.latency_samples.required}`} tone={closeWarm ? "good" : "warn"} />
             <Criterion label="decision" value={decisionWarm ? "measured" : "collecting p95"} detail={selected.decision_lag_ms == null ? `${selected.latency_samples.decision}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.decision_lag_ms.toFixed(1)} ms · ${selected.latency_samples.decision}/${selected.latency_samples.required}`} tone={decisionWarm ? "good" : "warn"} />
             <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />

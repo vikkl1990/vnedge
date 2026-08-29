@@ -26,6 +26,13 @@ const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 //: "1h" keeps the pulse-derived series, which carries the VWAP/AVWAP overlays.
 //: Every other timeframe reads the CANONICAL lake instead.
 const CHART_TIMEFRAMES: ChartTimeframe[] = ["5m", "15m", "1h", "4h"];
+const TIMEFRAME_SECONDS: Record<ChartTimeframe, number> = {
+  "1m": 60,
+  "5m": 300,
+  "15m": 900,
+  "1h": 3_600,
+  "4h": 14_400,
+};
 const MARKET_MONITOR_GRID = "grid w-full min-w-[1120px] grid-cols-[minmax(110px,.8fr)_minmax(130px,.9fr)_minmax(110px,.8fr)_minmax(110px,.8fr)_minmax(140px,1.1fr)_minmax(140px,1.1fr)_minmax(120px,.9fr)_minmax(145px,1fr)] gap-x-4";
 
 const baseAsset = (symbol: string) => {
@@ -80,6 +87,14 @@ const toUnixHour = (value: string): UTCTimestamp | null => {
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds)) return null;
   return Math.floor(milliseconds / 3_600_000) * 3_600 as UTCTimestamp;
+};
+
+const toUnixBucket = (value: string, timeframe: ChartTimeframe): UTCTimestamp | null => {
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) return null;
+  const seconds = Math.floor(milliseconds / 1_000);
+  const bucket = TIMEFRAME_SECONDS[timeframe];
+  return (Math.floor(seconds / bucket) * bucket) as UTCTimestamp;
 };
 
 const utcTimeLabel = (time: Time) => {
@@ -211,9 +226,11 @@ function formingPoint(
     high,
     low,
     close,
-    color: "#58A6FF",
-    borderColor: "#58A6FF",
-    wickColor: "#58A6FF",
+    // Forming is a display ghost, never scanner structure.  Per-bar colors
+    // prevent it from looking like a confirmed close beside canonical bars.
+    color: "rgba(88,166,255,0.18)",
+    borderColor: "rgba(88,166,255,0.65)",
+    wickColor: "rgba(88,166,255,0.45)",
   };
 }
 
@@ -539,7 +556,7 @@ function CandleChart({
       color: string;
       shape: "circle" | "square" | "arrowUp" | "arrowDown";
       text: string;
-    }> = hours.flatMap((hour) => {
+    }> = (timeframe === "1h" ? hours : []).flatMap((hour) => {
         const time = toUnixHour(hour.open_time);
         if (time === null || hour.data_quality === "ok") return [];
         return [{
@@ -552,7 +569,10 @@ function CandleChart({
       });
     for (const event of auditEvents) {
       if (event.backfill || !["signal", "entry", "exit"].includes(event.kind)) continue;
-      const time = toUnixHour(event.bar_ts || event.ts);
+      if (event.timeframe && event.timeframe !== timeframe) continue;
+      // Journal record time is the decision/accept timestamp. ``bar_ts`` is
+      // the candle OPEN identity and previously painted a 15m setup early.
+      const time = toUnixBucket(event.ts, timeframe);
       if (time === null) continue;
       const long = ["long", "buy"].includes(event.side.toLowerCase());
       const strategy = compactStrategy(event.strategy_id || event.lane || "scanner");
@@ -565,7 +585,7 @@ function CandleChart({
           position: long ? "belowBar" : "aboveBar",
           color: "#58A6FF",
           shape: long ? "arrowUp" : "arrowDown",
-          text: `SIG ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
+          text: `SETUP ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
         });
       } else if (event.kind === "entry") {
         markers.push({
@@ -573,7 +593,7 @@ function CandleChart({
           position: long ? "belowBar" : "aboveBar",
           color: "#D29922",
           shape: "circle",
-          text: `IN ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
+          text: `ACCEPT ${long ? "L" : "S"} · ${strategy}${tfStamp}`,
         });
       } else {
         const net = event.virtual_net_usd;
@@ -588,7 +608,7 @@ function CandleChart({
     }
     markers.sort((a, b) => Number(a.time) - Number(b.time));
     markerRef.current?.setMarkers(markers);
-  }, [auditEvents, hours]);
+  }, [auditEvents, hours, timeframe]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -725,7 +745,7 @@ function CandleChart({
         {timeframe === "1h" && hasDualAvwap && <span className="flex items-center gap-1.5 text-[#BC8CFF]"><span className="h-0.5 w-4 bg-[#BC8CFF]" />AVWAP H</span>}
         {typeof priorDayPoc === "number" && Number.isFinite(priorDayPoc) && <span className="flex items-center gap-1.5 text-[#F0883E]"><span className="h-0.5 w-4 bg-[#F0883E]" />PRIOR-DAY POC</span>}
         {typeof priorDayVah === "number" && typeof priorDayVal === "number" && <span className="flex items-center gap-1.5 text-dim"><span className="h-px w-4 border-t border-dotted border-dim" />VAH / VAL</span>}
-        {timeframe === "1h" && chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 bg-info" />FORMING</span>}
+        {timeframe === "1h" && chartLivePoint && <span className="flex items-center gap-1.5 text-info"><span className="h-2 w-2 border border-info bg-info/20" />FORMING · DISPLAY ONLY</span>}
         {auditEvents.some((event) => ["signal", "entry", "exit"].includes(event.kind)) && <span className="flex items-center gap-1.5 text-brand"><span className="h-2 w-2 rounded-full bg-brand" />SCANNER EVIDENCE</span>}
         {timeframe === "1h" && formingWithheld && <span className="text-warn">STALE FORMING POINT WITHHELD</span>}
         {timeframe === "1h" && hasDegradedHours && <span className="text-faint">MUTED = GAP/DEGRADED</span>}

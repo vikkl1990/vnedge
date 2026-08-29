@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from vnedge.strategy.scanner_contracts import (
+    SCANNER_RUNTIME_CONTRACTS,
+    ScannerRuntimeContract,
     resolve_scanner_cost_profile,
     scanner_runtime_contract,
 )
@@ -76,3 +80,50 @@ def test_active_scanners_publish_their_real_decision_and_exit_engines() -> None:
         assert contract is not None
         assert contract.decision_engine == "base_strategy_next_open_v1"
         assert contract.exit_engine == "active_exit_v1"
+
+
+def test_scanner_clock_contracts_separate_structure_entry_and_protection() -> None:
+    squeeze = scanner_runtime_contract("squeeze_expansion_breakout_v4")
+    bos = scanner_runtime_contract("structure_bos_15m_trigger_v3")
+    assert squeeze is not None and bos is not None
+
+    assert squeeze.decision_tf == "5m"
+    assert squeeze.entry_clock == "bbo_acceptance"
+    assert squeeze.structure_clock == "closed_bar"
+    assert squeeze.protection_clock == "ticks"
+    assert squeeze.context_tfs == ()
+
+    assert bos.decision_tf == "15m"
+    assert bos.entry_clock == "next_open"
+    assert bos.context_tfs == ("4h",)
+
+
+def test_active_scanner_roster_never_uses_brick_or_context_as_fire_clock() -> None:
+    assert SCANNER_RUNTIME_CONTRACTS
+    assert {
+        contract.decision_tf for contract in SCANNER_RUNTIME_CONTRACTS.values()
+    }.isdisjoint({"1m", "4h"})
+
+
+@pytest.mark.parametrize("timeframe", ["1m", "4h"])
+def test_scanner_contract_rejects_non_decision_clocks(timeframe: str) -> None:
+    with pytest.raises(ValueError, match="not an eligible scanner decision clock"):
+        ScannerRuntimeContract(
+            strategy_id="invalid_clock",
+            timeframe=timeframe,
+            cost_family="swing",
+            max_holding_bars=1,
+            rationale="test",
+        )
+
+
+def test_scanner_contract_rejects_context_not_slower_than_decision() -> None:
+    with pytest.raises(ValueError, match="must be slower"):
+        ScannerRuntimeContract(
+            strategy_id="invalid_context",
+            timeframe="15m",
+            context_timeframes=("5m",),
+            cost_family="swing",
+            max_holding_bars=1,
+            rationale="test",
+        )

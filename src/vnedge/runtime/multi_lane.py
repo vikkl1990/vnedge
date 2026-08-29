@@ -1442,9 +1442,24 @@ async def build_lane(
         )
         else None
     )
-    context_timeframes = tuple(
+    declared_context_timeframes = tuple(
         str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
     )
+    if (
+        runtime_contract is not None
+        and declared_context_timeframes != runtime_contract.context_tfs
+    ):
+        raise ValueError(
+            f"{spec.strategy_id} runtime context contract requires "
+            f"{runtime_contract.context_tfs}, strategy declares "
+            f"{declared_context_timeframes}"
+        )
+    context_timeframes = (
+        runtime_contract.context_tfs
+        if runtime_contract is not None
+        else declared_context_timeframes
+    )
+    context_watermarks: dict[str, datetime] = {}
     context_binder = getattr(strategy, "bind_canonical_context", None)
     if context_timeframes and callable(context_binder):
         for context_timeframe in context_timeframes:
@@ -1465,6 +1480,15 @@ async def build_lane(
                 )
                 context_history = pd.DataFrame()
             context_binder(context_timeframe, context_history)
+            if not context_history.empty:
+                opened = pd.Timestamp(context_history["timestamp"].iloc[-1])
+                if opened.tzinfo is None:
+                    opened = opened.tz_localize("UTC")
+                else:
+                    opened = opened.tz_convert("UTC")
+                context_watermarks[context_timeframe] = (
+                    opened + pd.Timedelta(context_timeframe)
+                ).to_pydatetime()
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
     journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
@@ -1491,6 +1515,7 @@ async def build_lane(
         canonical_candle_subscription=canonical_subscription,
         quote_evidence=quote_evidence,
         canonical_arm_health=canonical_arm_health,
+        canonical_context_watermarks=context_watermarks,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",

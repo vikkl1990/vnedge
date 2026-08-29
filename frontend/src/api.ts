@@ -359,6 +359,13 @@ export interface TrialScorecard {
   criteria?: TrialCriterion[];
 }
 export interface ScannerRuntimeContract {
+  decision_tf?: string;
+  context_tfs?: string[];
+  structure_clock?: "closed_bar";
+  entry_clock?: "next_open" | "bbo_acceptance";
+  protection_clock?: "ticks";
+  context_last_closed_at?: Record<string, string>;
+  context_age_seconds?: Record<string, number>;
   cost_family?: string;
   max_holding_bars?: number;
   max_holding_hours?: number;

@@ -32,7 +32,7 @@ import math
 import os
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -226,6 +226,7 @@ class LivePaperSession:
         canonical_candle_subscription: CanonicalCandleSubscription | None = None,
         quote_evidence: QuoteEvidenceRecorder | None = None,
         canonical_arm_health: Callable[[], str | None] | None = None,
+        canonical_context_watermarks: Mapping[str, datetime] | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -272,6 +273,10 @@ class LivePaperSession:
         self.canonical_candle_subscription = canonical_candle_subscription
         self.quote_evidence = quote_evidence
         self.canonical_arm_health = canonical_arm_health
+        self._canonical_context_last_closed_at = {
+            str(timeframe): timestamp.astimezone(UTC)
+            for timeframe, timestamp in (canonical_context_watermarks or {}).items()
+        }
         self._last_canonical_transport = "parquet_poll"
         self._last_router_wait_ms: float | None = None
         # In router-dark mode the venue kline is a watchdog, never decision
@@ -342,11 +347,19 @@ class LivePaperSession:
         )
         runtime_contract = scanner_runtime_contract(strategy.strategy_id)
         self.runtime_contract = runtime_contract
+        declared_context = tuple(
+            str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
+        )
         if runtime_contract is not None:
             if tf != runtime_contract.timeframe:
                 raise ValueError(
                     f"{strategy.strategy_id} requires timeframe "
                     f"{runtime_contract.timeframe}, got {tf}"
+                )
+            if declared_context != runtime_contract.context_tfs:
+                raise ValueError(
+                    f"{strategy.strategy_id} runtime context contract requires "
+                    f"{runtime_contract.context_tfs}, strategy declares {declared_context}"
                 )
             if config.max_holding_bars != runtime_contract.max_holding_bars:
                 raise ValueError(
@@ -859,8 +872,13 @@ class LivePaperSession:
         durable. Missing context blocks that scanner's newest decision without
         degrading unrelated exits or measurement lanes.
         """
-        timeframes = tuple(
-            str(value) for value in getattr(self.strategy, "canonical_context_timeframes", ())
+        timeframes = (
+            self.runtime_contract.context_tfs
+            if self.runtime_contract is not None
+            else tuple(
+                str(value)
+                for value in getattr(self.strategy, "canonical_context_timeframes", ())
+            )
         )
         ingest = getattr(self.strategy, "ingest_canonical_context", None)
         set_health = getattr(self.strategy, "set_canonical_context_health", None)
@@ -917,6 +935,9 @@ class LivePaperSession:
                 )
                 continue
             ingest(canonical)
+            self._canonical_context_last_closed_at[timeframe] = (
+                canonical.open_time + timedelta(milliseconds=context_ms)
+            )
             if callable(set_health):
                 set_health(timeframe, True)
             self.journal.append(
@@ -1736,6 +1757,31 @@ class LivePaperSession:
             "decision_price": decision_price,
             "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
+            "decision_tf": (
+                self.runtime_contract.decision_tf
+                if self.runtime_contract is not None
+                else self.config.timeframe
+            ),
+            "context_tfs": list(
+                self.runtime_contract.context_tfs
+                if self.runtime_contract is not None
+                else getattr(self.strategy, "canonical_context_timeframes", ())
+            ),
+            "structure_clock": (
+                self.runtime_contract.structure_clock
+                if self.runtime_contract is not None
+                else "closed_bar"
+            ),
+            "entry_clock": (
+                self.runtime_contract.entry_clock
+                if self.runtime_contract is not None
+                else "next_open"
+            ),
+            "protection_clock": (
+                self.runtime_contract.protection_clock
+                if self.runtime_contract is not None
+                else "ticks"
+            ),
         }
         # A shadow intent is a real reservation in the virtual book even
         # though it never reaches an exchange.  Treat it exactly like an open
@@ -3001,10 +3047,35 @@ class LivePaperSession:
         ).hexdigest()
         record = {
             "bar_ts": bar_ts,
+            "decision_at": (
+                (
+                    pd.Timestamp(row["timestamp"])
+                    + pd.Timedelta(seconds=self._tf_seconds)
+                ).isoformat()
+                if self._tf_seconds is not None
+                else bar_ts
+            ),
             "strategy_id": self.strategy.strategy_id,
             "exchange": getattr(self.feed, "exchange_id", ""),
             "symbol": self.config.symbol,
             "timeframe": self.config.timeframe,
+            "decision_tf": (
+                self.runtime_contract.decision_tf
+                if self.runtime_contract is not None
+                else self.config.timeframe
+            ),
+            "context_tfs": list(
+                self.runtime_contract.context_tfs
+                if self.runtime_contract is not None
+                else getattr(self.strategy, "canonical_context_timeframes", ())
+            ),
+            "structure_clock": "closed_bar",
+            "entry_clock": (
+                self.runtime_contract.entry_clock
+                if self.runtime_contract is not None
+                else "next_open"
+            ),
+            "protection_clock": "ticks",
             "decision_price": (
                 None
                 if "close" not in df.columns or not math.isfinite(float(row["close"]))
@@ -3214,6 +3285,26 @@ class LivePaperSession:
                 "scanner_cost_hypothesis": self.last_scanner_cost_hypothesis,
                 "runtime_contract": (
                     {
+                        "decision_tf": self.runtime_contract.decision_tf,
+                        "context_tfs": list(self.runtime_contract.context_tfs),
+                        "structure_clock": self.runtime_contract.structure_clock,
+                        "entry_clock": self.runtime_contract.entry_clock,
+                        "protection_clock": self.runtime_contract.protection_clock,
+                        "context_last_closed_at": {
+                            timeframe: timestamp.isoformat()
+                            for timeframe, timestamp in sorted(
+                                self._canonical_context_last_closed_at.items()
+                            )
+                        },
+                        "context_age_seconds": {
+                            timeframe: max(
+                                0.0,
+                                (datetime.now(UTC) - timestamp).total_seconds(),
+                            )
+                            for timeframe, timestamp in sorted(
+                                self._canonical_context_last_closed_at.items()
+                            )
+                        },
                         "cost_family": self.runtime_contract.cost_family,
                         "max_holding_bars": self.runtime_contract.max_holding_bars,
                         "decision_engine": self.runtime_contract.decision_engine,

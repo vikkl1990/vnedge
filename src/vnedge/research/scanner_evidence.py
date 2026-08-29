@@ -146,6 +146,8 @@ def apply_contiguous_warmup_quality(
 def _bind_replay_context(
     strategy: Any,
     context_candles: dict[str, pd.DataFrame] | None,
+    *,
+    contract_context: tuple[str, ...] | None = None,
 ) -> tuple[tuple[str, ...], dict[str, dict[str, int]]]:
     """Bind the same canonical HTF inputs required by the runtime strategy.
 
@@ -156,6 +158,11 @@ def _bind_replay_context(
     required = tuple(
         str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
     )
+    if contract_context is not None and required != contract_context:
+        raise ValueError(
+            f"runtime context contract requires {contract_context}, "
+            f"strategy declares {required}"
+        )
     if not required:
         return (), {}
     binder = getattr(strategy, "bind_canonical_context", None)
@@ -205,8 +212,12 @@ def replay_scanner(
     the conservative pre-trade gate cost are reported explicitly.
     """
     strategy = get_strategy_class(strategy_id)()
-    bound_context, context_quality = _bind_replay_context(strategy, context_candles)
     contract = scanner_runtime_contract(strategy_id)
+    bound_context, context_quality = _bind_replay_context(
+        strategy,
+        context_candles,
+        contract_context=contract.context_tfs if contract is not None else None,
+    )
     if contract is not None and contract.decision_engine.startswith("quote_acceptance"):
         raise ValueError(
             f"{strategy_id} is quote-driven ({contract.decision_engine}); "
@@ -451,7 +462,11 @@ def replay_quote_scanner(
     if contract is None or not contract.decision_engine.startswith("quote_acceptance"):
         raise ValueError(f"{strategy_id} has no quote-acceptance runtime contract")
     strategy = get_strategy_class(strategy_id)()
-    bound_context, context_quality = _bind_replay_context(strategy, context_candles)
+    bound_context, context_quality = _bind_replay_context(
+        strategy,
+        context_candles,
+        contract_context=contract.context_tfs,
+    )
     tf_seconds = timeframe_to_seconds(contract.timeframe)
     if tf_seconds is None:
         raise ValueError(f"unsupported scanner timeframe {contract.timeframe}")
