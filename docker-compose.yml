@@ -65,6 +65,10 @@ services:
       VNEDGE_CANONICAL_PRODUCER_MODE: "${VNEDGE_CANONICAL_PRODUCER_MODE:-external_parquet}"
       VNEDGE_INTEGRATED_RECORDER_EXCHANGES: "${VNEDGE_INTEGRATED_RECORDER_EXCHANGES:-binanceusdm}"
       VNEDGE_INTEGRATED_RECORDER_SYMBOLS: "${VNEDGE_INTEGRATED_RECORDER_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT}"
+      # Exact lane-consumed BBO capture for bounded parity windows. Off by
+      # default because it is evidence storage, not a decision dependency.
+      VNEDGE_QUOTE_EVIDENCE_ENABLED: "${VNEDGE_QUOTE_EVIDENCE_ENABLED:-0}"
+      VNEDGE_QUOTE_EVIDENCE_ROOT: "${VNEDGE_QUOTE_EVIDENCE_ROOT:-data/quote_evidence}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
       interval: 30s

@@ -439,6 +439,19 @@ def replay_quote_scanner(
         raise ValueError("canonical candle frame is empty")
     if "timestamp" not in prepared.columns:
         raise ValueError("canonical candle frame requires timestamp")
+    capture_overflow_drops = (
+        int(
+            pd.to_numeric(
+                quotes["capture_overflow_drops"], errors="coerce"
+            ).fillna(0).max()
+        )
+        if "capture_overflow_drops" in quotes.columns and not quotes.empty
+        else 0
+    )
+    if capture_overflow_drops > 0:
+        raise ValueError(
+            "quote evidence capture overflowed; parity window is incomplete"
+        )
     cleaned, cleaning = clean_book(quotes.copy())
     cleaned = cleaned.reset_index(drop=True)
     candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
@@ -545,6 +558,10 @@ def replay_quote_scanner(
         "quotes_used": len(event_rows),
         "quotes_dropped": cleaning.dropped,
         "quotes_outside_window": quotes_outside_window,
+        "capture_quality": {
+            "queue_overflow_drops": capture_overflow_drops,
+            "complete": capture_overflow_drops == 0,
+        },
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
         "intents": len(intents),
         "outcomes": len(outcomes),
@@ -582,6 +599,18 @@ def _intent_signature(payload: dict[str, Any]) -> dict[str, Any]:
         "quote_sequence": payload.get("quote_sequence"),
         "episode_id": payload.get("episode_id"),
     }
+
+
+def _canonical_intent_key(key: str) -> str:
+    """Normalize the symbol segment without hiding temporal/lifecycle drift."""
+    parts = key.split("|")
+    if len(parts) < 4:
+        return key
+    try:
+        parts[1] = canonical_symbol(parts[1])
+    except (TypeError, ValueError):
+        return key
+    return "|".join(parts)
 
 
 def compare_quote_replay_to_live(
@@ -654,7 +683,7 @@ def compare_quote_replay_to_live(
         signatures: dict[str, dict[str, Any]] = {}
         for record in records:
             payload = record["payload"]
-            key = str(payload.get("intent_key") or "")
+            key = _canonical_intent_key(str(payload.get("intent_key") or ""))
             if not key:
                 continue
             counts[key] += 1

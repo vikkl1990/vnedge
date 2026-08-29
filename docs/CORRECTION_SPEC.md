@@ -181,6 +181,18 @@ replay parity before router decision authority is enabled. The default Docker
 topology and empty capital allowlist remain unchanged until that artifact is
 clean.
 
+The first VM comparison on 2026-08-29 correctly failed: the standalone
+book-recorder websocket accepted a BTC short about two seconds before the
+lane's independent websocket did, and the live latency gate rejected and
+re-armed that episode three times. ETH reported a vacuous zero-vs-zero match.
+Therefore standalone BBO is not accepted as quote-path parity evidence.
+VNEDGE now provides an opt-in bounded quote-evidence recorder at the exact
+lane-consumption boundary (VNEDGE_QUOTE_EVIDENCE_ENABLED). It writes immutable
+Parquet shards asynchronously and exposes queue/persist health; any capture
+overflow makes replay refuse the window. A future parity artifact must use
+that lane-specific tape and report at least one candidate on each compared
+side. Zero-vs-zero is transport coverage, not mechanism completion.
+
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace
 window.

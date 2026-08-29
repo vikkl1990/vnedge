@@ -63,6 +63,7 @@ from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
+from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.strategy.base_strategy import BaseStrategy
@@ -1423,6 +1424,21 @@ async def build_lane(
         execution_cost_exchange_id=spec.execution_cost_exchange,
     )
     strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
+    quote_evidence = (
+        QuoteEvidenceRecorder(
+            Path(os.environ.get("VNEDGE_QUOTE_EVIDENCE_ROOT", "data/quote_evidence")),
+            lane_id=spec.lane_id,
+            exchange=spec.exchange,
+            symbol=spec.symbol,
+            max_queue=int(os.environ.get("VNEDGE_QUOTE_EVIDENCE_QUEUE", "8192")),
+        )
+        if (
+            _env_bool(os.environ, "VNEDGE_QUOTE_EVIDENCE_ENABLED")
+            and runtime_contract is not None
+            and runtime_contract.decision_engine.startswith("quote_acceptance")
+        )
+        else None
+    )
     context_timeframes = tuple(
         str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
     )
@@ -1470,6 +1486,7 @@ async def build_lane(
         shadow_portfolio=shadow_portfolio,
         canonical_candle_store=_canonical_runtime_store(spec, canonical_store),
         canonical_candle_subscription=canonical_subscription,
+        quote_evidence=quote_evidence,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",
@@ -1506,6 +1523,8 @@ async def build_lane(
         spec.mode.value,
         resumed,
     )
+    if quote_evidence is not None:
+        quote_evidence.start()
     return _LaneRuntime(spec=spec, session=session, feed=feed)
 
 
@@ -1665,6 +1684,16 @@ class MultiLaneShadowRunner:
                 f"session failed: {exc}",
             )
         finally:
+            quote_evidence = runtime.session.quote_evidence
+            if quote_evidence is not None:
+                try:
+                    await quote_evidence.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "lane %s quote evidence close failed: %s",
+                        runtime.spec.lane_id,
+                        exc,
+                    )
             try:
                 await runtime.feed.stop()
             except Exception as exc:  # noqa: BLE001

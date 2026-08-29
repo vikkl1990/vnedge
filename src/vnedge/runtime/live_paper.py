@@ -93,6 +93,7 @@ from vnedge.runtime.latency_tracker import (
     timeframe_to_seconds,
 )
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
+from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
@@ -221,6 +222,7 @@ class LivePaperSession:
         shadow_portfolio: ShadowPortfolioGate | None = None,
         canonical_candle_store: CandleParquetStore | None = None,
         canonical_candle_subscription: CanonicalCandleSubscription | None = None,
+        quote_evidence: QuoteEvidenceRecorder | None = None,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -265,6 +267,7 @@ class LivePaperSession:
         self.shadow_portfolio = shadow_portfolio
         self.canonical_candle_store = canonical_candle_store
         self.canonical_candle_subscription = canonical_candle_subscription
+        self.quote_evidence = quote_evidence
         self._last_canonical_transport = "parquet_poll"
         self._last_router_wait_ms: float | None = None
         # In router-dark mode the venue kline is a watchdog, never decision
@@ -553,6 +556,11 @@ class LivePaperSession:
             return
         overflow_drops = self._quote_overflow_total(queue)
         for update in updates:
+            if self.quote_evidence is not None:
+                self.quote_evidence.record(
+                    update,
+                    source_overflow_drops=overflow_drops,
+                )
             # The simulated executable quote follows the exact observation
             # being evaluated, not a newer shared-feed value.
             self.exchange.set_quote(self.config.symbol, update.bid, update.ask)
@@ -3219,6 +3227,11 @@ class LivePaperSession:
                 "trial_scorecard": self._trial_scorecard(),
                 "last_fired_ts": self.last_fired_ts,
                 "last_quote_signal": self.last_quote_signal,
+                "quote_evidence": (
+                    self.quote_evidence.snapshot()
+                    if self.quote_evidence is not None
+                    else None
+                ),
                 "last_eval": self.last_eval,
                 "last_reject_reason": self.last_reject_reason,
                 "shadow_perf": (

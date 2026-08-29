@@ -433,7 +433,7 @@ def test_live_parity_keeps_rejected_intent_with_empty_order_payload():
     result = scanner_evidence.compare_quote_replay_to_live(replay, live)
 
     assert result["live_intents"] == 1
-    assert result["live_only"] == ["quote_v1|BTC/USDT:USDT|short|1"]
+    assert result["live_only"] == ["quote_v1|BTCUSDT|short|1"]
 
 
 def test_quote_replay_live_parity_reports_keys_payloads_and_window():
@@ -681,6 +681,34 @@ def test_quote_replay_clamps_explicit_evidence_bounds_to_causal_window(monkeypat
     )
 
 
+def test_quote_replay_refuses_incomplete_lane_capture(monkeypatch):
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _quote_strategy_class())
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: _quote_contract())
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=2, freq="5min", tz="UTC"),
+            "open": [100.0, 101.1],
+            "high": [100.5, 101.3],
+            "low": [99.5, 100.8],
+            "close": [100.0, 101.15],
+            "volume": [10.0, 12.0],
+        }
+    )
+    quotes = pd.DataFrame(
+        {
+            "ts_ms": [int(pd.Timestamp("2026-01-01T00:05:00Z").timestamp() * 1000)],
+            "bid": [101.09],
+            "ask": [101.10],
+            "capture_overflow_drops": [1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="capture overflowed"):
+        scanner_evidence.replay_quote_scanner(
+            "test_quote_scanner", candles, quotes
+        )
+
+
 def test_live_parity_audits_evidence_window_not_warmup_history():
     """A live intent during warm-up (before BBO coverage) must not fail parity."""
     replay = {
@@ -733,6 +761,48 @@ def test_live_parity_audits_evidence_window_not_warmup_history():
     assert result["exact_parity"] is True
     assert result["live_only"] == []
     assert result["evidence_window"]["start"] == "2026-01-01T00:30:00+00:00"
+
+
+def test_live_parity_normalizes_historical_native_symbol_intent_keys():
+    replay_record = {
+        "kind": "shadow_intent",
+        "payload": {
+            "intent_key": "quote_v1|BTCUSDT|long|1000",
+            "approved": True,
+            "intent": {
+                "strategy_id": "quote_v1",
+                "symbol": "BTCUSDT",
+                "side": "long",
+            },
+            "quote_event_ts": "2026-01-01T00:45:00+00:00",
+        },
+    }
+    live_record = {
+        "kind": "shadow_intent",
+        "payload": {
+            **replay_record["payload"],
+            "intent_key": "quote_v1|BTC/USDT:USDT|long|1000",
+            "intent": {
+                "strategy_id": "quote_v1",
+                "symbol": "BTC/USDT:USDT",
+                "side": "long",
+            },
+        },
+    }
+    replay = {
+        "strategy_id": "quote_v1",
+        "symbol": "BTCUSDT",
+        "source_window": {
+            "start": "2026-01-01T00:00:00+00:00",
+            "end_exclusive": "2026-01-01T01:00:00+00:00",
+        },
+        "records": [replay_record],
+    }
+
+    result = scanner_evidence.compare_quote_replay_to_live(replay, [live_record])
+
+    assert result["exact_parity"] is True
+    assert result["matched_intents"] == 1
 
 
 def test_load_evidence_frame_concatenates_shard_directories(tmp_path: Path):
