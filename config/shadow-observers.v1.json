@@ -21,14 +21,14 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "range_expansion_realtime_v1",
+      "strategy_id": "range_expansion_realtime_v2",
       "exchange": "binanceusdm",
       "cost_exchange": "delta_india",
       "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
       "timeframe": "15m",
       "revision": {
-        "version": "1",
-        "mechanism": "closed-bar session expansion arm with current-quote breakout acceptance",
+        "version": "2",
+        "mechanism": "prior-range boundary pre-armed before expansion with current-quote breakout acceptance",
         "decision_engine": "quote_acceptance_v2",
         "exit_engine": "scanner_exit_v1",
         "backtest_engine": "vnedge_quote_acceptance_replay",

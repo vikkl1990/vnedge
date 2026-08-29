@@ -10,7 +10,8 @@ or live permission.
 - `RESEARCH_ONLY` strategies cannot take capital.
 - `SHADOW_OBSERVE` is a separate explicit allowlist. Frozen historical IDs
   remain replayable; the active roster uses `squeeze_expansion_breakout_v4`
-  plus the quote-triggered `range_expansion_realtime_v1`,
+  plus the historical quote-triggered `range_expansion_realtime_v1` and its
+  pre-armed successor `range_expansion_realtime_v2`,
   `htf_structure_continuation_realtime_v1`, and
   `session_continuation_realtime_v1`.
 - `KILLED` strategies cannot be observed or capital-enabled.
@@ -118,6 +119,7 @@ inferred from timeframe:
 |----------|-------------|----------------------|
 | `squeeze_expansion_breakout_v4` | scalp (`delta_scalp` on Delta) | 48 x 5m = 4h |
 | `range_expansion_realtime_v1` | swing | 48 x 15m = 12h |
+| `range_expansion_realtime_v2` | swing | 48 x 15m = 12h |
 | `htf_structure_continuation_realtime_v1` | swing | 48 x 15m = 12h |
 | `session_continuation_realtime_v1` | swing | 32 x 15m = 8h |
 

@@ -92,7 +92,7 @@ Parity capture runbook (run where the recorded data and journals live):
 ```
 docker compose run --rm scanner-evidence \
   python -m vnedge.research.scanner_evidence \
-    --strategy range_expansion_realtime_v1 \
+    --strategy range_expansion_realtime_v2 \
     --symbol "BTC/USDT:USDT" \
     --candles /app/data/candles/exchange=binanceusdm/BTCUSDT/15m \
     --quotes "/app/data/ticks/exchange=binanceusdm/symbol=BTCUSDT/stream=book/<YYYYMMDD>" \

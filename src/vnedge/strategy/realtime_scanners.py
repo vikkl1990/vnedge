@@ -144,6 +144,134 @@ class RangeExpansionRealtimeV1(_QuoteEntryOnly, RangeExpansionObserverV4):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RangeExpansionRealtimeV2Params:
+    """Frozen pre-arm contract for the range breakout successor.
+
+    V1 required the expanding candle's body and volume to be complete before
+    creating an arm.  That made quote acceptance real-time only *after* the
+    move had already been discovered.  V2 deliberately uses only information
+    available at the preceding 15-minute close.  The live BBO break supplies
+    the expansion event itself.
+    """
+
+    minimum_lagged_volume_ratio: float = 0.5
+
+    def __post_init__(self) -> None:
+        if self.minimum_lagged_volume_ratio <= 0:
+            raise ValueError("pre-arm volume floor must be positive")
+
+
+RANGE_PREARM_PARAMS: Final = RangeExpansionRealtimeV2Params()
+
+
+class RangeExpansionRealtimeV2(RangeExpansionRealtimeV1):
+    """Pre-arm the prior-range boundary; let live quotes discover the move.
+
+    The scanner is still causal and closed-bar driven for setup state.  It no
+    longer waits for the current 15-minute candle to prove expansion, body,
+    or current volume.  A meaningful 12-hour boundary, a ready hour profile,
+    lagged liquidity, data quality, session timing, and after-cost geometry
+    are fixed before the BBO is allowed to start the three-second hold.
+    """
+
+    strategy_id = "range_expansion_realtime_v2"
+    prearm_params = RANGE_PREARM_PARAMS
+
+    def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
+        out = super().prepare(candles)
+        p = self.params
+        prearm = self.prearm_params
+        timestamp = pd.to_datetime(out["timestamp"], utc=True, errors="coerce")
+        # Candle timestamps are open times.  Setup state becomes actionable at
+        # the close boundary, including the 11:45 -> 12:00 UTC session handoff.
+        decision_at = timestamp + pd.Timedelta(minutes=15)
+        close = pd.to_numeric(out["close"], errors="coerce")
+        long_level = pd.to_numeric(out["rt_long_level"], errors="coerce")
+        short_level = pd.to_numeric(out["rt_short_level"], errors="coerce")
+        atr = pd.to_numeric(out["rex3_atr"], errors="coerce")
+        volume = pd.to_numeric(out["volume"], errors="coerce")
+        volume_base = pd.to_numeric(out["rex3_volume_base"], errors="coerce")
+        lagged_volume_ratio = volume.div(volume_base)
+        profile = pd.to_numeric(out["rex3_hour_median_bps"], errors="coerce")
+        projected = pd.to_numeric(out["rex3_projected_net_bps"], errors="coerce")
+        quality_ok = out["rex3_quality_ok"].eq(1)
+        session_ok = decision_at.dt.hour.ge(p.session_start_hour_utc) & decision_at.dt.hour.lt(
+            p.session_end_hour_utc
+        )
+        profile_ready = profile.gt(0)
+        liquidity_ok = lagged_volume_ratio.ge(prearm.minimum_lagged_volume_ratio)
+        geometry_ok = atr.gt(0) & long_level.gt(short_level) & projected.ge(p.min_projected_net_bps)
+        common = quality_ok & session_ok & profile_ready & liquidity_ok & geometry_ok
+        allow_long = common & close.le(long_level)
+        allow_short = common & close.ge(short_level)
+        out["rt_decision_at"] = decision_at
+        out["rt_prearm_session_ok"] = session_ok.astype(float)
+        out["rt_prearm_profile_ready"] = profile_ready.astype(float)
+        out["rt_prearm_volume_ratio"] = lagged_volume_ratio
+        out["rt_prearm_liquidity_ok"] = liquidity_ok.astype(float)
+        out["rt_prearm_geometry_ok"] = geometry_ok.astype(float)
+        out["rt_allow_long"] = allow_long.astype(float)
+        out["rt_allow_short"] = allow_short.astype(float)
+        out["rt_arm_ready"] = (allow_long | allow_short).astype(float)
+        return out
+
+    def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
+        row = df.iloc[index]
+
+        def number(name: str) -> float | None:
+            try:
+                value = float(row.get(name, float("nan")))
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        def flag(name: str) -> bool:
+            return bool(number(name) or 0)
+
+        quality_ok = flag("rex3_quality_ok")
+        session_ok = flag("rt_prearm_session_ok")
+        profile_ready = flag("rt_prearm_profile_ready")
+        liquidity_ok = flag("rt_prearm_liquidity_ok")
+        geometry_ok = flag("rt_prearm_geometry_ok")
+        inside_boundary = flag("rt_allow_long") or flag("rt_allow_short")
+        failures = [
+            reason
+            for ok, reason in (
+                (quality_ok, "data_quality_not_ok"),
+                (session_ok, "fill_session_not_open"),
+                (profile_ready, "hour_profile_not_ready"),
+                (liquidity_ok, "lagged_liquidity_below_floor"),
+                (geometry_ok, "after_cost_geometry_below_floor"),
+                (inside_boundary, "boundary_already_crossed"),
+            )
+            if not ok
+        ]
+        return {
+            "eligible": flag("rt_arm_ready"),
+            "primary_failed_gate": failures[0] if failures else None,
+            "all_failed_gates": failures,
+            "features": {
+                "entry_mode": "prearmed_live_quote_hold",
+                "setup_bar_requires_expansion": False,
+                "setup_bar_requires_current_volume": False,
+                "decision_at": str(row.get("rt_decision_at", "unavailable")),
+                "prior_range_high": number("rt_long_level"),
+                "prior_range_low": number("rt_short_level"),
+                "lagged_volume_ratio": number("rt_prearm_volume_ratio"),
+                "hour_profile_bps": number("rex3_hour_median_bps"),
+                "projected_net_bps": number("rex3_projected_net_bps"),
+            },
+            "thresholds": {
+                "minimum_lagged_volume_ratio": self.prearm_params.minimum_lagged_volume_ratio,
+                "min_projected_net_bps": self.params.min_projected_net_bps,
+                "acceptance_hold_seconds": self.acceptance_params.acceptance_hold_seconds,
+                "min_acceptance_samples": self.acceptance_params.min_acceptance_samples,
+                "max_chase_bps": self.acceptance_params.max_chase_bps,
+            },
+        }
+
+
 BOS_ACCEPTANCE: Final = SqueezeExpansionV3Params(
     arm_grace_bars=1,
     acceptance_hold_seconds=3.0,
@@ -655,6 +783,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
 
 REALTIME_SCANNERS = (
     RangeExpansionRealtimeV1,
+    RangeExpansionRealtimeV2,
     StructureBosRealtimeV1,
     SessionContinuationRealtimeV1,
     HtfStructureContinuationRealtimeV1,

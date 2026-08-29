@@ -235,6 +235,7 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "tick_accepted_breakout_v1",
         "trend_squeeze_continuation_1h_v1",
         "range_expansion_realtime_v1",
+        "range_expansion_realtime_v2",
         "structure_bos_realtime_v1",
         "session_continuation_realtime_v1",
         "htf_structure_continuation_realtime_v1",

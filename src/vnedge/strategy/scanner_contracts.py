@@ -136,6 +136,17 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         decision_engine="quote_acceptance_v2",
         exit_engine="scanner_exit_v1",
     ),
+    "range_expansion_realtime_v2": ScannerRuntimeContract(
+        strategy_id="range_expansion_realtime_v2",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
+        rationale=(
+            "prior-range boundary pre-armed at the preceding close with quote-held expansion entry"
+        ),
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    ),
     "structure_bos_realtime_v1": ScannerRuntimeContract(
         strategy_id="structure_bos_realtime_v1",
         timeframe="15m",

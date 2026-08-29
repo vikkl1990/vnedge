@@ -12,6 +12,7 @@ from vnedge.strategy.realtime_scanners import (
     RANGE_ACCEPTANCE,
     HtfStructureContinuationRealtimeV1,
     RangeExpansionRealtimeV1,
+    RangeExpansionRealtimeV2,
     SessionContinuationRealtimeV1,
     StructureBosRealtimeV1,
 )
@@ -22,6 +23,7 @@ def test_realtime_scanner_ids_can_never_emit_bar_close_entries() -> None:
     frame = pd.DataFrame({"close": [100.0]})
     for strategy in (
         RangeExpansionRealtimeV1(),
+        RangeExpansionRealtimeV2(),
         StructureBosRealtimeV1(),
         SessionContinuationRealtimeV1(),
         HtfStructureContinuationRealtimeV1(),
@@ -77,6 +79,42 @@ def test_range_refreshes_share_one_episode_within_the_hour() -> None:
     episodes = [strategy.realtime_arm(frame, index).episode_id for index in range(3)]
 
     assert len(set(episodes)) == 1
+
+
+def test_range_v2_prearms_before_the_expanding_candle_exists() -> None:
+    timestamps = pd.date_range(
+        end="2026-08-24T11:45:00Z",
+        periods=2_100,
+        freq="15min",
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": 100.0,
+            "high": 100.5,
+            "low": 99.5,
+            "close": [100.05 if index % 2 else 99.95 for index in range(len(timestamps))],
+            "volume": 100.0,
+            "data_quality": "ok",
+        }
+    )
+    old = RangeExpansionRealtimeV1()
+    new = RangeExpansionRealtimeV2()
+
+    old_frame = old.prepare(frame)
+    new_frame = new.prepare(frame)
+    index = len(frame) - 1
+
+    assert old_frame.iloc[index]["rex3_expansion_ok"] == 0.0
+    assert old.realtime_arm(old_frame, index) is None
+    arm = new.realtime_arm(new_frame, index)
+    assert arm is not None
+    assert arm.allow_long is True
+    assert arm.allow_short is True
+    assert new_frame.iloc[index]["rt_decision_at"] == pd.Timestamp("2026-08-24T12:00:00Z")
+    diagnostics = new.evaluation_diagnostics(new_frame, index)
+    assert diagnostics["eligible"] is True
+    assert diagnostics["features"]["setup_bar_requires_expansion"] is False
 
 
 def test_quote_hold_supplies_entry_and_uses_structural_stop() -> None:
@@ -155,13 +193,16 @@ def test_quote_engine_without_a_setup_reports_generic_arm_state() -> None:
     engine = ExpansionAcceptanceEngine(config=RANGE_ACCEPTANCE)
     ts = datetime(2026, 8, 24, 14, 0, tzinfo=UTC)
 
-    assert engine.observe_quote(
-        bid=100.0,
-        ask=100.1,
-        ts=ts,
-        received_ts=ts,
-        bar_index=1,
-    ) is None
+    assert (
+        engine.observe_quote(
+            bid=100.0,
+            ask=100.1,
+            ts=ts,
+            received_ts=ts,
+            bar_index=1,
+        )
+        is None
+    )
     assert engine.last_reason == "no_active_arm"
 
 

@@ -207,7 +207,7 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
             "scanner_exit_v1",
             "1",
         ),
-        "range_expansion_realtime_v1": (
+        "range_expansion_realtime_v2": (
             "quote_acceptance_v2",
             "scanner_exit_v1",
             "2",
