@@ -1057,4 +1057,12 @@ def test_journal_report_counts_transitions_and_unmatched_outcome(tmp_path: Path)
     assert row["virtual_resolved"] == 1
     assert row["unmatched_outcomes"] == 1
     assert row["observed_shadow_net_usd"] == 2.0
+    assert report["scanner_transitions"] == 1
+    assert report["quote_lifecycle"] == {"armed_long": 1}
+    assert report["virtual_approved"] == 0
+    assert report["virtual_rejected"] == 0
+    assert report["virtual_pending"] == 0
+    assert report["gross_usd"] == 3.0
+    assert report["fees_usd"] == 1.0
+    assert report["observed_shadow_net_usd"] == 2.0
     assert "unmatched_outcome_lifecycle" in report["performance_blockers"]

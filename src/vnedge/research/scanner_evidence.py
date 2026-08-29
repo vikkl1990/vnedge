@@ -1226,8 +1226,39 @@ def build_journal_report(
     report["virtual_resolved"] = sum(
         int(row["virtual_resolved"]) for row in report["strategies"]
     )
+    report["virtual_approved"] = sum(
+        int(row["virtual_approved"]) for row in report["strategies"]
+    )
+    report["virtual_rejected"] = sum(
+        int(row["virtual_rejected"]) for row in report["strategies"]
+    )
+    report["virtual_pending"] = sum(
+        int(row["virtual_pending"]) for row in report["strategies"]
+    )
     report["accepted_entries"] = sum(
         int(row["accepted_entries"]) for row in report["strategies"]
+    )
+    report["scanner_transitions"] = sum(
+        int(row["scanner_transitions"]) for row in report["strategies"]
+    )
+    lifecycle: Counter[str] = Counter()
+    quote_lifecycle: Counter[str] = Counter()
+    for row in report["strategies"]:
+        lifecycle.update(dict(row.get("lifecycle") or {}))
+        quote_lifecycle.update(dict(row.get("quote_lifecycle") or {}))
+    report["lifecycle"] = dict(lifecycle)
+    report["quote_lifecycle"] = dict(quote_lifecycle)
+    report["gross_usd"] = sum(
+        float(row["gross_usd"]) for row in report["strategies"]
+    )
+    report["gross_bps"] = sum(
+        float(row["gross_bps"]) for row in report["strategies"]
+    )
+    report["fees_usd"] = sum(
+        float(row["fees_usd"]) for row in report["strategies"]
+    )
+    report["funding_usd"] = sum(
+        float(row["funding_usd"]) for row in report["strategies"]
     )
     report["observed_shadow_net_usd"] = sum(
         float(row["observed_shadow_net_usd"]) for row in report["strategies"]
