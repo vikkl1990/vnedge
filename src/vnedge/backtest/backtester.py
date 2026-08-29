@@ -27,10 +27,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from vnedge.backtest.fee_model import FeeModel
 from vnedge.backtest.slippage_model import SlippageModel
-from vnedge.runtime.active_exit import ExitEngine, ExitEngineConfig
 from vnedge.config.risk_config import RiskConfig
+from vnedge.plan.cost_model import COST_PROFILES, CostModel
 from vnedge.risk.position_sizer import SymbolLimits, size_position
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
+from vnedge.runtime.active_exit import ExitEngine, ExitEngineConfig
 from vnedge.runtime.daily_factory import (
     DailySignalFactoryConfig,
     entry_block_reason,
@@ -50,6 +51,12 @@ class BacktestConfig(BaseModel):
     max_holding_bars: int = Field(default=48, ge=1)
     fees: FeeModel = Field(default_factory=FeeModel)
     slippage: SlippageModel = Field(default_factory=SlippageModel)
+    # Explicit venue/execution cost world. Historical runs that omit this keep
+    # their original Binance-style defaults; new evidence runs should always
+    # name a profile (for example ``delta_swing``). When present, this field is
+    # the source of truth and private FeeModel/SlippageModel overrides are
+    # rejected rather than silently drifting from paper/live economics.
+    cost_profile: str | None = None
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: SymbolLimits = Field(
         default=SymbolLimits(
@@ -96,8 +103,51 @@ class BacktestConfig(BaseModel):
     # A promotion evidence run may never opt back into the legacy exit branch.
     promotion_contract: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def _hydrate_declared_cost_profile(cls, values: object) -> object:
+        if not isinstance(values, dict):
+            return values
+        profile = values.get("cost_profile")
+        if profile in (None, ""):
+            return values
+        profile = str(profile)
+        if profile not in COST_PROFILES:
+            raise ValueError(
+                f"unknown cost_profile {profile!r}; known: {sorted(COST_PROFILES)}"
+            )
+        model = CostModel.for_profile(profile)
+        config = model.config
+        if config.default_slip_entry_bps != config.default_slip_exit_bps:
+            raise ValueError(
+                f"backtester requires symmetric slippage for cost_profile {profile!r}"
+            )
+        expected_fees = FeeModel(
+            maker_bps=config.maker_fee_bps * config.fee_gst_mult,
+            taker_bps=config.taker_fee_bps * config.fee_gst_mult,
+        )
+        expected_slippage = SlippageModel(bps=config.default_slip_entry_bps)
+        if "fees" in values and FeeModel.model_validate(values["fees"]) != expected_fees:
+            raise ValueError(
+                "cost_profile is the cost source of truth and cannot be combined "
+                "with private fees/slippage overrides"
+            )
+        if (
+            "slippage" in values
+            and SlippageModel.model_validate(values["slippage"]) != expected_slippage
+        ):
+            raise ValueError(
+                "cost_profile is the cost source of truth and cannot be combined "
+                "with private fees/slippage overrides"
+            )
+        hydrated = dict(values)
+        hydrated["cost_profile"] = profile
+        hydrated["fees"] = expected_fees
+        hydrated["slippage"] = expected_slippage
+        return hydrated
+
     @model_validator(mode="after")
-    def _trail_requires_active_exit(self) -> "BacktestConfig":
+    def _trail_requires_active_exit(self) -> BacktestConfig:
         # A trail set with the legacy exit is a SILENT no-op — the backtester only
         # trails under use_active_exit (see run loop). Catch the contradiction so a
         # judgment can't believe it trailed when it didn't (H4).
@@ -111,7 +161,26 @@ class BacktestConfig(BaseModel):
                 "promotion_contract requires use_active_exit=True — legacy exits "
                 "are not eligible for promotion evidence"
             )
+        if self.promotion_contract and self.cost_profile is None:
+            raise ValueError(
+                "promotion_contract requires an explicit cost_profile; venue fees "
+                "and tax must never be inferred from backtest defaults"
+            )
         return self
+
+    @property
+    def execution_round_trip_bps(self) -> float:
+        """Booked taker/taker fee plus adverse slippage, before funding."""
+        return 2.0 * (self.fees.taker_bps + self.slippage.bps)
+
+    @property
+    def gate_round_trip_bps(self) -> float:
+        """Pre-trade cost wall. Safety is a gate reserve, not booked PnL."""
+        if self.cost_profile is None:
+            return self.execution_round_trip_bps
+        return CostModel.for_profile(self.cost_profile).round_trip_bps(
+            include_safety=True
+        )
 
 
 @dataclass(frozen=True)
@@ -255,6 +324,11 @@ def run_backtest(
 ) -> BacktestResult:
     if candles.empty:
         raise ValueError("empty candle frame")
+    if config.promotion_contract and (funding is None or funding.empty):
+        raise ValueError(
+            "promotion_contract requires funding history; a perpetual backtest "
+            "cannot silently assume zero funding"
+        )
     if not candles["timestamp"].is_monotonic_increasing or candles["timestamp"].duplicated().any():
         raise ValueError("candles must be gate-validated: sorted, unique timestamps")
 
@@ -408,7 +482,7 @@ def run_backtest(
                 # TP-ladder partials, fee-aware breakeven, per-bar ATR trail.
                 engine = position.exit_engine
                 a = trail_atr[j] if trail_atr is not None else 0.0
-                atr_value = float(a) if a == a else 0.0
+                atr_value = float(a) if pd.notna(a) else 0.0
                 decision = engine.on_bar(
                     high=hi,
                     low=lo,

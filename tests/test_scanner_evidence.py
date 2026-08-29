@@ -171,6 +171,93 @@ def test_replay_uses_single_book_next_open_and_dual_costs(monkeypatch):
     assert outcome["net_execution_bps"] > outcome["net_gate_bps"]
 
 
+def test_closed_replay_uses_venue_contract_cost_not_private_strategy_cost(monkeypatch):
+    class _PrivateCostStrategy(BaseStrategy):
+        strategy_id = "private_cost"
+        warmup_bars = 0
+
+        class params:
+            round_trip_cost_bps = 1.0
+
+        def prepare(self, candles):
+            return candles.copy()
+
+        def signal(self, df, index):
+            if index != 0:
+                return None
+            return SignalIntent(
+                side="long", stop_price=90.0, take_profit_price=110.0, reason="test"
+            )
+
+    contract = ScannerRuntimeContract(
+        strategy_id="private_cost",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=2,
+        rationale="test",
+    )
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _PrivateCostStrategy)
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: contract)
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=3, freq="15min", tz="UTC"),
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 111.0, 101.0],
+            "low": [99.0, 99.0, 99.0],
+            "close": [100.0, 110.0, 100.0],
+            "volume": [1.0, 1.0, 1.0],
+        }
+    )
+
+    result = scanner_evidence.replay_scanner(
+        "private_cost", candles, exchange_id="delta_india"
+    )
+
+    assert result["cost_profile"] == "delta_swing"
+    assert result["execution_cost_bps"] == pytest.approx(15.8)
+    assert result["gate_cost_bps"] == pytest.approx(18.8)
+    outcome = next(row["outcome"] for row in result["records"] if row.get("admitted"))
+    assert outcome["execution_cost_bps"] == pytest.approx(15.8)
+    assert outcome["gate_cost_bps"] == pytest.approx(18.8)
+    assert result["performance_eligible"] is False
+
+
+def test_closed_replay_refuses_quote_driven_scanner_without_bbo(monkeypatch):
+    class _QuoteOnly(BaseStrategy):
+        strategy_id = "quote_only"
+
+        def prepare(self, candles):
+            return candles.copy()
+
+        def signal(self, df, index):
+            del df, index
+
+    contract = ScannerRuntimeContract(
+        strategy_id="quote_only",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=2,
+        rationale="test",
+        decision_engine="quote_acceptance_v2",
+        exit_engine="scanner_exit_v1",
+    )
+    monkeypatch.setattr(scanner_evidence, "get_strategy_class", lambda _: _QuoteOnly)
+    monkeypatch.setattr(scanner_evidence, "scanner_runtime_contract", lambda _: contract)
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=2, freq="15min", tz="UTC"),
+            "open": [100.0, 100.0],
+            "high": [101.0, 101.0],
+            "low": [99.0, 99.0],
+            "close": [100.0, 100.0],
+            "volume": [1.0, 1.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="quote-driven.*lane-consumed BBO"):
+        scanner_evidence.replay_scanner("quote_only", candles)
+
+
 def test_replay_requires_and_binds_declared_canonical_context(monkeypatch):
     class _ContextStrategy(BaseStrategy):
         strategy_id = "test_context"

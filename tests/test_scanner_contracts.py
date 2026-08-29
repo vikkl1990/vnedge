@@ -52,6 +52,17 @@ def test_unknown_strategy_keeps_legacy_runtime_path() -> None:
     assert scanner_runtime_contract("measurement_only_v1") is None
 
 
+def test_realtime_bos_prearm_prices_the_most_conservative_enabled_swing_venue() -> None:
+    from vnedge.plan.cost_model import CostModel
+    from vnedge.strategy.realtime_scanners import StructureBosRealtimeV2
+
+    expected = max(
+        CostModel.for_profile("swing").round_trip_bps(),
+        CostModel.for_profile("delta_swing").round_trip_bps(),
+    )
+    assert StructureBosRealtimeV2.params.round_trip_cost_bps == expected
+
+
 def test_active_scanners_publish_their_real_decision_and_exit_engines() -> None:
     squeeze = scanner_runtime_contract("squeeze_expansion_breakout_v4")
     range_expansion = scanner_runtime_contract("range_expansion_observer_v4")

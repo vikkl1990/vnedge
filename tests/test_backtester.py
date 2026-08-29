@@ -4,14 +4,39 @@ import pandas as pd
 import pytest
 
 from vnedge.backtest.backtester import BacktestConfig, run_backtest
+from vnedge.backtest.fee_model import FeeModel
+from vnedge.backtest.slippage_model import SlippageModel
+from vnedge.data.schemas import normalize_candles, normalize_funding
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
-from vnedge.data.schemas import normalize_candles, normalize_funding
 
 BASE = 1_750_000_000_000
 HOUR = 3_600_000
 SLIP = 2 / 10_000  # default slippage bps
 FEE = 5 / 10_000   # default taker bps
+
+
+def test_declared_delta_swing_profile_hydrates_fee_tax_and_slippage():
+    config = BacktestConfig(cost_profile="delta_swing")
+
+    assert config.fees.taker_bps == pytest.approx(5.9)
+    assert config.fees.maker_bps == pytest.approx(2.36)
+    assert config.slippage.bps == pytest.approx(2.0)
+    assert config.execution_round_trip_bps == pytest.approx(15.8)
+    assert config.gate_round_trip_bps == pytest.approx(18.8)
+    assert BacktestConfig.model_validate(config.model_dump()) == config
+
+
+def test_declared_cost_profile_rejects_private_fee_or_slippage_override():
+    with pytest.raises(ValueError, match="source of truth"):
+        BacktestConfig(cost_profile="delta_swing", fees=FeeModel(taker_bps=1.0))
+    with pytest.raises(ValueError, match="source of truth"):
+        BacktestConfig(cost_profile="delta_swing", slippage=SlippageModel(bps=0.0))
+
+
+def test_promotion_contract_requires_explicit_cost_profile():
+    with pytest.raises(ValueError, match="explicit cost_profile"):
+        BacktestConfig(promotion_contract=True)
 
 
 def make_candles(bars: list[tuple[float, float, float, float]]) -> pd.DataFrame:

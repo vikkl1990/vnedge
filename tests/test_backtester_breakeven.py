@@ -5,13 +5,13 @@ This exit rescues those give-backs. Pins the mechanism + default-off parity.
 """
 
 import numpy as np
-import pytest
 import pandas as pd
+import pytest
 
 from vnedge.backtest.backtester import (
     BacktestConfig,
-    _OpenPosition,
     _check_intrabar_exit,
+    _OpenPosition,
     run_backtest,
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
@@ -167,6 +167,20 @@ def test_promotion_contract_rejects_legacy_exit_path():
 
     with pytest.raises(ValueError, match="promotion_contract"):
         BacktestConfig(use_active_exit=False, promotion_contract=True)
+
+
+def test_promotion_contract_rejects_missing_funding_history():
+    import pytest
+
+    with pytest.raises(ValueError, match="funding history"):
+        run_backtest(
+            _rise_then_fall(),
+            None,
+            _LadderOnce(),
+            BacktestConfig(promotion_contract=True, cost_profile="delta_swing"),
+            symbol="BTC/USDT:USDT",
+            timeframe="1h",
+        )
 
 
 def test_gap_through_stop_fills_at_open_not_stop():

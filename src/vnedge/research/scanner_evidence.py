@@ -184,6 +184,7 @@ def replay_scanner(
     strategy_id: str,
     candles: pd.DataFrame,
     *,
+    exchange_id: str = "binanceusdm",
     context_candles: dict[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
     """Replay one frozen scanner with the runtime's single-book semantics.
@@ -197,6 +198,12 @@ def replay_scanner(
     strategy = get_strategy_class(strategy_id)()
     bound_context, context_quality = _bind_replay_context(strategy, context_candles)
     contract = scanner_runtime_contract(strategy_id)
+    if contract is not None and contract.decision_engine.startswith("quote_acceptance"):
+        raise ValueError(
+            f"{strategy_id} is quote-driven ({contract.decision_engine}); "
+            "closed-bar replay would fabricate its entry. Use "
+            "replay_quote_scanner with lane-consumed BBO evidence."
+        )
     normalized = normalize_canonical_candles(candles)
     if contract is not None:
         tf_seconds = timeframe_to_seconds(contract.timeframe)
@@ -212,7 +219,12 @@ def replay_scanner(
     )
     prepared = strategy.prepare(normalized)
     hold = contract.max_holding_bars if contract else 24
-    cost_model = CostModel.for_profile(contract.cost_family if contract else "swing")
+    cost_profile = (
+        resolve_scanner_cost_profile(contract, exchange_id=exchange_id)
+        if contract is not None
+        else ("delta_swing" if "delta" in exchange_id.lower() else "swing")
+    )
+    cost_model = CostModel.for_profile(cost_profile)
     execution_cost = float(cost_model.round_trip_bps(include_safety=False))
     gate_cost = float(cost_model.round_trip_bps(include_safety=True))
     position_active_through = -1
@@ -277,11 +289,12 @@ def replay_scanner(
                         break
             sign = 1 if intent.side == "long" else -1
             gross = sign * (exit_price - entry) / entry * 10_000
-            configured_cost = getattr(
-                getattr(strategy, "params", None), "round_trip_cost_bps", None
-            )
-            realized_cost = float(configured_cost) if configured_cost is not None else execution_cost
-            conservative_cost = max(realized_cost, gate_cost)
+            # Strategy parameters may contain a historical research estimate,
+            # but execution evidence must use the runtime contract + venue.
+            # A private strategy cost is never allowed to override GST,
+            # slippage, or the safety reserve selected for this run.
+            realized_cost = execution_cost
+            conservative_cost = gate_cost
             record["admitted"] = True
             record["outcome"] = {
                 "resolution": resolution,
@@ -321,6 +334,16 @@ def replay_scanner(
         "strategy_id": strategy_id,
         "capital_eligible": is_capital_eligible(strategy_id),
         "read_only": True,
+        "exchange_id": exchange_id,
+        "cost_profile": cost_profile,
+        "execution_cost_bps": execution_cost,
+        "gate_cost_bps": gate_cost,
+        "funding_included": False,
+        "performance_eligible": False,
+        "performance_blockers": [
+            "funding_history_not_replayed",
+            "risk_gateway_not_replayed",
+        ],
         "bars": len(prepared),
         "canonical_context_timeframes": list(bound_context),
         "context_quality": context_quality,
@@ -543,6 +566,7 @@ def replay_quote_scanner(
         "strategy_id": strategy_id,
         "symbol": symbol,
         "read_only": True,
+        "evidence_class": "quote_mechanism_parity",
         "data_source": "canonical_candles+clean_recorded_bbo",
         "source_window": {
             "start": window_start.isoformat(),
@@ -574,6 +598,14 @@ def replay_quote_scanner(
                 lane_consumed_capture and capture_overflow_drops == 0
             ),
         },
+        # This runner proves arm/quote/intent mechanism parity. It deliberately
+        # has no gateway callback and no historical funding cashflow, so its
+        # outcomes must not be presented as a promotion-grade PnL backtest.
+        "performance_eligible": False,
+        "performance_blockers": [
+            "risk_gateway_not_replayed",
+            "funding_history_not_replayed",
+        ],
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
         "intents": len(intents),
         "outcomes": len(outcomes),
@@ -1150,6 +1182,7 @@ def main() -> None:
                 replay_scanner(
                     strategy_id,
                     candles,
+                    exchange_id=args.exchange_id,
                     context_candles=context_candles,
                 )
                 for strategy_id in args.strategy

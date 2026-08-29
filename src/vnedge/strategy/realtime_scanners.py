@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from types import MappingProxyType
 from typing import Final
@@ -390,6 +390,17 @@ class StructureBosRealtimeV2(StructureBosRealtimeV1):
     """
 
     strategy_id = "structure_bos_realtime_v2"
+    # V1/V2/V3 historical closed-bar registrations retain their frozen 17 bps
+    # generic-swing research assumption. This realtime successor can execute
+    # on Delta, so its PRE-ARM payoff filter uses the most conservative enabled
+    # swing venue. The runtime CostGate still applies the exact lane profile.
+    params = replace(
+        StructureBos15mTriggerV3.params,
+        round_trip_cost_bps=max(
+            CostModel.for_profile("swing").round_trip_bps(),
+            CostModel.for_profile("delta_swing").round_trip_bps(),
+        ),
+    )
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         out = super().prepare(candles)
