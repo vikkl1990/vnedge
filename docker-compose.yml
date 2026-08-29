@@ -238,7 +238,11 @@ services:
       - data/reports/tick_lake_maintenance.json
     volumes:
       - ./data:/app/data
-    mem_limit: 1200m
+    # Closed-day recovery may globally sort a schema-transition/overlap day.
+    # The code caps compressed input at 160 MiB and preserves every row; Arrow
+    # briefly holds source + sort index + sorted result, so 1.2 GiB was too low
+    # for the observed 12M-row ETH day and caused a restart loop.
+    mem_limit: 2g
     healthcheck:
       test:
         - CMD-SHELL

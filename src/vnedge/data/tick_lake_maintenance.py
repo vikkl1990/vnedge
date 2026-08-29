@@ -297,9 +297,13 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
     try:
         if not ordered_ranges:
             tables = [_align(pq.read_table(path)) for *_head, path, _schema in metadata]
-            table = pa.concat_tables(tables)
-            order = pc.sort_indices(table, sort_keys=[("ts_ms", "ascending")])
-            table = table.take(order)
+            combined = pa.concat_tables(tables)
+            order = pc.sort_indices(combined, sort_keys=[("ts_ms", "ascending")])
+            table = combined.take(order)
+            # The sorted table no longer references the source chunks.  Release
+            # them before Parquet encoding so large (10M+ row) days do not keep
+            # both copies resident throughout the write.
+            del tables, combined, order
             writer = pq.ParquetWriter(tmp, unified_schema, compression="snappy")
             writer.write_table(table, row_group_size=100_000)
             written_rows = table.num_rows
