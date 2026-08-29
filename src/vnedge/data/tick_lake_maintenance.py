@@ -86,6 +86,12 @@ DEFAULT_DISK_USAGE_HALT_PCT = 85.0
 # Hard floor for pressure mode: never delete book days younger than this.
 # Constant on purpose — lowering it is a reviewed code change, not config.
 PRESSURE_FLOOR_DAYS = 7
+# A globally out-of-order day needs one in-memory Arrow sort before it can be
+# published as a single ordered file.  Keep that recovery path bounded: the
+# normal recorder produces far smaller closed-day inputs, while a larger day
+# remains untouched for an operator-run offline repair instead of risking an
+# OOM kill in the maintenance container.
+MAX_FULL_SORT_INPUT_BYTES = 160 * 1024 * 1024
 
 
 # --- small helpers ---------------------------------------------------------------
@@ -203,7 +209,7 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
     inputs = sorted(p for p in day_dir.glob("*.parquet") if p.is_file())
     if not inputs or inputs == [out]:
         return None  # empty or already compacted
-    metadata: list[tuple[int, int, int, Path]] = []
+    metadata: list[tuple[int, int, int, Path, pa.Schema]] = []
     for p in inputs:
         try:
             parquet = pq.ParquetFile(p)
@@ -212,7 +218,7 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
                 return None
             rows = int(parquet.metadata.num_rows)
             if rows == 0:
-                metadata.append((0, 0, 0, p))
+                metadata.append((0, 0, 0, p, parquet.schema_arrow))
                 continue
             first = parquet.read_row_group(0, columns=["ts_ms"])["ts_ms"]
             last = parquet.read_row_group(
@@ -224,6 +230,7 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
                     int(pc.max(last).as_py()),
                     rows,
                     p,
+                    parquet.schema_arrow,
                 )
             )
         except (OSError, ValueError, AttributeError, pa.ArrowException) as exc:
@@ -242,24 +249,80 @@ def compact_day(day_dir: Path, *, now: datetime | None = None,
     written_rows = 0
     previous_ts: int | None = None
     stream_failed = False
+
     try:
-        for _minimum, _maximum, _rows, path in metadata:
-            parquet = pq.ParquetFile(path)
-            for batch in parquet.iter_batches(batch_size=100_000):
-                table = pa.Table.from_batches([batch])
-                order = pc.sort_indices(table, sort_keys=[("ts_ms", "ascending")])
-                table = table.take(order)
-                if table.num_rows:
-                    first_ts = int(table["ts_ms"][0].as_py())
-                    if previous_ts is not None and first_ts < previous_ts:
-                        raise ValueError(
-                            "overlapping/out-of-order shard ranges require offline repair"
+        unified_schema = pa.unify_schemas([item[4] for item in metadata])
+    except pa.ArrowException as exc:
+        logger.error("compact %s: incompatible shard schemas (%s) — shards kept",
+                     day_dir, exc)
+        return None
+
+    def _align(table: pa.Table) -> pa.Table:
+        """Add nullable legacy fields and order/cast every shard identically."""
+        columns: list[pa.ChunkedArray | pa.Array] = []
+        for field in unified_schema:
+            if field.name not in table.column_names:
+                columns.append(pa.nulls(table.num_rows, type=field.type))
+                continue
+            column = table[field.name]
+            if column.type != field.type:
+                column = pc.cast(column, target_type=field.type, safe=True)
+            columns.append(column)
+        return pa.Table.from_arrays(columns, schema=unified_schema)
+
+    # Detect cross-shard overlap before opening the output.  Overlap is not a
+    # reason to delete or deduplicate rows: same-millisecond trades are valid,
+    # and legacy shards may not carry trade_id.  A bounded global Arrow sort
+    # preserves the exact tape while restoring the ordering invariant.
+    ordered_ranges = True
+    range_end: int | None = None
+    for minimum, maximum, rows, _path, _schema in metadata:
+        if rows == 0:
+            continue
+        if range_end is not None and minimum < range_end:
+            ordered_ranges = False
+            break
+        range_end = maximum
+
+    input_bytes = sum(path.stat().st_size for *_head, path, _schema in metadata)
+    if not ordered_ranges and input_bytes > MAX_FULL_SORT_INPUT_BYTES:
+        logger.error(
+            "compact %s: out-of-order input is %d bytes (limit %d); "
+            "offline repair required — shards kept",
+            day_dir,
+            input_bytes,
+            MAX_FULL_SORT_INPUT_BYTES,
+        )
+        return None
+    try:
+        if not ordered_ranges:
+            tables = [_align(pq.read_table(path)) for *_head, path, _schema in metadata]
+            table = pa.concat_tables(tables)
+            order = pc.sort_indices(table, sort_keys=[("ts_ms", "ascending")])
+            table = table.take(order)
+            writer = pq.ParquetWriter(tmp, unified_schema, compression="snappy")
+            writer.write_table(table, row_group_size=100_000)
+            written_rows = table.num_rows
+        else:
+            for _minimum, _maximum, _rows, path, _schema in metadata:
+                parquet = pq.ParquetFile(path)
+                for batch in parquet.iter_batches(batch_size=100_000):
+                    table = _align(pa.Table.from_batches([batch]))
+                    order = pc.sort_indices(table, sort_keys=[("ts_ms", "ascending")])
+                    table = table.take(order)
+                    if table.num_rows:
+                        first_ts = int(table["ts_ms"][0].as_py())
+                        if previous_ts is not None and first_ts < previous_ts:
+                            raise ValueError(
+                                "out-of-order row groups require offline repair"
+                            )
+                        previous_ts = int(table["ts_ms"][table.num_rows - 1].as_py())
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            tmp, unified_schema, compression="snappy"
                         )
-                    previous_ts = int(table["ts_ms"][table.num_rows - 1].as_py())
-                if writer is None:
-                    writer = pq.ParquetWriter(tmp, table.schema, compression="snappy")
-                writer.write_table(table)
-                written_rows += table.num_rows
+                    writer.write_table(table)
+                    written_rows += table.num_rows
     except (OSError, ValueError, AttributeError, pa.ArrowException) as exc:
         stream_failed = True
         logger.error("compact %s: bounded stream failed (%s) — shards kept", day_dir, exc)

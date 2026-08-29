@@ -84,6 +84,40 @@ def test_compact_day_merges_sorts_and_stays_readable(tmp_path):
     assert [(ts, kind) for ts, kind, _ in after] == [(ts, kind) for ts, kind, _ in before]
 
 
+def test_compact_day_unifies_legacy_schema_without_losing_rows(tmp_path):
+    day = _day(2)
+    d = _write_shard(tmp_path, "trades", day, _trade_rows(day, 3), 0)
+    current = _trade_rows(day, 2, start=3)
+    for index, row in enumerate(current):
+        row["trade_id"] = f"trade-{index}"
+    _write_shard(tmp_path, "trades", day, current, 1)
+
+    result = compact_day(d, now=NOW)
+
+    assert result is not None and result["rows"] == 5
+    frame = pd.read_parquet(d / f"compacted-{day}.parquet")
+    assert list(frame.columns) == ["ts_ms", "price", "amount", "side", "trade_id"]
+    assert frame["trade_id"].isna().sum() == 3
+    assert list(frame["trade_id"].dropna()) == ["trade-0", "trade-1"]
+
+
+def test_compact_day_globally_sorts_overlapping_shards_without_deduping(tmp_path):
+    day = _day(2)
+    d = _write_shard(tmp_path, "trades", day, _trade_rows(day, 4, start=0), 0)
+    # Deliberate overlap includes one exact duplicate.  Compaction is storage
+    # maintenance, not an identity oracle: it must retain both copies.
+    overlap = _trade_rows(day, 3, start=2)
+    _write_shard(tmp_path, "trades", day, overlap, 1)
+
+    result = compact_day(d, now=NOW)
+
+    assert result is not None and result["rows"] == 7
+    frame = pd.read_parquet(d / f"compacted-{day}.parquet")
+    assert len(frame) == 7
+    assert frame["ts_ms"].is_monotonic_increasing
+    assert (frame["ts_ms"] == _ts(day, 2)).sum() == 2
+
+
 def test_compact_day_never_touches_today(tmp_path):
     day = _day(0)
     d = _write_shard(tmp_path, "book", day, _book_rows(day, 3), 0)
