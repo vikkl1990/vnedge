@@ -341,6 +341,7 @@ def replay_scanner(
     evaluable_bars = max(0, len(prepared) - int(strategy.warmup_bars) - 1)
     return {
         "schema_version": 2,
+        "net_bps_semantics": "booked_execution",
         "generated_at": datetime.now(UTC).isoformat(),
         "strategy_id": strategy_id,
         "capital_eligible": is_capital_eligible(strategy_id),
@@ -1413,7 +1414,8 @@ def main() -> None:
             atomic_write(args.out, payload)
             return
         atomic_write(args.out, {
-            "schema_version": 1,
+            "schema_version": 2,
+            "net_bps_semantics": "booked_execution",
             "generated_at": datetime.now(UTC).isoformat(),
             "read_only": True,
             "replays": [

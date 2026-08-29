@@ -111,6 +111,28 @@ over-penalized reported P&L. Readers of legacy JSON must prefer
 performance-ineligible and does not synthesize net bps without fills, funding,
 and the lane's real approval path.
 
+The closed-bar replay envelope is also schema 2 and carries
+`net_bps_semantics=booked_execution`. Consumers must use
+`read_closed_replay_net()` and must not rank a legacy gate-net row beside a
+schema-2 booked-execution row. Legacy values remain displayable with an
+explicit `legacy_gate_net` label; they are not silently converted. Existing
+artifacts are immutable: schema-2 reruns use a new output path.
+
+Consumer boundary:
+
+| Pipeline | Cost interpretation |
+|---|---|
+| closed-bar scanner replay | booked execution for P&L; gate-net alongside it |
+| generic backtester | venue fee/slippage booked on fills; safety only in the gate |
+| live/shadow journal | USD fill outcome only; never mapped into replay bps |
+| quote replay | no performance net until fills, funding, and approval parity exist |
+| touch/close proxy scripts | independent exploratory schema; not auto-migrated |
+| research evidence index | candidate-specific schemas; no implicit scanner alias import |
+
+The schema rename does not change scanner gates or execution. A schema-2
+headline differs from the legacy headline by only the unbooked safety reserve
+(`3 bps × trades` for the current Delta profiles).
+
 Parity capture runbook (run where the recorded data and journals live):
 
 ```

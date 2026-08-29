@@ -2646,7 +2646,7 @@ def create_app(
         payload = _artifact_payload(
             Path("research/live_research/scanner_evidence_latest.json"),
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "generated_at": None,
                 "read_only": True,
                 "evaluations": 0,

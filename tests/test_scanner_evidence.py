@@ -188,6 +188,7 @@ def test_replay_uses_single_book_next_open_and_dual_costs(monkeypatch):
     assert outcome["entry"] == 100.0
     assert outcome["exit"] == 110.0
     assert result["schema_version"] == 2
+    assert result["net_bps_semantics"] == "booked_execution"
     assert outcome["net_bps"] == outcome["net_execution_bps"]
     assert outcome["cost_bps"] == outcome["execution_cost_bps"]
     assert outcome["funding_bps"] == 0.0

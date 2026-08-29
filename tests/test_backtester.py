@@ -27,6 +27,27 @@ def test_declared_delta_swing_profile_hydrates_fee_tax_and_slippage():
     assert BacktestConfig.model_validate(config.model_dump()) == config
 
 
+def test_delta_backtest_books_execution_cost_not_gate_reserve():
+    candles = make_candles([FLAT] * 10)
+    strategy = StubStrategy(
+        at_index=4,
+        intent=SignalIntent(side="long", stop_price=50.0, reason="flat_cost_probe"),
+    )
+    config = BacktestConfig(
+        cost_profile="delta_swing",
+        max_holding_bars=1,
+        use_active_exit=False,
+    )
+
+    result = run_backtest(candles, None, strategy, config)
+    trade = result.trades[0]
+    entry_notional = trade.quantity * trade.entry_price
+    booked_net_bps = trade.net_pnl_usd / entry_notional * 10_000
+
+    assert booked_net_bps == pytest.approx(-config.execution_round_trip_bps, abs=0.02)
+    assert booked_net_bps != pytest.approx(-config.gate_round_trip_bps, abs=0.02)
+
+
 def test_declared_cost_profile_rejects_private_fee_or_slippage_override():
     with pytest.raises(ValueError, match="source of truth"):
         BacktestConfig(cost_profile="delta_swing", fees=FeeModel(taker_bps=1.0))
