@@ -1902,7 +1902,7 @@
       var netClass=net==null?'':num(net)>=0?'up':'dn',parent=r.parent_revision_id?('fork ← '+String(r.parent_revision_id).split('+')[0]):'root revision';
       var evidenceLabel=hasBacktest?String((r.latest_run||{}).run_kind||'backtest').replace(/_/g,' '):(hasShadow?'shadow journal':'not reported');
       var outcome=hasBacktest?p.trades:(hasShadow?sh.virtual_resolved:null);
-      var outcomeLabel=hasBacktest?(p.sample_qualified?'sample qualified':'under / not reported'):(hasShadow?(num(sh.fires)+' fires · '+num(sh.virtual_pending)+' pending'):'not reported');
+      var outcomeLabel=hasBacktest?(p.sample_qualified?'sample qualified':'under / not reported'):(hasShadow?(num(sh.accepted_entries==null?sh.virtual_approved:sh.accepted_entries)+' accepted entries · '+num(sh.virtual_pending)+' pending'):'not reported');
       var stageLabel=String(r.stage||'registered').toLowerCase();
       var stageTone=wfTone(r.stage);
       if(r.stage==='SHADOW_OBSERVE'){

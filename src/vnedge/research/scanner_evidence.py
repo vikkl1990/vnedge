@@ -777,6 +777,11 @@ def build_journal_report(
         row.setdefault("virtual_rejected", 0)
         row.setdefault("virtual_resolved", 0)
         row["virtual_pending"] = max(0, approved - resolved)
+        # ``fires`` is deliberately the closed-bar decision count.  Quote
+        # scanners arm on a closed bar and fire only after live acceptance,
+        # so expose the actual accepted-entry count separately instead of
+        # presenting a working quote scanner as ``0 fires`` in the UI.
+        row["accepted_entries"] = approved
         row.setdefault("gross_usd", 0.0)
         row.setdefault("gross_bps", 0.0)
         row.setdefault("fees_usd", 0.0)
@@ -789,6 +794,9 @@ def build_journal_report(
     )
     report["virtual_resolved"] = sum(
         int(row["virtual_resolved"]) for row in report["strategies"]
+    )
+    report["accepted_entries"] = sum(
+        int(row["accepted_entries"]) for row in report["strategies"]
     )
     report["net_execution_usd"] = sum(
         float(row["net_execution_usd"]) for row in report["strategies"]

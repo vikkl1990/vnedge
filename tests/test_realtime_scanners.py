@@ -107,6 +107,7 @@ def test_quote_hold_supplies_entry_and_uses_structural_stop() -> None:
             reason="structure_bos_realtime_v1",
         )
     )
+    assert engine.last_reason == "armed_long"
     first = datetime(2026, 8, 24, 14, 0, tzinfo=UTC)
 
     assert (
@@ -150,6 +151,20 @@ def test_fill_time_session_gate_rejects_a_1600_quote() -> None:
     assert engine.last_reason == "quote_outside_session"
 
 
+def test_quote_engine_without_a_setup_reports_generic_arm_state() -> None:
+    engine = ExpansionAcceptanceEngine(config=RANGE_ACCEPTANCE)
+    ts = datetime(2026, 8, 24, 14, 0, tzinfo=UTC)
+
+    assert engine.observe_quote(
+        bid=100.0,
+        ask=100.1,
+        ts=ts,
+        received_ts=ts,
+        bar_index=1,
+    ) is None
+    assert engine.last_reason == "no_active_arm"
+
+
 def test_htf_continuation_arm_uses_wide_structure_floor() -> None:
     strategy = HtfStructureContinuationRealtimeV1()
     strategy.warmup_bars = 0
@@ -177,6 +192,31 @@ def test_htf_continuation_arm_uses_wide_structure_floor() -> None:
     assert arm.allow_short is False
     assert arm.structural_stop_mode == "structure_floor"
     assert arm.expires_after_bars == 2
+
+
+def test_htf_continuation_retains_bound_canonical_context() -> None:
+    strategy = HtfStructureContinuationRealtimeV1()
+    context = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-08-24T08:00:00Z"),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 10.0,
+            }
+        ]
+    )
+
+    strategy.bind_canonical_context("4h", context)
+
+    assert strategy.canonical_context_timeframes == ("4h",)
+    assert strategy._structure._hourly.htf_candles is not None
+    assert len(strategy._structure._hourly.htf_candles) == 1
+
+    strategy.set_canonical_context_health("4h", False)
+    assert strategy._structure._hourly._canonical_htf_current is False
 
 
 def test_structure_floor_does_not_treat_small_pullback_as_reversal() -> None:

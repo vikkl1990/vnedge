@@ -351,9 +351,10 @@ def test_checked_in_observer_roster_is_valid() -> None:
     specs = build_shadow_observe_roster_specs(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
-    assert len(specs) == 8
+    assert len(specs) == 10
     assert sum(spec.strategy_id == "session_continuation_realtime_v1" for spec in specs) == 2
     assert sum(spec.strategy_id == "htf_structure_continuation_realtime_v1" for spec in specs) == 2
+    assert sum(spec.strategy_id == "structure_bos_realtime_v1" for spec in specs) == 2
     assert all(not spec.is_primary for spec in specs)
     assert all(spec.execution_cost_exchange == "delta_india" for spec in specs)
 

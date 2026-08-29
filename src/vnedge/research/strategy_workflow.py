@@ -820,6 +820,7 @@ def build_strategy_workflow(
                 "generated_at": scanner_evidence_generated_at,
                 "evaluations": raw.get("evaluations"),
                 "fires": raw.get("fires"),
+                "accepted_entries": raw.get("accepted_entries"),
                 "backfill_evaluations": raw.get("backfill_evaluations"),
                 "virtual_candidates": raw.get("virtual_candidates"),
                 "virtual_approved": raw.get("virtual_approved"),

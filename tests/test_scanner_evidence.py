@@ -439,6 +439,8 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     row = report["strategies"][0]
     assert report["schema_version"] == 2
     assert row["virtual_approved"] == 1
+    assert row["accepted_entries"] == 1
+    assert report["accepted_entries"] == 1
     assert row["virtual_resolved"] == 1
     assert row["virtual_pending"] == 0
     assert row["gross_usd"] == 10.0

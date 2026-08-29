@@ -212,6 +212,11 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
             "scanner_exit_v1",
             "2",
         ),
+        "structure_bos_realtime_v1": (
+            "quote_acceptance_v2",
+            "scanner_exit_v1",
+            "2",
+        ),
         "htf_structure_continuation_realtime_v1": (
             "quote_acceptance_v2",
             "scanner_exit_v1",
@@ -225,8 +230,8 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
     }
     rows = {row["strategy_id"]: row for row in payload["revisions"] if row["strategy_id"] in active}
 
-    assert payload["provenance"]["active_roster_revisions"] == 4
-    assert payload["summary"]["explicit_revisions"] >= 4
+    assert payload["provenance"]["active_roster_revisions"] == 5
+    assert payload["summary"]["explicit_revisions"] >= 5
     assert set(rows) == set(active)
     for strategy_id, (decision_engine, exit_engine, engine_version) in active.items():
         row = rows[strategy_id]

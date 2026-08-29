@@ -18,6 +18,7 @@ from typing import Final
 
 import pandas as pd
 
+from vnedge.data.candles import Candle
 from vnedge.plan.cost_model import CostModel
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.strategy.range_expansion_observer_v4 import (
@@ -389,15 +390,30 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
     realtime_breakeven_arm_r = 1.25
     realtime_trail_arm_r = 2.0
     realtime_trail_atr_mult = 1.5
+    canonical_context_timeframes = StructureBos15mTriggerV3.canonical_context_timeframes
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         self.funding = funding
+        # Keep one structure engine for the lifetime of the scanner.  The
+        # runtime seeds canonical 4h context on the strategy instance before
+        # the first evaluation; constructing a new engine in ``prepare`` used
+        # to discard that context and made every HTF gate read ``none``.
+        self._structure = StructureBos15mTriggerV3(funding)
+
+    def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
+        self._structure.bind_canonical_context(timeframe, candles)
+
+    def ingest_canonical_context(self, candle: Candle) -> None:
+        self._structure.ingest_canonical_context(candle)
+
+    def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
+        self._structure.set_canonical_context_health(timeframe, healthy)
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         # Build the frozen BoS context with its own parameter object.  This
         # scanner's public ``params`` are the pullback contract below, so the
         # workflow UI never reports the inherited BoS thresholds by mistake.
-        out = StructureBos15mTriggerV3(self.funding).prepare(candles)
+        out = self._structure.prepare(candles)
         p = self.params
         open_ = pd.to_numeric(out["open"], errors="coerce")
         high = pd.to_numeric(out["high"], errors="coerce")

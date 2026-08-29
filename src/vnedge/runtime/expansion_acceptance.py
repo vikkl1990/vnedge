@@ -79,7 +79,7 @@ class ExpansionAcceptanceEngine:
     cooldown_until_bar: int = -1
     fires_today: int = 0
     today: date | None = None
-    last_reason: str = "no_compression_arm"
+    last_reason: str = "no_active_arm"
     long: _SideLifecycle = field(default_factory=_SideLifecycle)
     short: _SideLifecycle = field(default_factory=_SideLifecycle)
     last_quote_ts: datetime | None = None
@@ -146,7 +146,12 @@ class ExpansionAcceptanceEngine:
             self.arm = arm
             grace = arm.expires_after_bars or self.config.arm_grace_bars
             self.arm_expires_bar = arm.bar_index + grace
-            self.last_reason = "armed_both_sides"
+            if arm.allow_long and arm.allow_short:
+                self.last_reason = "armed_both_sides"
+            elif arm.allow_long:
+                self.last_reason = "armed_long"
+            else:
+                self.last_reason = "armed_short"
             return
         if (
             self.arm is not None
@@ -211,7 +216,7 @@ class ExpansionAcceptanceEngine:
         self.quotes_distinct += 1
         self._roll_day(ts)
         if self.arm is None:
-            self.last_reason = "no_compression_arm"
+            self.last_reason = "no_active_arm"
             return None
         if self.arm.session_start_hour_utc is not None:
             hour = ts.astimezone(UTC).hour

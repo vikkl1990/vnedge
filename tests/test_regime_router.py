@@ -9,6 +9,7 @@ import pytest
 from vnedge.strategy.regime_router import (
     DEFAULT_CONFIG,
     FAST_SQUEEZE,
+    SESSION_CONTINUATION_REALTIME,
     SLOW_PULLBACK,
     SLOW_RECLAIM,
     Regime,
@@ -45,6 +46,7 @@ def test_expand_allows_slow_sleeves() -> None:
     assert SLOW_RECLAIM in router.allowed_sleeves()
     assert SLOW_PULLBACK in router.allowed_sleeves()
     assert FAST_SQUEEZE in router.allowed_sleeves()
+    assert SESSION_CONTINUATION_REALTIME in router.allowed_sleeves()
 
 
 def test_range_is_fast_only_by_default() -> None:

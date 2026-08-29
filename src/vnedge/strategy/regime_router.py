@@ -42,6 +42,7 @@ SLOW_PULLBACK: Final = "trend_continuation_v1"
 STRUCTURE: Final = "structure_bos_1h"
 TICK_ACCEPTED: Final = "tick_accepted_breakout_v1"
 SESSION_CONTINUATION: Final = "session_continuation_15m_v1"
+SESSION_CONTINUATION_REALTIME: Final = "session_continuation_realtime_v1"
 SWEEP_REVERSAL: Final = "liquidity_sweep_reversal_15m_v1"
 AVWAP_RECLAIM: Final = "avwap_reclaim_15m_v1"
 TREND_PULLBACK: Final = "trend_pullback_1h_v1"
@@ -51,7 +52,12 @@ FAST_IDS: Final = frozenset({FAST_SQUEEZE, FAST_VOL_EXP})
 SLOW_IDS: Final = frozenset({SLOW_RECLAIM, SLOW_PULLBACK, STRUCTURE})
 RANGE_NATIVE_IDS: Final = frozenset({AVWAP_RECLAIM, SWEEP_REVERSAL})
 EXPAND_NATIVE_IDS: Final = frozenset(
-    {TICK_ACCEPTED, SESSION_CONTINUATION, TREND_PULLBACK}
+    {
+        TICK_ACCEPTED,
+        SESSION_CONTINUATION,
+        SESSION_CONTINUATION_REALTIME,
+        TREND_PULLBACK,
+    }
 )
 TRANSITION_IDS: Final = frozenset({TREND_SQUEEZE})
 
