@@ -328,6 +328,8 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert result["quotes_dropped"] == 1
     assert result["quotes_used"] == 2
     assert result["quotes_outside_window"] == 0
+    assert result["capture_quality"]["mode"] == "external_book"
+    assert result["capture_quality"]["parity_eligible"] is False
     assert result["intents"] == 1
     assert result["intent_keys"] == [
         "test_quote_scanner|BTCUSDT|long|1767225900600"
@@ -803,6 +805,32 @@ def test_live_parity_normalizes_historical_native_symbol_intent_keys():
 
     assert result["exact_parity"] is True
     assert result["matched_intents"] == 1
+
+
+def test_live_parity_rejects_external_book_capture_even_when_intents_match():
+    replay = {
+        "strategy_id": "quote_v1",
+        "symbol": "BTCUSDT",
+        "source_window": {
+            "start": "2026-01-01T00:00:00+00:00",
+            "end_exclusive": "2026-01-01T01:00:00+00:00",
+        },
+        "capture_quality": {
+            "mode": "external_book",
+            "queue_overflow_drops": 0,
+            "complete": True,
+            "parity_eligible": False,
+        },
+        "records": [],
+    }
+
+    result = scanner_evidence.compare_quote_replay_to_live(replay, [])
+
+    assert result["exact_parity"] is False
+    assert result["input_eligible"] is False
+    assert result["input_ineligible_reasons"] == [
+        "quote_capture_not_parity_eligible:external_book"
+    ]
 
 
 def test_load_evidence_frame_concatenates_shard_directories(tmp_path: Path):

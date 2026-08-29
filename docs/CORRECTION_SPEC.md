@@ -192,6 +192,9 @@ Parquet shards asynchronously and exposes queue/persist health; any capture
 overflow makes replay refuse the window. A future parity artifact must use
 that lane-specific tape and report at least one candidate on each compared
 side. Zero-vs-zero is transport coverage, not mechanism completion.
+Artifacts now label captures as `lane_consumed` or `external_book`; the
+comparator forces `exact_parity=false` when the input is not lane-consumed,
+even when both sides emitted zero intents.
 
 Done when candle-close event latency p99 is below 250ms, decision paths make
 zero steady-state lake reads, and recorder loss blocks lanes within one grace

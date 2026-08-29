@@ -452,6 +452,11 @@ def replay_quote_scanner(
         raise ValueError(
             "quote evidence capture overflowed; parity window is incomplete"
         )
+    lane_consumed_capture = {
+        "lane_id",
+        "captured_at_ms",
+        "capture_overflow_drops",
+    }.issubset(quotes.columns)
     cleaned, cleaning = clean_book(quotes.copy())
     cleaned = cleaned.reset_index(drop=True)
     candle_times = pd.to_datetime(prepared["timestamp"], utc=True)
@@ -559,8 +564,15 @@ def replay_quote_scanner(
         "quotes_dropped": cleaning.dropped,
         "quotes_outside_window": quotes_outside_window,
         "capture_quality": {
+            "mode": "lane_consumed" if lane_consumed_capture else "external_book",
             "queue_overflow_drops": capture_overflow_drops,
             "complete": capture_overflow_drops == 0,
+            # A standalone book recorder owns another websocket connection.
+            # It is useful diagnostic evidence, but its event sequence cannot
+            # prove exact parity with the quotes consumed by the live lane.
+            "parity_eligible": (
+                lane_consumed_capture and capture_overflow_drops == 0
+            ),
         },
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
         "intents": len(intents),
@@ -706,7 +718,15 @@ def compare_quote_replay_to_live(
     ]
     duplicate_replay = {key: count for key, count in replay_counts.items() if count > 1}
     duplicate_live = {key: count for key, count in live_counts.items() if count > 1}
-    exact = not any(
+    capture_quality = replay.get("capture_quality")
+    input_eligible = True
+    input_ineligible_reasons: list[str] = []
+    if isinstance(capture_quality, dict):
+        input_eligible = bool(capture_quality.get("parity_eligible", False))
+        if not input_eligible:
+            mode = str(capture_quality.get("mode") or "unknown")
+            input_ineligible_reasons.append(f"quote_capture_not_parity_eligible:{mode}")
+    exact = input_eligible and not any(
         (replay_only, live_only, payload_mismatches, duplicate_replay, duplicate_live)
     )
     matched = sum((replay_counts & live_counts).values())
@@ -718,6 +738,9 @@ def compare_quote_replay_to_live(
         "symbol": symbol,
         "source_window": source_window,
         "evidence_window": audit_window,
+        "capture_quality": capture_quality,
+        "input_eligible": input_eligible,
+        "input_ineligible_reasons": input_ineligible_reasons,
         "exact_parity": exact,
         "replay_intents": sum(replay_counts.values()),
         "live_intents": sum(live_counts.values()),
