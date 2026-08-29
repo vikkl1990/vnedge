@@ -1860,7 +1860,7 @@ class LivePaperSession:
             decision_bar_ts,
         )
         if self.config.mode is RunnerMode.SHADOW:
-            decision = self.gateway.evaluate(
+            decision = self.execution_kernel.evaluate_candidate(
                 intent, self.tracker.account_state(), self._market_state(), now=now
             )
             if decision.approved and self.shadow_portfolio is not None:
@@ -2080,7 +2080,7 @@ class LivePaperSession:
             strategy_id=self.strategy.strategy_id,
             order_type="market",
         )
-        decision = self.gateway.evaluate(
+        decision = self.execution_kernel.evaluate_candidate(
             intent,
             self.tracker.account_state(),
             self._market_state(),

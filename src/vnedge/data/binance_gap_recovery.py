@@ -409,6 +409,8 @@ def recover_storage_gaps(
     recover_closed_tail: bool = False,
     tail_timeframe: str = "1h",
     now: datetime | None = None,
+    staging_root: Path | str | None = None,
+    authority_root: Path | str | None = None,
 ) -> RecoveryReport:
     """Fetch, replay and then close exact unrecovered storage-hole records.
     ``recover_closed_tail`` is used by the long-running repair worker.  A
@@ -424,6 +426,11 @@ def recover_storage_gaps(
     data_path = Path(data_root)
     gap_store = GapParquetStore(gap_root)
     candle_store = CandleParquetStore(candle_root, exchange=exchange)
+    replay_store = (
+        CandleParquetStore(staging_root, exchange=exchange)
+        if staging_root is not None
+        else candle_store
+    )
     recovered: list[RecoveredGap] = []
     skipped: list[str] = []
     moment = _utc(now or datetime.now(UTC), label="recovery clock")
@@ -564,7 +571,19 @@ def recover_storage_gaps(
                     chunk_failed = True
                     break
                 paths = _write_tape(tape, data_path, exchange=exchange)
-                candle_count = _replay_fetched_tape(tape, candle_store)
+                candle_count = _replay_fetched_tape(tape, replay_store)
+                if staging_root is not None:
+                    if authority_root is None:
+                        raise ValueError("authority_root is required with staging_root")
+                    from vnedge.data.canonical_repair import merge_staged_candles
+
+                    merge_staged_candles(
+                        staging_root=staging_root,
+                        canonical_root=candle_root,
+                        authority_root=authority_root,
+                        exchange=exchange,
+                        symbols=symbols,
+                    )
                 if not _canonical_gap_covered(
                     candle_store,
                     symbol,
@@ -705,12 +724,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.max_tail_passes < 1:
         parser.error("--max-tail-passes must be >= 1")
 
-    from vnedge.exchange.writer_lease import canonical_write_authority
-
-    with (
-        canonical_write_authority(Path(args.data_root), args.exchange),
-        BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher,
-    ):
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    staging_root = Path(args.data_root) / "repair_staging" / args.exchange / run_id / "candles"
+    with BinanceAggTradeRest(request_interval_seconds=args.request_interval_seconds) as fetcher:
         recovered: list[RecoveredGap] = []
         skipped: list[str] = []
         candle_store = CandleParquetStore(args.candle_root, exchange=args.exchange)
@@ -724,6 +740,8 @@ def main(argv: list[str] | None = None) -> int:
                 fetcher=fetcher,
                 recover_closed_tail=True,
                 tail_timeframe=args.tail_timeframe,
+                staging_root=staging_root,
+                authority_root=args.data_root,
             )
             recovered.extend(pass_report.recovered)
             skipped.extend(pass_report.skipped_symbols)

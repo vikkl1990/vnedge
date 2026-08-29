@@ -7,7 +7,7 @@ from datetime import datetime
 
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder
-from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent
+from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent, RiskDecision
 from vnedge.runtime.execution_contract import (
     AdapterKind,
     ExecutionContext,
@@ -30,6 +30,17 @@ class ExecutionKernel:
 
     def __post_init__(self) -> None:
         self.context.validate_adapter(self.adapter_kind)
+
+    def evaluate_candidate(
+        self,
+        intent: OrderIntent,
+        account: AccountState,
+        market: MarketState,
+        *,
+        now: datetime | None = None,
+    ) -> RiskDecision:
+        """Evaluate a non-submitting candidate through the same risk boundary."""
+        return self.order_manager.evaluate_candidate(intent, account, market, now=now)
 
     async def submit(
         self,

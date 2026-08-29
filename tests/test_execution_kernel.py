@@ -22,6 +22,13 @@ class _RecordingOrderManager:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.result = object()
+        self.evaluate_calls: list[dict[str, Any]] = []
+
+    def evaluate_candidate(self, intent, account, market, *, now=None):
+        self.evaluate_calls.append(
+            {"intent": intent, "account": account, "market": market, "now": now}
+        )
+        return self.result
 
     async def submit(self, intent, account, market, intent_key, now=None, *, replaces=None):
         self.calls.append(
@@ -103,6 +110,22 @@ async def test_observe_never_reaches_order_manager() -> None:
     with pytest.raises(PermissionError, match="observe stage"):
         await kernel.submit(_intent(), _account(), _market(), "k")
     assert manager.calls == []
+
+
+def test_observe_candidate_uses_order_manager_risk_boundary_without_submit() -> None:
+    manager = _RecordingOrderManager()
+    kernel = ExecutionKernel(
+        ExecutionContext(DataClock.LIVE, ExecutionStage.OBSERVE),
+        cast(OrderManager, manager),
+        AdapterKind.SIMULATED,
+    )
+    now = datetime(2026, 8, 28, tzinfo=UTC)
+    result = kernel.evaluate_candidate(_intent(), _account(), _market(), now=now)
+    assert result is manager.result
+    assert manager.calls == []
+    assert manager.evaluate_calls == [
+        {"intent": _intent(), "account": _account(), "market": _market(), "now": now}
+    ]
 
 
 async def test_emergency_stage_only_forwards_reduce_only_intents() -> None:

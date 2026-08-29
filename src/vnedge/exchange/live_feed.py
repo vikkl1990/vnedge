@@ -201,6 +201,9 @@ class LiveMarketFeed:
         slippage_est_bps: float = 2.0,
         funding_refresh_seconds: float = 900.0,
         data_silence_seconds: float = 60.0,
+        enable_candles: bool = True,
+        enable_quotes: bool = True,
+        enable_funding: bool = True,
     ) -> None:
         import ccxt.pro as ccxtpro  # heavy import kept local
 
@@ -216,6 +219,11 @@ class LiveMarketFeed:
         if data_silence_seconds <= 0:
             raise ValueError("data_silence_seconds must be positive")
         self.data_silence_seconds = data_silence_seconds
+        self.enable_candles = enable_candles
+        self.enable_quotes = enable_quotes
+        self.enable_funding = enable_funding
+        if not (enable_candles or enable_quotes or enable_funding):
+            raise ValueError("market feed must enable at least one stream")
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
@@ -239,11 +247,13 @@ class LiveMarketFeed:
 
     # --- Lifecycle ----------------------------------------------------------------
     async def start(self) -> None:
-        self._tasks = [
-            asyncio.create_task(self._watch_candles(), name="feed-candles"),
-            asyncio.create_task(self._refresh_funding(), name="feed-funding"),
-            asyncio.create_task(self._watch_book(), name="feed-book"),
-        ]
+        self._tasks = []
+        if getattr(self, "enable_candles", True):
+            self._tasks.append(asyncio.create_task(self._watch_candles(), name="feed-candles"))
+        if getattr(self, "enable_funding", True):
+            self._tasks.append(asyncio.create_task(self._refresh_funding(), name="feed-funding"))
+        if getattr(self, "enable_quotes", True):
+            self._tasks.append(asyncio.create_task(self._watch_book(), name="feed-book"))
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -431,6 +441,9 @@ class RestPollingMarketFeed:
         quote_poll_seconds: float = _DEFAULT_REST_QUOTE_POLL_SECONDS,
         funding_refresh_seconds: float = 900.0,
         data_silence_seconds: float = 60.0,
+        enable_candles: bool = True,
+        enable_quotes: bool = True,
+        enable_funding: bool = True,
     ) -> None:
         if timeframe not in TIMEFRAME_MS:
             raise ValueError(f"unsupported timeframe for REST polling feed: {timeframe}")
@@ -446,6 +459,11 @@ class RestPollingMarketFeed:
         if data_silence_seconds <= 0:
             raise ValueError("data_silence_seconds must be positive")
         self.data_silence_seconds = data_silence_seconds
+        self.enable_candles = enable_candles
+        self.enable_quotes = enable_quotes
+        self.enable_funding = enable_funding
+        if not (enable_candles or enable_quotes or enable_funding):
+            raise ValueError("market feed must enable at least one stream")
 
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
@@ -465,11 +483,13 @@ class RestPollingMarketFeed:
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        self._tasks = [
-            asyncio.create_task(self._poll_candles(), name="rest-feed-candles"),
-            asyncio.create_task(self._poll_quotes(), name="rest-feed-quotes"),
-            asyncio.create_task(self._refresh_funding(), name="rest-feed-funding"),
-        ]
+        self._tasks = []
+        if self.enable_candles:
+            self._tasks.append(asyncio.create_task(self._poll_candles(), name="rest-feed-candles"))
+        if self.enable_quotes:
+            self._tasks.append(asyncio.create_task(self._poll_quotes(), name="rest-feed-quotes"))
+        if self.enable_funding:
+            self._tasks.append(asyncio.create_task(self._refresh_funding(), name="rest-feed-funding"))
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -638,6 +658,9 @@ class DeltaWsFeed(RestPollingMarketFeed):
         timeframe: str = "1m",
         slippage_est_bps: float = 3.0,
         candle_poll_seconds: float = _DEFAULT_REST_CANDLE_POLL_SECONDS,
+        enable_candles: bool = True,
+        enable_quotes: bool = True,
+        enable_funding: bool = True,
     ) -> None:
         super().__init__(
             exchange_id,
@@ -645,24 +668,34 @@ class DeltaWsFeed(RestPollingMarketFeed):
             timeframe=timeframe,
             slippage_est_bps=slippage_est_bps,
             candle_poll_seconds=candle_poll_seconds,
+            enable_candles=enable_candles,
+            enable_quotes=enable_quotes,
+            enable_funding=enable_funding,
         )
         from vnedge.exchange.delta_ws import DeltaPublicWsClient, delta_native_symbol
 
         self.feed_mode = "delta native ws candles (rest fallback)"
         self._native_symbol = delta_native_symbol(symbol)
         self._last_ws_candle_at: datetime | None = None
+        channels: tuple[str, ...] = ()
+        if enable_quotes:
+            channels += ("l2_orderbook",)
+        if enable_funding:
+            channels += ("funding_rate", "v2/ticker")
         self._ws = DeltaPublicWsClient(
             [self._native_symbol],
-            candle_timeframes=(timeframe,),
+            channels=channels,
+            candle_timeframes=(timeframe,) if enable_candles else (),
             on_candle=self._on_ws_candle,
         )
 
     async def start(self) -> None:
         await self._ws.start()
-        self._tasks = [
-            asyncio.create_task(self._poll_candles(), name="delta-feed-candles"),
-            asyncio.create_task(self._sync_ws_state(), name="delta-feed-ws-sync"),
-        ]
+        self._tasks = [asyncio.create_task(self._sync_ws_state(), name="delta-feed-ws-sync")]
+        if self.enable_candles:
+            self._tasks.append(
+                asyncio.create_task(self._poll_candles(), name="delta-feed-candles")
+            )
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -778,13 +811,37 @@ def create_market_feed(
     *,
     symbol: str,
     timeframe: str = "1m",
+    enable_candles: bool = True,
+    enable_quotes: bool = True,
+    enable_funding: bool = True,
 ) -> LiveMarketFeed | RestPollingMarketFeed:
     if supports_ccxt_pro_feed(exchange_id):
-        return LiveMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+        return LiveMarketFeed(
+            exchange_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            enable_candles=enable_candles,
+            enable_quotes=enable_quotes,
+            enable_funding=enable_funding,
+        )
     if exchange_id in _DELTA_NATIVE_WS_IDS:
         # Delta has no CCXT Pro class but does have a native public websocket.
-        return DeltaWsFeed(exchange_id, symbol=symbol, timeframe=timeframe)
-    feed = RestPollingMarketFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+        return DeltaWsFeed(
+            exchange_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            enable_candles=enable_candles,
+            enable_quotes=enable_quotes,
+            enable_funding=enable_funding,
+        )
+    feed = RestPollingMarketFeed(
+        exchange_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        enable_candles=enable_candles,
+        enable_quotes=enable_quotes,
+        enable_funding=enable_funding,
+    )
     logger.warning(
         "%s has no validated websocket feed; using explicit REST polling mode",
         exchange_id,

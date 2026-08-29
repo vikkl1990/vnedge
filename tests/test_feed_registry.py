@@ -24,7 +24,14 @@ from vnedge.risk.risk_manager import MarketState
 class FakeFeed:
     """Stands in for LiveMarketFeed/RestPollingMarketFeed in the registry."""
 
-    def __init__(self, exchange_id: str, *, symbol: str, timeframe: str = "1m") -> None:
+    def __init__(
+        self,
+        exchange_id: str,
+        *,
+        symbol: str,
+        timeframe: str = "1m",
+        **streams,
+    ) -> None:
         self.exchange_id = exchange_id
         self.symbol = symbol
         self.timeframe = timeframe
@@ -41,6 +48,7 @@ class FakeFeed:
         self.candles_closed = 0
         self.start_calls = 0
         self.stop_calls = 0
+        self.streams = streams
 
     async def start(self) -> None:
         self.start_calls += 1
@@ -65,8 +73,8 @@ class FakeFeed:
 def make_registry():
     created: list[FakeFeed] = []
 
-    def factory(exchange_id, *, symbol, timeframe="1m"):
-        feed = FakeFeed(exchange_id, symbol=symbol, timeframe=timeframe)
+    def factory(exchange_id, *, symbol, timeframe="1m", **streams):
+        feed = FakeFeed(exchange_id, symbol=symbol, timeframe=timeframe, **streams)
         created.append(feed)
         return feed
 
@@ -86,10 +94,10 @@ async def test_fan_out_delivers_every_candle_to_all_views():
     b = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="1h")
 
     # same key -> ONE real feed, created once, started once
-    assert len(created) == 1
+    assert len(created) == 2  # one TF candle source + one market-wide BBO source
     await a.start()
     await b.start()
-    assert created[0].start_calls == 1
+    assert created[0].start_calls == created[1].start_calls == 1
 
     candles = [[1_000, 1, 2, 0.5, 1.5, 10], [2_000, 1.5, 3, 1, 2, 11], [3_000, 2, 4, 2, 3, 12]]
     for row in candles:
@@ -113,7 +121,7 @@ async def test_quote_fanout_delivers_bounded_history_to_every_view() -> None:
     await b.start()
 
     quote = QuoteUpdate(ts=datetime.now(UTC), bid=100.0, ask=100.1)
-    created[0].quote_updates.put_nowait(quote)
+    created[1].quote_updates.put_nowait(quote)
     assert await asyncio.wait_for(a.quote_updates.get(), timeout=1.0) == quote
     assert await asyncio.wait_for(b.quote_updates.get(), timeout=1.0) == quote
 
@@ -128,6 +136,28 @@ async def test_quote_fanout_delivers_bounded_history_to_every_view() -> None:
     assert a.quote_updates.get_nowait() == latest
     await a.stop()
     await b.stop()
+
+
+async def test_different_timeframes_share_one_market_bbo() -> None:
+    registry, created = make_registry()
+    five = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="5m")
+    hour = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="1h")
+    await five.start()
+    await hour.start()
+
+    assert len(created) == 3  # 5m candles, shared BBO, 1h candles
+    assert registry.active_quote_feeds() == {("binanceusdm", "BTC/USDT:USDT"): 2}
+    quote = QuoteUpdate(ts=datetime.now(UTC), bid=100.0, ask=100.1)
+    created[1].quote_updates.put_nowait(quote)
+    assert await asyncio.wait_for(five.quote_updates.get(), timeout=1.0) == quote
+    assert await asyncio.wait_for(hour.quote_updates.get(), timeout=1.0) == quote
+    assert created[1].streams == {
+        "enable_candles": False,
+        "enable_quotes": True,
+        "enable_funding": True,
+    }
+    await five.stop()
+    await hour.stop()
 
 
 def test_quote_update_preserves_event_and_receive_clocks() -> None:
@@ -206,18 +236,18 @@ async def test_refcounted_stop_only_last_release_stops_the_feed():
     await b.start()
 
     await a.stop()
-    assert created[0].stop_calls == 0  # b still consumes the shared feed
+    assert created[0].stop_calls == created[1].stop_calls == 0
     assert registry.active_feeds() == {("bybit", "BTC/USDT:USDT", "1h"): 1}
 
     await b.stop()
-    assert created[0].stop_calls == 1  # last release stops the real feed
+    assert created[0].stop_calls == created[1].stop_calls == 1
     assert registry.active_feeds() == {}
 
     # next acquire builds a FRESH feed, not the stopped one
     c = registry.acquire("bybit", symbol="BTC/USDT:USDT", timeframe="1h")
-    assert len(created) == 2
+    assert len(created) == 4
     await c.stop()
-    assert created[1].stop_calls == 1
+    assert created[2].stop_calls == created[3].stop_calls == 1
 
 
 async def test_stopped_view_is_isolated_from_the_shared_stream():
@@ -236,12 +266,12 @@ async def test_stopped_view_is_isolated_from_the_shared_stream():
 
     # stop is idempotent and never double-releases the refcount
     await a.stop()
-    assert created[0].stop_calls == 0
+    assert created[0].stop_calls == created[1].stop_calls == 0
     with pytest.raises(RuntimeError, match="released"):
         await a.start()
 
     await b.stop()
-    assert created[0].stop_calls == 1
+    assert created[0].stop_calls == created[1].stop_calls == 1
 
 
 async def test_views_proxy_shared_state_and_report_sharing():
@@ -251,21 +281,22 @@ async def test_views_proxy_shared_state_and_report_sharing():
     b = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="1h")
 
     feed = created[0]
+    quote_feed = created[1]
     assert a.exchange_id == "binanceusdm"
     assert a.symbol == "BTC/USDT:USDT"
     assert a.timeframe == "1h"
-    assert a.quote == feed.quote
-    assert a.funding_rate == feed.funding_rate
-    assert a.funding_events == feed.funding_events
-    assert a.book_metrics == feed.book_metrics
+    assert a.quote == quote_feed.quote
+    assert a.funding_rate == quote_feed.funding_rate
+    assert a.funding_events == quote_feed.funding_events
+    assert a.book_metrics == quote_feed.book_metrics
     assert a.healthy is True
     assert a.last_event_at == feed.last_event_at
     assert a.staleness_seconds() == 1.5
-    assert a.market_state() == feed.market_state()
-    assert b.feed_mode == "fake ws, shared x2"
+    assert a.market_state() == quote_feed.market_state()
+    assert b.feed_mode == "fake ws, BBO shared x2"
 
     # shared state mutates in ONE place and every view sees it
-    feed.quote = (200.0, 201.0)
+    quote_feed.quote = (200.0, 201.0)
     assert a.quote == b.quote == (200.0, 201.0)
 
     await a.stop()
@@ -279,8 +310,9 @@ async def test_different_keys_build_independent_feeds():
     c = registry.acquire("binanceusdm", symbol="BTC/USDT:USDT", timeframe="1m")
     d = registry.acquire("bybit", symbol="BTC/USDT:USDT", timeframe="1h")
 
-    assert len(created) == 4  # symbol, timeframe and exchange all key the feed
+    assert len(created) == 7  # four TF feeds plus three market-wide BBO feeds
     assert len(registry.active_feeds()) == 4
+    assert len(registry.active_quote_feeds()) == 3
     for view in (a, b, c, d):
         await view.stop()
     assert registry.active_feeds() == {}

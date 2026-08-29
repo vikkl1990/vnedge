@@ -1,30 +1,11 @@
-"""Shared market-feed registry: one real feed per (exchange, symbol, timeframe).
-
-Lanes watching the same market used to each build their own feed — duplicate
-websocket connections to the same venue for identical data (e.g. the governed
-Binance BTC paper lane and its shadow twin). The registry deduplicates:
-``acquire()`` creates the real feed on first use and hands every caller a
-lightweight :class:`SharedFeedView`.
-
-Each view owns its OWN closed-candle queue. A fan-out task drains the real
-feed's queue and copies every closed candle into ALL registered view queues,
-so every lane sees every candle — lanes never compete for items on a single
-queue. Everything else (quote, funding, book metrics, staleness, market
-state) is read-only shared state and proxies straight through to the real
-feed; that is safe in the single-process asyncio design.
-
-Lifecycle is refcounted: ``view.start()`` starts the real feed exactly once;
-``view.stop()`` releases the view, and the LAST release stops the real feed
-(and forgets the entry, so a later acquire builds a fresh one). A stopped
-view stops receiving candles immediately, without disturbing its siblings.
-"""
+"""Shared public feeds: one candle stream per timeframe, one BBO per market."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable
 from datetime import datetime
+from typing import cast
 
 from vnedge.exchange.live_feed import (
     QUOTE_ACCEPTANCE_BUFFER_SIZE,
@@ -37,42 +18,47 @@ from vnedge.exchange.live_feed import (
 )
 from vnedge.risk.risk_manager import MarketState
 
-logger = logging.getLogger(__name__)
-
-FeedKey = tuple[str, str, str]  # (exchange_id, symbol, timeframe)
+FeedKey = tuple[str, str, str]
+QuoteKey = tuple[str, str]
 _Feed = LiveMarketFeed | RestPollingMarketFeed
 FeedFactory = Callable[..., _Feed]
 
 
+class _FeedEntry:
+    def __init__(self, key: FeedKey | QuoteKey, feed: _Feed) -> None:
+        self.key = key
+        self.feed = feed
+        self.views: list[SharedFeedView] = []
+        self.fanout_task: asyncio.Task | None = None
+        self.started = False
+        self.start_lock = asyncio.Lock()
+
+
 class SharedFeedView:
-    """One lane's handle on a shared feed.
+    """Lane-local queues backed by separate shared candle and quote owners."""
 
-    Keeps the ``LiveMarketFeed`` surface the runners consume: an exclusive
-    ``closed_candles`` queue (fed by the registry fan-out) plus read-through
-    proxies for the shared market state.
-    """
-
-    def __init__(self, registry: SharedFeedRegistry, entry: _FeedEntry) -> None:
+    def __init__(self, registry: SharedFeedRegistry, candle: _FeedEntry, quote: _FeedEntry) -> None:
         self._registry = registry
-        self._entry = entry
+        self._candle_entry = candle
+        self._quote_entry = quote
         self.closed_candles: asyncio.Queue[list] = asyncio.Queue()
         self.quote_updates: asyncio.Queue[QuoteUpdate] = asyncio.Queue(
             maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
         )
-        self.candles_closed = 0  # candles delivered to THIS view
+        self.candles_closed = 0
         self._stopped = False
 
-    # --- lifecycle (refcounted through the registry) -------------------------------
     async def start(self) -> None:
         if self._stopped:
             raise RuntimeError("cannot start a released SharedFeedView")
-        await self._registry._start_entry(self._entry)
+        await self._registry._start_entry(self._candle_entry, quote=False)
+        await self._registry._start_entry(self._quote_entry, quote=True)
 
     async def stop(self) -> None:
         if self._stopped:
-            return  # idempotent: runners stop defensively
+            return
         self._stopped = True
-        await self._registry._release(self._entry, self)
+        await self._registry._release(self)
 
     def _deliver(self, row: list) -> None:
         self.closed_candles.put_nowait(row)
@@ -88,15 +74,18 @@ class SharedFeedView:
         self.quote_updates.put_nowait(quote)
 
     @property
-    def quote_overflow_drops(self) -> int:
-        """Total source + per-lane quote evictions visible to this lane."""
-        source = quote_overflow_drops(self._feed.quote_updates)
-        return source + quote_overflow_drops(self.quote_updates)
-
-    # --- shared read-through state --------------------------------------------------
-    @property
     def _feed(self) -> _Feed:
-        return self._entry.feed
+        return self._candle_entry.feed
+
+    @property
+    def _quote_feed(self) -> _Feed:
+        return self._quote_entry.feed
+
+    @property
+    def quote_overflow_drops(self) -> int:
+        return quote_overflow_drops(self._quote_feed.quote_updates) + quote_overflow_drops(
+            self.quote_updates
+        )
 
     @property
     def exchange_id(self) -> str:
@@ -112,147 +101,151 @@ class SharedFeedView:
 
     @property
     def feed_mode(self) -> str:
-        mode = self._feed.feed_mode
-        n = len(self._entry.views)
-        return mode if n <= 1 else f"{mode}, shared x{n}"
+        count = len(self._quote_entry.views)
+        return self._feed.feed_mode if count <= 1 else f"{self._feed.feed_mode}, BBO shared x{count}"
 
     @property
     def slippage_est_bps(self) -> float:
-        return self._feed.slippage_est_bps
+        return self._quote_feed.slippage_est_bps
 
     @property
     def quote(self) -> tuple[float, float] | None:
-        return self._feed.quote
+        return self._quote_feed.quote
 
     @property
     def forming_candle(self) -> list | None:
-        # feeds without a forming bar (REST poll) simply report None
         return getattr(self._feed, "forming_candle", None)
 
     @property
     def funding_rate(self) -> float:
-        return self._feed.funding_rate
+        return self._quote_feed.funding_rate
 
     @property
     def funding_events(self) -> list[tuple[int, float]]:
-        return self._feed.funding_events
+        return self._quote_feed.funding_events
 
     @property
     def book_metrics(self) -> dict | None:
-        return self._feed.book_metrics
+        return self._quote_feed.book_metrics
 
     @property
     def healthy(self) -> bool:
-        return self._feed.healthy
+        return self._feed.healthy and self._quote_feed.healthy
 
     @property
     def last_event_at(self) -> datetime | None:
-        return self._feed.last_event_at
+        values = [x for x in (self._feed.last_event_at, self._quote_feed.last_event_at) if x]
+        return min(values) if values else None
 
     def staleness_seconds(self, now: datetime | None = None) -> float:
-        return self._feed.staleness_seconds(now)
+        return max(self._feed.staleness_seconds(now), self._quote_feed.staleness_seconds(now))
 
     def market_state(self) -> MarketState:
-        return self._feed.market_state()
-
-
-class _FeedEntry:
-    """Registry bookkeeping for one real feed: views, fan-out task, start state."""
-
-    def __init__(self, key: FeedKey, feed: _Feed) -> None:
-        self.key = key
-        self.feed = feed
-        self.views: list[SharedFeedView] = []
-        self.fanout_tasks: list[asyncio.Task] = []
-        self.started = False
-        self.start_lock = asyncio.Lock()
+        state = self._quote_feed.market_state()
+        if self._feed.healthy:
+            return state
+        return MarketState(
+            symbol=state.symbol,
+            last_update=state.last_update,
+            spread_bps=state.spread_bps,
+            estimated_slippage_bps=state.estimated_slippage_bps,
+            funding_rate=state.funding_rate,
+            exchange_healthy=False,
+            data_degraded=True,
+            data_quality="degraded",
+            data_quality_reason="timeframe candle transport unhealthy",
+        )
 
 
 class SharedFeedRegistry:
-    """Refcounted registry of market feeds keyed by (exchange, symbol, timeframe)."""
+    """Refcounted candle feeds plus a market-wide BBO/funding feed."""
 
     def __init__(self, feed_factory: FeedFactory | None = None) -> None:
-        self._factory: FeedFactory = feed_factory or create_market_feed
+        self._factory = feed_factory or create_market_feed
         self._entries: dict[FeedKey, _FeedEntry] = {}
+        self._quote_entries: dict[QuoteKey, _FeedEntry] = {}
 
-    def acquire(
-        self, exchange_id: str, *, symbol: str, timeframe: str = "1m"
-    ) -> SharedFeedView:
-        """Get a view of the shared feed for this market, creating it if needed."""
-        key: FeedKey = (exchange_id, symbol, timeframe)
-        entry = self._entries.get(key)
-        if entry is None:
-            feed = self._factory(exchange_id, symbol=symbol, timeframe=timeframe)
-            entry = _FeedEntry(key, feed)
-            self._entries[key] = entry
-            logger.info("feed registry: created shared feed for %s", key)
-        else:
-            logger.info(
-                "feed registry: reusing shared feed for %s (now %d views)",
-                key, len(entry.views) + 1,
+    def acquire(self, exchange_id: str, *, symbol: str, timeframe: str = "1m") -> SharedFeedView:
+        candle_key: FeedKey = (exchange_id, symbol, timeframe)
+        candle = self._entries.get(candle_key)
+        if candle is None:
+            candle = _FeedEntry(
+                candle_key,
+                self._factory(
+                    exchange_id, symbol=symbol, timeframe=timeframe,
+                    enable_candles=True, enable_quotes=False, enable_funding=False,
+                ),
             )
-        view = SharedFeedView(self, entry)
-        entry.views.append(view)
+            self._entries[candle_key] = candle
+        quote_key: QuoteKey = (exchange_id, symbol)
+        quote = self._quote_entries.get(quote_key)
+        if quote is None:
+            quote = _FeedEntry(
+                quote_key,
+                self._factory(
+                    exchange_id, symbol=symbol, timeframe="1m",
+                    enable_candles=False, enable_quotes=True, enable_funding=True,
+                ),
+            )
+            self._quote_entries[quote_key] = quote
+        view = SharedFeedView(self, candle, quote)
+        candle.views.append(view)
+        quote.views.append(view)
         return view
 
     def active_feeds(self) -> dict[FeedKey, int]:
-        """Live view counts per feed key (observability/tests)."""
         return {key: len(entry.views) for key, entry in self._entries.items()}
 
-    # --- internal lifecycle ----------------------------------------------------------
-    async def _start_entry(self, entry: _FeedEntry) -> None:
+    def active_quote_feeds(self) -> dict[QuoteKey, int]:
+        return {key: len(entry.views) for key, entry in self._quote_entries.items()}
+
+    async def _start_entry(self, entry: _FeedEntry, *, quote: bool) -> None:
         async with entry.start_lock:
             if entry.started:
                 return
             await entry.feed.start()
-            entry.fanout_tasks = [
-                asyncio.create_task(
-                    self._fan_out(entry), name=f"feed-fanout-{'-'.join(entry.key)}"
-                )
-            ]
-            if hasattr(entry.feed, "quote_updates"):
-                entry.fanout_tasks.append(
-                    asyncio.create_task(
-                        self._fan_out_quotes(entry),
-                        name=f"quote-fanout-{'-'.join(entry.key)}",
-                    )
-                )
+            target = self._fan_out_quotes(entry) if quote else self._fan_out(entry)
+            entry.fanout_task = asyncio.create_task(
+                target, name=f"{'quote' if quote else 'candle'}-fanout-{'-'.join(entry.key)}"
+            )
             entry.started = True
 
     async def _fan_out(self, entry: _FeedEntry) -> None:
-        """Copy every closed candle from the real feed to EVERY view queue."""
         while True:
             row = await entry.feed.closed_candles.get()
             for view in list(entry.views):
                 view._deliver(row)
 
     async def _fan_out_quotes(self, entry: _FeedEntry) -> None:
-        """Fan out the latest quote to every view without an unbounded queue."""
         while True:
             quote = await entry.feed.quote_updates.get()
             for view in list(entry.views):
                 view._deliver_quote(quote)
 
-    async def _release(self, entry: _FeedEntry, view: SharedFeedView) -> None:
-        if view in entry.views:
-            entry.views.remove(view)
+    async def _stop_empty(self, entry: _FeedEntry) -> None:
         if entry.views:
-            return  # other lanes still consume this feed
-        # last view released: tear the real feed down and forget the entry
-        self._entries.pop(entry.key, None)
-        if entry.fanout_tasks:
-            for task in entry.fanout_tasks:
-                task.cancel()
-            await asyncio.gather(*entry.fanout_tasks, return_exceptions=True)
-            entry.fanout_tasks = []
+            return
+        if entry.fanout_task is not None:
+            entry.fanout_task.cancel()
+            await asyncio.gather(entry.fanout_task, return_exceptions=True)
+            entry.fanout_task = None
         entry.started = False
         await entry.feed.stop()
-        logger.info("feed registry: stopped shared feed for %s (last view released)",
-                    entry.key)
+
+    async def _release(self, view: SharedFeedView) -> None:
+        candle, quote = view._candle_entry, view._quote_entry
+        if view in candle.views:
+            candle.views.remove(view)
+        if view in quote.views:
+            quote.views.remove(view)
+        if not candle.views:
+            self._entries.pop(cast(FeedKey, candle.key), None)
+            await self._stop_empty(candle)
+        if not quote.views:
+            self._quote_entries.pop(cast(QuoteKey, quote.key), None)
+            await self._stop_empty(quote)
 
 
-# Default process-wide registry: lanes built by different call sites still share
-# feeds because the v1 architecture is a single asyncio process.
 _DEFAULT_REGISTRY = SharedFeedRegistry()
 
 
@@ -263,5 +256,5 @@ def shared_feed_registry() -> SharedFeedRegistry:
 def acquire_market_feed(
     exchange_id: str, *, symbol: str, timeframe: str = "1m"
 ) -> SharedFeedView:
-    """Acquire a shared-feed view from the default process-wide registry."""
+    """Acquire from the process-wide registry used by runtime lane builders."""
     return _DEFAULT_REGISTRY.acquire(exchange_id, symbol=symbol, timeframe=timeframe)

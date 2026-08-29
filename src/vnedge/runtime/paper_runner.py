@@ -312,7 +312,7 @@ class PaperRunner:
                         self.strategy.strategy_id, cfg.symbol, intent.side, ts
                     )
                     if cfg.mode is RunnerMode.SHADOW:
-                        risk_decision = self.gateway.evaluate(
+                        risk_decision = self.execution_kernel.evaluate_candidate(
                             intent, self.tracker.account_state(), market, now=ts,
                         )
                         self.journal.append("shadow_intent", {

@@ -33,6 +33,7 @@ from vnedge.risk.risk_manager import (
     MarketState,
     OrderIntent,
     PreTradeRiskGateway,
+    RiskDecision,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,22 @@ class OrderManager:
         return self._journal.recovery_degraded or any(
             o.is_unresolved for o in self.orders.values()
         )
+
+    def evaluate_candidate(
+        self,
+        intent: OrderIntent,
+        account: AccountState,
+        market: MarketState,
+        *,
+        now: datetime | None = None,
+    ) -> RiskDecision:
+        """Run an observe-only candidate through the canonical risk gateway.
+
+        This intentionally does not mint an idempotency key or touch the
+        adapter.  It gives OBSERVE the same risk implementation as SHADOW and
+        LIVE while preserving the hard rule that observation cannot submit.
+        """
+        return self._gateway.evaluate(intent, account, market, now=now)
 
     async def submit(
         self,
