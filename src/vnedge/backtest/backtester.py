@@ -262,6 +262,11 @@ class BacktestResult:
     skipped_by_sizing: int
     final_equity_usd: float
     config: BacktestConfig = field(repr=False, default_factory=BacktestConfig)
+    # Funding evidence is part of the result contract so report builders do
+    # not infer "included" from a zero dollar total. A valid supplied series
+    # can legitimately produce zero cashflow when no position spans an event.
+    funding_included: bool = False
+    funding_event_count: int = 0
     # (timestamp, reason) for every entry decision the protections blocked —
     # empty unless config.protections enables something. Mirrors the live
     # runner's lane_eval skip_reason records for engine-parity checks.
@@ -344,7 +349,10 @@ def run_backtest(
     )
 
     # Funding events as parallel arrays with a moving cursor.
-    if funding is not None and not funding.empty:
+    funding_included = funding is not None and not funding.empty
+    funding_event_count = len(funding) if funding_included else 0
+    if funding_included:
+        assert funding is not None
         f_ts = funding["timestamp"].to_numpy()
         f_rate = funding["funding_rate"].to_numpy()
     else:
@@ -585,6 +593,8 @@ def run_backtest(
         symbol=symbol, timeframe=timeframe, trades=tuple(trades),
         equity_curve=equity_curve, skipped_by_sizing=skipped,
         final_equity_usd=equity, config=config,
+        funding_included=funding_included,
+        funding_event_count=funding_event_count,
         protection_blocked=tuple(protection_blocked),
         factory_blocked=tuple(factory_blocked),
     )

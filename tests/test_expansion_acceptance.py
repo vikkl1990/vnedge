@@ -258,6 +258,29 @@ class _Journal:
         self.records.append((kind, payload))
 
 
+def test_shadow_runner_reports_rejection_categories_without_double_counting() -> None:
+    runner = SqueezeAcceptanceObserveRunner(
+        journal=_Journal(), symbol="BTC/USDT:USDT"
+    )
+
+    runner._count_rejection(("cost_gate:below_minimum_net",))
+    runner._count_rejection(("sizing:below_minimum",))
+    runner._count_rejection(("shadow_portfolio:position_open",))
+    runner._count_rejection(("daily_loss_limit",))
+
+    stats = runner.stats()
+    assert stats["rejection_reasons"] == {
+        "cost": 1,
+        "portfolio": 1,
+        "risk": 1,
+        "sizing": 1,
+    }
+    assert stats["cost_rejected"] == 1
+    assert stats["sizing_rejected"] == 1
+    assert stats["risk_rejected"] == 1
+    assert stats["portfolio_rejected"] == 1
+
+
 def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     journal = _Journal()
     runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USDT:USDT")
@@ -296,6 +319,7 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert transitions[-1]["quotes_distinct"] == 3
 
     open_stats = runner.stats()
+    assert open_stats["armed_entries"] == 1
     assert open_stats["open_intents"] == 1
     assert open_stats["open_position"]["mark_basis"] == "executable_bid"
     assert open_stats["open_unrealized_net_usd"] < 0

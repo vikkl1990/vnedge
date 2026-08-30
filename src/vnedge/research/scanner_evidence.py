@@ -202,6 +202,7 @@ def replay_scanner(
     *,
     exchange_id: str = "binanceusdm",
     context_candles: dict[str, pd.DataFrame] | None = None,
+    funding: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Replay one frozen scanner with the runtime's single-book semantics.
 
@@ -247,6 +248,21 @@ def replay_scanner(
     cost_model = CostModel.for_profile(cost_profile)
     execution_cost = float(cost_model.round_trip_bps(include_safety=False))
     gate_cost = float(cost_model.round_trip_bps(include_safety=True))
+    funding_frame = pd.DataFrame(columns=["timestamp", "funding_rate"])
+    if funding is not None and not funding.empty:
+        required_funding = {"timestamp", "funding_rate"}
+        missing_funding = required_funding - set(funding.columns)
+        if missing_funding:
+            raise ValueError(
+                "funding frame missing column(s): " + ", ".join(sorted(missing_funding))
+            )
+        funding_frame = funding.loc[:, ["timestamp", "funding_rate"]].copy()
+        funding_frame["timestamp"] = pd.to_datetime(funding_frame["timestamp"], utc=True)
+        funding_frame["funding_rate"] = pd.to_numeric(
+            funding_frame["funding_rate"], errors="raise"
+        )
+        funding_frame = funding_frame.sort_values("timestamp", kind="stable")
+    funding_included = not funding_frame.empty
     position_active_through = -1
     admitted_trades = 0
     position_conflicts = 0
@@ -283,11 +299,15 @@ def replay_scanner(
             exit_price = float(prepared.iloc[end]["close"])
             resolution = "timeout" if end == timeout_index else "end_of_data"
             exit_index = end
+            mfe_bps = 0.0
+            mae_bps = 0.0
             for cursor in range(entry_index, end + 1):
                 bar = prepared.iloc[cursor]
                 low, high = float(bar["low"]), float(bar["high"])
                 bar_open = float(bar["open"])
                 if intent.side == "long":
+                    mfe_bps = max(mfe_bps, (high - entry) / entry * 10_000)
+                    mae_bps = min(mae_bps, (low - entry) / entry * 10_000)
                     if low <= intent.stop_price:
                         exit_price = min(intent.stop_price, bar_open)
                         resolution = "stop"
@@ -298,6 +318,8 @@ def replay_scanner(
                         exit_index = cursor
                         break
                 else:
+                    mfe_bps = max(mfe_bps, (entry - low) / entry * 10_000)
+                    mae_bps = min(mae_bps, (entry - high) / entry * 10_000)
                     if high >= intent.stop_price:
                         exit_price = max(intent.stop_price, bar_open)
                         resolution = "stop"
@@ -315,6 +337,21 @@ def replay_scanner(
             # slippage, or the safety reserve selected for this run.
             realized_cost = execution_cost
             conservative_cost = gate_cost
+            entry_ts = pd.Timestamp(prepared.iloc[entry_index]["timestamp"])
+            exit_ts = pd.Timestamp(prepared.iloc[exit_index]["timestamp"])
+            funding_rates = funding_frame.loc[
+                (funding_frame["timestamp"] > entry_ts)
+                & (funding_frame["timestamp"] <= exit_ts),
+                "funding_rate",
+            ]
+            # Perpetual convention: longs pay positive funding and shorts
+            # receive it. Expressed in bps on entry notional for this
+            # scanner-level evidence path.
+            funding_bps = (
+                (-1.0 if intent.side == "long" else 1.0)
+                * float(funding_rates.sum())
+                * 10_000.0
+            )
             record["admitted"] = True
             record["outcome"] = {
                 "resolution": resolution,
@@ -324,12 +361,16 @@ def replay_scanner(
                 # Unqualified cost/net fields mean booked execution economics.
                 # The conservative pre-trade reserve remains explicitly gated.
                 "cost_bps": realized_cost,
-                "net_bps": gross - realized_cost,
+                "net_bps": gross - realized_cost + funding_bps,
                 "execution_cost_bps": realized_cost,
                 "gate_cost_bps": conservative_cost,
-                "funding_bps": 0.0,
-                "net_execution_bps": gross - realized_cost,
-                "net_gate_bps": gross - conservative_cost,
+                "funding_bps": funding_bps,
+                "net_execution_bps": gross - realized_cost + funding_bps,
+                "net_gate_bps": gross - conservative_cost + funding_bps,
+                "mae_bps": mae_bps,
+                "mfe_bps": mfe_bps,
+                "holding_bars": max(0, exit_index - entry_index),
+                "hold_seconds": max(0.0, (exit_ts - entry_ts).total_seconds()),
                 "entry_index": entry_index,
                 "exit_index": exit_index,
             }
@@ -361,13 +402,14 @@ def replay_scanner(
         "cost_profile": cost_profile,
         "execution_cost_bps": execution_cost,
         "gate_cost_bps": gate_cost,
-        "funding_bps": 0.0,
-        "funding_included": False,
+        "funding_bps": sum(float(item["funding_bps"]) for item in outcomes),
+        "funding_included": funding_included,
+        "funding_event_count": len(funding_frame),
         "performance_eligible": False,
-        "performance_blockers": [
-            "funding_history_not_replayed",
-            "risk_gateway_not_replayed",
-        ],
+        "performance_blockers": (
+            ([] if funding_included else ["funding_history_not_replayed"])
+            + ["risk_gateway_not_replayed"]
+        ),
         "bars": len(prepared),
         "canonical_context_timeframes": list(bound_context),
         "context_quality": context_quality,

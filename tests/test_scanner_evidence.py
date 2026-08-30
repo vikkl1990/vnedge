@@ -254,6 +254,60 @@ def test_closed_replay_uses_venue_contract_cost_not_private_strategy_cost(monkey
     assert result["performance_eligible"] is False
 
 
+def test_closed_replay_reports_funding_and_path_quality(monkeypatch):
+    class _FundingPathStrategy(BaseStrategy):
+        strategy_id = "funding_path"
+        warmup_bars = 0
+
+        def prepare(self, candles):
+            return candles.copy()
+
+        def signal(self, df, index):
+            del df
+            if index != 0:
+                return None
+            return SignalIntent(
+                side="long", stop_price=90.0, take_profit_price=110.0, reason="test"
+            )
+
+    candles = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC"),
+            "open": [100.0, 100.0, 100.0, 100.0],
+            "high": [101.0, 106.0, 111.0, 101.0],
+            "low": [99.0, 98.0, 99.0, 99.0],
+            "close": [100.0, 105.0, 110.0, 100.0],
+            "volume": [1.0] * 4,
+        }
+    )
+    funding = pd.DataFrame(
+        {
+            "timestamp": [pd.Timestamp("2026-01-01T02:00:00Z")],
+            "funding_rate": [0.001],
+        }
+    )
+    monkeypatch.setattr(
+        scanner_evidence, "get_strategy_class", lambda _: _FundingPathStrategy
+    )
+
+    result = scanner_evidence.replay_scanner(
+        "funding_path", candles, funding=funding
+    )
+
+    outcome = next(row["outcome"] for row in result["records"] if row.get("admitted"))
+    assert result["funding_included"] is True
+    assert result["funding_event_count"] == 1
+    assert "funding_history_not_replayed" not in result["performance_blockers"]
+    assert result["performance_eligible"] is False
+    assert outcome["funding_bps"] == pytest.approx(-10.0)
+    assert outcome["mfe_bps"] == pytest.approx(1100.0)
+    assert outcome["mae_bps"] == pytest.approx(-200.0)
+    assert outcome["holding_bars"] == 1
+    assert outcome["hold_seconds"] == 3600.0
+    assert outcome["net_bps"] == outcome["net_execution_bps"]
+    assert result["net_bps"] == result["net_execution_bps"]
+
+
 def test_closed_replay_refuses_quote_driven_scanner_without_bbo(monkeypatch):
     class _QuoteOnly(BaseStrategy):
         strategy_id = "quote_only"

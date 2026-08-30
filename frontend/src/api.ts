@@ -413,6 +413,14 @@ export interface CorrectionLane {
   bar_close_receipt_ms: number | null;
   canonical_wait_ms: number | null;
   decision_lag_ms: number | null;
+  close_to_arm_ms: number | null;
+  htf_context_wait_ms: number | null;
+  quote_ingest_ms: number | null;
+  quote_on_quote_ms: number | null;
+  acceptance_hold_ms: number | null;
+  gate_eval_ms: number | null;
+  shadow_journal_ms: number | null;
+  tick_stop_ms: number | null;
   latency_samples: { bar_close: number; canonical_wait: number; decision: number; required: number };
   latency_recovery: Record<string, LatencyRecoveryState>;
   arm_skips: number;
@@ -423,11 +431,44 @@ export interface CorrectionLane {
   round_trip_bps: number | null;
   health: "ok" | "degraded" | "blocked" | "unknown";
   health_reason: string | null;
+  health_reasons: string[];
+  health_details: Record<string, {
+    p95_ms: number | null;
+    samples: number;
+    soft_ms: number;
+    hard_ms: number;
+    recovery_ms: number;
+    band: "ok" | "degraded" | "blocked" | "unknown" | string;
+  }>;
   equity_usd: number | null;
   realized_pnl_usd: number | null;
   unrealized_pnl_usd: number | null;
   open_positions: number;
   funnel: Record<string, number>;
+  lifecycle: {
+    engine_kind: "quote_acceptance" | "next_open" | "measurement";
+    decision_engine: string;
+    state: "watching" | "armed" | "holding" | "accepted" | "session_blocked" | "degraded";
+    armed_current: boolean;
+    arm_state: string | null;
+    armed_entries: number;
+    candidates: number;
+    accepted: number;
+    rejected: number;
+    cost_rejected: number;
+    sizing_rejected: number;
+    risk_rejected: number;
+    portfolio_rejected: number;
+    prerequisite_rejected: number;
+    fires: number | null;
+    resolved: number;
+    pending: number;
+    session_state: "eligible" | "blocked";
+    htf_context_age_seconds: number | null;
+    net_value: number | null;
+    net_unit: "USD" | null;
+    net_basis: "shadow_booked_execution" | null;
+  };
   sizing_profile: SizingProfile | null;
   runtime_contract: ScannerRuntimeContract | null;
   active_plan: Record<string, unknown> | null;
@@ -435,6 +476,17 @@ export interface CorrectionLane {
   why_no_fire: string;
   last_reject_reason: string | null;
   shadow_perf: {
+    virtual_trades?: number;
+    armed_entries?: number;
+    candidates?: number;
+    approved?: number;
+    rejected?: number;
+    rejection_reasons?: Record<string, number>;
+    cost_rejected?: number;
+    sizing_rejected?: number;
+    risk_rejected?: number;
+    portfolio_rejected?: number;
+    prerequisite_rejected?: number;
     pending_shadow_intents?: number;
     pending_intents?: Array<{
       intent_key: string;
@@ -447,6 +499,10 @@ export interface CorrectionLane {
     }>;
     shadow_outcomes_recent?: Record<string, unknown>[];
     virtual_net_usd?: number;
+    resolved_net_usd?: number;
+    open_unrealized_net_usd?: number;
+    total_net_usd?: number;
+    open_position?: Record<string, unknown> | null;
     wins?: number;
     losses?: number;
     profit_factor?: number | null;
@@ -466,6 +522,9 @@ export interface CorrectionLane {
 export interface LanesPayload {
   generated_at: string;
   source_snapshot_at: string | null;
+  snapshot_age_ms: number | null;
+  snapshot_state: "fresh" | "stale" | "unknown";
+  snapshot_sla_ms: number;
   lanes: CorrectionLane[];
   capital_roster_size: number;
   measurement_only: boolean;
@@ -782,10 +841,16 @@ export interface BacktestTrade {
   fees_usd: number;
   funding_usd: number;
   net_pnl_usd: number;
+  gross_bps_on_entry_notional?: number | null;
+  execution_cost_bps_on_entry_notional?: number | null;
+  funding_bps_on_entry_notional?: number | null;
+  net_execution_bps_on_entry_notional?: number | null;
   net_bps_on_entry_notional: number | null;
   return_on_initial_equity_pct: number;
   mae_usd: number;
   mfe_usd: number;
+  mae_bps_on_entry_notional?: number | null;
+  mfe_bps_on_entry_notional?: number | null;
   hold_seconds: number;
 }
 
@@ -818,6 +883,8 @@ export interface BacktestOverview {
   skipped_by_sizing: number;
   net_profit_usd: number;
   gross_profit_usd: number;
+  booked_fees_usd?: number;
+  funding_cashflow_usd?: number;
   total_cost_usd: number;
   return_pct: number;
   annualized_return_pct: number | null;
@@ -873,7 +940,11 @@ export interface BacktestReport {
       taker_bps_per_leg: number;
       slippage_bps_per_leg: number;
       modeled_taker_round_trip_bps: number;
+      execution_round_trip_bps?: number;
+      gate_round_trip_bps?: number;
+      safety_reserve_bps?: number;
       funding_included: boolean;
+      funding_event_count?: number;
     };
     exit_contract: {
       max_holding_bars: number;

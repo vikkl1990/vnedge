@@ -124,6 +124,49 @@ def test_lane_projection_uses_server_health_bands() -> None:
 
     assert projected["health"] == "blocked"
     assert projected["health_reason"] == "bar_close_lag_hard"
+    assert projected["health_reasons"] == ["bar_close_lag_hard"]
+    assert projected["health_details"]["bar_close_receipt"] == {
+        "p95_ms": 120.0,
+        "samples": 20,
+        "soft_ms": 500,
+        "hard_ms": 2000,
+        "recovery_ms": 1500,
+        "band": "blocked",
+    }
+
+
+def test_lane_projection_reports_simultaneous_latency_failures() -> None:
+    snap = snapshot()
+    lane = snap["lanes"][0]
+    lane["gapped_candles"] = 0
+    lane["arm_blocked"] = "bar_close_lag_hard"
+    lane["timeframe"] = "15m"
+    lane["latency"] = {
+        "bar_close_processing_ms": {"p95": 2_400.0, "n": 101},
+        "decision_lag_ms": {"p95": 4_200.0, "n": 101},
+    }
+    lane["bands"] = {
+        "age": "ok",
+        "bar_close_lag": "blocked",
+        "decision_lag": "blocked",
+        "dd": "ok",
+    }
+
+    projected = build_lanes_payload(snap, now=NOW)["lanes"][0]
+
+    assert projected["health_reasons"] == [
+        "bar_close_lag_hard",
+        "decision_lag_hard",
+    ]
+    assert projected["health_details"]["bar_close_receipt"]["hard_ms"] == 2_000
+    assert projected["health_details"]["decision_compute"] == {
+        "p95_ms": 4_200.0,
+        "samples": 101,
+        "soft_ms": 500,
+        "hard_ms": 2_500,
+        "recovery_ms": 2_000,
+        "band": "blocked",
+    }
 
 
 def test_lane_projection_keeps_fresh_candle_separate_from_latency_block() -> None:
@@ -202,6 +245,122 @@ def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     assert lane["last_signal_age_seconds"] == 7200.0
     assert lane["shadow_perf"]["virtual_net_usd"] == 3.5
     assert lane["last_reject_reason"] == "no causal BoS candidate"
+
+
+def test_quote_lane_lifecycle_does_not_relabel_candidates_as_fires() -> None:
+    snap = snapshot()
+    snap["snapshot_age_ms"] = 2_500.0
+    snap["lanes"] = [
+        {
+            "lane_id": "shadow_observe_squeeze_btc_5m",
+            "exchange": "binanceusdm",
+            "strategy_id": "squeeze_expansion_breakout_v4",
+            "mode": "shadow (live data)",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "5m",
+            "feed": "ok",
+            "bands": {
+                "age": "ok",
+                "bar_close_lag": "ok",
+                "decision_lag": "ok",
+                "dd": "ok",
+            },
+            "funnel": {
+                "signals": 7,
+                "live_signals": 7,
+                "shadow_approved": 2,
+                "shadow_rejected": 5,
+                "risk_rejects": 3,
+                "sizing_skips": 1,
+            },
+            "shadow_perf": {
+                "virtual_trades": 2,
+                "armed_entries": 287,
+                "candidates": 7,
+                "approved": 2,
+                "rejected": 5,
+                "cost_rejected": 3,
+                "sizing_rejected": 1,
+                "risk_rejected": 1,
+                "acceptance_state": "armed_long",
+                "virtual_net_usd": -10.81,
+            },
+            "runtime_contract": {
+                "decision_tf": "5m",
+                "context_tfs": ["1h", "4h"],
+                "context_age_seconds": {"1h": 120.0, "4h": 900.0},
+                "entry_clock": "bbo_acceptance",
+                "protection_clock": "ticks",
+                "decision_engine": "quote_acceptance_v1",
+            },
+        }
+    ]
+
+    payload = build_lanes_payload(snap, now=NOW)
+    lane = payload["lanes"][0]
+
+    assert payload["snapshot_state"] == "fresh"
+    assert payload["snapshot_age_ms"] == 2500.0
+    assert lane["health"] == "ok"
+    assert lane["lifecycle"] == {
+        "engine_kind": "quote_acceptance",
+        "decision_engine": "quote_acceptance_v1",
+        "state": "armed",
+        "armed_current": True,
+        "arm_state": "armed_long",
+        "armed_entries": 287,
+        "candidates": 7,
+        "accepted": 2,
+        "rejected": 5,
+        "cost_rejected": 3,
+        "sizing_rejected": 1,
+        "risk_rejected": 1,
+        "portfolio_rejected": 0,
+        "prerequisite_rejected": 0,
+        "fires": None,
+        "resolved": 2,
+        "pending": 0,
+        "session_state": "eligible",
+        "htf_context_age_seconds": 900.0,
+        "net_value": -10.81,
+        "net_unit": "USD",
+        "net_basis": "shadow_booked_execution",
+    }
+
+
+def test_next_open_lane_keeps_real_closed_bar_fire_count() -> None:
+    snap = snapshot()
+    snap["snapshot_age_ms"] = 20_000.0
+    snap["lanes"] = [
+        {
+            "lane_id": "shadow_observe_structure_btc_1h",
+            "exchange": "binanceusdm",
+            "strategy_id": "structure_bos_1h",
+            "mode": "shadow (live data)",
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1h",
+            "feed": "ok",
+            "bands": {
+                "age": "ok",
+                "bar_close_lag": "ok",
+                "decision_lag": "ok",
+                "dd": "ok",
+            },
+            "funnel": {"live_signals": 3, "shadow_approved": 2},
+            "runtime_contract": {
+                "entry_clock": "next_open",
+                "decision_engine": "base_strategy_next_open_v1",
+            },
+        }
+    ]
+
+    payload = build_lanes_payload(snap, now=NOW)
+    lifecycle = payload["lanes"][0]["lifecycle"]
+
+    assert payload["snapshot_state"] == "stale"
+    assert lifecycle["engine_kind"] == "next_open"
+    assert lifecycle["fires"] == 3
+    assert lifecycle["accepted"] == 2
 
 
 def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() -> None:

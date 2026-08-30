@@ -15,6 +15,7 @@ from typing import Any
 
 from vnedge.dashboard.health_bands import lane_bands, lane_health, timeframe_health
 from vnedge.plan.cost_model import CostModel
+from vnedge.runtime import latency_thresholds as LT
 from vnedge.runtime.latency_thresholds import LATENCY_GATE_MIN_SAMPLES
 from vnedge.strategy.scanner_observability import (
     ScannerCandidate,
@@ -32,6 +33,8 @@ LIVE_BLOCKED_MESSAGE = (
     "Live entrypoint disabled — venue private stream / checklist incomplete. "
     "Paper/shadow only."
 )
+
+LANES_SNAPSHOT_SLA_MS = 15_000.0
 
 
 def _lane_round_trip_bps(lane: Mapping[str, Any], plan: Mapping[str, Any]) -> float | None:
@@ -196,42 +199,215 @@ def _current_waiting_reason(lane: Mapping[str, Any], fallback: str) -> str:
     return fallback
 
 
-def _health_reason(
+def _snapshot_age_ms(snapshot: Mapping[str, Any], now: datetime) -> float | None:
+    """Return serving-time snapshot age without making a stale row look live."""
+    reported = _number(snapshot.get("snapshot_age_ms"))
+    if reported is not None:
+        return max(0.0, reported)
+    raw = snapshot.get("timestamp") or snapshot.get("as_of") or snapshot.get("ts")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return round(max(0.0, (now - parsed.astimezone(UTC)).total_seconds() * 1000), 1)
+
+
+def _int(value: object) -> int:
+    try:
+        return max(0, int(float(str(value or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _scanner_lifecycle(
+    lane: Mapping[str, Any],
+    *,
+    mode: str,
+    health: str,
+    waiting_reason: str,
+    open_positions: int,
+) -> dict[str, Any]:
+    """Normalize unlike scanner engines without relabelling candidates as fires."""
+    contract = _mapping(lane.get("runtime_contract"))
+    funnel = _mapping(lane.get("funnel"))
+    perf = _mapping(lane.get("shadow_perf"))
+    decision_engine = str(contract.get("decision_engine") or "unreported")
+    entry_clock = str(contract.get("entry_clock") or "")
+    quote_engine = entry_clock == "bbo_acceptance" or decision_engine.startswith(
+        "quote_acceptance"
+    )
+    engine_kind = (
+        "measurement"
+        if mode == "measurement"
+        else "quote_acceptance"
+        if quote_engine
+        else "next_open"
+    )
+
+    acceptance_state = str(perf.get("acceptance_state") or "")
+    state_text = acceptance_state.lower()
+    armed_current = state_text.startswith("armed_") or any(
+        token in state_text for token in ("_probe", "holding")
+    )
+    pending = _int(perf.get("pending_shadow_intents"))
+    candidates = (
+        _int(perf.get("candidates"))
+        if quote_engine
+        else _int(funnel.get("live_signals") or funnel.get("signals"))
+    )
+    accepted = _int(perf.get("approved") or funnel.get("shadow_approved"))
+    rejected = _int(perf.get("rejected") or funnel.get("shadow_rejected"))
+    cost_rejected = _int(perf.get("cost_rejected"))
+    sizing_rejected = _int(
+        perf.get("sizing_rejected") or funnel.get("sizing_skips")
+    )
+    risk_rejected = _int(perf.get("risk_rejected") or funnel.get("risk_rejects"))
+    portfolio_rejected = _int(perf.get("portfolio_rejected"))
+    prerequisite_rejected = _int(perf.get("prerequisite_rejected"))
+    resolved = _int(perf.get("virtual_trades"))
+
+    waiting_lower = waiting_reason.lower()
+    session_state = (
+        "blocked"
+        if "session" in waiting_lower or "outside_session" in state_text
+        else "eligible"
+    )
+    if health in {"blocked", "degraded"}:
+        setup_state = "degraded"
+    elif open_positions > 0 or pending > 0 or perf.get("open_position"):
+        setup_state = "holding"
+    elif state_text.endswith("_accepted"):
+        setup_state = "accepted"
+    elif armed_current:
+        setup_state = "armed"
+    elif session_state == "blocked":
+        setup_state = "session_blocked"
+    else:
+        setup_state = "watching"
+
+    context_ages = _mapping(contract.get("context_age_seconds"))
+    numeric_context_ages = [
+        number
+        for value in context_ages.values()
+        if (number := _number(value)) is not None
+    ]
+    net_value = _number(perf.get("virtual_net_usd"))
+    return {
+        "engine_kind": engine_kind,
+        "decision_engine": decision_engine,
+        "state": setup_state,
+        "armed_current": armed_current,
+        "arm_state": acceptance_state or None,
+        "armed_entries": _int(perf.get("armed_entries")),
+        "candidates": candidates,
+        "accepted": accepted,
+        "rejected": rejected,
+        "cost_rejected": cost_rejected,
+        "sizing_rejected": sizing_rejected,
+        "risk_rejected": risk_rejected,
+        "portfolio_rejected": portfolio_rejected,
+        "prerequisite_rejected": prerequisite_rejected,
+        # A fire is a closed-bar/next-open event. Quote engines enter through
+        # accepted BBO candidates and intentionally expose no fire count.
+        "fires": None
+        if quote_engine or mode == "measurement"
+        else _int(funnel.get("live_signals") or funnel.get("signals")),
+        "resolved": resolved,
+        "pending": pending,
+        "session_state": session_state,
+        "htf_context_age_seconds": max(numeric_context_ages)
+        if numeric_context_ages
+        else None,
+        "net_value": net_value,
+        "net_unit": "USD" if net_value is not None else None,
+        "net_basis": "shadow_booked_execution" if net_value is not None else None,
+    }
+
+
+def _health_diagnostics(
     lane: Mapping[str, Any], health: str, problem: str | None
-) -> str | None:
-    """Explain every non-OK lane with the same bands that assign its colour."""
+) -> tuple[list[str], dict[str, Any]]:
+    """Return *all* current health causes plus their measured contracts.
+
+    The runtime arm gate deliberately returns the first failed check.  That is
+    sufficient to fail closed but it made the cockpit hide simultaneous
+    failures (for example a slow venue close *and* slow strategy compute).
+    The projection therefore evaluates the already-server-owned bands again;
+    it does not invent a second health policy.
+    """
+    reasons: list[str] = []
+
+    def add(reason: object) -> None:
+        text = str(reason or "").strip()
+        if text and text not in reasons:
+            reasons.append(text)
+
     if problem:
-        return problem
+        add(problem)
     blocked = lane.get("arm_blocked")
     if blocked:
         if isinstance(blocked, Mapping):
-            return str(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
-        return str(blocked)
+            add(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
+        else:
+            add(blocked)
     if lane.get("gapped_candles"):
-        return "candle_gap"
-    if health == "unknown":
-        samples = [
-            _latency_samples(lane, "bar_close_processing_ms", "feed_lag_ms"),
-            _latency_samples(lane, "decision_lag_ms"),
-        ]
-        observed = min((value for value in samples if value > 0), default=0)
-        return f"latency_warming_{observed}/{LATENCY_GATE_MIN_SAMPLES}"
-    if health == "ok":
-        return None
+        add("candle_gap")
+
     bands = lane.get("bands")
     bands = bands if isinstance(bands, Mapping) else lane_bands(dict(lane))
+    suffix = {"blocked": "hard", "degraded": "soft"}
     for name in ("age", "bar_close_lag", "decision_lag", "dd"):
         band = str(bands.get(name) or "unknown")
-        if band == "blocked":
-            return f"{name}_hard"
-    for name in ("age", "bar_close_lag", "decision_lag", "dd"):
-        band = str(bands.get(name) or "unknown")
-        if band == "degraded":
-            return f"{name}_soft"
+        if band in suffix:
+            add(f"{name}_{suffix[band]}")
+
     feed = str(lane.get("feed") or "").lower()
     if feed and feed not in {"ok", "live"}:
-        return f"feed_{feed}"
-    return "degraded"
+        add(f"feed_{feed}")
+
+    bar_p95 = _latency_value_with_alias(
+        lane, "bar_close_processing_ms", "feed_lag_ms"
+    )
+    decision_p95 = _latency_value(lane, "decision_lag_ms")
+    timeframe = str(lane.get("timeframe") or "")
+    decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
+        timeframe
+    )
+    details = {
+        "bar_close_receipt": {
+            "p95_ms": bar_p95,
+            "samples": _latency_samples(
+                lane, "bar_close_processing_ms", "feed_lag_ms"
+            ),
+            "soft_ms": LT.CLOSED_BAR_LAG_SOFT_P99_MS,
+            "hard_ms": LT.CLOSED_BAR_LAG_HARD_P99_MS,
+            "recovery_ms": LT.CLOSED_BAR_LAG_RECOVERY_MS,
+            "band": str(bands.get("bar_close_lag") or "unknown"),
+        },
+        "decision_compute": {
+            "p95_ms": decision_p95,
+            "samples": _latency_samples(lane, "decision_lag_ms"),
+            "soft_ms": decision_soft,
+            "hard_ms": decision_hard,
+            "recovery_ms": decision_recovery,
+            "band": str(bands.get("decision_lag") or "unknown"),
+        },
+    }
+
+    if health == "unknown" and not reasons:
+        samples = [
+            int(details["bar_close_receipt"]["samples"]),
+            int(details["decision_compute"]["samples"]),
+        ]
+        observed = min((value for value in samples if value > 0), default=0)
+        add(f"latency_warming_{observed}/{LATENCY_GATE_MIN_SAMPLES}")
+    elif health == "degraded" and not reasons:
+        add("degraded")
+    return reasons, details
 
 
 def build_lanes_payload(
@@ -239,6 +415,7 @@ def build_lanes_payload(
 ) -> dict[str, Any]:
     """Project the active roster without allowing mode to imply permission."""
     at = now or datetime.now(UTC)
+    snapshot_age_ms = _snapshot_age_ms(snapshot, at)
     runtime = _mapping(snapshot.get("runtime_control"))
     problem_rows = _mapping(snapshot.get("lane_health")).get("problems")
     problems = {
@@ -272,6 +449,17 @@ def build_lanes_payload(
         health = lane_health(lane, has_problem=lane_id in problems)
         reason = _last_signal_reason(lane, eligibility=eligibility, mode=mode)
         waiting_reason = _current_waiting_reason(lane, reason)
+        open_positions = _position_count(lane)
+        lane_lifecycle = _scanner_lifecycle(
+            lane,
+            mode=mode,
+            health=health,
+            waiting_reason=waiting_reason,
+            open_positions=open_positions,
+        )
+        health_reasons, health_details = _health_diagnostics(
+            lane, health, problems.get(lane_id)
+        )
         result.append(
             {
                 "lane_id": str(lane.get("lane_id") or strategy_id or "unknown"),
@@ -326,15 +514,16 @@ def build_lanes_payload(
                 "cost_profile": str(lane.get("cost_profile") or "unreported"),
                 "round_trip_bps": _lane_round_trip_bps(lane, plan),
                 "health": health,
-                "health_reason": _health_reason(
-                    lane, health, problems.get(str(lane.get("lane_id") or ""))
-                ),
+                "health_reason": health_reasons[0] if health_reasons else None,
+                "health_reasons": health_reasons,
+                "health_details": health_details,
                 "shadow_perf": lane.get("shadow_perf") if mode == "shadow" else None,
                 "equity_usd": _number(lane.get("equity")),
                 "realized_pnl_usd": _number(lane.get("realized_pnl")),
                 "unrealized_pnl_usd": _number(lane.get("unrealized_pnl")),
-                "open_positions": _position_count(lane),
+                "open_positions": open_positions,
                 "funnel": dict(_mapping(lane.get("funnel"))),
+                "lifecycle": lane_lifecycle,
                 # Measurement lanes have a nominal tracker balance because the
                 # shared runtime owns one, but that is not an actionable purse
                 # or sizing contract.  Exposing it here made the cockpit imply
@@ -451,7 +640,18 @@ def build_lanes_payload(
         )
     return {
         "generated_at": at.isoformat(),
-        "source_snapshot_at": snapshot.get("timestamp") or snapshot.get("as_of"),
+        "source_snapshot_at": snapshot.get("timestamp")
+        or snapshot.get("as_of")
+        or snapshot.get("ts"),
+        "snapshot_age_ms": snapshot_age_ms,
+        "snapshot_state": (
+            "unknown"
+            if snapshot_age_ms is None
+            else "stale"
+            if snapshot_age_ms > LANES_SNAPSHOT_SLA_MS
+            else "fresh"
+        ),
+        "snapshot_sla_ms": LANES_SNAPSHOT_SLA_MS,
         "lanes": result,
         "capital_roster_size": capital_count,
         "measurement_only": capital_count == 0,

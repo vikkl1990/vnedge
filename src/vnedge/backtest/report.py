@@ -82,6 +82,12 @@ def _trade_row(trade: Trade, initial_equity: float) -> dict[str, Any]:
         0.0,
         (pd.Timestamp(trade.exit_ts) - pd.Timestamp(trade.entry_ts)).total_seconds(),
     )
+    gross_bps = trade.gross_pnl_usd / notional * 10_000.0 if notional else None
+    execution_cost_bps = trade.fees_usd / notional * 10_000.0 if notional else None
+    funding_bps = trade.funding_usd / notional * 10_000.0 if notional else None
+    net_execution_bps = net / notional * 10_000.0 if notional else None
+    mae_bps = trade.mae_usd / notional * 10_000.0 if notional else None
+    mfe_bps = trade.mfe_usd / notional * 10_000.0 if notional else None
     return {
         "side": trade.side,
         "quantity": trade.quantity,
@@ -95,10 +101,18 @@ def _trade_row(trade: Trade, initial_equity: float) -> dict[str, Any]:
         "fees_usd": trade.fees_usd,
         "funding_usd": trade.funding_usd,
         "net_pnl_usd": net,
-        "net_bps_on_entry_notional": (net / notional * 10_000.0) if notional else None,
+        "gross_bps_on_entry_notional": gross_bps,
+        "execution_cost_bps_on_entry_notional": execution_cost_bps,
+        "funding_bps_on_entry_notional": funding_bps,
+        "net_execution_bps_on_entry_notional": net_execution_bps,
+        # Compatibility alias. In schema v2 unqualified net means booked
+        # execution economics, never the conservative CostGate reserve.
+        "net_bps_on_entry_notional": net_execution_bps,
         "return_on_initial_equity_pct": (net / initial_equity * 100.0),
         "mae_usd": trade.mae_usd,
         "mfe_usd": trade.mfe_usd,
+        "mae_bps_on_entry_notional": mae_bps,
+        "mfe_bps_on_entry_notional": mfe_bps,
         "hold_seconds": hold_seconds,
     }
 
@@ -226,6 +240,8 @@ def build_backtest_report(
         warnings.append("UNDER_SAMPLED: fewer than 30 closed trades")
     if evidence_class.upper() != "SEALED_OOS":
         warnings.append("Not sealed OOS evidence; this run cannot support promotion")
+    if not result.funding_included:
+        warnings.append("FUNDING_EXCLUDED: no funding history was supplied")
     if not trades:
         warnings.append("No closed trades in the selected window")
 
@@ -261,7 +277,15 @@ def build_backtest_report(
                     2.0
                     * (result.config.fees.taker_bps + result.config.slippage.bps)
                 ),
-                "funding_included": True,
+                "execution_round_trip_bps": result.config.execution_round_trip_bps,
+                "gate_round_trip_bps": result.config.gate_round_trip_bps,
+                "safety_reserve_bps": max(
+                    0.0,
+                    result.config.gate_round_trip_bps
+                    - result.config.execution_round_trip_bps,
+                ),
+                "funding_included": result.funding_included,
+                "funding_event_count": result.funding_event_count,
             },
             "exit_contract": {
                 "max_holding_bars": result.config.max_holding_bars,
@@ -275,6 +299,8 @@ def build_backtest_report(
             **metrics.to_dict(),
             "gross_profit_usd": gross_profit,
             "net_profit_usd": net_profit,
+            "booked_fees_usd": fees,
+            "funding_cashflow_usd": funding,
             "total_cost_usd": fees - funding,
             "annualized_return_pct": annualized_return,
             "calmar": calmar,

@@ -3168,7 +3168,7 @@
     '<div><div class="k">Timeframe / bars</div><div class="v">'+safe(run.timeframe||'—')+' · '+num(run.bars).toLocaleString()+'</div></div>'+
     '<div><div class="k">Window</div><div class="v">'+safe(String(w.start||'—').slice(0,10))+' → '+safe(String(w.end||'—').slice(0,10))+'</div></div>'+
     '<div><div class="k">Starting equity</div><div class="v">'+btMoney(run.initial_equity_usd)+'</div></div>'+
-    '<div><div class="k">Modeled taker RT</div><div class="v">'+btNumber(c.modeled_taker_round_trip_bps,1,' bps')+'</div></div>'+
+    '<div><div class="k">Booked / gate RT</div><div class="v">'+btNumber(c.execution_round_trip_bps==null?c.modeled_taker_round_trip_bps:c.execution_round_trip_bps,1,'')+' / '+btNumber(c.gate_round_trip_bps==null?c.modeled_taker_round_trip_bps:c.gate_round_trip_bps,1,' bps')+'</div></div>'+
     '<div><div class="k">Evidence integrity</div><div class="v">'+safe(ev.bundle_id?('verified · '+String(ev.bundle_id).slice(4,16)):'legacy · unbundled')+'</div></div>'+
     '<div><div class="k">Engine parity</div><div class="v">'+safe(eng.parity_status||'NOT REPORTED')+'</div></div>'+
   '</div>';}

@@ -170,28 +170,41 @@ export function StatusStrip() {
 export function DeskPanel() {
   const { data } = useLanes();
   const lanes = data?.lanes ?? [];
+  const setupTone = (state: CorrectionLane["lifecycle"]["state"]): "good" | "info" | "warn" | "bad" | "neutral" => (
+    state === "accepted" || state === "holding" ? "good"
+      : state === "armed" ? "info"
+      : state === "session_blocked" ? "neutral"
+      : state === "degraded" ? "bad"
+      : "neutral"
+  );
   const cols: Column<CorrectionLane>[] = [
-    { key: "strategy_id", header: "Strategy", render: (r) => <span className={r.eligibility === "KILLED" ? "text-faint line-through" : "font-mono"}>{r.strategy_id}</span> },
     {
-      key: "eligibility", header: "Eligibility", render: (r) => (
-        <TerminalBadge tone={r.eligibility === "eligible" ? "info" : r.eligibility === "KILLED" ? "bad" : r.eligibility === "RESEARCH_ONLY" ? "warn" : "neutral"}>{r.eligibility}</TerminalBadge>
-      ),
+      key: "strategy_id", header: "Lane", render: (r) => <span className="block min-w-[190px]"><span className={r.eligibility === "KILLED" ? "font-mono text-faint line-through" : "font-mono text-txt"}>{r.strategy_id}</span><span className="block text-[9px] text-faint">{r.eligibility} · {r.observation_class === "shadow_observe" ? "SHADOW_OBSERVE" : r.mode}</span></span>,
     },
-    { key: "mode", header: "Mode", render: (r) => <TerminalBadge tone={r.mode === "paper" ? "warn" : r.observation_class === "shadow_observe" ? "info" : "neutral"}>{r.observation_class === "shadow_observe" ? "SHADOW_OBSERVE" : r.mode}</TerminalBadge> },
-    { key: "market", header: "Symbol / TF", render: (r) => <span className="whitespace-nowrap font-mono">{r.symbol || "—"} · {r.timeframe || "—"}</span> },
-    { key: "capital", header: "Capital", render: (r) => <TerminalBadge tone={r.capital ? "bad" : "neutral"}>{r.capital ? "yes" : "no"}</TerminalBadge> },
-    { key: "rtt", header: "Venue RTT", align: "right", render: (r) => r.venue_rtt_ms == null ? "not reported" : `${r.venue_rtt_ms.toFixed(1)} ms` },
-    { key: "candle", header: "Candle", render: (r) => <span className="whitespace-nowrap font-mono">{r.candle_status} · {r.candle_age_ms == null ? "age —" : ageSec(r.candle_age_ms / 1000)}</span> },
-    { key: "close-lag", header: "Close path p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} persisted receipt samples`}><span className="block">receipt {r.bar_close_receipt_ms == null ? "—" : `${r.bar_close_receipt_ms.toFixed(1)} ms`}</span><span className="block text-[9px] text-faint">lake wait {r.canonical_wait_ms == null ? "—" : `${r.canonical_wait_ms.toFixed(1)} ms`} · n {r.latency_samples.bar_close}/{r.latency_samples.required}</span></span> },
-    { key: "lag", header: "Decision p95", align: "right", render: (r) => <span title={`${r.latency_samples.decision}/${r.latency_samples.required} persisted runtime samples`}>{r.decision_lag_ms == null ? "—" : `${r.decision_lag_ms.toFixed(1)} ms`}<span className="block text-[9px] text-faint">n {r.latency_samples.decision}/{r.latency_samples.required}</span></span> },
-    { key: "skips", header: "Arm skips", align: "right", render: (r) => r.arm_skips.toLocaleString("en-US") },
-    { key: "signal", header: "Last signal / reason", render: (r) => <span className="block min-w-[150px]"><span className="font-mono">{r.last_signal_age_seconds == null ? "—" : ageSec(r.last_signal_age_seconds)}</span><span className="block text-[10px] text-dim">{r.current_waiting_reason}</span></span> },
-    { key: "virtual", header: "Virtual outcome", render: (r) => r.observation_class !== "shadow_observe" ? "—" : <span className="block min-w-[130px] font-mono">{usd(r.shadow_perf?.virtual_net_usd)}<span className="block text-[10px] text-dim">{r.shadow_perf?.wins ?? 0}W / {r.shadow_perf?.losses ?? 0}L · {r.shadow_perf?.pending_shadow_intents ?? 0} pending</span></span> },
-    { key: "cost", header: "Cost profile", render: (r) => <span className="whitespace-nowrap font-mono">{r.cost_profile} · {r.round_trip_bps == null ? "RT —" : `${r.round_trip_bps.toFixed(1)} bps RT`}</span> },
-    { key: "health", header: "Health", render: (r) => <TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "warn" : r.health === "blocked" ? "bad" : "neutral"}>{r.health}</TerminalBadge> },
+    { key: "market", header: "Market", render: (r) => <span className="whitespace-nowrap font-mono">{r.symbol || "—"}<span className="block text-[9px] text-faint">decision {r.timeframe || "—"}</span></span> },
+    { key: "engine", header: "Entry engine", render: (r) => <span className="block whitespace-nowrap font-mono">{r.lifecycle.engine_kind === "quote_acceptance" ? "BBO accept" : r.lifecycle.engine_kind === "next_open" ? "next open" : "measurement"}<span className="block text-[9px] text-faint">protect {r.runtime_contract?.protection_clock ?? "—"}</span></span> },
+    { key: "state", header: "Setup state", render: (r) => <span className="block min-w-[105px]"><TerminalBadge tone={setupTone(r.lifecycle.state)}>{r.lifecycle.state}</TerminalBadge><span className="mt-1 block max-w-[150px] truncate font-mono text-[9px] text-faint" title={r.lifecycle.arm_state ?? r.current_waiting_reason}>{r.lifecycle.arm_state ?? r.current_waiting_reason}</span></span> },
+    { key: "funnel", header: "Lifecycle", render: (r) => <span className="block min-w-[180px] font-mono"><span className="block">arm {r.lifecycle.armed_entries} → cand {r.lifecycle.candidates} → acc {r.lifecycle.accepted}</span><span className="block text-[9px] text-faint">rej {r.lifecycle.rejected}: cost {r.lifecycle.cost_rejected} · size {r.lifecycle.sizing_rejected} · risk {r.lifecycle.risk_rejected} · {r.lifecycle.fires == null ? "fires n/a" : `fires ${r.lifecycle.fires}`}</span></span> },
+    { key: "context", header: "Session / HTF", render: (r) => <span className="block min-w-[100px] font-mono">{r.lifecycle.session_state}<span className="block text-[9px] text-faint">HTF {r.lifecycle.htf_context_age_seconds == null ? "n/a" : ageSec(r.lifecycle.htf_context_age_seconds)}</span></span> },
+    { key: "close-lag", header: "Close → arm p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} receipt samples`}><span className="block">{r.close_to_arm_ms == null ? "—" : `${r.close_to_arm_ms.toFixed(1)} ms`}</span><span className="block text-[9px] text-faint">receipt {r.bar_close_receipt_ms == null ? "—" : `${r.bar_close_receipt_ms.toFixed(0)} ms`} · wait {r.canonical_wait_ms == null ? "—" : `${r.canonical_wait_ms.toFixed(0)} ms`}</span></span> },
+    { key: "waiting", header: "Why waiting", render: (r) => <span className="block min-w-[145px]"><span className="font-mono text-dim">{r.current_waiting_reason}</span><span className="block text-[9px] text-faint">{r.arm_skips.toLocaleString("en-US")} arm skips</span></span> },
+    { key: "virtual", header: "Shadow booked", align: "right", render: (r) => r.lifecycle.net_unit !== "USD" ? "—" : <span className="block min-w-[105px] font-mono">{usd(r.lifecycle.net_value)}<span className="block text-[9px] text-faint">USD · {r.lifecycle.resolved} resolved · {r.lifecycle.pending} pending</span></span> },
+    { key: "cost", header: "Gate wall", render: (r) => <span className="whitespace-nowrap font-mono">{r.cost_profile}<span className="block text-[9px] text-faint">{r.round_trip_bps == null ? "not reported" : `${r.round_trip_bps.toFixed(1)} bps RT`}</span></span> },
+    { key: "health", header: "Ops health", render: (r) => {
+      const reasons = r.health_reasons?.length ? r.health_reasons : r.health_reason ? [r.health_reason] : [];
+      const close = r.health_details?.bar_close_receipt;
+      const decision = r.health_details?.decision_compute;
+      const title = [
+        reasons.join(" · ") || "operationally nominal",
+        close?.p95_ms == null ? "" : `close receipt p95 ${close.p95_ms.toFixed(1)}ms (soft ${close.soft_ms} / hard ${close.hard_ms}; n=${close.samples})`,
+        decision?.p95_ms == null ? "" : `decision p95 ${decision.p95_ms.toFixed(1)}ms (soft ${decision.soft_ms} / hard ${decision.hard_ms}; n=${decision.samples})`,
+      ].filter(Boolean).join("\n");
+      return <span className="block min-w-[150px]"><TerminalBadge tone={r.health === "ok" ? "good" : r.health === "degraded" ? "warn" : r.health === "blocked" ? "bad" : "neutral"}>{r.health}</TerminalBadge><span className="mt-1 block max-w-[180px] text-[9px] leading-4 text-faint" title={title}>{reasons.length ? reasons.slice(0, 2).join(" · ") : "operationally nominal"}</span>{reasons.length > 2 && <span className="block text-[9px] text-faint">+{reasons.length - 2} more</span>}</span>;
+    } },
   ];
   return (
     <TerminalPanel title="Desk · runtime lanes" meta={`${lanes.length} active · policy truth · read only`}>
+      {data?.snapshot_state !== "fresh" && <div className="mb-4 rounded-lg border border-short/50 bg-short/10 px-3 py-2 text-[12px] text-short" role="alert"><strong>Lane snapshot {data?.snapshot_state ?? "unknown"}.</strong> Setup states and counters are not live. Age {data?.snapshot_age_ms == null ? "not reported" : ageSec(data.snapshot_age_ms / 1000)}; SLA {data?.snapshot_sla_ms == null ? "—" : ageSec(data.snapshot_sla_ms / 1000)}.</div>}
       {data?.banner && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[12px] text-warn">{data.banner}</div>}
       {lanes.length ? <DenseTable columns={cols} rows={lanes} rowKey={(lane) => lane.lane_id} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -202,11 +215,17 @@ export function DeskPanel() {
               <span className="text-faint">virtual purse</span><span className="text-right font-mono">{usd(lane.sizing_profile?.starting_equity_usd ?? lane.equity_usd)}</span>
               <span className="text-faint">margin / leverage</span><span className="text-right font-mono">{usd(lane.sizing_profile?.fixed_margin_usd)} / ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>
               <span className="text-faint">bars / evaluations</span><span className="text-right font-mono">{lane.funnel.bars ?? 0} / {lane.funnel.evals ?? 0}</span>
-              <span className="text-faint">signals / approved</span><span className="text-right font-mono">{lane.funnel.signals ?? 0} / {lane.funnel.shadow_approved ?? 0}</span>
+              <span className="text-faint">armed / candidate / accepted</span><span className="text-right font-mono">{lane.lifecycle.armed_entries} / {lane.lifecycle.candidates} / {lane.lifecycle.accepted}</span>
+              <span className="text-faint">rejects total / cost</span><span className="text-right font-mono">{lane.lifecycle.rejected} / {lane.lifecycle.cost_rejected}</span>
+              <span className="text-faint">size / risk / portfolio</span><span className="text-right font-mono">{lane.lifecycle.sizing_rejected} / {lane.lifecycle.risk_rejected} / {lane.lifecycle.portfolio_rejected}</span>
+              <span className="text-faint">fires</span><span className="text-right font-mono">{lane.lifecycle.fires == null ? "n/a · BBO entry" : lane.lifecycle.fires}</span>
               <span className="text-faint">positions / pending</span><span className="text-right font-mono">{lane.open_positions} / {lane.shadow_perf?.pending_shadow_intents ?? 0}</span>
               <span className="text-faint">decision engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_engine ?? "unreported"}</span>
               <span className="text-faint">clock contract</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_tf ?? lane.timeframe} close → {lane.runtime_contract?.entry_clock === "bbo_acceptance" ? "BBO" : "next open"} → {lane.runtime_contract?.protection_clock ?? "ticks"}</span>
               <span className="text-faint">last-closed context</span><span className="text-right font-mono break-all">{(lane.runtime_contract?.context_tfs ?? []).map((tf) => `${tf} ${ageSec(lane.runtime_contract?.context_age_seconds?.[tf])}`).join(" · ") || "none"}</span>
+              <span className="text-faint">operational blockers</span><span className="text-right font-mono break-all">{lane.health_reasons?.join(" · ") || "none"}</span>
+              <span className="text-faint">close receipt p95</span><span className="text-right font-mono">{lane.health_details?.bar_close_receipt?.p95_ms == null ? "—" : `${lane.health_details.bar_close_receipt.p95_ms.toFixed(1)} ms`} / hard {lane.health_details?.bar_close_receipt?.hard_ms ?? "—"} ms</span>
+              <span className="text-faint">decision compute p95</span><span className="text-right font-mono">{lane.health_details?.decision_compute?.p95_ms == null ? "—" : `${lane.health_details.decision_compute.p95_ms.toFixed(1)} ms`} / hard {lane.health_details?.decision_compute?.hard_ms ?? "—"} ms</span>
               <span className="text-faint">exit engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.exit_engine ?? "unreported"}</span>
               <span className="text-faint">last evaluation</span><span className="text-right font-mono break-all">{String(lane.last_eval?.reason ?? lane.last_signal_reason)}</span>
             </div>
@@ -584,7 +603,7 @@ function BacktestLabPanel() {
     { key: "cost", header: "Fees + funding", align: "right", render: (row) => usd(row.fees_usd - row.funding_usd) },
     { key: "net", header: "Net", align: "right", render: (row) => <span className={signed(row.net_pnl_usd)}>{usd(row.net_pnl_usd)}</span> },
     { key: "bps", header: "Net bps", align: "right", render: (row) => row.net_bps_on_entry_notional == null ? "—" : `${row.net_bps_on_entry_notional.toFixed(1)}` },
-    { key: "path", header: "MAE / MFE", align: "right", render: (row) => <span className="whitespace-nowrap font-mono">{usd(row.mae_usd)} / {usd(row.mfe_usd)}</span> },
+    { key: "path", header: "MAE / MFE", align: "right", render: (row) => <span className="whitespace-nowrap font-mono">{row.mae_bps_on_entry_notional == null || row.mfe_bps_on_entry_notional == null ? `${usd(row.mae_usd)} / ${usd(row.mfe_usd)}` : `${row.mae_bps_on_entry_notional.toFixed(1)} / +${row.mfe_bps_on_entry_notional.toFixed(1)} bps`}</span> },
     { key: "exit", header: "Exit", render: (row) => <span className="font-mono text-[10px]">{row.exit_reason}</span> },
   ];
   const dayCols: Column<BacktestDay>[] = [
@@ -655,8 +674,8 @@ function BacktestLabPanel() {
           <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">TIMEFRAME / BARS</div><div className="mt-1 font-mono text-[11px]">{report.run.timeframe} · {report.run.bars.toLocaleString("en-US")}</div></div>
           <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">WINDOW UTC</div><div className="mt-1 font-mono text-[11px]">{compactDate(report.run.window.start)} → {compactDate(report.run.window.end)}</div></div>
           <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">START EQUITY</div><div className="mt-1 font-mono text-[11px]">{usd(report.run.initial_equity_usd)}</div></div>
-          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">TAKER RT</div><div className="mt-1 font-mono text-[11px] text-warn">{report.run.costs.modeled_taker_round_trip_bps.toFixed(1)} bps</div></div>
-          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">FUNDING</div><div className="mt-1 font-mono text-[11px]">{report.run.costs.funding_included ? "included" : "excluded"}</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">BOOKED / GATE RT</div><div className="mt-1 font-mono text-[11px] text-warn">{(report.run.costs.execution_round_trip_bps ?? report.run.costs.modeled_taker_round_trip_bps).toFixed(1)} / {(report.run.costs.gate_round_trip_bps ?? report.run.costs.modeled_taker_round_trip_bps).toFixed(1)} bps</div></div>
+          <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">FUNDING</div><div className="mt-1 font-mono text-[11px]">{report.run.costs.funding_included ? `included · ${report.run.costs.funding_event_count ?? "?"}` : "excluded"}</div></div>
           <div className="bg-inset p-2.5"><div className="text-[9px] font-mono text-faint">ENGINE</div><div className="mt-1 truncate font-mono text-[11px]" title={report.run.engine}>{report.run.engine}</div></div>
         </div>
 

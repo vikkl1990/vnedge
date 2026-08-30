@@ -53,6 +53,7 @@ class SqueezeAcceptanceObserveRunner:
     candidates: int = 0
     fires: int = 0
     rejected: int = 0
+    rejection_reasons: dict[str, int] = field(default_factory=dict)
     outcomes: int = 0
     net_usd: float = 0.0
     current_bar_index: int = -1
@@ -61,6 +62,7 @@ class SqueezeAcceptanceObserveRunner:
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
     _last_journaled_episode: int | None = field(default=None, init=False, repr=False)
+    _armed_episodes: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _last_bid: float | None = field(default=None, init=False, repr=False)
     _last_ask: float | None = field(default=None, init=False, repr=False)
 
@@ -89,6 +91,15 @@ class SqueezeAcceptanceObserveRunner:
         for record in read_all():
             payload = record.get("payload", {})
             key = str(payload.get("intent_key") or "")
+            if (
+                record.get("kind") == "scanner_transition"
+                and str(payload.get("strategy_id") or "") == self.strategy_id
+                and str(payload.get("state") or "").startswith("armed_")
+                and payload.get("episode_id") is not None
+            ):
+                self._armed_episodes.add(
+                    (str(payload.get("symbol") or self.symbol), int(payload["episode_id"]))
+                )
             if record.get("kind") == "shadow_intent" and key.startswith(f"{self.intent_prefix}|"):
                 self.candidates += 1
                 if payload.get("approved"):
@@ -96,6 +107,7 @@ class SqueezeAcceptanceObserveRunner:
                     self.fires += 1
                 else:
                     self.rejected += 1
+                    self._count_rejection(payload.get("failed_checks"))
             elif record.get("kind") == "shadow_outcome" and key.startswith(
                 f"{self.intent_prefix}|"
             ):
@@ -107,6 +119,29 @@ class SqueezeAcceptanceObserveRunner:
             self._restore_error = "multiple unresolved v3 scanner intents"
         elif pending:
             self._restore_payload = pending[0]
+
+    def _count_rejection(self, failed_checks: object) -> None:
+        checks = (
+            [str(value) for value in failed_checks]
+            if isinstance(failed_checks, (list, tuple))
+            else [str(failed_checks)]
+            if failed_checks
+            else ["unreported"]
+        )
+        if any(value.startswith("cost_gate:") for value in checks):
+            bucket = "cost"
+        elif any(value.startswith("sizing:") for value in checks):
+            bucket = "sizing"
+        elif any(value.startswith("shadow_portfolio:") for value in checks):
+            bucket = "portfolio"
+        elif any(
+            value.startswith(("candle_path:", "daily_factory", "protection"))
+            for value in checks
+        ):
+            bucket = "prerequisite"
+        else:
+            bucket = "risk"
+        self.rejection_reasons[bucket] = self.rejection_reasons.get(bucket, 0) + 1
 
     def restore(self, df: pd.DataFrame) -> None:
         """Rebuild arm state and at most one durable virtual position."""
@@ -372,6 +407,7 @@ class SqueezeAcceptanceObserveRunner:
                 )
         if not approval.approved:
             self.rejected += 1
+            self._count_rejection(approval.failed_checks)
             self.acceptance.notify_rejected()
             return fire
         self.exits.open_from_fire(
@@ -505,6 +541,8 @@ class SqueezeAcceptanceObserveRunner:
             return
         self._last_journaled_acceptance = reason
         self._last_journaled_episode = episode
+        if reason.startswith("armed_") and episode is not None:
+            self._armed_episodes.add((self.symbol, int(episode)))
         self.journal.append(
             "scanner_transition",
             {
@@ -667,8 +705,15 @@ class SqueezeAcceptanceObserveRunner:
             "open_intents": int(self.has_open),
             "pending_shadow_intents": int(self.has_open),
             "candidates": self.candidates,
+            "armed_entries": len(self._armed_episodes),
             "approved": self.fires,
             "rejected": self.rejected,
+            "rejection_reasons": dict(sorted(self.rejection_reasons.items())),
+            "cost_rejected": self.rejection_reasons.get("cost", 0),
+            "sizing_rejected": self.rejection_reasons.get("sizing", 0),
+            "risk_rejected": self.rejection_reasons.get("risk", 0),
+            "portfolio_rejected": self.rejection_reasons.get("portfolio", 0),
+            "prerequisite_rejected": self.rejection_reasons.get("prerequisite", 0),
             "acceptance_state": self.acceptance.last_reason,
             "quote_source": self.acceptance.last_quote_source,
             "quote_ingest_lag_seconds": round(self.acceptance.last_quote_lag_seconds, 6),

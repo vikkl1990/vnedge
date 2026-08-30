@@ -40,6 +40,8 @@ def test_delta_backtest_books_execution_cost_not_gate_reserve():
     )
 
     result = run_backtest(candles, None, strategy, config)
+    assert result.funding_included is False
+    assert result.funding_event_count == 0
     trade = result.trades[0]
     entry_notional = trade.quantity * trade.entry_price
     booked_net_bps = trade.net_pnl_usd / entry_notional * 10_000
@@ -220,6 +222,8 @@ def test_long_pays_positive_funding():
     )
     strategy = StubStrategy(at_index=4, intent=LONG_INTENT)
     result = run_backtest(candles, funding, strategy, BacktestConfig())
+    assert result.funding_included is True
+    assert result.funding_event_count == 1
     trade = result.trades[0]
     expected = -0.001 * trade.quantity * 100.0  # longs PAY positive rates
     assert trade.funding_usd == pytest.approx(expected)
