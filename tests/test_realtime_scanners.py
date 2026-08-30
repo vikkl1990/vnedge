@@ -85,6 +85,38 @@ def test_range_refreshes_share_one_episode_within_the_hour() -> None:
     assert len(set(episodes)) == 1
 
 
+def test_realtime_episode_is_invariant_to_frame_position() -> None:
+    strategy = SessionContinuationRealtimeV1()
+    strategy.warmup_bars = 0
+    row = {
+        "timestamp": pd.Timestamp("2026-08-24T14:15:00Z"),
+        "close": 100.0,
+        "rt_arm_ready": 1.0,
+        "rt_long_level": 101.0,
+        "rt_short_level": 99.0,
+        "rt_atr": 1.5,
+        "rt_allow_long": 1.0,
+        "rt_allow_short": 1.0,
+    }
+    short_frame = pd.DataFrame([row])
+    long_frame = pd.DataFrame(
+        [
+            {
+                **row,
+                "timestamp": pd.Timestamp("2026-08-24T14:00:00Z"),
+                "rt_arm_ready": 0.0,
+            },
+            row,
+        ]
+    )
+
+    short_arm = strategy.realtime_arm(short_frame, 0)
+    long_arm = strategy.realtime_arm(long_frame, 1)
+
+    assert short_arm is not None and long_arm is not None
+    assert short_arm.episode_id == long_arm.episode_id
+
+
 def test_range_v2_prearms_before_the_expanding_candle_exists() -> None:
     timestamps = pd.date_range(
         end="2026-08-24T11:45:00Z",

@@ -33,10 +33,21 @@ from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV
 
 
 def _episode(row: pd.Series, index: int) -> int:
+    """Return a replay-stable identity for a decision candle.
+
+    ``index`` is deliberately ignored.  A bounded replay and a long-running
+    lane can place the same canonical candle at different DataFrame offsets;
+    including that offset made otherwise-identical quote intents disagree and
+    could replenish an acceptance probe after a restart.  The canonical candle
+    timestamp is already unique within one strategy/symbol/timeframe lane.
+    """
+    del index
     ts = pd.Timestamp(row["timestamp"])
     if ts.tzinfo is None:
         ts = ts.tz_localize("UTC")
-    return int(ts.timestamp() * 1000) + index
+    else:
+        ts = ts.tz_convert("UTC")
+    return int(ts.timestamp() * 1000)
 
 
 def _hour_episode(row: pd.Series) -> int:
