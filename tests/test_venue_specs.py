@@ -9,7 +9,11 @@ while non-Bybit venues keep the historical defaults unchanged.
 import pytest
 
 from vnedge.config.risk_config import RiskConfig
+from vnedge.exchange.delta_contracts import DeltaContractSpec
 from vnedge.exchange.venue_specs import (
+    MissingDeltaContractSpecError,
+    clear_frozen_delta_specs,
+    freeze_delta_specs,
     venue_fill_model,
     venue_symbol_limits,
     venue_taker_bps,
@@ -84,10 +88,22 @@ def test_binance_symbol_limits_match_live_exchange_info(symbol, step, min_notion
     assert limits.min_notional_usd == min_notional
 
 
-def test_unknown_venue_and_symbol_fall_back_to_default():
-    # An untabulated venue falls back to the historical default.
-    other = venue_symbol_limits("delta_india", "BTC/USD:USD")
-    assert other.qty_step == 0.0001
+def test_delta_requires_frozen_contract_spec_and_never_uses_generic_default():
+    clear_frozen_delta_specs()
+    with pytest.raises(MissingDeltaContractSpecError):
+        venue_symbol_limits("delta_india", "BTC/USD:USD")
+    freeze_delta_specs({"BTCUSD": DeltaContractSpec(
+        symbol="BTCUSD", product_id=27, contract_value=0.001,
+        contract_unit_currency="BTC", tick_size=0.5,
+        initial_margin_pct=0.5, maintenance_margin_pct=0.25,
+    )})
+    limits = venue_symbol_limits("delta_india", "BTC/USD:USD")
+    assert limits.qty_step == 0.001
+    assert limits.maintenance_margin_rate == pytest.approx(0.0025)
+    clear_frozen_delta_specs()
+
+
+def test_unknown_non_delta_symbol_falls_back_to_default():
     # A tabulated venue but untabulated symbol also falls back, safely.
     unknown = venue_symbol_limits("bybit", "PEPE/USDT:USDT")
     assert unknown.qty_step == 0.0001

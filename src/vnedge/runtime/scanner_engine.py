@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
+from vnedge.exchange.book_imbalance import BookImbalance
 from vnedge.execution.exit_engine import ExitConfig, ExitEngine
 from vnedge.runtime.expansion_acceptance import ExpansionAcceptanceEngine
 from vnedge.runtime.scanner_session import SessionCosts
@@ -43,6 +44,7 @@ class ScannerEngine(Protocol):
         source: str = "unknown",
         exchange_timestamped: bool = False,
         overflow_drops: int = 0,
+        book: BookImbalance | None = None,
     ) -> Any: ...
 
 
@@ -71,6 +73,7 @@ def build_quote_acceptance_engine(
     approve_fire: FireGuard | None = None,
     notional_usd: float = 3000.0,
     margin_usd: float = 100.0,
+    require_book_imbalance: bool = False,
 ) -> SqueezeAcceptanceObserveRunner:
     """Build the canonical quote scanner used by both live and replay.
 
@@ -105,7 +108,10 @@ def build_quote_acceptance_engine(
         strategy=strategy,
         notional_usd=notional_usd,
         margin_usd=margin_usd,
-        acceptance=ExpansionAcceptanceEngine(config=quote_acceptance_config(strategy)),
+        acceptance=ExpansionAcceptanceEngine(
+            config=quote_acceptance_config(strategy),
+            require_book_imbalance=require_book_imbalance,
+        ),
         exits=ExitEngine(config=exit_config),
         approve_fire=approve_fire,
         costs=SessionCosts.from_profile(cost_profile, bar_minutes=bar_minutes),

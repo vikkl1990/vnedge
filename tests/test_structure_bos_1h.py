@@ -385,18 +385,17 @@ def test_cost_gate_bridge_uses_frozen_edge_hypothesis() -> None:
     assert survived[0][1].approved
 
 
-def test_cost_gate_rejection_is_reported_and_backtest_signal_is_dropped() -> None:
+def test_indicative_funding_rate_does_not_drop_a_structure_signal() -> None:
     strategy = _strategy()
     prepared = strategy.prepare(_canonical_frame())
     prepared.loc[_BREAK_INDEX, "funding_rate"] = 0.10
 
     evaluation = strategy.evaluate(prepared, _BREAK_INDEX)
-    assert not evaluation.accepted
+    assert evaluation.accepted
     assert evaluation.candidate is not None
     assert evaluation.research_intent is not None
-    assert evaluation.cost is not None and not evaluation.cost.approved
-    assert "net" in evaluation.reason
-    assert strategy.signal(prepared, _BREAK_INDEX) is None
+    assert evaluation.cost is not None and evaluation.cost.approved
+    assert strategy.signal(prepared, _BREAK_INDEX) is not None
 
 
 def test_data_quality_gap_cannot_create_or_bridge_structure() -> None:

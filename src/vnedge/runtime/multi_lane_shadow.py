@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
+from vnedge.execution.journal import DecisionJournal
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
 from vnedge.runtime.multi_lane import (
     CanonicalProducer,
@@ -573,6 +574,13 @@ def lane_specs_fingerprint(specs: list[LaneSpec]) -> str:
 async def main() -> int:
     journal_dir = Path(os.environ.get("MULTI_LANE_JOURNAL_DIR", "logs/paper_trials"))
     lanes = desired_lane_specs()
+    if any(lane.exchange in {"delta", "delta_india", "deltaindia"} for lane in lanes):
+        from vnedge.exchange.delta_snapshot_validation import bootstrap_delta_product_specs
+
+        spec_journal = DecisionJournal(journal_dir / "delta_product_specs.journal.jsonl")
+        # Product risk fields freeze before any lane can size or arm. Network
+        # failure/mismatch intentionally aborts this shadow/paper process.
+        await asyncio.to_thread(bootstrap_delta_product_specs, spec_journal)
     canonical_router, canonical_producers, canonical_exchanges = (
         build_integrated_canonical_runtime(lanes)
     )

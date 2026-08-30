@@ -12,7 +12,7 @@ Design notes:
 - ALL checks run even after the first failure, so the decision log shows the
   complete picture (an order failing 4 checks is a different situation from
   one failing 1).
-- Reduce-only orders skip entry-quality gates (spread, funding, exposure):
+- Reduce-only orders skip entry-quality gates (spread, exposure):
   getting OUT of risk must never be blocked by filters designed to stop us
   getting INTO risk. Public-feed health/staleness is recorded as an exit
   warning, not a hard reject; order-mechanics validity checks still apply.
@@ -294,16 +294,10 @@ class PreTradeRiskGateway:
                 market.spread_bps <= cfg.max_spread_bps,
                 f"{market.spread_bps:.1f}bps > {cfg.max_spread_bps}bps",
             )
-            # Only reject when funding is AGAINST the position; earning
-            # funding is not a risk.
-            paying_funding = (
-                market.funding_rate if intent.side == "long" else -market.funding_rate
-            )
-            check(
-                "funding",
-                paying_funding <= cfg.max_abs_funding_rate,
-                f"paying {paying_funding:.4%}/interval > {cfg.max_abs_funding_rate:.4%}",
-            )
+            # Funding is not an entry-quality clock.  The current ticker rate
+            # is telemetry and may differ from the eventual settled print.
+            # Known print-crossing estimates belong in CostGate; actual prints
+            # debit/credit the open book through the funding ledger.
 
         decision = RiskDecision(
             approved=not failed,

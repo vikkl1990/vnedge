@@ -94,27 +94,13 @@ def test_unknown_profile_fails_loudly() -> None:
         SessionCosts.from_profile("no_such_profile")
 
 
-def test_funding_is_charged_per_completed_8h_period() -> None:
-    """Immaterial at 1h holds, decisive at multi-day ones.
-
-    Every arm measured before 2026-08-21 held for about an hour and paid no
-    funding. A trend arm holding five days crosses fifteen stamps, which at a
-    routine rate is comparable to an entire round trip.
-    """
-    costs = SessionCosts.from_profile(
-        "delta_scalp", free_close_within_bars=0, bar_minutes=240.0,
-        funding_bps_per_8h=1.0,
-    )
-    assert costs.funding_bps(1) == 0.0        # 4h: no completed period
-    assert costs.funding_bps(2) == pytest.approx(1.0)    # 8h
-    assert costs.funding_bps(30) == pytest.approx(15.0)  # 5 days
-    flat = SessionCosts.from_profile("delta_scalp", bar_minutes=240.0)
-    assert flat.funding_bps(30) == 0.0, "funding must default OFF"
-    assert costs.round_trip_bps(30) > flat.round_trip_bps(30) + 14
+def test_elapsed_bars_cannot_synthesize_funding() -> None:
+    costs = SessionCosts.from_profile("delta_scalp", bar_minutes=240.0)
+    assert costs.funding_bps(1) == 0.0
+    assert costs.funding_bps(30) == 0.0
+    assert costs.round_trip_bps(30) == costs.round_trip_bps(1)
 
 
-def test_a_position_closed_before_the_stamp_pays_nothing() -> None:
-    costs = SessionCosts(funding_bps_per_8h=1.0, bar_minutes=60.0)
-    assert costs.funding_bps(7) == 0.0
-    assert costs.funding_bps(8) == pytest.approx(1.0)
-    assert costs.funding_bps(9) == pytest.approx(1.0)
+def test_nonzero_bar_derived_funding_is_refused() -> None:
+    with pytest.raises(ValueError, match="settled funding prints"):
+        SessionCosts(funding_bps_per_8h=1.0, bar_minutes=60.0)

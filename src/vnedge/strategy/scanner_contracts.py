@@ -29,7 +29,14 @@ StructureClock = Literal["closed_bar"]
 EntryClock = Literal["next_open", "bbo_acceptance"]
 ProtectionClock = Literal["ticks"]
 
-_TF_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3_600, "4h": 14_400}
+_TF_SECONDS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3_600,
+    "4h": 14_400,
+    "1d": 86_400,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,18 @@ class ScannerRuntimeContract:
             if self.decision_engine.startswith("quote_acceptance")
             else "next_open"
         )
+
+    @property
+    def evidence_entry_clock(self) -> str:
+        """Unambiguous clock cohort for replay/report aggregation.
+
+        ``entry_clock`` is the legacy runtime enum.  Evidence needs the
+        actual clock because a next 5m open and a next 1h open are different
+        experiments and must never share one PnL headline.
+        """
+        if self.decision_engine.startswith("quote_acceptance"):
+            return "quote_hold"
+        return f"next_{self.timeframe}_open"
 
 
 _CONTRACTS: dict[str, ScannerRuntimeContract] = {
@@ -248,6 +267,19 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         decision_engine="quote_acceptance_v2",
         exit_engine="scanner_exit_v1",
         context_timeframes=("4h",),
+    ),
+    "htf_regime_continuation_15m_v1": ScannerRuntimeContract(
+        strategy_id="htf_regime_continuation_15m_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale=(
+            "weekly/daily/4h permission with closed 15m reclaim; 48h is a fail-safe "
+            "tail while structure deterioration owns the normal exit"
+        ),
+        decision_engine="base_strategy_next_open_v1",
+        exit_engine="scanner_exit_v1",
+        context_timeframes=("4h", "1d"),
     ),
 }
 

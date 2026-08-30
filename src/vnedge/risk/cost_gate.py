@@ -26,10 +26,7 @@ from vnedge.plan.cost_model import (
 )
 from vnedge.risk.fee_model import FeeModelPrediction
 
-# Perp funding accrues per interval (Binance / Delta India = 8h).
-_FUNDING_INTERVAL_SECONDS = Decimal(8 * 3600)
 _MAKER = {"maker"}
-_LONG = {"buy", "long"}
 
 
 def _dec(x: object) -> Decimal:
@@ -120,10 +117,11 @@ class CostGate:
         side: str,
         urgency: str,  # "maker" | "taker" | "aggressive"
         expected_holding_seconds: int,
-        current_funding_rate: object,  # per-interval fraction, e.g. 0.0001 = 1bp/8h
         symbol: str,
+        current_funding_rate: object = 0,
         available_room_bps: object | None = None,
         fee_model_prediction: FeeModelPrediction | None = None,
+        predicted_funding_bps: object | None = None,
     ) -> CostGateResult:
         p = COST_PROFILES[self.profile.value]
         edge = _dec(signal_edge_bps)
@@ -202,11 +200,19 @@ class CostGate:
                 else "unapproved_execution_model_ignored"
             )
 
-        # --- Funding over the expected hold (signed). Long pays +funding; short earns it. ---
-        hold = Decimal(max(0, int(expected_holding_seconds)))
-        funding_frac = _dec(current_funding_rate) * (hold / _FUNDING_INTERVAL_SECONDS)
-        funding_signed = funding_frac * Decimal(10000)  # -> bps
-        funding_bps = funding_signed if side in _LONG else -funding_signed
+        # Funding is a discrete inventory cash flow at a SETTLED venue print.
+        # Never pro-rate the current/predicted ticker rate over elapsed time and
+        # never infer an 8h clock here.  A caller may supply a separately
+        # computed, side-aware haircut only when a known settlement timestamp
+        # lies inside the frozen expected hold.  Unknown funding is zero, not
+        # an entry blocker.  ``current_funding_rate`` remains as a compatibility
+        # input for older callers but is intentionally telemetry-only.
+        del current_funding_rate
+        funding_bps = (
+            Decimal(0)
+            if predicted_funding_bps is None
+            else _dec(predicted_funding_bps)
+        )
 
         total = fee_bps + slippage_bps + funding_bps
         net = edge - total

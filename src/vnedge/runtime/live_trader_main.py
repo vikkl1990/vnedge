@@ -122,10 +122,13 @@ def _default_adapter(config: LiveTraderRunConfig):
     api_key = os.environ["VNEDGE_EXEC_API_KEY"]
     api_secret = os.environ["VNEDGE_EXEC_API_SECRET"]
     if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
-        from vnedge.exchange.delta_contracts import fetch_india_contract_spec
+        from vnedge.data.symbols import canonical_symbol
         from vnedge.exchange.delta_execution import DeltaRestExecutionAdapter
+        from vnedge.exchange.venue_specs import frozen_delta_specs
 
-        spec = fetch_india_contract_spec(config.symbol)
+        spec = frozen_delta_specs().get(canonical_symbol(config.symbol))
+        if spec is None:
+            raise RuntimeError(f"Delta product {config.symbol} was not frozen at startup")
         if spec.product_id is None:
             raise RuntimeError(f"Delta product {config.symbol} has no product id")
         return DeltaRestExecutionAdapter(
@@ -267,13 +270,19 @@ async def run_live_trader(
         "ALL GATES OPEN — starting LIVE trader on %s %s (%s). This places REAL orders.",
         config.exchange, config.symbol, config.strategy_id,
     )
+    journal = DecisionJournal(f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl")
+    if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
+        from vnedge.exchange.delta_snapshot_validation import bootstrap_delta_product_specs
+
+        # Fail before constructing any live adapter/account/feed if the venue's
+        # product ID, lot, tick, IM, or MM differs from the reviewed baseline.
+        await asyncio.to_thread(bootstrap_delta_product_specs, journal)
     adapter = (adapter_factory or _default_adapter)(config)
     account = (account_factory or _default_account)(config)
     feed = (feed_factory or _default_feed)(config)
     strategy = (strategy_factory or _default_strategy)(config.strategy_id)
     history = await (warmup_loader or _default_warmup)(config, _WARMUP_BARS)
 
-    journal = DecisionJournal(f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl")
     # H1: the field is a Path — a str here makes is_active()/.exists() crash on the
     # first entry, so `touch KILL` could not halt a live bot. Honor KILL_FILE so the
     # gateway's switch and the pre-live checklist (which reads KILL_FILE) agree.

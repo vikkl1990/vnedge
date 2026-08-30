@@ -1361,8 +1361,8 @@ class DeltaTickRecorder:
         channels = tuple(
             channel
             for channel, enabled in (
-                ("l2_orderbook", not trades_only),
-                ("all_trades", not books_only),
+                ("ob_l1", not trades_only),
+                ("trades", not books_only),
             )
             if enabled
         )
@@ -1397,7 +1397,7 @@ class DeltaTickRecorder:
                     ts_ms,
                     received_ts_ms=self._epoch_ms(),
                     sequence=(msg.get("sequence") or msg.get("sequence_no") or msg.get("nonce")),
-                    source=f"{self.exchange_id}:l2_orderbook",
+                    source=f"{self.exchange_id}:ob_l1",
                     exchange_timestamped=ts_raw is not None,
                 )
             )

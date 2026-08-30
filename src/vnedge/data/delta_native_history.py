@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -32,6 +33,7 @@ from collections.abc import Callable
 import pandas as pd
 
 from vnedge.data.schemas import normalize_funding
+from vnedge.exchange.delta_limit_state import DeltaRestBudget, parse_rate_limit_reset
 from vnedge.exchange.delta_ws import delta_native_symbol
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,7 @@ DELTA_NATIVE_EXCHANGE_IDS = frozenset({"delta_india", "delta", "deltaindia"})
 # safely below the cap so a single window can never silently truncate.
 _CANDLES_PER_PAGE = 1500
 _REQUEST_TIMEOUT_SECONDS = 15.0
+_MIN_PAGE_INTERVAL_SECONDS = 0.350
 
 _RESOLUTION_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -73,6 +76,8 @@ async def fetch_delta_funding_history(
     base_url: str = DELTA_INDIA_API_URL,
     now_s: int | None = None,
     http_get_json: Callable[[str], dict] | None = None,
+    page_interval_seconds: float = _MIN_PAGE_INTERVAL_SECONDS,
+    rest_budget: DeltaRestBudget | None = None,
 ) -> pd.DataFrame:
     """Settled funding history from Delta's native ``FUNDING:`` candle feed.
 
@@ -95,7 +100,9 @@ async def fetch_delta_funding_history(
     window_s = _CANDLES_PER_PAGE * step_s
 
     rows: list[tuple[int, float]] = []
+    budget = rest_budget or DeltaRestBudget()
     cursor = start_s
+    last_request_at = 0.0
     while cursor < end_s:
         window_end = min(cursor + window_s, end_s)
         query = urllib.parse.urlencode(
@@ -106,7 +113,30 @@ async def fetch_delta_funding_history(
                 "end": window_end,
             }
         )
-        payload = await asyncio.to_thread(get, f"{base_url}/v2/history/candles?{query}")
+        elapsed = time.monotonic() - last_request_at
+        if last_request_at and elapsed < page_interval_seconds:
+            await asyncio.sleep(page_interval_seconds - elapsed)
+        url = f"{base_url}/v2/history/candles?{query}"
+        budget_wait = budget.reserve(
+            "GET", "/v2/history/candles", now=time.time()
+        )
+        if budget_wait > 0:
+            await asyncio.sleep(budget_wait)
+        attempts = 0
+        while True:
+            attempts += 1
+            last_request_at = time.monotonic()
+            try:
+                payload = await asyncio.to_thread(get, url)
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempts >= 3:
+                    raise
+                wait = budget.note_429(exc.headers, now=time.time())
+                # The parser is kept as the single header contract; the
+                # explicit calculation also supports injected legacy budgets.
+                reset_at = parse_rate_limit_reset(exc.headers, now=time.time())
+                await asyncio.sleep(max(wait, reset_at - time.time(), 0.0))
         if not isinstance(payload, dict) or not payload.get("success", False):
             raise ValueError(f"delta candle API error for FUNDING:{native}: {payload!r}")
         for item in payload.get("result") or []:

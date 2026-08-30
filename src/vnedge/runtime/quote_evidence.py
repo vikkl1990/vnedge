@@ -93,6 +93,18 @@ class QuoteEvidenceRecorder:
             captured_at_ms=int(datetime.now(UTC).timestamp() * 1000),
             exchange_timestamped=quote.exchange_timestamped,
         ).storage_row()
+        if quote.book is not None:
+            row.update(
+                {
+                    "book_ts_ms": int(quote.book.ts.timestamp() * 1000),
+                    "bid_size": quote.book.bid_size,
+                    "ask_size": quote.book.ask_size,
+                    "book_imbalance": quote.book.imb,
+                    "microprice": quote.book.microprice,
+                    "spread_ticks": quote.book.spread_ticks,
+                    "book_levels": quote.book.levels,
+                }
+            )
         try:
             self._queue.put_nowait(row)
             self.rows_accepted += 1

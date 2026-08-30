@@ -49,6 +49,7 @@ TF_SECONDS: dict[str, int] = {
     "15m": 15 * 60,
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
+    "1d": 24 * 60 * 60,
 }
 
 CANDLE_STORAGE_COLUMNS = (
@@ -498,7 +499,7 @@ class CandleParquetStore:
         if self.exchange:
             root = root / f"exchange={self.exchange}"
         directory = root / sanitize_symbol(candle.symbol) / candle.timeframe
-        if candle.timeframe in {"1h", "4h"}:
+        if candle.timeframe in {"1h", "4h", "1d"}:
             name = candle.open_time.strftime("%Y-%m.parquet")
         else:
             name = candle.open_time.strftime("%Y-%m-%d.parquet")
@@ -651,7 +652,7 @@ class CandleParquetStore:
         directory = root / sanitize_symbol(symbol) / timeframe
         name = (
             opened.strftime("%Y-%m.parquet")
-            if timeframe in {"1h", "4h"}
+            if timeframe in {"1h", "4h", "1d"}
             else opened.strftime("%Y-%m-%d.parquet")
         )
         path = directory / name
@@ -689,11 +690,12 @@ _AGGREGATION_CHAIN = (
     ("5m", "15m"),
     ("15m", "1h"),
     ("1h", "4h"),
+    ("4h", "1d"),
 )
 
 
 class CandlePipeline:
-    """Live one-symbol tick pipeline publishing closed base through 4h bars."""
+    """Live one-symbol tick pipeline publishing closed base through 1d bars."""
 
     def __init__(
         self,

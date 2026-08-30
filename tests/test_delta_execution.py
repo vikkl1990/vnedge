@@ -6,10 +6,28 @@ import asyncio
 import pytest
 
 from vnedge.exchange.delta_contracts import DeltaContractSpec
-from vnedge.exchange.delta_execution import DeltaRestExecutionAdapter
+from vnedge.exchange.delta_execution import DeltaRateLimited, DeltaRestExecutionAdapter
 from vnedge.execution.order_manager import AdapterRejection
 from vnedge.execution.order_state import ManagedOrder
 from vnedge.risk.risk_manager import OrderIntent
+
+
+def _spec(symbol="BTCUSD"):
+    if symbol == "ETHUSD":
+        return DeltaContractSpec(
+            symbol="ETHUSD", product_id=3136, contract_value=0.01,
+            contract_unit_currency="ETH", tick_size=0.05,
+            initial_margin_pct=0.5, maintenance_margin_pct=0.25,
+        )
+    return DeltaContractSpec(
+        symbol="BTCUSD", product_id=27, contract_value=0.001,
+        contract_unit_currency="BTC", tick_size=0.5,
+        initial_margin_pct=0.5, maintenance_margin_pct=0.25,
+    )
+
+
+def _specs(*symbols):
+    return {symbol: _spec(symbol) for symbol in symbols}
 
 
 def _order(**over):
@@ -39,7 +57,7 @@ class FakeDelta:
 
     def get_order_by_client_id(self, coid):
         if coid not in self.lookup:
-            raise Exception("not found")
+            raise RuntimeError("not found")
         return self.lookup[coid]
 
     def cancel_order(self, product_id, order_id):
@@ -52,7 +70,9 @@ def _run(coro):
 
 
 def test_dry_run_is_default_and_does_not_touch_a_client():
-    a = DeltaRestExecutionAdapter(product_ids={"BTCUSD": 27})
+    a = DeltaRestExecutionAdapter(
+        product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD")
+    )
     assert a.dry_run is True
     oid = _run(a.submit_order(_order()))
     assert oid.startswith("dryrun-")
@@ -104,7 +124,7 @@ def test_maps_long_to_buy_with_post_only_and_idempotent_id():
     fake = FakeDelta()
     a = DeltaRestExecutionAdapter(
         dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
-        client=fake, product_ids={"BTCUSD": 27},
+        client=fake, product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"),
     )
     oid = _run(a.submit_order(_order(side="long", time_in_force="PO")))
     assert oid == "987654"
@@ -115,7 +135,28 @@ def test_maps_long_to_buy_with_post_only_and_idempotent_id():
     assert call["client_order_id"] == "coid-1"  # journaled id sent verbatim
     assert call["product_id"] == 27
     assert call["order_type"].value == "limit_order"
-    assert call["time_in_force"] is None         # PO is post_only, not Delta TIF
+    assert call["time_in_force"].value == "gtc"  # post-only limits remain GTC
+
+
+def test_limit_price_is_directionally_snapped_and_serialized_as_decimal_string():
+    fake = FakeDelta()
+    a = DeltaRestExecutionAdapter(
+        dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
+        client=fake, product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"),
+    )
+    _run(a.submit_order(_order(side="long", limit_price=64000.37, time_in_force="PO")))
+    assert fake.calls[0]["limit_price"] == "64000"
+
+
+def test_fok_is_refused_before_network():
+    fake = FakeDelta()
+    a = DeltaRestExecutionAdapter(
+        dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
+        client=fake, product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"),
+    )
+    with pytest.raises(AdapterRejection, match="time_in_force"):
+        _run(a.submit_order(_order(time_in_force="FOK")))
+    assert fake.calls == []
 
 
 def test_delta_contract_spec_converts_base_quantity_to_integer_contracts():
@@ -133,6 +174,7 @@ def test_delta_contract_spec_converts_base_quantity_to_integer_contracts():
                 product_id=3136,
                 contract_value=0.01,
                 contract_unit_currency="ETH",
+                tick_size=0.05,
             )
         },
     )
@@ -166,6 +208,7 @@ def test_delta_contract_spec_rejects_base_quantity_below_one_contract():
                 product_id=3136,
                 contract_value=0.01,
                 contract_unit_currency="ETH",
+                tick_size=0.05,
             )
         },
     )
@@ -213,7 +256,7 @@ def test_short_reduce_only_exit_maps_to_sell_reduce_only():
     fake = FakeDelta()
     a = DeltaRestExecutionAdapter(
         dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
-        client=fake, product_ids={"ETHUSD": 30},
+        client=fake, product_ids={"ETHUSD": 3136}, contract_specs=_specs("ETHUSD"),
     )
     _run(a.submit_order(_order(symbol="ETHUSD", side="short", reduce_only=True, time_in_force=None)))
     call = fake.calls[0]
@@ -226,7 +269,7 @@ def test_maps_delta_ioc_time_in_force_enum_shape():
     fake = FakeDelta()
     a = DeltaRestExecutionAdapter(
         dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
-        client=fake, product_ids={"BTCUSD": 27},
+        client=fake, product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"),
     )
     _run(a.submit_order(_order(time_in_force="IOC")))
     call = fake.calls[0]
@@ -256,18 +299,46 @@ def test_unmapped_symbol_is_rejected_not_guessed():
 def test_venue_rejection_classified_as_adapter_rejection():
     class Rejecting(FakeDelta):
         def place_order(self, **kw):
-            raise Exception("insufficient margin")
+            raise RuntimeError("insufficient margin")
     a = DeltaRestExecutionAdapter(
         dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
-        client=Rejecting(), product_ids={"BTCUSD": 27},
+        client=Rejecting(), product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD"),
     )
     with pytest.raises(AdapterRejection, match="rejected"):
         _run(a.submit_order(_order()))
 
 
+def test_rest_429_is_known_refusal_and_blocks_new_entries():
+    class Response:
+        status_code = 429
+
+        def __init__(self):
+            self.headers = {"Retry-After": "60"}
+
+    class RateLimited(FakeDelta):
+        def place_order(self, **kw):
+            exc = RuntimeError("rate_limit_exceeded")
+            exc.response = Response()
+            raise exc
+
+    clock = [100.0]
+    a = DeltaRestExecutionAdapter(
+        dry_run=False, api_key="k", api_secret="s", live_confirmed=True,
+        client=RateLimited(), product_ids={"BTCUSD": 27},
+        contract_specs=_specs("BTCUSD"), wall_clock=lambda: clock[0],
+    )
+    with pytest.raises(DeltaRateLimited) as first:
+        _run(a.submit_order(_order()))
+    assert first.value.cooldown_until == 160.0
+    with pytest.raises(DeltaRateLimited, match="cooldown active"):
+        _run(a.submit_order(_order()))
+
+
 def test_dry_run_ignores_missing_credentials():
     # dry-run must be usable with no keys at all (research/paper default)
-    a = DeltaRestExecutionAdapter(product_ids={"BTCUSD": 27})
+    a = DeltaRestExecutionAdapter(
+        product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD")
+    )
     assert _run(a.submit_order(_order())).startswith("dryrun-")
 
 

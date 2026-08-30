@@ -1,7 +1,7 @@
 """Chunked, idempotent context-lane backfill.
 
 This is the data builder for research/scalper context lanes. It fills and
-keeps 4h/1h/15m/1m candle Parquet datasets across the configured research
+keeps 1d/4h/1h/15m/1m candle Parquet datasets across the configured research
 universe, checkpointing every chunk so reruns skip already-covered data.
 """
 
@@ -37,14 +37,16 @@ from vnedge.research.universe import (
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_CONTEXT_TIMEFRAMES: tuple[str, ...] = ("4h", "1h", "15m", "1m")
+REQUIRED_CONTEXT_TIMEFRAMES: tuple[str, ...] = ("1d", "4h", "1h", "15m", "1m")
 DEFAULT_TIMEFRAME_DAYS: dict[str, int] = {
+    "1d": 730,
     "4h": 365,
     "1h": 365,
     "15m": 180,
     "1m": 60,
 }
 DEFAULT_CHUNK_DAYS: dict[str, int] = {
+    "1d": 365,
     "4h": 90,
     "1h": 30,
     "15m": 14,
@@ -137,12 +139,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--timeframe-days",
         default=_mapping_to_cli(DEFAULT_TIMEFRAME_DAYS),
-        help="comma map, e.g. 1m=60,15m=180,1h=365,4h=365",
+        help="comma map, e.g. 1m=60,15m=180,1h=365,4h=365,1d=730",
     )
     parser.add_argument(
         "--chunk-days",
         default=_mapping_to_cli(DEFAULT_CHUNK_DAYS),
-        help="comma map, e.g. 1m=3,15m=14,1h=30,4h=90",
+        help="comma map, e.g. 1m=3,15m=14,1h=30,4h=90,1d=365",
     )
     parser.add_argument("--since", help="UTC ISO start applied to all timeframes")
     parser.add_argument("--until", help="UTC ISO end; default now")

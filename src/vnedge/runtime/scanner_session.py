@@ -37,7 +37,8 @@ class SessionCosts:
     Two modes, and the difference matters:
 
     * ``cost_model`` set -- costs come from ``vnedge.plan.cost_model``, the
-      canonical source, and include fees, slippage, and funding. The pre-trade
+      canonical source, and include fees and slippage. Funding is booked only
+      from explicit settled prints by the position ledger. The pre-trade
       safety reserve is deliberately excluded from booked trade PnL.
     * ``cost_model`` None -- the legacy FEE-ONLY behaviour. It understates the
       true cost by slip_in + slip_out + safety (8 bps on delta_scalp) and is
@@ -57,12 +58,15 @@ class SessionCosts:
     #: fields above, so a lane cannot hold a private fee assumption.
     cost_model: CostModel | None = None
     bar_minutes: float = 5.0
-    #: Funding paid per 8h period while a position is open, in bps of notional.
-    #: Immaterial at the ~1h holds every prior arm ran at, and decisive for a
-    #: multi-day one: a five-day hold crosses fifteen funding stamps, so at a
-    #: routine 1 bp per period that is 15 bps -- comparable to a whole round
-    #: trip. 0.0 keeps the behaviour of every measurement taken before this.
+    #: Deprecated compatibility field. A non-zero value is refused because a
+    #: bar-count-derived 8h charge fabricates venue events.
     funding_bps_per_8h: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.funding_bps_per_8h != 0.0:
+            raise ValueError(
+                "bar-derived funding is forbidden; apply settled funding prints to the open book"
+            )
 
     @classmethod
     def from_profile(cls, profile: str = "delta_scalp", *,
@@ -84,15 +88,9 @@ class SessionCosts:
         )
 
     def funding_bps(self, held_bars: int) -> float:
-        """Funding accrued over the hold.
-
-        Charged per COMPLETED 8h period, which is when the venue stamps it --
-        a position closed after 7h pays none, and one held 9h pays one.
-        """
-        if self.funding_bps_per_8h <= 0:
-            return 0.0
-        hours = held_bars * self.bar_minutes / 60.0
-        return self.funding_bps_per_8h * int(hours // 8)
+        """Compatibility surface: elapsed bars never create funding."""
+        del held_bars
+        return 0.0
 
     def round_trip_bps(self, held_bars: int, *, maker_entry: bool = False) -> float:
         if self.cost_model is not None:

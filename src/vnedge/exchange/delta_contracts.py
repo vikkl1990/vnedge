@@ -7,15 +7,19 @@ explicit conversion at the venue boundary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import math
-from urllib.request import Request, urlopen
 import json
+import math
+import time
+import urllib.error
+from dataclasses import dataclass
+from urllib.request import Request, urlopen
 
+from vnedge.exchange.delta_limit_state import DeltaRestBudget
 
 INDIA_PRODUCTS_URL = "https://api.india.delta.exchange/v2/products"
 VNEDGE_HIGH_LEVERAGE_THRESHOLD = 10.0
 VNEDGE_MAX_LEVERAGE = 30.0
+_PUBLIC_PRODUCT_BUDGET = DeltaRestBudget()
 
 
 @dataclass(frozen=True)
@@ -45,7 +49,7 @@ class DeltaContractSpec:
         return 100.0 / self.initial_margin_pct
 
     @classmethod
-    def from_delta_product(cls, product: dict) -> "DeltaContractSpec":
+    def from_delta_product(cls, product: dict) -> DeltaContractSpec:
         return cls(
             symbol=str(product["symbol"]),
             product_id=int(product["id"]) if product.get("id") is not None else None,
@@ -71,17 +75,34 @@ class DeltaSizedTrade:
     reason: str = ""
 
 
-def fetch_india_contract_spec(symbol: str) -> DeltaContractSpec:
+def fetch_india_product_json(symbol: str) -> dict:
     native_symbol = symbol.replace("/", "").replace(":USD", "")
+    wait = _PUBLIC_PRODUCT_BUDGET.reserve(
+        "GET", f"/v2/products/{native_symbol}", now=time.time()
+    )
+    if wait > 0:
+        time.sleep(wait)
     req = Request(
         f"{INDIA_PRODUCTS_URL}/{native_symbol}",
         headers={"User-Agent": "vnedge-contract-sizing-audit"},
     )
-    with urlopen(req, timeout=10) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            _PUBLIC_PRODUCT_BUDGET.note_429(exc.headers, now=time.time())
+        raise
     if not payload.get("success"):
         raise ValueError(f"Delta product lookup failed for {symbol}: {payload}")
-    return DeltaContractSpec.from_delta_product(payload["result"])
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise TypeError(f"Delta product lookup returned no object for {symbol}: {payload}")
+    return result
+
+
+def fetch_india_contract_spec(symbol: str) -> DeltaContractSpec:
+    return DeltaContractSpec.from_delta_product(fetch_india_product_json(symbol))
 
 
 def contracts_from_base_quantity(

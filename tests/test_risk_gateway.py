@@ -240,11 +240,11 @@ def test_exposure_limits(gateway):
     assert any("symbol_exposure" in f for f in decision.failed_checks)
 
 
-def test_funding_against_position_rejected(gateway):
+def test_current_funding_never_blocks_entry(gateway):
     market = healthy_market(funding_rate=0.005)  # longs pay 0.5%/interval
     decision = gateway.evaluate(entry_intent(side="long"), healthy_account(), market, now=NOW)
-    assert not decision.approved
-    assert any("funding" in f for f in decision.failed_checks)
+    assert decision.approved, decision.explanation
+    assert not any("funding" in f for f in decision.failed_checks)
 
 
 def test_consecutive_loss_streak_blocks_entries(gateway):
@@ -262,7 +262,7 @@ def test_consecutive_loss_streak_does_not_block_exits(gateway):
     assert decision.approved, decision.explanation
 
 
-def test_funding_in_our_favor_accepted(gateway):
+def test_favorable_current_funding_is_also_telemetry_only(gateway):
     market = healthy_market(funding_rate=0.005)  # shorts EARN 0.5%
     decision = gateway.evaluate(entry_intent(side="short"), healthy_account(), market, now=NOW)
     assert decision.approved, decision.explanation

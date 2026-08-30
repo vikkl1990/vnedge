@@ -5,12 +5,14 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
+from vnedge.exchange.book_imbalance import imbalance_l1
 from vnedge.execution.exit_engine import ExitConfig, ExitEngine
 from vnedge.runtime.expansion_acceptance import (
     AcceptanceState,
     CompressionArm,
     ExpansionAcceptanceEngine,
 )
+from vnedge.runtime.funding_ledger import FundingPrint
 from vnedge.runtime.squeeze_acceptance_observe import SqueezeAcceptanceObserveRunner
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
@@ -77,6 +79,53 @@ def test_quote_hold_accepts_at_current_ask_not_old_level() -> None:
     assert engine.short.state is AcceptanceState.ARMED
     assert engine.hold_observation_id == 1
     assert engine.last_hold_ms == 5000.0
+
+
+def test_required_l1_imbalance_rearms_failed_probe_then_accepts_supported_side() -> None:
+    engine = _armed()
+    engine.require_book_imbalance = True
+    t0 = datetime(2026, 8, 20, tzinfo=UTC)
+    neutral = imbalance_l1(100.08, 100.09, 50.0, 50.0, tick=0.01, ts=t0)
+    supported = imbalance_l1(100.08, 100.09, 70.0, 30.0, tick=0.01, ts=t0)
+    assert neutral is not None and supported is not None
+    for seconds in (0, 2):
+        assert engine.observe_quote(
+            bid=100.08,
+            ask=100.09,
+            ts=t0 + timedelta(seconds=seconds),
+            bar_index=10,
+            book=neutral,
+        ) is None
+    assert engine.observe_quote(
+        bid=100.08,
+        ask=100.09,
+        ts=t0 + timedelta(seconds=5),
+        bar_index=10,
+        book=neutral,
+    ) is None
+    assert engine.last_reason == "imb_not_bid_heavy"
+    assert engine.long.state is AcceptanceState.ARMED
+    assert engine.book_filter_rejects == 1
+
+    fire = None
+    for seconds in (6, 8, 11):
+        refreshed = imbalance_l1(
+            100.08,
+            100.09,
+            70.0,
+            30.0,
+            tick=0.01,
+            ts=t0 + timedelta(seconds=seconds),
+        )
+        fire = engine.observe_quote(
+            bid=100.08,
+            ask=100.09,
+            ts=t0 + timedelta(seconds=seconds),
+            bar_index=10,
+            book=refreshed,
+        )
+    assert fire is not None
+    assert fire.side == "long"
 
 
 def test_loss_rearms_same_side_but_net_win_burns_it() -> None:
@@ -339,6 +388,63 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert outcomes[0]["funding_complete"] is True
     assert "mfe_bps" in outcomes[0] and "mae_bps" in outcomes[0]
     assert runner.acceptance.long.state is AcceptanceState.ARMED
+
+
+def test_quote_shadow_books_only_explicit_settled_funding_print() -> None:
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTCUSD")
+    bars = pd.DataFrame(
+        [
+            {
+                "timestamp": datetime(2026, 8, 20, tzinfo=UTC),
+                "open": 99.5,
+                "high": 100.0,
+                "low": 99.0,
+                "close": 99.8,
+                "volume": 1000.0,
+                "sqz_episode": 7.0,
+                "sqz_range_high": 100.0,
+                "sqz_range_low": 99.0,
+                "sqz_atr": 0.25,
+                "sqz_vwap24": 99.5,
+                "sqz_compressed": 1.0,
+            },
+            {
+                "timestamp": datetime(2026, 8, 20, 0, 5, tzinfo=UTC),
+                "open": 100.0,
+                "high": 100.1,
+                "low": 99.5,
+                "close": 99.7,
+                "volume": 1200.0,
+                "sqz_episode": 7.0,
+                "sqz_range_high": 100.0,
+                "sqz_range_low": 99.0,
+                "sqz_atr": 0.25,
+                "sqz_vwap24": 99.5,
+                "sqz_compressed": 1.0,
+            },
+        ]
+    )
+    runner.on_closed_bar(bars, 0, bars.iloc[0]["timestamp"])
+    t0 = datetime(2026, 8, 20, 0, 1, tzinfo=UTC)
+    for seconds in (0, 2, 5):
+        runner.on_quote(bid=100.08, ask=100.09, ts=t0 + timedelta(seconds=seconds))
+    assert runner.apply_funding_print(
+        FundingPrint(
+            ts_ms=int(datetime(2026, 8, 20, 0, 2, tzinfo=UTC).timestamp() * 1000),
+            rate=0.0001,
+        )
+    )
+    assert not runner.apply_funding_print(
+        FundingPrint(
+            ts_ms=int(datetime(2026, 8, 20, 0, 2, tzinfo=UTC).timestamp() * 1000),
+            rate=0.0001,
+        )
+    )
+    runner.on_closed_bar(bars, 1, bars.iloc[1]["timestamp"])
+    outcome = next(payload for kind, payload in journal.records if kind == "shadow_outcome")
+    assert outcome["funding_events"] == 1
+    assert outcome["funding_usd"] == pytest.approx(0.3)
 
 
 def test_runner_ignores_pre_entry_low_in_first_closed_candle() -> None:

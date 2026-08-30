@@ -148,7 +148,7 @@ def test_offline_resample_matches_streaming_merge() -> None:
     )
 
 
-def test_pipeline_builds_exact_1m_to_4h_chain_deterministically() -> None:
+def test_pipeline_builds_exact_1m_to_1d_chain_deterministically() -> None:
     trades = [
         Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"), minute % 2 == 0)
         for minute in range(240)
@@ -168,6 +168,7 @@ def test_pipeline_builds_exact_1m_to_4h_chain_deterministically() -> None:
         "15m": 16,
         "1h": 4,
         "4h": 1,
+        "1d": 0,
     }
     four_hour = output["4h"][0]
     assert (four_hour.open, four_hour.close) == (D("100"), D("339"))
@@ -181,6 +182,34 @@ def test_three_complete_hours_never_publish_a_4h_candle() -> None:
     output = build_candles_from_trades("BTCUSDT", trades, close_through=START + timedelta(hours=3))
     assert len(output["1h"]) == 3
     assert output["4h"] == ()
+
+
+def test_six_complete_4h_candles_publish_one_utc_day() -> None:
+    parts: list[Candle] = []
+    for index in range(6):
+        opened = START + timedelta(hours=index * 4)
+        parts.append(
+            Candle(
+                symbol="BTCUSDT",
+                timeframe="4h",
+                open_time=opened,
+                close_time=opened + timedelta(hours=4),
+                open=D("100"),
+                high=D("110"),
+                low=D("90"),
+                close=D(str(101 + index)),
+                volume=D("2"),
+                quote_volume=D("202"),
+                trade_count=2,
+                taker_buy_volume=D("1"),
+                vwap=D("101"),
+            )
+        )
+    daily = merge_candles("BTCUSDT", "1d", parts)
+    assert daily.open_time == START
+    assert daily.close_time == START + timedelta(days=1)
+    assert daily.volume == D("12")
+    assert daily.vwap == D("1212") / D("12")
 
 
 def test_pipeline_never_publishes_forming_bar() -> None:

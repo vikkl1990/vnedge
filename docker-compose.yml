@@ -72,6 +72,9 @@ services:
       # default because it is evidence storage, not a decision dependency.
       VNEDGE_QUOTE_EVIDENCE_ENABLED: "${VNEDGE_QUOTE_EVIDENCE_ENABLED:-0}"
       VNEDGE_QUOTE_EVIDENCE_ROOT: "${VNEDGE_QUOTE_EVIDENCE_ROOT:-data/quote_evidence}"
+      # Persist websocket 429 cooldown across container rebuild/restart through
+      # the mounted data volume. Reconnect storms must not reset the breaker.
+      VNEDGE_DELTA_WS_BREAKER_PATH: "${VNEDGE_DELTA_WS_BREAKER_PATH:-data/state/delta_ws_breaker.json}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=10)"]
       interval: 30s

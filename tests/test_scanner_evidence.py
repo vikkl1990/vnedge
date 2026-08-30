@@ -189,6 +189,9 @@ def test_replay_uses_single_book_next_open_and_dual_costs(monkeypatch):
     assert outcome["exit"] == 110.0
     assert result["schema_version"] == 2
     assert result["net_bps_semantics"] == "booked_execution"
+    assert result["entry_clock"] == "next_open"
+    assert result["clock_cohort"] == "closed_bar->next_open"
+    assert outcome["entry_clock"] == "next_open"
     assert outcome["net_bps"] == outcome["net_execution_bps"]
     assert outcome["cost_bps"] == outcome["execution_cost_bps"]
     assert outcome["funding_bps"] == 0.0
@@ -238,6 +241,8 @@ def test_closed_replay_uses_venue_contract_cost_not_private_strategy_cost(monkey
     )
 
     assert result["cost_profile"] == "delta_swing"
+    assert result["entry_clock"] == "next_15m_open"
+    assert result["clock_cohort"] == "closed_15m->next_15m_open"
     assert result["execution_cost_bps"] == pytest.approx(15.8)
     assert result["gate_cost_bps"] == pytest.approx(18.8)
     outcome = next(row["outcome"] for row in result["records"] if row.get("admitted"))
@@ -504,6 +509,8 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert result["capture_quality"]["mode"] == "external_book"
     assert result["capture_quality"]["parity_eligible"] is False
     assert result["intents"] == 1
+    assert result["entry_clock"] == "quote_hold"
+    assert result["clock_cohort"] == "closed_5m->quote_hold"
     assert result["intent_keys"] == [
         "test_quote_scanner|BTCUSDT|long|1767225900600"
     ]

@@ -89,12 +89,14 @@ def test_scanner_clock_contracts_separate_structure_entry_and_protection() -> No
 
     assert squeeze.decision_tf == "5m"
     assert squeeze.entry_clock == "bbo_acceptance"
+    assert squeeze.evidence_entry_clock == "quote_hold"
     assert squeeze.structure_clock == "closed_bar"
     assert squeeze.protection_clock == "ticks"
     assert squeeze.context_tfs == ()
 
     assert bos.decision_tf == "15m"
     assert bos.entry_clock == "next_open"
+    assert bos.evidence_entry_clock == "next_15m_open"
     assert bos.context_tfs == ("4h",)
 
 

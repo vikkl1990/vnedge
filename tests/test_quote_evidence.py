@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from vnedge.exchange.book_imbalance import imbalance_l1
 from vnedge.exchange.live_feed import QuoteUpdate
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 
@@ -43,6 +44,40 @@ async def test_quote_evidence_persists_exact_consumed_quote(tmp_path: Path) -> N
     assert frame["symbol"].unique().tolist() == ["BTCUSDT"]
     assert recorder.snapshot()["rows_persisted"] == 2
     assert recorder.snapshot()["healthy"] is True
+
+
+@pytest.mark.asyncio
+async def test_quote_evidence_persists_sized_book_filter_inputs(tmp_path: Path) -> None:
+    recorder = QuoteEvidenceRecorder(
+        tmp_path,
+        lane_id="delta-btc",
+        exchange="delta_india",
+        symbol="BTCUSD",
+        flush_every=1,
+    )
+    recorder.start()
+    timestamp = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    book = imbalance_l1(68_518.0, 68_519.0, 2_452.0, 285.0, tick=0.5, ts=timestamp)
+    assert book is not None
+    recorder.record(
+        QuoteUpdate(
+            ts=timestamp,
+            received_ts=timestamp + timedelta(milliseconds=50),
+            bid=book.bid,
+            ask=book.ask,
+            sequence=100,
+            source="delta_india:ob_l1",
+            exchange_timestamped=True,
+            book=book,
+        ),
+        source_overflow_drops=0,
+    )
+    await recorder.close()
+    frame = pd.read_parquet(next(tmp_path.rglob("*.parquet")))
+    assert frame.loc[0, "bid_size"] == 2_452.0
+    assert frame.loc[0, "ask_size"] == 285.0
+    assert frame.loc[0, "book_imbalance"] == pytest.approx(book.imb)
+    assert frame.loc[0, "spread_ticks"] == 2.0
 
 
 def test_quote_evidence_queue_overflow_invalidates_window(tmp_path: Path) -> None:

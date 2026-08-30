@@ -6,8 +6,15 @@ tests pin the exact message schemas confirmed against the live venue.
 
 import asyncio
 import json
+from datetime import UTC, datetime
 
-from vnedge.exchange.delta_ws import DeltaPublicWsClient, delta_native_symbol
+import pytest
+
+from vnedge.exchange.delta_ws import (
+    DeltaPublicWsClient,
+    assert_delta_public_ws_url,
+    delta_native_symbol,
+)
 from vnedge.exchange.heartbeat import HeartbeatConfig, HeartbeatStatus
 
 
@@ -15,6 +22,19 @@ def test_native_symbol_conversion():
     assert delta_native_symbol("BTC/USD:USD") == "BTCUSD"
     assert delta_native_symbol("ETH/USD:USD") == "ETHUSD"
     assert delta_native_symbol("BTCUSD") == "BTCUSD"
+
+
+def test_public_socket_host_is_exact_allowlist_not_substring():
+    assert assert_delta_public_ws_url(
+        "wss://public-socket.india.delta.exchange"
+    ).startswith("wss://")
+    for bad in (
+        "wss://socket.india.delta.exchange",
+        "wss://public-socket.india.delta.exchange.attacker.test",
+        "ws://public-socket.india.delta.exchange",
+    ):
+        with pytest.raises(ValueError, match="refusing"):
+            assert_delta_public_ws_url(bad)
 
 
 def test_handle_l2_orderbook_sets_top_of_book():
@@ -38,6 +58,47 @@ def test_handle_l2_orderbook_sets_top_of_book():
     assert client.quote("BTC/USD:USD") == (62697.5, 62698.0)
     assert client.last_event_at is not None
     assert client.healthy is True
+
+
+def test_compact_ob_l1_decodes_sizes_and_venue_event_clock() -> None:
+    seen = []
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], on_book=lambda symbol, bids, asks, message: seen.append(
+            (symbol, bids, asks, message)
+        )
+    )
+    event_us = 1_775_037_882_675_402
+    client._handle(
+        {
+            "type": "ob_l1",
+            "sy": "BTCUSD",
+            "bp": "68518.0",
+            "bs": "2452",
+            "ap": "68519.0",
+            "as": "285",
+            "lts": event_us,
+            "ts": event_us + 72_703,
+        }
+    )
+    assert client.quote("BTCUSD") == (68518.0, 68519.0)
+    assert client.books["BTCUSD"] == (
+        [{"limit_price": "68518.0", "size": "2452"}],
+        [{"limit_price": "68519.0", "size": "285"}],
+    )
+    assert client.book_event_at["BTCUSD"] == datetime.fromtimestamp(
+        event_us / 1_000_000, tz=UTC
+    )
+    assert len(seen) == 1
+
+
+def test_heartbeat_never_invokes_book_callback() -> None:
+    seen = []
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], on_book=lambda *args: seen.append(args)
+    )
+    client._handle({"type": "heartbeat", "timestamp": 1_775_037_882_675_402})
+    assert seen == []
+    assert client.last_book_at is None
 
 
 def test_handle_all_trades_taker_side():
@@ -91,6 +152,45 @@ def test_handle_funding_rate_normalises_percent_to_fraction():
     )
     # 0.01% -> 0.0001 fraction, matching CCXT's fundingRate convention
     assert client.funding_rate["BTCUSD"] == 0.0001
+
+
+def test_compact_funding_rollover_emits_one_settled_print_without_interval_guess():
+    client = DeltaPublicWsClient(["BTCUSD"])
+    first_realization_us = 1_775_836_800_000_000
+    next_realization_us = 1_775_865_600_000_000
+    client._handle(
+        {
+            "type": "funding_rate",
+            "sy": "BTCUSD",
+            "fr": 0.01,
+            "nfr": first_realization_us,
+        }
+    )
+    # Same realization: update the estimate, but book no cash yet.
+    client._handle(
+        {
+            "type": "funding_rate",
+            "sy": "BTCUSD",
+            "fr": 0.02,
+            "nfr": first_realization_us,
+        }
+    )
+    assert client.settled_funding_events.get("BTCUSD", []) == []
+
+    # A venue-provided schedule rollover proves the prior print settled and
+    # uses its last observed rate, never the new period's estimate.
+    client._handle(
+        {
+            "type": "funding_rate",
+            "sy": "BTCUSD",
+            "fr": -0.03,
+            "nfr": next_realization_us,
+        }
+    )
+    assert client.settled_funding_events["BTCUSD"] == [
+        (first_realization_us // 1_000, 0.0002)
+    ]
+    assert client.next_funding_at_ms["BTCUSD"] == next_realization_us // 1_000
 
 
 def test_handle_ticker_captures_mark_price():
@@ -314,10 +414,11 @@ async def test_reader_loop_consumes_stream_and_subscribes():
     await client.stop()
 
     # subscribe message was sent with all default channels
-    sub = fake.sent[0]
+    assert fake.sent[0] == {"type": "enable_heartbeat"}
+    sub = fake.sent[1]
     assert sub["type"] == "subscribe"
     names = {c["name"] for c in sub["payload"]["channels"]}
-    assert {"l2_orderbook", "all_trades", "funding_rate", "v2/ticker"} <= names
+    assert names == {"ticker", "ob_l1", "trades", "funding_rate"}
     assert all(c["symbols"] == ["BTCUSD"] for c in sub["payload"]["channels"])
 
     assert client.quote("BTCUSD") == (100.0, 101.0)

@@ -1518,8 +1518,8 @@
     }
     el.innerHTML=rows.map(function(g){
       var px=g.price!=null?(g.price>=1000?g.price.toLocaleString(undefined,{maximumFractionDigits:1}):g.price>=1?g.price.toFixed(2):g.price.toFixed(4)):"--";
-      var fund=g.fund!=null?((g.fund>=0?"+":"")+(g.fund*100).toFixed(3)+"%"):(g.fired?g.fired+" firing":g.sig.toLocaleString()+" evals");
-      var cls=g.fund==null?"":g.fund>=0?"up":"dn";
+      var fund=g.fund!=null?((g.fund>=0?"+":"")+(g.fund*100).toFixed(3)+"% fund ind."):(g.fired?g.fired+" firing":g.sig.toLocaleString()+" evals");
+      var cls="";
       return '<span><i>'+safe(g.sym)+'</i>'+px+' <b class="'+cls+'">'+safe(fund)+'</b></span>';
     }).join('');
   }
@@ -1751,7 +1751,8 @@
     renderModelDesk(s);
     renderTrialDesk(s);
 
-    // watchlist — real per-symbol price + funding (each lane forwards its quote)
+    // Watchlist funding is indicative telemetry only. It is not an arm state,
+    // entry clock, or prediction of the next settled cash flow.
     var bySym={};
     lanes.forEach(function(l){var k=symShort(l.symbol);if(!k)return;if(!bySym[k])bySym[k]={sym:k,ven:{},lanes:0,sig:0,fired:0,price:null,fund:null};var g=bySym[k];g.lanes++;g.ven[l.exchange]=1;var f=l.funnel||{};g.sig+=num(f.live_evals||f.evals||0);if(l.last_eval&&l.last_eval.fired)g.fired++;if(g.price==null&&l.price&&fin(l.price.mid))g.price=l.price.mid;if(g.fund==null&&fin(l.funding_rate))g.fund=l.funding_rate;});
     var cov=Object.keys(bySym).map(function(k){return bySym[k];}).sort(function(a,b){return ((b.price!=null)-(a.price!=null))||(b.lanes-a.lanes);});
@@ -1759,7 +1760,7 @@
     if($("watch"))$("watch").innerHTML=cov.map(function(g){
       var chips=Object.keys(g.ven).map(function(x){var v=ven(x);return '<i style="background:'+v.col+'">'+v.sh+'</i>';}).join('');
       var px=g.price!=null?("$"+(g.price>=1000?g.price.toLocaleString(undefined,{maximumFractionDigits:1}):g.price>=1?g.price.toFixed(2):g.price.toFixed(4))):(g.lanes+" lanes");
-      var sub=g.fund!=null?((g.fund>=0?"+":"")+(g.fund*100).toFixed(3)+"% fund"):(g.sig.toLocaleString()+" evals");
+      var sub=g.fund!=null?((g.fund>=0?"+":"")+(g.fund*100).toFixed(3)+"% indicative funding"):(g.sig.toLocaleString()+" evals");
       return '<div class="wcard">'+(g.fired?'<span class="fire">◆ '+g.fired+' firing</span>':'')+
         '<div class="sym"><b>'+g.sym+'</b></div>'+
         '<div class="px num">'+px+'</div>'+

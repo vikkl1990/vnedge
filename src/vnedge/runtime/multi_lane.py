@@ -71,6 +71,7 @@ from vnedge.strategy.composite import CompositeSignalStrategy
 from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
@@ -788,6 +789,12 @@ def _build_single_strategy(
                     f"{strategy_id} parameters are frozen; configure a new strategy ID"
                 )
             return realtime_scanner_class(seed_funding)
+    if strategy_id == HtfRegimeContinuation15mV1.strategy_id:
+        if params:
+            raise ValueError(
+                f"{strategy_id} parameters are frozen; configure a new strategy ID"
+            )
+        return HtfRegimeContinuation15mV1(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -1103,6 +1110,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     StructureBos15mTriggerV3.strategy_id: StructureBos15mTriggerV3.warmup_bars,
     **{strategy.strategy_id: strategy.warmup_bars for strategy in NEW_RESEARCH_SCANNERS},
     **{strategy.strategy_id: strategy.warmup_bars for strategy in REALTIME_SCANNERS},
+    HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1.warmup_bars,
 }
 
 

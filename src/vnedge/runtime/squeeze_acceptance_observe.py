@@ -11,9 +11,11 @@ from typing import cast
 
 import pandas as pd
 
+from vnedge.exchange.book_imbalance import BookImbalance
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
+from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.runtime.latency_tracker import (
     ACCEPTANCE_HOLD_MS,
     SHADOW_JOURNAL_MS,
@@ -88,6 +90,7 @@ class SqueezeAcceptanceObserveRunner:
             return
         intents: dict[str, dict] = {}
         resolved: set[str] = set()
+        funding_by_intent: dict[str, tuple[float, set[str]]] = {}
         for record in read_all():
             payload = record.get("payload", {})
             key = str(payload.get("intent_key") or "")
@@ -114,11 +117,26 @@ class SqueezeAcceptanceObserveRunner:
                 resolved.add(key)
                 self.outcomes += 1
                 self.net_usd += float(payload.get("virtual_net_usd") or 0.0)
+            elif (
+                record.get("kind") == "funding_applied"
+                and payload.get("book") == "quote_shadow"
+                and key.startswith(f"{self.intent_prefix}|")
+            ):
+                cost, event_ids = funding_by_intent.get(key, (0.0, set()))
+                event_id = str(payload.get("funding_event_id") or "")
+                if event_id and event_id not in event_ids:
+                    event_ids.add(event_id)
+                    cost += float(payload.get("funding_cost_usd") or 0.0)
+                funding_by_intent[key] = (cost, event_ids)
         pending = [payload for key, payload in intents.items() if key not in resolved]
         if len(pending) > 1:
             self._restore_error = "multiple unresolved v3 scanner intents"
         elif pending:
-            self._restore_payload = pending[0]
+            self._restore_payload = dict(pending[0])
+            pending_key = str(self._restore_payload.get("intent_key") or "")
+            funding_cost, event_ids = funding_by_intent.get(pending_key, (0.0, set()))
+            self._restore_payload["funding_cost_usd"] = funding_cost
+            self._restore_payload["funding_event_ids"] = sorted(event_ids)
 
     def _count_rejection(self, failed_checks: object) -> None:
         checks = (
@@ -200,6 +218,8 @@ class SqueezeAcceptanceObserveRunner:
                     "entry_ts": decision_ts.to_pydatetime(),
                     "notional_usd": float(intent.get("notional_usd") or self.notional_usd),
                     "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
+                    "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
+                    "funding_event_ids": set(pending.get("funding_event_ids") or ()),
                 }
                 self._restore_payload = None
             if self.open_meta is not None and entry_index is not None and index >= entry_index:
@@ -249,6 +269,8 @@ class SqueezeAcceptanceObserveRunner:
                 "entry_ts": decision_ts.to_pydatetime(),
                 "notional_usd": float(intent.get("notional_usd") or self.notional_usd),
                 "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
+                "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
+                "funding_event_ids": set(pending.get("funding_event_ids") or ()),
             }
             self._restore_payload = None
 
@@ -294,6 +316,7 @@ class SqueezeAcceptanceObserveRunner:
         source: str = "unknown",
         exchange_timestamped: bool = False,
         overflow_drops: int = 0,
+        book: BookImbalance | None = None,
     ) -> FireDecision | None:
         if math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask:
             self._last_bid = bid
@@ -326,6 +349,7 @@ class SqueezeAcceptanceObserveRunner:
             sequence=sequence,
             source=source,
             exchange_timestamped=exchange_timestamped,
+            book=book,
         )
         if (
             self.latency is not None
@@ -430,9 +454,53 @@ class SqueezeAcceptanceObserveRunner:
             "entry_ts": ts,
             "notional_usd": approval.notional_usd or self.notional_usd,
             "margin_usd": approval.margin_usd or self.margin_usd,
+            "funding_cost_usd": 0.0,
+            "funding_event_ids": set(),
         }
         self.fires += 1
         return fire
+
+    def apply_funding_print(self, event: FundingPrint) -> bool:
+        """Book one settled venue funding print against an open virtual position.
+
+        Funding never creates, delays, or expires an arm.  It is an idempotent
+        inventory cash flow applied only after the quote-accepted entry exists.
+        """
+        meta = self.open_meta
+        if meta is None:
+            return False
+        entry_ts = meta.get("entry_ts") or meta.get("bar_ts")
+        if isinstance(entry_ts, datetime) and event.ts_ms <= int(entry_ts.timestamp() * 1000):
+            return False
+        event_ids = meta.setdefault("funding_event_ids", set())
+        if not isinstance(event_ids, set):
+            event_ids = set(event_ids)
+            meta["funding_event_ids"] = event_ids
+        if event.event_id in event_ids:
+            return False
+        side = str(meta.get("side") or "")
+        if side not in {"long", "short"}:
+            return False
+        notional = float(meta.get("notional_usd") or self.notional_usd)
+        cost = funding_cost_usd(side=side, notional_usd=notional, rate=event.rate)
+        event_ids.add(event.event_id)
+        meta["funding_cost_usd"] = float(meta.get("funding_cost_usd") or 0.0) + cost
+        self.journal.append(
+            "funding_applied",
+            {
+                "book": "quote_shadow",
+                "intent_key": meta.get("intent_key"),
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
+                "funding_event_id": event.event_id,
+                "funding_ts_ms": event.ts_ms,
+                "funding_rate": event.rate,
+                "funding_cost_usd": cost,
+                "cash_delta_usd": -cost,
+                "source": event.source,
+            },
+        )
+        return True
 
     def _journal_acceptance_transition(
         self,
@@ -472,6 +540,9 @@ class SqueezeAcceptanceObserveRunner:
                 "quotes_seen": self.acceptance.quotes_seen,
                 "quotes_distinct": self.acceptance.quotes_distinct,
                 "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+                "book_filter_rejects": self.acceptance.book_filter_rejects,
+                "book_imbalance": self.acceptance.last_book_imbalance,
+                "book_spread_ticks": self.acceptance.last_book_spread_ticks,
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
@@ -563,6 +634,9 @@ class SqueezeAcceptanceObserveRunner:
                 "quotes_seen": self.acceptance.quotes_seen,
                 "quotes_distinct": self.acceptance.quotes_distinct,
                 "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+                "book_filter_rejects": self.acceptance.book_filter_rejects,
+                "book_imbalance": self.acceptance.last_book_imbalance,
+                "book_spread_ticks": self.acceptance.last_book_spread_ticks,
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
@@ -625,11 +699,14 @@ class SqueezeAcceptanceObserveRunner:
             (decision.price / entry - 1) if side == "long" else (1 - decision.price / entry)
         ) * 10_000
         held = max(0, index - int(meta.get("entry_bar", index)))
-        total_cost_bps = self.costs.round_trip_bps(held)
-        funding_bps = self.costs.funding_bps(held)
-        execution_cost_bps = total_cost_bps - funding_bps
-        net_bps = gross_bps - total_cost_bps
+        execution_cost_bps = self.costs.round_trip_bps(held)
+        funding_cost_usd_value = float(meta.get("funding_cost_usd") or 0.0)
         notional = float(meta.get("notional_usd", self.notional_usd))
+        funding_bps = (
+            funding_cost_usd_value / notional * 10_000 if notional > 0 else 0.0
+        )
+        total_cost_bps = execution_cost_bps + funding_bps
+        net_bps = gross_bps - total_cost_bps
         net_usd = net_bps * notional / 10_000
         gross_usd = gross_bps * notional / 10_000
         profile = (
@@ -657,7 +734,8 @@ class SqueezeAcceptanceObserveRunner:
                 "virtual_net_usd": net_usd,
                 "gross_pnl_usd": gross_usd,
                 "fees_usd": execution_cost_bps * notional / 10_000,
-                "funding_usd": funding_bps * notional / 10_000,
+                "funding_usd": funding_cost_usd_value,
+                "funding_events": len(meta.get("funding_event_ids") or ()),
                 "funding_bps": funding_bps,
                 "funding_complete": True,
                 "notional_usd": notional,
@@ -720,6 +798,9 @@ class SqueezeAcceptanceObserveRunner:
             "quotes_seen": self.acceptance.quotes_seen,
             "quotes_distinct": self.acceptance.quotes_distinct,
             "quote_contract_rejects": self.acceptance.quote_contract_rejects,
+            "book_filter_rejects": self.acceptance.book_filter_rejects,
+            "book_imbalance": self.acceptance.last_book_imbalance,
+            "book_spread_ticks": self.acceptance.last_book_spread_ticks,
             "quote_overflow_drops": self.acceptance.quote_overflow_drops,
             "quote_rearms": self.acceptance.quote_rearms,
             "overflow_probe_resets": self.acceptance.overflow_probe_resets,

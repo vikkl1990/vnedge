@@ -242,11 +242,15 @@ def test_default_account_requires_and_passes_credentials(monkeypatch):
 
 def test_delta_default_adapter_dispatches_to_native_adapter(monkeypatch):
     from vnedge.exchange import delta_contracts, delta_execution
+    from vnedge.exchange.venue_specs import clear_frozen_delta_specs, freeze_delta_specs
 
     monkeypatch.setenv("VNEDGE_EXEC_API_KEY", "key")
     monkeypatch.setenv("VNEDGE_EXEC_API_SECRET", "secret")
-    spec = delta_contracts.DeltaContractSpec("BTCUSD", product_id=42)
-    monkeypatch.setattr(delta_contracts, "fetch_india_contract_spec", lambda symbol: spec)
+    spec = delta_contracts.DeltaContractSpec(
+        "BTCUSD", product_id=42, contract_value=0.001, tick_size=0.5,
+        initial_margin_pct=0.5, maintenance_margin_pct=0.25,
+    )
+    freeze_delta_specs({"BTCUSD": spec})
     captured = {}
 
     class FakeDeltaAdapter:
@@ -260,3 +264,4 @@ def test_delta_default_adapter_dispatches_to_native_adapter(monkeypatch):
     assert captured["product_ids"] == {"BTC/USD:USD": 42}
     assert captured["contract_specs"] == {"BTC/USD:USD": spec}
     assert captured["dry_run"] is False and captured["live_confirmed"] is True
+    clear_frozen_delta_specs()

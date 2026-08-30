@@ -25,6 +25,7 @@ from vnedge.paper.paper_broker import PaperBroker
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
+from vnedge.runtime.funding_ledger import FundingPrint
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.multi_lane import MultiLaneProvider
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
@@ -140,7 +141,7 @@ def test_target_resolution_and_fee_math(tmp_path):
     assert outcomes[0].virtual_net_usd == pytest.approx(10.0 - (0.05 + 0.055))
 
 
-def test_settled_funding_accrues_at_utc_boundary_for_existing_position(tmp_path):
+def test_settled_funding_print_accrues_for_existing_position(tmp_path):
     tracker, _ = tracker_for(tmp_path)
     tracker.track(
         intent_key="funded",
@@ -152,11 +153,11 @@ def test_settled_funding_accrues_at_utc_boundary_for_existing_position(tmp_path)
         decision_bar_ts=pd.Timestamp("2026-08-25T22:00:00Z"),
     )
     assert tracker.resolve_bar(bar_at("2026-08-25T23:00:00Z")) == []
-    assert tracker.resolve_bar(
-        bar_at("2026-08-26T00:00:00Z", funding_rate=0.0001)
-    ) == []
+    assert tracker.apply_funding_print(
+        FundingPrint(ts_ms=int(pd.Timestamp("2026-08-26T00:00:00Z").timestamp() * 1000), rate=0.0001)
+    ) == 1
     outcome = tracker.resolve_bar(
-        bar_at("2026-08-26T01:00:00Z", high=111.0, funding_rate=0.0001)
+        bar_at("2026-08-26T01:00:00Z", high=111.0)
     )[0]
 
     assert outcome.funding_events == 1
@@ -166,7 +167,7 @@ def test_settled_funding_accrues_at_utc_boundary_for_existing_position(tmp_path)
     assert tracker.stats()["funding_usd"] == pytest.approx(0.01)
 
 
-def test_boundary_fill_does_not_pay_prior_funding_and_missing_rate_is_visible(tmp_path):
+def test_boundary_fill_does_not_pay_prior_funding_and_unknown_rate_does_not_block(tmp_path):
     tracker, _ = tracker_for(tmp_path)
     tracker.track(
         intent_key="boundary-fill",
@@ -177,9 +178,10 @@ def test_boundary_fill_does_not_pay_prior_funding_and_missing_rate_is_visible(tm
         take_profit_price=110.0,
         decision_bar_ts=pd.Timestamp("2026-08-25T23:00:00Z"),
     )
-    assert tracker.resolve_bar(
-        bar_at("2026-08-26T00:00:00Z", funding_rate=0.0001)
-    ) == []
+    assert tracker.resolve_bar(bar_at("2026-08-26T00:00:00Z")) == []
+    assert tracker.apply_funding_print(
+        FundingPrint(ts_ms=int(pd.Timestamp("2026-08-26T00:00:00Z").timestamp() * 1000), rate=0.0001)
+    ) == 0
     outcome = tracker.resolve_bar(bar_at("2026-08-26T01:00:00Z", high=111.0))[0]
     assert outcome.funding_events == 0
     assert outcome.funding_usd == 0.0
@@ -194,12 +196,12 @@ def test_boundary_fill_does_not_pay_prior_funding_and_missing_rate_is_visible(tm
         decision_bar_ts=pd.Timestamp("2026-08-26T06:00:00Z"),
     )
     assert tracker.resolve_bar(bar_at("2026-08-26T07:00:00Z")) == []
+    # No settlement print arrives. That is a zero cash movement, not an entry
+    # veto and not a synthetic "missing 8h" funding event.
     assert tracker.resolve_bar(bar_at("2026-08-26T08:00:00Z")) == []
     missing = tracker.resolve_bar(bar_at("2026-08-26T09:00:00Z", low=89.0))[0]
-    assert missing.funding_events == 1
-    assert missing.funding_complete is False
-    assert tracker.stats()["status"] == "FUNDING_INCOMPLETE"
-    assert tracker.stats()["trade_compatible"] is False
+    assert missing.funding_events == 0
+    assert missing.funding_complete is True
 
 
 # --- maker route: touch-to-fill + maker fee, all-taker figure kept visible --------

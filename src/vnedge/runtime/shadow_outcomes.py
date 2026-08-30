@@ -43,7 +43,6 @@ nothing, and trade nothing.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -53,6 +52,7 @@ from vnedge.execution.journal import DecisionJournal
 from vnedge.paper.fill_model import FillModel
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.active_exit import _better_stop
+from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.strategy.base_strategy import StrategyExitIntent
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ def is_maker_route_strategy(strategy_id: str) -> bool:
 @dataclass
 class _PendingIntent:
     intent_key: str
+    symbol: str
     side: str  # "long" | "short"
     quantity: float
     notional_usd: float
@@ -93,11 +94,11 @@ class _PendingIntent:
     take_profit_levels: tuple[float, ...] = ()  # TP ladder (tp1, tp2, …) for the journal
     mfe_price: float = 0.0  # max-favourable price since entry — observation only
     filled: bool = False  # every virtual entry fills after the decision bar
+    filled_at_ts: pd.Timestamp | None = None
     bars_waiting: int = 0  # maker-route only: bars the resting limit has waited
     funding_usd: float = 0.0
     funding_events: int = 0
     funding_complete: bool = True
-    last_funding_event_ts: pd.Timestamp | None = None
 
 
 @dataclass(frozen=True)
@@ -181,11 +182,13 @@ class ShadowOutcomeTracker:
         self._semantic_gap = False
         self._recent_outcomes: list[dict] = []
         self._resolutions: dict[str, int] = {"stop": 0, "target": 0, "timeout": 0}
+        self._funding_event_keys: set[str] = set()
         self._load()
 
     # --- journal replay ----------------------------------------------------------
     def _load(self) -> None:
         intents: dict[str, dict] = {}
+        applied_funding: list[dict] = []
         for record in self.journal.read_all():
             kind, payload = record.get("kind"), record.get("payload", {})
             if kind == "shadow_intent":
@@ -216,6 +219,8 @@ class ShadowOutcomeTracker:
                 if key is not None and key not in self._resolved_keys:
                     self._resolved_keys.add(key)
                     self._unfilled += 1
+            elif kind == "funding_applied" and payload.get("book") == "shadow":
+                applied_funding.append(payload)
         for key, payload in intents.items():
             if key in self._resolved_keys:
                 continue
@@ -223,6 +228,18 @@ class ShadowOutcomeTracker:
             if pending is not None:
                 self._semantic_gap = self._semantic_gap or bool(pending.take_profit_levels)
                 self._pending[key] = pending
+        for payload in applied_funding:
+            intent_key = str(payload.get("intent_key") or "")
+            event_id = str(
+                payload.get("funding_event_id") or payload.get("event_id") or ""
+            )
+            pending = self._pending.get(intent_key)
+            if not event_id:
+                continue
+            self._funding_event_keys.add(f"{intent_key}:{event_id}")
+            if pending is not None:
+                pending.funding_usd += float(payload.get("funding_cost_usd") or 0.0)
+                pending.funding_events += 1
 
     def _parse_intent(self, key: str, payload: dict) -> _PendingIntent | None:
         """Build a pending virtual position from a journaled shadow_intent.
@@ -241,6 +258,7 @@ class ShadowOutcomeTracker:
         entry_price = notional / quantity
         return _PendingIntent(
             intent_key=key,
+            symbol=str(intent.get("symbol") or ""),
             side=str(intent.get("side", "long")),
             quantity=quantity,
             notional_usd=notional,
@@ -259,6 +277,7 @@ class ShadowOutcomeTracker:
         self,
         *,
         intent_key: str,
+        symbol: str = "",
         side: str,
         quantity: float,
         notional_usd: float,
@@ -276,6 +295,7 @@ class ShadowOutcomeTracker:
         entry_price = notional_usd / quantity
         self._pending[intent_key] = _PendingIntent(
             intent_key=intent_key,
+            symbol=symbol,
             side=side,
             quantity=quantity,
             notional_usd=notional_usd,
@@ -293,6 +313,52 @@ class ShadowOutcomeTracker:
     @property
     def has_pending(self) -> bool:
         return bool(self._pending)
+
+    def apply_funding_print(self, event: FundingPrint) -> int:
+        """Apply one SETTLED print to positions open when it arrived.
+
+        The event is idempotent per intent.  A flat/unfilled intent is ignored;
+        elapsed bars and wall-clock boundaries never synthesize a charge.
+        """
+
+        applied = 0
+        stamp = pd.to_datetime(event.ts_ms, unit="ms", utc=True)
+        for pending in list(self._pending.values()):
+            if (
+                not pending.filled
+                or pending.filled_at_ts is None
+                or stamp <= pending.filled_at_ts
+            ):
+                continue
+            key = f"{pending.intent_key}:{event.event_id}"
+            if key in self._funding_event_keys:
+                continue
+            cost = funding_cost_usd(
+                side=pending.side,
+                notional_usd=pending.notional_usd,
+                rate=event.rate,
+            )
+            if not self.journal.append(
+                "funding_applied",
+                {
+                    "book": "shadow",
+                    "intent_key": pending.intent_key,
+                    "symbol": pending.symbol,
+                    "funding_event_id": event.event_id,
+                    "funding_ts_ms": event.ts_ms,
+                    "funding_rate": event.rate,
+                    "funding_cost_usd": cost,
+                    "cash_delta_usd": -cost,
+                    "source": event.source,
+                },
+            ):
+                pending.funding_complete = False
+                continue
+            self._funding_event_keys.add(key)
+            pending.funding_usd += cost
+            pending.funding_events += 1
+            applied += 1
+        return applied
 
     # --- resolution --------------------------------------------------------------
     def resolve_bar(
@@ -318,12 +384,12 @@ class ShadowOutcomeTracker:
             # Taker shadow fills use the first post-decision bar's open, which
             # is the same convention as PaperRunner and the offline scanner
             # replay. The decision-time quote remains only a sizing reference.
-            filled_before_bar = pending.filled
             if not self.maker_route and not pending.filled:
                 pending.entry_price = open_price
                 pending.notional_usd = pending.quantity * open_price
                 pending.mfe_price = open_price
                 pending.filled = True
+                pending.filled_at_ts = bar_ts
             # Maker route: the resting limit only fills if this bar's range
             # touches it. If the market runs away without a touch, the order is
             # cancelled after its TTL — the immediate runners a maker miss are
@@ -339,8 +405,7 @@ class ShadowOutcomeTracker:
                         self._cancel_unfilled(pending, bar_ts)
                     continue
                 pending.filled = True  # touched -> fills this bar as the fill bar
-            if filled_before_bar and pending.filled:
-                self._accrue_funding(pending, bar_ts, bar)
+                pending.filled_at_ts = bar_ts
             pending.bars_held += 1  # fill bar counts as 0, like run_backtest
             # Track max-favourable excursion for the observation-only ladder.
             if pending.side == "long":
@@ -368,50 +433,6 @@ class ShadowOutcomeTracker:
                 continue
             outcomes.append(self._close(pending, resolution, exit_price, bar_ts))
         return outcomes
-
-    @staticmethod
-    def _is_funding_stamp(bar_ts: pd.Timestamp) -> bool:
-        stamp = pd.Timestamp(bar_ts)
-        if stamp.tzinfo is None:
-            stamp = stamp.tz_localize("UTC")
-        else:
-            stamp = stamp.tz_convert("UTC")
-        return (
-            stamp.hour % 8 == 0
-            and stamp.minute == 0
-            and stamp.second == 0
-            and stamp.microsecond == 0
-        )
-
-    def _accrue_funding(
-        self,
-        pending: _PendingIntent,
-        bar_ts: pd.Timestamp,
-        bar: pd.Series,
-    ) -> None:
-        """Book the settled funding print at a UTC 00/08/16 boundary.
-
-        A position filled on the boundary does not retroactively pay that
-        stamp. Existing positions do. Positive rates charge longs and credit
-        shorts; negative rates do the inverse. Missing settlement data is
-        operator-visible and prevents the outcome from claiming cost-complete
-        parity instead of silently assuming zero.
-        """
-        stamp = pd.Timestamp(bar_ts)
-        if not self._is_funding_stamp(stamp) or pending.last_funding_event_ts == stamp:
-            return
-        pending.last_funding_event_ts = stamp
-        pending.funding_events += 1
-        raw = bar.get("funding_rate")
-        try:
-            rate = float(raw)
-        except (TypeError, ValueError):
-            rate = math.nan
-        if not math.isfinite(rate):
-            pending.funding_complete = False
-            return
-        direction = 1.0 if pending.side == "long" else -1.0
-        pending.funding_usd += direction * rate * pending.notional_usd
 
     def replay(self, candles: pd.DataFrame) -> list[VirtualOutcome]:
         """Resolve restored pending intents against already-seen candles —

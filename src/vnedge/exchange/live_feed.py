@@ -32,6 +32,12 @@ from datetime import UTC, datetime
 
 from vnedge.data.ccxt_client import create_ccxt_async_exchange
 from vnedge.data.schemas import TIMEFRAME_MS
+from vnedge.exchange.book_imbalance import (
+    BookImbalance,
+    BookTape,
+    imbalance_l1,
+    imbalance_l2,
+)
 from vnedge.exchange.heartbeat import HeartbeatStatus
 from vnedge.risk.risk_manager import MarketState
 
@@ -67,6 +73,9 @@ class QuoteUpdate:
     sequence: int | str | None = None
     source: str = "unknown"
     exchange_timestamped: bool = False
+    # Present only when the exact consumed quote came from a sized book frame.
+    # Heartbeats, funding, and unsized ticker frames never populate it.
+    book: BookImbalance | None = None
 
     def __post_init__(self) -> None:
         if self.ts.tzinfo is None or self.ts.utcoffset() is None:
@@ -87,6 +96,11 @@ class QuoteUpdate:
             raise ValueError("quote sequence must be an integer, string, or None")
         if not self.source.strip():
             raise ValueError("quote source cannot be empty")
+        if self.book is not None and (
+            not math.isclose(self.book.bid, self.bid, rel_tol=0.0, abs_tol=1e-12)
+            or not math.isclose(self.book.ask, self.ask, rel_tol=0.0, abs_tol=1e-12)
+        ):
+            raise ValueError("quote and sized-book top of book must match")
         object.__setattr__(self, "ts", self.ts.astimezone(UTC))
         object.__setattr__(self, "received_ts", received.astimezone(UTC))
 
@@ -125,6 +139,7 @@ def _publish_latest_quote(
     received_ts: datetime | None = None,
     sequence: int | str | None = None,
     source: str = "unknown",
+    book: BookImbalance | None = None,
 ) -> QuoteUpdate:
     """Publish into a bounded acceptance history without blocking ingress.
 
@@ -145,6 +160,7 @@ def _publish_latest_quote(
         sequence=normalized_sequence,
         source=source,
         exchange_timestamped=event_ts is not None,
+        book=book,
     )
     if queue.full():
         try:
@@ -639,11 +655,11 @@ class RestPollingMarketFeed:
 
 
 class DeltaWsFeed(RestPollingMarketFeed):
-    """Delta India feed: NATIVE websocket candles/quotes/funding, REST fallback.
+    """Delta India feed: native websocket candles/quotes plus REST settlement history.
 
     Delta has no CCXT Pro class, but its native public websocket
     (``DeltaPublicWsClient``) pushes everything the lane needs: top-of-book
-    from ``l2_orderbook``, funding from the ``funding_rate`` channel, and
+    from ``ob_l1``, indicative funding from ``ticker``, and
     closed candles from the ``candlestick_<timeframe>`` channel (verified
     live 2026-07-08 — the channel streams the forming candle; the client
     emits it as closed when a newer ``candle_start_time`` appears, the same
@@ -668,6 +684,9 @@ class DeltaWsFeed(RestPollingMarketFeed):
         enable_candles: bool = True,
         enable_quotes: bool = True,
         enable_funding: bool = True,
+        enable_l2: bool = False,
+        l2_levels: int = 5,
+        l2_decay_k: float = 0.35,
     ) -> None:
         super().__init__(
             exchange_id,
@@ -684,15 +703,31 @@ class DeltaWsFeed(RestPollingMarketFeed):
         self.feed_mode = "delta native ws candles (rest fallback)"
         self._native_symbol = delta_native_symbol(symbol)
         self._last_ws_candle_at: datetime | None = None
+        self._book_tape = BookTape(stale_after_s=2.0)
+        self._l2_book_tape = BookTape(stale_after_s=2.0)
+        if l2_levels <= 0:
+            raise ValueError("Delta L2 levels must be positive")
+        if not math.isfinite(l2_decay_k) or l2_decay_k < 0:
+            raise ValueError("Delta L2 decay must be finite and non-negative")
+        self._enable_l2 = bool(enable_l2)
+        self._l2_levels = int(l2_levels)
+        self._l2_decay_k = float(l2_decay_k)
         channels: tuple[str, ...] = ()
         if enable_quotes:
-            channels += ("l2_orderbook",)
+            channels += ("ticker",)
+        if enable_quotes:
+            channels += ("ob_l1",)
+        if enable_quotes and self._enable_l2:
+            # Deliberately opt-in until captured production frames prove the
+            # compact ob_l2 decoder and live/replay sequence parity.
+            channels += ("ob_l2",)
         if enable_funding:
-            channels += ("funding_rate", "v2/ticker")
+            channels += ("funding_rate",)
         self._ws = DeltaPublicWsClient(
             [self._native_symbol],
             channels=channels,
             candle_timeframes=(timeframe,) if enable_candles else (),
+            on_book=self._on_ws_book,
             on_candle=self._on_ws_candle,
         )
 
@@ -719,6 +754,92 @@ class DeltaWsFeed(RestPollingMarketFeed):
         self._last_ws_candle_at = datetime.now(UTC)
         self._emit_closed(row)
 
+    def _on_ws_book(self, sym: str, buy: list, sell: list, message: dict) -> None:
+        """Publish every sized Delta book frame; never poll/coalesce L1.
+
+        ``ticker`` can carry an unsized BBO and is useful for telemetry, but it
+        cannot prove imbalance. Only ``ob_l1`` (and a future explicitly enabled
+        L2 channel) enters the acceptance tape.
+        """
+        if sym != self._native_symbol or message.get("type") not in {
+            "ob_l1",
+            "l2_orderbook",
+            "ob_l2",
+        }:
+            return
+        if not buy or not sell:
+            return
+        try:
+            bid = float(buy[0]["limit_price"])
+            ask = float(sell[0]["limit_price"])
+            bid_size = float(buy[0]["size"])
+            ask_size = float(sell[0]["size"])
+            from vnedge.exchange.venue_specs import frozen_delta_specs
+
+            spec = frozen_delta_specs().get(self._native_symbol)
+            tick = float(spec.tick_size) if spec is not None and spec.tick_size else 0.0
+        except (KeyError, TypeError, ValueError):
+            return
+        event_ts = self._ws.book_event_at.get(self._native_symbol)
+        if event_ts is None:
+            return
+        message_type = str(message.get("type") or "")
+        if message_type == "ob_l1":
+            snapshot = imbalance_l1(
+                bid,
+                ask,
+                bid_size,
+                ask_size,
+                tick=tick,
+                ts=event_ts,
+            )
+            tape = self._book_tape
+            source = "delta_india:ob_l1"
+        else:
+            if not self._enable_l2:
+                return
+            try:
+                bids = [
+                    (float(level["limit_price"]), float(level["size"]))
+                    for level in buy
+                ]
+                asks = [
+                    (float(level["limit_price"]), float(level["size"]))
+                    for level in sell
+                ]
+            except (KeyError, TypeError, ValueError):
+                return
+            snapshot = imbalance_l2(
+                bids,
+                asks,
+                tick=tick,
+                ts=event_ts,
+                levels=self._l2_levels,
+                decay_k=self._l2_decay_k,
+            )
+            tape = self._l2_book_tape
+            source = "delta_india:ob_l2"
+        if snapshot is None:
+            return
+        tape.on_book(snapshot)
+        now = datetime.now(UTC)
+        live_snapshot = tape.live(now)
+        if live_snapshot is None:
+            # Never extend stale L2. A separately arriving L1 frame remains
+            # authoritative and will publish on its own event clock.
+            return
+        self.quote = (live_snapshot.bid, live_snapshot.ask)
+        _publish_latest_quote(
+            self.quote_updates,
+            bid=live_snapshot.bid,
+            ask=live_snapshot.ask,
+            event_ts=event_ts,
+            received_ts=now,
+            sequence=self._ws.book_sequence.get(self._native_symbol),
+            source=source,
+            book=live_snapshot,
+        )
+
     def _ws_candles_fresh(self, now: datetime | None = None) -> bool:
         """Websocket candle stream considered alive: a close within 2x timeframe."""
         if self._last_ws_candle_at is None:
@@ -737,20 +858,14 @@ class DeltaWsFeed(RestPollingMarketFeed):
         """Mirror native websocket state into the polling-feed surface."""
         while True:
             try:
-                quote = self._ws.quote(self._native_symbol)
-                if quote is not None and quote != self.quote:
-                    self.quote = quote
-                    _publish_latest_quote(
-                        self.quote_updates,
-                        bid=quote[0],
-                        ask=quote[1],
-                        event_ts=self._ws.book_event_at.get(self._native_symbol),
-                        sequence=self._ws.book_sequence.get(self._native_symbol),
-                        source="delta_india:l2_orderbook",
-                    )
                 fr = self._ws.funding_rate.get(self._native_symbol)
                 if fr is not None:
                     self.funding_rate = fr
+                # Current funding remains telemetry. Only a venue schedule
+                # rollover produces a settled cash event for the ledger.
+                self.funding_events = list(
+                    self._ws.settled_funding_events.get(self._native_symbol, ())
+                )
                 native_forming = self._ws.forming_candle(
                     self._native_symbol, self.timeframe
                 )
@@ -821,6 +936,7 @@ def create_market_feed(
     enable_candles: bool = True,
     enable_quotes: bool = True,
     enable_funding: bool = True,
+    enable_l2: bool = False,
 ) -> LiveMarketFeed | RestPollingMarketFeed:
     if supports_ccxt_pro_feed(exchange_id):
         return LiveMarketFeed(
@@ -840,6 +956,7 @@ def create_market_feed(
             enable_candles=enable_candles,
             enable_quotes=enable_quotes,
             enable_funding=enable_funding,
+            enable_l2=enable_l2,
         )
     feed = RestPollingMarketFeed(
         exchange_id,

@@ -24,7 +24,7 @@ from typing import Any
 import yaml
 
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, HIGH_LEVERAGE_THRESHOLD
-from vnedge.exchange.venue_specs import venue_symbol_limits
+from vnedge.exchange.venue_specs import MissingDeltaContractSpecError, venue_symbol_limits
 from vnedge.strategy.strategy_registry import get_strategy_class
 
 DEFAULT_RESEARCH_DIR = Path("research/live_research")
@@ -572,8 +572,14 @@ def _requested_experiment(
     lev = float(config.requested_leverage if leverage is None else leverage)
     notional = margin * lev
     max_leverage = _optional_float(manifest.get("max_leverage"))
-    limits = venue_symbol_limits(exchange, symbol)
     risk_blockers: list[str] = []
+    try:
+        limits = venue_symbol_limits(exchange, symbol)
+    except MissingDeltaContractSpecError as exc:
+        # This is a read-only planning artifact. Surface the startup contract
+        # failure as a blocker instead of crashing the whole dashboard build.
+        limits = None
+        risk_blockers.append(f"Delta product spec unavailable: {exc}")
 
     if lev > ABSOLUTE_MAX_LEVERAGE:
         risk_blockers.append(
@@ -587,7 +593,7 @@ def _requested_experiment(
         risk_blockers.append(
             f"requested leverage above {HIGH_LEVERAGE_THRESHOLD:g}x needs explicit high-leverage acknowledgement"
         )
-    if notional < limits.min_notional_usd:
+    if limits is not None and notional < limits.min_notional_usd:
         risk_blockers.append(
             f"requested notional ${notional:.2f} below venue min ${limits.min_notional_usd:.2f}"
         )
@@ -595,7 +601,10 @@ def _requested_experiment(
     if exchange.lower() in {"binanceusdm", "bybit"}:
         spec_source = "verified_exchange_limits"
     elif exchange.lower() == "delta_india":
-        spec_source = "delta_fallback_limits_contract_lookup_required_before_live"
+        spec_source = (
+            "frozen_delta_product_snapshot" if limits is not None
+            else "delta_product_snapshot_unavailable"
+        )
 
     return {
         "profile": profile,
@@ -603,9 +612,9 @@ def _requested_experiment(
         "requested_leverage": lev,
         "requested_notional_usd": notional,
         "manifest_max_leverage": max_leverage,
-        "venue_min_qty": limits.min_qty,
-        "venue_qty_step": limits.qty_step,
-        "venue_min_notional_usd": limits.min_notional_usd,
+        "venue_min_qty": None if limits is None else limits.min_qty,
+        "venue_qty_step": None if limits is None else limits.qty_step,
+        "venue_min_notional_usd": None if limits is None else limits.min_notional_usd,
         "venue_spec_source": spec_source,
         "high_leverage_threshold": HIGH_LEVERAGE_THRESHOLD,
         "absolute_max_leverage": ABSOLUTE_MAX_LEVERAGE,

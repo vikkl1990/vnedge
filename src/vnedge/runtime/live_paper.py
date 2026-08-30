@@ -82,6 +82,7 @@ from vnedge.runtime.daily_factory import (
 )
 from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
 from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.funding_ledger import FundingPrint
 from vnedge.runtime.latency_tracker import (
     BAR_CLOSE_PROCESSING_MS,
     CLOSE_TO_ARM_MS,
@@ -330,6 +331,18 @@ class LivePaperSession:
         # replay identity, and newly minted shadow intent keys use one stable
         # canonical symbol.
         self.data_symbol = canonical_symbol(config.symbol)
+        self._funding_dispatch_keys: set[tuple[str, str]] = {
+            (
+                str(payload.get("book") or ""),
+                str(payload.get("funding_event_id") or ""),
+            )
+            for record in journal.read_all()
+            for payload in [record.get("payload")]
+            if record.get("kind") == "funding_applied"
+            and isinstance(payload, dict)
+            and str(payload.get("symbol") or "") in {self.data_symbol, config.symbol}
+            and payload.get("funding_event_id")
+        }
         self._tm_degraded = False
         # candle-path arm-gate skip counter, keyed by coarse reason
         # (decision_tf_stale / _gapped / _future / tm_error / tm_age_hard).
@@ -414,6 +427,11 @@ class LivePaperSession:
                     cost_profile=self.cost_profile,
                     bar_minutes=(self._tf_seconds or 300) / 60.0,
                     approve_fire=self._approve_scanner_fire,
+                    require_book_imbalance=data_exchange.lower() in {
+                        "delta",
+                        "delta_india",
+                        "deltaindia",
+                    },
                 )
                 if quote_acceptance and runtime_contract is not None
                 else SqueezeObserveRunner(
@@ -592,16 +610,19 @@ class LivePaperSession:
             self.latency.record(QUOTE_INGEST_MS, quote_event["ingest_lag_ms"])
             quote_compute_started = time.perf_counter()
             try:
-                fire = observer.on_quote(
-                    bid=update.bid,
-                    ask=update.ask,
-                    ts=update.ts,
-                    received_ts=update.received_ts,
-                    sequence=update.sequence,
-                    source=update.source,
-                    exchange_timestamped=update.exchange_timestamped,
-                    overflow_drops=overflow_drops,
-                )
+                quote_args = {
+                    "bid": update.bid,
+                    "ask": update.ask,
+                    "ts": update.ts,
+                    "received_ts": update.received_ts,
+                    "sequence": update.sequence,
+                    "source": update.source,
+                    "exchange_timestamped": update.exchange_timestamped,
+                    "overflow_drops": overflow_drops,
+                }
+                if update.book is not None:
+                    quote_args["book"] = update.book
+                fire = observer.on_quote(**quote_args)
             finally:
                 self.latency.record(
                     QUOTE_ON_QUOTE_MS,
@@ -891,6 +912,7 @@ class LivePaperSession:
             context_ms = {
                 "1h": 3_600_000,
                 "4h": 14_400_000,
+                "1d": 86_400_000,
             }.get(timeframe)
             if context_ms is None:
                 raise ValueError(f"unsupported canonical context timeframe: {timeframe}")
@@ -1822,7 +1844,10 @@ class LivePaperSession:
             expected_holding_seconds=(
                 max(1, self.config.max_holding_bars) * (self._tf_seconds or 0)
             ),
-            current_funding_rate=getattr(self.feed, "funding_rate", 0.0),
+            # Indicative funding is telemetry, never an entry clock.  A caller
+            # may pass an explicit predicted_funding_bps only after proving a
+            # known settlement falls inside the frozen hold horizon.
+            current_funding_rate=0.0,
             symbol=self.config.symbol,
             available_room_bps=signal_edge_bps,
         )
@@ -1937,6 +1962,7 @@ class LivePaperSession:
                 if self.shadow_outcomes is not None:
                     self.shadow_outcomes.track(
                         intent_key=key,
+                        symbol=self.data_symbol,
                         side=sig.side,
                         quantity=intent.quantity,
                         notional_usd=intent.notional_usd,
@@ -2065,7 +2091,7 @@ class LivePaperSession:
             expected_holding_seconds=(
                 max(1, self.config.max_holding_bars) * (self._tf_seconds or 0)
             ),
-            current_funding_rate=getattr(self.feed, "funding_rate", 0.0),
+            current_funding_rate=0.0,
             symbol=self.config.symbol,
             available_room_bps=signal_edge_bps,
         )
@@ -2604,6 +2630,7 @@ class LivePaperSession:
         a closed candle and must still advance stop checks, feed-stall checks,
         the forming-bar clock, heartbeat persistence, and the dashboard.
         """
+        self._apply_settled_funding()
         await self._check_tick_stop(now)
         if self.feed.quote is not None:
             self._sync_quote()
@@ -2615,6 +2642,53 @@ class LivePaperSession:
         self._feed_time_machine(now)
         self._record_runner_heartbeat("waiting_for_closed_candle", now)
         self._publish_snapshot()
+
+    def _apply_settled_funding(self) -> None:
+        """Dispatch new settled funding prints to open books, never to scanners.
+
+        ``feed.funding_rate`` is indicative telemetry and is deliberately not
+        read here.  Historical prints are idempotent by their venue timestamp
+        and rate; flat books consume them without a cash movement so a later
+        entry cannot be charged retroactively.
+        """
+        rows = getattr(self.feed, "funding_events", ()) or ()
+        for ts_ms, rate in sorted(rows):
+            event = FundingPrint(ts_ms=int(ts_ms), rate=float(rate))
+            if self.shadow_outcomes is not None:
+                dispatch = ("shadow", event.event_id)
+                if dispatch not in self._funding_dispatch_keys:
+                    self.shadow_outcomes.apply_funding_print(event)
+                    self._funding_dispatch_keys.add(dispatch)
+            if isinstance(self.scanner_observer, SqueezeAcceptanceObserveRunner):
+                dispatch = ("quote_shadow", event.event_id)
+                if dispatch not in self._funding_dispatch_keys:
+                    self.scanner_observer.apply_funding_print(event)
+                    self._funding_dispatch_keys.add(dispatch)
+            if self.config.mode is not RunnerMode.PAPER:
+                continue
+            dispatch = ("paper", event.event_id)
+            if dispatch in self._funding_dispatch_keys:
+                continue
+            booked = self.exchange.apply_funding_print(self.config.symbol, event)
+            self._funding_dispatch_keys.add(dispatch)
+            if booked is None:
+                continue
+            self.journal.append(
+                "funding_applied",
+                {
+                    "book": "paper",
+                    "symbol": self.data_symbol,
+                    "strategy_id": self.strategy.strategy_id,
+                    "funding_event_id": booked.event_id,
+                    "funding_ts_ms": booked.ts_ms,
+                    "funding_rate": booked.rate,
+                    "side": booked.side,
+                    "notional_usd": booked.notional_usd,
+                    "funding_cost_usd": booked.funding_cost_usd,
+                    "cash_delta_usd": -booked.funding_cost_usd,
+                    "source": booked.source,
+                },
+            )
 
     def _maybe_daily_report(self, now: datetime) -> None:
         """At each UTC day rollover, journal a summary of the finished day

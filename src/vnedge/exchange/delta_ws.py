@@ -1,48 +1,15 @@
-"""Native Delta Exchange India public websocket client.
+"""Native Delta Exchange India production public-websocket client.
 
-CCXT (and CCXT Pro) has no websocket support for Delta Exchange, so the Delta
-lane has run on a REST-polling feed. Delta's *native* public websocket, however,
-streams exactly what we want in real time: full L2 order books, prints, current
-funding, and mark price. This client speaks that native protocol.
+The only accepted host is ``wss://public-socket.india.delta.exchange``.
+Subscriptions use the current public channel names (``ticker``, ``ob_l1``,
+``trades``, and ``candlestick_<tf>``). Delta server heartbeats and RFC pongs
+advance transport liveness only; market freshness has independent book, trade,
+and candle clocks. Public data only: no authentication, orders, or dead-man
+heartbeat exists in this process.
 
-Public data only. No authentication, no orders, no account channels — the same
-posture as ``LiveMarketFeed``. It maintains live state (top-of-book, funding,
-last trade, L2 book, mark price) that a feed wrapper reads, and exposes optional
-``on_book`` / ``on_trade`` callbacks so a tick recorder can archive the raw
-stream without a second connection.
-
-Protocol (confirmed by live probing against wss://socket.india.delta.exchange):
-
-- subscribe:   {"type":"subscribe","payload":{"channels":[
-                   {"name":"l2_orderbook","symbols":["BTCUSD"]}, ...]}}
-- l2_orderbook (full snapshot per message):
-      {"type":"l2_orderbook","symbol":"BTCUSD",
-       "buy":[{"limit_price":"62697.5","size":1762,"depth":"1762"}, ...],
-       "sell":[{"limit_price":"62698.0","size":10,...}, ...]}
-      buy is bids (descending), sell is asks (ascending). Prices are strings.
-- all_trades:
-      {"type":"all_trades","symbol":"BTCUSD","size":1,"price":"62644.5",
-       "buyer_role":"maker","seller_role":"taker","timestamp":<microseconds>}
-      taker side = whichever role == "taker".
-- funding_rate (8h interval):
-      {"type":"funding_rate","symbol":"BTCUSD","funding_rate":0.01,
-       "funding_interval":28800,"funding_rate_8h":0.01,...}
-      funding_rate is a PERCENT (0.01 == 0.01%); we normalise to a fraction
-      (/100) so it matches CCXT's fundingRate convention used everywhere else.
-- v2/ticker:
-      {"type":"v2/ticker","symbol":"BTCUSD","mark_price":"62637.53",
-       "close":62642.5,"oi":"1026.9130",...}
-- candlestick_<tf> (tf in 1m/5m/15m/30m/1h/... — confirmed live 2026-07-08):
-      {"type":"candlestick_1h","symbol":"BTCUSD","resolution":"1h",
-       "open":62092,"high":62379.5,"low":62010,"close":62240.5,
-       "volume":836519.0,"candle_start_time":1783530000000000,
-       "timestamp":1783532686647151,"last_updated":1783532686647151,...}
-      candle_start_time/timestamp are MICROSECONDS. The channel streams the
-      FORMING candle repeatedly (sub-second cadence); there is no explicit
-      "closed" flag. Closed-candle discipline therefore mirrors
-      ``LiveMarketFeed._watch_candles``: when a message arrives with a newer
-      ``candle_start_time``, the previously forming candle is proven closed
-      and is emitted via ``on_candle``.
+Legacy frame names remain decode-compatible during migration, but this client
+never subscribes to them. Candle messages are forming updates; a newer
+``candle_start_time`` proves the previous interval closed.
 """
 
 from __future__ import annotations
@@ -50,13 +17,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from vnedge.data.symbols import canonical_symbol
+from vnedge.exchange.delta_limit_state import WsConnectBreaker, parse_rate_limit_reset
 from vnedge.exchange.heartbeat import (
     HeartbeatConfig,
     HeartbeatStatus,
@@ -66,11 +37,35 @@ from vnedge.exchange.heartbeat import (
 
 logger = logging.getLogger(__name__)
 
-DELTA_INDIA_WS_URL = "wss://socket.india.delta.exchange"
+DELTA_INDIA_WS_URL = "wss://public-socket.india.delta.exchange"
+ALLOWED_PUBLIC_WS_HOSTS = frozenset({"public-socket.india.delta.exchange"})
 
-DEFAULT_CHANNELS = ("l2_orderbook", "all_trades", "funding_rate", "v2/ticker")
+DEFAULT_CHANNELS = ("ticker", "ob_l1", "trades", "funding_rate")
 
 _MAX_CONSECUTIVE_ERRORS = 5
+
+
+def _normalise_book_side(raw: object) -> list[dict[str, object]]:
+    """Normalize verbose and compact Delta levels into one internal shape."""
+    if not isinstance(raw, list):
+        return []
+    levels: list[dict[str, object]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            price = item.get("limit_price")
+            if price is None:
+                price = item.get("price") or item.get("p")
+            size = item.get("size")
+            if size is None:
+                size = item.get("s") or item.get("quantity")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            price, size = item[0], item[1]
+        else:
+            continue
+        if price is None or size is None:
+            continue
+        levels.append({"limit_price": price, "size": size})
+    return levels
 
 
 def delta_native_symbol(symbol: str) -> str:
@@ -79,6 +74,13 @@ def delta_native_symbol(symbol: str) -> str:
     ``BTC/USD:USD`` -> ``BTCUSD``. Already-native symbols pass through.
     """
     return canonical_symbol(symbol)
+
+
+def assert_delta_public_ws_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme != "wss" or parsed.hostname not in ALLOWED_PUBLIC_WS_HOSTS:
+        raise ValueError(f"refusing Delta public websocket host: {url}")
+    return url
 
 
 class DeltaPublicWsClient:
@@ -103,12 +105,14 @@ class DeltaPublicWsClient:
         on_candle: Callable[[str, str, list], None] | None = None,
         heartbeat: HeartbeatConfig | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+        breaker: WsConnectBreaker | None = None,
     ) -> None:
         self.symbols = [delta_native_symbol(s) for s in symbols]
         self.channels = tuple(channels) + tuple(
             f"candlestick_{tf}" for tf in candle_timeframes
         )
-        self.url = url
+        self.url = assert_delta_public_ws_url(url)
         self._connect = connect  # injectable for tests; defaults to websockets.connect
         self.on_book = on_book
         self.on_trade = on_trade
@@ -117,17 +121,24 @@ class DeltaPublicWsClient:
         self.heartbeat_config = heartbeat or HeartbeatConfig(
             ping_interval_s=20.0,
             pong_timeout_s=20.0,
-            transport_silence_s=45.0,
+            transport_silence_s=35.0,
             data_silence_s=60.0,
             use_ws_control_ping=False,  # websockets handles RFC ping/pong
             use_app_ping=False,  # Delta sends heartbeats after enable_heartbeat
         )
         self._monotonic = monotonic
+        self._wall_clock = wall_clock
         self._heartbeat = WsHeartbeat(
             self.heartbeat_config,
             started_at=self._monotonic(),
         )
         self._backoff = ReconnectBackoff()
+        self._breaker = breaker or WsConnectBreaker(
+            Path(os.environ.get(
+                "VNEDGE_DELTA_WS_BREAKER_PATH", "data/state/delta_ws_breaker.json"
+            ))
+        )
+        self._breaker.load()
 
         # live per-symbol state (native symbol -> value)
         self.best_bid: dict[str, float] = {}
@@ -138,6 +149,12 @@ class DeltaPublicWsClient:
         self.book_event_at: dict[str, datetime] = {}
         self.book_sequence: dict[str, int | str] = {}
         self.funding_rate: dict[str, float] = {}
+        # Funding is booked only after Delta rolls the venue-provided next
+        # realization timestamp forward.  The current rate is telemetry until
+        # then; elapsed wall time never fabricates a settlement.
+        self.next_funding_at_ms: dict[str, int] = {}
+        self.settled_funding_events: dict[str, list[tuple[int, float]]] = {}
+        self._funding_schedule: dict[str, tuple[int, float]] = {}
         self.mark_price: dict[str, float] = {}
         self.books: dict[str, tuple[list, list]] = {}
         self.last_trade: dict[str, dict] = {}
@@ -147,6 +164,9 @@ class DeltaPublicWsClient:
 
         self.last_event_at: datetime | None = None
         self.last_transport_at: datetime | None = None
+        self.last_book_at: datetime | None = None
+        self.last_trade_at: datetime | None = None
+        self.last_candle_at: datetime | None = None
         self.healthy: bool = False
         self._consecutive_errors = 0
         self._closed = False
@@ -178,13 +198,18 @@ class DeltaPublicWsClient:
     async def _run(self) -> None:
         connect = self._connect or _default_connect
         while not self._closed:
+            cooldown = self._breaker.remaining(self._wall_clock())
+            if cooldown > 0:
+                self.healthy = False
+                await asyncio.sleep(cooldown)
+                continue
             try:
                 async with connect(self.url) as ws:
                     self._heartbeat.reset(self._monotonic())
+                    # Enable the official server heartbeat immediately.  It is
+                    # transport liveness only and never refreshes book/trade age.
+                    await ws.send(json.dumps({"type": "enable_heartbeat"}))
                     await ws.send(json.dumps(self._subscribe_msg()))
-                    # server drops idle sockets after ~60s; heartbeat keeps it up
-                    with suppress(Exception):  # heartbeat is best effort
-                        await ws.send(json.dumps({"type": "enable_heartbeat"}))
                     iterator = ws.__aiter__()
                     while not self._closed:
                         try:
@@ -195,8 +220,6 @@ class DeltaPublicWsClient:
                         except StopAsyncIteration:
                             break
                         self._handle_raw(raw)
-                        if self.heartbeat_status() == HeartbeatStatus.DATA_STALE:
-                            raise ConnectionError("delta websocket market data silent")
                 if not self._closed:
                     self.healthy = False
                     self._mark_error(ConnectionError("delta websocket stream ended"))
@@ -207,6 +230,13 @@ class DeltaPublicWsClient:
                 self._mark_error(TimeoutError("delta websocket transport silent"))
             except Exception as exc:  # noqa: BLE001 - reconnect on any stream error
                 self.healthy = False
+                if _handshake_status(exc) == 429:
+                    reset_at = _handshake_reset_at(exc, now=self._wall_clock())
+                    self._breaker.on_handshake_429(
+                        self._wall_clock(), reset_at=reset_at
+                    )
+                    self._mark_error(RuntimeError("Delta websocket HTTP 429; cooldown persisted"))
+                    continue
                 self._mark_error(exc)
             # normal stream-end or error: reconnect with bounded backoff so we
             # never hot-loop when the socket closes cleanly.
@@ -226,42 +256,59 @@ class DeltaPublicWsClient:
 
     def _handle(self, msg: dict) -> None:
         mtype = msg.get("type")
-        sym = msg.get("symbol")
-        if mtype == "l2_orderbook":
+        sym = msg.get("symbol") or msg.get("sy")
+        if mtype in {"ob_l1", "ob_l2", "l2_orderbook"}:
             self._handle_book(sym, msg)
-        elif mtype == "all_trades":
+        elif mtype in {"trades", "all_trades"}:
             self._handle_trade(sym, msg)
         elif mtype == "funding_rate":
             self._handle_funding(sym, msg)
-        elif mtype == "v2/ticker":
+        elif mtype in {"ticker", "v2/ticker"}:
             self._handle_ticker(sym, msg)
         elif isinstance(mtype, str) and mtype.startswith("candlestick_"):
             self._handle_candle(sym, mtype, msg)
-        elif mtype in {"heartbeat", "pong"}:
+        elif mtype == "heartbeat":
+            self._touch_transport()
+        elif mtype == "pong":
             self._touch_transport(pong=True)
         # subscriptions / errors and unknown types carry transport liveness only
 
     def _handle_book(self, sym: str | None, msg: dict) -> None:
         if not sym:
             return
-        buy = msg.get("buy") or []
-        sell = msg.get("sell") or []
+        buy = _normalise_book_side(msg.get("buy") or msg.get("bids") or msg.get("b"))
+        sell = _normalise_book_side(msg.get("sell") or msg.get("asks") or msg.get("a"))
+        # Compact India ob_l1 frames: bp/ap are prices, bs/as are contract sizes.
+        if not buy and msg.get("bp") is not None:
+            buy = [{"limit_price": msg["bp"], "size": msg.get("bs", 0)}]
+        if not sell and msg.get("ap") is not None:
+            sell = [{"limit_price": msg["ap"], "size": msg.get("as", 0)}]
+        if not buy and msg.get("best_bid") is not None:
+            buy = [{"limit_price": msg["best_bid"], "size": msg.get("bid_size", 0)}]
+        if not sell and msg.get("best_ask") is not None:
+            sell = [{"limit_price": msg["best_ask"], "size": msg.get("ask_size", 0)}]
         if buy:
             self.best_bid[sym] = float(buy[0]["limit_price"])
         if sell:
             self.best_ask[sym] = float(sell[0]["limit_price"])
-        event_at = self._message_datetime(msg.get("timestamp"))
+        # lts is the venue's last-book-update event clock; ts is publish time.
+        event_at = self._message_datetime(
+            msg.get("lts") or msg.get("timestamp") or msg.get("ts")
+        )
         if event_at is not None:
             self.book_event_at[sym] = event_at
         sequence = (
             msg.get("sequence_no")
             or msg.get("sequence")
             or msg.get("nonce")
+            or msg.get("lts")
             or msg.get("timestamp")
+            or msg.get("ts")
         )
         if isinstance(sequence, (int, str)) and not isinstance(sequence, bool):
             self.book_sequence[sym] = sequence
         self.books[sym] = (buy, sell)
+        self.last_book_at = self._now()
         self._touch()
         if self.on_book is not None:
             self.on_book(sym, buy, sell, msg)
@@ -287,6 +334,7 @@ class DeltaPublicWsClient:
             "trade_id": msg.get("trade_id") or msg.get("id"),
         }
         self.last_trade[sym] = trade
+        self.last_trade_at = self._now()
         self._touch()
         if self.on_trade is not None:
             self.on_trade(sym, trade)
@@ -296,12 +344,33 @@ class DeltaPublicWsClient:
             return
         raw = msg.get("funding_rate")
         if raw is None:
+            raw = msg.get("fr")
+        if raw is None:
             return
         try:
             # Delta reports funding as a percent; normalise to a fraction.
-            self.funding_rate[sym] = float(raw) / 100.0
+            rate = float(raw) / 100.0
         except (TypeError, ValueError):
             return
+        self.funding_rate[sym] = rate
+
+        next_raw = msg.get("next_funding_realization")
+        if next_raw is None:
+            next_raw = msg.get("nfr")
+        next_ms = self._timestamp_ms(next_raw)
+        if next_ms is not None:
+            previous = self._funding_schedule.get(sym)
+            if previous is not None and next_ms > previous[0]:
+                # The schedule rollover proves the prior realization passed.
+                # Use its last observed rate, never the new estimate.
+                events = self.settled_funding_events.setdefault(sym, [])
+                settled = (previous[0], previous[1])
+                if not events or events[-1] != settled:
+                    events.append(settled)
+                    del events[:-64]
+            if previous is None or next_ms >= previous[0]:
+                self._funding_schedule[sym] = (next_ms, rate)
+                self.next_funding_at_ms[sym] = next_ms
         self._touch()
 
     def _handle_candle(self, sym: str | None, mtype: str, msg: dict) -> None:
@@ -337,6 +406,7 @@ class DeltaPublicWsClient:
             self._forming_candles[key] = row
         # older-start messages (out-of-order replays) never regress the forming
         # candle and never re-close an interval; they only count as liveness.
+        self.last_candle_at = self._now()
         self._touch()
 
     def forming_candle(self, symbol: str, timeframe: str) -> list | None:
@@ -351,7 +421,28 @@ class DeltaPublicWsClient:
         if mp is not None:
             with suppress(TypeError, ValueError):
                 self.mark_price[sym] = float(mp)
-        # ticker sometimes carries funding_rate too; prefer the dedicated channel
+        bid = msg.get("best_bid") or msg.get("bid") or msg.get("bid_price")
+        ask = msg.get("best_ask") or msg.get("ask") or msg.get("ask_price")
+        if bid is not None and ask is not None:
+            with suppress(TypeError, ValueError):
+                bid_f, ask_f = float(bid), float(ask)
+                if 0 < bid_f <= ask_f:
+                    self.best_bid[sym], self.best_ask[sym] = bid_f, ask_f
+                    self.book_event_at[sym] = self._message_datetime(
+                        msg.get("timestamp")
+                    ) or self._now()
+                    self.last_book_at = self._now()
+                    if self.on_book is not None:
+                        self.on_book(
+                            sym,
+                            [{"limit_price": str(bid), "size": msg.get("bid_size", 0)}],
+                            [{"limit_price": str(ask), "size": msg.get("ask_size", 0)}],
+                            msg,
+                        )
+        raw_funding = msg.get("funding_rate")
+        if raw_funding is not None:
+            with suppress(TypeError, ValueError):
+                self.funding_rate[sym] = float(raw_funding) / 100.0
         self._touch()
 
     # -- helpers -----------------------------------------------------------
@@ -424,6 +515,26 @@ class DeltaPublicWsClient:
         except (OverflowError, OSError, ValueError):
             return None
 
+    @staticmethod
+    def _timestamp_ms(raw: object) -> int | None:
+        """Normalize seconds/ms/us/ns venue timestamps to epoch milliseconds."""
+        if raw is None or isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        absolute = abs(value)
+        if absolute >= 1e17:  # ns
+            value /= 1_000_000
+        elif absolute >= 1e14:  # us
+            value /= 1_000
+        elif absolute < 1e11:  # seconds
+            value *= 1_000
+        return int(value)
+
 
 def _default_connect(url: str):
     """Real websocket connect, imported lazily so tests need no network dep."""
@@ -432,3 +543,25 @@ def _default_connect(url: str):
     # ping_interval keeps the protocol-level connection alive; Delta also has an
     # app-level heartbeat we enable after subscribe.
     return websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2**22)
+
+
+def _handshake_status(exc: Exception) -> int | None:
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "status", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+        getattr(getattr(exc, "response", None), "status", None),
+    ):
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _handshake_reset_at(exc: Exception, *, now: float) -> float | None:
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not headers:
+        return None
+    try:
+        return parse_rate_limit_reset(headers, now=now)
+    except (TypeError, ValueError):
+        return None

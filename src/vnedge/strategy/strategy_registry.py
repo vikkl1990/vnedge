@@ -7,6 +7,7 @@ from vnedge.strategy.crypto_trend_atr_margin import CryptoTrendAtrMargin
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
+from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
@@ -48,6 +49,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     SqueezeExpansionBreakoutV4.strategy_id: SqueezeExpansionBreakoutV4,
     **{strategy.strategy_id: strategy for strategy in NEW_RESEARCH_SCANNERS},
     **{strategy.strategy_id: strategy for strategy in REALTIME_SCANNERS},
+    HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1,
 }
 
 # Observation and pre-registered candidates are deliberately non-capital even
@@ -69,6 +71,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         SqueezeExpansionBreakoutV4.strategy_id,
         *(strategy.strategy_id for strategy in NEW_RESEARCH_SCANNERS),
         *(strategy.strategy_id for strategy in REALTIME_SCANNERS),
+        HtfRegimeContinuation15mV1.strategy_id,
     }
 )
 

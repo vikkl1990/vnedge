@@ -35,14 +35,28 @@ def test_maker_is_cheaper_than_taker():
     assert m.cost.total_cost_bps < t.cost.total_cost_bps
 
 
-def test_funding_long_pays_short_earns():
+def test_current_funding_rate_is_telemetry_not_an_entry_clock():
     common = dict(signal_edge_bps=100, urgency="taker", expected_holding_seconds=28800,
                   current_funding_rate="0.0001", symbol="BTCUSDT")   # 1bp/8h over one interval
     long = _gate().evaluate(side="buy", **common)
     short = _gate().evaluate(side="sell", **common)
-    assert long.cost.funding_bps == Decimal("1")     # long pays funding
-    assert short.cost.funding_bps == Decimal("-1")   # short earns it
-    assert long.cost.total_cost_bps > short.cost.total_cost_bps
+    assert long.cost.funding_bps == Decimal("0")
+    assert short.cost.funding_bps == Decimal("0")
+    assert long.cost.total_cost_bps == short.cost.total_cost_bps
+
+
+def test_only_explicit_known_settlement_haircut_enters_cost_gate():
+    common = dict(
+        signal_edge_bps=100,
+        urgency="taker",
+        expected_holding_seconds=28_800,
+        current_funding_rate="0.999",
+        symbol="BTCUSDT",
+    )
+    long = _gate().evaluate(side="buy", predicted_funding_bps="1", **common)
+    short = _gate().evaluate(side="sell", predicted_funding_bps="-1", **common)
+    assert long.cost.funding_bps == Decimal("1")
+    assert short.cost.funding_bps == Decimal("-1")
 
 
 def test_delta_india_costs_more_than_binance():
@@ -139,6 +153,7 @@ def test_funding_rebate_cannot_reduce_the_physical_room_wall():
         urgency="taker",
         expected_holding_seconds=28_800,
         current_funding_rate="0.001",
+        predicted_funding_bps="-10",
         symbol="BTCUSDT",
         available_room_bps=Decimal("10"),
     )

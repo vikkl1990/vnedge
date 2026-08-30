@@ -1,15 +1,32 @@
 import json
 
+import pytest
+
+from vnedge.exchange.delta_contracts import DeltaContractSpec
+from vnedge.exchange.venue_specs import clear_frozen_delta_specs, freeze_delta_specs
 from vnedge.research.paper_lane_activation import (
     ACTIVATION_MANIFEST_UNSAFE,
     ACTIVATION_NEEDS_HUMAN_APPROVAL,
-    ACTIVATION_PAPER_ONLINE_WAITING,
     ACTIVATION_PAPER_RUNNING,
     ACTIVATION_ROUTE_BLOCKED,
     PaperLaneActivationConfig,
     _parse_args,
     build_paper_lane_activation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _frozen_delta_test_specs():
+    freeze_delta_specs({
+        "BTCUSD": DeltaContractSpec(
+            "BTCUSD", 27, 0.001, "BTC", 0.5, 0.5, 0.25
+        ),
+        "ETHUSD": DeltaContractSpec(
+            "ETHUSD", 3136, 0.01, "ETH", 0.05, 0.5, 0.25
+        ),
+    })
+    yield
+    clear_frozen_delta_specs()
 
 
 def test_paper_activation_marks_running_only_with_manifest_route_and_journal(tmp_path):

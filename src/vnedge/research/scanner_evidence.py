@@ -20,6 +20,7 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from vnedge.data.symbols import canonical_symbol
 from vnedge.data.tape import TapeCleanResult, clean_book
+from vnedge.exchange.book_imbalance import BookImbalance
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.latency_tracker import timeframe_to_seconds
 from vnedge.runtime.quote_ordering import quote_order_key
@@ -248,6 +249,10 @@ def replay_scanner(
     cost_model = CostModel.for_profile(cost_profile)
     execution_cost = float(cost_model.round_trip_bps(include_safety=False))
     gate_cost = float(cost_model.round_trip_bps(include_safety=True))
+    entry_clock = (
+        contract.evidence_entry_clock if contract is not None else "next_open"
+    )
+    clock_cohort = f"closed_{contract.timeframe if contract else 'bar'}->{entry_clock}"
     funding_frame = pd.DataFrame(columns=["timestamp", "funding_rate"])
     if funding is not None and not funding.empty:
         required_funding = {"timestamp", "funding_rate"}
@@ -274,6 +279,8 @@ def replay_scanner(
         base = {
             "bar_ts": str(prepared.iloc[index].get("timestamp", index)),
             "strategy_id": strategy_id,
+            "entry_clock": entry_clock,
+            "clock_cohort": clock_cohort,
             "fired": intent is not None,
             "eligible": bool(diagnostics.get("eligible", intent is not None)),
             "signal_reason": intent.reason if intent else None,
@@ -355,6 +362,8 @@ def replay_scanner(
             record["admitted"] = True
             record["outcome"] = {
                 "resolution": resolution,
+                "entry_clock": entry_clock,
+                "clock_cohort": clock_cohort,
                 "entry": entry,
                 "exit": exit_price,
                 "gross_bps": gross,
@@ -396,6 +405,8 @@ def replay_scanner(
         "net_bps_semantics": "booked_execution",
         "generated_at": datetime.now(UTC).isoformat(),
         "strategy_id": strategy_id,
+        "entry_clock": entry_clock,
+        "clock_cohort": clock_cohort,
         "capital_eligible": is_capital_eligible(strategy_id),
         "read_only": True,
         "exchange_id": exchange_id,
@@ -608,14 +619,22 @@ def replay_quote_scanner(
         audit_basis = "explicit"
     audit_end = window_end if evidence_end is None else min(window_end, evidence_end)
     journal = _ReplayJournal()
+    cost_profile = resolve_scanner_cost_profile(contract, exchange_id=exchange_id)
+    entry_clock = contract.evidence_entry_clock
+    clock_cohort = f"closed_{contract.timeframe}->{entry_clock}"
     engine = build_quote_acceptance_engine(
         journal=journal,
         symbol=symbol,
         strategy=strategy,
         contract=contract,
-        cost_profile=resolve_scanner_cost_profile(contract, exchange_id=exchange_id),
+        cost_profile=cost_profile,
         bar_minutes=tf_seconds / 60.0,
         approve_fire=approve_fire,
+        require_book_imbalance=exchange_id.lower() in {
+            "delta",
+            "delta_india",
+            "deltaindia",
+        },
     )
 
     quote_index = 0
@@ -627,6 +646,30 @@ def replay_quote_scanner(
         ) else event_ts
         sequence_raw = row.get("sequence")
         sequence = None if pd.isna(sequence_raw) else sequence_raw
+        book: BookImbalance | None = None
+        book_columns = {
+            "book_ts_ms",
+            "bid_size",
+            "ask_size",
+            "book_imbalance",
+            "microprice",
+            "spread_ticks",
+            "book_levels",
+        }
+        if book_columns.issubset(row.index) and not any(
+            pd.isna(row[name]) for name in book_columns
+        ):
+            book = BookImbalance(
+                bid=float(row["bid"]),
+                ask=float(row["ask"]),
+                bid_size=float(row["bid_size"]),
+                ask_size=float(row["ask_size"]),
+                imb=float(row["book_imbalance"]),
+                microprice=float(row["microprice"]),
+                spread_ticks=float(row["spread_ticks"]),
+                ts=datetime.fromtimestamp(float(row["book_ts_ms"]) / 1000.0, tz=UTC),
+                levels=int(row["book_levels"]),
+            )
         engine.on_quote(
             bid=float(row["bid"]),
             ask=float(row["ask"]),
@@ -636,6 +679,7 @@ def replay_quote_scanner(
             source=str(row.get("source") or "recorded_book"),
             exchange_timestamped=bool(row.get("exchange_timestamped", True)),
             overflow_drops=int(row.get("overflow_drops") or 0),
+            book=book,
         )
 
     for bar_index, open_ts in enumerate(candle_times):
@@ -665,6 +709,9 @@ def replay_quote_scanner(
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
         "strategy_id": strategy_id,
+        "entry_clock": entry_clock,
+        "clock_cohort": clock_cohort,
+        "cost_profile": cost_profile,
         "symbol": symbol,
         "read_only": True,
         "evidence_class": "quote_mechanism_parity",

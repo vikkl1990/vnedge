@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass, replace
 
 from vnedge.paper.fill_model import FillModel
+from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,18 @@ class PaperPosition:
         return "long" if self.quantity > 0 else "short"
 
 
+@dataclass(frozen=True)
+class PaperFunding:
+    event_id: str
+    ts_ms: int
+    symbol: str
+    rate: float
+    side: str
+    notional_usd: float
+    funding_cost_usd: float
+    source: str
+
+
 class SimulatedExchange:
     def __init__(self, fill_model: FillModel, starting_balance_usd: float = 1_000.0) -> None:
         self.fill_model = fill_model
@@ -90,6 +103,8 @@ class SimulatedExchange:
         self.orders: dict[str, PaperOrderStatus] = {}  # by client_order_id
         self._resting: dict[str, PaperOrderRequest] = {}  # open limit orders
         self.fills: list[PaperFill] = []
+        self.funding: list[PaperFunding] = []
+        self._funding_event_keys: set[str] = set()
         self._seq = 0
 
     # --- Market data ----------------------------------------------------------
@@ -98,6 +113,52 @@ class SimulatedExchange:
             raise ValueError(f"invalid quote {bid}/{ask} for {symbol}")
         self.quotes[symbol] = (bid, ask)
         self._try_fill_resting(symbol)
+
+    def apply_funding_print(
+        self,
+        symbol: str,
+        event: FundingPrint,
+        *,
+        mark_price: float | None = None,
+    ) -> PaperFunding | None:
+        """Apply a settled funding event to the open paper inventory once.
+
+        Flat books ignore the cash flow.  The event is still consumed so a
+        position opened later cannot be charged for a historical settlement.
+        """
+        key = f"{symbol}:{event.event_id}"
+        if key in self._funding_event_keys:
+            return None
+        self._funding_event_keys.add(key)
+        position = self.positions.get(symbol)
+        if position is None or abs(position.quantity) < 1e-12:
+            return None
+        if mark_price is None:
+            quote = self.quotes.get(symbol)
+            mark_price = (
+                (quote[0] + quote[1]) / 2.0 if quote is not None else position.entry_price
+            )
+        if mark_price <= 0:
+            raise ValueError("funding mark price must be positive")
+        notional = abs(position.quantity) * mark_price
+        cost = funding_cost_usd(
+            side=position.side,
+            notional_usd=notional,
+            rate=event.rate,
+        )
+        self.balance_usd -= cost
+        booked = PaperFunding(
+            event_id=event.event_id,
+            ts_ms=event.ts_ms,
+            symbol=symbol,
+            rate=event.rate,
+            side=position.side,
+            notional_usd=notional,
+            funding_cost_usd=cost,
+            source=event.source,
+        )
+        self.funding.append(booked)
+        return booked
 
     # --- Order entry ------------------------------------------------------------
     def submit_order(self, req: PaperOrderRequest) -> PaperOrderStatus:
@@ -322,3 +383,6 @@ class SimulatedExchange:
 
     def get_fills(self) -> list[PaperFill]:
         return list(self.fills)
+
+    def get_funding(self) -> list[PaperFunding]:
+        return list(self.funding)

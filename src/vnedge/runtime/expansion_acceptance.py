@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from enum import Enum
 
+from vnedge.exchange.book_imbalance import BookImbalance, imbalance_allows
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.strategy.realtime_entry import StructuralStopMode
 from vnedge.strategy.squeeze_expansion_breakout_v3 import (
@@ -72,6 +73,9 @@ class _SideLifecycle:
 @dataclass
 class ExpansionAcceptanceEngine:
     config: SqueezeExpansionV3Params = PARAMS
+    require_book_imbalance: bool = False
+    min_book_imbalance: float = 0.20
+    max_book_spread_ticks: float = 2.0
     arm: CompressionArm | None = None
     arm_expires_bar: int = -1
     position_open: bool = False
@@ -93,6 +97,9 @@ class ExpansionAcceptanceEngine:
     overflow_probe_resets: int = 0
     hold_observation_id: int = 0
     last_hold_ms: float | None = None
+    book_filter_rejects: int = 0
+    last_book_imbalance: float | None = None
+    last_book_spread_ticks: float | None = None
 
     def _observe_hold(self, started_at: datetime | None, ended_at: datetime) -> None:
         """Expose terminal probe duration as telemetry without changing state."""
@@ -185,8 +192,12 @@ class ExpansionAcceptanceEngine:
         sequence: int | str | None = None,
         source: str = "unknown",
         exchange_timestamped: bool = False,
+        book: BookImbalance | None = None,
     ) -> FireDecision | None:
         self.quotes_seen += 1
+        if book is not None:
+            self.last_book_imbalance = book.imb
+            self.last_book_spread_ticks = book.spread_ticks
         if ts.tzinfo is None:
             raise ValueError("quote timestamp must be timezone-aware")
         received = received_ts or ts
@@ -296,6 +307,19 @@ class ExpansionAcceptanceEngine:
             ):
                 self.last_reason = f"{side}_probe"
                 continue
+            if self.require_book_imbalance:
+                book_reject = imbalance_allows(
+                    side,
+                    book,
+                    min_abs=self.min_book_imbalance,
+                    max_spread_ticks=self.max_book_spread_ticks,
+                )
+                if book_reject is not None:
+                    self._observe_hold(lifecycle.probe_started_at, ts)
+                    lifecycle.rearm()
+                    self.book_filter_rejects += 1
+                    self.last_reason = book_reject
+                    continue
             if lifecycle.fires >= self.config.max_fires_per_side:
                 lifecycle.state = AcceptanceState.BURNED
                 self.last_reason = f"{side}_fire_budget"

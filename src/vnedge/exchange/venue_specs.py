@@ -23,6 +23,7 @@ Binance/others 5.0.
 from __future__ import annotations
 
 from vnedge.data.symbols import canonical_symbol
+from vnedge.exchange.delta_contracts import DeltaContractSpec
 from vnedge.paper.fill_model import FillModel
 from vnedge.risk.position_sizer import SymbolLimits
 
@@ -132,8 +133,58 @@ _LIMITS_BY_EXCHANGE: dict[str, dict[str, SymbolLimits]] = {
 }
 
 
+class MissingDeltaContractSpecError(RuntimeError):
+    """Delta paper/live sizing must never fall through to generic lot limits."""
+
+
+_FROZEN_DELTA_SPECS: dict[str, DeltaContractSpec] = {}
+
+
+def freeze_delta_specs(specs: dict[str, DeltaContractSpec]) -> None:
+    if not specs:
+        raise MissingDeltaContractSpecError("empty Delta product snapshot")
+    normalized: dict[str, DeltaContractSpec] = {}
+    for key, spec in specs.items():
+        normalized[canonical_symbol(key)] = spec
+        normalized[canonical_symbol(spec.symbol)] = spec
+    global _FROZEN_DELTA_SPECS
+    _FROZEN_DELTA_SPECS = normalized
+
+
+def clear_frozen_delta_specs() -> None:
+    """Test/process-reset helper; production freezes once before building lanes."""
+    global _FROZEN_DELTA_SPECS
+    _FROZEN_DELTA_SPECS = {}
+
+
+def frozen_delta_specs() -> dict[str, DeltaContractSpec]:
+    if not _FROZEN_DELTA_SPECS:
+        raise MissingDeltaContractSpecError("Delta product specs were not frozen at startup")
+    return dict(_FROZEN_DELTA_SPECS)
+
+
+def _delta_symbol_limits(spec: DeltaContractSpec) -> SymbolLimits:
+    step = float(spec.contract_value)
+    if spec.maintenance_margin_pct is None:
+        raise MissingDeltaContractSpecError(f"Delta {spec.symbol} has no maintenance margin")
+    return SymbolLimits(
+        min_qty=step * spec.min_contracts,
+        qty_step=step * spec.contract_step,
+        # Delta's minimum is one integer contract; notional therefore derives
+        # from multiplier * live entry price instead of a fabricated flat USD floor.
+        min_notional_usd=0.0,
+        maintenance_margin_rate=float(spec.maintenance_margin_pct) / 100.0,
+    )
+
+
 def venue_symbol_limits(exchange: str, symbol: str) -> SymbolLimits:
-    """Real per-(venue, symbol) contract limits, falling back to the historical
-    BTC-shaped default for venues/symbols not tabulated (Binance, Delta, and any
-    symbol we haven't verified)."""
-    return _LIMITS_BY_EXCHANGE.get(exchange.lower(), {}).get(symbol, _DEFAULT_LIMITS)
+    """Return venue limits; Delta is fail-closed until its prod snapshot freezes."""
+    exchange_id = exchange.lower()
+    if exchange_id in {"delta", "delta_india", "deltaindia"}:
+        specs = frozen_delta_specs()
+        key = canonical_symbol(symbol)
+        spec = specs.get(key)
+        if spec is None:
+            raise MissingDeltaContractSpecError(f"no frozen Delta spec for {symbol!r}")
+        return _delta_symbol_limits(spec)
+    return _LIMITS_BY_EXCHANGE.get(exchange_id, {}).get(symbol, _DEFAULT_LIMITS)

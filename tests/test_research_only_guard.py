@@ -49,6 +49,7 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "session_continuation_realtime_v1",
         "session_continuation_realtime_v2",
         "htf_structure_continuation_realtime_v1",
+        "htf_regime_continuation_15m_v1",
     }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)
