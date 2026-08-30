@@ -322,7 +322,7 @@ def test_trade_batch_skips_invalid_rows_and_stably_orders_valid_rows():
     assert [row["trade_id"] for row, _ in rows] == ["a", "b"]
 
 
-def test_trade_batch_rejects_missing_id_and_future_timestamp():
+def test_trade_batch_accepts_missing_id_and_rejects_future_timestamp():
     rows, rejected = _normalize_trade_batch(
         [
             {"timestamp": 1_000, "price": 100, "amount": 1},
@@ -331,8 +331,55 @@ def test_trade_batch_rejects_missing_id_and_future_timestamp():
         ],
         received_at_ms=15_000,
     )
-    assert rejected == 2
-    assert [row["trade_id"] for row, _ in rows] == ["ok"]
+    assert rejected == 1
+    assert [row["trade_id"] for row, _ in rows] == [None, "ok"]
+    assert [key for _, key in rows] == [None, "10000:ok"]
+
+
+def test_replay_dedup_keeps_no_id_rows_and_rejects_changed_id_body(tmp_path):
+    frame = pd.DataFrame(
+        [
+            {"ts_ms": 1_000, "price": 100, "amount": 1, "side": "buy", "trade_id": None},
+            {"ts_ms": 1_000, "price": 100, "amount": 1, "side": "buy", "trade_id": "a"},
+            {"ts_ms": 1_000, "price": 100, "amount": 1, "side": "buy", "trade_id": "a"},
+            {"ts_ms": 1_001, "price": 101, "amount": 1, "side": "sell", "trade_id": float("nan")},
+        ]
+    )
+    rows, keys, bodies, duplicates = CanonicalCandleSink._dedupe_replay_frame(
+        frame,
+        symbol="BTC/USDT:USDT",
+    )
+    assert rows["trade_id"].isna().sum() == 2
+    assert len(rows) == 3
+    assert keys == {"1000:a"}
+    assert bodies["a"] == (1_000, 100.0, 1.0, "buy")
+    assert duplicates == 1
+
+    conflicting = pd.concat(
+        [
+            frame.iloc[[1]],
+            pd.DataFrame(
+                [
+                    {
+                        "ts_ms": 1_000,
+                        "price": 102,
+                        "amount": 1,
+                        "side": "buy",
+                        "trade_id": "a",
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    with pytest.raises(ValueError, match="conflicting durable trade body"):
+        CanonicalCandleSink._dedupe_replay_frame(
+            conflicting,
+            symbol="BTC/USDT:USDT",
+            conflict_root=tmp_path,
+            exchange="binanceusdm",
+        )
+    assert (tmp_path / "reports" / "trade_integrity" / "conflicts.jsonl").exists()
 
 
 class _TradeSink:
@@ -350,10 +397,16 @@ def _bare_recorder(candle_sink):
     rec._last_trade_ts_ms = {}
     rec._seen_trade_ids = {"BTC/USDT:USDT": set()}
     rec._seen_trade_order = {"BTC/USDT:USDT": deque()}
+    rec._seen_trade_bodies = {"BTC/USDT:USDT": {}}
     rec._skipped_trade_counts = {"BTC/USDT:USDT": [0, 0, 0, 0]}
     rec._next_skip_log = {"BTC/USDT:USDT": 0.0}
     rec._trade_reorder = {"BTC/USDT:USDT": []}
     rec._pending_trade_ids = {"BTC/USDT:USDT": set()}
+    rec._pending_trade_bodies = {"BTC/USDT:USDT": {}}
+    rec._trade_metrics = {"BTC/USDT:USDT": {name: 0 for name in (
+        "trades_in", "trades_dup_ws", "trades_dup_pending", "trades_dup_replay",
+        "trades_no_id", "trades_late_closed", "trades_conflict",
+    )}}
     rec._max_seen_trade_ts_ms = {}
     rec._trade_arrival_seq = 0
     return rec
@@ -387,6 +440,62 @@ def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_pat
         ("BTC/USDT:USDT", 2000),
         ("BTC/USDT:USDT", 3000),
     ]
+    metrics = rec.trade_metrics_snapshot()["BTCUSDT"]
+    assert metrics["trades_dup_pending"] == 1
+    assert metrics["trades_dup_ws"] == 1
+    assert metrics["seen_set_size"] == 4
+
+
+def test_missing_trade_ids_are_applied_once_per_arrival_without_synthetic_identity(tmp_path):
+    rec = _bare_recorder(_TradeSink())
+    buf = _Buffer(tmp_path, "delta_india", "BTC/USDT:USDT", "trades")
+    row = {"timestamp": 1_000, "price": 100, "amount": 1}
+
+    rec._ingest_trade_batch("BTC/USDT:USDT", [row, row], buf)
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+
+    assert rec.trade_count == 2
+    assert [item["trade_id"] for item in buf._rows] == [None, None]
+    assert rec.trade_metrics_snapshot()["BTCUSDT"]["trades_no_id"] == 2
+
+
+def test_same_venue_id_with_changed_body_is_rejected_and_journaled(tmp_path):
+    rec = _bare_recorder(_TradeSink())
+    rec.root = tmp_path
+    rec.exchange_id = "binanceusdm"
+    buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
+    rec._ingest_trade_batch(
+        "BTC/USDT:USDT",
+        [{"id": "same", "timestamp": 1_000, "price": 100, "amount": 1}],
+        buf,
+    )
+    rec._ingest_trade_batch(
+        "BTC/USDT:USDT",
+        [{"id": "same", "timestamp": 1_000, "price": 101, "amount": 1}],
+        buf,
+    )
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+
+    assert rec.trade_count == 1
+    assert rec.trade_metrics_snapshot()["BTCUSDT"]["trades_conflict"] == 1
+    conflicts = tmp_path / "reports" / "trade_integrity" / "conflicts.jsonl"
+    assert '"trade_id":"same"' in conflicts.read_text()
+
+
+def test_restart_ring_drops_replayed_ids_without_reapplying(tmp_path):
+    rec = _bare_recorder(_TradeSink())
+    buf = _Buffer(tmp_path, "binanceusdm", "BTC/USDT:USDT", "trades")
+    rows = [
+        {"id": str(index), "timestamp": 1_000 + index, "price": 100, "amount": 1}
+        for index in range(100)
+    ]
+    rec._ingest_trade_batch("BTC/USDT:USDT", rows, buf)
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+    rec._ingest_trade_batch("BTC/USDT:USDT", rows, buf)
+    rec._drain_trade_reorder("BTC/USDT:USDT", buf, force=True)
+
+    assert rec.trade_count == 100
+    assert rec.trade_metrics_snapshot()["BTCUSDT"]["trades_dup_ws"] == 100
 
 
 def test_raw_trade_shard_is_durable_before_closed_candle_publish(tmp_path):
@@ -541,7 +650,31 @@ async def test_delta_recorder_writes_book_and_trade_shards(tmp_path):
     assert trades.loc[0, "price"] == 62698.0
     assert trades.loc[0, "amount"] == 3.0
     assert trades.loc[0, "side"] == "buy"  # buyer is the taker/aggressor
-    assert trades.loc[0, "trade_id"].startswith("delta-synthetic:")
+    assert pd.isna(trades.loc[0, "trade_id"])
+
+
+def test_delta_recorder_deduplicates_native_id_and_rejects_changed_body(tmp_path):
+    rec = DeltaTickRecorder(
+        ["BTC/USD:USD"],
+        tmp_path,
+        connect=lambda _url: None,
+    )
+    trade = {
+        "trade_id": "native-1",
+        "ts_ms": DAY_TS,
+        "price": 62_698.0,
+        "size": 3,
+        "side": "buy",
+    }
+    rec._on_trade("BTCUSD", trade)
+    rec._on_trade("BTCUSD", trade)
+    rec._on_trade("BTCUSD", {**trade, "price": 62_699.0})
+
+    assert rec.trade_count == 1
+    metrics = rec.trade_metrics_snapshot()["BTCUSD"]
+    assert metrics["trades_dup_ws"] == 1
+    assert metrics["trades_conflict"] == 1
+    assert (tmp_path / "reports" / "trade_integrity" / "conflicts.jsonl").exists()
 
 
 def test_books_only_does_not_subscribe_to_trades() -> None:

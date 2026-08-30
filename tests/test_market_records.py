@@ -27,9 +27,10 @@ def test_public_trade_is_canonical_and_derives_volume_once() -> None:
     assert trade.storage_row()["trade_id"] == "123"
 
 
-def test_public_trade_rejects_invalid_identity_and_future_clock() -> None:
-    with pytest.raises(ValueError, match="trade_id"):
-        PublicTrade("binanceusdm", "BTCUSDT", "", NOW, 100, 1)
+def test_public_trade_preserves_missing_identity_and_rejects_future_clock() -> None:
+    unidentified = PublicTrade("binanceusdm", "BTCUSDT", "", NOW, 100, 1)
+    assert unidentified.trade_id is None
+    assert unidentified.storage_row()["trade_id"] is None
     trade = PublicTrade("binanceusdm", "BTCUSDT", "1", NOW + timedelta(seconds=6), 100, 1)
     with pytest.raises(ValueError, match="future slack"):
         trade.validate_clock(NOW, future_slack=timedelta(seconds=5))

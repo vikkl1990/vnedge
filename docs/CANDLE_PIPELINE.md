@@ -19,11 +19,23 @@ memory bucket. They are deliberately not interchangeable:
 
 `PublicTrade` logically includes `(exchange, canonical_symbol, trade_id)`;
 exchange and symbol live in Parquet partition names. Quote notional and taker
-buy volume are derived once from price, amount, and `is_buyer_maker`. Invalid,
-future-clock, and id-less public prints are rejected at ingress. Delta's public
-feed currently omits a native trade id, so its recorder assigns an explicit
-`delta-synthetic:` content identity and deduplicates it within a bounded
-window.
+buy volume are derived once from price, amount, and `is_buyer_maker`. Invalid
+and future-clock public prints are rejected at ingress. A print without a
+venue id is applied once and persisted with a null id; it cannot be safely
+deduplicated and no price/amount-derived identity is invented.
+
+Trade deduplication has one key, per symbol: `f"{ts_ms}:{trade_id}"` when the
+venue id exists, otherwise `None`. The live reorder buffer, durable restart
+tail, and gap overlap all use that same key. Timestamp alone is never a trade
+identity. Reuse of one venue id with a different timestamp or body is an
+operator-visible conflict and the second body is not applied.
+
+The recorder publishes per-symbol integrity counters under
+`reports/trade_integrity/<exchange>.json`: input, live/pending/replay
+duplicates, null IDs, late closed-tape rows, conflicts, and bounded seen-set
+size. Conflicting bodies are also fsynced to `conflicts.jsonl` before the
+second body is rejected. `reorder_release_lag_ms` remains in recorder latency
+telemetry.
 
 `LaneBBO` is captured after lane dequeue with event time, receipt time, native
 sequence, source, overflow counters, lane id, and capture time. Non-positive or

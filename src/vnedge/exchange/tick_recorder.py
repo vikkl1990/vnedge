@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import heapq
+import json
 import logging
 import math
 import os
@@ -65,6 +65,91 @@ _TRADE_REORDER_MS = 250
 _TRADE_FUTURE_SLACK_MS = 5_000
 _DELTA_NATIVE_IDS = {"delta_india", "delta", "deltaindia"}
 
+TradeBody = tuple[int, float, float, str]
+
+_TRADE_COUNTER_NAMES = (
+    "trades_in",
+    "trades_dup_ws",
+    "trades_dup_pending",
+    "trades_dup_replay",
+    "trades_no_id",
+    "trades_late_closed",
+    "trades_conflict",
+)
+
+
+def _empty_trade_metrics() -> dict[str, int]:
+    return {name: 0 for name in _TRADE_COUNTER_NAMES}
+
+
+def _append_trade_conflict(
+    root: Path,
+    *,
+    exchange: str,
+    symbol: str,
+    trade_id: str,
+    previous: TradeBody,
+    incoming: TradeBody,
+    layer: str,
+) -> None:
+    """Durably expose a venue-ID collision before failing closed."""
+    path = root / "reports" / "trade_integrity" / "conflicts.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "observed_at": datetime.now(UTC).isoformat(),
+        "exchange": exchange,
+        "symbol": canonical_symbol(symbol),
+        "trade_id": trade_id,
+        "previous": list(previous),
+        "incoming": list(incoming),
+        "layer": layer,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _write_trade_metrics(
+    root: Path,
+    *,
+    exchange: str,
+    metrics: dict[str, dict[str, int | float]],
+) -> None:
+    path = root / "reports" / "trade_integrity" / f"{exchange}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    payload = {
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "exchange": exchange,
+        "symbols": metrics,
+    }
+    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _trade_id(row: dict[str, Any]) -> str | None:
+    value = row.get("trade_id")
+    if value is None:
+        return None
+    try:
+        if bool(pd.isna(value)):
+            return None
+    except (TypeError, ValueError):
+        pass
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _trade_body(row: dict[str, Any]) -> TradeBody:
+    return (
+        int(row["ts_ms"]),
+        float(row["price"]),
+        float(row["amount"]),
+        str(row.get("side") or "").lower(),
+    )
+
 
 def _normalize_trade_batch(
     trades: list[dict[str, Any]],
@@ -99,11 +184,9 @@ def _normalize_trade_batch(
         if not math.isfinite(amount) or amount <= 0:
             rejected += 1
             continue
-        trade_id = trade.get("id")
-        if trade_id in (None, ""):
-            rejected += 1
-            continue
-        key = f"{timestamp}:{trade_id}"
+        raw_trade_id = trade.get("id")
+        trade_id = None if raw_trade_id is None else str(raw_trade_id).strip() or None
+        key = f"{timestamp}:{trade_id}" if trade_id is not None else None
         accepted.append(
             (
                 {
@@ -111,7 +194,7 @@ def _normalize_trade_batch(
                     "price": price,
                     "amount": amount,
                     "side": str(trade.get("side") or ""),
-                    "trade_id": str(trade_id),
+                    "trade_id": trade_id,
                 },
                 key,
             )
@@ -153,6 +236,12 @@ class CanonicalCandleSink:
         }
         self.restored_last_trade_ts_ms: dict[str, int] = {}
         self.restored_trade_keys: dict[str, set[str]] = {symbol: set() for symbol in symbols}
+        self.restored_trade_bodies: dict[str, dict[str, TradeBody]] = {
+            symbol: {} for symbol in symbols
+        }
+        self.restored_trade_metrics: dict[str, dict[str, int]] = {
+            symbol: _empty_trade_metrics() for symbol in symbols
+        }
         if tick_root is not None:
             self.restore_forming_from_tick_lake(Path(tick_root), at=restore_at or datetime.now(UTC))
 
@@ -229,6 +318,105 @@ class CanonicalCandleSink:
             day += timedelta(days=1)
         return sorted(selected)
 
+    @staticmethod
+    def _dedupe_replay_frame(
+        frame: pd.DataFrame,
+        *,
+        symbol: str,
+        conflict_root: Path | None = None,
+        exchange: str = "unknown",
+    ) -> tuple[pd.DataFrame, set[str], dict[str, TradeBody], int]:
+        """Deduplicate identified rows and reject reused IDs with new bodies.
+
+        Rows without a venue id are intentionally retained. Identical repeats
+        keep the later durable copy; a changed timestamp/price/amount/side is
+        a corrupt overlap and must not be silently selected.
+        """
+        no_id: list[tuple[int, dict[str, Any]]] = []
+        by_id: dict[str, tuple[int, dict[str, Any]]] = {}
+        bodies: dict[str, TradeBody] = {}
+        duplicates = 0
+        for row_index, row in enumerate(frame.to_dict("records")):
+            trade_id = _trade_id(row)
+            if trade_id is None:
+                no_id.append((row_index, row))
+                continue
+            body = _trade_body(row)
+            previous = bodies.get(trade_id)
+            if previous is not None and previous != body:
+                if conflict_root is not None:
+                    _append_trade_conflict(
+                        conflict_root,
+                        exchange=exchange,
+                        symbol=symbol,
+                        trade_id=trade_id,
+                        previous=previous,
+                        incoming=body,
+                        layer="restart_replay",
+                    )
+                raise ValueError(
+                    f"conflicting durable trade body: symbol={canonical_symbol(symbol)} "
+                    f"trade_id={trade_id!r} previous={previous!r} incoming={body!r}"
+                )
+            if previous is not None:
+                duplicates += 1
+            bodies[trade_id] = body
+            by_id[trade_id] = (row_index, row)
+        selected = [*no_id, *by_id.values()]
+        selected.sort(key=lambda item: (int(item[1]["ts_ms"]), item[0]))
+        deduped = pd.DataFrame([row for _index, row in selected], columns=frame.columns)
+        keys = {f"{body[0]}:{trade_id}" for trade_id, body in bodies.items()}
+        return deduped, keys, bodies, duplicates
+
+    @staticmethod
+    def _recent_trade_frame(
+        tick_root: Path,
+        exchange: str,
+        symbol: str,
+        *,
+        through_ms: int,
+        limit: int = _SEEN_TRADE_IDS,
+    ) -> pd.DataFrame:
+        """Read a bounded newest-first tail used only to restore dedup state."""
+        stream = (
+            tick_root
+            / "ticks"
+            / f"exchange={exchange}"
+            / f"symbol={canonical_symbol(symbol)}"
+            / "stream=trades"
+        )
+        frames: list[pd.DataFrame] = []
+        rows = 0
+        if not stream.exists():
+            return pd.DataFrame()
+        shards: list[Path] = []
+        for day in sorted((path for path in stream.iterdir() if path.is_dir()), reverse=True):
+            shards.extend(sorted(day.glob("*.parquet"), reverse=True))
+            if len(shards) * FLUSH_EVERY >= limit * 2:
+                break
+        for path in shards:
+            try:
+                frame = pd.read_parquet(path)
+            except Exception:
+                logger.exception("failed to read dedup restore shard %s", path)
+                continue
+            if "ts_ms" not in frame.columns:
+                continue
+            ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
+            frame = frame.loc[ts <= through_ms]
+            if frame.empty:
+                continue
+            frames.append(frame)
+            rows += len(frame)
+            if rows >= limit * 2:
+                break
+        if not frames:
+            return pd.DataFrame()
+        recent = pd.concat(frames, ignore_index=True)
+        recent["ts_ms"] = pd.to_numeric(recent["ts_ms"], errors="raise").astype("int64")
+        recent = recent.sort_values("ts_ms", kind="stable").tail(limit * 2)
+        return recent.reset_index(drop=True)
+
     def restore_forming_from_tick_lake(self, tick_root: Path, *, at: datetime) -> int:
         """Rebuild the uncommitted tail from durable trade shards.
 
@@ -252,6 +440,33 @@ class CanonicalCandleSink:
         restored = 0
         for symbol in self.symbols:
             pipeline = self.pipelines[symbol]
+            recent = self._recent_trade_frame(
+                tick_root,
+                self.exchange,
+                symbol,
+                through_ms=through_ms,
+            )
+            if not recent.empty:
+                _recent_rows, recent_keys, recent_bodies, _duplicates = (
+                    self._dedupe_replay_frame(
+                        recent,
+                        symbol=symbol,
+                        conflict_root=tick_root,
+                        exchange=self.exchange,
+                    )
+                )
+                ordered_keys = sorted(
+                    recent_keys,
+                    key=lambda key: int(key.split(":", 1)[0]),
+                )[-_SEEN_TRADE_IDS:]
+                wanted_ids = {key.split(":", 1)[1] for key in ordered_keys}
+                self.restored_trade_keys[symbol] = set(ordered_keys)
+                self.restored_trade_bodies[symbol] = {
+                    trade_id: body
+                    for trade_id, body in recent_bodies.items()
+                    if trade_id in wanted_ids
+                }
+                self.restored_last_trade_ts_ms[symbol] = int(recent["ts_ms"].max())
             replay_start = pipeline.builder.closed_through or bucket_open
             replay_start_ms = int(replay_start.timestamp() * 1000)
             shards = self._candidate_shards(
@@ -283,24 +498,26 @@ class CanonicalCandleSink:
             if frame.empty:
                 continue
             frame["ts_ms"] = pd.to_numeric(frame["ts_ms"], errors="raise").astype("int64")
-            if "trade_id" in frame.columns:
-                ids = frame["trade_id"].astype("string")
-                with_id = ids.notna() & (ids.str.len() > 0)
-                frame = pd.concat(
-                    [
-                        frame.loc[~with_id],
-                        frame.loc[with_id].drop_duplicates("trade_id", keep="last"),
-                    ],
-                    ignore_index=True,
+            no_id_count = sum(
+                _trade_id(row) is None for row in frame.to_dict("records")
+            )
+            frame, keys, bodies, duplicate_count = self._dedupe_replay_frame(
+                frame,
+                symbol=symbol,
+                conflict_root=tick_root,
+                exchange=self.exchange,
+            )
+            self.restored_trade_metrics[symbol]["trades_dup_replay"] += duplicate_count
+            self.restored_trade_metrics[symbol]["trades_no_id"] += no_id_count
+            if duplicate_count:
+                logger.info(
+                    "forming recovery removed %d identical trade replay rows for %s",
+                    duplicate_count,
+                    symbol,
                 )
-            frame = frame.sort_values("ts_ms", kind="stable")
             trades: list[Trade] = []
-            keys: set[str] = set()
             for row in frame.to_dict("records"):
                 side = str(row.get("side") or "").lower()
-                trade_id = row.get("trade_id")
-                if trade_id is not None and not pd.isna(trade_id) and str(trade_id):
-                    keys.add(f"{int(row['ts_ms'])}:{trade_id}")
                 trades.append(
                     Trade(
                         timestamp=datetime.fromtimestamp(int(row["ts_ms"]) / 1000, tz=UTC),
@@ -319,7 +536,18 @@ class CanonicalCandleSink:
                     trade.is_buyer_maker,
                 )
             self.restored_last_trade_ts_ms[symbol] = int(frame["ts_ms"].max())
-            self.restored_trade_keys[symbol] = keys
+            merged_keys = sorted(
+                self.restored_trade_keys[symbol] | keys,
+                key=lambda key: int(key.split(":", 1)[0]),
+            )[-_SEEN_TRADE_IDS:]
+            self.restored_trade_keys[symbol] = set(merged_keys)
+            wanted_ids = {key.split(":", 1)[1] for key in merged_keys}
+            self.restored_trade_bodies[symbol].update(bodies)
+            self.restored_trade_bodies[symbol] = {
+                trade_id: body
+                for trade_id, body in self.restored_trade_bodies[symbol].items()
+                if trade_id in wanted_ids
+            }
             restored += len(trades)
             logger.info(
                 "restored canonical tail from tick lake: exchange=%s symbol=%s "
@@ -551,7 +779,28 @@ class TickRecorder:
             for symbol in symbols
         }
         self._seen_trade_order: dict[str, deque[str]] = {
-            symbol: deque(sorted(self._seen_trade_ids[symbol])[-_SEEN_TRADE_IDS:])
+            symbol: deque(
+                sorted(
+                    self._seen_trade_ids[symbol],
+                    key=lambda key: int(key.split(":", 1)[0]),
+                )[-_SEEN_TRADE_IDS:]
+            )
+            for symbol in symbols
+        }
+        self._seen_trade_bodies: dict[str, dict[str, TradeBody]] = {
+            symbol: dict(
+                self.candle_sink.restored_trade_bodies.get(symbol, {})
+                if self.candle_sink is not None
+                else {}
+            )
+            for symbol in symbols
+        }
+        self._trade_metrics: dict[str, dict[str, int]] = {
+            symbol: dict(
+                self.candle_sink.restored_trade_metrics.get(symbol, _empty_trade_metrics())
+                if self.candle_sink is not None
+                else _empty_trade_metrics()
+            )
             for symbol in symbols
         }
         self._skipped_trade_counts: dict[str, list[int]] = {
@@ -565,20 +814,84 @@ class TickRecorder:
             symbol: [] for symbol in symbols
         }
         self._pending_trade_ids: dict[str, set[str]] = {symbol: set() for symbol in symbols}
+        self._pending_trade_bodies: dict[str, dict[str, TradeBody]] = {
+            symbol: {} for symbol in symbols
+        }
         self._max_seen_trade_ts_ms: dict[str, int] = {}
         self._trade_arrival_seq = 0
         if self.candle_sink is not None:
             self._last_trade_ts_ms.update(self.candle_sink.restored_last_trade_ts_ms)
 
-    def _remember_trade(self, symbol: str, key: str | None) -> None:
+    def _ensure_trade_state(self, symbol: str) -> None:
+        if not hasattr(self, "_seen_trade_bodies"):
+            self._seen_trade_bodies = {}
+        if not hasattr(self, "_pending_trade_bodies"):
+            self._pending_trade_bodies = {}
+        if not hasattr(self, "_trade_metrics"):
+            self._trade_metrics = {}
+        self._seen_trade_ids.setdefault(symbol, set())
+        self._seen_trade_order.setdefault(symbol, deque())
+        self._seen_trade_bodies.setdefault(symbol, {})
+        self._pending_trade_ids.setdefault(symbol, set())
+        self._pending_trade_bodies.setdefault(symbol, {})
+        self._trade_metrics.setdefault(symbol, _empty_trade_metrics())
+
+    def _remember_trade(self, symbol: str, key: str | None, row: dict[str, Any]) -> None:
         if key is None:
             return
+        self._ensure_trade_state(symbol)
         seen = self._seen_trade_ids[symbol]
         order = self._seen_trade_order[symbol]
         if len(order) >= _SEEN_TRADE_IDS:
-            seen.discard(order.popleft())
+            evicted = order.popleft()
+            seen.discard(evicted)
+            self._seen_trade_bodies[symbol].pop(evicted.split(":", 1)[1], None)
         order.append(key)
         seen.add(key)
+        trade_id = _trade_id(row)
+        if trade_id is not None:
+            self._seen_trade_bodies[symbol][trade_id] = _trade_body(row)
+
+    def _trade_conflict(
+        self,
+        symbol: str,
+        *,
+        trade_id: str,
+        previous: TradeBody,
+        incoming: TradeBody,
+        layer: str,
+    ) -> None:
+        self._trade_metrics[symbol]["trades_conflict"] += 1
+        logger.error(
+            "trade identity conflict: exchange=%s symbol=%s id=%s layer=%s "
+            "previous=%s incoming=%s",
+            getattr(self, "exchange_id", "unknown"),
+            symbol,
+            trade_id,
+            layer,
+            previous,
+            incoming,
+        )
+        root = getattr(self, "root", None)
+        if root is not None:
+            _append_trade_conflict(
+                Path(root),
+                exchange=getattr(self, "exchange_id", "unknown"),
+                symbol=symbol,
+                trade_id=trade_id,
+                previous=previous,
+                incoming=incoming,
+                layer=layer,
+            )
+
+    def trade_metrics_snapshot(self) -> dict[str, dict[str, int | float]]:
+        return {
+            canonical_symbol(symbol): {
+                **counters,
+                "seen_set_size": len(self._seen_trade_ids.get(symbol, ())),
+            }
+            for symbol, counters in self._trade_metrics.items()
+        }
 
     def _report_skipped_trades(
         self,
@@ -613,20 +926,57 @@ class TickRecorder:
         trades: list[dict[str, Any]],
         buf: _Buffer,
     ) -> None:
+        self._ensure_trade_state(symbol)
+        metrics = self._trade_metrics[symbol]
+        metrics["trades_in"] += len(trades)
         candidates, malformed = _normalize_trade_batch(trades)
         late = 0
         duplicate = 0
         last_timestamp = self._last_trade_ts_ms.get(symbol)
         seen = self._seen_trade_ids[symbol]
+        seen_bodies = self._seen_trade_bodies[symbol]
         pending_ids = self._pending_trade_ids[symbol]
+        pending_bodies = self._pending_trade_bodies[symbol]
         pending = self._trade_reorder[symbol]
         for row, key in candidates:
             timestamp = int(row["ts_ms"])
+            trade_id = _trade_id(row)
+            if trade_id is None:
+                metrics["trades_no_id"] += 1
+            else:
+                body = _trade_body(row)
+                pending_body = pending_bodies.get(trade_id)
+                if pending_body is not None:
+                    if pending_body != body:
+                        self._trade_conflict(
+                            symbol,
+                            trade_id=trade_id,
+                            previous=pending_body,
+                            incoming=body,
+                            layer="live_pending",
+                        )
+                    else:
+                        metrics["trades_dup_pending"] += 1
+                    duplicate += 1
+                    continue
+                seen_body = seen_bodies.get(trade_id)
+                if seen_body is not None and seen_body != body:
+                    self._trade_conflict(
+                        symbol,
+                        trade_id=trade_id,
+                        previous=seen_body,
+                        incoming=body,
+                        layer="live_seen",
+                    )
+                    duplicate += 1
+                    continue
+                if key in seen:
+                    metrics["trades_dup_ws"] += 1
+                    duplicate += 1
+                    continue
             if last_timestamp is not None and timestamp < last_timestamp:
                 late += 1
-                continue
-            if key is not None and (key in seen or key in pending_ids):
-                duplicate += 1
+                metrics["trades_late_closed"] += 1
                 continue
             latency = getattr(self, "recorder_latency", None)
             if latency is not None:
@@ -638,7 +988,9 @@ class TickRecorder:
                 (timestamp, self._trade_arrival_seq, row, key),
             )
             if key is not None:
+                assert trade_id is not None
                 pending_ids.add(key)
+                pending_bodies[trade_id] = _trade_body(row)
             self._max_seen_trade_ts_ms[symbol] = max(
                 timestamp,
                 self._max_seen_trade_ts_ms.get(symbol, timestamp),
@@ -669,6 +1021,7 @@ class TickRecorder:
         """Publish event-time ordered trades through a bounded watermark."""
         pending = self._trade_reorder[symbol]
         pending_ids = self._pending_trade_ids[symbol]
+        pending_bodies = self._pending_trade_bodies[symbol]
         late = 0
         candle_rejected = 0
         last_timestamp = self._last_trade_ts_ms.get(symbol)
@@ -676,14 +1029,18 @@ class TickRecorder:
             timestamp, _, row, key = heapq.heappop(pending)
             if key is not None:
                 pending_ids.discard(key)
+                trade_id = _trade_id(row)
+                if trade_id is not None:
+                    pending_bodies.pop(trade_id, None)
             if last_timestamp is not None and timestamp < last_timestamp:
                 late += 1
+                self._trade_metrics[symbol]["trades_late_closed"] += 1
                 continue
             side = str(row.get("side") or "").lower()
             public_trade = PublicTrade(
                 exchange=getattr(self, "exchange_id", buf.exchange),
                 symbol=symbol,
-                trade_id=str(row["trade_id"]),
+                trade_id=_trade_id(row),
                 timestamp=datetime.fromtimestamp(timestamp / 1000, tz=UTC),
                 price=row["price"],
                 amount=row["amount"],
@@ -693,6 +1050,10 @@ class TickRecorder:
             )
             public_trade.validate_clock(datetime.now(UTC))
             durable_row = public_trade.storage_row()
+            # Preserve the venue integer exactly. A millisecond routed through
+            # datetime.timestamp() can round 1001ms down to 1000ms, corrupting
+            # the dedup body and making an exact reconnect look like a conflict.
+            durable_row["ts_ms"] = timestamp
             # The raw row is the rebuild tape. Add it first and atomically
             # publish the shard before a boundary trade is allowed to emit the
             # prior closed candle. Forming-candle trades remain batched.
@@ -724,7 +1085,13 @@ class TickRecorder:
                         exc,
                     )
             self.trade_count += 1
-            self._remember_trade(symbol, key)
+            latency = getattr(self, "recorder_latency", None)
+            if latency is not None:
+                latency.record(
+                    "reorder_release_lag_ms",
+                    max(0.0, float(int(datetime.now(UTC).timestamp() * 1000) - timestamp)),
+                )
+            self._remember_trade(symbol, key, durable_row)
             last_timestamp = timestamp
         if last_timestamp is not None:
             self._last_trade_ts_ms[symbol] = last_timestamp
@@ -786,6 +1153,11 @@ class TickRecorder:
     async def _maintain_latency_snapshot(self) -> None:
         while True:
             self.recorder_latency_store.save_from(self.recorder_latency)
+            _write_trade_metrics(
+                self.root,
+                exchange=self.exchange_id,
+                metrics=self.trade_metrics_snapshot(),
+            )
             await asyncio.sleep(5.0)
 
     async def _watch_book(self, symbol: str, clock) -> None:
@@ -866,6 +1238,11 @@ class TickRecorder:
         finally:
             try:
                 self.recorder_latency_store.save_from(self.recorder_latency)
+                _write_trade_metrics(
+                    self.root,
+                    exchange=self.exchange_id,
+                    metrics=self.trade_metrics_snapshot(),
+                )
                 await self._ex.close()
             finally:
                 if lease is not None:
@@ -946,8 +1323,39 @@ class DeltaTickRecorder:
         )
         self.trade_count = 0
         self.book_count = 0
-        self._seen_trade_ids: set[str] = set()
-        self._seen_trade_order: deque[str] = deque()
+        self._seen_trade_ids: dict[str, set[str]] = {
+            symbol: set(
+                self.candle_sink.restored_trade_keys.get(symbol, set())
+                if self.candle_sink is not None
+                else ()
+            )
+            for symbol in self.symbols
+        }
+        self._seen_trade_order: dict[str, deque[str]] = {
+            symbol: deque(
+                sorted(
+                    self._seen_trade_ids[symbol],
+                    key=lambda key: int(key.split(":", 1)[0]),
+                )[-_SEEN_TRADE_IDS:]
+            )
+            for symbol in self.symbols
+        }
+        self._seen_trade_bodies: dict[str, dict[str, TradeBody]] = {
+            symbol: dict(
+                self.candle_sink.restored_trade_bodies.get(symbol, {})
+                if self.candle_sink is not None
+                else {}
+            )
+            for symbol in self.symbols
+        }
+        self._trade_metrics: dict[str, dict[str, int]] = {
+            symbol: dict(
+                self.candle_sink.restored_trade_metrics.get(symbol, _empty_trade_metrics())
+                if self.candle_sink is not None
+                else _empty_trade_metrics()
+            )
+            for symbol in self.symbols
+        }
         self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols}
         self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
         channels = tuple(
@@ -1001,39 +1409,29 @@ class DeltaTickRecorder:
         buf = self._trade_bufs.get(sym)
         if buf is None:
             return
-        trade_id = trade.get("trade_id")
-        if trade_id in (None, ""):
-            # Delta's public ``all_trades`` payload currently omits a native
-            # trade id. Keep the raw-tape identity mandatory by deriving a
-            # stable, explicitly-labelled fallback from every available event
-            # identity field. Exact websocket replays then deduplicate; two
-            # indistinguishable prints cannot honestly be separated without a
-            # venue sequence and remain one measurement atom.
-            identity = "|".join(
-                str(trade.get(field) or "")
-                for field in (
-                    "ts_ms",
-                    "price",
-                    "size",
-                    "buyer_role",
-                    "seller_role",
-                    "sequence",
-                )
-            )
-            digest = hashlib.sha256(f"{sym}|{identity}".encode()).hexdigest()[:24]
-            trade_id = f"delta-synthetic:{digest}"
-        trade_id = str(trade_id)
-        if trade_id in self._seen_trade_ids:
-            return
+        metrics = self._trade_metrics[sym]
+        metrics["trades_in"] += 1
+        raw_trade_id = trade.get("trade_id")
+        trade_id = None if raw_trade_id in (None, "") else str(raw_trade_id)
         side = str(trade.get("side") or "").lower()
         try:
+            timestamp_ms = int(trade["ts_ms"])
+            price = Decimal(str(trade["price"]))
+            amount = Decimal(str(trade["size"]))
+            normalized: dict[str, Any] = {
+                "ts_ms": timestamp_ms,
+                "price": float(price),
+                "amount": float(amount),
+                "side": side,
+                "trade_id": trade_id,
+            }
             public_trade = PublicTrade(
                 exchange=self.exchange_id,
                 symbol=sym,
-                trade_id=str(trade_id),
-                timestamp=datetime.fromtimestamp(int(trade["ts_ms"]) / 1000, tz=UTC),
-                price=trade["price"],
-                amount=trade["size"],
+                trade_id=trade_id,
+                timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+                price=price,
+                amount=amount,
                 is_buyer_maker=(
                     False if side == "buy" else True if side == "sell" else None
                 ),
@@ -1042,21 +1440,57 @@ class DeltaTickRecorder:
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             logger.warning("%s trade skipped: %s", sym, exc)
             return
+        key = f"{timestamp_ms}:{trade_id}" if trade_id is not None else None
+        if trade_id is None:
+            metrics["trades_no_id"] += 1
+        else:
+            body = _trade_body(normalized)
+            previous = self._seen_trade_bodies[sym].get(trade_id)
+            if previous is not None and previous != body:
+                metrics["trades_conflict"] += 1
+                logger.error(
+                    "Delta trade identity conflict: symbol=%s id=%s previous=%s incoming=%s",
+                    sym,
+                    trade_id,
+                    previous,
+                    body,
+                )
+                _append_trade_conflict(
+                    self.root,
+                    exchange=self.exchange_id,
+                    symbol=sym,
+                    trade_id=trade_id,
+                    previous=previous,
+                    incoming=body,
+                    layer="delta_live",
+                )
+                return
+            if key in self._seen_trade_ids[sym]:
+                metrics["trades_dup_ws"] += 1
+                return
         row = public_trade.storage_row()
-        if len(self._seen_trade_order) >= _SEEN_TRADE_IDS:
-            self._seen_trade_ids.discard(self._seen_trade_order.popleft())
-        self._seen_trade_ids.add(trade_id)
-        self._seen_trade_order.append(trade_id)
+        row["ts_ms"] = timestamp_ms
+        if key is not None:
+            assert trade_id is not None
+            order = self._seen_trade_order[sym]
+            seen = self._seen_trade_ids[sym]
+            if len(order) >= _SEEN_TRADE_IDS:
+                evicted = order.popleft()
+                seen.discard(evicted)
+                self._seen_trade_bodies[sym].pop(evicted.split(":", 1)[1], None)
+            seen.add(key)
+            order.append(key)
+            self._seen_trade_bodies[sym][trade_id] = _trade_body(normalized)
         self.recorder_latency.record(
             TRADE_INGEST_MS,
-            max(0.0, float(self._epoch_ms() - int(row["ts_ms"]))),
+            max(0.0, float(self._epoch_ms() - timestamp_ms)),
         )
         # Match the CCXT recorder's durability contract: the raw trade is the
         # rebuild tape and must be visible before a boundary trade can publish
         # the prior closed candle to an in-memory subscriber.
         buf.add(row)
         if self.candle_sink is not None and self.candle_sink.would_publish_on_trade(
-            sym, int(row["ts_ms"])
+            sym, timestamp_ms
         ):
             buf.flush((self._clock or time.monotonic)())
         if self.candle_sink is not None:
@@ -1070,6 +1504,15 @@ class DeltaTickRecorder:
                 },
             )
         self.trade_count += 1
+
+    def trade_metrics_snapshot(self) -> dict[str, dict[str, int | float]]:
+        return {
+            canonical_symbol(symbol): {
+                **counters,
+                "seen_set_size": len(self._seen_trade_ids.get(symbol, ())),
+            }
+            for symbol, counters in self._trade_metrics.items()
+        }
 
     def _all_buffers(self):
         return (*self._trade_bufs.values(), *self._book_bufs.values())
@@ -1128,6 +1571,11 @@ class DeltaTickRecorder:
                     self.candle_sink.advance_time(datetime.now(UTC))
                 if now >= next_latency_snapshot:
                     self.recorder_latency_store.save_from(self.recorder_latency)
+                    _write_trade_metrics(
+                        self.root,
+                        exchange=self.exchange_id,
+                        metrics=self.trade_metrics_snapshot(),
+                    )
                     next_latency_snapshot = now + 5.0
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
@@ -1138,6 +1586,11 @@ class DeltaTickRecorder:
         finally:
             try:
                 self.recorder_latency_store.save_from(self.recorder_latency)
+                _write_trade_metrics(
+                    self.root,
+                    exchange=self.exchange_id,
+                    metrics=self.trade_metrics_snapshot(),
+                )
                 await self._client.stop()
             finally:
                 if lease is not None:

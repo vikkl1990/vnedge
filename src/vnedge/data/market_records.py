@@ -38,7 +38,7 @@ class PublicTrade:
 
     exchange: str
     symbol: str
-    trade_id: str
+    trade_id: str | None
     timestamp: datetime
     price: Decimal
     amount: Decimal
@@ -46,11 +46,9 @@ class PublicTrade:
 
     def __post_init__(self) -> None:
         exchange = self.exchange.strip().lower()
-        trade_id = self.trade_id.strip()
+        trade_id = None if self.trade_id is None else self.trade_id.strip() or None
         if not exchange:
             raise ValueError("trade exchange must not be empty")
-        if not trade_id:
-            raise ValueError("venue trade_id must not be empty")
         if self.is_buyer_maker is not None and not isinstance(self.is_buyer_maker, bool):
             raise ValueError("is_buyer_maker must be bool or None")
         object.__setattr__(self, "exchange", exchange)
