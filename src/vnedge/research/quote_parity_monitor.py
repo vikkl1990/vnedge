@@ -320,7 +320,34 @@ def _lane_report(
     if runtime_start is None:
         raise ValueError("current runner-start heartbeat is outside journal evidence")
     lane_capture = quote_root / f"lane={spec.lane_id}"
-    quotes = load_quote_capture(lane_capture, runtime_start=runtime_start, now=now)
+    try:
+        quotes = load_quote_capture(lane_capture, runtime_start=runtime_start, now=now)
+    except ValueError as exc:
+        # A roster-wide monitor can start as soon as the process healthcheck
+        # passes, while later lane tasks are still restoring.  No quote after
+        # that lane's runner_start is an expected sample-size state during the
+        # policy collection window, not a broken replay.  Once the minimum
+        # duration has elapsed the same absence remains an explicit error.
+        if (
+            str(exc) == "quote evidence has no rows inside current runner window"
+            and now - runtime_start < policy.min_duration
+        ):
+            return {
+                "lane_id": spec.lane_id,
+                "strategy_id": spec.strategy_id,
+                "exchange": spec.exchange,
+                "symbol": spec.data_symbol,
+                "timeframe": spec.timeframe,
+                "runtime_start": runtime_start.isoformat(),
+                "status": "collecting",
+                "reasons": [
+                    "approval_parity_disabled",
+                    "capture_duration_below_minimum",
+                    "quote_count_below_minimum",
+                    "matched_intents_below_minimum",
+                ],
+            }
+        raise
     lane_ids = {str(value) for value in quotes["lane_id"].dropna().unique()}
     exchanges = {str(value).strip().lower() for value in quotes["exchange"].dropna().unique()}
     symbols = {canonical_symbol(str(value)) for value in quotes["symbol"].dropna().unique()}

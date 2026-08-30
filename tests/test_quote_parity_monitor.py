@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pandas as pd
 from vnedge.research.quote_parity_monitor import (
     QuoteParityPolicy,
     _mechanism_lifecycle_guard,
+    build_quote_parity_report,
     classify_parity,
     latest_runtime_start,
     load_quote_capture,
@@ -156,6 +158,73 @@ def test_latest_runtime_start_is_bound_to_exact_lane_identity():
     ]
 
     assert latest_runtime_start(records, spec) == datetime(2026, 8, 29, 2, tzinfo=UTC)
+
+
+def test_empty_post_restart_quote_window_is_collecting_not_error(tmp_path: Path):
+    runtime_start = datetime(2026, 8, 30, 15, 0, tzinfo=UTC)
+    spec = LaneSpec(
+        lane_id="session-lane",
+        exchange="binanceusdm",
+        symbol="BTC/USDT:USDT",
+        timeframe="15m",
+        strategy_id="session_continuation_realtime_v2",
+    )
+    journal_root = tmp_path / "journals"
+    journal_root.mkdir()
+    (journal_root / f"{spec.lane_id}.journal.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": runtime_start.isoformat(),
+                "kind": "paper_lane_heartbeat",
+                "payload": {
+                    "reason": "runner_started",
+                    "started_at": runtime_start.isoformat(),
+                    "strategy_id": spec.strategy_id,
+                    "symbol": spec.symbol,
+                    "timeframe": spec.timeframe,
+                },
+            }
+        )
+        + "\n"
+    )
+    lane_day = (
+        tmp_path
+        / "quotes"
+        / f"lane={spec.lane_id}"
+        / "exchange=binanceusdm"
+        / "symbol=BTCUSDT"
+        / "20260830"
+    )
+    lane_day.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ts_ms": int((runtime_start - timedelta(seconds=1)).timestamp() * 1000),
+                "captured_at_ms": 1,
+                "capture_overflow_drops": 0,
+                "lane_id": spec.lane_id,
+                "exchange": spec.exchange,
+                "symbol": spec.data_symbol,
+            }
+        ]
+    ).to_parquet(lane_day / "quotes.parquet", index=False)
+
+    report = build_quote_parity_report(
+        [spec],
+        candle_root=tmp_path / "candles",
+        quote_root=tmp_path / "quotes",
+        journal_root=journal_root,
+        policy=QuoteParityPolicy(min_duration=timedelta(hours=2)),
+        now=runtime_start + timedelta(minutes=1),
+    )
+
+    assert report["summary"]["statuses"] == {"collecting": 1}
+    assert report["lanes"][0]["reasons"] == [
+        "approval_parity_disabled",
+        "capture_duration_below_minimum",
+        "quote_count_below_minimum",
+        "matched_intents_below_minimum",
+    ]
 
 
 def test_quote_capture_loader_excludes_previous_runner_rows(tmp_path: Path):
