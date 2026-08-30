@@ -1,6 +1,7 @@
 import json
+from datetime import UTC, datetime
 
-from vnedge.dashboard.trade_journal import build_trade_journal
+from vnedge.dashboard.trade_journal import TradeJournalConfig, build_trade_journal
 
 
 def write_jsonl(path, rows):
@@ -387,6 +388,76 @@ def test_trade_journal_paginates_rows_without_changing_full_ledger_totals(tmp_pa
     assert len(second["closed_trades"]) == 1
     assert first["page"]["has_more"] is True
     assert second["page"]["has_previous"] is True
+
+
+def test_trade_journal_uses_full_stream_shadow_ledger_when_tail_lost_outcome(tmp_path):
+    lane = "shadow_observe_squeeze_binanceusdm_btc_usdt_usdt_5m"
+    journal = tmp_path / f"{lane}.journal.jsonl"
+    rows = [
+        {
+            "ts": "2026-08-20T01:00:00+00:00",
+            "kind": "shadow_outcome",
+            "payload": {
+                "intent_key": "old-resolved",
+                "resolution": "stop",
+                "virtual_net_usd": -12.3,
+            },
+        },
+        *[
+            {
+                "ts": f"2026-08-30T12:{minute:02d}:00+00:00",
+                "kind": "lane_eval",
+                "payload": {"strategy_id": "squeeze_expansion_breakout_v4"},
+            }
+            for minute in range(50)
+        ],
+    ]
+    write_jsonl(journal, rows)
+    evidence = tmp_path / "scanner_evidence_latest.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "source_window": {"complete": True},
+                "resolved_trades_complete": True,
+                "resolved_trades": [
+                    {
+                        "lane": lane,
+                        "ts": "2026-08-20T01:00:00+00:00",
+                        "kind": "shadow_outcome",
+                        "strategy_id": "squeeze_expansion_breakout_v4",
+                        "symbol": "BTC/USDT:USDT",
+                        "side": "long",
+                        "resolution": "stop",
+                        "entry_price": 100.0,
+                        "exit_price": 99.0,
+                        "virtual_net_usd": -12.3,
+                        "fees_usd": 0.4,
+                        "funding_usd": 0.1,
+                        "intent_key": "old-resolved",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_trade_journal(
+        snapshot={"lanes": [{"lane_id": lane}]},
+        journal_dir=tmp_path,
+        scanner_evidence_path=evidence,
+        config=TradeJournalConfig(tail_bytes=256),
+    )
+
+    assert payload["summary"]["closed_trades"] == 1
+    assert payload["summary"]["shadow_closed_trades"] == 1
+    assert payload["summary"]["virtual_net_usd"] == -12.3
+    assert payload["summary"]["shadow_execution_fees_usd"] == 0.4
+    assert payload["summary"]["shadow_funding_usd"] == 0.1
+    assert payload["summary"]["shadow_history_complete"] is True
+    assert payload["summary"]["reconciliation_state"] == "matched"
+    assert payload["closed_trades"][0]["source"] == "scanner_evidence_full_stream"
 
 
 # --- cohort P&L split (honest headline) ------------------------------------------

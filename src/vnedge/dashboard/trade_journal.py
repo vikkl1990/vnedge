@@ -30,6 +30,7 @@ def build_trade_journal(
     snapshot: dict | None,
     journal_dir: Path | str | None,
     history_path: Path | str | None = None,
+    scanner_evidence_path: Path | str | None = None,
     lane: str = "",
     since: str | None = None,
     limit: int = 200,
@@ -59,6 +60,7 @@ def build_trade_journal(
     journal_rows = _journal_rows(
         root, lane=lane, since=since_dt, config=config, active=active
     )
+    evidence, evidence_state = _scanner_evidence(scanner_evidence_path)
 
     positions = _snapshot_positions(snapshot, lane)
     snapshot_orders = _snapshot_orders(snapshot, lane)
@@ -70,6 +72,13 @@ def build_trade_journal(
     order_rows = _merge_snapshot_orders(order_rows, snapshot_orders)
 
     closed_trades = _build_closed_trades(fills, journal_rows, virtual_trades)
+    evidence_shadow = _evidence_shadow_trades(
+        evidence,
+        lane=lane,
+        since=since_dt,
+        active=active,
+    )
+    closed_trades = _merge_evidence_shadow(closed_trades, evidence_shadow)
     scanner_events = _scanner_audit_events(journal_rows)
     scanner_lanes = _shadow_observe_lane_ids(snapshot)
     if scanner_lanes is not None:
@@ -90,6 +99,8 @@ def build_trade_journal(
     actual_realized = sum(_float(row.get("realized_pnl_usd")) for row in fills)
     fees = sum(_float(row.get("fee_usd")) for row in fills)
     virtual_net = sum(_float(row.get("virtual_net_usd")) for row in closed_trades)
+    shadow_fees = sum(_float(row.get("fees_usd")) for row in shadow_closed)
+    shadow_funding = sum(_float(row.get("funding_usd")) for row in shadow_closed)
     actual_closed_net = sum(_float(row.get("net_after_this_fill_fee_usd")) for row in actual_closed)
     actual_closed_fees = sum(_float(row.get("fee_usd")) for row in actual_closed)
     open_orders_total = sum(1 for row in order_rows if _is_open_order(row))
@@ -130,6 +141,8 @@ def build_trade_journal(
             "active_lanes": len(active) if active is not None else None,
             "actual_realized_pnl_usd": round(actual_realized, 6),
             "fees_usd": round(fees, 6),
+            "shadow_execution_fees_usd": round(shadow_fees, 6),
+            "shadow_funding_usd": round(shadow_funding, 6),
             "virtual_net_usd": round(virtual_net, 6),
             "actual_closed_net_usd": round(actual_closed_net, 6),
             "actual_closed_fees_usd": round(actual_closed_fees, 6),
@@ -137,6 +150,16 @@ def build_trade_journal(
             "lane_pnl": lane_pnl,
             "cohort_pnl": cohort_pnl,
             "history_lane": _primary_lane(history_path),
+            "shadow_history_source": (
+                "scanner_evidence_full_stream"
+                if evidence_state == "complete"
+                else "bounded_journal_tail"
+            ),
+            "shadow_history_state": evidence_state,
+            "shadow_history_complete": evidence_state == "complete",
+            "reconciliation_state": (
+                "matched" if evidence_state == "complete" else "incomplete"
+            ),
         },
         "positions": positions[:limit],
         "orders": order_rows,
@@ -155,7 +178,10 @@ def build_trade_journal(
             "read_only": True,
             "can_trade": False,
             "can_promote": False,
-            "source": "snapshot + decision journals + hash-chained fill ledgers",
+            "source": (
+                "snapshot + bounded decision-journal tail + full-stream scanner evidence "
+                "+ hash-chained fill ledgers"
+            ),
         },
         "can_trade": False,
         "can_promote": False,
@@ -175,6 +201,108 @@ def _tail_lines(path: Path, max_bytes: int) -> list[str]:
     if size > max_bytes and lines:
         lines = lines[1:]
     return [line for line in lines if line.strip()]
+
+
+def _scanner_evidence(
+    path: Path | str | None,
+) -> tuple[dict[str, Any], str]:
+    """Read the compact full-stream scanner artifact.
+
+    Dashboard requests deliberately do not rescan multi-gigabyte append-only
+    journals.  The credential-free evidence worker performs that scan and
+    publishes the resolved shadow ledger atomically.  Freshness affects the
+    reconciliation label, but stale rows remain useful historical evidence
+    and are merged with the live journal tail.
+    """
+    if path is None:
+        return {}, "unavailable"
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}, "unavailable"
+    if not isinstance(payload, dict):
+        return {}, "invalid"
+    source = payload.get("source_window")
+    source_complete = isinstance(source, dict) and bool(source.get("complete"))
+    ledger_complete = bool(payload.get("resolved_trades_complete"))
+    rows = payload.get("resolved_trades")
+    if not source_complete or not ledger_complete or not isinstance(rows, list):
+        return payload, "incomplete"
+    generated = _parse_dt(payload.get("generated_at"))
+    if generated is None or (datetime.now(UTC) - generated).total_seconds() > 15 * 60:
+        return payload, "stale"
+    return payload, "complete"
+
+
+def _evidence_shadow_trades(
+    evidence: Mapping[str, Any],
+    *,
+    lane: str,
+    since: datetime | None,
+    active: set[str] | None,
+) -> list[dict[str, Any]]:
+    rows = evidence.get("resolved_trades")
+    if not isinstance(rows, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        lane_id = str(raw.get("lane") or "")
+        if lane and lane_id != lane:
+            continue
+        if active and lane_id not in active:
+            continue
+        ts = str(raw.get("ts") or raw.get("exit_ts") or "")
+        if not _after_since(ts, since):
+            continue
+        row = dict(raw)
+        row["lane"] = lane_id
+        row["ts"] = ts
+        row["kind"] = "shadow_outcome"
+        row["source"] = "scanner_evidence_full_stream"
+        leverage = _float(row.get("leverage"))
+        notional = _float(row.get("notional_usd"))
+        if leverage > 0 and notional > 0:
+            row["margin_usd"] = round(notional / leverage, 2)
+        row["exchange"] = row.get("exchange") or _lane_exchange(lane_id)
+        hold = _hold_seconds(row)
+        if hold is not None:
+            row["hold_seconds"] = round(hold, 1)
+        output.append(row)
+    return output
+
+
+def _shadow_identity(row: Mapping[str, Any]) -> tuple[str, ...]:
+    intent_key = str(row.get("intent_key") or "")
+    if intent_key:
+        return ("intent", intent_key)
+    return (
+        "fallback",
+        str(row.get("lane") or ""),
+        str(row.get("kind") or ""),
+        str(row.get("ts") or row.get("exit_ts") or ""),
+        str(row.get("entry_price") or ""),
+        str(row.get("exit_price") or ""),
+    )
+
+
+def _merge_evidence_shadow(
+    closed_trades: list[dict[str, Any]],
+    evidence_shadow: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge full-stream shadow rows without duplicating recent tail rows."""
+    actual = [row for row in closed_trades if row.get("kind") == "actual_closing_fill"]
+    shadow = {
+        _shadow_identity(row): row
+        for row in closed_trades
+        if row.get("kind") != "actual_closing_fill"
+    }
+    # Evidence rows contain intent-side economics joined by the full scanner,
+    # so they intentionally win over the tail projection for the same key.
+    for row in evidence_shadow:
+        shadow[_shadow_identity(row)] = row
+    return [*actual, *shadow.values()]
 
 
 def _iter_jsonl(path: Path, *, max_bytes: int) -> Iterable[dict[str, Any]]:

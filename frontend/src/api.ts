@@ -734,7 +734,13 @@ export interface JournalPayload {
     shadow_closed_trades: number;
     scanner_events: number;
     fees_usd: number;
+    shadow_execution_fees_usd: number;
+    shadow_funding_usd: number;
     virtual_net_usd: number;
+    shadow_history_source: string;
+    shadow_history_state: string;
+    shadow_history_complete: boolean;
+    reconciliation_state: string;
     [k: string]: unknown;
   };
   closed_trades: JournalRow[];

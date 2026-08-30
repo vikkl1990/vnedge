@@ -1150,11 +1150,19 @@ def build_journal_report(
                 intent_duplicates[key] += 1
             # Latest durable verdict wins; retries no longer create phantom
             # candidates and a later approval is not hidden by setdefault.
-            intents[key] = dict(payload)
+            intents[key] = {
+                **payload,
+                "_lane_id": record["lane_id"],
+                "_record_ts": record["ts"],
+            }
         elif record["kind"] == "shadow_outcome" and key:
             if key in outcomes:
                 outcome_duplicates[key] += 1
-            outcomes[key] = dict(payload)
+            outcomes[key] = {
+                **payload,
+                "_lane_id": record["lane_id"],
+                "_record_ts": record["ts"],
+            }
 
     approved_keys: set[str] = set()
     for key, payload in intents.items():
@@ -1169,6 +1177,7 @@ def build_journal_report(
             row["virtual_rejected"] += 1
 
     resolved_approved: set[str] = set()
+    resolved_trades: list[dict[str, Any]] = []
     for key, payload in outcomes.items():
         matched = intents.get(key)
         strategy_id = (
@@ -1219,6 +1228,53 @@ def build_journal_report(
         # Compatibility name for the dashboard. It remains explicitly
         # shadow-only and is never converted into a replay ``net_bps``.
         row["observed_shadow_net_usd"] += booked_net_usd
+        resolved_trades.append(
+            {
+                "lane": str(payload.get("_lane_id") or (matched or {}).get("_lane_id") or ""),
+                "ts": str(payload.get("exit_ts") or payload.get("_record_ts") or ""),
+                "kind": "shadow_outcome",
+                "strategy_id": strategy_id,
+                "symbol": str(payload.get("symbol") or intent.get("symbol") or ""),
+                "side": side,
+                "resolution": str(payload.get("resolution") or "resolved"),
+                "entry_price": entry,
+                "exit_price": exit_price,
+                "quantity": quantity,
+                "notional_usd": float(intent.get("notional_usd") or 0.0),
+                "leverage": float(intent.get("leverage") or 0.0),
+                "virtual_net_usd": booked_net_usd,
+                "gross_pnl_usd": float(
+                    payload.get("gross_pnl_usd")
+                    if payload.get("gross_pnl_usd") is not None
+                    else computed_gross_usd
+                ),
+                "captured_bps": float(
+                    payload.get("captured_bps")
+                    if payload.get("captured_bps") is not None
+                    else computed_gross_bps
+                ),
+                "fees_usd": float(payload.get("fees_usd") or 0.0),
+                "funding_usd": float(payload.get("funding_usd") or 0.0),
+                "net_bps": payload.get("net_bps"),
+                "mfe_bps": payload.get("mfe_bps"),
+                "mae_bps": payload.get("mae_bps"),
+                "entry_ts": str(payload.get("entry_ts") or (matched or {}).get("_record_ts") or ""),
+                "exit_ts": str(payload.get("exit_ts") or payload.get("_record_ts") or ""),
+                "bars_held": int(payload.get("bars_held") or 0),
+                "cost_profile": str(payload.get("cost_profile") or "legacy_unattributed"),
+                "cost_contract_version": str(payload.get("cost_contract_version") or "legacy"),
+                "build_sha": str(payload.get("build_sha") or "unknown"),
+                "intent_key": key,
+                "signal_reason": str(
+                    payload.get("signal_reason")
+                    or (matched or {}).get("signal_reason")
+                    or ""
+                ),
+                "take_profit_levels": payload.get("take_profit_levels") or [],
+                "tp_reached": int(payload.get("tp_reached") or 0),
+                "source": "scanner_evidence_full_stream",
+            }
+        )
 
     strategies = []
     for strategy_id in sorted(grouped):
@@ -1282,7 +1338,9 @@ def build_journal_report(
         row.setdefault("net_execution_usd", 0.0)
         row.setdefault("observed_shadow_net_usd", 0.0)
         row["strategy_id"] = strategy_id
-    report["schema_version"] = 2
+    # Schema 3 adds the compact resolved-trade ledger used by bounded UI
+    # readers. Schema 2 aggregate fields retain their meanings unchanged.
+    report["schema_version"] = 3
     report["strategies"] = [by_strategy[key] for key in sorted(by_strategy)]
     report["virtual_candidates"] = sum(
         int(row["virtual_candidates"]) for row in report["strategies"]
@@ -1336,6 +1394,12 @@ def build_journal_report(
     report["unmatched_outcomes"] = sum(
         int(row["unmatched_outcomes"]) for row in report["strategies"]
     )
+    report["resolved_trades"] = sorted(
+        resolved_trades,
+        key=lambda item: (str(item.get("ts") or ""), str(item.get("intent_key") or "")),
+        reverse=True,
+    )
+    report["resolved_trades_complete"] = effective_bytes is None
     if report["unmatched_outcomes"]:
         report["performance_blockers"].append("unmatched_outcome_lifecycle")
     return report

@@ -1523,6 +1523,9 @@ def create_app(
                 snapshot=provider.latest(),
                 journal_dir=lane_dir,
                 history_path=history_path,
+                scanner_evidence_path=Path(
+                    "research/live_research/scanner_evidence_latest.json"
+                ),
                 lane=lane,
                 since=since,
                 limit=limit,

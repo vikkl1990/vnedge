@@ -1188,6 +1188,7 @@ export function JournalPanel() {
     return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
   }, 0);
   const summaryNet = summary?.actual_closed_net_usd;
+  const shadowHistoryComplete = summary?.shadow_history_complete === true;
   const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
   const completeTradePopulation = (data?.page?.totals.closed_trades ?? rows.length) <= rows.length;
   const reconciliationMismatch = completeTradePopulation && reconciliationDelta != null && Math.abs(reconciliationDelta) > 0.01;
@@ -1238,14 +1239,18 @@ export function JournalPanel() {
   return (
     <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${data?.page?.totals.closed_trades ?? rows.length} closed · page ${Math.floor(offset / pageSize) + 1} · 20s`}>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Paper net" value={usd(summary?.actual_realized_pnl_usd)} /></div>
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Fees" value={usd(summary?.fees_usd)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Paper net" value={usd(summary?.actual_closed_net_usd)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3">
+          <Kpi label="Paper fees" value={usd(summary?.fees_usd)} />
+          <div className="mt-1 text-[9px] font-mono text-faint">shadow modeled {usd(summary?.shadow_execution_fees_usd)}</div>
+        </div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow net" value={usd(summary?.virtual_net_usd)} /></div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={String(summary?.open_orders ?? 0)} /></div>
       </div>
-      <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${reconciliationMismatch ? "border-warn/50 bg-warn/5 text-warn" : "border-line bg-inset text-dim"}`}>
-        <span className="font-mono">Snapshot reconciliation:</span> {completeTradePopulation ? `visible rows ${usd(rowsNet)} · summary ${usd(summaryNet)}` : `full-ledger summary ${usd(summaryNet)} · page rows ${usd(rowsNet)}`}
-        {completeTradePopulation ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)} (accounting mismatch)` : " · matched") : " · page view (not a reconciliation population)"}
+      <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${reconciliationMismatch || !shadowHistoryComplete ? "border-warn/50 bg-warn/5 text-warn" : "border-line bg-inset text-dim"}`}>
+        <span className="font-mono">Evidence reconciliation:</span> paper {completeTradePopulation ? `visible ${usd(rowsNet)} · ledger ${usd(summaryNet)}` : `ledger ${usd(summaryNet)} · page ${usd(rowsNet)}`}
+        {completeTradePopulation ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)}` : " · matched") : " · paged"}
+        {` · shadow ${summary?.shadow_closed_trades ?? 0} closed / ${usd(summary?.virtual_net_usd)} · ${shadowHistoryComplete ? "full-stream matched" : `history ${summary?.shadow_history_state ?? "unavailable"}`}`}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
         {(["all", "scanner", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}

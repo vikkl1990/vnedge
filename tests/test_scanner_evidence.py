@@ -703,7 +703,7 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     report = scanner_evidence.build_journal_report([journal])
 
     row = report["strategies"][0]
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
     assert row["virtual_approved"] == 1
     assert row["accepted_entries"] == 1
     assert report["accepted_entries"] == 1
@@ -714,6 +714,42 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
     assert row["observed_shadow_net_usd"] == 9.7
     assert report["net_execution_usd"] == 9.7
     assert report["performance_eligible"] is False
+    assert report["resolved_trades_complete"] is True
+    assert report["resolved_trades"] == [
+        {
+            "lane": "lane",
+            "ts": "2026-01-01T01:00:00+00:00",
+            "kind": "shadow_outcome",
+            "strategy_id": "session_continuation_15m_v1",
+            "symbol": "",
+            "side": "long",
+            "resolution": "resolved",
+            "entry_price": 100.0,
+            "exit_price": 105.0,
+            "quantity": 2.0,
+            "notional_usd": 200.0,
+            "leverage": 0.0,
+            "virtual_net_usd": 9.7,
+            "gross_pnl_usd": 10.0,
+            "captured_bps": 500.0,
+            "fees_usd": 0.3,
+            "funding_usd": 0.0,
+            "net_bps": None,
+            "mfe_bps": None,
+            "mae_bps": None,
+            "entry_ts": "2026-01-01T00:00:00+00:00",
+            "exit_ts": "2026-01-01T01:00:00+00:00",
+            "bars_held": 0,
+            "cost_profile": "legacy_unattributed",
+            "cost_contract_version": "legacy",
+            "build_sha": "unknown",
+            "intent_key": "k1",
+            "signal_reason": "",
+            "take_profit_levels": [],
+            "tp_reached": 0,
+            "source": "scanner_evidence_full_stream",
+        }
+    ]
 
 
 def test_journal_report_reads_only_a_bounded_recent_tail(tmp_path: Path):
