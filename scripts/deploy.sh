@@ -295,10 +295,22 @@ echo "TLS edge health OK"
 # deploy that came up with live enabled, a killed/unapproved strategy in a
 # paper/live lane, or a roster count the snapshot does not expose for audit.
 echo "verifying deployed capital policy..."
-if ! docker compose exec -T multi-lane-shadow \
-        python -m vnedge.runtime.fleet_policy \
-        --url http://127.0.0.1:8080/state \
-        --expected-build-sha "$HEAD_SHA"; then
+FLEET_OK=0
+for _ in $(seq 1 "${DEPLOY_FLEET_WAIT_ATTEMPTS:-12}"); do
+    if docker compose exec -T multi-lane-shadow \
+            python -m vnedge.runtime.fleet_policy \
+            --url http://127.0.0.1:8080/state \
+            --expected-build-sha "$HEAD_SHA"; then
+        FLEET_OK=1
+        break
+    fi
+    # The authenticated /state snapshot aggregates every lane and can exceed
+    # its request timeout while restored feature frames are still hot in CPU
+    # caches.  Retry the *same* fail-closed audit; never reinterpret a timeout
+    # as a policy pass.
+    sleep 5
+done
+if [ "$FLEET_OK" != 1 ]; then
     echo "FLEET POLICY FAILED — deployment is running but unsafe; investigate immediately" >&2
     exit 1
 fi
