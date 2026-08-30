@@ -37,7 +37,9 @@ def test_roster_requirements_follow_active_strategy_dependencies(tmp_path) -> No
         ),
         encoding="utf-8",
     )
-    assert requirements_from_roster(roster) == {"1h": 24, "4h": 12, "15m": 65}
+    # The scanner's local 33-bar feature window is not its full dependency:
+    # the shared causal regime router first becomes finite after 111 bars.
+    assert requirements_from_roster(roster) == {"1h": 24, "4h": 12, "15m": 112}
 
 
 def _candles(symbol: str, timeframe: str, count: int, close: datetime) -> list[Candle]:

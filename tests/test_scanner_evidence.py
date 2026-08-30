@@ -646,8 +646,12 @@ def test_quote_replay_live_parity_reports_keys_payloads_and_window():
         ],
         "approval_parity_eligible": True,
     }
+    live_record = json.loads(json.dumps(replay["records"][0]))
+    # Parquet often loads a venue sequence as text while JSONL retains an int.
+    # They are the same quote identity and must not fail mechanism parity.
+    live_record["payload"]["quote_sequence"] = "7"
     live = [
-        replay["records"][0],
+        live_record,
         {
             "kind": "shadow_intent",
             "payload": {

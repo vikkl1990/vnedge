@@ -486,6 +486,8 @@ def replay_quote_scanner(
     runtime_start: datetime | None = None,
     context_candles: dict[str, pd.DataFrame] | None = None,
     approve_fire: FireGuard | None = None,
+    approval_parity_eligible: bool | None = None,
+    approval_mode: str | None = None,
 ) -> dict[str, Any]:
     """Drive the runtime quote engine with recorded canonical bars and BBO.
 
@@ -497,7 +499,10 @@ def replay_quote_scanner(
 
     This is read-only evidence and cannot submit an order. Approval parity is
     eligible only when the caller supplies the same deterministic ``FireGuard``
-    as the lane; the default artifact proves quote mechanism only.
+    as the lane. A caller may supply a recorded lifecycle guard while explicitly
+    keeping ``approval_parity_eligible=False``: that lets rejected live
+    candidates re-arm the replay engine without pretending the shared purse,
+    candle-health latch, funding snapshot, or risk gateway were reconstructed.
     """
     symbol = canonical_symbol(symbol)
     contract = scanner_runtime_contract(strategy_id)
@@ -646,6 +651,14 @@ def replay_quote_scanner(
         feed_quote(*event_rows[quote_index])
         quote_index += 1
 
+    approval_eligible = (
+        approve_fire is not None
+        if approval_parity_eligible is None
+        else bool(approval_parity_eligible)
+    )
+    resolved_approval_mode = approval_mode or (
+        "shared_fire_guard" if approval_eligible else "mechanism_only"
+    )
     intents = [r for r in journal.records if r["kind"] == "shadow_intent"]
     outcomes = [r for r in journal.records if r["kind"] == "shadow_outcome"]
     return {
@@ -690,15 +703,21 @@ def replay_quote_scanner(
                 lane_consumed_capture and capture_overflow_drops == 0
             ),
         },
-        "approval_parity_eligible": approve_fire is not None,
-        "approval_mode": (
-            "shared_fire_guard" if approve_fire is not None else "mechanism_only"
-        ),
+        "approval_parity_eligible": approval_eligible,
+        "approval_mode": resolved_approval_mode,
         # Historical funding is absent, so even a shared approval guard cannot
         # make this a promotion-grade PnL backtest.
         "performance_eligible": False,
         "performance_blockers": (
-            ([] if approve_fire is not None else ["risk_gateway_not_replayed"])
+            (
+                []
+                if approval_eligible
+                else [
+                    "risk_gateway_not_replayed",
+                    "candle_health_not_replayed",
+                    "shared_portfolio_not_replayed",
+                ]
+            )
             + ["funding_history_not_replayed"]
         ),
         "intent_keys": [str(r["payload"].get("intent_key") or "") for r in intents],
@@ -741,7 +760,13 @@ def _intent_signature(
         ),
         "entry_price": payload.get("entry_price"),
         "stop_price": payload.get("stop_price"),
-        "quote_sequence": payload.get("quote_sequence"),
+        # Parquet may materialize a native integer sequence as a string while
+        # the live JSON journal retains it as an int.  That is one venue
+        # identity, not a payload mismatch.  The ordering path already uses
+        # the same numeric-first normalization; parity must do likewise.
+        "quote_sequence": _normalized_quote_sequence(
+            payload.get("quote_sequence")
+        ),
         "episode_id": payload.get("episode_id"),
     }
     if include_approval:
@@ -762,6 +787,30 @@ def _intent_signature(
             }
         )
     return signature
+
+
+def _normalized_quote_sequence(value: object) -> int | str | None:
+    """Canonicalize a venue sequence without conflating distinct values."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else str(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return text
 
 
 def _canonical_intent_key(key: str) -> str:

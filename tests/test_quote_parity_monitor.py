@@ -5,6 +5,7 @@ import pandas as pd
 
 from vnedge.research.quote_parity_monitor import (
     QuoteParityPolicy,
+    _mechanism_lifecycle_guard,
     classify_parity,
     latest_runtime_start,
     load_quote_capture,
@@ -25,7 +26,11 @@ def _eligible_replay(*, quotes: int = 2_000) -> dict:
 def test_zero_intent_exact_match_is_collecting_not_cutover_proof():
     status, reasons = classify_parity(
         _eligible_replay(),
-        {"exact_parity": True, "matched_intents": 0},
+        {
+            "mechanism_exact_parity": True,
+            "approval_parity_eligible": True,
+            "matched_intents": 0,
+        },
         capture_duration=timedelta(hours=3),
         policy=QuoteParityPolicy(),
     )
@@ -41,7 +46,11 @@ def test_nontrivial_exact_match_passes_only_after_duration_and_quote_floor():
 
     status, reasons = classify_parity(
         _eligible_replay(quotes=10_000),
-        {"exact_parity": True, "matched_intents": 2},
+        {
+            "mechanism_exact_parity": True,
+            "approval_parity_eligible": True,
+            "matched_intents": 2,
+        },
         capture_duration=timedelta(hours=2, minutes=1),
         policy=policy,
     )
@@ -53,13 +62,66 @@ def test_nontrivial_exact_match_passes_only_after_duration_and_quote_floor():
 def test_mismatch_fails_before_sample_size_is_considered():
     status, reasons = classify_parity(
         _eligible_replay(quotes=1),
-        {"exact_parity": False, "matched_intents": 0},
+        {
+            "mechanism_exact_parity": False,
+            "approval_parity_eligible": False,
+            "matched_intents": 0,
+        },
         capture_duration=timedelta(seconds=1),
         policy=QuoteParityPolicy(),
     )
 
     assert status == "mismatch"
     assert reasons == ("live_replay_mismatch",)
+
+
+def test_mechanism_only_is_not_mislabeled_as_live_replay_mismatch():
+    status, reasons = classify_parity(
+        _eligible_replay(quotes=10_000),
+        {
+            "mechanism_exact_parity": True,
+            "approval_parity_eligible": False,
+            "matched_intents": 2,
+        },
+        capture_duration=timedelta(hours=3),
+        policy=QuoteParityPolicy(),
+    )
+
+    assert status == "mechanism_only"
+    assert reasons == ("approval_parity_disabled",)
+
+
+def test_recorded_lifecycle_guard_reuses_rejection_without_claiming_gateway_parity():
+    guard = _mechanism_lifecycle_guard(
+        [
+            {
+                "kind": "shadow_intent",
+                "payload": {
+                    "intent_key": "session_continuation_realtime_v2|BTCUSDT|long|1",
+                    "strategy_id": "session_continuation_realtime_v2",
+                    "symbol": "BTC/USDT:USDT",
+                    "approved": False,
+                    "failed_checks": ["candle_path:tm_age_hard"],
+                    "intent": {"side": "long", "notional_usd": 3000.0},
+                    "quote_event_ts": "2026-08-29T13:46:01Z",
+                    "episode_id": 7,
+                    "margin_usd": 100.0,
+                },
+            }
+        ],
+        strategy_id="session_continuation_realtime_v2",
+        symbol="BTCUSDT",
+    )
+
+    class Fire:
+        side = "long"
+        episode_id = 7
+
+    approval = guard(Fire(), 10, datetime(2026, 8, 29, 13, 46, 1, tzinfo=UTC))
+
+    assert approval.approved is False
+    assert approval.intent_key.endswith("|1")
+    assert approval.failed_checks == ("candle_path:tm_age_hard",)
 
 
 def test_latest_runtime_start_is_bound_to_exact_lane_identity():

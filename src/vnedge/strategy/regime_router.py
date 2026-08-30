@@ -102,6 +102,21 @@ class RegimeRouterConfig:
 DEFAULT_CONFIG: Final = RegimeRouterConfig()
 
 
+def regime_router_warmup_bars(config: RegimeRouterConfig = DEFAULT_CONFIG) -> int:
+    """Return the first index where every causal router feature can be finite.
+
+    ``atr_pct_rank`` is built from the long ATR series.  The ATR itself needs
+    ``atr_long`` prior bars and its percentile needs ``min_bars`` finite ATR
+    observations.  Scanner classes used to advertise only their local feature
+    lookback, so a bounded replay could trim away the router history while the
+    long-running lane still had it.  That made live arms disappear in replay.
+
+    The return value follows the strategy convention: an index equal to
+    ``warmup_bars`` is the first eligible decision row.
+    """
+    return config.atr_long + config.min_bars - 1
+
+
 def build_policy(config: RegimeRouterConfig) -> Mapping[Regime, frozenset[str]]:
     range_set = (
         RANGE_NATIVE_IDS

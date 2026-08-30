@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
+from vnedge.strategy.regime_router import regime_router_warmup_bars
 from vnedge.strategy.research_scanners import (
     NEW_RESEARCH_SCANNERS,
     SHADOW_RESEARCH_SCANNERS,
@@ -43,6 +44,13 @@ def test_new_scanners_are_registered_research_only_and_never_capital():
         assert scanner.strategy_id in RESEARCH_ONLY
         assert scanner.strategy_id not in CAPITAL_APPROVED
         assert is_capital_eligible(scanner.strategy_id) is False
+
+
+def test_scanner_warmup_contract_covers_shared_regime_router():
+    required = regime_router_warmup_bars()
+
+    for scanner in NEW_RESEARCH_SCANNERS:
+        assert scanner.warmup_bars >= required
 
 
 def test_shadow_permission_is_narrower_than_research_registration():

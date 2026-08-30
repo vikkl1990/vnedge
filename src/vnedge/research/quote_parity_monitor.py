@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import gc
 import time
-from collections import Counter
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -37,6 +37,7 @@ from vnedge.runtime.multi_lane_shadow import (
     OBSERVER_ROSTER_PATH_ENV,
     build_shadow_observe_roster_specs,
 )
+from vnedge.runtime.squeeze_observe import FireGuard, ScannerApproval
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.strategy_registry import get_strategy_class
 
@@ -68,15 +69,30 @@ def classify_parity(
     if not isinstance(quality, dict) or not bool(quality.get("parity_eligible")):
         reasons.append("capture_not_parity_eligible")
         return "ineligible", tuple(reasons)
-    if not bool(comparison.get("exact_parity")):
+    mechanism_exact = bool(
+        comparison.get("mechanism_exact_parity", comparison.get("exact_parity", False))
+    )
+    if not mechanism_exact:
         reasons.append("live_replay_mismatch")
         return "mismatch", tuple(reasons)
+    approval_eligible = bool(comparison.get("approval_parity_eligible", True))
+    if not approval_eligible:
+        # A per-lane quote replay cannot reconstruct the shared shadow purse,
+        # funding snapshot, candle-health latch, and gateway account state.
+        # Call the proven layer by its real name instead of reporting every
+        # mechanism-exact lane as a live/replay mismatch.
+        reasons.append("approval_parity_disabled")
     if capture_duration < policy.min_duration:
         reasons.append("capture_duration_below_minimum")
     if int(replay.get("quotes_used") or 0) < policy.min_quotes:
         reasons.append("quote_count_below_minimum")
-    if int(comparison.get("matched_intents") or 0) < policy.min_matched_intents:
+    matched_intents = int(comparison.get("matched_intents") or 0)
+    if matched_intents < policy.min_matched_intents:
         reasons.append("matched_intents_below_minimum")
+    if matched_intents < policy.min_matched_intents:
+        return "collecting", tuple(reasons)
+    if not approval_eligible:
+        return "mechanism_only", tuple(reasons)
     return ("collecting", tuple(reasons)) if reasons else ("passed", ())
 
 
@@ -116,6 +132,104 @@ def _record_timestamp(record: dict[str, Any]) -> datetime | None:
         return pd.to_datetime(value, utc=True).to_pydatetime()
     except (TypeError, ValueError):
         return None
+
+
+def _mechanism_lifecycle_guard(
+    records: Iterable[dict[str, Any]],
+    *,
+    strategy_id: str,
+    symbol: str,
+) -> FireGuard:
+    """Condition replay state on recorded live approval without proving it.
+
+    Approval changes scanner state: a rejected quote candidate re-arms while
+    an approved candidate opens the virtual book. Replaying every candidate as
+    approved therefore stops after the first live rejection and reports later
+    live candidates as scanner misses. This guard reuses only the recorded
+    yes/no lifecycle outcome so candidate generation can be compared fairly.
+
+    It deliberately remains approval-ineligible. The callback does not
+    reconstruct account state, funding, candle health, sizing, or CostGate.
+    An unmatched replay candidate is rejected and journaled with its normal
+    deterministic key; the comparison then exposes it as replay-only.
+    """
+
+    canonical = canonical_symbol(symbol)
+    approvals: dict[tuple[int, str, int], deque[dict[str, Any]]] = defaultdict(deque)
+    for record in records:
+        if record.get("kind") != "shadow_intent":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        intent_value = payload.get("intent")
+        intent = intent_value if isinstance(intent_value, dict) else {}
+        key_parts = str(payload.get("intent_key") or "").split("|")
+        record_strategy = str(
+            payload.get("strategy_id")
+            or intent.get("strategy_id")
+            or (key_parts[0] if key_parts else "")
+        )
+        record_symbol = str(
+            payload.get("symbol")
+            or intent.get("symbol")
+            or (key_parts[1] if len(key_parts) > 1 else "")
+        )
+        if record_strategy != strategy_id or not record_symbol:
+            continue
+        try:
+            if canonical_symbol(record_symbol) != canonical:
+                continue
+            raw_event_ts = payload.get("quote_event_ts")
+            if raw_event_ts in (None, "") or pd.isna(raw_event_ts):
+                continue
+            event_ts = pd.to_datetime(raw_event_ts, utc=True).to_pydatetime()
+            episode = int(payload.get("episode_id"))
+        except (TypeError, ValueError):
+            continue
+        side = str(
+            intent.get("side")
+            or payload.get("side")
+            or (key_parts[2] if len(key_parts) > 2 else "")
+        )
+        if side not in {"long", "short"}:
+            continue
+        lookup = (int(event_ts.timestamp() * 1000), side, episode)
+        approvals[lookup].append(payload)
+
+    def approve(fire: Any, _index: int, event_ts: datetime) -> ScannerApproval:
+        lookup = (
+            int(event_ts.timestamp() * 1000),
+            str(fire.side),
+            int(fire.episode_id),
+        )
+        candidates = approvals.get(lookup)
+        if not candidates:
+            return ScannerApproval(
+                approved=False,
+                intent={
+                    "strategy_id": strategy_id,
+                    "symbol": canonical,
+                    "side": str(fire.side),
+                },
+                failed_checks=("mechanism_oracle:no_live_candidate",),
+                explanation="replay candidate absent from recorded live lifecycle",
+            )
+        payload = candidates.popleft()
+        intent_value = payload.get("intent")
+        intent = intent_value if isinstance(intent_value, dict) else {}
+        return ScannerApproval(
+            approved=bool(payload.get("approved")),
+            intent=dict(intent),
+            failed_checks=tuple(str(item) for item in payload.get("failed_checks") or ()),
+            passed_checks=tuple(str(item) for item in payload.get("passed_checks") or ()),
+            explanation=str(payload.get("explanation") or ""),
+            notional_usd=float(intent.get("notional_usd") or 0.0),
+            margin_usd=float(payload.get("margin_usd") or 0.0),
+            intent_key=str(payload.get("intent_key") or ""),
+        )
+
+    return approve
 
 
 def load_quote_capture(
@@ -236,6 +350,13 @@ def _lane_report(
         evidence_end=last_quote + timedelta(milliseconds=1),
         runtime_start=runtime_start,
         context_candles=_context_frames(spec, candle_root, candle_cache),
+        approve_fire=_mechanism_lifecycle_guard(
+            records,
+            strategy_id=spec.strategy_id,
+            symbol=spec.data_symbol,
+        ),
+        approval_parity_eligible=False,
+        approval_mode="recorded_live_lifecycle",
     )
     comparison = compare_quote_replay_to_live(replay, records)
     duration = max(timedelta(0), last_quote - first_quote)

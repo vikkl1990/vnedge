@@ -17,7 +17,12 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr, ema, prior_high, prior_low
-from vnedge.strategy.regime_router import annotate_strategy_route
+from vnedge.strategy.regime_router import (
+    annotate_strategy_route,
+    regime_router_warmup_bars,
+)
+
+_ROUTER_WARMUP = regime_router_warmup_bars()
 
 
 def _frame(candles: pd.DataFrame, *, name: str) -> tuple[pd.DataFrame, pd.Series]:
@@ -118,7 +123,7 @@ class AvwapReclaim15mV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "15m"
     params = AvwapReclaimParams()
-    warmup_bars = 21
+    warmup_bars = max(21, _ROUTER_WARMUP)
     prefix = "avr"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
@@ -232,7 +237,7 @@ class SessionContinuation15mV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "15m"
     params = SessionContinuationParams()
-    warmup_bars = 33
+    warmup_bars = max(33, _ROUTER_WARMUP)
     prefix = "sc15"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
@@ -302,7 +307,7 @@ class LiquiditySweepReversal15mV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "15m"
     params = LiquiditySweepParams()
-    warmup_bars = 21
+    warmup_bars = max(21, _ROUTER_WARMUP)
     prefix = "lsr"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
@@ -364,7 +369,7 @@ class TrendPullback1hV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "1h"
     params = TrendPullbackParams()
-    warmup_bars = 51
+    warmup_bars = max(51, _ROUTER_WARMUP)
     prefix = "tp1h"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
@@ -452,7 +457,7 @@ class TrendSqueezeContinuation1hV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "1h"
     params = TrendSqueezeContinuationParams()
-    warmup_bars = 51
+    warmup_bars = max(51, _ROUTER_WARMUP)
     prefix = "tsc1h"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
@@ -603,7 +608,7 @@ class TickAcceptedBreakoutV1(_DiagnosticScanner):
     eligibility = "RESEARCH_ONLY"
     timeframe = "5m"
     params = TickAcceptedBreakoutParams()
-    warmup_bars = 25
+    warmup_bars = max(25, _ROUTER_WARMUP)
     prefix = "tab"
     failure_contract = (
         ("rs_quality_ok", "data_quality_not_ok"),
