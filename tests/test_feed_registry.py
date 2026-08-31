@@ -48,6 +48,7 @@ class FakeFeed:
         self.candles_closed = 0
         self.start_calls = 0
         self.stop_calls = 0
+        self.primed_through: int | None = None
         self.streams = streams
 
     async def start(self) -> None:
@@ -68,6 +69,9 @@ class FakeFeed:
             funding_rate=self.funding_rate,
             exchange_healthy=self.healthy,
         )
+
+    def prime_closed_through(self, open_time_ms: int) -> None:
+        self.primed_through = int(open_time_ms)
 
 
 def make_registry():
@@ -158,6 +162,16 @@ async def test_different_timeframes_share_one_market_bbo() -> None:
     }
     await five.stop()
     await hour.stop()
+
+
+def test_warmup_watermark_primes_only_the_candle_owner() -> None:
+    registry, created = make_registry()
+    view = registry.acquire("delta_india", symbol="BTC/USD:USD", timeframe="15m")
+
+    view.prime_closed_through(1_788_192_000_000)
+
+    assert created[0].primed_through == 1_788_192_000_000
+    assert created[1].primed_through is None
 
 
 def test_quote_update_preserves_event_and_receive_clocks() -> None:

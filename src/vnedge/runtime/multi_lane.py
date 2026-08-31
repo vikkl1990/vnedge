@@ -1418,6 +1418,15 @@ async def build_lane(
     # each lane gets a view with its own closed-candle queue (fan-out, not
     # competition), and the last lane to stop tears the real feed down.
     feed = acquire_market_feed(spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe)
+    if not history.empty:
+        # REST warm-up already owns every bar through this timestamp.  Prime
+        # the live feed's monotonic emission guard before it starts so the
+        # latest cached bar is not replayed as a new close (and recorded as a
+        # multi-minute/hour transport-latency breach).
+        latest_open_ms = int(
+            pd.to_datetime(history["timestamp"].iloc[-1], utc=True).timestamp() * 1000
+        )
+        feed.prime_closed_through(latest_open_ms)
     risk = _lane_risk_config(spec)
     daily_factory = _lane_daily_factory_config(spec)
     runtime_contract = scanner_runtime_contract(spec.strategy_id)

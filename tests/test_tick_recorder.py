@@ -709,6 +709,14 @@ def test_delta_recorder_reorders_compact_batch_before_candle_sink(tmp_path):
     assert rec.trade_count == 3
 
 
+def test_delta_recorder_boundary_trails_reorder_window(tmp_path):
+    rec = DeltaTickRecorder(["BTC/USD:USD"], tmp_path, connect=lambda _url: None)
+    wall_now = datetime(2026, 8, 31, 17, 0, 0, 200_000, tzinfo=UTC)
+    safe_boundary = rec._safe_advance_boundary(wall_now)
+
+    assert safe_boundary == datetime(2026, 8, 31, 16, 59, 59, 950_000, tzinfo=UTC)
+
+
 def test_books_only_does_not_subscribe_to_trades() -> None:
     """A books-only recorder must not write the trade stream.
 

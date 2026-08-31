@@ -212,7 +212,7 @@ class LatencyTracker:
         """
         return {
             "version": 1,
-            "bar_close_semantics": "receipt_v2",
+            "bar_close_semantics": "receipt_live_v3",
             "maxlen": self.maxlen,
             "series": {name: list(values) for name, values in self._series.items()},
         }
@@ -230,7 +230,7 @@ class LatencyTracker:
         raw_series = state.get("series")
         if not isinstance(raw_series, Mapping):
             raise TypeError("latency checkpoint series must be a mapping")
-        legacy_close_semantics = state.get("bar_close_semantics") != "receipt_v2"
+        legacy_close_semantics = state.get("bar_close_semantics") != "receipt_live_v3"
 
         restored: dict[str, deque[float]] = {}
         count = 0
@@ -246,9 +246,10 @@ class LatencyTracker:
                 FEED_LAG_MS,
                 BAR_CLOSE_RECEIPT_MS,
             }:
-                # Pre-v2 close samples included the bounded canonical-lake
-                # wait. Mixing them with receipt-only samples would keep lanes
-                # falsely blocked for an entire rolling window after deploy.
+                # Pre-v3 close samples either included the bounded canonical
+                # wait or admitted the historical warm-up seam as a live
+                # receipt. Mixing either shape into the corrected live-only
+                # series would keep lanes falsely blocked for a whole window.
                 continue
             values: list[float] = []
             for raw_value in raw_values:

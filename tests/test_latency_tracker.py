@@ -175,6 +175,28 @@ def test_restore_rebaselines_pre_receipt_close_history() -> None:
     assert tracker.stats("decision_lag_ms")["last"] == 12.0
 
 
+def test_restore_rebaselines_receipt_v2_warmup_seam_history() -> None:
+    tracker = LatencyTracker()
+    restored = tracker.restore_state(
+        {
+            "version": 1,
+            "bar_close_semantics": "receipt_v2",
+            "series": {
+                "bar_close_receipt_ms": [2_247_713.0],
+                "bar_close_processing_ms": [2_247_713.0],
+                "feed_lag_ms": [2_247_713.0],
+                "decision_lag_ms": [242.0],
+            },
+        }
+    )
+
+    assert restored == 1
+    assert tracker.stats("bar_close_receipt_ms") is None
+    assert tracker.stats(BAR_CLOSE_PROCESSING_MS) is None
+    assert tracker.stats("feed_lag_ms") is None
+    assert tracker.stats("decision_lag_ms")["last"] == 242.0
+
+
 def test_event_latency_separates_ingest_from_future_clock_skew():
     tracker = LatencyTracker()
     base = datetime(2026, 8, 16, 12, tzinfo=UTC)

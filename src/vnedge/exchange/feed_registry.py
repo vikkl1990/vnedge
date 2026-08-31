@@ -156,6 +156,12 @@ class SharedFeedView:
             data_quality_reason="timeframe candle transport unhealthy",
         )
 
+    def prime_closed_through(self, open_time_ms: int) -> None:
+        """Pass the warm-up/live handoff watermark to the shared candle feed."""
+        prime = getattr(self._feed, "prime_closed_through", None)
+        if callable(prime):
+            prime(open_time_ms)
+
 
 class SharedFeedRegistry:
     """Refcounted candle feeds plus a market-wide BBO/funding feed."""

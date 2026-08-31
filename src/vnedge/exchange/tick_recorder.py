@@ -1389,6 +1389,11 @@ class DeltaTickRecorder:
 
         return int(datetime.now(UTC).timestamp() * 1000)
 
+    @staticmethod
+    def _safe_advance_boundary(now: datetime) -> datetime:
+        """Candle clock bounded behind the trade reorder watermark."""
+        return now - timedelta(milliseconds=_TRADE_REORDER_MS)
+
     def _on_book(self, sym: str, buy: list, sell: list, msg: dict) -> None:
         if not buy or not sell:
             return
@@ -1610,19 +1615,26 @@ class DeltaTickRecorder:
             next_latency_snapshot = 0.0
             while True:
                 now = clock()
-                through_ms = self._epoch_ms() - _TRADE_REORDER_MS
+                wall_now = datetime.now(UTC)
+                # The candle clock must trail the exact same reorder watermark
+                # as trade release.  Advancing at wall-clock ``:00`` closed the
+                # minute before prints from its final 250 ms were eligible to
+                # leave the heap, so otherwise-valid boundary trades were then
+                # rejected as belonging to an already-closed candle.
+                safe_boundary = self._safe_advance_boundary(wall_now)
+                through_ms = int(safe_boundary.timestamp() * 1000)
                 for symbol in self.symbols:
                     self._drain_delta_reorder(symbol, through_ms=through_ms)
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
                 if self.candle_sink is not None and self.candle_sink.would_publish_on_advance(
-                    datetime.now(UTC)
+                    safe_boundary
                 ):
                     for trade_buf in self._trade_bufs.values():
                         trade_buf.flush(now)
                 if self.candle_sink is not None:
-                    self.candle_sink.advance_time(datetime.now(UTC))
+                    self.candle_sink.advance_time(safe_boundary)
                 if now >= next_latency_snapshot:
                     self.recorder_latency_store.save_from(self.recorder_latency)
                     _write_trade_metrics(

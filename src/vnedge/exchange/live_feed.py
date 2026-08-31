@@ -565,6 +565,24 @@ class RestPollingMarketFeed:
         """Read-only forming bar; never enters the closed-candle decision queue."""
         return list(self._forming) if self._forming is not None else None
 
+    def prime_closed_through(self, open_time_ms: int) -> None:
+        """Seed the REST/WS dedupe watermark from the lane warm-up tail.
+
+        A feed starts after REST warm-up has already supplied the most recent
+        closed bar.  Without this handoff, its first fallback poll re-emits
+        that historical bar as if it had just closed, contaminating live
+        receipt latency and starting an impossible canonical-lake wait.
+        Shared feeds may be primed by several equivalent lanes, so only the
+        greatest proven timestamp is retained.
+        """
+        timestamp = int(open_time_ms)
+        if self._last_emitted_candle_ts is None:
+            self._last_emitted_candle_ts = timestamp
+        else:
+            self._last_emitted_candle_ts = max(
+                self._last_emitted_candle_ts, timestamp
+            )
+
     async def _poll_candles(self) -> None:
         while True:
             await self._poll_candles_once()
