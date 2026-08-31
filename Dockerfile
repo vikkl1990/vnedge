@@ -4,6 +4,11 @@
 # below and served at /app by the dashboard.
 FROM node:20-slim AS frontend
 WORKDIR /ui
+# Embed the same immutable revision exposed by the backend.  The SPA compares
+# this value with /meta and reloads once when an operator leaves a pre-deploy
+# tab open across an image replacement.
+ARG VNEDGE_BUILD_SHA=dev
+ENV VITE_VNEDGE_BUILD_SHA=$VNEDGE_BUILD_SHA
 # Copy manifests first so `npm ci` is cached unless deps change.
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund

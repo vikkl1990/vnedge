@@ -3,6 +3,7 @@ import { CommandPalette, type Command } from "./components/CommandPalette";
 import { MarketPulse } from "./components/MarketPulse";
 import { PatternAtlas } from "./components/PatternAtlas";
 import { LiveStateBridge } from "./components/LiveStateBridge";
+import { BuildVersionGuard } from "./components/BuildVersionGuard";
 import { TerminalTabs } from "./components/Terminal";
 import {
   Header,
@@ -23,7 +24,7 @@ import { SettingsPanel } from "./panels/Settings/SettingsPanel";
 
 const TABS = [
   { id: "pulse", label: "Pulse" },
-  { id: "patterns", label: "Patterns" },
+  { id: "patterns", label: "Pattern Atlas" },
   { id: "desk", label: "Desk" },
   { id: "risk", label: "Risk" },
   { id: "journal", label: "Journal" },
@@ -77,6 +78,7 @@ export default function App() {
   return (
     <div className="min-h-full max-w-[1800px] mx-auto px-3 py-3 md:px-4 flex flex-col gap-3">
       <LiveStateBridge />
+      <BuildVersionGuard />
       <Header />
       <StatusStrip />
       <ReadinessBanner />
