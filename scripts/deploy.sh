@@ -162,7 +162,7 @@ recreate_in_waves() {
     local wave="${DEPLOY_WAVE_SIZE:-6}" pause="${DEPLOY_WAVE_PAUSE:-25}"
     retire_legacy_canonical_writers
     if [ "$NEED_BUILD" = 1 ]; then
-        docker compose up -d --no-build pulse-recorder || return 1
+        docker compose up -d --no-build pulse-recorder delta-recorder || return 1
         local recorder_ready=0
         for _ in $(seq 1 "${DEPLOY_RECORDER_WAIT_ATTEMPTS:-120}"); do
             if docker compose logs --since "$DEPLOY_START" pulse-recorder 2>/dev/null \
@@ -176,14 +176,27 @@ recreate_in_waves() {
             echo "canonical recorder did not finish restart restoration" >&2
             return 1
         fi
-        echo "canonical recorder restored before lane recreation"
+        local delta_ready=0
+        for _ in $(seq 1 "${DEPLOY_RECORDER_WAIT_ATTEMPTS:-120}"); do
+            if docker compose logs --since "$DEPLOY_START" delta-recorder 2>/dev/null \
+                    | grep -q "delta tick recorder:"; then
+                delta_ready=1
+                break
+            fi
+            sleep 2
+        done
+        if [ "$delta_ready" != 1 ]; then
+            echo "Delta canonical recorder did not finish restart restoration" >&2
+            return 1
+        fi
+        echo "Binance and Delta canonical recorders restored before lane recreation"
     fi
     docker compose up -d --no-build multi-lane-shadow || return 1
     sleep "$pause"
     local rest svc
     local -a batch=()
     rest=$(docker compose config --services 2>/dev/null \
-        | grep -vE '^(multi-lane-shadow|pulse-recorder)$')
+        | grep -vE '^(multi-lane-shadow|pulse-recorder|delta-recorder)$')
     for svc in $rest; do
         batch+=("$svc")
         if [ "${#batch[@]}" -ge "$wave" ]; then

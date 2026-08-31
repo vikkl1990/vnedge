@@ -16,7 +16,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from vnedge.exchange.tick_recorder import TickRecorder
+from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.exchange.writer_lease import CanonicalWriterLease
 from vnedge.runtime.scanner_startup import (
     prerequisite_commands,
@@ -121,24 +121,42 @@ async def run_owner(
     environ: Mapping[str, str] = os.environ,
 ) -> None:
     """Run the live recorder and all canonical maintenance under one lease."""
-    if exchange != "binanceusdm":
-        raise ValueError("canonical owner maintenance currently supports binanceusdm")
+    if exchange not in {"binanceusdm", "delta_india"}:
+        raise ValueError("canonical owner supports binanceusdm or delta_india")
     if not symbols:
         raise ValueError("canonical owner requires at least one symbol")
     lease = CanonicalWriterLease(data_root, exchange).acquire()
     tasks: tuple[asyncio.Task[None], ...] = ()
     try:
-        recorder = TickRecorder(
-            exchange,
-            list(symbols),
-            data_root,
-            candle_root=candle_root,
-            trades_only=True,
-        )
+        if exchange == "delta_india":
+            recorder = DeltaTickRecorder(
+                list(symbols),
+                data_root,
+                exchange_id=exchange,
+                candle_root=candle_root,
+                trades_only=True,
+            )
+        else:
+            recorder = TickRecorder(
+                exchange,
+                list(symbols),
+                data_root,
+                candle_root=candle_root,
+                trades_only=True,
+            )
         recorder_task = asyncio.create_task(
             recorder.run(acquire_writer_lease=False),
             name="canonical-owner-recorder",
         )
+        # Historical canonical repair currently has a Binance-specific exact
+        # aggTrade/Archive implementation. Delta owns a separate live trade
+        # tape and must not run those commands against BTCUSD/ETHUSD. Its
+        # recorder still holds the same process-lifetime writer lease and
+        # produces the exact forward canonical ladder used by Delta lanes.
+        if exchange == "delta_india":
+            tasks = (recorder_task,)
+            await recorder_task
+            raise RuntimeError("Delta canonical recorder exited unexpectedly")
         maintenance_task = asyncio.create_task(
             _maintenance_loop(environ, lease_fd=lease.fileno),
             name="canonical-owner-maintenance",

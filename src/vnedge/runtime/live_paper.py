@@ -238,6 +238,40 @@ class LivePaperSession:
             config.trail_atr_window + config.max_holding_bars + 32,
         )
         self.candles = history.tail(self._working_frame_limit).reset_index(drop=True)
+        # REST warm-up frames commonly omit symbol/timeframe while canonical
+        # live rows carry the venue-native spelling (BTC/USD:USD). Leaving the
+        # seam untouched made 15m->1h aggregates alternate between the legacy
+        # BTCUSDT fallback and BTC/USD:USD, and the causal swing validator then
+        # stopped HTF/BoS lanes with a mixed-market series. The session config
+        # is the market identity authority: accept equivalent native/canonical
+        # spellings, reject real cross-market contamination, then stamp one
+        # exact identity across the bounded frame.
+        if not self.candles.empty:
+            if "symbol" in self.candles.columns:
+                observed_symbols = {
+                    canonical_symbol(str(value))
+                    for value in self.candles["symbol"].dropna()
+                    if str(value).strip()
+                }
+                expected_symbol = canonical_symbol(config.symbol)
+                if observed_symbols - {expected_symbol}:
+                    raise ValueError(
+                        "warmup candles contain a different symbol than the lane: "
+                        f"expected {expected_symbol}, got {sorted(observed_symbols)}"
+                    )
+            if "timeframe" in self.candles.columns:
+                observed_timeframes = {
+                    str(value).strip().lower()
+                    for value in self.candles["timeframe"].dropna()
+                    if str(value).strip()
+                }
+                if observed_timeframes - {config.timeframe.lower()}:
+                    raise ValueError(
+                        "warmup candles contain a different timeframe than the lane: "
+                        f"expected {config.timeframe}, got {sorted(observed_timeframes)}"
+                    )
+            self.candles["symbol"] = config.symbol
+            self.candles["timeframe"] = config.timeframe
         self.gateway = gateway
         self.om = order_manager
         self.execution_context = ExecutionContext.from_runner_mode(config.mode)

@@ -16,6 +16,7 @@ from typing import Final, Literal
 
 import pandas as pd
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.plan.cost_model import CostModel
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.structure_bos_1h import PARAMS as BOS_1H_PARAMS
@@ -65,6 +66,19 @@ def _complete_hour_frame(candles: pd.DataFrame) -> pd.DataFrame:
     work["timestamp"] = ts
     work["hour_open"] = ts.dt.floor("h")
     work["minute"] = ts.dt.minute
+    if "symbol" in work.columns:
+        identities = {
+            canonical_symbol(str(value))
+            for value in work["symbol"].dropna()
+            if str(value).strip()
+        }
+        if len(identities) > 1:
+            raise ValueError(
+                f"structure BoS 15m contains multiple symbols: {sorted(identities)}"
+            )
+        output_symbol = next(iter(identities), "BTCUSDT")
+    else:
+        output_symbol = "BTCUSDT"
     numeric = ("open", "high", "low", "close", "volume")
     for name in numeric:
         work[name] = pd.to_numeric(work[name], errors="coerce")
@@ -80,7 +94,7 @@ def _complete_hour_frame(candles: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "timestamp": hour_open,
-                "symbol": str(group.iloc[-1].get("symbol", "BTCUSDT")),
+                "symbol": output_symbol,
                 "timeframe": "1h",
                 "open": float(group.iloc[0]["open"]),
                 "high": float(group["high"].max()),

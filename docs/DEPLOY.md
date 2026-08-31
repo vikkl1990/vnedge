@@ -30,7 +30,7 @@ runtime.
 ```bash
 export VNEDGE_BUILD_SHA="$(git rev-parse --short HEAD)"
 docker compose config -q
-docker compose up -d --build multi-lane-shadow pulse-recorder dashboard-tls
+docker compose up -d --build multi-lane-shadow pulse-recorder delta-recorder dashboard-tls
 docker compose ps
 docker compose logs -f multi-lane-shadow
 ```

@@ -26,6 +26,9 @@ def test_container_default_and_compose_are_measurement_only() -> None:
     assert compose["services"]["pulse-recorder"]["command"][2] == (
         "vnedge.exchange.canonical_owner"
     )
+    delta = compose["services"]["delta-recorder"]
+    assert delta["command"][2] == "vnedge.exchange.canonical_owner"
+    assert delta["command"][4] == "delta_india"
 
 
 def test_sanctioned_deploy_path_runs_fleet_policy_after_recreate() -> None:
@@ -47,13 +50,14 @@ def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
 
     legacy_stop = recreate.index("retire_legacy_canonical_writers")
     recorder_start = recreate.index(
-        "docker compose up -d --no-build pulse-recorder"
+        "docker compose up -d --no-build pulse-recorder delta-recorder"
     )
     recorder_proof = recreate.index('grep -q "tick recorder:"')
     lane_start = recreate.index(
         "docker compose up -d --no-build multi-lane-shadow"
     )
     assert legacy_stop < recorder_start < recorder_proof < lane_start
+    assert 'grep -q "delta tick recorder:"' in recreate
     assert "legacy canonical writer is still running after retirement" in deploy
     retirement = deploy[
         deploy.index("retire_legacy_canonical_writers()") : start

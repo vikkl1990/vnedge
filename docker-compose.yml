@@ -147,6 +147,47 @@ services:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
 
+  # Delta India owns a distinct USD-margined market identity. The Binance
+  # Pulse recorder cannot satisfy Delta scanner rows: BTCUSDT and BTCUSD are
+  # deliberately separate canonical products. This owner records the exact
+  # public Delta trade tape and publishes BTCUSD/ETHUSD canonical candles.
+  delta-recorder:
+    build: .
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - vnedge.exchange.canonical_owner
+      - --exchange
+      - delta_india
+      - --symbols
+      - BTC/USD:USD,ETH/USD:USD
+      - --data-root
+      - data
+      - --candle-root
+      - data/candles
+    environment:
+      VNEDGE_DELTA_WS_BREAKER_PATH: "${VNEDGE_DELTA_WS_BREAKER_PATH:-data/state/delta_ws_breaker.json}"
+    volumes:
+      - ./data:/app/data
+    mem_limit: 1g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import pathlib,time,sys;
+          files=list(pathlib.Path('data/ticks/exchange=delta_india').glob('symbol=*/stream=trades/*/*.parquet'));
+          sys.exit(0 if files and time.time()-max(p.stat().st_mtime for p in files)<180 else 1)
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
   # Legacy offline repair command. The default owner performs the same strict
   # aggregate-ID proof and canonical rebuild under its inherited lease.
   gap-recovery:

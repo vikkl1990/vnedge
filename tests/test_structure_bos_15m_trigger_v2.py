@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
+from vnedge.strategy.structure_bos_15m_trigger_v2 import (
+    StructureBos15mTriggerV2,
+    _complete_hour_frame,
+)
 from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 
 
@@ -58,6 +61,29 @@ def test_v2_uses_closed_hour_context_and_15m_break_confirmation() -> None:
     assert signal is not None
     assert signal.side == "long"
     assert "context=closed_1h_4h" in signal.reason
+
+
+def test_hour_frame_normalizes_equivalent_delta_symbol_spellings() -> None:
+    frame = _history().iloc[:8].copy()
+    frame.loc[frame.index[:4], "symbol"] = "BTCUSD"
+    frame.loc[frame.index[4:], "symbol"] = "BTC/USD:USD"
+
+    hourly = _complete_hour_frame(frame)
+
+    assert not hourly.empty
+    assert set(hourly["symbol"]) == {"BTCUSD"}
+
+
+def test_hour_frame_rejects_actual_cross_market_contamination() -> None:
+    frame = _history().iloc[:8].copy()
+    frame.loc[frame.index[-1], "symbol"] = "ETH/USD:USD"
+
+    try:
+        _complete_hour_frame(frame)
+    except ValueError as exc:
+        assert "multiple symbols" in str(exc)
+    else:  # pragma: no cover - defensive assertion for a safety boundary
+        raise AssertionError("cross-market candle series was accepted")
 
 
 def test_v2_rejects_conflicting_higher_timeframe() -> None:

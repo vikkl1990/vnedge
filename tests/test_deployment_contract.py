@@ -20,7 +20,7 @@ def test_every_compose_required_variable_is_documented_in_env_example() -> None:
 
 def test_documented_default_start_includes_the_pulse_producer() -> None:
     deploy = (ROOT / "docs" / "DEPLOY.md").read_text(encoding="utf-8")
-    assert "multi-lane-shadow pulse-recorder dashboard-tls" in deploy
+    assert "multi-lane-shadow pulse-recorder delta-recorder dashboard-tls" in deploy
 
 
 def test_default_compose_has_no_live_order_service() -> None:

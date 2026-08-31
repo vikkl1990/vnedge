@@ -465,6 +465,29 @@ def test_delta_legacy_swing_lane_uses_gst_aware_profile(tmp_path):
     assert session.cost_model.round_trip_bps() == pytest.approx(18.8)
 
 
+def test_session_stamps_one_market_identity_across_rest_warmup_seam(tmp_path):
+    seeded = history(8)
+    seeded["symbol"] = ["BTCUSDT"] * 4 + ["BTC/USDT:USDT"] * 4
+    seeded["timeframe"] = "1h"
+    config = RunnerConfig(mode=RunnerMode.SHADOW, symbol=SYM, timeframe="1h")
+    exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
+    journal = DecisionJournal(tmp_path / "identity.journal.jsonl")
+    gateway = PreTradeRiskGateway(config.risk, KillSwitch(tmp_path / "KILL.identity"))
+    session = LivePaperSession(
+        AlwaysLong(),
+        FakeFeed([]),
+        seeded,
+        config,
+        gateway=gateway,
+        order_manager=OrderManager(gateway, journal, PaperBroker(exchange)),
+        exchange=exchange,
+        journal=journal,
+    )
+
+    assert set(session.candles["symbol"]) == {SYM}
+    assert set(session.candles["timeframe"]) == {"1h"}
+
+
 def test_execution_cost_venue_is_explicit_and_independent_from_data_feed(tmp_path):
     feed = FakeFeed([])
     feed.exchange_id = "binanceusdm"
