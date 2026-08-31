@@ -202,6 +202,30 @@ def test_runtime_canonical_htf_binding_advances_and_fails_closed() -> None:
     assert prepared.iloc[-1]["mtf_reason"] == "canonical_htf_unavailable"
 
 
+def test_runtime_canonical_htf_binding_accepts_empty_startup_slice() -> None:
+    strategy = StructureBos1H()
+
+    strategy.bind_canonical_context("4h", pd.DataFrame())
+
+    assert strategy.htf_candles is not None
+    assert strategy.htf_candles.empty
+    assert "timestamp" in strategy.htf_candles.columns
+    assert strategy._canonical_htf_current is False
+
+
+def test_runtime_canonical_htf_binding_normalizes_open_time_alias() -> None:
+    frame = _htf_frame().iloc[:2].rename(columns={"timestamp": "open_time"})
+    strategy = StructureBos1H()
+
+    strategy.bind_canonical_context("4h", frame)
+
+    assert strategy.htf_candles is not None
+    assert len(strategy.htf_candles) == 2
+    assert "timestamp" in strategy.htf_candles.columns
+    assert "open_time" not in strategy.htf_candles.columns
+    assert strategy._canonical_htf_current is True
+
+
 def test_closed_candle_api_applies_dual_avwap_conflict_only() -> None:
     engine = StructureBos1H()
     bars = _bars(_canonical_frame())

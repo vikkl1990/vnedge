@@ -765,7 +765,40 @@ class StructureBos1H(BaseStrategy):
         """Seed the runtime with persisted, fully closed canonical HTF bars."""
         if timeframe != "4h":
             raise ValueError(f"unsupported structure context timeframe: {timeframe}")
-        frame = candles.copy().sort_values("timestamp").drop_duplicates(
+        # An empty canonical slice is a valid startup condition: the strategy
+        # must build but remain fail-closed until a real 4h close arrives.
+        # ``DataFrame()`` has no columns, so sorting it used to crash the lane
+        # factory instead of recording unhealthy context. Accept ``open_time``
+        # as the storage-facing alias while keeping ``timestamp`` internally.
+        if candles.empty:
+            self.htf_candles = pd.DataFrame(
+                columns=(
+                    "timestamp",
+                    "symbol",
+                    "timeframe",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "quote_volume",
+                    "trade_count",
+                    "taker_buy_volume",
+                    "data_quality",
+                    "is_closed",
+                )
+            )
+            self._canonical_htf_current = False
+            return
+        frame = candles.copy()
+        if "timestamp" not in frame.columns and "open_time" in frame.columns:
+            frame = frame.rename(columns={"open_time": "timestamp"})
+        if "timestamp" not in frame.columns:
+            raise ValueError("canonical 4h context requires timestamp or open_time")
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        if frame["timestamp"].isna().any():
+            raise ValueError("canonical 4h context requires valid UTC timestamps")
+        frame = frame.sort_values("timestamp").drop_duplicates(
             subset="timestamp", keep="last"
         )
         self.htf_candles = frame.tail(2_048).reset_index(drop=True)
