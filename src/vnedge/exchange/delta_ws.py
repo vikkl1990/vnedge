@@ -387,18 +387,30 @@ class DeltaPublicWsClient:
         """
         if not sym:
             return
-        timeframe = str(msg.get("resolution") or mtype.removeprefix("candlestick_"))
+        # The production India public socket uses compact fields (captured
+        # 2026-08-31): sy/res/cst/o/h/l/c/v.  Older fixtures and some Delta
+        # surfaces use the verbose equivalents.  Both shapes describe the
+        # same forming candle and must share this close-discipline path.
+        timeframe = str(
+            msg.get("resolution")
+            or msg.get("res")
+            or mtype.removeprefix("candlestick_")
+        )
         try:
-            start_ms = int(msg["candle_start_time"]) // 1000  # microseconds -> ms
+            start_ms = self._timestamp_ms(
+                msg.get("candle_start_time", msg.get("cst"))
+            )
+            if start_ms is None:
+                return
             row = [
                 start_ms,
-                float(msg["open"]),
-                float(msg["high"]),
-                float(msg["low"]),
-                float(msg["close"]),
-                float(msg.get("volume") or 0.0),
+                float(msg.get("open", msg.get("o"))),
+                float(msg.get("high", msg.get("h"))),
+                float(msg.get("low", msg.get("l"))),
+                float(msg.get("close", msg.get("c"))),
+                float(msg.get("volume", msg.get("v")) or 0.0),
             ]
-        except (KeyError, TypeError, ValueError):
+        except (TypeError, ValueError):
             return
         key = (sym, timeframe)
         forming = self._forming_candles.get(key)

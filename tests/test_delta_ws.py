@@ -359,6 +359,76 @@ def test_candlestick_tracks_resolutions_independently():
     assert closed == ["1m"]
 
 
+def test_compact_india_candlestick_close_discipline():
+    """Pin the exact compact frame shape emitted by the production socket."""
+    closed = []
+    client = DeltaPublicWsClient(
+        ["BTCUSD"], candle_timeframes=("15m",),
+        on_candle=lambda sym, tf, row: closed.append((sym, tf, row)),
+    )
+    t0 = 1_788_196_500_000_000
+    client._handle(
+        {
+            "type": "candlestick_15m",
+            "sy": "BTCUSD",
+            "res": "15m",
+            "cst": t0,
+            "o": 78_711,
+            "h": 78_717.5,
+            "l": 78_493,
+            "c": 78_591.5,
+            "v": 141_735.0,
+            "ts": t0 + 123_456,
+        }
+    )
+    client._handle(
+        {
+            "type": "candlestick_15m",
+            "sy": "BTCUSD",
+            "res": "15m",
+            "cst": t0,
+            "o": 78_711,
+            "h": 78_717.5,
+            "l": 78_493,
+            "c": 78_592.0,
+            "v": 141_860.0,
+            "ts": t0 + 654_321,
+        }
+    )
+    assert closed == []
+    assert client.forming_candle("BTCUSD", "15m") == [
+        t0 // 1_000,
+        78_711.0,
+        78_717.5,
+        78_493.0,
+        78_592.0,
+        141_860.0,
+    ]
+
+    next_start = t0 + 900_000_000
+    client._handle(
+        {
+            "type": "candlestick_15m",
+            "sy": "BTCUSD",
+            "res": "15m",
+            "cst": next_start,
+            "o": 78_592,
+            "h": 78_600,
+            "l": 78_580,
+            "c": 78_599,
+            "v": 12.0,
+            "ts": next_start + 1,
+        }
+    )
+    assert closed == [
+        (
+            "BTCUSD",
+            "15m",
+            [t0 // 1_000, 78_711.0, 78_717.5, 78_493.0, 78_592.0, 141_860.0],
+        )
+    ]
+
+
 def test_candlestick_malformed_messages_are_ignored():
     closed = []
     client = DeltaPublicWsClient(
