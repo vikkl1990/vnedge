@@ -317,13 +317,18 @@ class DeltaPublicWsClient:
         if not sym:
             return
         try:
-            price = float(msg["price"])
-            size = float(msg["size"])
+            # Production India frames are compact: p=price, s=size in
+            # contracts, t=event time (microseconds), r=seller role.
+            price = float(msg["price"] if "price" in msg else msg["p"])
+            size = float(msg["size"] if "size" in msg else msg["s"])
         except (KeyError, TypeError, ValueError):
             return
         # taker side drives aggressor; buyer taker => buy print, seller taker => sell
-        taker = "sell" if msg.get("seller_role") == "taker" else "buy"
-        ts_raw = msg.get("timestamp")
+        seller_role = msg.get("seller_role")
+        if seller_role is None:
+            seller_role = {"t": "taker", "m": "maker"}.get(str(msg.get("r") or ""))
+        taker = "sell" if seller_role == "taker" else "buy"
+        ts_raw = msg.get("timestamp", msg.get("t"))
         ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._now_ms()
         trade = {
             "symbol": sym,

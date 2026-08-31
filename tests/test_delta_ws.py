@@ -139,6 +139,35 @@ def test_handle_all_trades_taker_side():
     assert client.last_trade["BTCUSD"]["side"] == "buy"
 
 
+def test_handle_compact_india_trade_frame():
+    client = DeltaPublicWsClient(["BTCUSD"])
+    seen = []
+    client.on_trade = lambda sym, trade: seen.append((sym, trade))
+
+    client._handle(
+        {
+            "type": "trades",
+            "sy": "BTCUSD",
+            "p": "78603.0",
+            "s": 25.0,
+            "r": "t",
+            "t": 1_788_194_075_400_893,
+            "ts": 1_788_194_075_504_312,
+        }
+    )
+
+    trade = client.last_trade["BTCUSD"]
+    assert trade == {
+        "symbol": "BTCUSD",
+        "price": 78603.0,
+        "size": 25.0,
+        "side": "sell",
+        "ts_ms": 1_788_194_075_400,
+        "trade_id": None,
+    }
+    assert seen == [("BTCUSD", trade)]
+
+
 def test_handle_funding_rate_normalises_percent_to_fraction():
     client = DeltaPublicWsClient(["BTCUSD"])
     client._handle(
