@@ -20,6 +20,11 @@ from vnedge.strategy.indicators import (
     sma,
     zscore,
 )
+from vnedge.ml.mechanism_features import (
+    MECHANISM_FEATURE_COLUMNS,
+    MechanismParams,
+    add_mechanism_features,
+)
 from vnedge.strategy.regime import RegimeParams, add_regime_columns, merge_funding
 
 
@@ -30,6 +35,7 @@ class FeatureParams:
     vol_window: int = 24
     z_window: int = 48
     vol_ratio_window: int = 96  # trailing baseline for the vol-expansion ratio
+    mechanism: MechanismParams = field(default_factory=MechanismParams)
 
     @property
     def warmup_bars(self) -> int:
@@ -40,6 +46,7 @@ class FeatureParams:
             self.funding_pct_window,
             self.z_window + 1,
             self.vol_window + self.vol_ratio_window,
+            self.mechanism.warmup_bars,
         )
 
 
@@ -58,6 +65,9 @@ FEATURE_COLUMNS = [
     "ret_accel", "vol_ratio",            # momentum acceleration, vol expansion
     "funding_z",                         # funding extremity
     "hour_sin", "hour_cos",              # session (cyclical hour-of-day)
+    # --- mechanism features mined from the 2026-08 indicator audits
+    # (appended; order-stable; see ml/mechanism_features.py) ---
+    *MECHANISM_FEATURE_COLUMNS,
 ]
 
 
@@ -116,4 +126,7 @@ def build_feature_matrix(
     hour = pd.to_datetime(df["timestamp"], utc=True).dt.hour.to_numpy()
     df["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
     df["hour_cos"] = np.cos(2.0 * np.pi * hour / 24.0)
+    # Mechanism features mined from the audited indicator corpora (all causal;
+    # the causality test iterates FEATURE_COLUMNS and covers them too).
+    df = add_mechanism_features(df, params.mechanism)
     return df
