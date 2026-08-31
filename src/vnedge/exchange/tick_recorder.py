@@ -1358,6 +1358,14 @@ class DeltaTickRecorder:
         }
         self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols}
         self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
+        self._trade_reorder: dict[
+            str, list[tuple[int, int, dict[str, Any]]]
+        ] = {symbol: [] for symbol in self.symbols}
+        self._max_seen_trade_ts_ms: dict[str, int] = {}
+        self._last_trade_ts_ms: dict[str, int] = {}
+        if self.candle_sink is not None:
+            self._last_trade_ts_ms.update(self.candle_sink.restored_last_trade_ts_ms)
+        self._trade_arrival_seq = 0
         channels = tuple(
             channel
             for channel, enabled in (
@@ -1481,29 +1489,72 @@ class DeltaTickRecorder:
             seen.add(key)
             order.append(key)
             self._seen_trade_bodies[sym][trade_id] = _trade_body(normalized)
-        self.recorder_latency.record(
-            TRADE_INGEST_MS,
-            max(0.0, float(self._epoch_ms() - timestamp_ms)),
+        self._trade_arrival_seq += 1
+        heapq.heappush(
+            self._trade_reorder[sym],
+            (timestamp_ms, self._trade_arrival_seq, row),
         )
-        # Match the CCXT recorder's durability contract: the raw trade is the
-        # rebuild tape and must be visible before a boundary trade can publish
-        # the prior closed candle to an in-memory subscriber.
-        buf.add(row)
-        if self.candle_sink is not None and self.candle_sink.would_publish_on_trade(
-            sym, timestamp_ms
-        ):
-            buf.flush((self._clock or time.monotonic)())
-        if self.candle_sink is not None:
-            self.candle_sink.on_trade(
-                sym,
-                {
-                    "timestamp": row["ts_ms"],
-                    "price": row["price"],
-                    "amount": row["amount"],
-                    "side": row["side"],
-                },
+        self._max_seen_trade_ts_ms[sym] = max(
+            timestamp_ms,
+            self._max_seen_trade_ts_ms.get(sym, timestamp_ms),
+        )
+        self._drain_delta_reorder(
+            sym,
+            through_ms=self._max_seen_trade_ts_ms[sym] - _TRADE_REORDER_MS,
+        )
+
+    def _drain_delta_reorder(
+        self,
+        sym: str,
+        *,
+        through_ms: int | None = None,
+        force: bool = False,
+    ) -> None:
+        """Apply Delta prints in bounded event-time order before candle build."""
+        pending = self._trade_reorder[sym]
+        last_timestamp = self._last_trade_ts_ms.get(sym)
+        buf = self._trade_bufs[sym]
+        while pending and (force or (through_ms is not None and pending[0][0] <= through_ms)):
+            timestamp_ms, _, row = heapq.heappop(pending)
+            if last_timestamp is not None and timestamp_ms < last_timestamp:
+                self._trade_metrics[sym]["trades_late_closed"] += 1
+                continue
+            self.recorder_latency.record(
+                TRADE_INGEST_MS,
+                max(0.0, float(self._epoch_ms() - timestamp_ms)),
             )
-        self.trade_count += 1
+            # Raw trades are durable before a boundary print may publish the
+            # previous candle, matching the generic recorder contract.
+            buf.add(row)
+            if self.candle_sink is not None and self.candle_sink.would_publish_on_trade(
+                sym, timestamp_ms
+            ):
+                buf.flush((self._clock or time.monotonic)())
+            if self.candle_sink is not None:
+                try:
+                    self.candle_sink.on_trade(
+                        sym,
+                        {
+                            "timestamp": row["ts_ms"],
+                            "price": row["price"],
+                            "amount": row["amount"],
+                            "side": row["side"],
+                        },
+                    )
+                except ValueError as exc:
+                    self._trade_metrics[sym]["trades_late_closed"] += 1
+                    logger.warning(
+                        "canonical Delta trade skipped: symbol=%s timestamp=%s reason=%s",
+                        sym,
+                        timestamp_ms,
+                        exc,
+                    )
+                    last_timestamp = timestamp_ms
+                    continue
+            self.trade_count += 1
+            last_timestamp = timestamp_ms
+        if last_timestamp is not None:
+            self._last_trade_ts_ms[sym] = last_timestamp
 
     def trade_metrics_snapshot(self) -> dict[str, dict[str, int | float]]:
         return {
@@ -1559,6 +1610,9 @@ class DeltaTickRecorder:
             next_latency_snapshot = 0.0
             while True:
                 now = clock()
+                through_ms = self._epoch_ms() - _TRADE_REORDER_MS
+                for symbol in self.symbols:
+                    self._drain_delta_reorder(symbol, through_ms=through_ms)
                 for buf in self._all_buffers():
                     if buf.should_flush(now):
                         buf.flush(now)
@@ -1580,6 +1634,8 @@ class DeltaTickRecorder:
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             now = clock()
+            for symbol in self.symbols:
+                self._drain_delta_reorder(symbol, force=True)
             for buf in self._all_buffers():
                 buf.flush(now)
             raise

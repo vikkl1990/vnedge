@@ -669,12 +669,44 @@ def test_delta_recorder_deduplicates_native_id_and_rejects_changed_body(tmp_path
     rec._on_trade("BTCUSD", trade)
     rec._on_trade("BTCUSD", trade)
     rec._on_trade("BTCUSD", {**trade, "price": 62_699.0})
+    rec._drain_delta_reorder("BTCUSD", force=True)
 
     assert rec.trade_count == 1
     metrics = rec.trade_metrics_snapshot()["BTCUSD"]
     assert metrics["trades_dup_ws"] == 1
     assert metrics["trades_conflict"] == 1
     assert (tmp_path / "reports" / "trade_integrity" / "conflicts.jsonl").exists()
+
+
+def test_delta_recorder_reorders_compact_batch_before_candle_sink(tmp_path):
+    rec = DeltaTickRecorder(["BTC/USD:USD"], tmp_path, connect=lambda _url: None)
+    applied = []
+
+    class Sink:
+        @staticmethod
+        def would_publish_on_trade(_symbol, _timestamp):
+            return False
+
+        @staticmethod
+        def on_trade(_symbol, trade):
+            applied.append(trade["timestamp"])
+
+    rec.candle_sink = Sink()
+    for offset in (200, 100, 500):
+        rec._on_trade(
+            "BTCUSD",
+            {
+                "trade_id": None,
+                "ts_ms": DAY_TS + offset,
+                "price": 62_698.0,
+                "size": 1,
+                "side": "buy",
+            },
+        )
+    rec._drain_delta_reorder("BTCUSD", force=True)
+
+    assert applied == [DAY_TS + 100, DAY_TS + 200, DAY_TS + 500]
+    assert rec.trade_count == 3
 
 
 def test_books_only_does_not_subscribe_to_trades() -> None:
