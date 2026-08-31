@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -753,6 +754,9 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
             "bars_held": 0,
             "cost_profile": "legacy_unattributed",
             "cost_contract_version": "legacy",
+            "booked_exec_bps": 15.0,
+            "scoreboard_eligible": True,
+            "scoreboard_exclusion": None,
             "build_sha": "unknown",
             "intent_key": "k1",
             "signal_reason": "",
@@ -761,6 +765,72 @@ def test_journal_report_joins_intent_and_outcome(tmp_path: Path):
             "source": "scanner_evidence_full_stream",
         }
     ]
+
+
+def test_journal_scoreboard_excludes_legacy_fourteen_bps_rows(tmp_path: Path):
+    journal = tmp_path / "legacy-cost.journal.jsonl"
+    records = [
+        {
+            "kind": "shadow_intent",
+            "payload": {
+                "intent_key": "legacy-14",
+                "approved": True,
+                "intent": {
+                    "strategy_id": "htf_old_v1",
+                    "side": "long",
+                    "notional_usd": 1000.0,
+                },
+            },
+        },
+        {
+            "kind": "shadow_outcome",
+            "payload": {
+                "intent_key": "legacy-14",
+                "entry_price": 100.0,
+                "exit_price": 101.0,
+                "fees_usd": 1.4,
+                "virtual_net_usd": 8.6,
+            },
+        },
+    ]
+    journal.write_text("\n".join(json.dumps(row) for row in records) + "\n")
+
+    report = scanner_evidence.build_journal_report([journal])
+
+    assert report["legacy_cost_rows_excluded"] == 1
+    assert report["scoreboard_net_execution_usd"] == 0.0
+    trade = report["resolved_trades"][0]
+    assert trade["booked_exec_bps"] == pytest.approx(14.0)
+    assert trade["scoreboard_eligible"] is False
+    assert trade["scoreboard_exclusion"] == "legacy_14bps"
+
+
+def test_journal_report_exposes_one_conversion_category_per_reject(tmp_path: Path):
+    journal = tmp_path / "conversion.journal.jsonl"
+    records = [
+        {
+            "kind": "scanner_transition",
+            "payload": {"strategy_id": "range_v2", "state": "book_stale"},
+        },
+        {
+            "kind": "shadow_intent",
+            "payload": {
+                "intent_key": "range_v2|BTCUSD|long|1",
+                "strategy_id": "range_v2",
+                "approved": False,
+                "failed_checks": ["cost_gate:min_net_edge"],
+            },
+        },
+    ]
+    journal.write_text("\n".join(json.dumps(row) for row in records) + "\n")
+
+    report = scanner_evidence.build_journal_report([journal])
+
+    assert report["conversion_rejections"] == {"quote_missing": 1, "min_net": 1}
+    assert report["strategies"][0]["conversion_rejections"] == {
+        "quote_missing": 1,
+        "min_net": 1,
+    }
 
 
 def test_journal_report_reads_only_a_bounded_recent_tail(tmp_path: Path):
@@ -1078,6 +1148,39 @@ def test_load_evidence_frame_concatenates_shard_directories(tmp_path: Path):
 
     assert len(frame) == 2
     assert set(frame.columns) == {"ts_ms", "bid", "ask"}
+
+
+def test_quote_evidence_window_streams_only_requested_rows(tmp_path: Path):
+    path = tmp_path / "quotes.csv"
+    timestamps = pd.date_range("2026-01-01", periods=8, freq="12h", tz="UTC")
+    pd.DataFrame(
+        {
+            "ts_ms": [int(item.timestamp() * 1000) for item in timestamps],
+            "bid": range(8),
+            "ask": range(1, 9),
+        }
+    ).to_csv(path, index=False)
+
+    frame = scanner_evidence.load_quote_evidence_window(
+        path,
+        start=datetime(2026, 1, 2, tzinfo=UTC),
+        end=datetime(2026, 1, 3, tzinfo=UTC),
+        batch_rows=2,
+    )
+
+    assert frame["bid"].tolist() == [2, 3]
+
+
+def test_quote_evidence_window_refuses_unbounded_parity_span(tmp_path: Path):
+    path = tmp_path / "quotes.csv"
+    pd.DataFrame({"ts_ms": [1], "bid": [1], "ask": [2]}).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="must not exceed 3 days"):
+        scanner_evidence.load_quote_evidence_window(
+            path,
+            start=datetime(2026, 1, 1, tzinfo=UTC),
+            end=datetime(2026, 1, 5, tzinfo=UTC),
+        )
 
 
 def test_quote_replay_uses_shared_approval_guard(monkeypatch):

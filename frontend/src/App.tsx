@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { MarketPulse } from "./components/MarketPulse";
+import { PatternAtlas } from "./components/PatternAtlas";
 import { LiveStateBridge } from "./components/LiveStateBridge";
 import { TerminalTabs } from "./components/Terminal";
 import {
@@ -22,6 +23,7 @@ import { SettingsPanel } from "./panels/Settings/SettingsPanel";
 
 const TABS = [
   { id: "pulse", label: "Pulse" },
+  { id: "patterns", label: "Patterns" },
   { id: "desk", label: "Desk" },
   { id: "risk", label: "Risk" },
   { id: "journal", label: "Journal" },
@@ -61,6 +63,7 @@ export default function App() {
   const commands: Command[] = useMemo(
     () => [
       { id: "pulse", label: "Pulse", hint: "1h story · VWAP · scanner observer", run: () => navigate("pulse") },
+      { id: "patterns", label: "Patterns", hint: "published perps setups · live lifecycle · evidence", run: () => navigate("patterns") },
       { id: "desk", label: "Desk", hint: "runtime lanes · sizing · virtual outcomes", run: () => navigate("desk") },
       { id: "risk", label: "Risk", hint: "purse · margin · leverage · gates", run: () => navigate("risk") },
       { id: "journal", label: "Journal", hint: "decisions · signals · outcomes", run: () => navigate("journal") },
@@ -89,6 +92,7 @@ export default function App() {
       </div>
 
       {tab === "pulse" && <MarketPulse />}
+      {tab === "patterns" && <PatternAtlas />}
       {tab === "desk" && (
         <div className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-2"><BookPanel /><MarketPanel /></div>

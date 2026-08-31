@@ -766,13 +766,20 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
     realtime_trail_atr_mult = 1.5
     canonical_context_timeframes = StructureBos15mTriggerV3.canonical_context_timeframes
 
+    def _new_structure_engine(
+        self,
+        funding: pd.DataFrame | None,
+    ) -> StructureBos15mTriggerV3:
+        """Construct the frozen exact-data structure engine for this ID."""
+        return StructureBos15mTriggerV3(funding)
+
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         self.funding = funding
         # Keep one structure engine for the lifetime of the scanner.  The
         # runtime seeds canonical 4h context on the strategy instance before
         # the first evaluation; constructing a new engine in ``prepare`` used
         # to discard that context and made every HTF gate read ``none``.
-        self._structure = StructureBos15mTriggerV3(funding)
+        self._structure = self._new_structure_engine(funding)
 
     def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
         self._structure.bind_canonical_context(timeframe, candles)

@@ -58,6 +58,7 @@ _OBSERVER_FIELDS = frozenset(
         "trail_atr_mult",
         "cost_exchange",
         "revision",
+        "enabled",
     }
 )
 _REVISION_FIELDS = frozenset(
@@ -376,6 +377,9 @@ def build_shadow_observe_roster_specs(
         if unknown:
             raise ValueError(f"observer roster row {index} has unknown fields: {sorted(unknown)}")
         strategy_id = str(row.get("strategy_id", "")).strip()
+        enabled = row.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise TypeError(f"observer roster row {index} enabled must be boolean")
         exchange = str(row.get("exchange", "")).strip()
         timeframe = str(row.get("timeframe", "")).strip()
         symbols = row.get("symbols")
@@ -416,6 +420,8 @@ def build_shadow_observe_roster_specs(
             raise ValueError(
                 f"observer {strategy_id} has unsupported cost_exchange {cost_exchange!r}"
             )
+        if not enabled:
+            continue
         for configured_symbol in symbols:
             symbol = _venue_symbol(exchange, configured_symbol.strip())
             specs.append(

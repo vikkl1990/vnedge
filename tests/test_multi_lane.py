@@ -30,6 +30,7 @@ from vnedge.runtime.multi_lane_shadow import (
 )
 from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
+from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
@@ -459,12 +460,32 @@ def test_checked_in_observer_roster_is_valid() -> None:
     specs = build_shadow_observe_roster_specs(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
-    assert len(specs) == 10
+    assert len(specs) == 8
+    assert all(spec.strategy_id != "squeeze_expansion_breakout_v4" for spec in specs)
     assert sum(spec.strategy_id == "session_continuation_realtime_v2" for spec in specs) == 2
-    assert sum(spec.strategy_id == "htf_structure_continuation_realtime_v1" for spec in specs) == 2
+    assert sum(spec.strategy_id == "htf_regime_continuation_15m_v2" for spec in specs) == 2
+    assert all(spec.strategy_id != "htf_structure_continuation_realtime_v1" for spec in specs)
     assert sum(spec.strategy_id == "structure_bos_realtime_v2" for spec in specs) == 2
     assert all(not spec.is_primary for spec in specs)
+    assert {spec.exchange for spec in specs} == {"delta_india"}
+    assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}
     assert all(spec.execution_cost_exchange == "delta_india" for spec in specs)
+
+
+def test_lane_factory_builds_the_ohlc_only_regime_successor() -> None:
+    strategy = _build_single_strategy(
+        "htf_regime_continuation_15m_v2", {}, None, None
+    )
+
+    assert isinstance(strategy, HtfRegimeContinuation15mV2)
+
+    with pytest.raises(ValueError, match="parameters are frozen"):
+        _build_single_strategy(
+            "htf_regime_continuation_15m_v2",
+            {"weekly_classifier": "vwap_structure_v1"},
+            None,
+            None,
+        )
 
 
 def test_observer_roster_rejects_unknown_execution_cost_venue(tmp_path) -> None:

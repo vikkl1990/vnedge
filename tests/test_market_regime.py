@@ -13,6 +13,7 @@ from vnedge.strategy.market_regime import (
 )
 
 TEST_CONFIG = MarketRegimeConfig(
+    weekly_classifier="range_structure_v1",
     daily_location_bars=14,
     h4_ema_bars=5,
     min_complete_weeks=3,
@@ -169,16 +170,64 @@ def test_insufficient_closed_context_never_grants_permission() -> None:
     assert not regime.allow_long and not regime.allow_short
 
 
-def test_missing_quote_volume_does_not_invent_weekly_vwap() -> None:
+def test_official_candle_quote_volume_does_not_satisfy_trade_lake_weekly_vwap() -> None:
     daily = _daily_weeks([(90, 100, 95), (92, 102, 98), (50, 200, 103)])
-    daily = daily.drop(columns="quote_volume")
+    config = replace(TEST_CONFIG, weekly_classifier="vwap_structure_v1")
 
-    regime = regime_from_closed(daily, _h4("up"), config=TEST_CONFIG)
+    regime = regime_from_closed(daily, _h4("up"), config=config)
 
     assert not regime.ready
     assert regime.family == "flat"
     assert regime.reason.startswith("insufficient_closed_htf_context:")
     assert "weekly" in regime.reason
+
+
+def test_vwap_classifier_accepts_only_complete_trade_lake_weekly_artifacts() -> None:
+    daily = _daily_weeks([(90, 100, 95), (92, 102, 98), (50, 200, 103)])
+    start = pd.Timestamp("2026-07-06", tz="UTC")
+    artifacts = pd.DataFrame(
+        [
+            {
+                "exchange": "delta_india",
+                "symbol": "BTCUSD",
+                "timeframe": "1w",
+                "open_time": start + pd.Timedelta(days=7 * week),
+                "close_time": start + pd.Timedelta(days=7 * (week + 1)),
+                "vwap": value,
+                "sum_base": 1.0,
+                "sum_notional": value,
+                "n_trades": 10,
+                "source": "trade_lake",
+                "coverage_ok": True,
+            }
+            for week, value in enumerate((95.0, 98.0, 100.0))
+        ]
+    )
+    config = replace(TEST_CONFIG, weekly_classifier="vwap_structure_v1")
+
+    regime = regime_from_closed(
+        daily,
+        _h4("up"),
+        weekly_vwap_artifacts=artifacts,
+        weekly_vwap_symbol="BTCUSD",
+        config=config,
+    )
+
+    assert regime.ready
+    assert regime.weekly == "up"
+
+
+def test_range_structure_classifier_uses_official_ohlc_without_weekly_vwap() -> None:
+    daily = _daily_weeks([(90, 100, 95), (92, 102, 98), (50, 200, 103)])
+    daily = daily.drop(columns="quote_volume")
+    config = replace(TEST_CONFIG, weekly_classifier="range_structure_v1")
+
+    regime = regime_from_closed(daily, _h4("up"), config=config)
+
+    assert regime.ready
+    assert regime.weekly == "up"
+    assert regime.state == "continuation"
+    assert regime.allow_long
 
 
 def test_range_state_selects_mean_revert_scanners_only() -> None:

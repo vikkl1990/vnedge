@@ -2,8 +2,10 @@
 
 This module classifies *closed* higher-timeframe candles.  It never emits an
 order or a signal; callers may only use the result to deny scanner sides.
-Weekly candles are derived from seven complete UTC daily candles so a forming
-week can never leak into a 15-minute decision.
+Weekly OHLC is derived from seven complete UTC daily candles so a forming week
+can never leak into a 15-minute decision.  The V1 weekly VWAP is joined from a
+separate, complete Delta trade-lake artifact; candle quote-volume and HLC3 are
+not eligible substitutes.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 WeeklyBias = Literal["up", "down", "range"]
+WeeklyClassifier = Literal["vwap_structure_v1", "range_structure_v1"]
 DailyLocation = Literal["discount", "mid", "premium"]
 H4Direction = Literal["up", "down", "range"]
 EmaState = Literal["up", "down", "range"]
@@ -30,6 +33,7 @@ AsOfBar = tuple[str, int]
 
 @dataclass(frozen=True, slots=True)
 class MarketRegimeConfig:
+    weekly_classifier: WeeklyClassifier = "vwap_structure_v1"
     daily_location_bars: int = 14
     h4_ema_bars: int = 20
     min_complete_weeks: int = 3
@@ -44,6 +48,11 @@ class MarketRegimeConfig:
     rsi_premium: float = 70.0
 
     def __post_init__(self) -> None:
+        if self.weekly_classifier not in {
+            "vwap_structure_v1",
+            "range_structure_v1",
+        }:
+            raise ValueError("unsupported weekly_classifier")
         if self.daily_location_bars < 3:
             raise ValueError("daily_location_bars must be at least 3")
         if self.h4_ema_bars < 3:
@@ -189,6 +198,83 @@ def complete_weeks_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _attach_trade_lake_weekly_vwap(
+    weeks: pd.DataFrame,
+    artifacts: pd.DataFrame | None,
+    *,
+    as_of: pd.Timestamp | None,
+    expected_symbol: str | None,
+) -> pd.DataFrame:
+    """Attach only complete Delta trade-lake VWAP rows to weekly OHLC.
+
+    Canonical daily candles may carry a ``quote_volume`` column on other
+    venues, but V1's Delta contract explicitly refuses that fallback.  The
+    derived artifact is a separately persisted accumulator and is read here;
+    it is never recomputed in the regime/scanner loop.
+    """
+    out = weeks.copy()
+    out["vwap"] = math.nan
+    if artifacts is None or artifacts.empty or out.empty:
+        return out
+    required = {
+        "exchange",
+        "timeframe",
+        "symbol",
+        "open_time",
+        "close_time",
+        "vwap",
+        "sum_base",
+        "sum_notional",
+        "n_trades",
+        "source",
+        "coverage_ok",
+    }
+    if required.difference(artifacts.columns):
+        return out
+    values = artifacts.copy()
+    values["open_time"] = pd.to_datetime(values["open_time"], utc=True, errors="coerce")
+    values["close_time"] = pd.to_datetime(values["close_time"], utc=True, errors="coerce")
+    values["vwap"] = pd.to_numeric(values["vwap"], errors="coerce")
+    values["sum_base"] = pd.to_numeric(values["sum_base"], errors="coerce")
+    values["sum_notional"] = pd.to_numeric(
+        values["sum_notional"], errors="coerce"
+    )
+    values["n_trades"] = pd.to_numeric(values["n_trades"], errors="coerce")
+    exact_vwap = np.isclose(
+        values["vwap"],
+        values["sum_notional"] / values["sum_base"],
+        rtol=1e-12,
+        atol=1e-12,
+        equal_nan=False,
+    )
+    values = values[
+        values["exchange"].astype(str).str.lower().eq("delta_india")
+        & values["timeframe"].astype(str).eq("1w")
+        & values["source"].astype(str).eq("trade_lake")
+        & values["coverage_ok"].eq(True)
+        & values["vwap"].gt(0)
+        & values["sum_base"].gt(0)
+        & values["sum_notional"].gt(0)
+        & values["n_trades"].gt(0)
+        & exact_vwap
+        & values["open_time"].notna()
+        & values["close_time"].eq(values["open_time"] + pd.Timedelta(days=7))
+    ]
+    if expected_symbol is not None:
+        values = values[values["symbol"].astype(str).eq(expected_symbol)]
+    if as_of is not None:
+        values = values[values["close_time"] <= as_of]
+    if values.empty:
+        return out
+    lookup = (
+        values.sort_values("close_time")
+        .drop_duplicates("open_time", keep="last")
+        .set_index("open_time")["vwap"]
+    )
+    out["vwap"] = pd.to_datetime(out["timestamp"], utc=True).map(lookup)
+    return out
+
+
 def _weekly_bias(weeks: pd.DataFrame, *, minimum: int) -> WeeklyBias | None:
     if len(weeks) < minimum:
         return None
@@ -215,6 +301,68 @@ def _weekly_bias(weeks: pd.DataFrame, *, minimum: int) -> WeeklyBias | None:
         return "up"
     if breakout_down or (below_value and falling_highs):
         return "down"
+    return "range"
+
+
+def _weekly_range_structure_bias(
+    weeks: pd.DataFrame, *, minimum: int
+) -> WeeklyBias | None:
+    """Classify weekly direction from official OHLC only.
+
+    This is intentionally a separate classifier from the frozen VWAP
+    contract.  Official Delta candle history has no quote volume, so it can
+    support causal range/structure classification but cannot manufacture a
+    weekly VWAP from HLC3.
+    """
+    if len(weeks) < minimum:
+        return None
+    prior2, prior, last = weeks.iloc[-3], weeks.iloc[-2], weeks.iloc[-1]
+    values = (
+        last["open"],
+        last["close"],
+        last["high"],
+        last["low"],
+        prior["high"],
+        prior["low"],
+        prior2["high"],
+        prior2["low"],
+    )
+    if not all(np.isfinite(float(value)) for value in values):
+        return None
+    breakout_up = float(last["close"]) > float(prior["high"])
+    breakout_down = float(last["close"]) < float(prior["low"])
+    rising_lows = float(last["low"]) > float(prior["low"]) > float(prior2["low"])
+    falling_highs = (
+        float(last["high"]) < float(prior["high"]) < float(prior2["high"])
+    )
+    if breakout_up or (rising_lows and float(last["close"]) > float(last["open"])):
+        return "up"
+    if breakout_down or (
+        falling_highs and float(last["close"]) < float(last["open"])
+    ):
+        return "down"
+
+    # ``range`` is the conservative third state.  The explicit inside and
+    # compression calculation documents the preferred mean-reversion shape;
+    # ambiguous non-directional weeks remain range instead of becoming an
+    # invented trend.
+    prior_high = max(float(prior["high"]), float(prior2["high"]))
+    prior_low = min(float(prior["low"]), float(prior2["low"]))
+    last_range = float(last["high"]) - float(last["low"])
+    prior_ranges = np.asarray(
+        [
+            float(prior["high"]) - float(prior["low"]),
+            float(prior2["high"]) - float(prior2["low"]),
+        ],
+        dtype=float,
+    )
+    inside_compressed_range = (
+        float(last["high"]) <= prior_high
+        and float(last["low"]) >= prior_low
+        and last_range <= float(np.median(prior_ranges))
+    )
+    if inside_compressed_range:
+        return "range"
     return "range"
 
 
@@ -432,6 +580,8 @@ def regime_from_closed(
     h4: pd.DataFrame,
     *,
     as_of: pd.Timestamp | None = None,
+    weekly_vwap_artifacts: pd.DataFrame | None = None,
+    weekly_vwap_symbol: str | None = None,
     config: MarketRegimeConfig = DEFAULT_CONFIG,
 ) -> MarketRegime:
     """Classify the last closed daily/weekly/4h state at ``as_of``.
@@ -456,7 +606,18 @@ def regime_from_closed(
             h4_frame["timestamp"] + pd.Timedelta(hours=4) <= cutoff
         ].reset_index(drop=True)
     weeks = complete_weeks_from_daily(daily_frame)
-    weekly = _weekly_bias(weeks, minimum=config.min_complete_weeks)
+    if config.weekly_classifier == "range_structure_v1":
+        weekly = _weekly_range_structure_bias(
+            weeks, minimum=config.min_complete_weeks
+        )
+    else:
+        trade_vwap_weeks = _attach_trade_lake_weekly_vwap(
+            weeks,
+            weekly_vwap_artifacts,
+            as_of=cutoff,
+            expected_symbol=weekly_vwap_symbol,
+        )
+        weekly = _weekly_bias(trade_vwap_weeks, minimum=config.min_complete_weeks)
     location = _daily_location(daily_frame, bars=config.daily_location_bars)
     h4_direction = _h4_direction(h4_frame, ema_bars=config.h4_ema_bars)
     telescope = _telescope_state(daily_frame, h4_frame, config=config)
@@ -646,6 +807,8 @@ class MarketRegimeMachine:
         h4: pd.DataFrame,
         *,
         as_of: pd.Timestamp | None = None,
+        weekly_vwap_artifacts: pd.DataFrame | None = None,
+        weekly_vwap_symbol: str | None = None,
         data_healthy: bool = True,
         health_reason: str = "data_unhealthy",
     ) -> MarketRegime:
@@ -672,7 +835,12 @@ class MarketRegimeMachine:
             )
         else:
             candidate = regime_from_closed(
-                daily, h4, as_of=as_of, config=self.config
+                daily,
+                h4,
+                as_of=as_of,
+                weekly_vwap_artifacts=weekly_vwap_artifacts,
+                weekly_vwap_symbol=weekly_vwap_symbol,
+                config=self.config,
             )
         previous = self.current
         if previous is None:
@@ -731,6 +899,7 @@ __all__ = [
     "RegimeState",
     "RsiZone",
     "ScannerFamily",
+    "WeeklyClassifier",
     "complete_weeks_from_daily",
     "regime_from_closed",
 ]

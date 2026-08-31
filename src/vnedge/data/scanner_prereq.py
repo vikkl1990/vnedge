@@ -58,6 +58,8 @@ def requirements_from_roster(path: Path | str) -> dict[str, int]:
     for observer in observers:
         if not isinstance(observer, dict):
             raise TypeError("scanner roster observer must be an object")
+        if observer.get("enabled", True) is False:
+            continue
         strategy_id = str(observer.get("strategy_id") or "")
         timeframe = str(observer.get("timeframe") or "")
         strategy = get_strategy_class(strategy_id)

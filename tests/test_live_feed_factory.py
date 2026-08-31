@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from vnedge.data.ccxt_client import create_ccxt_async_exchange, resolve_ccxt_exchange_id
+from vnedge.exchange import live_feed as live_feed_module
 from vnedge.exchange.live_feed import (
     DeltaWsFeed,
     LiveMarketFeed,
@@ -151,10 +152,24 @@ class _FakeRestExchange:
 
 
 @pytest.mark.network
-async def test_delta_rest_candle_fallback_only_when_ws_is_stale():
+async def test_delta_rest_candle_fallback_only_when_ws_is_stale(monkeypatch):
+    # Keep the fallback's closure boundary fixed.  This test intentionally
+    # runs a polling loop for several wall-clock sleeps; without a frozen
+    # exchange clock it becomes nondeterministic when the suite crosses a
+    # real UTC minute boundary.
+    fixed_now = datetime.now(UTC)
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(live_feed_module, "datetime", _FrozenDateTime)
     feed = create_market_feed("delta_india", symbol="BTC/USD:USD", timeframe="1m")
     step_ms = 60_000
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    now_ms = int(fixed_now.timestamp() * 1000)
     closed_ts = (now_ms // step_ms - 1) * step_ms  # latest fully closed minute
     fake = _FakeRestExchange([
         [closed_ts, 1.0, 2.0, 0.5, 1.5, 10.0],

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
@@ -22,6 +23,10 @@ from vnedge.data.symbols import canonical_symbol
 from vnedge.data.tape import TapeCleanResult, clean_book
 from vnedge.exchange.book_imbalance import BookImbalance
 from vnedge.plan.cost_model import CostModel
+from vnedge.runtime.conversion_taxonomy import (
+    conversion_reject_category,
+    transition_reject_category,
+)
 from vnedge.runtime.latency_tracker import timeframe_to_seconds
 from vnedge.runtime.quote_ordering import quote_order_key
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
@@ -38,6 +43,7 @@ _CANONICAL_NUMERIC_COLUMNS = (
     "open", "high", "low", "close", "volume",
     "quote_volume", "trade_count", "taker_buy_volume", "vwap",
 )
+_MAX_QUOTE_PARITY_WINDOW = pd.Timedelta(days=3)
 
 
 def load_evidence_frame(path: Path) -> pd.DataFrame:
@@ -60,6 +66,80 @@ def load_evidence_frame(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in {".parquet", ".pq"}:
         return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def iter_evidence_frame_chunks(
+    path: Path,
+    *,
+    batch_rows: int = 100_000,
+) -> Iterator[pd.DataFrame]:
+    """Yield bounded evidence chunks without materialising a quote lake.
+
+    Quote parity is intentionally a short, lane-consumed evidence window.
+    Reading an entire multi-day BBO directory into RAM obscures that contract
+    and has previously exhausted the VM.  Parquet row groups and CSV chunks
+    are therefore streamed before the requested time window is selected.
+    """
+    if batch_rows < 1:
+        raise ValueError("batch_rows must be positive")
+    paths = sorted(path.rglob("*.parquet")) if path.is_dir() else [path]
+    if path.is_dir() and not paths:
+        raise ValueError(f"no parquet shards under directory {path}")
+    for source in paths:
+        if source.suffix.lower() in {".parquet", ".pq"}:
+            try:
+                import pyarrow.parquet as pq
+            except ImportError as exc:  # pragma: no cover - parquet dependency
+                raise RuntimeError("pyarrow is required for chunked parquet replay") from exc
+            parquet = pq.ParquetFile(source)
+            for batch in parquet.iter_batches(batch_size=batch_rows):
+                yield batch.to_pandas()
+        else:
+            yield from pd.read_csv(source, chunksize=batch_rows)
+
+
+def _quote_timestamp_series(frame: pd.DataFrame) -> pd.Series:
+    for name in ("ts_ms", "timestamp", "ts"):
+        if name not in frame.columns:
+            continue
+        if name.endswith("_ms"):
+            return pd.to_datetime(frame[name], unit="ms", utc=True, errors="coerce")
+        return pd.to_datetime(frame[name], utc=True, errors="coerce")
+    raise ValueError("quote evidence requires ts_ms, timestamp, or ts")
+
+
+def load_quote_evidence_window(
+    path: Path,
+    *,
+    start: datetime,
+    end: datetime,
+    batch_rows: int = 100_000,
+    max_window: pd.Timedelta | None = None,
+) -> pd.DataFrame:
+    """Load only a bounded quote-parity interval from a file or shard tree."""
+    if start.tzinfo is None or start.utcoffset() is None:
+        raise ValueError("quote window start must be timezone-aware")
+    if end.tzinfo is None or end.utcoffset() is None:
+        raise ValueError("quote window end must be timezone-aware")
+    start_ts = pd.Timestamp(start).tz_convert("UTC")
+    end_ts = pd.Timestamp(end).tz_convert("UTC")
+    if end_ts <= start_ts:
+        raise ValueError("quote window end must be after start")
+    allowed_window = max_window or _MAX_QUOTE_PARITY_WINDOW
+    if end_ts - start_ts > allowed_window:
+        raise ValueError("quote parity window must not exceed 3 days")
+    selected: list[pd.DataFrame] = []
+    empty_schema: pd.DataFrame | None = None
+    for chunk in iter_evidence_frame_chunks(path, batch_rows=batch_rows):
+        if empty_schema is None:
+            empty_schema = chunk.iloc[0:0].copy()
+        timestamps = _quote_timestamp_series(chunk)
+        mask = timestamps.ge(start_ts) & timestamps.lt(end_ts)
+        if bool(mask.any()):
+            selected.append(chunk.loc[mask].copy())
+    if not selected:
+        return empty_schema if empty_schema is not None else pd.DataFrame()
+    return pd.concat(selected, ignore_index=True)
 
 
 def normalize_canonical_candles(candles: pd.DataFrame) -> pd.DataFrame:
@@ -1184,6 +1264,7 @@ def build_journal_report(
                 "failed_gates": Counter(),
                 "lifecycle": Counter(),
                 "quote_lifecycle": Counter(),
+                "conversion_rejections": Counter(),
                 "scanner_transitions": 0,
                 "armed_episodes": set(),
                 "closest_near_miss": None,
@@ -1201,6 +1282,8 @@ def build_journal_report(
                 "unmatched_outcomes": 0,
                 "duplicate_intents": 0,
                 "duplicate_outcomes": 0,
+                "legacy_cost_rows_excluded": 0,
+                "scoreboard_net_execution_usd": 0.0,
             },
         )
 
@@ -1234,6 +1317,9 @@ def build_journal_report(
             row = strategy_row(strategy_id)
             state = str(payload.get("state") or "unknown")
             row["quote_lifecycle"].update((state,))
+            transition_category = transition_reject_category(state)
+            if transition_category is not None:
+                row["conversion_rejections"].update((transition_category,))
             row["scanner_transitions"] += 1
             episode = payload.get("episode_id")
             if state.startswith("armed_") and episode is not None:
@@ -1271,6 +1357,9 @@ def build_journal_report(
             approved_keys.add(key)
         else:
             row["virtual_rejected"] += 1
+            row["conversion_rejections"].update(
+                (conversion_reject_category(payload.get("failed_checks")),)
+            )
 
     resolved_approved: set[str] = set()
     resolved_trades: list[dict[str, Any]] = []
@@ -1324,6 +1413,24 @@ def build_journal_report(
         # Compatibility name for the dashboard. It remains explicitly
         # shadow-only and is never converted into a replay ``net_bps``.
         row["observed_shadow_net_usd"] += booked_net_usd
+        notional_usd = float(
+            payload.get("notional_usd") or intent.get("notional_usd") or 0.0
+        )
+        booked_exec_bps_raw = payload.get("execution_cost_bps")
+        if booked_exec_bps_raw is not None:
+            booked_exec_bps: float | None = float(booked_exec_bps_raw)
+        elif notional_usd > 0:
+            booked_exec_bps = float(payload.get("fees_usd") or 0.0) / notional_usd * 10_000.0
+        else:
+            booked_exec_bps = None
+        legacy_14bps = (
+            booked_exec_bps is not None
+            and math.isclose(booked_exec_bps, 14.0, abs_tol=0.05)
+        )
+        if legacy_14bps:
+            row["legacy_cost_rows_excluded"] += 1
+        else:
+            row["scoreboard_net_execution_usd"] += booked_net_usd
         resolved_trades.append(
             {
                 "lane": str(payload.get("_lane_id") or (matched or {}).get("_lane_id") or ""),
@@ -1336,7 +1443,7 @@ def build_journal_report(
                 "entry_price": entry,
                 "exit_price": exit_price,
                 "quantity": quantity,
-                "notional_usd": float(intent.get("notional_usd") or 0.0),
+                "notional_usd": notional_usd,
                 "leverage": float(intent.get("leverage") or 0.0),
                 "virtual_net_usd": booked_net_usd,
                 "gross_pnl_usd": float(
@@ -1359,6 +1466,9 @@ def build_journal_report(
                 "bars_held": int(payload.get("bars_held") or 0),
                 "cost_profile": str(payload.get("cost_profile") or "legacy_unattributed"),
                 "cost_contract_version": str(payload.get("cost_contract_version") or "legacy"),
+                "booked_exec_bps": booked_exec_bps,
+                "scoreboard_eligible": not legacy_14bps,
+                "scoreboard_exclusion": "legacy_14bps" if legacy_14bps else None,
                 "build_sha": str(payload.get("build_sha") or "unknown"),
                 "intent_key": key,
                 "signal_reason": str(
@@ -1385,6 +1495,7 @@ def build_journal_report(
                 "failed_gates": dict(row["failed_gates"]),
                 "lifecycle": dict(row["lifecycle"]),
                 "quote_lifecycle": dict(row["quote_lifecycle"]),
+                "conversion_rejections": dict(row["conversion_rejections"]),
                 "armed_entries": len(row["armed_episodes"]),
             }
         )
@@ -1461,11 +1572,14 @@ def build_journal_report(
     )
     lifecycle: Counter[str] = Counter()
     quote_lifecycle: Counter[str] = Counter()
+    conversion_rejections: Counter[str] = Counter()
     for row in report["strategies"]:
         lifecycle.update(dict(row.get("lifecycle") or {}))
         quote_lifecycle.update(dict(row.get("quote_lifecycle") or {}))
+        conversion_rejections.update(dict(row.get("conversion_rejections") or {}))
     report["lifecycle"] = dict(lifecycle)
     report["quote_lifecycle"] = dict(quote_lifecycle)
+    report["conversion_rejections"] = dict(conversion_rejections)
     report["gross_usd"] = sum(
         float(row["gross_usd"]) for row in report["strategies"]
     )
@@ -1483,6 +1597,12 @@ def build_journal_report(
     )
     report["observed_shadow_net_usd"] = sum(
         float(row["observed_shadow_net_usd"]) for row in report["strategies"]
+    )
+    report["scoreboard_net_execution_usd"] = sum(
+        float(row["scoreboard_net_execution_usd"]) for row in report["strategies"]
+    )
+    report["legacy_cost_rows_excluded"] = sum(
+        int(row["legacy_cost_rows_excluded"]) for row in report["strategies"]
     )
     report["armed_entries"] = sum(
         int(row["armed_entries"]) for row in report["strategies"]
@@ -1550,6 +1670,12 @@ def main() -> None:
         "--runtime-start",
         help="ISO start of the uninterrupted live runner instance being replayed",
     )
+    parser.add_argument(
+        "--quote-chunk-rows",
+        type=int,
+        default=100_000,
+        help="bounded parquet/CSV batch size for quote evidence",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--max-bytes-per-journal",
@@ -1573,7 +1699,6 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
         if args.quotes:
-            quotes = load_evidence_frame(args.quotes)
             evidence_start = (
                 pd.to_datetime(args.evidence_start, utc=True).to_pydatetime()
                 if args.evidence_start
@@ -1589,6 +1714,22 @@ def main() -> None:
                 if args.runtime_start
                 else None
             )
+            if evidence_start is None or evidence_end is None:
+                parser.error(
+                    "quote replay requires explicit --evidence-start and --evidence-end"
+                )
+            quote_load_start = min(
+                value for value in (evidence_start, runtime_start) if value is not None
+            )
+            try:
+                quotes = load_quote_evidence_window(
+                    args.quotes,
+                    start=quote_load_start,
+                    end=evidence_end,
+                    batch_rows=args.quote_chunk_rows,
+                )
+            except (RuntimeError, ValueError) as exc:
+                parser.error(str(exc))
             quote_replays = [
                 replay_quote_scanner(
                     strategy_id,
@@ -1661,9 +1802,17 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "atomic_write", "build_daily_report", "build_journal_report",
-    "compare_quote_replay_to_live", "iter_journal_records",
-    "load_evidence_frame", "normalize_canonical_candles",
-    "read_journal_records", "read_lane_evals",
-    "replay_quote_scanner", "replay_scanner",
+    "atomic_write",
+    "build_daily_report",
+    "build_journal_report",
+    "compare_quote_replay_to_live",
+    "iter_evidence_frame_chunks",
+    "iter_journal_records",
+    "load_evidence_frame",
+    "load_quote_evidence_window",
+    "normalize_canonical_candles",
+    "read_journal_records",
+    "read_lane_evals",
+    "replay_quote_scanner",
+    "replay_scanner",
 ]

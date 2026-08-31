@@ -14,6 +14,7 @@ import pandas as pd
 from vnedge.exchange.book_imbalance import BookImbalance
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
+from vnedge.runtime.conversion_taxonomy import conversion_reject_category
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.runtime.latency_tracker import (
@@ -56,6 +57,7 @@ class SqueezeAcceptanceObserveRunner:
     fires: int = 0
     rejected: int = 0
     rejection_reasons: dict[str, int] = field(default_factory=dict)
+    conversion_rejections: dict[str, int] = field(default_factory=dict)
     outcomes: int = 0
     net_usd: float = 0.0
     current_bar_index: int = -1
@@ -160,6 +162,10 @@ class SqueezeAcceptanceObserveRunner:
         else:
             bucket = "risk"
         self.rejection_reasons[bucket] = self.rejection_reasons.get(bucket, 0) + 1
+        category = conversion_reject_category(checks)
+        self.conversion_rejections[category] = (
+            self.conversion_rejections.get(category, 0) + 1
+        )
 
     def restore(self, df: pd.DataFrame) -> None:
         """Rebuild arm state and at most one durable virtual position."""
@@ -787,6 +793,7 @@ class SqueezeAcceptanceObserveRunner:
             "approved": self.fires,
             "rejected": self.rejected,
             "rejection_reasons": dict(sorted(self.rejection_reasons.items())),
+            "conversion_rejections": dict(sorted(self.conversion_rejections.items())),
             "cost_rejected": self.rejection_reasons.get("cost", 0),
             "sizing_rejected": self.rejection_reasons.get("sizing", 0),
             "risk_rejected": self.rejection_reasons.get("risk", 0),

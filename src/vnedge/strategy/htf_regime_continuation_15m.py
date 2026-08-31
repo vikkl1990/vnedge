@@ -16,7 +16,11 @@ import pandas as pd
 
 from vnedge.data.candles import Candle
 from vnedge.strategy.base_strategy import SignalIntent, StrategyExitIntent
-from vnedge.strategy.market_regime import MarketRegime, MarketRegimeMachine
+from vnedge.strategy.market_regime import (
+    DEFAULT_CONFIG,
+    MarketRegime,
+    MarketRegimeMachine,
+)
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.realtime_scanners import HtfStructureContinuationRealtimeV1
 
@@ -74,6 +78,39 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
     strategy_id = STRATEGY_ID
     eligibility = "RESEARCH_ONLY"
     canonical_context_timeframes = ("4h", "1d")
+    market_regime_config = DEFAULT_CONFIG
+
+    def _new_regime_machine(self) -> MarketRegimeMachine:
+        return MarketRegimeMachine(self.market_regime_config)
+
+    def _context_identity(self, decision_at: pd.Timestamp) -> tuple[object, ...]:
+        """Return the last closed HTF identities available to a decision.
+
+        Fifteen-minute rows between two HTF closes share one immutable regime
+        snapshot.  This avoids recomputing the daily/weekly telescope on every
+        microscope bar without changing V1's classifier semantics.
+        """
+        identities: list[object] = [all(self._regime_health.values())]
+        for timeframe, delta in (
+            ("4h", pd.Timedelta(hours=4)),
+            ("1d", pd.Timedelta(days=1)),
+        ):
+            frame = self._regime_frames[timeframe]
+            if frame.empty:
+                identities.append(None)
+                continue
+            timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+            eligible = timestamps[timestamps + delta <= decision_at]
+            identities.append(int(eligible.iloc[-1].value) if not eligible.empty else None)
+        if self._weekly_vwap_artifacts.empty:
+            identities.append(None)
+        else:
+            close_times = pd.to_datetime(
+                self._weekly_vwap_artifacts["close_time"], utc=True, errors="coerce"
+            )
+            eligible = close_times[close_times <= decision_at]
+            identities.append(int(eligible.iloc[-1].value) if not eligible.empty else None)
+        return tuple(identities)
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         super().__init__(funding)
@@ -82,6 +119,51 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             "1d": pd.DataFrame(),
         }
         self._regime_health = {"4h": False, "1d": False}
+        self._weekly_vwap_artifacts = pd.DataFrame()
+        self._weekly_vwap_symbol: str | None = None
+
+    def bind_weekly_vwap_artifacts(self, artifacts: pd.DataFrame) -> None:
+        """Bind the cached Delta trade-lake weekly VWAP dataset.
+
+        This is intentionally separate from ``bind_canonical_context``:
+        official OHLC candles cannot satisfy the trade-lake VWAP contract.
+        The regime loop only reads this bounded cache and never scans trades.
+        """
+        frame = artifacts.copy()
+        if not frame.empty:
+            required = {
+                "exchange",
+                "symbol",
+                "timeframe",
+                "open_time",
+                "close_time",
+                "vwap",
+                "sum_base",
+                "sum_notional",
+                "n_trades",
+                "source",
+                "coverage_ok",
+            }
+            missing = required.difference(frame.columns)
+            if missing:
+                raise ValueError(f"weekly VWAP artifacts missing columns: {sorted(missing)}")
+            frame["open_time"] = pd.to_datetime(frame["open_time"], utc=True, errors="coerce")
+            frame["close_time"] = pd.to_datetime(
+                frame["close_time"], utc=True, errors="coerce"
+            )
+            frame = (
+                frame.sort_values("open_time")
+                .drop_duplicates("open_time", keep="last")
+                .tail(64)
+                .reset_index(drop=True)
+            )
+            symbols = set(frame["symbol"].astype(str))
+            if len(symbols) != 1:
+                raise ValueError("weekly VWAP cache must contain exactly one symbol")
+            self._weekly_vwap_symbol = symbols.pop()
+        else:
+            self._weekly_vwap_symbol = None
+        self._weekly_vwap_artifacts = frame
 
     def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
         if timeframe not in self.canonical_context_timeframes:
@@ -117,26 +199,35 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         *,
         machine: MarketRegimeMachine | None = None,
     ) -> MarketRegime:
-        regime_machine = machine or MarketRegimeMachine()
+        regime_machine = machine or self._new_regime_machine()
         return regime_machine.step(
             self._regime_frames["1d"],
             self._regime_frames["4h"],
             as_of=decision_at,
+            weekly_vwap_artifacts=self._weekly_vwap_artifacts,
+            weekly_vwap_symbol=self._weekly_vwap_symbol,
             data_healthy=all(self._regime_health.values()),
             health_reason="canonical_regime_context_unhealthy",
         )
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         out = super().prepare(candles)
-        regime_machine = MarketRegimeMachine()
-        regimes = [
-            self._regime_at(
-                pd.Timestamp(ts) + pd.Timedelta(minutes=15),
-                machine=regime_machine,
-            )
-            for ts in pd.to_datetime(out["timestamp"], utc=True)
-        ]
+        regime_machine = self._new_regime_machine()
+        regimes: list[MarketRegime] = []
+        last_identity: tuple[object, ...] | None = None
+        last_regime: MarketRegime | None = None
+        for ts in pd.to_datetime(out["timestamp"], utc=True):
+            decision_at = pd.Timestamp(ts) + pd.Timedelta(minutes=15)
+            identity = self._context_identity(decision_at)
+            if last_regime is None or identity != last_identity:
+                last_regime = self._regime_at(
+                    decision_at,
+                    machine=regime_machine,
+                )
+                last_identity = identity
+            regimes.append(last_regime)
         out["mreg_weekly"] = [item.weekly for item in regimes]
+        out["mreg_weekly_classifier"] = self.market_regime_config.weekly_classifier
         out["mreg_daily"] = [item.daily for item in regimes]
         out["mreg_h4"] = [item.h4 for item in regimes]
         out["mreg_ema_state"] = [item.ema_state for item in regimes]
@@ -250,6 +341,9 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         features.update(
             {
                 "regime_weekly": str(row.get("mreg_weekly", "range")),
+                "regime_weekly_classifier": str(
+                    row.get("mreg_weekly_classifier", "vwap_structure_v1")
+                ),
                 "regime_daily": str(row.get("mreg_daily", "mid")),
                 "regime_h4": str(row.get("mreg_h4", "range")),
                 "regime_ema_state": str(row.get("mreg_ema_state", "range")),

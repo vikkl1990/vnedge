@@ -115,9 +115,18 @@ class StructureBos15mTriggerV2(BaseStrategy):
     warmup_bars = 224
     canonical_context_timeframes = ("4h",)
 
-    def __init__(self, funding: pd.DataFrame | None = None) -> None:
+    def __init__(
+        self,
+        funding: pd.DataFrame | None = None,
+        *,
+        allow_price_only_context: bool = False,
+    ) -> None:
         self.funding = funding
-        self._hourly = StructureBos1H(funding, allow_price_only_live=False)
+        self.allow_price_only_context = bool(allow_price_only_context)
+        self._hourly = StructureBos1H(
+            funding,
+            allow_price_only_live=self.allow_price_only_context,
+        )
 
     def bind_canonical_context(self, timeframe: str, candles: pd.DataFrame) -> None:
         self._hourly.bind_canonical_context(timeframe, candles)

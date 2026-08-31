@@ -1,12 +1,13 @@
 {
   "version": 2,
-  "registered_at": "2026-08-24T00:00:00+00:00",
+  "registered_at": "2026-08-31T00:00:00+00:00",
   "observers": [
     {
       "strategy_id": "squeeze_expansion_breakout_v4",
-      "exchange": "binanceusdm",
+      "enabled": false,
+      "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
       "timeframe": "5m",
       "revision": {
         "version": "4",
@@ -22,9 +23,9 @@
     },
     {
       "strategy_id": "range_expansion_realtime_v2",
-      "exchange": "binanceusdm",
+      "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
       "timeframe": "15m",
       "revision": {
         "version": "2",
@@ -39,18 +40,18 @@
       "trail_atr_mult": 0
     },
     {
-      "strategy_id": "htf_structure_continuation_realtime_v1",
-      "exchange": "binanceusdm",
+      "strategy_id": "htf_regime_continuation_15m_v2",
+      "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
       "timeframe": "15m",
       "revision": {
-        "version": "1",
-        "mechanism": "aligned 4h/1h direction with 15m pullback reclaim and current-quote continuation acceptance",
-        "decision_engine": "quote_acceptance_v2",
+        "version": "2",
+        "mechanism": "official-candle weekly range structure plus daily/4h permission and closed 15m reclaim",
+        "decision_engine": "base_strategy_next_open_v1",
         "exit_engine": "scanner_exit_v1",
-        "backtest_engine": "vnedge_quote_acceptance_replay",
-        "engine_version": "2"
+        "backtest_engine": "vnedge_closed_bar_replay",
+        "engine_version": "1"
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
@@ -58,9 +59,9 @@
     },
     {
       "strategy_id": "structure_bos_realtime_v2",
-      "exchange": "binanceusdm",
+      "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
       "timeframe": "15m",
       "revision": {
         "version": "2",
@@ -76,9 +77,9 @@
     },
     {
       "strategy_id": "session_continuation_realtime_v2",
-      "exchange": "binanceusdm",
+      "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
       "timeframe": "15m",
       "revision": {
         "version": "2",

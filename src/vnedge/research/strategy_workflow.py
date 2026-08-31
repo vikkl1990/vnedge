@@ -687,6 +687,8 @@ def _active_roster_states(path: Path) -> dict[str, RevisionState]:
     for raw in rows:
         if not isinstance(raw, dict):
             continue
+        if raw.get("enabled", True) is False:
+            continue
         strategy_id = str(raw.get("strategy_id") or "").strip()
         revision_raw = raw.get("revision")
         strategy_cls = STRATEGIES.get(strategy_id)
@@ -834,6 +836,15 @@ def build_strategy_workflow(
                 "fees_usd": raw.get("fees_usd"),
                 "net_execution_usd": raw.get("net_execution_usd"),
                 "observed_shadow_net_usd": raw.get("observed_shadow_net_usd"),
+                "scoreboard_net_execution_usd": raw.get(
+                    "scoreboard_net_execution_usd"
+                ),
+                "legacy_cost_rows_excluded": raw.get(
+                    "legacy_cost_rows_excluded"
+                ),
+                "conversion_rejections": dict(
+                    raw.get("conversion_rejections") or {}
+                ),
                 "performance_eligible": bool(
                     raw.get(
                         "performance_eligible",

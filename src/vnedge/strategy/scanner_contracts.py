@@ -281,6 +281,19 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         exit_engine="scanner_exit_v1",
         context_timeframes=("4h", "1d"),
     ),
+    "htf_regime_continuation_15m_v2": ScannerRuntimeContract(
+        strategy_id="htf_regime_continuation_15m_v2",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale=(
+            "official-candle weekly range/structure permission without synthetic "
+            "VWAP; closed 15m reclaim and next-open entry"
+        ),
+        decision_engine="base_strategy_next_open_v1",
+        exit_engine="scanner_exit_v1",
+        context_timeframes=("4h", "1d"),
+    ),
 }
 
 SCANNER_RUNTIME_CONTRACTS: Mapping[str, ScannerRuntimeContract] = MappingProxyType(_CONTRACTS)

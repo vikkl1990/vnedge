@@ -1898,7 +1898,7 @@
     var head='<div class="wfrow head"><span>Revision / lineage</span><span>Stage</span><span>After-cost evidence</span><span>Outcomes</span><span class="wfhide">Engine parity</span><span class="wfhide">Governance</span></div>';
     var body=rows.slice(0,80).map(function(r){
       var p=r.performance||{},sh=r.shadow_evidence||null,hasBacktest=p.after_cost_net_usd!=null||p.trades!=null;
-      var hasShadow=!!(sh&&num(sh.evaluations)>0),net=hasBacktest?p.after_cost_net_usd:(hasShadow?sh.observed_shadow_net_usd:null);
+      var hasShadow=!!(sh&&num(sh.evaluations)>0),shadowNet=sh&&sh.scoreboard_net_execution_usd!=null?sh.scoreboard_net_execution_usd:(sh?sh.observed_shadow_net_usd:null),net=hasBacktest?p.after_cost_net_usd:(hasShadow?shadowNet:null);
       var netText=net==null?'—':((num(net)>=0?'+$':'-$')+Math.abs(num(net)).toFixed(2));
       var netClass=net==null?'':num(net)>=0?'up':'dn',parent=r.parent_revision_id?('fork ← '+String(r.parent_revision_id).split('+')[0]):'root revision';
       var evidenceLabel=hasBacktest?String((r.latest_run||{}).run_kind||'backtest').replace(/_/g,' '):(hasShadow?'observed shadow · not backtest':'not reported');
