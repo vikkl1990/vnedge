@@ -1547,7 +1547,7 @@
       var tf=l.timeframe||"?", tm=l.time_machine||null, lat=l.latency||null;
       var fm=(tm&&tm.forming)?tm.forming[tf]:null, prog=(fm&&fin(fm.progress))?fm.progress:null;
       var health=(tm&&tm.health)?tm.health[tf]:null;
-      var age=(tm&&tm.age_ms)?tm.age_ms[tf]:null;
+      var age=(tm&&tm.closed_bar_overdue_ms&&tm.closed_bar_overdue_ms[tf]!=null)?tm.closed_bar_overdue_ms[tf]:((tm&&tm.age_ms)?tm.age_ms[tf]:null);
       var dlag=(lat&&lat.decision_lag_ms&&fin(lat.decision_lag_ms.p95))?lat.decision_lag_ms.p95:null;
       var skips=skipCount(l.decision_skips);
       var hB=healthBand(health), aB=ageBand(tf,age);

@@ -95,3 +95,29 @@ def test_snapshot_dict_shape():
     assert d["forming"]["1m"]["open_time"] == BASE.isoformat()
     assert d["forming"]["1m"]["volume"] == 5
     assert d["health"]["1m"] == "ok"
+
+
+def test_closed_bar_overdue_clock_waits_for_next_boundary():
+    tm = TimeMachine(["BTC"], ["15m"])
+    tm.on_kline_update(
+        "BTC",
+        "15m",
+        _k(BASE, 100, 101, 99, 100, 5, BASE + timedelta(minutes=15)),
+        True,
+    )
+
+    assert tm.closed_bar_overdue_ms("BTC", "15m", BASE + timedelta(minutes=29)) == 0
+    assert tm.closed_bar_overdue_ms("BTC", "15m", BASE + timedelta(minutes=30, seconds=2)) == 2_000
+
+
+def test_closed_bar_overdue_uses_receipt_clock_for_historical_replay():
+    receipt = BASE + timedelta(days=30)
+    tm = TimeMachine(["BTC"], ["15m"])
+    tm.on_kline_update(
+        "BTC", "15m", _k(BASE, 100, 101, 99, 100, 5, receipt), True
+    )
+
+    assert tm.closed_bar_overdue_ms("BTC", "15m", receipt + timedelta(minutes=14)) == 0
+    assert tm.closed_bar_overdue_ms(
+        "BTC", "15m", receipt + timedelta(minutes=15, seconds=1)
+    ) == 1_000

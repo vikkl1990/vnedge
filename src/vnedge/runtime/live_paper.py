@@ -1398,8 +1398,8 @@ class LivePaperSession:
             if health != "ok":
                 return f"decision_tf_{health}"
             hard = LT.TM_AGE_HARD_LAST_MS.get(tf)
-            age = tm.age_ms(self.config.symbol, tf, now)
-            if hard is not None and age is not None and age > hard:
+            overdue = tm.closed_bar_overdue_ms(self.config.symbol, tf, now)
+            if hard is not None and overdue is not None and overdue > hard:
                 return "tm_age_hard"
         except Exception as exc:  # noqa: BLE001 — unknown state must fail closed
             logger.error("time machine arm check failed — blocking entry: %s", exc)

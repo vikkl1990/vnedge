@@ -61,6 +61,7 @@ def test_snapshot_dict_age_block():
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE, ex_ts=BASE + timedelta(seconds=10)), False)
     d = tm.snapshot_dict("BTC/USDT", now=BASE + timedelta(seconds=40))
     assert "age_ms" in d and abs(d["age_ms"]["1h"] - 30_000) < 1.0
+    assert d["closed_bar_overdue_ms"]["1h"] == 0.0
     assert "age_ms" not in tm.snapshot_dict("BTC/USDT")  # omitted without now
 
 
@@ -101,12 +102,30 @@ def test_gate_blocks_on_future_bar():
 
 
 def test_gate_blocks_on_hard_age_while_health_ok():
-    # age can breach the 90s HARD budget long before the 2.5h stall flips health
+    # A closed bar remains valid until the next decision boundary. Only a
+    # missed next close plus its delivery budget blocks new arms.
     tm = TimeMachine(["BTC/USDT"], ["1h"])
-    tm.on_kline_update("BTC/USDT", "1h", _k(BASE, ex_ts=BASE), False)
-    now = BASE + timedelta(milliseconds=LT.TM_AGE_HARD_LAST_MS["1h"] + 1_000)
+    tm.on_kline_update(
+        "BTC/USDT", "1h", _k(BASE, ex_ts=BASE + timedelta(hours=1)), True
+    )
+    assert _gate(_Stub(tm), BASE + timedelta(hours=1, minutes=59)) is None
+    now = BASE + timedelta(
+        hours=2, milliseconds=LT.TM_AGE_HARD_LAST_MS["1h"] + 1_000
+    )
     assert tm.health_of("BTC/USDT", "1h") == "ok"  # not stale yet
     assert _gate(_Stub(tm), now) == "tm_age_hard"
+
+
+def test_15m_closed_bar_is_fresh_through_next_boundary():
+    tm = TimeMachine(["BTC/USDT"], ["15m"])
+    tm.on_kline_update(
+        "BTC/USDT", "15m", _k(BASE, ex_ts=BASE + timedelta(minutes=15)), True
+    )
+    assert _gate(_Stub(tm, tf="15m"), BASE + timedelta(minutes=29, seconds=59)) is None
+    overdue = BASE + timedelta(
+        minutes=30, milliseconds=LT.TM_AGE_HARD_LAST_MS["15m"] + 1
+    )
+    assert _gate(_Stub(tm, tf="15m"), overdue) == "tm_age_hard"
 
 
 def test_gate_faults_fail_closed(monkeypatch):
