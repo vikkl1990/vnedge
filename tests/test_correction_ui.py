@@ -128,9 +128,9 @@ def test_lane_projection_uses_server_health_bands() -> None:
     assert projected["health_details"]["bar_close_receipt"] == {
         "p95_ms": 120.0,
         "samples": 20,
-        "soft_ms": 500,
-        "hard_ms": 2000,
-        "recovery_ms": 1500,
+        "soft_ms": 5000,
+        "hard_ms": 15000,
+        "recovery_ms": 10000,
         "band": "blocked",
     }
 
@@ -158,7 +158,7 @@ def test_lane_projection_reports_simultaneous_latency_failures() -> None:
         "bar_close_lag_hard",
         "decision_lag_hard",
     ]
-    assert projected["health_details"]["bar_close_receipt"]["hard_ms"] == 2_000
+    assert projected["health_details"]["bar_close_receipt"]["hard_ms"] == 8_000
     assert projected["health_details"]["decision_compute"] == {
         "p95_ms": 4_200.0,
         "samples": 101,

@@ -1048,17 +1048,36 @@ def _canonical_candle_frame(
 def _overlay_canonical_history(
     history: pd.DataFrame,
     canonical: pd.DataFrame,
+    *,
+    allow_validated_exchange_ohlcv: bool = False,
 ) -> pd.DataFrame:
+    """Overlay exact trade-derived rows onto one validated venue history.
+
+    Exchange OHLCV is non-armable by default because it cannot satisfy the
+    quote-volume/trade-count contract used by range, AVWAP, and flow lanes.
+    The sole opt-in is a strategy whose registered contract explicitly names
+    official price-only OHLC as its structure source.
+    """
+    default_quality = "ok" if allow_validated_exchange_ohlcv else "gap"
+    default_source = (
+        "exchange_ohlcv_validated"
+        if allow_validated_exchange_ohlcv
+        else "exchange_ohlcv"
+    )
     if canonical.empty:
         out = history.copy()
         # Absence of the canonical lake must not be more permissive than a
         # partially populated lake. Every exchange-only row is explicit and
         # non-armable until exact trade-derived truth is available.
-        out["data_quality"] = "gap"
+        out["data_quality"] = default_quality
         out["is_closed"] = True
-        out["candle_source"] = "exchange_ohlcv"
+        out["candle_source"] = default_source
         return out
-    out = history.copy().set_index("timestamp")
+    out = history.copy()
+    out["data_quality"] = default_quality
+    out["is_closed"] = True
+    out["candle_source"] = default_source
+    out = out.set_index("timestamp")
     exact = canonical.copy().set_index("timestamp")
     for name in exact.columns:
         if name not in out:
@@ -1066,8 +1085,31 @@ def _overlay_canonical_history(
         overlap = out.index.intersection(exact.index)
         if len(overlap):
             out.loc[overlap, name] = exact.loc[overlap, name]
-    out["candle_source"] = out["candle_source"].fillna("exchange_ohlcv")
+    out["candle_source"] = out["candle_source"].fillna(default_source)
     return out.reset_index().sort_values("timestamp").reset_index(drop=True)
+
+
+_VALIDATED_EXCHANGE_OHLCV_STRATEGIES = frozenset(
+    {HtfRegimeContinuation15mV2.strategy_id}
+)
+_CONTEXT_WARMUP_BARS = 800
+
+
+def _allows_validated_exchange_ohlcv(spec: LaneSpec) -> bool:
+    """Whether this exact registered ID may arm from official price-only OHLC."""
+    return spec.strategy_id in _VALIDATED_EXCHANGE_OHLCV_STRATEGIES
+
+
+def _warmup_since_for_timeframe(
+    timeframe: str,
+    until_ms: int,
+    *,
+    bars: int,
+) -> int:
+    """Return a close-boundary-aligned lookback for one independent clock."""
+    timeframe_ms = _timeframe_ms(timeframe)
+    boundary = (until_ms // timeframe_ms) * timeframe_ms
+    return boundary - max(1, int(bars)) * timeframe_ms
 
 
 def _canonical_runtime_store(
@@ -1118,6 +1160,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     **{strategy.strategy_id: strategy.warmup_bars for strategy in NEW_RESEARCH_SCANNERS},
     **{strategy.strategy_id: strategy.warmup_bars for strategy in REALTIME_SCANNERS},
     HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1.warmup_bars,
+    HtfRegimeContinuation15mV2.strategy_id: HtfRegimeContinuation15mV2.warmup_bars,
 }
 
 
@@ -1351,6 +1394,8 @@ async def build_lane(
             not_before=datetime.fromtimestamp(since / 1000, tz=UTC),
         )
     funding_history_unsupported = False
+    allow_validated_exchange_ohlcv = _allows_validated_exchange_ohlcv(spec)
+    context_seed_frames: dict[str, pd.DataFrame] = {}
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
         # the gap since the last run; degrades to a full fetch on any cache miss.
@@ -1370,13 +1415,59 @@ async def build_lane(
                 spec.lane_id,
             )
             canonical_history = pd.DataFrame()
-        history = _overlay_canonical_history(history, canonical_history)
+        history = _overlay_canonical_history(
+            history,
+            canonical_history,
+            allow_validated_exchange_ohlcv=allow_validated_exchange_ohlcv,
+        )
         strategy_requirement = _strategy_warmup_requirement(spec)
         if len(history) <= strategy_requirement:
             raise RuntimeError(
                 f"lane {spec.lane_id} warmup incomplete: {len(history)} bars; "
                 f"strategy requires more than {strategy_requirement}"
             )
+        # V2 deliberately declares an official price-only OHLC contract. Its
+        # daily EMA200 and weekly structure need an independent HTF window;
+        # reusing the 15m ``since`` timestamp made readiness impossible.
+        runtime_contract = scanner_runtime_contract(spec.strategy_id)
+        if allow_validated_exchange_ohlcv and runtime_contract is not None:
+            for context_timeframe in runtime_contract.context_tfs:
+                context_since = _warmup_since_for_timeframe(
+                    context_timeframe,
+                    until,
+                    bars=_CONTEXT_WARMUP_BARS,
+                )
+                context_spec = replace(spec, timeframe=context_timeframe)
+                exchange_context = await _warmup_candles(
+                    rest,
+                    context_spec,
+                    journal_dir
+                    / f"{spec.lane_id}.context_{context_timeframe}.candles.parquet",
+                    context_since,
+                    until,
+                )
+                try:
+                    exact_context = await asyncio.to_thread(
+                        _canonical_candle_frame,
+                        canonical_store,
+                        spec.symbol,
+                        context_timeframe,
+                        since_ms=context_since,
+                        until_ms=until,
+                    )
+                except (OSError, ValueError):
+                    logger.exception(
+                        "lane %s canonical %s context overlay unavailable; "
+                        "using validated official OHLC for the registered V2 contract",
+                        spec.lane_id,
+                        context_timeframe,
+                    )
+                    exact_context = pd.DataFrame()
+                context_seed_frames[context_timeframe] = _overlay_canonical_history(
+                    exchange_context,
+                    exact_context,
+                    allow_validated_exchange_ohlcv=True,
+                )
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
         except NotSupported:
@@ -1487,22 +1578,29 @@ async def build_lane(
     context_binder = getattr(strategy, "bind_canonical_context", None)
     if context_timeframes and callable(context_binder):
         for context_timeframe in context_timeframes:
-            try:
-                context_history = await asyncio.to_thread(
-                    _canonical_candle_frame,
-                    canonical_store,
-                    spec.symbol,
+            context_history = context_seed_frames.get(context_timeframe)
+            if context_history is None:
+                context_since = _warmup_since_for_timeframe(
                     context_timeframe,
-                    since_ms=since,
-                    until_ms=until,
+                    until,
+                    bars=_CONTEXT_WARMUP_BARS,
                 )
-            except (OSError, ValueError):
-                logger.exception(
-                    "lane %s canonical %s context unavailable; scanner remains fail-closed",
-                    spec.lane_id,
-                    context_timeframe,
-                )
-                context_history = pd.DataFrame()
+                try:
+                    context_history = await asyncio.to_thread(
+                        _canonical_candle_frame,
+                        canonical_store,
+                        spec.symbol,
+                        context_timeframe,
+                        since_ms=context_since,
+                        until_ms=until,
+                    )
+                except (OSError, ValueError):
+                    logger.exception(
+                        "lane %s canonical %s context unavailable; scanner remains fail-closed",
+                        spec.lane_id,
+                        context_timeframe,
+                    )
+                    context_history = pd.DataFrame()
             context_binder(context_timeframe, context_history)
             if not context_history.empty:
                 opened = pd.Timestamp(context_history["timestamp"].iloc[-1])

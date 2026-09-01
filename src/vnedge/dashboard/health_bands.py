@@ -129,6 +129,7 @@ def lane_bands(lane: dict) -> dict:
     lat = lane.get("latency") or {}
     decision_stats = _latency_metric(lat, "decision_lag_ms")
     bar_stats = _latency_metric(lat, "bar_close_processing_ms", "feed_lag_ms")
+    bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(tf)
     decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(tf)
     dlag = LT.classify_latency_stats(
         decision_stats,
@@ -138,9 +139,9 @@ def lane_bands(lane: dict) -> dict:
     )
     blag = LT.classify_latency_stats(
         bar_stats,
-        soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-        hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
-        recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
+        soft_ms=bar_soft,
+        hard_ms=bar_hard,
+        recovery_ms=bar_recovery,
     )
     sc = lane.get("trial_scorecard") or {}
     return {

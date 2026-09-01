@@ -127,7 +127,7 @@ def test_lane_bands_verdict_tone():
 def test_bar_close_latency_has_its_own_band_and_degrades_decision_chip():
     lane = _lane(
         latency={
-            "bar_close_processing_ms": {"p95": 750, "n": 20},
+            "bar_close_processing_ms": {"p95": 7_500, "n": 20},
             "decision_lag_ms": {"p95": 25, "n": 20},
         }
     )
@@ -139,7 +139,7 @@ def test_bar_close_latency_has_its_own_band_and_degrades_decision_chip():
 def test_hard_bar_close_latency_blocks_decision_chip():
     lane = _lane(
         latency={
-            "bar_close_processing_ms": {"p95": 2_500, "n": 20},
+            "bar_close_processing_ms": {"p95": 16_000, "n": 20},
             "decision_lag_ms": {"p95": 25, "n": 20},
         }
     )
@@ -151,9 +151,9 @@ def test_recovered_hard_tail_is_degraded_not_blocked():
     lane = _lane(
         latency={
             "bar_close_processing_ms": {
-                "p95": 2_500,
+                "p95": 16_000,
                 "n": 25,
-                "recent": [900, 800, 700, 750, 650],
+                "recent": [9_000, 8_000, 7_000, 7_500, 6_500],
             },
             "decision_lag_ms": {"p95": 25, "n": 25, "recent": [25] * 5},
         },

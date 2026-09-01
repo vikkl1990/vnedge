@@ -14,9 +14,11 @@ from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
     MultiLaneShadowRunner,
+    _allows_validated_exchange_ohlcv,
     _build_single_strategy,
     _canonical_runtime_store,
     _overlay_canonical_history,
+    _warmup_since_for_timeframe,
 )
 from vnedge.runtime.multi_lane_shadow import (
     build_capital_lane_specs,
@@ -183,6 +185,53 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv"
     assert overlaid.iloc[0]["data_quality"] == "gap"
     assert bool(overlaid.iloc[0]["is_closed"]) is True
+
+
+def test_htf_v2_may_seed_only_validated_price_only_exchange_history():
+    exchange = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10.0],
+        }
+    )
+    overlaid = _overlay_canonical_history(
+        exchange,
+        pd.DataFrame(),
+        allow_validated_exchange_ohlcv=True,
+    )
+    assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv_validated"
+    assert overlaid.iloc[0]["data_quality"] == "ok"
+    assert _allows_validated_exchange_ohlcv(
+        LaneSpec(
+            lane_id="htf_v2",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id=HtfRegimeContinuation15mV2.strategy_id,
+        )
+    )
+    assert not _allows_validated_exchange_ohlcv(
+        LaneSpec(
+            lane_id="range",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id="range_expansion_realtime_v2",
+        )
+    )
+
+
+def test_context_warmup_uses_its_own_timeframe_clock():
+    until = int(pd.Timestamp("2026-09-01T12:34:00Z").timestamp() * 1000)
+    daily_since = _warmup_since_for_timeframe("1d", until, bars=800)
+    h4_since = _warmup_since_for_timeframe("4h", until, bars=800)
+
+    assert (until // 86_400_000) * 86_400_000 - daily_since == 800 * 86_400_000
+    assert (until // 14_400_000) * 14_400_000 - h4_since == 800 * 14_400_000
 
 
 def test_non_binance_measurement_does_not_wait_on_unowned_canonical_store(tmp_path):

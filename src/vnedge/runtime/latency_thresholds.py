@@ -61,6 +61,22 @@ LATENCY_RECOVERY_CONSECUTIVE_SAMPLES = 5
 CLOSED_BAR_LAG_RECOVERY_MS = 1500
 DECISION_COMPUTE_RECOVERY_MS = 100
 
+# Finalized public candles are not matching-engine acknowledgements.  Delta's
+# production candlestick stream normally publishes a closed 5m/15m candle a
+# few seconds after the UTC boundary.  Applying the sub-minute/default 2s
+# budget to every timeframe made a healthy, gap-free Delta stream reject an
+# otherwise accepted 15m quote hold.  Keep the default strict for unknown and
+# 1m clocks, but scale the transport budget with the causal decision horizon.
+# These limits govern NEW arms only; Time Machine continuity/staleness remains
+# the independent fail-closed candle-quality gate.
+CLOSED_BAR_LAG_LIMITS_MS: dict[str, tuple[int, int, int]] = {
+    # timeframe: (soft p95, hard p95, recovery sample)
+    "5m": (2_000, 5_000, 4_000),
+    "15m": (3_000, 8_000, 6_000),
+    "1h": (5_000, 15_000, 10_000),
+    "4h": (10_000, 30_000, 20_000),
+}
+
 # --- snapshot / UI path (ms) — observability, never gates arms ---------------
 SNAPSHOT_AGE_SOFT_P99_MS = 3000
 SNAPSHOT_AGE_HARD_P99_MS = 10000
@@ -88,6 +104,24 @@ def decision_compute_limits(timeframe: str) -> tuple[int, int, int]:
             DECISION_COMPUTE_SOFT_P99_MS,
             DECISION_COMPUTE_HARD_P99_MS,
             DECISION_COMPUTE_RECOVERY_MS,
+        ),
+    )
+
+
+def closed_bar_receipt_limits(timeframe: str) -> tuple[int, int, int]:
+    """Return SOFT/HARD/recovery transport budgets for a closed candle.
+
+    Unknown and one-minute clocks keep the conservative global baseline.  A
+    configured higher timeframe receives only enough delivery slack for the
+    venue's finalized public candle; it never changes when the bar is allowed
+    to close or relaxes gap/future/staleness checks.
+    """
+    return CLOSED_BAR_LAG_LIMITS_MS.get(
+        str(timeframe or "").strip().lower(),
+        (
+            CLOSED_BAR_LAG_SOFT_P99_MS,
+            CLOSED_BAR_LAG_HARD_P99_MS,
+            CLOSED_BAR_LAG_RECOVERY_MS,
         ),
     )
 

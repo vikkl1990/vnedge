@@ -144,8 +144,9 @@ def test_gate_blocks_hard_closed_bar_processing_lag():
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
     latency = LatencyTracker()
+    _, hard_ms, _ = LT.closed_bar_receipt_limits("1h")
     for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+        latency.record(BAR_CLOSE_PROCESSING_MS, hard_ms + 1)
 
     assert _gate(_Stub(tm, latency=latency), BASE) == "bar_close_lag_hard"
 
@@ -179,13 +180,14 @@ def test_gate_self_recovers_after_five_fresh_healthy_bar_closes():
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
     latency = LatencyTracker()
+    _, hard_ms, recovery_ms = LT.closed_bar_receipt_limits("1h")
     for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+        latency.record(BAR_CLOSE_PROCESSING_MS, hard_ms + 1)
     for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+        latency.record(BAR_CLOSE_PROCESSING_MS, recovery_ms)
 
     stats = latency.stats(BAR_CLOSE_PROCESSING_MS)
-    assert stats["p95"] > LT.CLOSED_BAR_LAG_HARD_P99_MS
+    assert stats["p95"] > hard_ms
     assert _gate(_Stub(tm, latency=latency), BASE) is None
 
 
@@ -193,10 +195,11 @@ def test_gate_stays_blocked_until_recovery_proof_is_complete():
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
     latency = LatencyTracker()
+    _, hard_ms, recovery_ms = LT.closed_bar_receipt_limits("1h")
     for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+        latency.record(BAR_CLOSE_PROCESSING_MS, hard_ms + 1)
     for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES - 1):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+        latency.record(BAR_CLOSE_PROCESSING_MS, recovery_ms)
 
     assert _gate(_Stub(tm, latency=latency), BASE) == "bar_close_lag_hard"
 
@@ -205,11 +208,22 @@ def test_gate_reblocks_immediately_when_recovery_relapses():
     tm = TimeMachine(["BTC/USDT"], ["1h"])
     tm.on_kline_update("BTC/USDT", "1h", _k(BASE), False)
     latency = LatencyTracker()
+    _, hard_ms, recovery_ms = LT.closed_bar_receipt_limits("1h")
     for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_HARD_P99_MS + 1)
+        latency.record(BAR_CLOSE_PROCESSING_MS, hard_ms + 1)
     for _ in range(LT.LATENCY_RECOVERY_CONSECUTIVE_SAMPLES):
-        latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS)
+        latency.record(BAR_CLOSE_PROCESSING_MS, recovery_ms)
     assert _gate(_Stub(tm, latency=latency), BASE) is None
 
-    latency.record(BAR_CLOSE_PROCESSING_MS, LT.CLOSED_BAR_LAG_RECOVERY_MS + 1)
+    latency.record(BAR_CLOSE_PROCESSING_MS, recovery_ms + 1)
     assert _gate(_Stub(tm, latency=latency), BASE) == "bar_close_lag_hard"
+
+
+def test_delta_scale_15m_finalization_delay_does_not_block_new_arms():
+    tm = TimeMachine(["BTC/USDT"], ["15m"])
+    tm.on_kline_update("BTC/USDT", "15m", _k(BASE), False)
+    latency = LatencyTracker()
+    for _ in range(LT.LATENCY_GATE_MIN_SAMPLES):
+        latency.record(BAR_CLOSE_PROCESSING_MS, 3_400)
+
+    assert _gate(_Stub(tm, latency=latency, tf="15m"), BASE) is None

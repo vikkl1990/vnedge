@@ -374,6 +374,7 @@ def _health_diagnostics(
     )
     decision_p95 = _latency_value(lane, "decision_lag_ms")
     timeframe = str(lane.get("timeframe") or "")
+    bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(timeframe)
     decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
         timeframe
     )
@@ -383,9 +384,9 @@ def _health_diagnostics(
             "samples": _latency_samples(
                 lane, "bar_close_processing_ms", "feed_lag_ms"
             ),
-            "soft_ms": LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-            "hard_ms": LT.CLOSED_BAR_LAG_HARD_P99_MS,
-            "recovery_ms": LT.CLOSED_BAR_LAG_RECOVERY_MS,
+            "soft_ms": bar_soft,
+            "hard_ms": bar_hard,
+            "recovery_ms": bar_recovery,
             "band": str(bands.get("bar_close_lag") or "unknown"),
         },
         "decision_compute": {
