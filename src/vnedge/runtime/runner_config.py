@@ -78,7 +78,14 @@ class RunnerConfig(BaseModel):
     # them bounded so per-close preparation cost and memory stay flat with
     # process uptime.  The session raises this floor automatically when a
     # strategy warmup/hold/trailing contract needs more rows.
-    working_frame_bars: int = Field(default=4096, ge=256, le=100_000)
+    # Keep only a small generic floor. ``LivePaperSession`` raises this to the
+    # strategy's declared warmup + holding/exit buffer, so Range still retains
+    # its complete 20-day hour profile while 15m structure lanes no longer
+    # rescan 4,096 rows on every close.  The former 4,096 default made eight
+    # concurrent scanners spend 5-30 seconds in pandas and starved BBO/API
+    # handling even though their frozen contracts needed only a few hundred
+    # rows.
+    working_frame_bars: int = Field(default=256, ge=256, le=100_000)
     # The public market-data venue and the assumed execution-cost venue are
     # different contracts.  Leave this unset only when they are intentionally
     # the same; shadow deployments that model Delta fees while reading Binance

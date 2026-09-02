@@ -3513,7 +3513,7 @@ class LivePaperSession:
         """
         return await asyncio.to_thread(self.strategy.prepare, self.candles)
 
-    def _shadow_prime(self) -> None:
+    def _shadow_prime(self, df: pd.DataFrame | None = None) -> None:
         """SHADOW lanes only: backfill observability from seeded bars.
 
         The live loop otherwise acts only on bars that close AFTER startup, so
@@ -3527,7 +3527,11 @@ class LivePaperSession:
             return
         if len(self.candles) <= self.strategy.warmup_bars:
             return
-        df = self.strategy.prepare(self.candles)
+        if df is None:
+            # Compatibility for direct unit-test/caller use.  The runtime
+            # supplies its single startup frame so this fallback is never on
+            # the production event-loop hot path.
+            df = self.strategy.prepare(self.candles)
         last = len(df) - 1
         first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
         backfill_fired = 0
@@ -3561,7 +3565,7 @@ class LivePaperSession:
         trial_id = str((self.trial_meta or {}).get("trial_id") or "")
         return self.config.mode is RunnerMode.PAPER and trial_id.endswith("_paper_observation")
 
-    async def _paper_observation_prime(self) -> None:
+    async def _paper_observation_prime(self, df: pd.DataFrame | None = None) -> None:
         """PAPER observation lanes: prime observability, never restart-enter.
 
         Governed paper trials deliberately do not prime on startup because a
@@ -3577,7 +3581,8 @@ class LivePaperSession:
             return
         if len(self.candles) <= self.strategy.warmup_bars:
             return
-        df = self.strategy.prepare(self.candles)
+        if df is None:
+            df = await self._prepare_strategy_for_bar()
         last = len(df) - 1
         first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
         backfill_fired = 0
@@ -3611,19 +3616,36 @@ class LivePaperSession:
         bars = 0
         prepared_warmup = self.strategy.warmup_bars
 
+        # Restore, scanner priming, and shadow observability all require the
+        # same immutable view of the seeded candle frame.  Historically each
+        # path called ``strategy.prepare`` independently and synchronously.
+        # With 8+ lanes that serialized minutes of pandas work on the shared
+        # asyncio loop: health stayed green while /state, BBO handling, and
+        # the first real decisions were frozen.  Build once in a worker and
+        # share the result across the startup consumers.
+        startup_frame: pd.DataFrame | None = None
+        needs_startup_frame = (
+            (self.shadow_outcomes is not None and self.shadow_outcomes.has_pending)
+            or self.scanner_observer is not None
+            or self.config.mode is RunnerMode.SHADOW
+            or self._is_paper_observation_lane()
+        )
+        if needs_startup_frame:
+            startup_frame = await self._prepare_strategy_for_bar()
+
         if self.shadow_outcomes is not None and self.shadow_outcomes.has_pending:
             # restart: intents journaled before the shutdown resolve against
             # the seeded history first, so an already-hit stop or target is
             # never mis-resolved later at live prices
-            self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
+            assert startup_frame is not None
+            self._shadow_exit_df = startup_frame.reset_index(drop=True)
             self._log_shadow_outcomes(self.shadow_outcomes.replay(self._shadow_exit_df), started)
         if self.scanner_observer is not None:
-            self.scanner_observer.restore(
-                self.strategy.prepare(self.candles).reset_index(drop=True)
-            )
+            assert startup_frame is not None
+            self.scanner_observer.restore(startup_frame.reset_index(drop=True))
 
-        self._shadow_prime()
-        await self._paper_observation_prime()
+        self._shadow_prime(startup_frame)
+        await self._paper_observation_prime(startup_frame)
         self._record_runner_heartbeat("runner_started", started, force=True)
 
         while True:

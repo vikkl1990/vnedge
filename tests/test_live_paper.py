@@ -1103,6 +1103,39 @@ async def test_shadow_prime_never_enters_from_seeded_history(tmp_path):
     assert exchange.get_positions() == []
 
 
+async def test_shadow_startup_prepares_seeded_frame_once(tmp_path):
+    feed = FakeFeed([])
+    session, _exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    original_prepare = session.strategy.prepare
+    calls = 0
+
+    def counting_prepare(candles):
+        nonlocal calls
+        calls += 1
+        return original_prepare(candles)
+
+    session.strategy.prepare = counting_prepare  # type: ignore[method-assign]
+
+    await session.run(max_bars=0)
+
+    assert calls == 1
+
+
+def test_runtime_frame_uses_strategy_contract_not_legacy_4096_floor(tmp_path):
+    feed = FakeFeed([])
+    session, _exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+
+    expected = max(
+        256,
+        session.strategy.warmup_bars + session.config.max_holding_bars + 32,
+        session.config.trail_atr_window + session.config.max_holding_bars + 32,
+    )
+
+    assert session.config.working_frame_bars == 256
+    assert session._working_frame_limit == expected
+    assert session._working_frame_limit < 4096
+
+
 async def test_shadow_book_blocks_overlapping_virtual_positions(tmp_path):
     feed = FakeFeed(live_rows(n=2))
     session, _ = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
