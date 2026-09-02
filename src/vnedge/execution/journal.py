@@ -81,36 +81,63 @@ class DecisionJournal:
         """
         if not self.path.exists() or self.path.stat().st_size == 0:
             return
-        valid_lines: list[str] = []
-        bad_line: int | None = None
-        bad_reason = ""
-        with self.path.open(encoding="utf-8") as handle:
-            for lineno, raw in enumerate(handle, start=1):
-                stripped = raw.strip()
-                if not stripped:
-                    continue
-                try:
-                    record = json.loads(stripped)
-                    if not isinstance(record, dict):
-                        raise TypeError("record is not a JSON object")
-                except (json.JSONDecodeError, TypeError) as exc:
-                    bad_line = lineno
-                    bad_reason = str(exc)
-                    break
-                valid_lines.append(stripped)
-        if bad_line is None:
+        # append() performs one line-buffered, flushed+fsynced write. A crash
+        # can therefore tear only the final record. Re-reading and retaining
+        # every historical line on each process start made recovery O(file)
+        # in time *and* memory; high-volume evidence journals reached ~1 GiB
+        # and held the scanner process unavailable for minutes. Validate the
+        # crash boundary only. Full historical validation belongs to the
+        # offline evidence audit, while the hot WAL recovery remains strict
+        # about the only segment the current process could have torn.
+        size = self.path.stat().st_size
+        tail_bytes = min(size, 1 << 20)
+        with self.path.open("rb") as handle:
+            handle.seek(size - tail_bytes)
+            tail = handle.read(tail_bytes)
+        stripped = tail.rstrip(b"\r\n\t ")
+        if not stripped:
             return
+        line_start = stripped.rfind(b"\n") + 1
+        if line_start == 0 and tail_bytes < size:
+            # A journal record larger than 1 MiB violates the runtime record
+            # contract. Refuse it rather than guessing where its prefix began.
+            bad_offset = size - tail_bytes
+            bad_reason = "final journal record exceeds 1 MiB"
+        else:
+            bad_offset = size - tail_bytes + line_start
+            raw_line = stripped[line_start:]
+            try:
+                record = json.loads(raw_line.decode("utf-8"))
+                if not isinstance(record, dict):
+                    raise TypeError("record is not a JSON object")
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+                bad_reason = str(exc)
+            else:
+                # A complete JSON record without its newline would otherwise
+                # concatenate with the next append. Repair that delimiter and
+                # keep the journal available; no decision body was lost.
+                if not tail.endswith(b"\n"):
+                    with self.path.open("ab") as handle:
+                        handle.write(b"\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                return
 
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         quarantine = self.path.with_name(f"{self.path.name}.corrupt.{stamp}")
         os.replace(self.path, quarantine)
-        with self.path.open("w", encoding="utf-8") as handle:
-            for line in valid_lines:
-                handle.write(line + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        with quarantine.open("rb") as source, self.path.open("wb") as target:
+            remaining = bad_offset
+            while remaining > 0:
+                chunk = source.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                target.write(chunk)
+                remaining -= len(chunk)
+            target.flush()
+            os.fsync(target.fileno())
         self._recovery_degraded = True
-        self._recovery_error = f"malformed record at line {bad_line}: {bad_reason}"
+        self._recovery_error = f"malformed final record at byte {bad_offset}: {bad_reason}"
         self._quarantine_path = quarantine
         logger.critical(
             "DECISION JOURNAL RECOVERY DEGRADED (%s); original quarantined at %s — "

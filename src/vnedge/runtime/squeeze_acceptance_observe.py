@@ -66,6 +66,9 @@ class SqueezeAcceptanceObserveRunner:
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
     _last_journaled_episode: int | None = field(default=None, init=False, repr=False)
+    _journaled_quote_diagnostics: set[tuple[int | None, str]] = field(
+        default_factory=set, init=False, repr=False
+    )
     _armed_episodes: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _last_bid: float | None = field(default=None, init=False, repr=False)
     _last_ask: float | None = field(default=None, init=False, repr=False)
@@ -533,11 +536,38 @@ class SqueezeAcceptanceObserveRunner:
         exchange_timestamped: bool,
     ) -> None:
         reason = self.acceptance.last_reason
+        arm = self.acceptance.arm
+        episode = arm.episode_id if arm is not None else None
+
+        # These are per-quote diagnostics, not lifecycle transitions.  A
+        # combined ticker/L1 feed legitimately alternates ``quote_duplicate``
+        # and ``no_active_arm`` while flat.  Persisting every alternation used
+        # to fsync several records per second per lane, growing journals to
+        # ~1 GiB and starving the candle/event loop until the safety latency
+        # gate blocked every new arm.  Keep the first observation per arm
+        # episode (or once while flat); cumulative counters remain present on
+        # every real arm/probe/accept transition and in the runtime snapshot.
+        diagnostic_reasons = {
+            "invalid_quote",
+            "quote_clock_skew",
+            "quote_ingest_lag",
+            "quote_out_of_order",
+            "quote_duplicate",
+            "no_active_arm",
+            "quote_outside_session",
+            "one_net_position",
+            "cooldown",
+            "daily_fire_budget",
+        }
+        if reason in diagnostic_reasons:
+            diagnostic_key = (episode, reason)
+            if diagnostic_key in self._journaled_quote_diagnostics:
+                return
+            self._journaled_quote_diagnostics.add(diagnostic_key)
         if reason == self._last_journaled_acceptance:
             return
         self._last_journaled_acceptance = reason
-        arm = self.acceptance.arm
-        self._last_journaled_episode = arm.episode_id if arm is not None else None
+        self._last_journaled_episode = episode
         self.journal.append(
             "scanner_transition",
             {

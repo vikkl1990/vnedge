@@ -264,6 +264,19 @@ def test_journal_roundtrip(tmp_path):
     assert records[0]["kind"] == "test_event"
 
 
+def test_complete_wal_tail_without_newline_is_repaired(tmp_path):
+    path = tmp_path / "j.jsonl"
+    path.write_text('{"ts":"x","kind":"test_event","payload":{"a":1}}')
+
+    recovered = DecisionJournal(path)
+
+    assert recovered.available
+    assert not recovered.recovery_degraded
+    assert path.read_bytes().endswith(b"\n")
+    assert recovered.append("test_event", {"a": 2})
+    assert [row["payload"]["a"] for row in recovered.read_all()] == [1, 2]
+
+
 async def test_corrupt_wal_tail_is_quarantined_and_entries_fail_closed(tmp_path, gateway):
     path = tmp_path / "j.jsonl"
     initial = DecisionJournal(path)

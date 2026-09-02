@@ -428,6 +428,29 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert runner.acceptance.long.state is AcceptanceState.ARMED
 
 
+def test_shadow_runner_does_not_fsync_every_inert_quote() -> None:
+    """Flat/duplicate quote telemetry is diagnostic, not a state transition."""
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USD:USD")
+    t0 = datetime(2026, 9, 2, tzinfo=UTC)
+
+    # Alternating fresh and duplicate ticker/L1 frames used to defeat the
+    # adjacent-reason de-duplicator and append several fsynced records/second.
+    for second in range(10):
+        ts = t0 + timedelta(seconds=second)
+        runner.on_quote(bid=100.0, ask=100.5, ts=ts, sequence=second)
+        runner.on_quote(bid=100.0, ask=100.5, ts=ts, sequence=second)
+
+    transitions = [
+        payload for kind, payload in journal.records if kind == "scanner_transition"
+    ]
+    assert {payload["state"] for payload in transitions} == {
+        "no_active_arm",
+        "quote_duplicate",
+    }
+    assert len(transitions) == 2
+
+
 def test_quote_shadow_books_only_explicit_settled_funding_print() -> None:
     journal = _Journal()
     runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTCUSD")
