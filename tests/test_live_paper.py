@@ -1121,6 +1121,25 @@ async def test_shadow_startup_prepares_seeded_frame_once(tmp_path):
     assert calls == 1
 
 
+async def test_shadow_startup_offloads_restore_and_prime(tmp_path, monkeypatch):
+    feed = FakeFeed([])
+    session, _exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
+    calls: list[object] = []
+    real_to_thread = asyncio.to_thread
+
+    async def recording_to_thread(function, /, *args, **kwargs):
+        calls.append(function)
+        return await real_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", recording_to_thread)
+
+    await session.run(max_bars=0)
+
+    assert session._shadow_prime in calls
+    if session.scanner_observer is not None:
+        assert session.scanner_observer.restore in calls
+
+
 def test_runtime_frame_uses_strategy_contract_not_legacy_4096_floor(tmp_path):
     feed = FakeFeed([])
     session, _exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)

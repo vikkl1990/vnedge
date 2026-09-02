@@ -3642,9 +3642,18 @@ class LivePaperSession:
             self._log_shadow_outcomes(self.shadow_outcomes.replay(self._shadow_exit_df), started)
         if self.scanner_observer is not None:
             assert startup_frame is not None
-            self.scanner_observer.restore(startup_frame.reset_index(drop=True))
+            # Restore replays every retained row to reconstruct a durable arm
+            # or open virtual position. Range lanes legitimately retain more
+            # than 2,000 rows, so this pure-Python loop must not run on the
+            # shared asyncio thread where it would pause BBO and /state.
+            await asyncio.to_thread(
+                self.scanner_observer.restore,
+                startup_frame.reset_index(drop=True),
+            )
 
-        self._shadow_prime(startup_frame)
+        # The observability backfill is also CPU work. It never mutates feed or
+        # order state, so isolate it with the prepared frame just like restore.
+        await asyncio.to_thread(self._shadow_prime, startup_frame)
         await self._paper_observation_prime(startup_frame)
         self._record_runner_heartbeat("runner_started", started, force=True)
 
