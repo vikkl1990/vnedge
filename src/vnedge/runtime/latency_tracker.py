@@ -213,6 +213,13 @@ class LatencyTracker:
         return {
             "version": 1,
             "bar_close_semantics": "receipt_live_v3",
+            # Gating samples are only comparable within one runtime-cost
+            # epoch.  The pre-v4 quote path synchronously fsynced repeated
+            # inert diagnostics, starving the event loop and contaminating
+            # both close-receipt and decision-compute p95.  Keep the epoch
+            # stable across ordinary deploys; change it only when a proven
+            # runtime defect changes the meaning of the safety samples.
+            "gate_epoch": "bounded_quote_journal_v4",
             "maxlen": self.maxlen,
             "series": {name: list(values) for name, values in self._series.items()},
         }
@@ -231,6 +238,7 @@ class LatencyTracker:
         if not isinstance(raw_series, Mapping):
             raise TypeError("latency checkpoint series must be a mapping")
         legacy_close_semantics = state.get("bar_close_semantics") != "receipt_live_v3"
+        stale_gate_epoch = state.get("gate_epoch") != "bounded_quote_journal_v4"
 
         restored: dict[str, deque[float]] = {}
         count = 0
@@ -241,16 +249,17 @@ class LatencyTracker:
                 raise TypeError(
                     f"latency checkpoint metric {raw_name!r} must be a list"
                 )
-            if legacy_close_semantics and raw_name in {
+            skip_legacy_close = legacy_close_semantics and raw_name in {
                 BAR_CLOSE_PROCESSING_MS,
                 FEED_LAG_MS,
                 BAR_CLOSE_RECEIPT_MS,
-            }:
-                # Pre-v3 close samples either included the bounded canonical
-                # wait or admitted the historical warm-up seam as a live
-                # receipt. Mixing either shape into the corrected live-only
-                # series would keep lanes falsely blocked for a whole window.
-                continue
+            }
+            skip_stale_gate = stale_gate_epoch and raw_name in {
+                BAR_CLOSE_PROCESSING_MS,
+                BAR_CLOSE_RECEIPT_MS,
+                FEED_LAG_MS,
+                DECISION_LAG_MS,
+            }
             values: list[float] = []
             for raw_value in raw_values:
                 try:
@@ -264,6 +273,13 @@ class LatencyTracker:
                         f"latency checkpoint metric {raw_name!r} is non-finite"
                     )
                 values.append(value)
+            # Validate even a retired series before skipping it.  Otherwise a
+            # corrupt checkpoint could be reported as successfully restored.
+            if skip_legacy_close or skip_stale_gate:
+                # Pre-v3 close samples used a different receipt definition.
+                # Pre-v4 gating samples describe the known quote-WAL fsync
+                # storm.  Neither may shape the current new-arm safety gate.
+                continue
             bounded = values[-self.maxlen :]
             if bounded:
                 restored[raw_name] = deque(bounded, maxlen=self.maxlen)
