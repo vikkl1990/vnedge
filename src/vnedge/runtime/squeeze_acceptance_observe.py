@@ -194,7 +194,20 @@ class SqueezeAcceptanceObserveRunner:
                 self._restore_error = "v3 scanner decision bar absent from warmup"
                 return
 
-        for index in range(len(df)):
+        # ``prepare()`` has already computed the complete causal feature frame.
+        # Replaying every prepared row here is both unnecessary and expensive:
+        # a flat quote scanner can only retain an arm for its short grace
+        # window.  Historical arm transitions are restored from the journal in
+        # ``__post_init__``.  An open durable position is different: replay its
+        # exit path from the entry candle so stop/trail/strategy exits remain
+        # restart-equivalent.
+        if pending is not None and entry_index is not None:
+            replay_start = min(entry_index, len(df))
+        else:
+            arm_tail_bars = max(4, int(self.acceptance.config.arm_grace_bars) + 1)
+            replay_start = max(0, len(df) - arm_tail_bars)
+
+        for index in range(replay_start, len(df)):
             self.current_bar_index = index
             self._update_arm_from_row(df.iloc[index], index)
             if pending is not None and index == entry_index:

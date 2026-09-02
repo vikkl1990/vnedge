@@ -330,6 +330,44 @@ def test_shadow_runner_reports_rejection_categories_without_double_counting() ->
     assert stats["portfolio_rejected"] == 1
 
 
+def test_flat_restore_replays_only_causally_live_arm_tail() -> None:
+    runner = SqueezeAcceptanceObserveRunner(journal=_Journal(), symbol="BTCUSD")
+    start = datetime(2026, 8, 20, tzinfo=UTC)
+    bars = pd.DataFrame(
+        [
+            {
+                "timestamp": start + timedelta(minutes=5 * index),
+                "open": 99.5,
+                "high": 100.0,
+                "low": 99.0,
+                "close": 99.8,
+                "volume": 1000.0,
+                "sqz_episode": float(index),
+                "sqz_range_high": 100.0,
+                "sqz_range_low": 99.0,
+                "sqz_atr": 0.25,
+                "sqz_vwap24": 99.5,
+                "sqz_compressed": 1.0,
+            }
+            for index in range(2_018)
+        ]
+    )
+    evaluated: list[int] = []
+    update_arm = runner._update_arm_from_row
+
+    def record_update(row: pd.Series, index: int, **kwargs: object) -> None:
+        evaluated.append(index)
+        update_arm(row, index, **kwargs)  # type: ignore[arg-type]
+
+    runner._update_arm_from_row = record_update  # type: ignore[method-assign]
+    runner.restore(bars)
+
+    assert evaluated == list(range(len(bars) - 4, len(bars)))
+    assert runner.current_bar_index == len(bars) - 1
+    assert runner.acceptance.arm is not None
+    assert runner.acceptance.arm.episode_id == len(bars) - 1
+
+
 def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     journal = _Journal()
     runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USDT:USDT")
