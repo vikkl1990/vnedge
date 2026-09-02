@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import numbers
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -515,16 +516,37 @@ def _lane_trade_compatibility(snapshot: dict) -> dict:
 
 
 def _json_safe(obj):
-    """Recursively replace non-finite floats (inf/-inf/nan) with None.
+    """Return a recursively JSON-native snapshot.
 
-    Starlette serializes JSON with allow_nan=False, so one inf/nan anywhere in
-    the published snapshot raises ValueError and 500s /state (or drops /ws) —
-    which silently freezes the dashboard on stale data. Null is always safe.
+    Strategy features originate in pandas/numpy, so otherwise-valid values can
+    be numpy scalar types which the stdlib encoder rejects.  Starlette also
+    serializes with ``allow_nan=False``.  Normalize both classes of value at
+    the provider boundary so HTTP and websocket consumers see the same payload.
     """
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
+    if obj is None or isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, Decimal):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if isinstance(obj, numbers.Integral):
+        return int(obj)
+    if isinstance(obj, numbers.Real):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    # numpy scalar classes expose item(), while ordinary runtime/domain
+    # objects do not.  Recurse because item() can return another scalar type.
+    item = getattr(obj, "item", None)
+    if callable(item):
+        try:
+            native = item()
+        except (TypeError, ValueError):
+            native = obj
+        if native is not obj:
+            return _json_safe(native)
     if isinstance(obj, dict):
-        return {key: _json_safe(value) for key, value in obj.items()}
+        return {str(_json_safe(key)): _json_safe(value) for key, value in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(value) for value in obj]
     return obj

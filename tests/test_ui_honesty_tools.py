@@ -238,11 +238,20 @@ def test_snapshot_never_serves_non_finite_floats():
 
 
 def test_json_safe_scrubs_inf_and_nan_recursively():
+    import numpy as np
+
     dirty = {"a": math.inf, "b": math.nan, "c": [-math.inf, 2.0], "d": {"e": 1.5}, "s": "x"}
+    dirty["numpy"] = {
+        "int": np.int64(39),
+        "float": np.float64(1.25),
+        "bool": np.bool_(True),
+    }
     clean = _json_safe(dirty)
     assert clean["a"] is None and clean["b"] is None
     assert clean["c"] == [None, 2.0]
     assert clean["d"]["e"] == 1.5 and clean["s"] == "x"
+    assert clean["numpy"] == {"int": 39, "float": 1.25, "bool": True}
+    json.dumps(clean, allow_nan=False)
 
 
 def test_journal_enriches_trades_with_exchange_hold_and_lane_rollup(tmp_path):
