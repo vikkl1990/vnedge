@@ -275,6 +275,14 @@ if [ "$NEED_BUILD" = 1 ]; then
     echo "freshness OK: container recreated at $started, image newer than code"
 fi
 
+# Caddy resolves the Compose service name to a container IP when its upstream
+# is first dialled.  Recreating multi-lane-shadow can therefore leave the
+# long-lived proxy pinned to the retired IP even though both containers report
+# healthy individually.  Refresh only the edge after the new lane container is
+# known to be running.  ``--no-deps`` is essential: without it, a forced proxy
+# refresh recreates multi-lane-shadow and repeats the entire warmup barrier.
+docker compose up -d --no-build --no-deps --force-recreate dashboard-tls
+
 # Edge assertion: the serving process can be healthy while Caddy is missing,
 # misconfigured, or unable to reach its upstream. The proxy healthcheck hits
 # the real TLS listener and /healthz; make that a deployment gate.

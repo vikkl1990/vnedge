@@ -42,6 +42,17 @@ def test_sanctioned_deploy_path_runs_fleet_policy_after_recreate() -> None:
     assert '--expected-build-sha "$HEAD_SHA"' in deploy
 
 
+def test_deploy_refreshes_tls_upstream_without_recreating_lane_dependency() -> None:
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+    refresh = (
+        "docker compose up -d --no-build --no-deps --force-recreate dashboard-tls"
+    )
+    refresh_index = deploy.index(refresh)
+    lane_proof_index = deploy.index("freshness OK: container recreated")
+    edge_index = deploy.index("waiting for TLS edge health")
+    assert lane_proof_index < refresh_index < edge_index
+
+
 def test_deploy_restores_canonical_recorder_before_recreating_lanes() -> None:
     deploy = (ROOT / "scripts" / "deploy.sh").read_text()
     start = deploy.index("recreate_in_waves()")
