@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "registered_at": "2026-08-31T00:00:00+00:00",
   "observers": [
     {
@@ -19,7 +19,8 @@
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
-      "trail_atr_mult": 0
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
     },
     {
       "strategy_id": "range_expansion_realtime_v2",
@@ -37,7 +38,8 @@
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
-      "trail_atr_mult": 0
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
     },
     {
       "strategy_id": "htf_regime_continuation_15m_v2",
@@ -55,7 +57,8 @@
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
-      "trail_atr_mult": 0
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
     },
     {
       "strategy_id": "structure_bos_realtime_v2",
@@ -73,7 +76,8 @@
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,
-      "trail_atr_mult": 0
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
     },
     {
       "strategy_id": "session_continuation_realtime_v2",
@@ -88,6 +92,47 @@
         "exit_engine": "scanner_exit_v1",
         "backtest_engine": "vnedge_quote_acceptance_replay",
         "engine_version": "2"
+      },
+      "starting_equity": 1000,
+      "daily_loss_usd": 20,
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
+    },
+    {
+      "strategy_id": "structure_bounce_route_probe_v2",
+      "exchange": "delta_india",
+      "cost_exchange": "delta_india",
+      "symbols": ["BTC/USD:USD"],
+      "timeframe": "5m",
+      "entry_route": "taker",
+      "maker_fill_ttl_bars": 6,
+      "revision": {
+        "version": "2",
+        "mechanism": "route-neutral 4h-map structure bounce cohort with symbol-specific Delta execution route",
+        "decision_engine": "base_strategy_routed_entry_v1",
+        "exit_engine": "active_exit_v1",
+        "backtest_engine": "vnedge_paired_route_replay",
+        "engine_version": "1"
+      },
+      "starting_equity": 1000,
+      "daily_loss_usd": 20,
+      "trail_atr_mult": 0
+    },
+    {
+      "strategy_id": "structure_bounce_route_probe_v2",
+      "exchange": "delta_india",
+      "cost_exchange": "delta_india",
+      "symbols": ["ETH/USD:USD"],
+      "timeframe": "5m",
+      "entry_route": "maker_retest",
+      "maker_fill_ttl_bars": 6,
+      "revision": {
+        "version": "2",
+        "mechanism": "route-neutral 4h-map structure bounce cohort with symbol-specific Delta execution route",
+        "decision_engine": "base_strategy_routed_entry_v1",
+        "exit_engine": "active_exit_v1",
+        "backtest_engine": "vnedge_paired_route_replay",
+        "engine_version": "1"
       },
       "starting_equity": 1000,
       "daily_loss_usd": 20,

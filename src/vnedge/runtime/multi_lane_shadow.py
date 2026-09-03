@@ -29,7 +29,7 @@ from vnedge.runtime.multi_lane import (
     MultiLaneProvider,
     MultiLaneShadowRunner,
 )
-from vnedge.runtime.runner_config import RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerMode
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.strategy_registry import (
     get_strategy_class,
@@ -45,8 +45,8 @@ DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
 _SUPPORTED_COST_EXCHANGES = frozenset({"binanceusdm", "bybit", "delta", "delta_india"})
 OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
-OBSERVER_ROSTER_VERSION = 2
-_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, OBSERVER_ROSTER_VERSION})
+OBSERVER_ROSTER_VERSION = 3
+_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, 2, OBSERVER_ROSTER_VERSION})
 _OBSERVER_FIELDS = frozenset(
     {
         "strategy_id",
@@ -57,6 +57,8 @@ _OBSERVER_FIELDS = frozenset(
         "daily_loss_usd",
         "trail_atr_mult",
         "cost_exchange",
+        "entry_route",
+        "maker_fill_ttl_bars",
         "revision",
         "enabled",
     }
@@ -420,6 +422,22 @@ def build_shadow_observe_roster_specs(
             raise ValueError(
                 f"observer {strategy_id} has unsupported cost_exchange {cost_exchange!r}"
             )
+        route_raw = str(row.get("entry_route", "auto")).strip().lower()
+        try:
+            entry_route = EntryRoute(route_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"observer {strategy_id} has invalid entry_route {route_raw!r}"
+            ) from exc
+        if int(roster_version) >= 3 and entry_route is EntryRoute.AUTO:
+            raise ValueError(
+                f"observer {strategy_id} roster v3 requires explicit entry_route"
+            )
+        maker_fill_ttl_bars = int(row.get("maker_fill_ttl_bars", 1))
+        if not 1 <= maker_fill_ttl_bars <= 288:
+            raise ValueError(
+                f"observer {strategy_id} maker_fill_ttl_bars must be in [1, 288]"
+            )
         if not enabled:
             continue
         for configured_symbol in symbols:
@@ -436,6 +454,8 @@ def build_shadow_observe_roster_specs(
                     daily_loss_usd=daily_loss_usd,
                     trail_atr_mult=trail_atr_mult,
                     execution_cost_exchange=cost_exchange,
+                    entry_route=entry_route,
+                    maker_fill_ttl_bars=maker_fill_ttl_bars,
                     is_primary=False,
                 )
             )

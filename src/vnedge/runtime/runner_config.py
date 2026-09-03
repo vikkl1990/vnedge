@@ -22,6 +22,19 @@ class RunnerMode(str, Enum):
     SHADOW = "shadow"
 
 
+class EntryRoute(str, Enum):
+    """How an approved signal reaches the execution boundary.
+
+    ``AUTO`` preserves historical strategy-prefix routing while old manifests
+    are replayed.  New observer manifests must state taker vs maker-retest
+    explicitly so shadow, paper, and a future live adapter see one contract.
+    """
+
+    AUTO = "auto"
+    TAKER = "taker"
+    MAKER_RETEST = "maker_retest"
+
+
 class RunnerConfig(BaseModel):
     model_config = {"frozen": True, "arbitrary_types_allowed": True}
 
@@ -91,6 +104,10 @@ class RunnerConfig(BaseModel):
     # the same; shadow deployments that model Delta fees while reading Binance
     # must name ``delta_india`` explicitly.
     execution_cost_exchange_id: str | None = None
+    # Entry routing is execution policy, not signal logic.  Keeping it on the
+    # runner makes one scanner cohort comparable across shadow/paper/live.
+    entry_route: EntryRoute = EntryRoute.AUTO
+    maker_fill_ttl_bars: int = Field(default=1, ge=1, le=288)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: SymbolLimits = Field(
         default=SymbolLimits(

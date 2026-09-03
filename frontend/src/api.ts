@@ -362,7 +362,7 @@ export interface ScannerRuntimeContract {
   decision_tf?: string;
   context_tfs?: string[];
   structure_clock?: "closed_bar";
-  entry_clock?: "next_open" | "bbo_acceptance";
+  entry_clock?: "next_open" | "bbo_acceptance" | "execution_route";
   protection_clock?: "ticks";
   context_last_closed_at?: Record<string, string>;
   context_age_seconds?: Record<string, number>;
@@ -428,6 +428,8 @@ export interface CorrectionLane {
   last_signal_reason: string;
   current_waiting_reason: string;
   cost_profile: string;
+  entry_route: "auto" | "taker" | "maker_retest" | string;
+  maker_fill_ttl_bars: number | null;
   round_trip_bps: number | null;
   health: "ok" | "degraded" | "blocked" | "unknown";
   health_reason: string | null;
@@ -446,8 +448,11 @@ export interface CorrectionLane {
   open_positions: number;
   funnel: Record<string, number>;
   lifecycle: {
-    engine_kind: "quote_acceptance" | "next_open" | "measurement";
+    engine_kind: "quote_acceptance" | "next_open" | "measurement" | "taker" | "maker_retest";
     decision_engine: string;
+    entry_route: string;
+    maker_fill_ttl_bars: number | null;
+    fill_evidence: "closed_bar_touch_proxy" | "next_closed_bar_open_proxy" | "venue_order_lifecycle" | null;
     state: "watching" | "armed" | "holding" | "accepted" | "session_blocked" | "degraded";
     armed_current: boolean;
     arm_state: string | null;

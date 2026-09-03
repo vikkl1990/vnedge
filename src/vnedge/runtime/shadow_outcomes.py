@@ -53,6 +53,7 @@ from vnedge.paper.fill_model import FillModel
 from vnedge.plan.cost_model import CostModel
 from vnedge.runtime.active_exit import _better_stop
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
+from vnedge.runtime.runner_config import EntryRoute
 from vnedge.strategy.base_strategy import StrategyExitIntent
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,23 @@ def is_maker_route_strategy(strategy_id: str) -> bool:
     """True when the strategy's edge is defined after maker fees (opt-in route)."""
     sid = (strategy_id or "").lower()
     return any(sid.startswith(name) for name in MAKER_ROUTE_STRATEGIES)
+
+
+def resolve_entry_route(route: EntryRoute | str, strategy_id: str) -> EntryRoute:
+    """Resolve legacy AUTO routing once when a session is constructed.
+
+    New lanes should state their route explicitly. AUTO remains only so old
+    manifests and journals retain the strategy-prefix behavior they recorded.
+    """
+
+    parsed = route if isinstance(route, EntryRoute) else EntryRoute(str(route))
+    if parsed is EntryRoute.AUTO:
+        return (
+            EntryRoute.MAKER_RETEST
+            if is_maker_route_strategy(strategy_id)
+            else EntryRoute.TAKER
+        )
+    return parsed
 
 
 @dataclass

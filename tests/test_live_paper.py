@@ -23,7 +23,7 @@ from vnedge.risk.risk_manager import MarketState, PreTradeRiskGateway
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
 from vnedge.runtime.live_paper import LivePaperSession, _extract_strategy_thresholds
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.squeeze_acceptance_observe import SqueezeAcceptanceObserveRunner
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
@@ -305,6 +305,8 @@ def build_session(
     canonical_candle_store=None,
     canonical_candle_subscription=None,
     canonical_candle_wait_seconds=0.0,
+    entry_route=EntryRoute.AUTO,
+    maker_fill_ttl_bars=1,
 ):
     config = RunnerConfig(
         mode=mode,
@@ -317,6 +319,8 @@ def build_session(
         daily_factory=daily_factory or DailySignalFactoryConfig(),
         execution_cost_exchange_id=execution_cost_exchange_id,
         canonical_candle_wait_seconds=canonical_candle_wait_seconds,
+        entry_route=entry_route,
+        maker_fill_ttl_bars=maker_fill_ttl_bars,
     )
     exchange = SimulatedExchange(FillModel(), config.starting_equity_usd)
     journal = DecisionJournal(tmp_path / "journal.jsonl")
@@ -1956,6 +1960,24 @@ class MakerLongOnce(BaseStrategy):
         return SignalIntent("long", stop_price=close * 0.95, take_profit_price=close * 1.10)
 
 
+class ExplicitMakerLongOnce(MakerLongOnce):
+    """Route-neutral setup carries its structure-derived passive level."""
+
+    strategy_id = "structure_bounce_route_probe_v2"
+
+    def signal(self, df, index):
+        signal = super().signal(df, index)
+        if signal is None:
+            return None
+        return SignalIntent(
+            "long",
+            stop_price=signal.stop_price,
+            take_profit_price=signal.take_profit_price,
+            entry_limit_price=99.5,
+            reason="paired route cohort",
+        )
+
+
 def _mrow(i, close=100.0):
     return [BASE + i * MIN, 100.0, 100.5, 99.5, close, 5.0]
 
@@ -1993,6 +2015,36 @@ async def test_maker_edge_entry_unfilled_is_cancelled_and_skipped(tmp_path):
     assert session._plan is None
     assert exchange.get_positions() == []  # the trade was skipped
     assert "maker_entry_unfilled" in [e["event"] for e in session.trade_log]
+
+
+async def test_explicit_maker_route_uses_signal_level_and_frozen_ttl(tmp_path):
+    feed = FakeFeed([_mrow(5)], quote=(99.99, 100.01))
+    session, exchange = build_session(
+        tmp_path,
+        feed,
+        strategy=ExplicitMakerLongOnce(),
+        timeframe="5m",
+        max_holding_bars=288,
+        entry_route=EntryRoute.MAKER_RETEST,
+        maker_fill_ttl_bars=6,
+    )
+    await session.run(max_bars=1)
+
+    assert session.entry_route is EntryRoute.MAKER_RETEST
+    assert session.maker_fill_ttl_bars == 6
+    assert session._pending_entry is not None
+    status = exchange.get_order_status(session._pending_entry.client_order_id)
+    assert status is not None
+    assert session._pending_entry.plan.signal.entry_limit_price == pytest.approx(99.5)
+    order_record = next(
+        record
+        for record in session.journal.read_all()
+        if record["kind"] == "order_intent"
+    )
+    intent = order_record["payload"]["intent"]
+    assert intent["limit_price"] == pytest.approx(99.5)
+    assert intent["order_type"] == "limit"
+    assert intent["time_in_force"] == "PO"
 
 
 async def test_non_maker_strategy_still_uses_immediate_market_entry(tmp_path):

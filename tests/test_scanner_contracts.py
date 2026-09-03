@@ -99,6 +99,13 @@ def test_scanner_clock_contracts_separate_structure_entry_and_protection() -> No
     assert bos.evidence_entry_clock == "next_15m_open"
     assert bos.context_tfs == ("4h",)
 
+    routed = scanner_runtime_contract("structure_bounce_route_probe_v2")
+    assert routed is not None
+    assert routed.decision_tf == "5m"
+    assert routed.entry_clock == "execution_route"
+    assert routed.evidence_entry_clock == "configured_route_after_5m_close"
+    assert routed.cost_family == "scalp"
+
 
 def test_active_scanner_roster_never_uses_brick_or_context_as_fire_clock() -> None:
     assert SCANNER_RUNTIME_CONTRACTS

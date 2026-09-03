@@ -23,10 +23,15 @@ from types import MappingProxyType
 from typing import Literal
 
 CostFamily = Literal["scalp", "swing"]
-DecisionEngine = Literal["base_strategy_next_open_v1", "quote_acceptance_v1", "quote_acceptance_v2"]
+DecisionEngine = Literal[
+    "base_strategy_next_open_v1",
+    "base_strategy_routed_entry_v1",
+    "quote_acceptance_v1",
+    "quote_acceptance_v2",
+]
 ExitEngine = Literal["active_exit_v1", "scanner_exit_v1"]
 StructureClock = Literal["closed_bar"]
-EntryClock = Literal["next_open", "bbo_acceptance"]
+EntryClock = Literal["next_open", "bbo_acceptance", "execution_route"]
 ProtectionClock = Literal["ticks"]
 
 _TF_SECONDS = {
@@ -88,6 +93,8 @@ class ScannerRuntimeContract:
 
     @property
     def entry_clock(self) -> EntryClock:
+        if self.decision_engine == "base_strategy_routed_entry_v1":
+            return "execution_route"
         return (
             "bbo_acceptance"
             if self.decision_engine.startswith("quote_acceptance")
@@ -104,6 +111,8 @@ class ScannerRuntimeContract:
         """
         if self.decision_engine.startswith("quote_acceptance"):
             return "quote_hold"
+        if self.decision_engine == "base_strategy_routed_entry_v1":
+            return f"configured_route_after_{self.timeframe}_close"
         return f"next_{self.timeframe}_open"
 
 
@@ -293,6 +302,18 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         decision_engine="base_strategy_next_open_v1",
         exit_engine="scanner_exit_v1",
         context_timeframes=("4h", "1d"),
+    ),
+    "structure_bounce_route_probe_v2": ScannerRuntimeContract(
+        strategy_id="structure_bounce_route_probe_v2",
+        timeframe="5m",
+        cost_family="scalp",
+        max_holding_bars=288,
+        rationale=(
+            "route-neutral structure bounce cohort; explicit lane policy chooses "
+            "Delta taker now or passive retest"
+        ),
+        decision_engine="base_strategy_routed_entry_v1",
+        exit_engine="active_exit_v1",
     ),
 }
 

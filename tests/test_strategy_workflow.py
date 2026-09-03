@@ -222,11 +222,16 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
             "scanner_exit_v1",
             "2",
         ),
+        "structure_bounce_route_probe_v2": (
+            "base_strategy_routed_entry_v1",
+            "active_exit_v1",
+            "1",
+        ),
     }
     rows = {row["strategy_id"]: row for row in payload["revisions"] if row["strategy_id"] in active}
 
-    assert payload["provenance"]["active_roster_revisions"] == 4
-    assert payload["summary"]["explicit_revisions"] >= 4
+    assert payload["provenance"]["active_roster_revisions"] == 5
+    assert payload["summary"]["explicit_revisions"] >= 5
     assert set(rows) == set(active)
     for strategy_id, (decision_engine, exit_engine, engine_version) in active.items():
         row = rows[strategy_id]
@@ -238,6 +243,13 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
         assert "ENGINE_PARITY_NOT_REPORTED" in row["governance_flags"]
         assert row["latest_judgment"] is None
         assert row["can_trade"] is False
+
+    routed = rows["structure_bounce_route_probe_v2"]
+    assert routed["symbols"] == ("BTC/USD:USD", "ETH/USD:USD")
+    assert routed["params"]["execution_policy"] == {
+        "BTC/USD:USD": {"entry_route": "taker", "maker_fill_ttl_bars": 6},
+        "ETH/USD:USD": {"entry_route": "maker_retest", "maker_fill_ttl_bars": 6},
+    }
 
 
 def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path):

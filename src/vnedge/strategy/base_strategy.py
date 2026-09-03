@@ -35,10 +35,18 @@ class SignalIntent:
     #: ladder keep the classic single ``take_profit_price`` full-close behavior.
     take_profit_levels: tuple[float, ...] = ()
     reason: str = ""  # human-readable trigger explanation — explainability is a feature
+    #: Optional passive-entry level.  It is ignored by taker routes.  A
+    #: maker-retest route must use this exact level for CostGate, sizing,
+    #: journaling, shadow touch-to-fill, and eventual venue submission. Kept
+    #: after ``reason`` so historical four-positional-argument calls retain
+    #: their meaning.
+    entry_limit_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.stop_price <= 0:
             raise ValueError("stop_price must be positive — stop-less intents are forbidden")
+        if self.entry_limit_price is not None and self.entry_limit_price <= 0:
+            raise ValueError("entry_limit_price must be positive when supplied")
 
 
 @dataclass(frozen=True)

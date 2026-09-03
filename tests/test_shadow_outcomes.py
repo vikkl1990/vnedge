@@ -216,6 +216,25 @@ def test_is_maker_route_strategy_matches_maker_edge_set():
     assert not is_maker_route_strategy("")
 
 
+def test_explicit_entry_route_overrides_legacy_strategy_prefix() -> None:
+    from vnedge.runtime.runner_config import EntryRoute
+    from vnedge.runtime.shadow_outcomes import resolve_entry_route
+
+    assert resolve_entry_route(EntryRoute.TAKER, "stealth_trail_bbp_v1") is EntryRoute.TAKER
+    assert (
+        resolve_entry_route(EntryRoute.MAKER_RETEST, "trend_continuation_v1")
+        is EntryRoute.MAKER_RETEST
+    )
+    assert (
+        resolve_entry_route(EntryRoute.AUTO, "stealth_trail_bbp_v1")
+        is EntryRoute.MAKER_RETEST
+    )
+    assert (
+        resolve_entry_route(EntryRoute.AUTO, "trend_continuation_v1")
+        is EntryRoute.TAKER
+    )
+
+
 def test_default_route_is_taker_and_byte_identical(tmp_path):
     tracker, _journal = tracker_for(tmp_path)  # maker_route defaults False
     tracker.track(intent_key="t", side="long", quantity=1.0, notional_usd=100.0,

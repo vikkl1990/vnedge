@@ -98,13 +98,13 @@ from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 from vnedge.runtime.quote_ordering import quote_update_order_key
 from vnedge.runtime.run_report import RunReport
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
     VirtualOutcome,
-    is_maker_route_strategy,
+    resolve_entry_route,
 )
 from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.runtime.squeeze_acceptance_observe import (
@@ -497,6 +497,16 @@ class LivePaperSession:
         # SHADOW lanes never fill, so per-lane edge is invisible without
         # virtual resolution: approved intents are resolved forward on
         # closed bars with backtester semantics (journal = durable store).
+        self.configured_entry_route = config.entry_route
+        self.entry_route = resolve_entry_route(config.entry_route, strategy.strategy_id)
+        # Preserve the historical two-bar resting TTL for AUTO-routed maker
+        # strategies. New manifests are explicit and use their frozen TTL.
+        self.maker_fill_ttl_bars = (
+            self._MAKER_ENTRY_TTL_BARS
+            if config.entry_route is EntryRoute.AUTO
+            and self.entry_route is EntryRoute.MAKER_RETEST
+            else config.maker_fill_ttl_bars
+        )
         self.shadow_outcomes: ShadowOutcomeTracker | None = (
             ShadowOutcomeTracker(
                 journal,
@@ -505,7 +515,8 @@ class LivePaperSession:
                 # Strategies whose edge is defined after MAKER fees get the
                 # resting-limit route (touch-to-fill + maker entry fee); every
                 # other lane stays all-taker. Observability only either way.
-                maker_route=is_maker_route_strategy(strategy.strategy_id),
+                maker_route=self.entry_route is EntryRoute.MAKER_RETEST,
+                maker_fill_ttl_bars=self.maker_fill_ttl_bars,
                 # Same ATR-chandelier trail as the paper/live ActiveExitState, so
                 # a shadow lane predicts its paper twin instead of the legacy
                 # fixed-stop exit. Fed the identical _trail_atr() per bar below.
@@ -1796,6 +1807,9 @@ class LivePaperSession:
             "decision_price": decision_price,
             "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
+            "entry_limit_price": sig.entry_limit_price,
+            "entry_route": self.entry_route.value,
+            "maker_fill_ttl_bars": self.maker_fill_ttl_bars,
             "decision_tf": (
                 self.runtime_contract.decision_tf
                 if self.runtime_contract is not None
@@ -1845,7 +1859,30 @@ class LivePaperSession:
             )
             return
         bid, ask = self.feed.quote
-        ref_price = ask if sig.side == "long" else bid
+        maker = self.entry_route is EntryRoute.MAKER_RETEST
+        if maker and sig.entry_limit_price is None:
+            if self.configured_entry_route is EntryRoute.AUTO:
+                # Compatibility for frozen legacy maker IDs. New explicit
+                # maker-retest lanes must carry the route-neutral setup level.
+                ref_price = bid if sig.side == "long" else ask
+            else:
+                self.last_reject_reason = (
+                    "entry_route: maker_retest requires entry_limit_price"
+                )
+                self.journal.append(
+                    "entry_route_rejected",
+                    {**scanner_context, "reason": self.last_reject_reason},
+                )
+                self._log_trade_event(
+                    "entry_route_rejected", self.last_reject_reason, now
+                )
+                return
+        else:
+            ref_price = (
+                float(sig.entry_limit_price)
+                if maker and sig.entry_limit_price is not None
+                else ask if sig.side == "long" else bid
+            )
         targets = [
             float(target)
             for target in (sig.take_profit_price, *sig.take_profit_levels)
@@ -1873,9 +1910,6 @@ class LivePaperSession:
             (target - ref_price) / ref_price * 10_000.0
             if sig.side == "long"
             else (ref_price - target) / ref_price * 10_000.0
-        )
-        maker = self.config.mode is not RunnerMode.SHADOW and is_maker_route_strategy(
-            self.strategy.strategy_id
         )
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
@@ -1927,10 +1961,9 @@ class LivePaperSession:
                 now,
             )
             return
-        # Maker-edge strategies post a passive resting limit at the near touch
-        # (bid for a long, ask for a short) instead of crossing the spread — the
-        # route their scorecard edge is defined on. SHADOW never places real
-        # orders, so it stays market (its virtual pricing is handled separately).
+        # One explicit route reaches every stage. A maker-retest signal rests
+        # at the strategy's structure level; SHADOW no longer journals a fake
+        # market order while its outcome tracker books maker fees.
         intent = OrderIntent(
             symbol=self.config.symbol,
             side=sig.side,
@@ -1940,7 +1973,8 @@ class LivePaperSession:
             reduce_only=False,
             strategy_id=self.strategy.strategy_id,
             order_type="limit" if maker else "market",
-            limit_price=(bid if sig.side == "long" else ask) if maker else None,
+            limit_price=ref_price if maker else None,
+            time_in_force="PO" if maker else None,
         )
         key = make_intent_key(
             self.strategy.strategy_id,
@@ -1994,6 +2028,8 @@ class LivePaperSession:
                     "bar_ts": decision_bar_ts.isoformat(),
                     "timeframe": self.config.timeframe,
                     "decision_price": decision_price,
+                    "entry_route": self.entry_route.value,
+                    "maker_fill_ttl_bars": self.maker_fill_ttl_bars,
                 },
             )
             if decision.approved:
@@ -2265,7 +2301,7 @@ class LivePaperSession:
             )
             return
         pending.bars_waited += 1
-        if pending.bars_waited >= self._MAKER_ENTRY_TTL_BARS:
+        if pending.bars_waited >= self.maker_fill_ttl_bars:
             await self.om.cancel_order(pending.client_order_id, reason="maker entry TTL — no touch")
             self._pending_entry = None
             self._log_trade_event(
@@ -3373,6 +3409,8 @@ class LivePaperSession:
                 "cost_profile_source": self.cost_profile_source,
                 "data_exchange": getattr(self.feed, "exchange_id", ""),
                 "execution_cost_exchange": self.execution_cost_exchange_id,
+                "entry_route": self.entry_route.value,
+                "maker_fill_ttl_bars": self.maker_fill_ttl_bars,
                 "scanner_cost_hypothesis": self.last_scanner_cost_hypothesis,
                 "runtime_contract": (
                     {

@@ -65,7 +65,7 @@ from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
@@ -90,6 +90,7 @@ from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
+from vnedge.strategy.structure_bounce_route_probe_v2 import StructureBounceRouteProbeV2
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -123,6 +124,13 @@ class LaneSpec:
     # Public-data venue is not an execution-cost assumption. Shadow scanners
     # may observe Binance while conservatively modelling Delta India fees.
     execution_cost_exchange: str | None = None
+    # Explicit execution policy. AUTO exists only for legacy manifests.
+    entry_route: EntryRoute = EntryRoute.AUTO
+    maker_fill_ttl_bars: int = 1
+
+    def __post_init__(self) -> None:
+        if not 1 <= int(self.maker_fill_ttl_bars) <= 288:
+            raise ValueError("maker_fill_ttl_bars must be in [1, 288]")
 
     @property
     def data_symbol(self) -> str:
@@ -444,6 +452,10 @@ class MultiLaneProvider:
                 "execution_cost_exchange": self._lanes[lid]
                 .get("session", {})
                 .get("execution_cost_exchange"),
+                "entry_route": self._lanes[lid].get("session", {}).get("entry_route"),
+                "maker_fill_ttl_bars": self._lanes[lid]
+                .get("session", {})
+                .get("maker_fill_ttl_bars"),
                 "scanner_cost_hypothesis": self._lanes[lid]
                 .get("session", {})
                 .get("scanner_cost_hypothesis"),
@@ -824,6 +836,12 @@ def _build_single_strategy(
                 f"{strategy_id} parameters are frozen; configure a new strategy ID"
             )
         return HtfRegimeContinuation15mV2(seed_funding)
+    if strategy_id == StructureBounceRouteProbeV2.strategy_id:
+        if params:
+            raise ValueError(
+                f"{strategy_id} parameters are frozen; configure a new strategy ID"
+            )
+        return StructureBounceRouteProbeV2(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -1183,6 +1201,7 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     **{strategy.strategy_id: strategy.warmup_bars for strategy in REALTIME_SCANNERS},
     HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1.warmup_bars,
     HtfRegimeContinuation15mV2.strategy_id: HtfRegimeContinuation15mV2.warmup_bars,
+    StructureBounceRouteProbeV2.strategy_id: StructureBounceRouteProbeV2.warmup_bars,
 }
 
 
@@ -1562,6 +1581,8 @@ async def build_lane(
         canonical_candle_wait_seconds=8.0,
         trail_atr_mult=spec.trail_atr_mult,
         execution_cost_exchange_id=spec.execution_cost_exchange,
+        entry_route=spec.entry_route,
+        maker_fill_ttl_bars=spec.maker_fill_ttl_bars,
     )
     strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
     quote_evidence = (
@@ -1670,6 +1691,8 @@ async def build_lane(
             "daily_stop_usd": spec.daily_loss_usd,
             "promotion_source": spec.exchange,
             "daily_factory": daily_factory.model_dump(),
+            "entry_route": spec.entry_route.value,
+            "maker_fill_ttl_bars": spec.maker_fill_ttl_bars,
         },
     )
     # Expectations make a moved/edited store fail closed instead of injecting

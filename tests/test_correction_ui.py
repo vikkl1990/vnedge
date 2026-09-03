@@ -305,6 +305,9 @@ def test_quote_lane_lifecycle_does_not_relabel_candidates_as_fires() -> None:
     assert lane["lifecycle"] == {
         "engine_kind": "quote_acceptance",
         "decision_engine": "quote_acceptance_v1",
+        "entry_route": "auto",
+        "maker_fill_ttl_bars": None,
+        "fill_evidence": None,
         "state": "armed",
         "armed_current": True,
         "arm_state": "armed_long",
@@ -361,6 +364,41 @@ def test_next_open_lane_keeps_real_closed_bar_fire_count() -> None:
     assert lifecycle["engine_kind"] == "next_open"
     assert lifecycle["fires"] == 3
     assert lifecycle["accepted"] == 2
+
+
+def test_routed_shadow_lane_labels_execution_and_proxy_evidence() -> None:
+    snap = snapshot()
+    snap["lanes"] = [
+        {
+            "lane_id": "shadow_route_eth",
+            "exchange": "delta_india",
+            "strategy_id": "structure_bounce_route_probe_v2",
+            "mode": "shadow (live data)",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "feed": "ok",
+            "entry_route": "maker_retest",
+            "maker_fill_ttl_bars": 6,
+            "bands": {
+                "age": "ok",
+                "bar_close_lag": "ok",
+                "decision_lag": "ok",
+                "dd": "ok",
+            },
+            "funnel": {"live_signals": 4, "shadow_approved": 3},
+            "shadow_perf": {"virtual_trades": 2, "virtual_net_usd": 8.5},
+            "runtime_contract": {
+                "entry_clock": "execution_route",
+                "decision_engine": "base_strategy_routed_entry_v1",
+            },
+        }
+    ]
+
+    lane = build_lanes_payload(snap, now=NOW)["lanes"][0]
+    assert lane["entry_route"] == "maker_retest"
+    assert lane["maker_fill_ttl_bars"] == 6
+    assert lane["lifecycle"]["engine_kind"] == "maker_retest"
+    assert lane["lifecycle"]["fill_evidence"] == "closed_bar_touch_proxy"
 
 
 def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() -> None:

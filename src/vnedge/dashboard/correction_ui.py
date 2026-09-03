@@ -237,12 +237,18 @@ def _scanner_lifecycle(
     perf = _mapping(lane.get("shadow_perf"))
     decision_engine = str(contract.get("decision_engine") or "unreported")
     entry_clock = str(contract.get("entry_clock") or "")
+    entry_route = str(lane.get("entry_route") or "auto")
+    routed_engine = decision_engine == "base_strategy_routed_entry_v1"
     quote_engine = entry_clock == "bbo_acceptance" or decision_engine.startswith(
         "quote_acceptance"
     )
     engine_kind = (
         "measurement"
         if mode == "measurement"
+        else "maker_retest"
+        if routed_engine and entry_route == "maker_retest"
+        else "taker"
+        if routed_engine and entry_route == "taker"
         else "quote_acceptance"
         if quote_engine
         else "next_open"
@@ -299,6 +305,21 @@ def _scanner_lifecycle(
     return {
         "engine_kind": engine_kind,
         "decision_engine": decision_engine,
+        "entry_route": entry_route,
+        "maker_fill_ttl_bars": (
+            _int(lane.get("maker_fill_ttl_bars"))
+            if entry_route == "maker_retest"
+            else None
+        ),
+        "fill_evidence": (
+            "closed_bar_touch_proxy"
+            if routed_engine and entry_route == "maker_retest" and mode == "shadow"
+            else "next_closed_bar_open_proxy"
+            if routed_engine and entry_route == "taker" and mode == "shadow"
+            else "venue_order_lifecycle"
+            if routed_engine and mode == "paper"
+            else None
+        ),
         "state": setup_state,
         "armed_current": armed_current,
         "arm_state": acceptance_state or None,
@@ -513,6 +534,12 @@ def build_lanes_payload(
                 "last_signal_reason": reason,
                 "current_waiting_reason": waiting_reason,
                 "cost_profile": str(lane.get("cost_profile") or "unreported"),
+                "entry_route": str(lane.get("entry_route") or "auto"),
+                "maker_fill_ttl_bars": (
+                    _int(lane.get("maker_fill_ttl_bars"))
+                    if lane.get("maker_fill_ttl_bars") is not None
+                    else None
+                ),
                 "round_trip_bps": _lane_round_trip_bps(lane, plan),
                 "health": health,
                 "health_reason": health_reasons[0] if health_reasons else None,

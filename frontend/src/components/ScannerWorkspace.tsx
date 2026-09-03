@@ -118,7 +118,11 @@ export function ScannerWorkspace({
   const contextDetail = contextTfs.length
     ? contextTfs.map((tf) => `${tf} ${age(contextAges[tf])} since close`).join(" · ")
     : "no higher-timeframe veto";
-  const entryLabel = clock?.entry_clock === "bbo_acceptance" ? "BBO" : "next open";
+  const entryLabel = clock?.entry_clock === "bbo_acceptance"
+    ? "BBO"
+    : clock?.entry_clock === "execution_route"
+      ? selected?.entry_route === "maker_retest" ? "maker retest" : "taker now"
+      : "next open";
 
   return (
     <section className="border border-line bg-panel/80" aria-label="Scanner decision workspace">
@@ -166,6 +170,12 @@ export function ScannerWorkspace({
             <Criterion label="decision" value={decisionWarm ? "measured" : "collecting p95"} detail={selected.decision_lag_ms == null ? `${selected.latency_samples.decision}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.decision_lag_ms.toFixed(1)} ms · ${selected.latency_samples.decision}/${selected.latency_samples.required}`} tone={decisionWarm ? "good" : "warn"} />
             <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />
             <Criterion label="engine path" value={selected.runtime_contract?.decision_engine ?? "unreported"} detail={`exit ${selected.runtime_contract?.exit_engine ?? "unreported"} · ${selected.runtime_contract?.max_holding_bars ?? "—"} bars`} tone={selected.runtime_contract?.decision_engine && selected.runtime_contract?.exit_engine ? "info" : "warn"} />
+            {clock?.entry_clock === "execution_route" && <Criterion
+              label="route evidence"
+              value={selected.entry_route.replace(/_/g, " ")}
+              detail={`${selected.lifecycle.fill_evidence?.replace(/_/g, " ") ?? "unreported"}${selected.entry_route === "maker_retest" ? ` · cancel after ${selected.maker_fill_ttl_bars ?? "—"} bars without touch` : ""}`}
+              tone={selected.lifecycle.fill_evidence === "venue_order_lifecycle" ? "good" : "warn"}
+            />}
             {quoteEngine && <Criterion
               label="quote tape"
               value={quoteDistinct ? `${quoteDistinct}/${quoteSeen}` : "no samples"}
