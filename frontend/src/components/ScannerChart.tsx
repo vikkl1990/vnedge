@@ -231,6 +231,9 @@ export function ScannerChart() {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("15m");
   const [marketReadyKey, setMarketReadyKey] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(true);
+  const [logScale, setLogScale] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const vpvrRef = useRef<{ remove?: () => void } | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
@@ -352,6 +355,12 @@ export function ScannerChart() {
           });
           chartRef.current = chart;
           chart.drawings?.showToolbar?.(false);
+          try {
+            const saved = localStorage.getItem("vnedge.chart.config");
+            if (saved) chart.renderer?.applyConfig?.(JSON.parse(saved));
+          } catch {
+            /* cosmetics only — never block the chart on bad persisted config */
+          }
           await chart.ready();
         } else {
           await chart.setMarket({ data: bars, timeframe });
@@ -381,9 +390,31 @@ export function ScannerChart() {
       }
       chartRef.current = null;
       drawnIdsRef.current = [];
+      vpvrRef.current = null;
     },
     [],
   );
+
+  // Renderer features: log scale + visible-range volume profile (native).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || marketReadyKey !== marketDataKey) return;
+    try {
+      chart.renderer?.set?.({ logScale });
+    } catch {
+      /* renderer without the feature: ignore */
+    }
+    try {
+      if (showProfile && !vpvrRef.current) {
+        vpvrRef.current = chart.addNativeIndicator?.("vpvr") ?? null;
+      } else if (!showProfile && vpvrRef.current) {
+        vpvrRef.current.remove?.();
+        vpvrRef.current = null;
+      }
+    } catch {
+      vpvrRef.current = null;
+    }
+  }, [logScale, marketDataKey, marketReadyKey, showProfile]);
 
   // Journal overlays are bucketed onto the selected TF. Their cards retain
   // actual event time, so a 12:07 acceptance is drawn on the 12:00 15m bar but
@@ -617,6 +648,54 @@ export function ScannerChart() {
           {showContext && context.isError && (
             <span className="text-[10px] font-mono text-faint">ctx unavailable</span>
           )}
+          <span className="mx-1 h-4 w-px bg-line" />
+          <button
+            onClick={() =>
+              setLogScale((value) => {
+                const next = !value;
+                try {
+                  const config = chartRef.current?.renderer?.getConfig?.();
+                  if (config) localStorage.setItem("vnedge.chart.config", JSON.stringify(config));
+                } catch {
+                  /* persistence is best-effort */
+                }
+                return next;
+              })
+            }
+            title="Logarithmic price scale"
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              logScale ? "border-brand text-brand" : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            LOG
+          </button>
+          <button
+            onClick={() => setShowProfile((value) => !value)}
+            title="Visible-range volume profile (native indicator)"
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              showProfile ? "border-brand text-brand" : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            VPVR
+          </button>
+          <button
+            onClick={() => {
+              try {
+                const url = chartRef.current?.renderer?.screenshot?.();
+                if (!url) return;
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = `vnedge-${selectedMarket ? baseAsset(selectedMarket.symbol) : "chart"}-${timeframe}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.png`;
+                link.click();
+              } catch {
+                /* screenshot unsupported on this renderer */
+              }
+            }}
+            title="Export chart as PNG (candles + overlays; journal evidence stays in the journal)"
+            className="rounded border border-line px-2 py-1 text-[11px] font-mono text-dim hover:text-txt"
+          >
+            PNG
+          </button>
           <span className="ml-auto text-[10px] font-mono text-faint">
             {candles.data
               ? `${candles.data.count} bars · ${candles.data.source}`
