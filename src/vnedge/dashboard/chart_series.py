@@ -15,10 +15,8 @@ Read-only. This module has no order, promotion or settings authority.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import UTC
 from typing import Any
-
-UTC = timezone.utc
 
 #: Never hand an unbounded series to a browser; a year of 1m bars is 525k rows.
 MAX_BARS = 5_000
@@ -34,7 +32,7 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
     limit = max(1, min(int(limit), MAX_BARS))
     try:
         rows = list(store.read(symbol, timeframe))
-    except Exception:
+    except Exception:  # noqa: BLE001 - read-only UI must degrade on store failures
         rows = []
 
     # Lightweight Charts requires strictly monotonic series input.  The store
@@ -85,7 +83,7 @@ def mechanism_context_payload(store: Any, symbol: str, timeframe: str, *,
     limit = max(1, min(int(limit), MAX_BARS))
     try:
         rows = list(store.read(symbol, timeframe))
-    except Exception:
+    except Exception:  # noqa: BLE001 - read-only UI must degrade on store failures
         rows = []
     base = {"symbol": symbol, "timeframe": timeframe, "source": "canonical_lake"}
     if not rows:

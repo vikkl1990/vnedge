@@ -51,6 +51,9 @@ class MechanismParams:
         ) + 2
 
 
+DEFAULT_MECHANISM_PARAMS = MechanismParams()
+
+
 #: appended to feature_matrix.FEATURE_COLUMNS — order is part of the contract
 MECHANISM_FEATURE_COLUMNS = [
     "dist_swing_high_atr", "dist_swing_low_atr",
@@ -130,7 +133,7 @@ def _grouped_prior_cummax(values: pd.Series, group_id: pd.Series) -> pd.Series:
 
 
 def add_mechanism_features(
-    df: pd.DataFrame, params: MechanismParams = MechanismParams()
+    df: pd.DataFrame, params: MechanismParams = DEFAULT_MECHANISM_PARAMS
 ) -> pd.DataFrame:
     """Append MECHANISM_FEATURE_COLUMNS to a frame that already has ``atr``."""
     out = df.copy()
@@ -225,7 +228,7 @@ def add_mechanism_features(
     out["donchian_width_atr"] = (width / safe_atr).clip(upper=cap)
 
     # --- supertrend state (causal forward recursion) ------------------------
-    st_line, st_dir = _supertrend(high, low, close, atr, params)
+    _st_line, st_dir = _supertrend(high, low, close, atr, params)
     out["st_dir"] = st_dir
     dir_series = pd.Series(st_dir, index=out.index)
     flipped = dir_series.ne(dir_series.shift(1)) & dir_series.notna() & dir_series.shift(1).notna()
@@ -262,7 +265,7 @@ def add_mechanism_features(
 
 
 def mechanism_context(
-    candles: pd.DataFrame, params: MechanismParams = MechanismParams()
+    candles: pd.DataFrame, params: MechanismParams = DEFAULT_MECHANISM_PARAMS
 ) -> dict:
     """Drawable market context at the LAST bar, for the operator chart.
 
