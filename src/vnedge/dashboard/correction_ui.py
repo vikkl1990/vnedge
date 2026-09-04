@@ -399,12 +399,14 @@ def _health_diagnostics(
     decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
         timeframe
     )
+    bar_samples = _latency_samples(
+        lane, "bar_close_processing_ms", "feed_lag_ms"
+    )
+    decision_samples = _latency_samples(lane, "decision_lag_ms")
     details = {
         "bar_close_receipt": {
             "p95_ms": bar_p95,
-            "samples": _latency_samples(
-                lane, "bar_close_processing_ms", "feed_lag_ms"
-            ),
+            "samples": bar_samples,
             "soft_ms": bar_soft,
             "hard_ms": bar_hard,
             "recovery_ms": bar_recovery,
@@ -412,7 +414,7 @@ def _health_diagnostics(
         },
         "decision_compute": {
             "p95_ms": decision_p95,
-            "samples": _latency_samples(lane, "decision_lag_ms"),
+            "samples": decision_samples,
             "soft_ms": decision_soft,
             "hard_ms": decision_hard,
             "recovery_ms": decision_recovery,
@@ -421,10 +423,7 @@ def _health_diagnostics(
     }
 
     if health == "unknown" and not reasons:
-        samples = [
-            int(details["bar_close_receipt"]["samples"]),
-            int(details["decision_compute"]["samples"]),
-        ]
+        samples = [bar_samples, decision_samples]
         observed = min((value for value in samples if value > 0), default=0)
         add(f"latency_warming_{observed}/{LATENCY_GATE_MIN_SAMPLES}")
     elif health == "degraded" and not reasons:

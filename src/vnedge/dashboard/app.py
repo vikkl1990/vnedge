@@ -75,7 +75,7 @@ from vnedge.dashboard.auth import (
     permissions_for,
 )
 from vnedge.dashboard.backtest_lab import load_backtest_lab
-from vnedge.dashboard.chart_series import candles_payload
+from vnedge.dashboard.chart_series import candles_payload, mechanism_context_payload
 from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_payload
 from vnedge.dashboard.market_pulse import MarketPulseService
 from vnedge.dashboard.session import SessionIssuer
@@ -1244,6 +1244,27 @@ def create_app(
         store = CandleParquetStore(Path("data/candles"), exchange=exchange)
         payload = await asyncio.to_thread(
             candles_payload, store, symbol, timeframe, limit=n
+        )
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/candles/{symbol}/context")
+    async def chart_mechanism_context(
+        symbol: str,
+        request: Request,
+        exchange: str = "binanceusdm",
+        timeframe: str = "1h",
+        n: int = 600,
+    ) -> JSONResponse:
+        """Drawable mechanism context (swing levels, channel, FVG zones).
+
+        Computed by the ML plane's own definitions over the SAME canonical
+        store as the candles endpoint — the chart and the model can never
+        describe two different markets. Presentation-only.
+        """
+        user = _authorized(request)
+        store = CandleParquetStore(Path("data/candles"), exchange=exchange)
+        payload = await asyncio.to_thread(
+            mechanism_context_payload, store, symbol, timeframe, limit=n
         )
         return JSONResponse(payload, headers=_identity(user))
 
