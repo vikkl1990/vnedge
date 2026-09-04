@@ -25,6 +25,10 @@ from vnedge.runtime.latency_tracker import (
 )
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.squeeze_observe import FireGuard, JournalSink, ScannerApproval
+from vnedge.strategy.arm_evidence import (
+    FrozenPermissionSnapshot,
+    freeze_permission_from_row,
+)
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.squeeze_expansion_breakout_v3 import PARAMS
@@ -51,6 +55,8 @@ class SqueezeAcceptanceObserveRunner:
         )
     )
     costs: SessionCosts = field(default_factory=lambda: SessionCosts.from_profile("delta_scalp"))
+    decision_timeframe: str = ""
+    context_timeframes: tuple[str, ...] = ()
     latency: LatencyTracker | None = None
     open_meta: dict | None = None
     candidates: int = 0
@@ -242,6 +248,7 @@ class SqueezeAcceptanceObserveRunner:
                     "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
                     "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
                     "funding_event_ids": set(pending.get("funding_event_ids") or ()),
+                    "arm_evidence": pending.get("arm_evidence"),
                 }
                 self._restore_payload = None
             if self.open_meta is not None and entry_index is not None and index >= entry_index:
@@ -293,6 +300,7 @@ class SqueezeAcceptanceObserveRunner:
                 "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
                 "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
                 "funding_event_ids": set(pending.get("funding_event_ids") or ()),
+                "arm_evidence": pending.get("arm_evidence"),
             }
             self._restore_payload = None
 
@@ -391,6 +399,8 @@ class SqueezeAcceptanceObserveRunner:
         if fire is None:
             return None
         self.candidates += 1
+        arm = self.acceptance.arm
+        arm_evidence = arm.evidence.as_dict() if arm is not None and arm.evidence else None
         approval = (
             self.approve_fire(fire, self.current_bar_index, ts)
             if self.approve_fire is not None
@@ -438,6 +448,7 @@ class SqueezeAcceptanceObserveRunner:
                     "quote_exchange_timestamped": exchange_timestamped,
                     "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
                     "episode_id": fire.episode_id,
+                    "arm_evidence": arm_evidence,
                     "margin_usd": approval.margin_usd or self.margin_usd,
                     "take_profit_price": None,
                     "take_profit_levels": [],
@@ -478,6 +489,7 @@ class SqueezeAcceptanceObserveRunner:
             "margin_usd": approval.margin_usd or self.margin_usd,
             "funding_cost_usd": 0.0,
             "funding_event_ids": set(),
+            "arm_evidence": arm_evidence,
         }
         self.fires += 1
         return fire
@@ -595,6 +607,7 @@ class SqueezeAcceptanceObserveRunner:
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
+                "arm_evidence": arm.evidence.as_dict() if arm is not None and arm.evidence else None,
             },
         )
 
@@ -614,7 +627,7 @@ class SqueezeAcceptanceObserveRunner:
             if isinstance(prepared, pd.DataFrame):
                 arm = self.strategy.realtime_arm(prepared, index)
                 if isinstance(arm, RealtimeEntryArm):
-                    self.acceptance.update_arm(self._compression_arm(arm, index))
+                    self.acceptance.update_arm(self._compression_arm(arm, index, row))
                     self._journal_arm_transition(previous_reason, journal_event_ts)
                     return
         values = {
@@ -639,6 +652,12 @@ class SqueezeAcceptanceObserveRunner:
                 vwap=values["sqz_vwap24"],
                 bar_index=index,
                 compressed=values["sqz_compressed"] > 0,
+                evidence=self._freeze_arm_evidence(
+                    row,
+                    allow_long=True,
+                    allow_short=True,
+                    reason="squeeze_acceptance_v3",
+                ),
             )
         )
         self._journal_arm_transition(previous_reason, journal_event_ts)
@@ -689,11 +708,41 @@ class SqueezeAcceptanceObserveRunner:
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
+                "arm_evidence": arm.evidence.as_dict() if arm is not None and arm.evidence else None,
             },
         )
 
-    @staticmethod
-    def _compression_arm(arm: RealtimeEntryArm, index: int) -> CompressionArm:
+    def _freeze_arm_evidence(
+        self,
+        row: pd.Series,
+        *,
+        allow_long: bool,
+        allow_short: bool,
+        reason: str,
+    ) -> FrozenPermissionSnapshot | None:
+        if not self.decision_timeframe:
+            return None
+        return freeze_permission_from_row(
+            row.to_dict(),
+            decision_timeframe=self.decision_timeframe,
+            context_timeframes=self.context_timeframes,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            reason=reason,
+        )
+
+    def _compression_arm(
+        self,
+        arm: RealtimeEntryArm,
+        index: int,
+        row: pd.Series,
+    ) -> CompressionArm:
+        evidence = arm.evidence or self._freeze_arm_evidence(
+            row,
+            allow_long=arm.allow_long,
+            allow_short=arm.allow_short,
+            reason=arm.reason,
+        )
         return CompressionArm(
             episode_id=arm.episode_id,
             box_high=arm.long_level,
@@ -713,6 +762,7 @@ class SqueezeAcceptanceObserveRunner:
             session_start_hour_utc=arm.session_start_hour_utc,
             session_end_hour_utc=arm.session_end_hour_utc,
             reason=arm.reason,
+            evidence=evidence,
         )
 
     @staticmethod
@@ -805,6 +855,7 @@ class SqueezeAcceptanceObserveRunner:
                 "captured_bps_basis": "gross",
                 "net_won": net_bps > 0,
                 "signal_reason": meta.get("reason", ""),
+                "arm_evidence": meta.get("arm_evidence"),
                 "bar_ts": bar_ts.isoformat(),
             },
         )
