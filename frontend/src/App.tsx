@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { MarketPulse } from "./components/MarketPulse";
-import { ScannerChart } from "./components/ScannerChart";
 import { PatternAtlas } from "./components/PatternAtlas";
 import { LiveStateBridge } from "./components/LiveStateBridge";
 import { BuildVersionGuard } from "./components/BuildVersionGuard";
@@ -22,6 +21,12 @@ import {
 } from "./panels/Panels";
 import { useUi } from "./store";
 import { SettingsPanel } from "./panels/Settings/SettingsPanel";
+
+const ScannerChart = lazy(() =>
+  import("./components/ScannerChart").then((module) => ({
+    default: module.ScannerChart,
+  })),
+);
 
 const TABS = [
   { id: "pulse", label: "Pulse" },
@@ -98,7 +103,17 @@ export default function App() {
 
       {tab === "pulse" && <MarketPulse />}
       {tab === "patterns" && <PatternAtlas />}
-      {tab === "chart" && <ScannerChart />}
+      {tab === "chart" && (
+        <Suspense
+          fallback={
+            <div className="rounded border border-line bg-panel px-4 py-12 text-center text-[11px] font-mono text-dim">
+              Loading canonical chart renderer…
+            </div>
+          }
+        >
+          <ScannerChart />
+        </Suspense>
+      )}
       {tab === "desk" && (
         <div className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-2"><BookPanel /><MarketPanel /></div>

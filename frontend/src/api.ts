@@ -203,39 +203,21 @@ export interface ChartCandles {
   candles: ChartCandle[];
 }
 
-export interface ChartMarker {
-  time: number;
-  position: "aboveBar" | "belowBar";
-  shape: "arrowUp" | "arrowDown" | "circle";
-  color: string;
-  text: string;
-}
-
-export interface ChartMarkers {
-  symbol: string;
-  count: number;
-  journals: number;
-  markers: ChartMarker[];
-}
-
 export async function fetchChartCandles(
   symbol: string,
   timeframe: ChartTimeframe,
   n = 500,
   exchange = "binanceusdm",
 ): Promise<ChartCandles> {
+  // The HTTP/storage identity is canonical (BTCUSDT / BTCUSD), while lanes
+  // carry venue-native CCXT symbols (BTC/USDT:USDT / BTC/USD:USD).
+  const dataSymbol = symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
   const q = new URLSearchParams({ timeframe, n: String(n), exchange });
-  return apiGet<ChartCandles>(`/api/candles/${encodeURIComponent(symbol)}?${q}`);
-}
-
-/** Where the lanes actually got in and out, for overlay on the candles. */
-export async function fetchChartMarkers(
-  symbol: string,
-  n = 500,
-): Promise<ChartMarkers> {
-  const q = new URLSearchParams({ n: String(n) });
-  return apiGet<ChartMarkers>(
-    `/api/candles/${encodeURIComponent(symbol)}/markers?${q}`,
+  return apiGet<ChartCandles>(
+    `/api/candles/${encodeURIComponent(dataSymbol)}?${q}`,
   );
 }
 

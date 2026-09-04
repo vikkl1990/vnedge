@@ -1,82 +1,207 @@
 // Scanner chart: canonical candles rendered by Vela (own-bars, fully offline)
-// with the lanes' actual scanner events drawn on the price they refer to —
-// entry/stop/target lines, the risk zone, and fire markers — plus a trade-plan
-// card column. Presentation only: every number here is read back from journals
-// and the canonical lake; nothing on this panel informs a decision.
-//
-// Data policy (deliberate): Vela's bundled exchange providers are NEVER
-// registered. Bars come only from /api/candles (the canonical lake), so the
-// operator sees the same series research and shadow read — not a fourth
-// candle source invented for the UI.
+// with scanner lifecycle events read from the same journal used by Desk.
+// Presentation only: this component never supplies market data to a lane.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Vela } from "@luxalgo/vela";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchChartCandles,
-  fetchChartMarkers,
   type ChartTimeframe,
+  type CorrectionLane,
   type ScannerAuditEvent,
 } from "../api";
-import { useJournal } from "../queries";
+import { useJournal, useLanes } from "../queries";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
 
-const SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT"] as const;
 const TIMEFRAMES: ChartTimeframe[] = ["5m", "15m", "1h", "4h"];
 const OVERLAY_PLANS = 3;
+
+export interface MarketChoice {
+  key: string;
+  exchange: string;
+  symbol: string;
+  label: string;
+}
+
+const TF_MS: Record<ChartTimeframe, number> = {
+  "1m": 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+};
 
 const COLORS = {
   entry: "#60a5fa",
   stop: "#f87171",
   target: "#34d399",
-  fireLong: "#34d399",
-  fireShort: "#f87171",
+  long: "#34d399",
+  short: "#f87171",
 };
+
+type ChartInstance = InstanceType<typeof Vela>;
 
 interface Plan {
   key: string;
-  ts_ms: number;
+  event_ts_ms: number;
+  bar_ts_ms: number;
   side: string;
   entry: number;
   stop: number;
   target: number | null;
-  approved: boolean;
   reason: string;
   strategy_id: string;
-  kind: string;
+  kind: "signal" | "entry";
 }
 
-function toPlans(
+interface EventMarker {
+  key: string;
+  bar_ts_ms: number;
+  side: string;
+  kind: "signal" | "entry" | "exit";
+  event_price: number | null;
+}
+
+interface CandleBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+const canonicalSymbol = (raw: string) =>
+  raw.split(":", 1)[0].replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+
+const baseAsset = (raw: string) => {
+  const canonical = canonicalSymbol(raw);
+  if (canonical.startsWith("BTC")) return "BTC";
+  if (canonical.startsWith("ETH")) return "ETH";
+  return canonical.slice(0, 6);
+};
+
+export function marketsFromLanes(lanes: CorrectionLane[] | undefined): MarketChoice[] {
+  if (!lanes?.length) return [];
+  const unique = new Map<string, MarketChoice>();
+  const ordered = [...lanes].sort((a, b) => {
+    const aPriority = a.observation_class === "shadow_observe" ? 0 : 1;
+    const bPriority = b.observation_class === "shadow_observe" ? 0 : 1;
+    return aPriority - bPriority;
+  });
+  for (const lane of ordered) {
+    if (!lane.exchange || !lane.symbol) continue;
+    const asset = baseAsset(lane.symbol);
+    if (asset !== "BTC" && asset !== "ETH") continue;
+    const key = `${lane.exchange}:${lane.symbol}`;
+    if (unique.has(key)) continue;
+    unique.set(key, {
+      key,
+      exchange: lane.exchange,
+      symbol: lane.symbol,
+      label: `${asset} · ${lane.exchange.replace(/_/g, " ").toUpperCase()}`,
+    });
+  }
+  return [...unique.values()];
+}
+
+function laneExchangeMap(lanes: CorrectionLane[] | undefined) {
+  return new Map((lanes ?? []).map((lane) => [lane.lane_id, lane.exchange]));
+}
+
+function eventMatchesMarket(
+  event: ScannerAuditEvent,
+  market: MarketChoice,
+  laneExchanges: Map<string, string>,
+) {
+  if (canonicalSymbol(event.symbol) !== canonicalSymbol(market.symbol)) return false;
+  const eventExchange = event.exchange || laneExchanges.get(event.lane);
+  return !eventExchange || eventExchange === market.exchange;
+}
+
+export function eventTimeMs(event: ScannerAuditEvent) {
+  if (event.kind === "entry") return Date.parse(event.entry_ts || event.ts);
+  if (event.kind === "exit") return Date.parse(event.ts);
+  return Date.parse(event.bar_ts || event.ts);
+}
+
+export function bucketOpenMs(timestamp: number, timeframe: ChartTimeframe) {
+  const width = TF_MS[timeframe];
+  return Math.floor(timestamp / width) * width;
+}
+
+export function toPlans(
   events: ScannerAuditEvent[] | undefined,
-  symbol: string,
-  timeframe: string,
+  market: MarketChoice,
+  timeframe: ChartTimeframe,
+  laneExchanges: Map<string, string>,
 ): Plan[] {
   if (!events) return [];
   const plans: Plan[] = [];
   for (const event of events) {
-    if (event.symbol !== symbol) continue;
+    if (!eventMatchesMarket(event, market, laneExchanges)) continue;
     if (event.timeframe && event.timeframe !== timeframe) continue;
     if (event.kind !== "signal" && event.kind !== "entry") continue;
     const entry = event.entry_price ?? event.decision_price ?? event.price;
     const stop = event.stop_price;
     if (typeof entry !== "number" || typeof stop !== "number") continue;
-    const ts_ms = Date.parse(event.bar_ts || event.ts);
-    if (!Number.isFinite(ts_ms)) continue;
+    const eventTs = eventTimeMs(event);
+    if (!Number.isFinite(eventTs)) continue;
     plans.push({
-      key: `${event.intent_key || event.ts}-${event.kind}`,
-      ts_ms,
+      key: `${event.lane}:${event.intent_key || event.ts}:${event.kind}`,
+      event_ts_ms: eventTs,
+      bar_ts_ms: bucketOpenMs(eventTs, timeframe),
       side: event.side,
       entry,
       stop,
       target: typeof event.target_price === "number" ? event.target_price : null,
-      approved: event.approved,
       reason: event.reason,
       strategy_id: event.strategy_id,
       kind: event.kind,
     });
   }
-  plans.sort((a, b) => b.ts_ms - a.ts_ms);
+  plans.sort((a, b) => b.event_ts_ms - a.event_ts_ms);
   return plans;
+}
+
+function toEventMarkers(
+  events: ScannerAuditEvent[] | undefined,
+  market: MarketChoice,
+  timeframe: ChartTimeframe,
+  laneExchanges: Map<string, string>,
+): EventMarker[] {
+  if (!events) return [];
+  const markers: EventMarker[] = [];
+  for (const event of events) {
+    if (!eventMatchesMarket(event, market, laneExchanges)) continue;
+    if (event.timeframe && event.timeframe !== timeframe) continue;
+    if (event.kind !== "signal" && event.kind !== "entry" && event.kind !== "exit") {
+      continue;
+    }
+    if (event.kind === "entry" && !event.approved) continue;
+    const eventTs = eventTimeMs(event);
+    if (!Number.isFinite(eventTs)) continue;
+    const eventPrice = event.entry_price ?? event.decision_price ?? event.price;
+    markers.push({
+      key: `${event.lane}:${event.intent_key || event.ts}:${event.kind}`,
+      bar_ts_ms: bucketOpenMs(eventTs, timeframe),
+      side: event.side,
+      kind: event.kind,
+      event_price: typeof eventPrice === "number" ? eventPrice : null,
+    });
+  }
+  return markers;
+}
+
+function clearDrawings(chart: ChartInstance, ids: string[]) {
+  for (const id of ids) {
+    try {
+      chart.drawings?.remove?.(id);
+    } catch {
+      // Vela may already have removed drawings during a market replacement.
+    }
+  }
 }
 
 const price = (value: number | null | undefined) =>
@@ -89,26 +214,55 @@ const price = (value: number | null | undefined) =>
 const riskBps = (plan: Plan) =>
   plan.entry > 0 ? Math.abs((plan.entry - plan.stop) / plan.entry) * 1e4 : null;
 
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 export function ScannerChart() {
-  const [symbol, setSymbol] = useState<(typeof SYMBOLS)[number]>(SYMBOLS[0]);
+  const lanes = useLanes();
+  const markets = useMemo(() => marketsFromLanes(lanes.data?.lanes), [lanes.data]);
+  const laneExchanges = useMemo(
+    () => laneExchangeMap(lanes.data?.lanes),
+    [lanes.data],
+  );
+  const [marketKey, setMarketKey] = useState("");
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("15m");
+  const [marketReadyKey, setMarketReadyKey] = useState<string | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<InstanceType<typeof Vela> | null>(null);
+  const chartRef = useRef<ChartInstance | null>(null);
   const drawnIdsRef = useRef<string[]>([]);
 
-  const candles = useQuery({
-    queryKey: ["scanner-chart-candles", symbol, timeframe],
-    queryFn: () => fetchChartCandles(symbol, timeframe, 500),
-    refetchInterval: 30_000,
-  });
-  const markers = useQuery({
-    queryKey: ["scanner-chart-markers", symbol],
-    queryFn: () => fetchChartMarkers(symbol, 200),
-    refetchInterval: 30_000,
-  });
-  const journal = useJournal(150, 0);
+  const selectedMarket =
+    markets.find((market) => market.key === marketKey) ?? markets[0] ?? null;
 
-  const bars = useMemo(
+  useEffect(() => {
+    if (markets.length && !markets.some((market) => market.key === marketKey)) {
+      setMarketKey(markets[0].key);
+    }
+  }, [marketKey, markets]);
+
+  const candles = useQuery({
+    queryKey: [
+      "scanner-chart-candles",
+      selectedMarket?.exchange,
+      selectedMarket?.symbol,
+      timeframe,
+    ],
+    queryFn: () => {
+      if (!selectedMarket) throw new Error("no active chart market");
+      return fetchChartCandles(
+          selectedMarket.symbol,
+          timeframe,
+          500,
+          selectedMarket.exchange,
+        );
+    },
+    enabled: selectedMarket !== null,
+    refetchInterval: 30_000,
+  });
+  const journal = useJournal(500, 0);
+
+  const bars = useMemo<CandleBar[]>(
     () =>
       (candles.data?.candles ?? []).map((candle) => ({
         time: candle.time * 1000,
@@ -120,84 +274,146 @@ export function ScannerChart() {
       })),
     [candles.data],
   );
-
-  const plans = useMemo(
-    () => toPlans(journal.data?.scanner_events, symbol, timeframe),
-    [journal.data, symbol, timeframe],
+  const marketDataKey = useMemo(
+    () =>
+      bars.length && selectedMarket
+        ? `${selectedMarket.key}:${timeframe}:${bars[0].time}:${bars[bars.length - 1].time}:${bars.length}`
+        : null,
+    [bars, selectedMarket, timeframe],
   );
 
-  // Chart lifecycle: create once, then update the market in place.
+  const plans = useMemo(
+    () =>
+      selectedMarket
+        ? toPlans(
+            journal.data?.scanner_events,
+            selectedMarket,
+            timeframe,
+            laneExchanges,
+          )
+        : [],
+    [journal.data, laneExchanges, selectedMarket, timeframe],
+  );
+  const eventMarkers = useMemo(
+    () =>
+      selectedMarket
+        ? toEventMarkers(
+            journal.data?.scanner_events,
+            selectedMarket,
+            timeframe,
+            laneExchanges,
+          )
+        : [],
+    [journal.data, laneExchanges, selectedMarket, timeframe],
+  );
+
+  // Market replacement is asynchronous in Vela. Drawings are added only after
+  // ready()/setMarket() has finished, otherwise Vela clears them with old data.
   useEffect(() => {
-    if (!containerRef.current || bars.length === 0) return;
-    if (!chartRef.current) {
-      chartRef.current = new Vela(containerRef.current, {
-        data: bars,
-        timeframe,
-        theme: "dark",
-      });
-      chartRef.current.drawings?.showToolbar?.(false);
-      return;
-    }
-    void chartRef.current.setMarket({ data: bars, timeframe });
-  }, [bars, timeframe]);
+    if (!containerRef.current || bars.length === 0 || !marketDataKey) return;
+    let cancelled = false;
+    setMarketReadyKey(null);
+
+    const load = async () => {
+      try {
+        let chart = chartRef.current;
+        if (chart) clearDrawings(chart, drawnIdsRef.current);
+        drawnIdsRef.current = [];
+        if (!chart) {
+          chart = new Vela(containerRef.current as HTMLDivElement, {
+            data: bars,
+            timeframe,
+            theme: "dark",
+          });
+          chartRef.current = chart;
+          chart.drawings?.showToolbar?.(false);
+          await chart.ready();
+        } else {
+          await chart.setMarket({ data: bars, timeframe });
+        }
+        if (cancelled || chartRef.current !== chart) return;
+        setChartError(null);
+        setMarketReadyKey(marketDataKey);
+      } catch (error) {
+        if (!cancelled) {
+          setMarketReadyKey(null);
+          setChartError(errorText(error));
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [bars, marketDataKey, timeframe]);
 
   useEffect(
     () => () => {
-      chartRef.current?.destroy?.();
+      if (chartRef.current) {
+        clearDrawings(chartRef.current, drawnIdsRef.current);
+        chartRef.current.destroy?.();
+      }
       chartRef.current = null;
       drawnIdsRef.current = [];
     },
     [],
   );
 
-  // Overlays: markers from the lanes' fills, plan lines from scanner events.
+  // Journal overlays are bucketed onto the selected TF. Their cards retain
+  // actual event time, so a 12:07 acceptance is drawn on the 12:00 15m bar but
+  // remains labelled 12:07 instead of pretending the entry occurred at close.
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || bars.length === 0) return;
+    if (!chart || marketReadyKey !== marketDataKey || bars.length === 0) return;
     const drawings = chart.drawings;
     if (!drawings?.add) return;
 
-    for (const id of drawnIdsRef.current) {
-      try {
-        drawings.remove?.(id);
-      } catch {
-        /* a resize/reload may have dropped it already */
-      }
-    }
+    clearDrawings(chart, drawnIdsRef.current);
     drawnIdsRef.current = [];
     const lastTime = bars[bars.length - 1].time;
     const firstTime = bars[0].time;
+    const barByTime = new Map(bars.map((bar) => [bar.time, bar]));
+    let failures = 0;
     const keep = (drawing: { id: string } | null | undefined) => {
       if (drawing?.id) drawnIdsRef.current.push(drawing.id);
     };
-    const clampTime = (ms: number) =>
-      Math.min(Math.max(ms, firstTime), lastTime);
-    const barByTime = new Map(bars.map((bar) => [bar.time, bar]));
 
-    for (const marker of markers.data?.markers ?? []) {
-      const time = marker.time * 1000;
-      const bar = barByTime.get(time);
-      if (!bar) continue; // marker outside the loaded window
-      const price = marker.position === "aboveBar" ? bar.high : bar.low;
+    for (const marker of eventMarkers) {
+      const bar = barByTime.get(marker.bar_ts_ms);
+      if (!bar) continue;
+      const entryLike = marker.kind !== "exit";
+      const arrowUp = entryLike ? marker.side === "long" : marker.side === "short";
+      const markerPrice = marker.event_price ?? (arrowUp ? bar.low : bar.high);
       try {
-        keep(
-          drawings.add(
-            marker.shape === "arrowDown" ? "arrowmarkdown" : "arrowmarkup",
-            { paneId: "price", anchors: [{ time, price }] },
-          ),
-        );
+        const drawing = drawings.add(arrowUp ? "arrowmarkup" : "arrowmarkdown", {
+          paneId: "price",
+          anchors: [{ time: marker.bar_ts_ms, price: markerPrice }],
+        });
+        keep(drawing);
+        if (drawing?.id) {
+          drawings.update?.(drawing.id, {
+            style: {
+              lineColor: arrowUp ? COLORS.long : COLORS.short,
+              fillColor: arrowUp ? COLORS.long : COLORS.short,
+              lineWidth: 1,
+              lineStyle: "solid",
+            },
+          });
+          drawings.lock?.(drawing.id);
+        }
       } catch {
-        /* renderer rejected the mark: skip */
+        failures += 1;
       }
     }
 
     for (const plan of plans.slice(0, OVERLAY_PLANS)) {
-      const t0 = clampTime(plan.ts_ms);
+      if (plan.bar_ts_ms < firstTime || plan.bar_ts_ms > lastTime) continue;
       try {
         const zone = drawings.add("box", {
           paneId: "price",
           anchors: [
-            { time: t0, price: plan.stop },
+            { time: plan.bar_ts_ms, price: plan.stop },
             { time: lastTime, price: plan.entry },
           ],
         });
@@ -225,7 +441,7 @@ export function ScannerChart() {
           const line = drawings.add("trendline", {
             paneId: "price",
             anchors: [
-              { time: t0, price: level },
+              { time: plan.bar_ts_ms, price: level },
               { time: lastTime, price: level },
             ],
           });
@@ -238,29 +454,30 @@ export function ScannerChart() {
           }
         }
       } catch {
-        /* plan predates the loaded window: skip its overlay */
+        failures += 1;
       }
     }
-  }, [bars, markers.data, plans]);
+    setChartError(failures ? `${failures} chart overlay(s) were rejected` : null);
+  }, [bars, eventMarkers, marketDataKey, marketReadyKey, plans]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
       <TerminalPanel
-        title={`Scanner chart · ${symbol} · ${timeframe}`}
-        meta="canonical lake bars · journal overlays · Vela renderer"
+        title={`Scanner chart · ${selectedMarket ? baseAsset(selectedMarket.symbol) : "NO MARKET"} · ${timeframe}`}
+        meta={`${selectedMarket?.exchange ?? "lane inventory unavailable"} · canonical lake · journal lifecycle overlays`}
       >
         <div className="mb-2 flex items-center gap-2 flex-wrap">
-          {SYMBOLS.map((item) => (
+          {markets.map((market) => (
             <button
-              key={item}
-              onClick={() => setSymbol(item)}
+              key={market.key}
+              onClick={() => setMarketKey(market.key)}
               className={`rounded border px-2 py-1 text-[11px] font-mono ${
-                item === symbol
+                market.key === selectedMarket?.key
                   ? "border-brand text-brand"
                   : "border-line text-dim hover:text-txt"
               }`}
             >
-              {item.split("/")[0]}
+              {market.label}
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-line" />
@@ -285,17 +502,31 @@ export function ScannerChart() {
                 : "loading…"}
           </span>
         </div>
-        <div
-          ref={containerRef}
-          className="h-[520px] w-full rounded border border-line bg-black/20"
-        />
+        <div className="relative">
+          <div
+            ref={containerRef}
+            className="h-[520px] w-full rounded border border-line bg-black/20"
+          />
+          {chartError && (
+            <div className="pointer-events-none absolute inset-x-4 top-4 rounded border border-short/40 bg-bg/90 px-3 py-2 text-[11px] font-mono text-short">
+              Chart renderer: {chartError}
+            </div>
+          )}
+          {!candles.isLoading && !candles.isError && bars.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] font-mono text-dim">
+              {selectedMarket
+                ? `No canonical ${timeframe} candles for ${selectedMarket.symbol} on ${selectedMarket.exchange}.`
+                : "No active BTC/ETH lane is available for chart selection."}
+            </div>
+          )}
+        </div>
       </TerminalPanel>
 
-      <TerminalPanel title="Trade plans" meta="latest scanner fires · read-only">
+      <TerminalPanel title="Trade plans" meta="journal truth · actual event clocks">
         <div className="flex flex-col gap-2">
           {plans.length === 0 && (
             <div className="text-[11px] font-mono text-dim">
-              No scanner events for {symbol} @ {timeframe} in the journal tail.
+              No signal or accepted-entry plans for {selectedMarket?.symbol ?? "an active market"} @ {timeframe} in the journal tail.
             </div>
           )}
           {plans.slice(0, 8).map((plan) => {
@@ -306,29 +537,21 @@ export function ScannerChart() {
                 className="rounded border border-line bg-bg/60 p-2 text-[11px] font-mono"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span
-                    className={plan.side === "long" ? "text-long" : "text-short"}
-                  >
+                  <span className={plan.side === "long" ? "text-long" : "text-short"}>
                     {plan.side.toUpperCase()} · {plan.strategy_id}
                   </span>
-                  <TerminalBadge tone={plan.approved ? "good" : "warn"}>
-                    {plan.approved ? "approved" : plan.kind}
+                  <TerminalBadge tone={plan.kind === "entry" ? "good" : "info"}>
+                    {plan.kind === "entry" ? "accepted" : "signal"}
                   </TerminalBadge>
                 </div>
                 <div className="mt-1 grid grid-cols-3 gap-1 text-dim">
-                  <span>
-                    E <span className="text-txt">{price(plan.entry)}</span>
-                  </span>
-                  <span>
-                    SL <span className="text-short">{price(plan.stop)}</span>
-                  </span>
-                  <span>
-                    TP <span className="text-long">{price(plan.target)}</span>
-                  </span>
+                  <span>E <span className="text-txt">{price(plan.entry)}</span></span>
+                  <span>SL <span className="text-short">{price(plan.stop)}</span></span>
+                  <span>TP <span className="text-long">{price(plan.target)}</span></span>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-faint">
                   <span>{risk !== null ? `${risk.toFixed(1)} bps to stop` : "—"}</span>
-                  <span>{new Date(plan.ts_ms).toISOString().slice(5, 16)}</span>
+                  <span>{new Date(plan.event_ts_ms).toISOString().slice(5, 16)}</span>
                 </div>
                 {plan.reason && (
                   <div className="mt-1 truncate text-faint" title={plan.reason}>
