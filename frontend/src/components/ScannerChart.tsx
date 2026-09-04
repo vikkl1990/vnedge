@@ -7,6 +7,7 @@ import { Vela } from "@luxalgo/vela";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchChartCandles,
+  fetchMechanismContext,
   type ChartTimeframe,
   type CorrectionLane,
   type ScannerAuditEvent,
@@ -38,6 +39,8 @@ const COLORS = {
   target: "#34d399",
   long: "#34d399",
   short: "#f87171",
+  swing: "#eab308",
+  channel: "#64748b",
 };
 
 type ChartInstance = InstanceType<typeof Vela>;
@@ -227,6 +230,7 @@ export function ScannerChart() {
   const [marketKey, setMarketKey] = useState("");
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("15m");
   const [marketReadyKey, setMarketReadyKey] = useState<string | null>(null);
+  const [showContext, setShowContext] = useState(true);
   const [chartError, setChartError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
@@ -261,6 +265,27 @@ export function ScannerChart() {
     refetchInterval: 30_000,
   });
   const journal = useJournal(500, 0);
+  // ML-plane mechanism context (swing levels, channel, FVG zones). Optional:
+  // an older backend without the endpoint just means no context overlay.
+  const context = useQuery({
+    queryKey: [
+      "scanner-chart-context",
+      selectedMarket?.exchange,
+      selectedMarket?.symbol,
+      timeframe,
+    ],
+    queryFn: () => {
+      if (!selectedMarket) throw new Error("no active chart market");
+      return fetchMechanismContext(
+        selectedMarket.symbol,
+        timeframe,
+        selectedMarket.exchange,
+      );
+    },
+    enabled: selectedMarket !== null && showContext,
+    refetchInterval: 60_000,
+    retry: false,
+  });
 
   const bars = useMemo<CandleBar[]>(
     () =>
@@ -457,8 +482,75 @@ export function ScannerChart() {
         failures += 1;
       }
     }
+    const ctx = showContext && context.data?.ready ? context.data : null;
+    if (ctx) {
+      const width = TF_MS[timeframe];
+      const level = (
+        value: number | null | undefined,
+        color: string,
+        style: "solid" | "dashed" | "dotted",
+      ) => {
+        if (typeof value !== "number" || !Number.isFinite(value)) return;
+        try {
+          const line = drawings.add("hline", {
+            paneId: "price",
+            anchors: [{ time: lastTime, price: value }],
+          });
+          keep(line);
+          if (line?.id) {
+            drawings.update?.(line.id, {
+              style: { lineColor: color, lineWidth: 1, lineStyle: style },
+            });
+            drawings.lock?.(line.id);
+          }
+        } catch {
+          failures += 1;
+        }
+      };
+      level(ctx.swing_high, COLORS.swing, "solid");
+      level(ctx.swing_low, COLORS.swing, "solid");
+      level(ctx.donchian_high, COLORS.channel, "dotted");
+      level(ctx.donchian_low, COLORS.channel, "dotted");
+      level(
+        ctx.supertrend_line,
+        ctx.supertrend_dir === 1 ? COLORS.long : COLORS.short,
+        "dashed",
+      );
+      for (const [zone, color] of [
+        [ctx.bull_fvg, COLORS.long],
+        [ctx.bear_fvg, COLORS.short],
+      ] as const) {
+        if (!zone) continue;
+        const t0 = Math.max(firstTime, lastTime - zone.age_bars * width);
+        try {
+          const box = drawings.add("box", {
+            paneId: "price",
+            anchors: [
+              { time: t0, price: zone.bottom },
+              { time: lastTime, price: zone.top },
+            ],
+          });
+          keep(box);
+          if (box?.id) {
+            drawings.update?.(box.id, {
+              style: {
+                lineColor: color,
+                lineWidth: 1,
+                lineStyle: "dotted",
+                fillColor: color,
+                fillOpacity: 0.06,
+              },
+            });
+            drawings.sendToBack?.(box.id);
+            drawings.lock?.(box.id);
+          }
+        } catch {
+          failures += 1;
+        }
+      }
+    }
     setChartError(failures ? `${failures} chart overlay(s) were rejected` : null);
-  }, [bars, eventMarkers, marketDataKey, marketReadyKey, plans]);
+  }, [bars, context.data, eventMarkers, marketDataKey, marketReadyKey, plans, showContext, timeframe]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
@@ -494,6 +586,37 @@ export function ScannerChart() {
               {item}
             </button>
           ))}
+          <span className="mx-1 h-4 w-px bg-line" />
+          <button
+            onClick={() => setShowContext((value) => !value)}
+            title="Mechanism context: swing levels, channel, supertrend, FVG zones — the ML plane's own view"
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              showContext
+                ? "border-brand text-brand"
+                : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            CTX
+          </button>
+          {showContext && context.data?.ready && (
+            <span className="text-[10px] font-mono text-dim">
+              vol&nbsp;
+              {typeof context.data.atr_pctile === "number"
+                ? `${Math.round(context.data.atr_pctile * 100)}%`
+                : "—"}
+              {" · st "}
+              <span
+                className={
+                  context.data.supertrend_dir === 1 ? "text-long" : "text-short"
+                }
+              >
+                {context.data.supertrend_dir === 1 ? "up" : "down"}
+              </span>
+            </span>
+          )}
+          {showContext && context.isError && (
+            <span className="text-[10px] font-mono text-faint">ctx unavailable</span>
+          )}
           <span className="ml-auto text-[10px] font-mono text-faint">
             {candles.data
               ? `${candles.data.count} bars · ${candles.data.source}`

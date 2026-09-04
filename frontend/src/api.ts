@@ -203,6 +203,45 @@ export interface ChartCandles {
   candles: ChartCandle[];
 }
 
+export interface MechanismFvgZone {
+  top: number;
+  bottom: number;
+  age_bars: number;
+}
+
+/** Drawable mechanism context from the ML plane's own definitions. */
+export interface MechanismContext {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  ready: boolean;
+  as_of?: number;
+  close?: number;
+  atr?: number;
+  swing_high?: number | null;
+  swing_high_age?: number;
+  swing_low?: number | null;
+  swing_low_age?: number;
+  donchian_high?: number | null;
+  donchian_low?: number | null;
+  supertrend_line?: number | null;
+  supertrend_dir?: 1 | -1 | null;
+  atr_pctile?: number | null;
+  bull_fvg?: MechanismFvgZone | null;
+  bear_fvg?: MechanismFvgZone | null;
+}
+
+export async function fetchMechanismContext(
+  symbol: string,
+  timeframe: ChartTimeframe,
+  exchange = "binanceusdm",
+): Promise<MechanismContext> {
+  const q = new URLSearchParams({ timeframe, exchange });
+  return apiGet<MechanismContext>(
+    `/api/candles/${encodeURIComponent(symbol)}/context?${q}`,
+  );
+}
+
 export async function fetchChartCandles(
   symbol: string,
   timeframe: ChartTimeframe,
