@@ -52,6 +52,14 @@ def snapshot() -> dict:
                     "decision_lag_ms": {"p95": 4.5, "n": 20},
                 },
                 "decision_skips": {"forming_1h": 2},
+                "runtime_readiness": {
+                    "data_ready": True,
+                    "decision_ready": True,
+                    "execution_ready": False,
+                    "data_blockers": [],
+                    "decision_blockers": [],
+                    "execution_blockers": ["execution_stage_observe"],
+                },
                 "cost_profile": "delta_swing",
                 "plan_overlay": {"round_trip_bps": 13.0},
                 "journal": {"available": True, "recovery_degraded": True},
@@ -94,9 +102,20 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["canonical_wait_ms"] is None
     assert measurement["decision_lag_ms"] == 4.5
     assert measurement["latency_samples"] == {
-        "bar_close": 20, "canonical_wait": 0, "decision": 20, "required": 20
+        "bar_close": 20,
+        "canonical_wait": 0,
+        "decision": 20,
+        "required": 20,
     }
     assert measurement["arm_skips"] == 2
+    assert measurement["runtime_readiness"] == {
+        "data_ready": True,
+        "decision_ready": True,
+        "execution_ready": False,
+        "data_blockers": [],
+        "decision_blockers": [],
+        "execution_blockers": ["execution_stage_observe"],
+    }
     assert measurement["last_signal_reason"] == "observe_only"
     assert measurement["cost_profile"] == "delta_swing"
     assert measurement["round_trip_bps"] == 13.0
@@ -208,11 +227,13 @@ def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject(
 
 def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     snap = snapshot()
-    snap["runtime_control"].update({
-        "shadow_observe_strategies": ["structure_bos_1h"],
-        "shadow_observe_timeframes": ["1h"],
-        "lane_set_hash": "abc123",
-    })
+    snap["runtime_control"].update(
+        {
+            "shadow_observe_strategies": ["structure_bos_1h"],
+            "shadow_observe_timeframes": ["1h"],
+            "lane_set_hash": "abc123",
+        }
+    )
     snap["lanes"] = [
         {
             "lane_id": "shadow_observe_binanceusdm_btc",
@@ -424,12 +445,8 @@ def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() 
     )
 
     payload = build_lanes_payload(snap, now=NOW)
-    measurement = next(
-        row for row in payload["lanes"] if row["observation_class"] == "measurement"
-    )
-    observer = next(
-        row for row in payload["lanes"] if row["observation_class"] == "shadow_observe"
-    )
+    measurement = next(row for row in payload["lanes"] if row["observation_class"] == "measurement")
+    observer = next(row for row in payload["lanes"] if row["observation_class"] == "shadow_observe")
 
     assert measurement["sizing_profile"] is None
     assert observer["sizing_profile"] == sizing

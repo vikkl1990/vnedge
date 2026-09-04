@@ -30,8 +30,7 @@ from vnedge.strategy.strategy_registry import (
 )
 
 LIVE_BLOCKED_MESSAGE = (
-    "Live entrypoint disabled — venue private stream / checklist incomplete. "
-    "Paper/shadow only."
+    "Live entrypoint disabled — venue private stream / checklist incomplete. Paper/shadow only."
 )
 
 LANES_SNAPSHOT_SLA_MS = 15_000.0
@@ -116,9 +115,7 @@ def _latency_value(lane: Mapping[str, Any], name: str) -> float | None:
     return _number(metric.get("p95") if metric else latency.get(name))
 
 
-def _latency_value_with_alias(
-    lane: Mapping[str, Any], name: str, alias: str
-) -> float | None:
+def _latency_value_with_alias(lane: Mapping[str, Any], name: str, alias: str) -> float | None:
     value = _latency_value(lane, name)
     return value if value is not None else _latency_value(lane, alias)
 
@@ -149,9 +146,7 @@ def _skip_count(lane: Mapping[str, Any]) -> int:
     return sum(int(value or 0) for value in skips.values())
 
 
-def _last_signal_reason(
-    lane: Mapping[str, Any], *, eligibility: str, mode: str
-) -> str:
+def _last_signal_reason(lane: Mapping[str, Any], *, eligibility: str, mode: str) -> str:
     if eligibility == "KILLED":
         return "strategy_killed"
     if mode == "measurement":
@@ -180,14 +175,8 @@ def _current_waiting_reason(lane: Mapping[str, Any], fallback: str) -> str:
             return str(blocked.get("reason") or blocked.get("detail") or "arm_blocked")
         return str(blocked)
     recovery = _mapping(lane.get("latency_recovery"))
-    states = [
-        _mapping(value)
-        for value in recovery.values()
-        if isinstance(value, Mapping)
-    ]
-    recovering = next(
-        (state for state in states if state.get("state") == "recovering"), None
-    )
+    states = [_mapping(value) for value in recovery.values() if isinstance(value, Mapping)]
+    recovering = next((state for state in states if state.get("state") == "recovering"), None)
     if recovering:
         return (
             "latency_recovering_"
@@ -239,9 +228,7 @@ def _scanner_lifecycle(
     entry_clock = str(contract.get("entry_clock") or "")
     entry_route = str(lane.get("entry_route") or "auto")
     routed_engine = decision_engine == "base_strategy_routed_entry_v1"
-    quote_engine = entry_clock == "bbo_acceptance" or decision_engine.startswith(
-        "quote_acceptance"
-    )
+    quote_engine = entry_clock == "bbo_acceptance" or decision_engine.startswith("quote_acceptance")
     engine_kind = (
         "measurement"
         if mode == "measurement"
@@ -268,9 +255,7 @@ def _scanner_lifecycle(
     accepted = _int(perf.get("approved") or funnel.get("shadow_approved"))
     rejected = _int(perf.get("rejected") or funnel.get("shadow_rejected"))
     cost_rejected = _int(perf.get("cost_rejected"))
-    sizing_rejected = _int(
-        perf.get("sizing_rejected") or funnel.get("sizing_skips")
-    )
+    sizing_rejected = _int(perf.get("sizing_rejected") or funnel.get("sizing_skips"))
     risk_rejected = _int(perf.get("risk_rejected") or funnel.get("risk_rejects"))
     portfolio_rejected = _int(perf.get("portfolio_rejected"))
     prerequisite_rejected = _int(perf.get("prerequisite_rejected"))
@@ -278,9 +263,7 @@ def _scanner_lifecycle(
 
     waiting_lower = waiting_reason.lower()
     session_state = (
-        "blocked"
-        if "session" in waiting_lower or "outside_session" in state_text
-        else "eligible"
+        "blocked" if "session" in waiting_lower or "outside_session" in state_text else "eligible"
     )
     if health in {"blocked", "degraded"}:
         setup_state = "degraded"
@@ -297,9 +280,7 @@ def _scanner_lifecycle(
 
     context_ages = _mapping(contract.get("context_age_seconds"))
     numeric_context_ages = [
-        number
-        for value in context_ages.values()
-        if (number := _number(value)) is not None
+        number for value in context_ages.values() if (number := _number(value)) is not None
     ]
     net_value = _number(perf.get("virtual_net_usd"))
     return {
@@ -307,9 +288,7 @@ def _scanner_lifecycle(
         "decision_engine": decision_engine,
         "entry_route": entry_route,
         "maker_fill_ttl_bars": (
-            _int(lane.get("maker_fill_ttl_bars"))
-            if entry_route == "maker_retest"
-            else None
+            _int(lane.get("maker_fill_ttl_bars")) if entry_route == "maker_retest" else None
         ),
         "fill_evidence": (
             "closed_bar_touch_proxy"
@@ -340,9 +319,7 @@ def _scanner_lifecycle(
         "resolved": resolved,
         "pending": pending,
         "session_state": session_state,
-        "htf_context_age_seconds": max(numeric_context_ages)
-        if numeric_context_ages
-        else None,
+        "htf_context_age_seconds": max(numeric_context_ages) if numeric_context_ages else None,
         "net_value": net_value,
         "net_unit": "USD" if net_value is not None else None,
         "net_basis": "shadow_booked_execution" if net_value is not None else None,
@@ -390,18 +367,12 @@ def _health_diagnostics(
     if feed and feed not in {"ok", "live"}:
         add(f"feed_{feed}")
 
-    bar_p95 = _latency_value_with_alias(
-        lane, "bar_close_processing_ms", "feed_lag_ms"
-    )
+    bar_p95 = _latency_value_with_alias(lane, "bar_close_processing_ms", "feed_lag_ms")
     decision_p95 = _latency_value(lane, "decision_lag_ms")
     timeframe = str(lane.get("timeframe") or "")
     bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(timeframe)
-    decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
-        timeframe
-    )
-    bar_samples = _latency_samples(
-        lane, "bar_close_processing_ms", "feed_lag_ms"
-    )
+    decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(timeframe)
+    bar_samples = _latency_samples(lane, "bar_close_processing_ms", "feed_lag_ms")
     decision_samples = _latency_samples(lane, "decision_lag_ms")
     details = {
         "bar_close_receipt": {
@@ -448,9 +419,7 @@ def build_lanes_payload(
     for lane in _rows(snapshot):
         strategy_id = str(lane.get("strategy_id") or "")
         eligibility = _eligibility(strategy_id)
-        mode = _mode(
-            lane.get("mode"), strategy_id, killed=eligibility == "KILLED"
-        )
+        mode = _mode(lane.get("mode"), strategy_id, killed=eligibility == "KILLED")
         observation_class = (
             "shadow_observe"
             if mode == "shadow" and is_shadow_observe_eligible(strategy_id)
@@ -459,9 +428,7 @@ def build_lanes_payload(
             else None
         )
         capital = (
-            mode == "paper"
-            and eligibility == "eligible"
-            and bool(runtime.get("orders_allowed"))
+            mode == "paper" and eligibility == "eligible" and bool(runtime.get("orders_allowed"))
         )
         candle_status, candle_age_ms = timeframe_health(lane)
         plan = _mapping(lane.get("plan_overlay"))
@@ -478,9 +445,7 @@ def build_lanes_payload(
             waiting_reason=waiting_reason,
             open_positions=open_positions,
         )
-        health_reasons, health_details = _health_diagnostics(
-            lane, health, problems.get(lane_id)
-        )
+        health_reasons, health_details = _health_diagnostics(lane, health, problems.get(lane_id))
         result.append(
             {
                 "lane_id": str(lane.get("lane_id") or strategy_id or "unknown"),
@@ -516,9 +481,7 @@ def build_lanes_payload(
                 "shadow_journal_ms": _latency_value(lane, "shadow_journal_ms"),
                 "tick_stop_ms": _latency_value(lane, "tick_stop_ms"),
                 "latency_samples": {
-                    "bar_close": _latency_samples(
-                        lane, "bar_close_processing_ms", "feed_lag_ms"
-                    ),
+                    "bar_close": _latency_samples(lane, "bar_close_processing_ms", "feed_lag_ms"),
                     "canonical_wait": _latency_samples(lane, "canonical_wait_ms"),
                     "decision": _latency_samples(lane, "decision_lag_ms"),
                     "required": LATENCY_GATE_MIN_SAMPLES,
@@ -526,9 +489,7 @@ def build_lanes_payload(
                 "latency_recovery": dict(_mapping(lane.get("latency_recovery"))),
                 "arm_skips": _skip_count(lane),
                 "last_signal_age_seconds": (
-                    None
-                    if mode == "measurement"
-                    else _age_seconds(lane.get("last_fired_ts"), at)
+                    None if mode == "measurement" else _age_seconds(lane.get("last_fired_ts"), at)
                 ),
                 "last_signal_reason": reason,
                 "current_waiting_reason": waiting_reason,
@@ -544,6 +505,11 @@ def build_lanes_payload(
                 "health_reason": health_reasons[0] if health_reasons else None,
                 "health_reasons": health_reasons,
                 "health_details": health_details,
+                "runtime_readiness": (
+                    dict(_mapping(lane.get("runtime_readiness")))
+                    if lane.get("runtime_readiness")
+                    else None
+                ),
                 "shadow_perf": lane.get("shadow_perf") if mode == "shadow" else None,
                 "equity_usd": _number(lane.get("equity")),
                 "realized_pnl_usd": _number(lane.get("realized_pnl")),
@@ -567,19 +533,13 @@ def build_lanes_payload(
                     else None
                 ),
                 "active_plan": (
-                    dict(_mapping(lane.get("active_plan")))
-                    if lane.get("active_plan")
-                    else None
+                    dict(_mapping(lane.get("active_plan"))) if lane.get("active_plan") else None
                 ),
                 "last_eval": (
-                    dict(_mapping(lane.get("last_eval")))
-                    if lane.get("last_eval")
-                    else None
+                    dict(_mapping(lane.get("last_eval"))) if lane.get("last_eval") else None
                 ),
                 "last_reject_reason": (
-                    str(lane.get("last_reject_reason"))
-                    if lane.get("last_reject_reason")
-                    else None
+                    str(lane.get("last_reject_reason")) if lane.get("last_reject_reason") else None
                 ),
                 "why_no_fire": (
                     "measurement lane emits no OrderIntent by design"
@@ -592,15 +552,9 @@ def build_lanes_payload(
         )
 
     capital_count = sum(bool(row["capital"]) for row in result)
-    observe_count = sum(
-        row["observation_class"] == "shadow_observe" for row in result
-    )
-    shadow_rows = [
-        row for row in result if row["observation_class"] == "shadow_observe"
-    ]
-    measurement_rows = [
-        row for row in result if row["observation_class"] == "measurement"
-    ]
+    observe_count = sum(row["observation_class"] == "shadow_observe" for row in result)
+    shadow_rows = [row for row in result if row["observation_class"] == "shadow_observe"]
+    measurement_rows = [row for row in result if row["observation_class"] == "measurement"]
     paper_rows = [row for row in result if row["mode"] == "paper"]
 
     def purse(rows: list[dict[str, Any]]) -> float:
@@ -619,7 +573,8 @@ def build_lanes_payload(
     shared_purse = runtime.get("shadow_shared_purse_usd")
     portfolio = {
         "shadow_purse_usd": round(float(shared_purse), 2)
-        if shared_purse is not None else purse(shadow_rows),
+        if shared_purse is not None
+        else purse(shadow_rows),
         "paper_purse_usd": purse(paper_rows),
         "measurement_nominal_usd": purse(measurement_rows),
         "shadow_lane_count": len(shadow_rows),
@@ -692,15 +647,11 @@ def build_lanes_payload(
         "shadow_observe_lanes": observe_count,
         "shadow_observe_strategies": [
             str(value)
-            for value in (
-                observer_strategies if isinstance(observer_strategies, list) else []
-            )
+            for value in (observer_strategies if isinstance(observer_strategies, list) else [])
         ],
         "shadow_observe_timeframes": [
             str(value)
-            for value in (
-                observer_timeframes if isinstance(observer_timeframes, list) else []
-            )
+            for value in (observer_timeframes if isinstance(observer_timeframes, list) else [])
         ],
         "lane_set_hash": str(runtime.get("lane_set_hash") or "") or None,
         "portfolio": portfolio,
@@ -744,11 +695,19 @@ def _journal(snapshot: Mapping[str, Any], lanes: list[Mapping[str, Any]]) -> dic
     unavailable = str(snapshot.get("last_journal_write") or "").lower() == "unavailable"
     unavailable = unavailable or any(journal.get("available") is False for journal in journals)
     quarantine = next(
-        (str(journal.get("quarantine_path")) for journal in journals if journal.get("quarantine_path")),
+        (
+            str(journal.get("quarantine_path"))
+            for journal in journals
+            if journal.get("quarantine_path")
+        ),
         None,
     )
     recovery_error = next(
-        (str(journal.get("recovery_error")) for journal in journals if journal.get("recovery_error")),
+        (
+            str(journal.get("recovery_error"))
+            for journal in journals
+            if journal.get("recovery_error")
+        ),
         None,
     )
     return {
@@ -826,10 +785,22 @@ def _live_checklist(
     runtime = _mapping(snapshot.get("runtime_control"))
     live = _mapping(snapshot.get("live_gates"))
     return [
-        {"id": "kill_clear", "label": "kill clear", "ok": not bool(snapshot.get("kill_switch_active"))},
-        {"id": "risk_frozen", "label": "risk frozen", "ok": bool(runtime.get("risk_frozen") or live.get("risk_frozen"))},
+        {
+            "id": "kill_clear",
+            "label": "kill clear",
+            "ok": not bool(snapshot.get("kill_switch_active")),
+        },
+        {
+            "id": "risk_frozen",
+            "label": "risk frozen",
+            "ok": bool(runtime.get("risk_frozen") or live.get("risk_frozen")),
+        },
         {"id": "recon_clean", "label": "recon clean", "ok": bool(recon.get("clean"))},
-        {"id": "journal_writable", "label": "journal writable", "ok": bool(journal.get("available")) and not bool(journal.get("entries_blocked"))},
+        {
+            "id": "journal_writable",
+            "label": "journal writable",
+            "ok": bool(journal.get("available")) and not bool(journal.get("entries_blocked")),
+        },
         {"id": "live_flags", "label": "three live flags", "ok": bool(live.get("three_live_flags"))},
         {"id": "trade_keys", "label": "trade-only keys", "ok": bool(live.get("trade_keys"))},
         {"id": "ladder", "label": "ladder attestation", "ok": bool(live.get("ladder_attestation"))},
@@ -870,7 +841,9 @@ def build_risk_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         if exchange in seen:
             continue
         seen.add(exchange)
-        public = str(lane.get("feed") or _mapping(lane.get("feed_health")).get("candles") or "unknown")
+        public = str(
+            lane.get("feed") or _mapping(lane.get("feed_health")).get("candles") or "unknown"
+        )
         streams.append(
             {
                 "exchange": exchange,

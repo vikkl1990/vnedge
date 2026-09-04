@@ -50,6 +50,7 @@ from vnedge.runtime.daily_factory import (
 )
 from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
 from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.readiness import RuntimeReadiness, build_runtime_readiness
 from vnedge.runtime.run_report import RunReport
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.indicators import atr as _atr_indicator
@@ -107,6 +108,7 @@ class LiveTraderSession:
         protections: ProtectionState | None = None,
         daily_factory: DailySignalFactoryConfig | None = None,
         fill_ledger: FillLedger | None = None,
+        require_fill_ledger: bool = False,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -186,7 +188,7 @@ class LiveTraderSession:
         )
         self._exit_state: ActiveExitState | None = None
         self._exit_engine: ExitEngine | None = None
-        self._position_qty = 0.0        # tracked entry size (resolve_bar gate)
+        self._position_qty = 0.0  # tracked entry size (resolve_bar gate)
         self._entry_bar_index: int | None = None
         # L1 settlement: real equity/peak/drawdown from the venue (account_state is
         # truth), tracked every account read, so _report() and the snapshot report
@@ -202,7 +204,10 @@ class LiveTraderSession:
         # (deduped by client_order_id). Per-fill fee/realized_pnl await the private
         # fill stream (increment 3) — recorded null now, never faked.
         self.fill_ledger = fill_ledger
+        self.require_fill_ledger = require_fill_ledger
         self._ledgered_orders: set[str] = set()
+        self._ledger_halt = False
+        self._ledger_error: str | None = None
         # Runtime fail-closed latch: set when position reconciliation finds the
         # venue diverging from internal state; blocks new entries (exits still
         # flow) until a clean settled pass clears it. The static
@@ -236,10 +241,36 @@ class LiveTraderSession:
 
     @property
     def entries_allowed(self) -> bool:
-        """emergency_reduce_only mode — or a reconciliation halt — allows exits only."""
+        """Entry authority only; reduce-only exits never consult this property."""
         return (
             self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
             and not self._reconciliation_halt
+            and not self._ledger_halt
+            and not (self.require_fill_ledger and self.fill_ledger is None)
+        )
+
+    def _runtime_readiness(self, now: datetime | None = None) -> RuntimeReadiness:
+        at = now or datetime.now(UTC)
+        data_blockers: list[str | None] = [self._candle_path_arm_block(at)]
+        decision_blockers: list[str | None] = [
+            "strategy_warmup_incomplete" if len(self.candles) <= self.strategy.warmup_bars else None
+        ]
+        execution_blockers: list[str | None] = [
+            "emergency_reduce_only"
+            if self.settings.trading_mode is TradingMode.EMERGENCY_REDUCE_ONLY
+            else None,
+            "reconciliation_halt" if self._reconciliation_halt else None,
+            "fill_ledger_write_failed" if self._ledger_halt else None,
+            "fill_ledger_unavailable"
+            if self.require_fill_ledger and self.fill_ledger is None
+            else None,
+            "private_stream_unhealthy" if not self.private_stream_ready(at) else None,
+            "unresolved_orders" if self.om.has_unresolved_orders else None,
+        ]
+        return build_runtime_readiness(
+            data_blockers=data_blockers,
+            decision_blockers=decision_blockers,
+            execution_blockers=execution_blockers,
         )
 
     def private_stream_ready(self, now: datetime | None = None) -> bool:
@@ -292,17 +323,24 @@ class LiveTraderSession:
 
     def _note_submit_read_failure(self, kind: str, exc: Exception) -> None:
         self._recon_read_failures += 1
-        logger.error("submit-path %s read failed (%d consecutive): %s",
-                     kind, self._recon_read_failures, exc)
+        logger.error(
+            "submit-path %s read failed (%d consecutive): %s", kind, self._recon_read_failures, exc
+        )
         if self._recon_read_failures >= self._MAX_RECON_READ_FAILURES:
             self._reconciliation_halt = True
 
     # --- L3: entry-hygiene gates (parity with paper's pre-entry discipline) ------
     def _tm_kline(self, row: list, now: datetime) -> dict:
         ts = pd.to_datetime(int(row[0]), unit="ms", utc=True).to_pydatetime()
-        return {"open_time": ts, "open": float(row[1]), "high": float(row[2]),
-                "low": float(row[3]), "close": float(row[4]), "volume": float(row[5]),
-                "exchange_ts": now}
+        return {
+            "open_time": ts,
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+            "exchange_ts": now,
+        }
 
     def _feed_time_machine(self, now: datetime, closed_row: list | None = None) -> None:
         """Feed the arm-gate's Time Machine. FAIL-SAFE: never raises into the loop;
@@ -312,10 +350,14 @@ class LiveTraderSession:
         try:
             sym, tf = self.symbol, self.timeframe
             if closed_row is not None:
-                self.time_machine.on_kline_update(sym, tf, self._tm_kline(closed_row, now), is_closed=True)
+                self.time_machine.on_kline_update(
+                    sym, tf, self._tm_kline(closed_row, now), is_closed=True
+                )
             forming = getattr(self.feed, "forming_candle", None)
             if forming:
-                self.time_machine.on_kline_update(sym, tf, self._tm_kline(forming, now), is_closed=False)
+                self.time_machine.on_kline_update(
+                    sym, tf, self._tm_kline(forming, now), is_closed=False
+                )
             self.time_machine.check_health(now)
             self._tm_degraded = False
         except Exception as exc:  # noqa: BLE001 — the arm-gate must never break the loop
@@ -357,7 +399,8 @@ class LiveTraderSession:
     def _daily_factory_entry_block_reason(self, now: datetime, account) -> str | None:
         self._roll_daily_factory(now)
         return entry_block_reason(
-            now=now, config=self.daily_factory,
+            now=now,
+            config=self.daily_factory,
             entries_today=self._factory_entries_today,
             daily_pnl_usd=float(getattr(account, "daily_pnl_usd", 0.0) or 0.0),
         )
@@ -375,7 +418,7 @@ class LiveTraderSession:
         if self.daily_factory is not None and self.daily_factory.enabled:
             account = await self._read_account()
             if account is None:
-                return "account_read_failed"   # no entry without account truth
+                return "account_read_failed"  # no entry without account truth
             fb = self._daily_factory_entry_block_reason(now, account)
             if fb is not None:
                 return f"daily_factory:{fb}"
@@ -391,30 +434,43 @@ class LiveTraderSession:
         account = await self._read_account()
         if account is None:
             return  # fail-closed: skip this entry, do not crash the loop
-        if account.equity_usd >= self.settings.live_small_capital_cap_usd \
-                and self.settings.trading_mode is TradingMode.LIVE_SMALL:
-            logger.warning("equity $%.2f at/above live_small cap $%.2f — entry refused",
-                           account.equity_usd, self.settings.live_small_capital_cap_usd)
+        if (
+            account.equity_usd >= self.settings.live_small_capital_cap_usd
+            and self.settings.trading_mode is TradingMode.LIVE_SMALL
+        ):
+            logger.warning(
+                "equity $%.2f at/above live_small cap $%.2f — entry refused",
+                account.equity_usd,
+                self.settings.live_small_capital_cap_usd,
+            )
             return
         bid, ask = self.feed.quote
         ref = ask if sig.side == "long" else bid
         sizing = size_position(
-            equity_usd=account.equity_usd, entry_price=ref, stop_price=sig.stop_price,
-            side=sig.side, config=self.settings.risk, limits=self.limits,
+            equity_usd=account.equity_usd,
+            entry_price=ref,
+            stop_price=sig.stop_price,
+            side=sig.side,
+            config=self.settings.risk,
+            limits=self.limits,
         )
         if not sizing.approved:
             self.sizing_skips += 1
             return
         intent = OrderIntent(
-            symbol=self.symbol, side=sig.side, quantity=sizing.quantity,
+            symbol=self.symbol,
+            side=sig.side,
+            quantity=sizing.quantity,
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
-            reduce_only=False, strategy_id=self.strategy.strategy_id,
+            reduce_only=False,
+            strategy_id=self.strategy.strategy_id,
         )
         from vnedge.execution.idempotency import make_intent_key
 
-        key = make_intent_key(self.strategy.strategy_id, self.symbol, sig.side,
-                              self.candles["timestamp"].iloc[-1])
+        key = make_intent_key(
+            self.strategy.strategy_id, self.symbol, sig.side, self.candles["timestamp"].iloc[-1]
+        )
         order = await self.execution_kernel.submit(
             intent, account, self.feed.market_state(), key, now=now
         )
@@ -444,9 +500,13 @@ class LiveTraderSession:
             self._clear_exit_plan()
             return
         intent = OrderIntent(
-            symbol=self.symbol, side="short" if pos.side == "long" else "long",
-            quantity=pos.quantity, notional_usd=0.0, leverage=1.0,
-            reduce_only=True, strategy_id=self.strategy.strategy_id,
+            symbol=self.symbol,
+            side="short" if pos.side == "long" else "long",
+            quantity=pos.quantity,
+            notional_usd=0.0,
+            leverage=1.0,
+            reduce_only=True,
+            strategy_id=self.strategy.strategy_id,
         )
         account = await self._read_account()
         if account is None:
@@ -467,13 +527,16 @@ class LiveTraderSession:
                 return
             self._pending_exit_orders.pop(base_key, None)
         order = await self.execution_kernel.submit(
-            intent, account, self.feed.market_state(),
-            intent_key=self._exit_intent_key(base_key), now=now,
+            intent,
+            account,
+            self.feed.market_state(),
+            intent_key=self._exit_intent_key(base_key),
+            now=now,
         )
         self.orders_submitted += 1
         if order.state in _EXIT_ACCEPTED_STATES:
             if self.protections is not None:
-                self.protections.on_exit(reason, self._bars)   # arm post-stop breaker
+                self.protections.on_exit(reason, self._bars)  # arm post-stop breaker
             self._clear_exit_plan()
         else:
             self._preserve_exit_plan(base_key, order)
@@ -533,8 +596,9 @@ class LiveTraderSession:
                 positions = await self.accounts.open_positions()
                 pos = next((p for p in positions if p.symbol == self.symbol), None)
                 if pos is not None:
-                    self._exit_state.seed_entry(entry_price=getattr(pos, "entry_price", None),
-                                                quantity=pos.quantity)
+                    self._exit_state.seed_entry(
+                        entry_price=getattr(pos, "entry_price", None), quantity=pos.quantity
+                    )
                     if self._position_qty <= 0:
                         self._position_qty = abs(float(pos.quantity))
             except Exception as exc:  # noqa: BLE001 — a read fault must not break exits
@@ -547,9 +611,7 @@ class LiveTraderSession:
             min_qty=self.limits.min_qty,
             qty_step=self.limits.qty_step,
             bars_held=(
-                self._bars - self._entry_bar_index
-                if self._entry_bar_index is not None
-                else 0
+                self._bars - self._entry_bar_index if self._entry_bar_index is not None else 0
             ),
             atr=self._trail_atr(),
         )
@@ -571,14 +633,10 @@ class LiveTraderSession:
                     else float(bar["close"])
                 ),
             )
-        await self._submit_exit(decision.reason, now)         # full-position close
+        await self._submit_exit(decision.reason, now)  # full-position close
 
     async def _check_tick_stop(self, now: datetime) -> None:
-        if (
-            self._plan is None
-            or self._exit_engine is None
-            or self.feed.quote is None
-        ):
+        if self._plan is None or self._exit_engine is None or self.feed.quote is None:
             return
         bid, ask = self.feed.quote
         decision = self._exit_engine.on_tick(
@@ -609,9 +667,8 @@ class LiveTraderSession:
         self._track_equity(account)
         markets = {self.symbol: self.feed.market_state()}
         fid = f"flatten|{int(datetime.now(UTC).timestamp() * 1000)}"
-        await self.om.emergency_flatten(positions, account, markets, fid,
-                                        now=datetime.now(UTC))
-        self._ledger_sweep(datetime.now(UTC))   # chain the flatten executions
+        await self.om.emergency_flatten(positions, account, markets, fid, now=datetime.now(UTC))
+        self._ledger_sweep(datetime.now(UTC))  # chain the flatten executions
 
     async def run(self, *, max_bars: int | None = None) -> RunReport:
         import asyncio
@@ -633,11 +690,17 @@ class LiveTraderSession:
                 ts = pd.to_datetime(raw[0], unit="ms", utc=True)
                 if len(self.candles) and ts <= self.candles["timestamp"].iloc[-1]:
                     continue
-                row = {"timestamp": ts, "open": float(raw[1]), "high": float(raw[2]),
-                       "low": float(raw[3]), "close": float(raw[4]), "volume": float(raw[5])}
+                row = {
+                    "timestamp": ts,
+                    "open": float(raw[1]),
+                    "high": float(raw[2]),
+                    "low": float(raw[3]),
+                    "close": float(raw[4]),
+                    "volume": float(raw[5]),
+                }
                 self.candles = pd.concat([self.candles, pd.DataFrame([row])], ignore_index=True)
                 self._bars += 1
-                self._feed_time_machine(now, raw)   # arm-gate input (fail-safe)
+                self._feed_time_machine(now, raw)  # arm-gate input (fail-safe)
 
                 bar = self.candles.iloc[-1]
                 # exits first (always allowed, even in emergency_reduce_only) — the
@@ -645,15 +708,18 @@ class LiveTraderSession:
                 await self._manage_exit(bar, now)
 
                 # entries only when allowed, flat, and nothing unresolved
-                if (self.entries_allowed and self._plan is None
-                        and not self.om.has_unresolved_orders
-                        and self.private_stream_ready(now)
-                        and len(self.candles) > self.strategy.warmup_bars):
+                if (
+                    self.entries_allowed
+                    and self._plan is None
+                    and not self.om.has_unresolved_orders
+                    and self.private_stream_ready(now)
+                    and len(self.candles) > self.strategy.warmup_bars
+                ):
                     df = self.strategy.prepare(self.candles)
                     idx = len(df) - 1
                     block = await self._entry_hygiene_block(now, idx)
                     if block is not None:
-                        self._note_entry_block(block)   # arm-gate / protections / factory
+                        self._note_entry_block(block)  # arm-gate / protections / factory
                     else:
                         sig = self.strategy.signal(df, idx)
                         if sig is not None:
@@ -663,12 +729,13 @@ class LiveTraderSession:
                 if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
                     await self._reconcile()
 
-                self._ledger_sweep(now)   # chain any newly-accepted executions
+                self._ledger_sweep(now)  # chain any newly-accepted executions
             except Exception as exc:  # noqa: BLE001 — a bar fault must not crash the live loop
                 self.bar_faults += 1
-                logger.error("live bar processing fault (bar %d) — skipping bar: %s",
-                             self._bars, exc)
-                await self._reconcile()   # resolve any in-flight order; keep risk gated
+                logger.error(
+                    "live bar processing fault (bar %d) — skipping bar: %s", self._bars, exc
+                )
+                await self._reconcile()  # resolve any in-flight order; keep risk gated
 
         await self._reconcile()
         self._ledger_sweep(datetime.now(UTC))
@@ -700,33 +767,38 @@ class LiveTraderSession:
         counts a mismatch and FAILS CLOSED (reduce-only) until a clean pass
         clears it. This is the halt the mismatch counter was reported for but
         nothing ever triggered."""
-        if (self.om.has_unresolved_orders or self._parked_entries
-                or self._pending_exit_orders):
+        if self.om.has_unresolved_orders or self._parked_entries or self._pending_exit_orders:
             return  # in flight — not a settled state to judge the venue against
         try:
             account = await self.accounts.account_state()
         except Exception as exc:  # noqa: BLE001 — a failed read must not crash the loop
             self._recon_read_failures += 1
-            logger.error("position reconciliation read failed (%d consecutive): %s",
-                         self._recon_read_failures, exc)
+            logger.error(
+                "position reconciliation read failed (%d consecutive): %s",
+                self._recon_read_failures,
+                exc,
+            )
             if self._recon_read_failures >= self._MAX_RECON_READ_FAILURES:
                 # can't verify the venue is truth → fail closed, like a mismatch
                 self._reconciliation_halt = True
                 logger.error(
                     "reconciliation read failed %d× — FAIL CLOSED (reduce-only) "
-                    "until a clean account read", self._recon_read_failures)
+                    "until a clean account read",
+                    self._recon_read_failures,
+                )
             return
-        self._recon_read_failures = 0          # clean read → clear the failure streak
-        self._track_equity(account)            # L1: real equity/peak/drawdown from venue truth
-        expected = self._plan is not None          # we believe we hold a position
-        actual = account.open_positions > 0        # the venue's truth
+        self._recon_read_failures = 0  # clean read → clear the failure streak
+        self._track_equity(account)  # L1: real equity/peak/drawdown from venue truth
+        expected = self._plan is not None  # we believe we hold a position
+        actual = account.open_positions > 0  # the venue's truth
         if expected != actual:
             self.recon_mismatches += 1
             self._reconciliation_halt = True
             logger.error(
                 "position mismatch: internal plan=%s vs venue positions=%d — "
                 "FAIL CLOSED (reduce-only) until a clean pass",
-                expected, account.open_positions,
+                expected,
+                account.open_positions,
             )
             self._rebuild_from_venue(expected=expected, venue_positions=account.open_positions)
             return
@@ -743,10 +815,13 @@ class LiveTraderSession:
                 self._journal_reconciliation_divergence(divergence)
                 logger.error(
                     "position divergence on %s (%s) — FAIL CLOSED (reduce-only) "
-                    "until an operator reconciles", self.symbol, divergence)
+                    "until an operator reconciles",
+                    self.symbol,
+                    divergence,
+                )
                 return
         if self._reconciliation_halt:
-            self._reconciliation_halt = False       # settled + agreeing → re-open
+            self._reconciliation_halt = False  # settled + agreeing → re-open
             self._orphan_position = False
             logger.info("position reconciliation clean — entries re-enabled")
 
@@ -776,8 +851,7 @@ class LiveTraderSession:
         if journal is None:
             return
         try:
-            journal.append("reconciliation_divergence",
-                           {"symbol": self.symbol, "reason": reason})
+            journal.append("reconciliation_divergence", {"symbol": self.symbol, "reason": reason})
         except Exception as exc:  # noqa: BLE001 — journaling must not crash the loop
             logger.warning("divergence journal failed: %s", exc)
 
@@ -796,27 +870,36 @@ class LiveTraderSession:
         """
         self._journal_reconciliation(expected=expected, venue_positions=venue_positions)
         if expected and venue_positions == 0:
-            logger.error("venue flat but internal plan present — dropping stale plan "
-                         "(external close/liquidation); entries resume after a clean pass")
+            logger.error(
+                "venue flat but internal plan present — dropping stale plan "
+                "(external close/liquidation); entries resume after a clean pass"
+            )
             self._clear_exit_plan()
             self._orphan_position = False
             return
-        self._orphan_position = True   # untracked venue position → operator flatten
-        logger.error("untracked venue position (%d) with no trade plan — reduce-only "
-                     "until an operator flatten clears it", venue_positions)
+        self._orphan_position = True  # untracked venue position → operator flatten
+        logger.error(
+            "untracked venue position (%d) with no trade plan — reduce-only "
+            "until an operator flatten clears it",
+            venue_positions,
+        )
 
     def _journal_reconciliation(self, *, expected: bool, venue_positions: int) -> None:
         journal = getattr(self.om, "_journal", None)
         if journal is None:
             return
         try:
-            journal.append("reconciliation_rebuild", {
-                "symbol": self.symbol,
-                "internal_plan": expected,
-                "venue_positions": venue_positions,
-                "action": ("drop_stale_plan" if (expected and venue_positions == 0)
-                           else "orphan_halt"),
-            })
+            journal.append(
+                "reconciliation_rebuild",
+                {
+                    "symbol": self.symbol,
+                    "internal_plan": expected,
+                    "venue_positions": venue_positions,
+                    "action": (
+                        "drop_stale_plan" if (expected and venue_positions == 0) else "orphan_halt"
+                    ),
+                },
+            )
         except Exception as exc:  # noqa: BLE001 — journaling must not crash the loop
             logger.warning("reconciliation journal failed: %s", exc)
 
@@ -834,7 +917,7 @@ class LiveTraderSession:
         order = self.om.orders[client_order_id]
         if order.state in _EXIT_ACCEPTED_STATES:
             if self.protections is not None:
-                parts = base_key.split("|")   # exit|SYMBOL|reason|ts
+                parts = base_key.split("|")  # exit|SYMBOL|reason|ts
                 if len(parts) >= 3:
                     self.protections.on_exit(parts[2], self._bars)
             self._clear_exit_plan()
@@ -846,8 +929,8 @@ class LiveTraderSession:
     def _ledger_sweep(self, now: datetime) -> None:
         """Append any OM order that reached an accepted/filled state and isn't
         chained yet. Resume-aware + deduped by client_order_id, so a restart
-        continues the chain rather than re-recording. FAIL-SAFE: a ledger fault
-        must never break the trading loop."""
+        continues the chain rather than re-recording. A write fault latches new
+        entries off while reduce-only exits continue through the normal path."""
         if self.fill_ledger is None:
             return
         try:
@@ -859,26 +942,48 @@ class LiveTraderSession:
             if coid in self._ledgered_orders or order.state not in _EXIT_ACCEPTED_STATES:
                 continue
             try:
-                self.fill_ledger.append({
-                    "ts": now.isoformat(),
-                    "mode": self.settings.trading_mode.value,
-                    "venue": getattr(self.feed, "exchange_id", "live"),
-                    "strategy_id": self.strategy.strategy_id,
-                    "symbol": order.intent.symbol,
-                    "side": "buy" if order.intent.side == "long" else "sell",
-                    "quantity": order.intent.quantity,
-                    "price": ref,                    # feed mid; exact fill px awaits the fill stream
-                    "fee_usd": None,                 # unknown until the private fill stream
-                    "realized_pnl_usd": None,
-                    "client_order_id": coid,
-                    "exchange_order_id": order.exchange_order_id,
-                    "kind": "exit" if order.intent.reduce_only else "entry",
-                    "state": order.state.value,
-                    "record_type": "order_ack",      # honest: acceptance, not an enriched fill
-                })
+                self.fill_ledger.append(
+                    {
+                        "ts": now.isoformat(),
+                        "mode": self.settings.trading_mode.value,
+                        "venue": getattr(self.feed, "exchange_id", "live"),
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": order.intent.symbol,
+                        "side": "buy" if order.intent.side == "long" else "sell",
+                        "quantity": order.intent.quantity,
+                        "price": ref,  # feed mid; exact fill px awaits the fill stream
+                        "fee_usd": None,  # unknown until the private fill stream
+                        "realized_pnl_usd": None,
+                        "client_order_id": coid,
+                        "exchange_order_id": order.exchange_order_id,
+                        "kind": "exit" if order.intent.reduce_only else "entry",
+                        "state": order.state.value,
+                        "record_type": "order_ack",  # honest: acceptance, not an enriched fill
+                    }
+                )
                 self._ledgered_orders.add(coid)
             except Exception as exc:  # noqa: BLE001 — the ledger must not wedge the loop
                 logger.error("fill ledger append failed for %s: %s", coid, exc)
+                self._ledger_halt = True
+                self._ledger_error = str(exc)
+                try:
+                    self.om.journal.append(
+                        "execution_readiness_blocked",
+                        {
+                            "ts": now.isoformat(),
+                            "reason": "fill_ledger_write_failed",
+                            "detail": self._ledger_error,
+                            "client_order_id": coid,
+                            "entries_allowed": False,
+                            "reduce_only_exits_allowed": True,
+                        },
+                    )
+                except Exception as journal_exc:  # noqa: BLE001 - latch is authoritative
+                    logger.error(
+                        "failed to journal fill-ledger halt for %s: %s",
+                        coid,
+                        journal_exc,
+                    )
                 return
 
     def _report(self) -> RunReport:
@@ -886,18 +991,29 @@ class LiveTraderSession:
         # truth. `fills` is the count of chained execution records (increment 2);
         # per-fill fees await the private fill stream, so fees_usd stays 0 here.
         # net_change is the account equity delta (realized + any open uPnL).
-        net_change = (self._last_equity_usd - self._starting_equity_usd
-                      if self._starting_equity_usd > 0 else 0.0)
+        net_change = (
+            self._last_equity_usd - self._starting_equity_usd
+            if self._starting_equity_usd > 0
+            else 0.0
+        )
         fills = self.fill_ledger.records if self.fill_ledger is not None else 0
         return RunReport(
-            mode=self.settings.trading_mode.value, symbol=self.symbol,
-            strategy_id=self.strategy.strategy_id, bars_processed=self._bars,
-            signals_generated=self.signals, orders_submitted=self.orders_submitted,
-            fills=fills, fees_usd=0.0, realized_pnl_usd=round(net_change, 6),
+            mode=self.settings.trading_mode.value,
+            symbol=self.symbol,
+            strategy_id=self.strategy.strategy_id,
+            bars_processed=self._bars,
+            signals_generated=self.signals,
+            orders_submitted=self.orders_submitted,
+            fills=fills,
+            fees_usd=0.0,
+            realized_pnl_usd=round(net_change, 6),
             unrealized_pnl_usd=0.0,
             max_drawdown_pct=round(self._max_drawdown_pct, 4),
             risk_rejects=self.risk_rejects,
-            sizing_skips=self.sizing_skips, shadow_approved=0, shadow_rejected=0,
+            sizing_skips=self.sizing_skips,
+            shadow_approved=0,
+            shadow_rejected=0,
             reconciliation_mismatches=self.recon_mismatches,
             final_equity_usd=round(self._last_equity_usd, 6),
+            runtime_readiness=self._runtime_readiness().to_dict(),
         )
