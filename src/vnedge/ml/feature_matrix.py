@@ -20,6 +20,11 @@ from vnedge.strategy.indicators import (
     sma,
     zscore,
 )
+from vnedge.ml.confluence_features import (
+    CONFLUENCE_FEATURE_COLUMNS,
+    ConfluenceParams,
+    add_confluence_features,
+)
 from vnedge.ml.mechanism_features import (
     MECHANISM_FEATURE_COLUMNS,
     MechanismParams,
@@ -36,6 +41,7 @@ class FeatureParams:
     z_window: int = 48
     vol_ratio_window: int = 96  # trailing baseline for the vol-expansion ratio
     mechanism: MechanismParams = field(default_factory=MechanismParams)
+    confluence: ConfluenceParams = field(default_factory=ConfluenceParams)
 
     @property
     def warmup_bars(self) -> int:
@@ -47,6 +53,7 @@ class FeatureParams:
             self.z_window + 1,
             self.vol_window + self.vol_ratio_window,
             self.mechanism.warmup_bars,
+            self.confluence.warmup_bars,
         )
 
 
@@ -68,6 +75,9 @@ FEATURE_COLUMNS = [
     # --- mechanism features mined from the 2026-08 indicator audits
     # (appended; order-stable; see ml/mechanism_features.py) ---
     *MECHANISM_FEATURE_COLUMNS,
+    # --- confluence families: classic-TA, crypto-native (OI), cross-sectional
+    # (appended; order-stable; see ml/confluence_features.py) ---
+    *CONFLUENCE_FEATURE_COLUMNS,
 ]
 
 
@@ -75,6 +85,9 @@ def build_feature_matrix(
     candles: pd.DataFrame,
     funding: pd.DataFrame | None,
     params: FeatureParams = FeatureParams(),
+    *,
+    open_interest: pd.Series | None = None,
+    benchmark_close: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Returns candles + regime columns + FEATURE_COLUMNS."""
     df = add_regime_columns(candles, params.regime)
@@ -129,4 +142,11 @@ def build_feature_matrix(
     # Mechanism features mined from the audited indicator corpora (all causal;
     # the causality test iterates FEATURE_COLUMNS and covers them too).
     df = add_mechanism_features(df, params.mechanism)
+    # Confluence families (classic-TA, OI, relative strength). The optional
+    # inputs default to neutral features, never NaN purges — a caller without
+    # OI or a benchmark loses those columns' information, not its matrix.
+    df = add_confluence_features(
+        df, params.confluence,
+        open_interest=open_interest, benchmark_close=benchmark_close,
+    )
     return df
