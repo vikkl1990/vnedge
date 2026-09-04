@@ -14,6 +14,11 @@ import {
 } from "../api";
 import { useJournal, useLanes } from "../queries";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
+import { TelescopeWorkspace } from "./TelescopeWorkspace";
+import {
+  canonicalChartSymbol,
+  VnedgeDataProvider,
+} from "../vela/VnedgeDataProvider";
 
 const TIMEFRAMES: ChartTimeframe[] = ["5m", "15m", "1h", "4h"];
 const OVERLAY_PLANS = 3;
@@ -58,12 +63,15 @@ interface Plan {
   kind: "signal" | "entry";
 }
 
-interface EventMarker {
+export interface EventMarker {
   key: string;
+  event_ts_ms: number;
   bar_ts_ms: number;
   side: string;
-  kind: "signal" | "entry" | "exit";
+  kind: "evaluation" | "signal" | "entry" | "rejection" | "exit";
   event_price: number | null;
+  reason: string;
+  strategy_id: string;
 }
 
 interface CandleBar {
@@ -76,7 +84,7 @@ interface CandleBar {
 }
 
 const canonicalSymbol = (raw: string) =>
-  raw.split(":", 1)[0].replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  canonicalChartSymbol(raw);
 
 const baseAsset = (raw: string) => {
   const canonical = canonicalSymbol(raw);
@@ -168,7 +176,7 @@ export function toPlans(
   return plans;
 }
 
-function toEventMarkers(
+export function toEventMarkers(
   events: ScannerAuditEvent[] | undefined,
   market: MarketChoice,
   timeframe: ChartTimeframe,
@@ -179,7 +187,13 @@ function toEventMarkers(
   for (const event of events) {
     if (!eventMatchesMarket(event, market, laneExchanges)) continue;
     if (event.timeframe && event.timeframe !== timeframe) continue;
-    if (event.kind !== "signal" && event.kind !== "entry" && event.kind !== "exit") {
+    if (
+      event.kind !== "signal" &&
+      event.kind !== "evaluation" &&
+      event.kind !== "entry" &&
+      event.kind !== "rejection" &&
+      event.kind !== "exit"
+    ) {
       continue;
     }
     if (event.kind === "entry" && !event.approved) continue;
@@ -188,13 +202,68 @@ function toEventMarkers(
     const eventPrice = event.entry_price ?? event.decision_price ?? event.price;
     markers.push({
       key: `${event.lane}:${event.intent_key || event.ts}:${event.kind}`,
+      event_ts_ms: eventTs,
       bar_ts_ms: bucketOpenMs(eventTs, timeframe),
       side: event.side,
       kind: event.kind,
       event_price: typeof eventPrice === "number" ? eventPrice : null,
+      reason: event.reason,
+      strategy_id: event.strategy_id,
     });
   }
-  return markers;
+  return markers.sort((left, right) => right.event_ts_ms - left.event_ts_ms);
+}
+
+export interface LifecycleSummary {
+  evaluations: number;
+  signals: number;
+  accepted: number;
+  rejected: number;
+  exits: number;
+}
+
+export function lifecycleSummary(markers: EventMarker[]): LifecycleSummary {
+  return markers.reduce<LifecycleSummary>(
+    (summary, marker) => {
+      if (marker.kind === "signal") summary.signals += 1;
+      else if (marker.kind === "evaluation") summary.evaluations += 1;
+      else if (marker.kind === "entry") summary.accepted += 1;
+      else if (marker.kind === "rejection") summary.rejected += 1;
+      else if (marker.kind === "exit") summary.exits += 1;
+      return summary;
+    },
+    { evaluations: 0, signals: 0, accepted: 0, rejected: 0, exits: 0 },
+  );
+}
+
+export interface SessionWindow {
+  start: number;
+  end: number;
+  low: number;
+  high: number;
+}
+
+/** UTC 12:00–16:00 research window, grouped into one band per day. */
+export function activeSessionWindows(
+  bars: CandleBar[],
+  timeframe: ChartTimeframe,
+): SessionWindow[] {
+  const grouped = new Map<string, CandleBar[]>();
+  for (const bar of bars) {
+    const date = new Date(bar.time);
+    const hour = date.getUTCHours();
+    if (hour < 12 || hour >= 16) continue;
+    const key = date.toISOString().slice(0, 10);
+    const current = grouped.get(key) ?? [];
+    current.push(bar);
+    grouped.set(key, current);
+  }
+  return [...grouped.values()].map((items) => ({
+    start: items[0].time,
+    end: items[items.length - 1].time + TF_MS[timeframe],
+    low: Math.min(...items.map((bar) => bar.low)),
+    high: Math.max(...items.map((bar) => bar.high)),
+  }));
 }
 
 function clearDrawings(chart: ChartInstance, ids: string[]) {
@@ -230,13 +299,18 @@ export function ScannerChart() {
   const [marketKey, setMarketKey] = useState("");
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("15m");
   const [marketReadyKey, setMarketReadyKey] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"detail" | "telescope">("detail");
   const [showContext, setShowContext] = useState(true);
+  const [showSession, setShowSession] = useState(true);
+  const [annotations, setAnnotations] = useState(false);
+  const [selectedEvidenceKey, setSelectedEvidenceKey] = useState<string>("");
   const [logScale, setLogScale] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const vpvrRef = useRef<{ remove?: () => void } | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
+  const providerRef = useRef<VnedgeDataProvider | null>(null);
   const drawnIdsRef = useRef<string[]>([]);
 
   const selectedMarket =
@@ -302,13 +376,9 @@ export function ScannerChart() {
       })),
     [candles.data],
   );
-  const marketDataKey = useMemo(
-    () =>
-      bars.length && selectedMarket
-        ? `${selectedMarket.key}:${timeframe}:${bars[0].time}:${bars[bars.length - 1].time}:${bars.length}`
-        : null,
-    [bars, selectedMarket, timeframe],
-  );
+  const chartIdentity = selectedMarket
+    ? `${selectedMarket.key}:${timeframe}`
+    : null;
 
   const plans = useMemo(
     () =>
@@ -334,40 +404,61 @@ export function ScannerChart() {
         : [],
     [journal.data, laneExchanges, selectedMarket, timeframe],
   );
+  const lifecycle = useMemo(() => lifecycleSummary(eventMarkers), [eventMarkers]);
+  const selectedEvidence =
+    eventMarkers.find((marker) => marker.key === selectedEvidenceKey) ??
+    eventMarkers[0] ??
+    null;
+  const selectedEvidenceBar = selectedEvidence
+    ? bars.find((bar) => bar.time === selectedEvidence.bar_ts_ms) ?? null
+    : null;
 
-  // Market replacement is asynchronous in Vela. Drawings are added only after
-  // ready()/setMarket() has finished, otherwise Vela clears them with old data.
+  // Vela owns its bar array through the canonical provider. We recreate only
+  // on an operator market/TF switch; tail updates append through subscribe().
+  // This avoids replacing a full bar array every poll (the source of the
+  // renderer's "cannot update oldest data" ordering error).
   useEffect(() => {
-    if (!containerRef.current || bars.length === 0 || !marketDataKey) return;
+    if (
+      viewMode !== "detail" ||
+      !containerRef.current ||
+      !selectedMarket ||
+      !chartIdentity
+    ) return;
     let cancelled = false;
     setMarketReadyKey(null);
-
+    const provider = new VnedgeDataProvider({
+      exchange: selectedMarket.exchange,
+      symbol: selectedMarket.symbol,
+      label: selectedMarket.label,
+    });
+    providerRef.current = provider;
     const load = async () => {
       try {
-        let chart = chartRef.current;
-        if (chart) clearDrawings(chart, drawnIdsRef.current);
-        drawnIdsRef.current = [];
-        if (!chart) {
-          chart = new Vela(containerRef.current as HTMLDivElement, {
-            data: bars,
-            timeframe,
-            theme: "dark",
-          });
-          chartRef.current = chart;
-          chart.drawings?.showToolbar?.(false);
-          try {
-            const saved = localStorage.getItem("vnedge.chart.config");
-            if (saved) chart.renderer?.applyConfig?.(JSON.parse(saved));
-          } catch {
-            /* cosmetics only — never block the chart on bad persisted config */
-          }
-          await chart.ready();
-        } else {
-          await chart.setMarket({ data: bars, timeframe });
+        if (chartRef.current) {
+          clearDrawings(chartRef.current, drawnIdsRef.current);
+          chartRef.current.destroy?.();
         }
+        drawnIdsRef.current = [];
+        const chart = new Vela(containerRef.current as HTMLDivElement, {
+          symbol: `vnedge:${canonicalChartSymbol(selectedMarket.symbol)}`,
+          timeframe,
+          bars: 500,
+          live: true,
+          theme: "dark",
+        });
+        chartRef.current = chart;
+        chart.drawings?.showToolbar?.(false);
+        await chart.data.registerProvider("vnedge", provider);
+        try {
+          const saved = localStorage.getItem("vnedge.chart.config");
+          if (saved) chart.renderer?.applyConfig?.(JSON.parse(saved));
+        } catch {
+          /* cosmetics only — never block the chart on bad persisted config */
+        }
+        await chart.ready();
         if (cancelled || chartRef.current !== chart) return;
         setChartError(null);
-        setMarketReadyKey(marketDataKey);
+        setMarketReadyKey(chartIdentity);
       } catch (error) {
         if (!cancelled) {
           setMarketReadyKey(null);
@@ -379,8 +470,23 @@ export function ScannerChart() {
     void load();
     return () => {
       cancelled = true;
+      if (chartRef.current) {
+        clearDrawings(chartRef.current, drawnIdsRef.current);
+        chartRef.current.destroy?.();
+      }
+      chartRef.current = null;
+      provider.destroy();
+      if (providerRef.current === provider) providerRef.current = null;
+      drawnIdsRef.current = [];
     };
-  }, [bars, marketDataKey, timeframe]);
+  }, [
+    chartIdentity,
+    selectedMarket?.exchange,
+    selectedMarket?.label,
+    selectedMarket?.symbol,
+    timeframe,
+    viewMode,
+  ]);
 
   useEffect(
     () => () => {
@@ -389,6 +495,8 @@ export function ScannerChart() {
         chartRef.current.destroy?.();
       }
       chartRef.current = null;
+      providerRef.current?.destroy();
+      providerRef.current = null;
       drawnIdsRef.current = [];
       vpvrRef.current = null;
     },
@@ -398,7 +506,7 @@ export function ScannerChart() {
   // Renderer features: log scale + visible-range volume profile (native).
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || marketReadyKey !== marketDataKey) return;
+    if (!chart || marketReadyKey !== chartIdentity) return;
     try {
       chart.renderer?.set?.({ logScale });
     } catch {
@@ -414,14 +522,18 @@ export function ScannerChart() {
     } catch {
       vpvrRef.current = null;
     }
-  }, [logScale, marketDataKey, marketReadyKey, showProfile]);
+  }, [chartIdentity, logScale, marketReadyKey, showProfile]);
+
+  useEffect(() => {
+    chartRef.current?.drawings?.showToolbar?.(annotations);
+  }, [annotations]);
 
   // Journal overlays are bucketed onto the selected TF. Their cards retain
   // actual event time, so a 12:07 acceptance is drawn on the 12:00 15m bar but
   // remains labelled 12:07 instead of pretending the entry occurred at close.
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || marketReadyKey !== marketDataKey || bars.length === 0) return;
+    if (!chart || marketReadyKey !== chartIdentity || bars.length === 0) return;
     const drawings = chart.drawings;
     if (!drawings?.add) return;
 
@@ -436,8 +548,39 @@ export function ScannerChart() {
     };
 
     for (const marker of eventMarkers) {
+      if (marker.kind === "evaluation") continue;
       const bar = barByTime.get(marker.bar_ts_ms);
       if (!bar) continue;
+      if (marker.kind === "rejection") {
+        const isQuality = /gap|lag|timeout|stale|candle|data/i.test(marker.reason);
+        if (!isQuality) continue;
+        try {
+          const band = drawings.add("box", {
+            paneId: "price",
+            anchors: [
+              { time: marker.bar_ts_ms, price: bar.low },
+              { time: marker.bar_ts_ms + TF_MS[timeframe], price: bar.high },
+            ],
+          });
+          keep(band);
+          if (band?.id) {
+            drawings.update?.(band.id, {
+              style: {
+                lineColor: COLORS.short,
+                lineWidth: 1,
+                lineStyle: "dotted",
+                fillColor: COLORS.short,
+                fillOpacity: 0.12,
+              },
+            });
+            drawings.sendToBack?.(band.id);
+            drawings.lock?.(band.id);
+          }
+        } catch {
+          failures += 1;
+        }
+        continue;
+      }
       const entryLike = marker.kind !== "exit";
       const arrowUp = entryLike ? marker.side === "long" : marker.side === "short";
       const markerPrice = marker.event_price ?? (arrowUp ? bar.low : bar.high);
@@ -460,6 +603,36 @@ export function ScannerChart() {
         }
       } catch {
         failures += 1;
+      }
+    }
+
+    if (showSession) {
+      for (const session of activeSessionWindows(bars, timeframe)) {
+        try {
+          const band = drawings.add("box", {
+            paneId: "price",
+            anchors: [
+              { time: session.start, price: session.low },
+              { time: session.end, price: session.high },
+            ],
+          });
+          keep(band);
+          if (band?.id) {
+            drawings.update?.(band.id, {
+              style: {
+                lineColor: COLORS.entry,
+                lineWidth: 1,
+                lineStyle: "dotted",
+                fillColor: COLORS.entry,
+                fillOpacity: 0.035,
+              },
+            });
+            drawings.sendToBack?.(band.id);
+            drawings.lock?.(band.id);
+          }
+        } catch {
+          failures += 1;
+        }
       }
     }
 
@@ -581,15 +754,36 @@ export function ScannerChart() {
       }
     }
     setChartError(failures ? `${failures} chart overlay(s) were rejected` : null);
-  }, [bars, context.data, eventMarkers, marketDataKey, marketReadyKey, plans, showContext, timeframe]);
+  }, [bars, chartIdentity, context.data, eventMarkers, marketReadyKey, plans, showContext, showSession, timeframe]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
       <TerminalPanel
-        title={`Scanner chart · ${selectedMarket ? baseAsset(selectedMarket.symbol) : "NO MARKET"} · ${timeframe}`}
-        meta={`${selectedMarket?.exchange ?? "lane inventory unavailable"} · canonical lake · journal lifecycle overlays`}
+        title={`${viewMode === "telescope" ? "Market telescope" : "Scanner chart"} · ${selectedMarket ? baseAsset(selectedMarket.symbol) : "NO MARKET"}${viewMode === "detail" ? ` · ${timeframe}` : ""}`}
+        meta={`${selectedMarket?.exchange ?? "lane inventory unavailable"} · VNEDGE provider · display only`}
       >
         <div className="mb-2 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setViewMode("detail")}
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              viewMode === "detail"
+                ? "border-brand text-brand"
+                : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            DETAIL
+          </button>
+          <button
+            onClick={() => setViewMode("telescope")}
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              viewMode === "telescope"
+                ? "border-brand text-brand"
+                : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            4-TF
+          </button>
+          <span className="mx-1 h-4 w-px bg-line" />
           {markets.map((market) => (
             <button
               key={market.key}
@@ -603,22 +797,22 @@ export function ScannerChart() {
               {market.label}
             </button>
           ))}
-          <span className="mx-1 h-4 w-px bg-line" />
-          {TIMEFRAMES.map((item) => (
-            <button
-              key={item}
-              onClick={() => setTimeframe(item)}
-              className={`rounded border px-2 py-1 text-[11px] font-mono ${
-                item === timeframe
-                  ? "border-brand text-brand"
-                  : "border-line text-dim hover:text-txt"
-              }`}
-            >
-              {item}
-            </button>
-          ))}
-          <span className="mx-1 h-4 w-px bg-line" />
-          <button
+          {viewMode === "detail" && <span className="mx-1 h-4 w-px bg-line" />}
+          {viewMode === "detail" && TIMEFRAMES.map((item) => (
+              <button
+                key={item}
+                onClick={() => setTimeframe(item)}
+                className={`rounded border px-2 py-1 text-[11px] font-mono ${
+                  item === timeframe
+                    ? "border-brand text-brand"
+                    : "border-line text-dim hover:text-txt"
+                }`}
+              >
+                {item}
+              </button>
+            ))}
+          {viewMode === "detail" && <span className="mx-1 h-4 w-px bg-line" />}
+          {viewMode === "detail" && <button
             onClick={() => setShowContext((value) => !value)}
             title="Mechanism context: swing levels, channel, supertrend, FVG zones — the ML plane's own view"
             className={`rounded border px-2 py-1 text-[11px] font-mono ${
@@ -628,8 +822,8 @@ export function ScannerChart() {
             }`}
           >
             CTX
-          </button>
-          {showContext && context.data?.ready && (
+          </button>}
+          {viewMode === "detail" && showContext && context.data?.ready && (
             <span className="text-[10px] font-mono text-dim">
               vol&nbsp;
               {typeof context.data.atr_pctile === "number"
@@ -645,11 +839,29 @@ export function ScannerChart() {
               </span>
             </span>
           )}
-          {showContext && context.isError && (
+          {viewMode === "detail" && showContext && context.isError && (
             <span className="text-[10px] font-mono text-faint">ctx unavailable</span>
           )}
-          <span className="mx-1 h-4 w-px bg-line" />
-          <button
+          {viewMode === "detail" && <button
+            onClick={() => setShowSession((value) => !value)}
+            title="Shade the pre-registered 12:00–16:00 UTC research window"
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              showSession ? "border-brand text-brand" : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            SESSION
+          </button>}
+          {viewMode === "detail" && <button
+            onClick={() => setAnnotations((value) => !value)}
+            title="Operator annotations; drawings are presentation-only"
+            className={`rounded border px-2 py-1 text-[11px] font-mono ${
+              annotations ? "border-brand text-brand" : "border-line text-dim hover:text-txt"
+            }`}
+          >
+            DRAW
+          </button>}
+          {viewMode === "detail" && <span className="mx-1 h-4 w-px bg-line" />}
+          {viewMode === "detail" && <button
             onClick={() =>
               setLogScale((value) => {
                 const next = !value;
@@ -668,8 +880,8 @@ export function ScannerChart() {
             }`}
           >
             LOG
-          </button>
-          <button
+          </button>}
+          {viewMode === "detail" && <button
             onClick={() => setShowProfile((value) => !value)}
             title="Visible-range volume profile (native indicator)"
             className={`rounded border px-2 py-1 text-[11px] font-mono ${
@@ -677,8 +889,8 @@ export function ScannerChart() {
             }`}
           >
             VPVR
-          </button>
-          <button
+          </button>}
+          {viewMode === "detail" && <button
             onClick={() => {
               try {
                 const url = chartRef.current?.renderer?.screenshot?.();
@@ -695,16 +907,20 @@ export function ScannerChart() {
             className="rounded border border-line px-2 py-1 text-[11px] font-mono text-dim hover:text-txt"
           >
             PNG
-          </button>
+          </button>}
           <span className="ml-auto text-[10px] font-mono text-faint">
-            {candles.data
+            {viewMode === "telescope"
+              ? "4h → 1h → 15m → 5m"
+              : candles.data
               ? `${candles.data.count} bars · ${candles.data.source}`
               : candles.isError
                 ? "candles unavailable"
                 : "loading…"}
           </span>
         </div>
-        <div className="relative">
+        {viewMode === "telescope" ? (
+          <TelescopeWorkspace market={selectedMarket} />
+        ) : <div className="relative">
           <div
             ref={containerRef}
             className="h-[520px] w-full rounded border border-line bg-black/20"
@@ -721,11 +937,65 @@ export function ScannerChart() {
                 : "No active BTC/ETH lane is available for chart selection."}
             </div>
           )}
-        </div>
+        </div>}
       </TerminalPanel>
 
-      <TerminalPanel title="Trade plans" meta="journal truth · actual event clocks">
+      <TerminalPanel title="Evidence inspector" meta="journal truth · actual event clocks">
         <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-5 gap-1 rounded border border-line bg-bg/60 p-2 text-center font-mono">
+            {[
+              ["eval", lifecycle.evaluations],
+              ["signal", lifecycle.signals],
+              ["accept", lifecycle.accepted],
+              ["reject", lifecycle.rejected],
+              ["exit", lifecycle.exits],
+            ].map(([label, value]) => (
+              <div key={String(label)}>
+                <div className="text-[9px] uppercase text-faint">{label}</div>
+                <div className="text-[12px] text-txt">{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] font-mono text-faint">
+            Journal-tail lifecycle · absence is shown, never inferred as healthy.
+          </div>
+          {selectedEvidence && (
+            <div className="rounded border border-brand/40 bg-brand/5 p-2 text-[11px] font-mono">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-brand">SELECTED EVIDENCE</span>
+                <TerminalBadge tone={selectedEvidence.kind === "entry" ? "good" : selectedEvidence.kind === "rejection" ? "bad" : "info"}>
+                  {selectedEvidence.kind}
+                </TerminalBadge>
+              </div>
+              <div className="mt-2 text-txt">{selectedEvidence.strategy_id || "unattributed scanner"}</div>
+              <div className="mt-1 break-words text-faint">{selectedEvidence.reason || "no reason reported"}</div>
+              <div className="mt-2 grid grid-cols-2 gap-1 text-dim">
+                <span>event</span><span className="text-right text-txt">{new Date(selectedEvidence.event_ts_ms).toISOString().slice(5, 19).replace("T", " ")}</span>
+                <span>causal bar</span><span className="text-right text-txt">{new Date(selectedEvidence.bar_ts_ms).toISOString().slice(5, 16).replace("T", " ")}</span>
+                <span>OHLC</span><span className="text-right text-txt">{selectedEvidenceBar ? `${price(selectedEvidenceBar.open)} / ${price(selectedEvidenceBar.high)} / ${price(selectedEvidenceBar.low)} / ${price(selectedEvidenceBar.close)}` : "outside chart window"}</span>
+                <span>volume</span><span className="text-right text-txt">{selectedEvidenceBar ? price(selectedEvidenceBar.volume) : "—"}</span>
+              </div>
+            </div>
+          )}
+          {eventMarkers.slice(0, 10).map((marker) => (
+            <button
+              key={marker.key}
+              onClick={() => setSelectedEvidenceKey(marker.key)}
+              className={`rounded border p-2 text-left text-[10px] font-mono ${
+                selectedEvidence?.key === marker.key
+                  ? "border-brand bg-brand/5"
+                  : "border-line bg-bg/40 hover:border-brand/50"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-txt">{marker.kind.toUpperCase()} · {marker.strategy_id || "scanner"}</span>
+                <span className="text-faint">{new Date(marker.event_ts_ms).toISOString().slice(11, 19)}</span>
+              </div>
+              <div className="mt-1 truncate text-faint" title={marker.reason}>{marker.reason || "no reason reported"}</div>
+            </button>
+          ))}
+          <div className="my-1 border-t border-line" />
+          <div className="text-[10px] font-mono text-dim">TRADE PLANS</div>
           {plans.length === 0 && (
             <div className="text-[11px] font-mono text-dim">
               No signal or accepted-entry plans for {selectedMarket?.symbol ?? "an active market"} @ {timeframe} in the journal tail.

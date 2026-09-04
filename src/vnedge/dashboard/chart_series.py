@@ -22,8 +22,15 @@ from typing import Any
 MAX_BARS = 5_000
 
 
-def candles_payload(store: Any, symbol: str, timeframe: str, *,
-                    limit: int = 500) -> dict[str, Any]:
+def candles_payload(
+    store: Any,
+    symbol: str,
+    timeframe: str,
+    *,
+    limit: int = 500,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
+) -> dict[str, Any]:
     """Canonical OHLCV shaped for lightweight-charts.
 
     Decimals become floats only at this boundary. They stay Decimal everywhere
@@ -48,6 +55,12 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
         )
         by_time[epoch] = candle
     ordered = sorted(by_time.items())
+    if from_ms is not None:
+        from_epoch = int(from_ms) // 1_000
+        ordered = [(epoch, candle) for epoch, candle in ordered if epoch >= from_epoch]
+    if to_ms is not None:
+        to_epoch = int(to_ms) // 1_000
+        ordered = [(epoch, candle) for epoch, candle in ordered if epoch <= to_epoch]
     tail = ordered[-limit:]
     return {
         "symbol": symbol,
@@ -55,6 +68,7 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
         "source": "canonical_lake",
         "count": len(tail),
         "truncated": len(ordered) > len(tail),
+        "range": {"from_ms": from_ms, "to_ms": to_ms},
         "candles": [
             {
                 "time": epoch,

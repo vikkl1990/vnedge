@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchChartCandles,
+  fetchMechanismContext,
   type CorrectionLane,
   type ScannerAuditEvent,
 } from "../api";
@@ -10,7 +11,10 @@ vi.mock("@luxalgo/vela", () => ({ Vela: class Vela {} }));
 import {
   bucketOpenMs,
   eventTimeMs,
+  activeSessionWindows,
+  lifecycleSummary,
   marketsFromLanes,
+  toEventMarkers,
   toPlans,
   type MarketChoice,
 } from "./ScannerChart";
@@ -113,6 +117,28 @@ describe("scanner chart evidence mapping", () => {
     );
   });
 
+  it("passes a bounded provider range and canonicalizes context paths", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ candles: [], ready: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchChartCandles("BTC/USD:USD", "15m", 50, "delta_india", {
+      fromMs: 1000,
+      toMs: 2000,
+    });
+    expect(fetchMock.mock.calls[0][0]).toContain("from_ms=1000");
+    expect(fetchMock.mock.calls[0][0]).toContain("to_ms=2000");
+    await fetchMechanismContext("BTC/USD:USD", "15m", "delta_india");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/candles/BTCUSD/context?timeframe=15m&exchange=delta_india",
+    );
+  });
+
   it("recovers the event venue from its lane when journal rows omit exchange", () => {
     const withoutExchange = event({ exchange: undefined });
     const plans = toPlans(
@@ -122,5 +148,42 @@ describe("scanner chart evidence mapping", () => {
       new Map([["delta_btc_15m", "delta_india"]]),
     );
     expect(plans).toHaveLength(1);
+  });
+
+  it("keeps an honest journal-tail lifecycle instead of treating fires as the funnel", () => {
+    const events = [
+      event({ kind: "evaluation", approved: false }),
+      event({ kind: "signal", approved: true, ts: "2026-09-04T12:08:00Z" }),
+      event({ kind: "rejection", approved: false, ts: "2026-09-04T12:09:00Z" }),
+      event({ kind: "entry", approved: true, ts: "2026-09-04T12:10:00Z" }),
+      event({ kind: "exit", approved: true, ts: "2026-09-04T12:11:00Z" }),
+    ];
+    const markers = toEventMarkers(events, deltaMarket, "15m", new Map());
+    expect(lifecycleSummary(markers)).toEqual({
+      evaluations: 1,
+      signals: 1,
+      accepted: 1,
+      rejected: 1,
+      exits: 1,
+    });
+  });
+
+  it("groups the 12-16 UTC research session into display-only daily bands", () => {
+    const bars = [11, 12, 13, 16].map((hour) => ({
+      time: Date.parse(`2026-09-04T${String(hour).padStart(2, "0")}:00:00Z`),
+      open: 100,
+      high: 100 + hour,
+      low: 100 - hour,
+      close: 100,
+      volume: 1,
+    }));
+    expect(activeSessionWindows(bars, "1h")).toEqual([
+      {
+        start: Date.parse("2026-09-04T12:00:00Z"),
+        end: Date.parse("2026-09-04T14:00:00Z"),
+        low: 87,
+        high: 113,
+      },
+    ]);
   });
 });

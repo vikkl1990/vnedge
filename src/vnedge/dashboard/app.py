@@ -1233,6 +1233,8 @@ def create_app(
         exchange: str = "binanceusdm",
         timeframe: str = "1h",
         n: int = 500,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
     ) -> JSONResponse:
         """Canonical OHLCV for the chart.
 
@@ -1243,7 +1245,13 @@ def create_app(
         user = _authorized(request)
         store = CandleParquetStore(Path("data/candles"), exchange=exchange)
         payload = await asyncio.to_thread(
-            candles_payload, store, symbol, timeframe, limit=n
+            candles_payload,
+            store,
+            symbol,
+            timeframe,
+            limit=n,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
         return JSONResponse(payload, headers=_identity(user))
 

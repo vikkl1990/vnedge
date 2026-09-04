@@ -200,6 +200,7 @@ export interface ChartCandles {
   source: string;    // "canonical_lake"
   count: number;
   truncated: boolean;
+  range?: { from_ms?: number | null; to_ms?: number | null };
   candles: ChartCandle[];
 }
 
@@ -236,9 +237,13 @@ export async function fetchMechanismContext(
   timeframe: ChartTimeframe,
   exchange = "binanceusdm",
 ): Promise<MechanismContext> {
+  const dataSymbol = symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
   const q = new URLSearchParams({ timeframe, exchange });
   return apiGet<MechanismContext>(
-    `/api/candles/${encodeURIComponent(symbol)}/context?${q}`,
+    `/api/candles/${encodeURIComponent(dataSymbol)}/context?${q}`,
   );
 }
 
@@ -247,6 +252,7 @@ export async function fetchChartCandles(
   timeframe: ChartTimeframe,
   n = 500,
   exchange = "binanceusdm",
+  range?: { fromMs?: number; toMs?: number },
 ): Promise<ChartCandles> {
   // The HTTP/storage identity is canonical (BTCUSDT / BTCUSD), while lanes
   // carry venue-native CCXT symbols (BTC/USDT:USDT / BTC/USD:USD).
@@ -255,6 +261,8 @@ export async function fetchChartCandles(
     .replace(/[^A-Za-z0-9]/g, "")
     .toUpperCase();
   const q = new URLSearchParams({ timeframe, n: String(n), exchange });
+  if (range?.fromMs !== undefined) q.set("from_ms", String(Math.trunc(range.fromMs)));
+  if (range?.toMs !== undefined) q.set("to_ms", String(Math.trunc(range.toMs)));
   return apiGet<ChartCandles>(
     `/api/candles/${encodeURIComponent(dataSymbol)}?${q}`,
   );
