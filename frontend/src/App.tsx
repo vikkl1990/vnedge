@@ -102,7 +102,7 @@ export default function App() {
       </div>
 
       {tab === "pulse" && <MarketPulse />}
-      {tab === "patterns" && <PatternAtlas />}
+      {tab === "patterns" && <PatternAtlas onNavigate={navigate} />}
       {tab === "chart" && (
         <Suspense
           fallback={

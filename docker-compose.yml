@@ -18,6 +18,9 @@ services:
       DASHBOARD_USERS: "${DASHBOARD_USERS:-}"
       DASHBOARD_JWT_SECRET: "${DASHBOARD_JWT_SECRET:-}"
       DASHBOARD_COOKIE_SECURE: "${DASHBOARD_COOKIE_SECURE:-true}"
+      # Credentials in URLs leak into browser history, proxy logs, screenshots,
+      # and referrers. Production always uses the bearer-to-cookie login flow.
+      DASHBOARD_ALLOW_QUERY_TOKEN: "0"
       # /health is process liveness; /ready additionally consumes this
       # cross-process evidence and fails while the canonical lake has holes.
       CANDLE_LAKE_HEALTH_PATH: data/gaps/lake_health.json

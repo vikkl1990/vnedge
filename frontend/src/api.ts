@@ -6,6 +6,18 @@ export interface BrowserSession {
   expires_at: string | null;
 }
 
+/** Remove legacy URL credentials before React, links, or screenshots copy them. */
+export function urlWithoutCredentials(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.searchParams.delete("token");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export function scrubCredentialFromBrowserUrl(): void {
+  if (!new URL(window.location.href).searchParams.has("token")) return;
+  window.history.replaceState(null, "", urlWithoutCredentials(window.location.href));
+}
+
 export interface ReadinessStatus {
   status: "ready" | "not_ready" | "unknown";
   reasons: string[];
@@ -578,6 +590,108 @@ export interface LanesPayload {
   read_only: true;
   can_promote: false;
   can_trade: false;
+}
+
+export type PatternFamily = "expansion" | "continuation" | "reclaim" | "reversal";
+
+export interface PatternAtlasLane {
+  lane_id: string;
+  strategy_id: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  ops: {
+    state: string;
+    reasons: string[];
+    details: Record<string, unknown>;
+    candle_status: string | null;
+    candle_age_ms: number | null;
+  };
+  setup: {
+    state: string;
+    armed_current: boolean;
+    reasons: string[];
+    failed_gates: string[];
+    session_state: string | null;
+    htf_context_age_seconds: number | null;
+  };
+  funnel: Record<string, number>;
+  latency: {
+    close_to_arm_ms: number | null;
+    bar_close_receipt_ms: number | null;
+    canonical_wait_ms: number | null;
+    decision_lag_ms: number | null;
+    quote_ingest_ms: number | null;
+    acceptance_hold_ms: number | null;
+  };
+  quotes: {
+    source: string | null;
+    seen: number;
+    distinct: number;
+    duplicates: number;
+    overflow_drops: number;
+    rearms: number;
+  };
+  runtime_contract: ScannerRuntimeContract | null;
+  net: { value: number | null; unit: string | null; basis: string | null };
+}
+
+export interface PatternAtlasPattern {
+  id: string;
+  name: string;
+  thesis: string;
+  family: PatternFamily;
+  decision_tf: "5m" | "15m" | "1h";
+  context: string;
+  entry_clock: string;
+  protection_clock: string;
+  regime: string;
+  direction: string;
+  rules: string[];
+  invalidation: string;
+  economics: string;
+  caution: string;
+  strategy_ids: string[];
+  sketch: "squeeze" | "range" | "bos" | "reclaim" | "session" | "sweep" | "pullback" | "regime";
+  runtime: {
+    ops_state: string;
+    setup_state: string;
+    lanes: PatternAtlasLane[];
+    lane_count: number;
+    funnel: Record<string, number>;
+    net_usd: number;
+    blockers: { ops: string[]; setup: string[]; evidence: string[] };
+  };
+  evidence: {
+    state: string;
+    strongest_state: string;
+    exact_ids: Array<{
+      strategy_id: string;
+      state: string;
+      judgments: number;
+      preregistrations: string[];
+      burned_windows: Array<Record<string, unknown>>;
+      catalogued: boolean;
+    }>;
+    has_preregistration: boolean;
+    judgments: number;
+  };
+}
+
+export interface PatternAtlasPayload {
+  schema: "vnedge.pattern_atlas.v2";
+  generated_at: string | null;
+  source_snapshot_at: string | null;
+  snapshot_state: string;
+  patterns: PatternAtlasPattern[];
+  summary: {
+    patterns: number;
+    runtime_lanes: number;
+    ops_blocked: number;
+    active_setups: number;
+    accepted: number;
+  };
+  policy: { can_trade: false; can_promote: false; read_only: true };
 }
 
 export interface PortfolioScope {

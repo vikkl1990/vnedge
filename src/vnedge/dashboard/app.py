@@ -78,6 +78,7 @@ from vnedge.dashboard.backtest_lab import load_backtest_lab
 from vnedge.dashboard.chart_series import candles_payload, mechanism_context_payload
 from vnedge.dashboard.correction_ui import build_lanes_payload, build_risk_payload
 from vnedge.dashboard.market_pulse import MarketPulseService
+from vnedge.dashboard.pattern_atlas import build_pattern_atlas_payload
 from vnedge.dashboard.session import SessionIssuer
 from vnedge.dashboard.session_regime import build_session_regime
 from vnedge.dashboard.trade_journal import build_trade_journal
@@ -1225,6 +1226,24 @@ def create_app(
         user = _authorized(request)
         payload = await asyncio.to_thread(live_catalog, Path("docs/prereg"))
         return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/patterns")
+    async def pattern_atlas(request: Request) -> JSONResponse:
+        """Pattern anatomy joined to per-lane ops/setup/evidence truth."""
+        user = _authorized(request)
+        snapshot = provider.latest()
+        if snapshot is None:
+            return JSONResponse(
+                {"status": "no snapshot yet"},
+                status_code=503,
+                headers=_identity(user),
+            )
+        lanes_payload = build_lanes_payload(snapshot)
+        catalog = await asyncio.to_thread(live_catalog, Path("docs/prereg"))
+        return JSONResponse(
+            build_pattern_atlas_payload(lanes_payload, catalog),
+            headers=_identity(user),
+        )
 
     @app.get("/api/candles/{symbol}")
     async def chart_candles(
