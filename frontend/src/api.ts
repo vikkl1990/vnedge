@@ -203,19 +203,43 @@ export interface ChartCandles {
   candles: ChartCandle[];
 }
 
-export interface ChartMarker {
-  time: number;
-  position: "aboveBar" | "belowBar";
-  shape: "arrowUp" | "arrowDown" | "circle";
-  color: string;
-  text: string;
+export interface MechanismFvgZone {
+  top: number;
+  bottom: number;
+  age_bars: number;
 }
 
-export interface ChartMarkers {
+/** Drawable mechanism context from the ML plane's own definitions. */
+export interface MechanismContext {
   symbol: string;
-  count: number;
-  journals: number;
-  markers: ChartMarker[];
+  timeframe: string;
+  source: string;
+  ready: boolean;
+  as_of?: number;
+  close?: number;
+  atr?: number;
+  swing_high?: number | null;
+  swing_high_age?: number;
+  swing_low?: number | null;
+  swing_low_age?: number;
+  donchian_high?: number | null;
+  donchian_low?: number | null;
+  supertrend_line?: number | null;
+  supertrend_dir?: 1 | -1 | null;
+  atr_pctile?: number | null;
+  bull_fvg?: MechanismFvgZone | null;
+  bear_fvg?: MechanismFvgZone | null;
+}
+
+export async function fetchMechanismContext(
+  symbol: string,
+  timeframe: ChartTimeframe,
+  exchange = "binanceusdm",
+): Promise<MechanismContext> {
+  const q = new URLSearchParams({ timeframe, exchange });
+  return apiGet<MechanismContext>(
+    `/api/candles/${encodeURIComponent(symbol)}/context?${q}`,
+  );
 }
 
 export async function fetchChartCandles(
@@ -224,18 +248,15 @@ export async function fetchChartCandles(
   n = 500,
   exchange = "binanceusdm",
 ): Promise<ChartCandles> {
+  // The HTTP/storage identity is canonical (BTCUSDT / BTCUSD), while lanes
+  // carry venue-native CCXT symbols (BTC/USDT:USDT / BTC/USD:USD).
+  const dataSymbol = symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
   const q = new URLSearchParams({ timeframe, n: String(n), exchange });
-  return apiGet<ChartCandles>(`/api/candles/${encodeURIComponent(symbol)}?${q}`);
-}
-
-/** Where the lanes actually got in and out, for overlay on the candles. */
-export async function fetchChartMarkers(
-  symbol: string,
-  n = 500,
-): Promise<ChartMarkers> {
-  const q = new URLSearchParams({ n: String(n) });
-  return apiGet<ChartMarkers>(
-    `/api/candles/${encodeURIComponent(symbol)}/markers?${q}`,
+  return apiGet<ChartCandles>(
+    `/api/candles/${encodeURIComponent(dataSymbol)}?${q}`,
   );
 }
 

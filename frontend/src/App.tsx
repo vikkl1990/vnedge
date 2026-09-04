@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { MarketPulse } from "./components/MarketPulse";
 import { PatternAtlas } from "./components/PatternAtlas";
@@ -22,9 +22,16 @@ import {
 import { useUi } from "./store";
 import { SettingsPanel } from "./panels/Settings/SettingsPanel";
 
+const ScannerChart = lazy(() =>
+  import("./components/ScannerChart").then((module) => ({
+    default: module.ScannerChart,
+  })),
+);
+
 const TABS = [
   { id: "pulse", label: "Pulse" },
   { id: "patterns", label: "Pattern Atlas" },
+  { id: "chart", label: "Chart" },
   { id: "desk", label: "Desk" },
   { id: "risk", label: "Risk" },
   { id: "journal", label: "Journal" },
@@ -65,6 +72,7 @@ export default function App() {
     () => [
       { id: "pulse", label: "Pulse", hint: "1h story · VWAP · scanner observer", run: () => navigate("pulse") },
       { id: "patterns", label: "Patterns", hint: "published perps setups · live lifecycle · evidence", run: () => navigate("patterns") },
+      { id: "chart", label: "Chart", hint: "canonical candles · scanner plans · Vela", run: () => navigate("chart") },
       { id: "desk", label: "Desk", hint: "runtime lanes · sizing · virtual outcomes", run: () => navigate("desk") },
       { id: "risk", label: "Risk", hint: "purse · margin · leverage · gates", run: () => navigate("risk") },
       { id: "journal", label: "Journal", hint: "decisions · signals · outcomes", run: () => navigate("journal") },
@@ -95,6 +103,17 @@ export default function App() {
 
       {tab === "pulse" && <MarketPulse />}
       {tab === "patterns" && <PatternAtlas />}
+      {tab === "chart" && (
+        <Suspense
+          fallback={
+            <div className="rounded border border-line bg-panel px-4 py-12 text-center text-[11px] font-mono text-dim">
+              Loading canonical chart renderer…
+            </div>
+          }
+        >
+          <ScannerChart />
+        </Suspense>
+      )}
       {tab === "desk" && (
         <div className="space-y-4">
           <div className="grid gap-4 xl:grid-cols-2"><BookPanel /><MarketPanel /></div>
