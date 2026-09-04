@@ -370,7 +370,11 @@ def test_flat_restore_replays_only_causally_live_arm_tail() -> None:
 
 def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     journal = _Journal()
-    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USDT:USDT")
+    runner = SqueezeAcceptanceObserveRunner(
+        journal=journal,
+        symbol="BTC/USDT:USDT",
+        decision_timeframe="5m",
+    )
     bars = pd.DataFrame([
         {
             "timestamp": datetime(2026, 8, 20, tzinfo=UTC),
@@ -398,6 +402,10 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert len(intent) == 1
     assert intent[0]["entry_price"] == 100.09
     assert intent[0]["intent"]["strategy_id"] == "squeeze_expansion_breakout_v3"
+    assert intent[0]["arm_evidence"]["decision_bar"]["state"] == "closed_immutable"
+    assert intent[0]["arm_evidence"]["decision_bar"]["open_time"] == (
+        datetime(2026, 8, 20, tzinfo=UTC).isoformat()
+    )
     transitions = [
         payload for kind, payload in journal.records if kind == "scanner_transition"
     ]
@@ -424,6 +432,7 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert outcomes[0]["cost_profile"] == "delta_scalp"
     assert outcomes[0]["cost_contract_version"] == "scanner_cost_v1"
     assert outcomes[0]["funding_complete"] is True
+    assert outcomes[0]["arm_evidence"] == intent[0]["arm_evidence"]
     assert "mfe_bps" in outcomes[0] and "mae_bps" in outcomes[0]
     assert runner.acceptance.long.state is AcceptanceState.ARMED
 

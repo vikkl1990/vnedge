@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
+from enum import Enum
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -82,6 +83,19 @@ _STORAGE_QUANTUM = Decimal("0.000000000000000001")
 #: narrow to quantize ordinary quote volumes and must never be relied on here.
 _STORAGE_PRECISION = 38
 _STORAGE_SCALE = 18
+
+
+class BarState(str, Enum):
+    """Observable lifecycle state of a canonical candle object.
+
+    The current recorder deliberately has no revisable/provisional close:
+    trades are held behind a bounded event-time watermark, the raw tape is
+    flushed, and only then is a close published.  Empty buckets and detected
+    holes are represented by absence/quality evidence, never by invented OHLC.
+    """
+
+    FORMING = "forming"
+    CLOSED_IMMUTABLE = "closed_immutable"
 
 
 def _utc(value: datetime) -> datetime:
@@ -198,6 +212,11 @@ class Candle:
     @property
     def duration(self) -> timedelta:
         return self.close_time - self.open_time
+
+    @property
+    def state(self) -> BarState:
+        """Return the explicit lifecycle state without duplicating storage."""
+        return BarState.CLOSED_IMMUTABLE if self.is_closed else BarState.FORMING
 
 
 @dataclass(frozen=True, slots=True)

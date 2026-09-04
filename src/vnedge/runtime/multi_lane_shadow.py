@@ -136,7 +136,12 @@ def build_integrated_canonical_runtime(
         )
         if not symbols:
             continue
-        subscriber = router.publisher(exchange)
+        subscriber = router.publisher(
+            exchange,
+            raw_trade_durable=True,
+            reorder_bound_ms=250,
+            late_trade_policy="reject",
+        )
         producer: CanonicalProducer
         if exchange == DELTA_EXCHANGE:
             producer = DeltaTickRecorder(

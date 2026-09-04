@@ -17,6 +17,8 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot
+
 StructuralStopMode = Literal["risk_cap", "structure_floor"]
 
 
@@ -39,6 +41,7 @@ class RealtimeEntryArm:
     session_start_hour_utc: int | None = None
     session_end_hour_utc: int | None = None
     reason: str = "realtime_scanner"
+    evidence: FrozenPermissionSnapshot | None = None
 
     def __post_init__(self) -> None:
         values = (

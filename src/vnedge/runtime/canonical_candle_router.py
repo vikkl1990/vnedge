@@ -19,9 +19,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
-from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.candles import BarState, Candle, CandleParquetStore
 from vnedge.data.symbols import canonical_symbol
 
 CanonicalCandleKey: TypeAlias = tuple[str, str, str]
@@ -52,6 +52,12 @@ class CanonicalCandleEvent:
     exchange: str
     candle: Candle
     published_at: datetime
+    state: BarState = BarState.CLOSED_IMMUTABLE
+    bar_version: int = 1
+    watermark_event_time: datetime | None = None
+    reorder_bound_ms: int | None = None
+    raw_trade_durable: bool | None = None
+    late_trade_policy: Literal["reject"] = "reject"
 
     def __post_init__(self) -> None:
         exchange = self.exchange.strip().lower()
@@ -59,12 +65,26 @@ class CanonicalCandleEvent:
             raise ValueError("canonical candle exchange must not be empty")
         if not self.candle.is_closed:
             raise ValueError("canonical router accepts closed candles only")
+        if self.state is not BarState.CLOSED_IMMUTABLE:
+            raise ValueError("canonical router accepts immutable closes only")
+        if self.bar_version != 1:
+            raise ValueError("canonical candle bar_version must be 1")
         if self.published_at.tzinfo is None or self.published_at.utcoffset() is None:
             raise ValueError("canonical event published_at must be timezone-aware")
         if self.published_at < self.candle.close_time:
             raise ValueError("canonical event cannot be published before candle close")
+        watermark = self.watermark_event_time or self.candle.close_time
+        if watermark.tzinfo is None or watermark.utcoffset() is None:
+            raise ValueError("canonical event watermark must be timezone-aware")
+        if watermark < self.candle.close_time:
+            raise ValueError("canonical event watermark cannot precede candle close")
+        if self.reorder_bound_ms is not None and self.reorder_bound_ms < 0:
+            raise ValueError("canonical event reorder bound must be non-negative")
+        if self.late_trade_policy != "reject":
+            raise ValueError("canonical event late-trade policy must be reject")
         object.__setattr__(self, "exchange", exchange)
         object.__setattr__(self, "published_at", self.published_at.astimezone(UTC))
+        object.__setattr__(self, "watermark_event_time", watermark.astimezone(UTC))
 
     @property
     def key(self) -> CanonicalCandleKey:
@@ -284,6 +304,9 @@ class CanonicalCandleRouter:
         exchange: str,
         *,
         clock: Callable[[], datetime] | None = None,
+        raw_trade_durable: bool | None = None,
+        reorder_bound_ms: int | None = None,
+        late_trade_policy: Literal["reject"] = "reject",
     ) -> Callable[[Candle], None]:
         """Return a candle-pipeline subscriber bound to one venue.
 
@@ -301,6 +324,10 @@ class CanonicalCandleRouter:
                     exchange=normalized,
                     candle=candle,
                     published_at=event_clock(),
+                    watermark_event_time=candle.close_time,
+                    reorder_bound_ms=reorder_bound_ms,
+                    raw_trade_durable=raw_trade_durable,
+                    late_trade_policy=late_trade_policy,
                 )
             )
 

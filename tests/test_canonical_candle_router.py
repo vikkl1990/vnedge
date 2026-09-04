@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.candles import BarState, Candle, CandleParquetStore
 from vnedge.runtime.canonical_candle_router import (
     CanonicalCandleConflictError,
     CanonicalCandleDurabilityError,
@@ -146,11 +146,39 @@ def test_pipeline_publisher_adapter_normalizes_exchange_and_clock():
     subscription = router.subscribe("binanceusdm", "BTCUSDT", "1h")
     published_at = datetime(2026, 8, 26, 12, tzinfo=UTC)
 
-    router.publisher("BINANCEUSDM", clock=lambda: published_at)(_candle(10))
+    router.publisher(
+        "BINANCEUSDM",
+        clock=lambda: published_at,
+        raw_trade_durable=True,
+        reorder_bound_ms=250,
+    )(_candle(10))
 
     event = subscription.get_nowait()
     assert event.exchange == "binanceusdm"
     assert event.published_at == published_at
+    assert event.state is BarState.CLOSED_IMMUTABLE
+    assert event.bar_version == 1
+    assert event.watermark_event_time == _candle(10).close_time
+    assert event.raw_trade_durable is True
+    assert event.reorder_bound_ms == 250
+    assert event.late_trade_policy == "reject"
+
+
+def test_router_rejects_non_immutable_or_preclose_watermark_provenance():
+    with pytest.raises(ValueError, match="immutable closes"):
+        CanonicalCandleEvent(
+            exchange="binanceusdm",
+            candle=_candle(10),
+            published_at=datetime(2026, 8, 26, 11, tzinfo=UTC),
+            state=BarState.FORMING,
+        )
+    with pytest.raises(ValueError, match="watermark cannot precede"):
+        CanonicalCandleEvent(
+            exchange="binanceusdm",
+            candle=_candle(10),
+            published_at=datetime(2026, 8, 26, 11, tzinfo=UTC),
+            watermark_event_time=datetime(2026, 8, 26, 10, 59, tzinfo=UTC),
+        )
 
 
 def test_router_symbol_key_is_canonical_across_venue_and_storage_forms():

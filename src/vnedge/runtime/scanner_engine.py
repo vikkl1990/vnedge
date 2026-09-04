@@ -115,6 +115,8 @@ def build_quote_acceptance_engine(
         exits=ExitEngine(config=exit_config),
         approve_fire=approve_fire,
         costs=SessionCosts.from_profile(cost_profile, bar_minutes=bar_minutes),
+        decision_timeframe=contract.timeframe,
+        context_timeframes=contract.context_timeframes,
     )
 
 
