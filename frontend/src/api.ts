@@ -483,6 +483,14 @@ export interface CorrectionLane {
     recovery_ms: number;
     band: "ok" | "degraded" | "blocked" | "unknown" | string;
   }>;
+  runtime_readiness: {
+    data_ready: boolean;
+    decision_ready: boolean;
+    execution_ready: boolean;
+    data_blockers: string[];
+    decision_blockers: string[];
+    execution_blockers: string[];
+  } | null;
   equity_usd: number | null;
   realized_pnl_usd: number | null;
   unrealized_pnl_usd: number | null;

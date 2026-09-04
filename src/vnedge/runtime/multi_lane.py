@@ -427,14 +427,13 @@ class MultiLaneProvider:
                 # cumulative funnel survives restarts (LaneFunnelStore); these
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
-                "last_quote_signal": self._lanes[lid]
-                .get("session", {})
-                .get("last_quote_signal"),
+                "last_quote_signal": self._lanes[lid].get("session", {}).get("last_quote_signal"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
                 # pipeline latency: bar_close_processing_ms (close -> dequeue)
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
                 "latency_recovery": self._lanes[lid].get("session", {}).get("latency_recovery"),
+                "runtime_readiness": self._lanes[lid].get("session", {}).get("runtime_readiness"),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
@@ -826,21 +825,15 @@ def _build_single_strategy(
             return realtime_scanner_class(seed_funding)
     if strategy_id == HtfRegimeContinuation15mV1.strategy_id:
         if params:
-            raise ValueError(
-                f"{strategy_id} parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return HtfRegimeContinuation15mV1(seed_funding)
     if strategy_id == HtfRegimeContinuation15mV2.strategy_id:
         if params:
-            raise ValueError(
-                f"{strategy_id} parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return HtfRegimeContinuation15mV2(seed_funding)
     if strategy_id == StructureBounceRouteProbeV2.strategy_id:
         if params:
-            raise ValueError(
-                f"{strategy_id} parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return StructureBounceRouteProbeV2(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
@@ -1100,9 +1093,7 @@ def _overlay_canonical_history(
     """
     default_quality = "ok" if allow_validated_exchange_ohlcv else "gap"
     default_source = (
-        "exchange_ohlcv_validated"
-        if allow_validated_exchange_ohlcv
-        else "exchange_ohlcv"
+        "exchange_ohlcv_validated" if allow_validated_exchange_ohlcv else "exchange_ohlcv"
     )
     if canonical.empty:
         out = history.copy()
@@ -1129,9 +1120,7 @@ def _overlay_canonical_history(
     return out.reset_index().sort_values("timestamp").reset_index(drop=True)
 
 
-_VALIDATED_EXCHANGE_OHLCV_STRATEGIES = frozenset(
-    {HtfRegimeContinuation15mV2.strategy_id}
-)
+_VALIDATED_EXCHANGE_OHLCV_STRATEGIES = frozenset({HtfRegimeContinuation15mV2.strategy_id})
 _CONTEXT_WARMUP_BARS = 800
 
 
@@ -1482,8 +1471,7 @@ async def build_lane(
                 exchange_context = await _warmup_candles(
                     rest,
                     context_spec,
-                    journal_dir
-                    / f"{spec.lane_id}.context_{context_timeframe}.candles.parquet",
+                    journal_dir / f"{spec.lane_id}.context_{context_timeframe}.candles.parquet",
                     context_since,
                     until,
                 )
@@ -1603,10 +1591,7 @@ async def build_lane(
     declared_context_timeframes = tuple(
         str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
     )
-    if (
-        runtime_contract is not None
-        and declared_context_timeframes != runtime_contract.context_tfs
-    ):
+    if runtime_contract is not None and declared_context_timeframes != runtime_contract.context_tfs:
         raise ValueError(
             f"{spec.strategy_id} runtime context contract requires "
             f"{runtime_contract.context_tfs}, strategy declares "

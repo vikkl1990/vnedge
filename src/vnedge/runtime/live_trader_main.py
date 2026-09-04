@@ -159,8 +159,7 @@ def _default_account(config: LiveTraderRunConfig):
         api_secret = os.environ["VNEDGE_EXEC_API_SECRET"]
     except KeyError as exc:
         raise RuntimeError(
-            "live account provider requires VNEDGE_EXEC_API_KEY and "
-            "VNEDGE_EXEC_API_SECRET"
+            "live account provider requires VNEDGE_EXEC_API_KEY and VNEDGE_EXEC_API_SECRET"
         ) from exc
     return CcxtReadOnlyAccountProvider(
         exchange_id=config.exchange,
@@ -172,9 +171,7 @@ def _default_account(config: LiveTraderRunConfig):
 def _default_feed(config: LiveTraderRunConfig):
     from vnedge.exchange.live_feed import LiveMarketFeed
 
-    return LiveMarketFeed(
-        config.exchange, symbol=config.symbol, timeframe=config.timeframe
-    )
+    return LiveMarketFeed(config.exchange, symbol=config.symbol, timeframe=config.timeframe)
 
 
 def _default_strategy(strategy_id: str):
@@ -232,7 +229,8 @@ async def run_live_trader(
         logger.error(
             "REFUSED: three live gates not open (mode=%s, enabled=%s, phrase_ok=%s). "
             "No live client constructed.",
-            settings.trading_mode.value, settings.live_trading_enabled,
+            settings.trading_mode.value,
+            settings.live_trading_enabled,
             settings.confirm_live_trading == LIVE_CONFIRMATION_PHRASE,
         )
         return _EXIT_GATES
@@ -260,15 +258,15 @@ async def run_live_trader(
 
     # --- Gate 4: mainnet trade-only credentials -----------------------------------
     if not _credentials_present():
-        logger.error(
-            "REFUSED: VNEDGE_EXEC_API_KEY/SECRET not set. No live client constructed."
-        )
+        logger.error("REFUSED: VNEDGE_EXEC_API_KEY/SECRET not set. No live client constructed.")
         return _EXIT_CREDENTIALS
 
     # All gates open — NOW it is safe to build live clients.
     logger.warning(
         "ALL GATES OPEN — starting LIVE trader on %s %s (%s). This places REAL orders.",
-        config.exchange, config.symbol, config.strategy_id,
+        config.exchange,
+        config.symbol,
+        config.strategy_id,
     )
     journal = DecisionJournal(f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl")
     if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
@@ -302,9 +300,17 @@ async def run_live_trader(
     stream = (private_stream_factory or _default_private_stream)(config, applier, health)
 
     session = LiveTraderSession(
-        strategy, feed, history, settings=settings, gateway=gateway,
-        order_manager=om, reconciler=reconciler, account_provider=account,
-        symbol=config.symbol, limits=limits, pre_live_report=checklist,
+        strategy,
+        feed,
+        history,
+        settings=settings,
+        gateway=gateway,
+        order_manager=om,
+        reconciler=reconciler,
+        account_provider=account,
+        symbol=config.symbol,
+        limits=limits,
+        pre_live_report=checklist,
         max_holding_bars=config.max_holding_bars,
         trail_atr_mult=config.trail_atr_mult,
         trail_atr_window=config.trail_atr_window,
@@ -312,7 +318,9 @@ async def run_live_trader(
         allow_partial_tp=config.allow_partial_tp,
         fee_aware_breakeven_bps=config.fee_aware_breakeven_bps,
         fill_ledger=fill_ledger,
-        private_stream_health=health, require_private_stream=True,
+        require_fill_ledger=True,
+        private_stream_health=health,
+        require_private_stream=True,
     )
     stop_event = asyncio.Event()
     stream_task = asyncio.create_task(
@@ -328,8 +336,11 @@ async def run_live_trader(
             await stream_task
         except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
             logger.debug("private stream teardown completed with error: %s", exc)
-        for name, closer in (("feed", feed.stop), ("adapter", adapter.close),
-                             ("stream", getattr(stream, "close", None))):
+        for name, closer in (
+            ("feed", feed.stop),
+            ("adapter", adapter.close),
+            ("stream", getattr(stream, "close", None)),
+        ):
             if closer is None:
                 continue
             try:
@@ -347,7 +358,9 @@ def _parse_args(argv=None) -> LiveTraderRunConfig:
     ap.add_argument("--strategy", dest="strategy_id", required=True)
     a = ap.parse_args(argv)
     return LiveTraderRunConfig(
-        exchange=a.exchange, symbol=a.symbol, timeframe=a.timeframe,
+        exchange=a.exchange,
+        symbol=a.symbol,
+        timeframe=a.timeframe,
         strategy_id=a.strategy_id,
     )
 

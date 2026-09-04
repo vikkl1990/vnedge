@@ -97,6 +97,7 @@ from vnedge.runtime.latency_tracker import (
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 from vnedge.runtime.quote_ordering import quote_update_order_key
+from vnedge.runtime.readiness import RuntimeReadiness, build_runtime_readiness
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
@@ -300,6 +301,8 @@ class LivePaperSession:
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
         self.fill_ledger = fill_ledger
+        self._ledger_halt = False
+        self._ledger_error: str | None = None
         self.funnel_store = funnel_store
         self.latency_store = latency_store
         self.gap_store = gap_store
@@ -461,7 +464,8 @@ class LivePaperSession:
                     cost_profile=self.cost_profile,
                     bar_minutes=(self._tf_seconds or 300) / 60.0,
                     approve_fire=self._approve_scanner_fire,
-                    require_book_imbalance=data_exchange.lower() in {
+                    require_book_imbalance=data_exchange.lower()
+                    in {
                         "delta",
                         "delta_india",
                         "deltaindia",
@@ -503,8 +507,7 @@ class LivePaperSession:
         # strategies. New manifests are explicit and use their frozen TTL.
         self.maker_fill_ttl_bars = (
             self._MAKER_ENTRY_TTL_BARS
-            if config.entry_route is EntryRoute.AUTO
-            and self.entry_route is EntryRoute.MAKER_RETEST
+            if config.entry_route is EntryRoute.AUTO and self.entry_route is EntryRoute.MAKER_RETEST
             else config.maker_fill_ttl_bars
         )
         self.shadow_outcomes: ShadowOutcomeTracker | None = (
@@ -690,9 +693,7 @@ class LivePaperSession:
                     "approved": bool(
                         (approval is not None and approval.approved) or approved_delta > 0
                     ),
-                    "failed_checks": (
-                        list(approval.failed_checks) if approval is not None else []
-                    ),
+                    "failed_checks": (list(approval.failed_checks) if approval is not None else []),
                     "path": "live_quote_acceptance",
                 }
                 self.last_fired_ts = update.ts.isoformat()
@@ -849,9 +850,7 @@ class LivePaperSession:
             )
         )
         venue_queue = getattr(self.feed, "closed_candles", None)
-        venue_task = (
-            asyncio.create_task(venue_queue.get()) if venue_queue is not None else None
-        )
+        venue_task = asyncio.create_task(venue_queue.get()) if venue_queue is not None else None
         try:
             while True:
                 waiting = {canonical_task}
@@ -940,8 +939,7 @@ class LivePaperSession:
             self.runtime_contract.context_tfs
             if self.runtime_contract is not None
             else tuple(
-                str(value)
-                for value in getattr(self.strategy, "canonical_context_timeframes", ())
+                str(value) for value in getattr(self.strategy, "canonical_context_timeframes", ())
             )
         )
         ingest = getattr(self.strategy, "ingest_canonical_context", None)
@@ -1000,8 +998,8 @@ class LivePaperSession:
                 )
                 continue
             ingest(canonical)
-            self._canonical_context_last_closed_at[timeframe] = (
-                canonical.open_time + timedelta(milliseconds=context_ms)
+            self._canonical_context_last_closed_at[timeframe] = canonical.open_time + timedelta(
+                milliseconds=context_ms
             )
             if callable(set_health):
                 set_health(timeframe, True)
@@ -1041,9 +1039,7 @@ class LivePaperSession:
             return
         newest = pd.Timestamp(self.candles["timestamp"].iloc[-1])
         terminal_before = (
-            newest - pd.Timedelta(milliseconds=2 * self._tf_ms)
-            if self._tf_ms is not None
-            else None
+            newest - pd.Timedelta(milliseconds=2 * self._tf_ms) if self._tf_ms is not None else None
         )
         for index in candidates:
             opened = pd.Timestamp(self.candles.at[index, "timestamp"])
@@ -1374,9 +1370,7 @@ class LivePaperSession:
         # immature samples remain visible to operators without halting arms.
         latency = getattr(self, "latency", None)
         if latency is not None:
-            bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(
-                self.config.timeframe
-            )
+            bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(self.config.timeframe)
             decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
                 self.config.timeframe
             )
@@ -1420,14 +1414,33 @@ class LivePaperSession:
             return "tm_error"
         return None
 
+    def _runtime_readiness(self, now: datetime | None = None) -> RuntimeReadiness:
+        """Report the three independent readiness layers without granting authority."""
+        at = now or datetime.now(UTC)
+        data_block = self._candle_path_arm_block(at)
+        decision_block = (
+            "strategy_warmup_incomplete" if len(self.candles) <= self.strategy.warmup_bars else None
+        )
+        execution_blockers: list[str | None] = [
+            "execution_stage_observe"
+            if not self.execution_context.stage.can_submit_orders
+            else None,
+            "fill_ledger_write_failed" if self._ledger_halt else None,
+            "decision_journal_unavailable" if not self.journal.available else None,
+            "unresolved_orders" if self.om.has_unresolved_orders else None,
+        ]
+        return build_runtime_readiness(
+            data_blockers=(data_block,),
+            decision_blockers=(decision_block,),
+            execution_blockers=execution_blockers,
+        )
+
     def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
         """Operator-visible proof behind automatic latency recovery."""
         decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
             self.config.timeframe
         )
-        bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(
-            self.config.timeframe
-        )
+        bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(self.config.timeframe)
         bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats("feed_lag_ms")
         return {
             "bar_close_processing_ms": LT.latency_recovery_state(
@@ -1630,6 +1643,7 @@ class LivePaperSession:
                 "mode": self.config.mode.value,
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
+                "runtime_readiness": self._runtime_readiness(now).to_dict(),
                 "runner_state": (
                     "in_position"
                     if self._plan is not None
@@ -1866,22 +1880,20 @@ class LivePaperSession:
                 # maker-retest lanes must carry the route-neutral setup level.
                 ref_price = bid if sig.side == "long" else ask
             else:
-                self.last_reject_reason = (
-                    "entry_route: maker_retest requires entry_limit_price"
-                )
+                self.last_reject_reason = "entry_route: maker_retest requires entry_limit_price"
                 self.journal.append(
                     "entry_route_rejected",
                     {**scanner_context, "reason": self.last_reject_reason},
                 )
-                self._log_trade_event(
-                    "entry_route_rejected", self.last_reject_reason, now
-                )
+                self._log_trade_event("entry_route_rejected", self.last_reject_reason, now)
                 return
         else:
             ref_price = (
                 float(sig.entry_limit_price)
                 if maker and sig.entry_limit_price is not None
-                else ask if sig.side == "long" else bid
+                else ask
+                if sig.side == "long"
+                else bid
             )
         targets = [
             float(target)
@@ -2101,9 +2113,7 @@ class LivePaperSession:
         finally:
             self.latency.record(GATE_EVAL_MS, (time.perf_counter() - started) * 1000.0)
 
-    def _approve_scanner_fire_impl(
-        self, fire, bar_index: int, bar_ts: datetime
-    ) -> ScannerApproval:
+    def _approve_scanner_fire_impl(self, fire, bar_index: int, bar_ts: datetime) -> ScannerApproval:
         """Run a scanner candidate through the normal sizing+risk boundary.
 
         This returns data to the read-only scanner runner; it never calls
@@ -2132,7 +2142,9 @@ class LivePaperSession:
         factory_block = self._daily_factory_entry_block_reason(bar_ts)
         protected, protection_reason = self.protections.entries_allowed(bar_index)
         local_failure = (
-            f"candle_path:{cp_block}"
+            "execution:fill_ledger_write_failed"
+            if self._ledger_halt
+            else f"candle_path:{cp_block}"
             if cp_block is not None
             else factory_block
             if factory_block is not None
@@ -2217,9 +2229,7 @@ class LivePaperSession:
             "squeeze_expansion_breakout_v3": "squeeze_acceptance_v3",
             "squeeze_expansion_breakout_v4": "squeeze_expansion_breakout_v4",
         }.get(self.strategy.strategy_id, self.strategy.strategy_id)
-        intent_key = (
-            f"{key_prefix}|{self.data_symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
-        )
+        intent_key = f"{key_prefix}|{self.data_symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
         if decision.approved and self.shadow_portfolio is not None:
             shared = self.shadow_portfolio.evaluate_entry(
                 lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
@@ -3176,8 +3186,7 @@ class LivePaperSession:
             "bar_ts": bar_ts,
             "decision_at": (
                 (
-                    pd.Timestamp(row["timestamp"])
-                    + pd.Timedelta(seconds=self._tf_seconds)
+                    pd.Timestamp(row["timestamp"]) + pd.Timedelta(seconds=self._tf_seconds)
                 ).isoformat()
                 if self._tf_seconds is not None
                 else bar_ts
@@ -3307,36 +3316,60 @@ class LivePaperSession:
                 f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
                 now,
             )
-            self.fill_ledger.append(
-                {
-                    "ts": now.isoformat(),
-                    "mode": self.config.mode.value,
-                    "venue": getattr(self.feed, "exchange_id", "paper"),
-                    "strategy_id": self.strategy.strategy_id,
-                    "symbol": fill.symbol,
-                    "side": "buy" if fill.buy else "sell",
-                    "quantity": fill.quantity,
-                    "price": fill.price,
-                    "fee_usd": fill.fee_usd,
-                    "realized_pnl_usd": fill.realized_pnl_usd,
-                    "client_order_id": fill.client_order_id,
-                    "exchange_seq": fill.seq,
-                    "mid_at_send": fill.mid_at_send,
-                    "fill_price": fill.price,
-                    "realized_exec_bps": fill.realized_exec_bps,
-                    "liquidity": fill.liquidity,
-                    "schedule_fee_bps": (
-                        self.exchange.fill_model.maker_fee_bps
-                        if fill.liquidity == "maker"
-                        else self.exchange.fill_model.taker_fee_bps
-                    ),
-                    "fee_leg": fee_leg,
-                    "hold_seconds": None,
-                    "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
-                    "execution_label_resolved": fill.realized_exec_bps is not None,
-                    "execution_label_schema_version": "execution_cost_label_v1",
-                }
-            )
+            try:
+                self.fill_ledger.append(
+                    {
+                        "ts": now.isoformat(),
+                        "mode": self.config.mode.value,
+                        "venue": getattr(self.feed, "exchange_id", "paper"),
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": fill.symbol,
+                        "side": "buy" if fill.buy else "sell",
+                        "quantity": fill.quantity,
+                        "price": fill.price,
+                        "fee_usd": fill.fee_usd,
+                        "realized_pnl_usd": fill.realized_pnl_usd,
+                        "client_order_id": fill.client_order_id,
+                        "exchange_seq": fill.seq,
+                        "mid_at_send": fill.mid_at_send,
+                        "fill_price": fill.price,
+                        "realized_exec_bps": fill.realized_exec_bps,
+                        "liquidity": fill.liquidity,
+                        "schedule_fee_bps": (
+                            self.exchange.fill_model.maker_fee_bps
+                            if fill.liquidity == "maker"
+                            else self.exchange.fill_model.taker_fee_bps
+                        ),
+                        "fee_leg": fee_leg,
+                        "hold_seconds": None,
+                        "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
+                        "execution_label_resolved": fill.realized_exec_bps is not None,
+                        "execution_label_schema_version": "execution_cost_label_v1",
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - entries must fail closed
+                self._ledger_halt = True
+                self._ledger_error = str(exc)
+                logger.error("fill ledger append failed for %s: %s", fill.client_order_id, exc)
+                try:
+                    self.journal.append(
+                        "execution_readiness_blocked",
+                        {
+                            "ts": now.isoformat(),
+                            "reason": "fill_ledger_write_failed",
+                            "detail": self._ledger_error,
+                            "client_order_id": fill.client_order_id,
+                            "entries_allowed": False,
+                            "reduce_only_exits_allowed": True,
+                        },
+                    )
+                except Exception as journal_exc:  # noqa: BLE001 - latch is authoritative
+                    logger.error(
+                        "failed to journal fill-ledger halt for %s: %s",
+                        fill.client_order_id,
+                        journal_exc,
+                    )
+                return
         self._ledgered_fills = len(fills)
 
     def _publish_snapshot(self) -> None:
@@ -3367,6 +3400,7 @@ class LivePaperSession:
                 "started_at": self._started_at.isoformat(),
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
+                "runtime_readiness": self._runtime_readiness(datetime.now(UTC)).to_dict(),
                 "bars_processed": self.bars_processed,
                 "evals": self.evals,
                 "live_evals": self.live_evals,
@@ -3460,9 +3494,7 @@ class LivePaperSession:
                 "last_fired_ts": self.last_fired_ts,
                 "last_quote_signal": self.last_quote_signal,
                 "quote_evidence": (
-                    self.quote_evidence.snapshot()
-                    if self.quote_evidence is not None
-                    else None
+                    self.quote_evidence.snapshot() if self.quote_evidence is not None else None
                 ),
                 "last_eval": self.last_eval,
                 "last_reject_reason": self.last_reject_reason,
@@ -3878,7 +3910,9 @@ class LivePaperSession:
                         source=(
                             "router"
                             if self._last_canonical_transport == "router_dark"
-                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                            else "parquet_hit"
+                            if canonical_ready
+                            else "parquet_timeout"
                         ),
                         armed="yes" if armed else "no",
                     )
@@ -3920,7 +3954,13 @@ class LivePaperSession:
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
                 cp_block = self._candle_path_arm_block(now)
-                if cp_block is not None:
+                if self._ledger_halt:
+                    sig = None
+                    reason = "execution:fill_ledger_write_failed"
+                    self._decision_skips[reason] = self._decision_skips.get(reason, 0) + 1
+                    self._record_eval(df, idx, sig, skip_reason=reason)
+                    self._log_trade_event("execution_blocked", reason, now)
+                elif cp_block is not None:
                     # decision-TF candle path unsafe to arm on: block the NEW
                     # entry (exits already ran above). Fail-closed for entries.
                     sig = None
@@ -3952,7 +3992,9 @@ class LivePaperSession:
                         source=(
                             "router"
                             if self._last_canonical_transport == "router_dark"
-                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                            else "parquet_hit"
+                            if canonical_ready
+                            else "parquet_timeout"
                         ),
                         armed="yes" if sig is not None else "no",
                     )
@@ -4030,6 +4072,7 @@ class LivePaperSession:
             shadow_rejected=self.shadow_rejected,
             reconciliation_mismatches=self.recon_mismatches,
             final_equity_usd=self.tracker.equity_usd(),
+            runtime_readiness=self._runtime_readiness().to_dict(),
         )
         self.journal.append("live_paper_report", report.to_dict())
         return report
