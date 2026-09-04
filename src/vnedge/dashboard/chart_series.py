@@ -67,3 +67,45 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
             for epoch, c in tail
         ],
     }
+
+
+def mechanism_context_payload(store: Any, symbol: str, timeframe: str, *,
+                              limit: int = 600) -> dict[str, Any]:
+    """Drawable mechanism context for the chart, from the canonical store.
+
+    Same store discipline as ``candles_payload``; the context itself comes
+    from ``ml.mechanism_features.mechanism_context`` — the model's own
+    definitions — so the chart can never show the operator a different
+    market than the ML plane sees. Read-only, presentation-only.
+    """
+    import pandas as pd
+
+    from vnedge.ml.mechanism_features import mechanism_context
+
+    limit = max(1, min(int(limit), MAX_BARS))
+    try:
+        rows = list(store.read(symbol, timeframe))
+    except Exception:
+        rows = []
+    base = {"symbol": symbol, "timeframe": timeframe, "source": "canonical_lake"}
+    if not rows:
+        return {**base, "ready": False, "bars": 0}
+    rows = rows[-limit:]
+    frame = pd.DataFrame(
+        {
+            "timestamp": [candle.open_time for candle in rows],
+            "open": [float(candle.open) for candle in rows],
+            "high": [float(candle.high) for candle in rows],
+            "low": [float(candle.low) for candle in rows],
+            "close": [float(candle.close) for candle in rows],
+            "volume": [float(candle.volume) for candle in rows],
+        }
+    )
+    context = mechanism_context(frame)
+    last = rows[-1]
+    epoch = (
+        int(last.open_time.replace(tzinfo=UTC).timestamp())
+        if last.open_time.tzinfo is None
+        else int(last.open_time.timestamp())
+    )
+    return {**base, "as_of": epoch, **context}

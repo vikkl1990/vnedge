@@ -73,6 +73,42 @@ def _bars_since(event: pd.Series, cap: float) -> pd.Series:
     return (positions - last).fillna(cap).clip(upper=cap)
 
 
+def _supertrend(
+    high: pd.Series, low: pd.Series, close: pd.Series, atr: pd.Series,
+    params: MechanismParams,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Causal forward recursion; returns (line, direction) arrays.
+
+    Shared by the feature columns (direction/flip age) and the drawable
+    context (the line itself), so the two can never disagree.
+    """
+    st_atr = atr.rolling(params.st_atr_window).mean()
+    hl2 = (high + low) / 2.0
+    ub = (hl2 + params.st_mult * st_atr).to_numpy(dtype=float)
+    lb = (hl2 - params.st_mult * st_atr).to_numpy(dtype=float)
+    closes = close.to_numpy(dtype=float)
+    n = len(closes)
+    upper = np.full(n, np.nan)
+    lower = np.full(n, np.nan)
+    st_dir = np.full(n, np.nan)
+    line = np.full(n, np.nan)
+    for i in range(n):
+        if np.isnan(ub[i]) or np.isnan(lb[i]):
+            continue
+        if i == 0 or np.isnan(upper[i - 1]):
+            upper[i], lower[i], st_dir[i] = ub[i], lb[i], 1.0
+            line[i] = lower[i]
+            continue
+        upper[i] = ub[i] if ub[i] < upper[i - 1] or closes[i - 1] > upper[i - 1] else upper[i - 1]
+        lower[i] = lb[i] if lb[i] > lower[i - 1] or closes[i - 1] < lower[i - 1] else lower[i - 1]
+        if st_dir[i - 1] > 0:
+            st_dir[i] = -1.0 if closes[i] < lower[i] else 1.0
+        else:
+            st_dir[i] = 1.0 if closes[i] > upper[i] else -1.0
+        line[i] = lower[i] if st_dir[i] > 0 else upper[i]
+    return line, st_dir
+
+
 def _grouped_prior_cummin(values: pd.Series, group_id: pd.Series) -> pd.Series:
     def _f(s: pd.Series) -> pd.Series:
         return s.shift(1).cummin()
@@ -189,27 +225,7 @@ def add_mechanism_features(
     out["donchian_width_atr"] = (width / safe_atr).clip(upper=cap)
 
     # --- supertrend state (causal forward recursion) ------------------------
-    st_atr = atr.rolling(params.st_atr_window).mean()
-    hl2 = (high + low) / 2.0
-    ub = (hl2 + params.st_mult * st_atr).to_numpy(dtype=float)
-    lb = (hl2 - params.st_mult * st_atr).to_numpy(dtype=float)
-    closes = close.to_numpy(dtype=float)
-    n = len(out)
-    upper = np.full(n, np.nan)
-    lower = np.full(n, np.nan)
-    st_dir = np.full(n, np.nan)
-    for i in range(n):
-        if np.isnan(ub[i]) or np.isnan(lb[i]):
-            continue
-        if i == 0 or np.isnan(upper[i - 1]):
-            upper[i], lower[i], st_dir[i] = ub[i], lb[i], 1.0
-            continue
-        upper[i] = ub[i] if ub[i] < upper[i - 1] or closes[i - 1] > upper[i - 1] else upper[i - 1]
-        lower[i] = lb[i] if lb[i] > lower[i - 1] or closes[i - 1] < lower[i - 1] else lower[i - 1]
-        if st_dir[i - 1] > 0:
-            st_dir[i] = -1.0 if closes[i] < lower[i] else 1.0
-        else:
-            st_dir[i] = 1.0 if closes[i] > upper[i] else -1.0
+    st_line, st_dir = _supertrend(high, low, close, atr, params)
     out["st_dir"] = st_dir
     dir_series = pd.Series(st_dir, index=out.index)
     flipped = dir_series.ne(dir_series.shift(1)) & dir_series.notna() & dir_series.shift(1).notna()
@@ -243,3 +259,104 @@ def add_mechanism_features(
     ).fillna(False).astype(float)
 
     return out
+
+
+def mechanism_context(
+    candles: pd.DataFrame, params: MechanismParams = MechanismParams()
+) -> dict:
+    """Drawable market context at the LAST bar, for the operator chart.
+
+    The feature columns distill mechanisms into model-shaped distances; a
+    chart needs the raw prices those distances were measured from. This
+    returns them — swing levels, channel bounds, the supertrend line, open
+    FVG zones — computed with the same definitions and parameters, so the
+    chart and the model can never describe two different markets.
+
+    Presentation-only helper: NOT part of MECHANISM_FEATURE_COLUMNS, never
+    an input to any model or gate.
+    """
+    df = candles
+    n = len(df)
+    if n < params.warmup_bars:
+        return {"ready": False, "bars": n, "warmup_bars": params.warmup_bars}
+    close, high, low = df["close"], df["high"], df["low"]
+    if "atr" in df.columns:
+        atr_series = df["atr"]
+    else:
+        from vnedge.strategy.indicators import atr as _atr
+
+        atr_series = _atr(df, 14)
+    positions = pd.Series(np.arange(n, dtype=float), index=df.index)
+    cap = params.far_cap
+
+    wing = params.swing_wing
+    span = 2 * wing + 1
+    sh_val = high.shift(wing)
+    sh_conf = sh_val.eq(high.rolling(span).max()).fillna(False)
+    sl_val = low.shift(wing)
+    sl_conf = sl_val.eq(low.rolling(span).min()).fillna(False)
+
+    d_high = high.rolling(params.donchian_window).max()
+    d_low = low.rolling(params.donchian_window).min()
+
+    st_line, st_dir = _supertrend(high, low, close, atr_series, params)
+
+    def _last(series: pd.Series) -> float | None:
+        value = series.iloc[-1]
+        return float(value) if pd.notna(value) else None
+
+    def _fvg_zone(*, bullish: bool) -> dict | None:
+        high_2, low_2 = high.shift(2), low.shift(2)
+        if bullish:
+            formed = (
+                (low > high_2) & ((low - high_2) >= params.fvg_min_atr * atr_series)
+            ).fillna(False)
+            top, bottom = low.where(formed), high_2.where(formed)
+        else:
+            formed = (
+                (high < low_2) & ((low_2 - high) >= params.fvg_min_atr * atr_series)
+            ).fillna(False)
+            top, bottom = low_2.where(formed), high.where(formed)
+        gap_id = positions.where(formed).ffill()
+        age = _bars_since(formed, cap)
+        if bullish:
+            prior = _grouped_prior_cummin(low, gap_id)
+            unfilled = (
+                bottom.ffill().notna()
+                & (age <= params.fvg_max_age)
+                & (prior.fillna(np.inf) > bottom.ffill())
+                & (low > bottom.ffill())
+            )
+        else:
+            prior = _grouped_prior_cummax(high, gap_id)
+            unfilled = (
+                top.ffill().notna()
+                & (age <= params.fvg_max_age)
+                & (prior.fillna(-np.inf) < top.ffill())
+                & (high < top.ffill())
+            )
+        if not bool(unfilled.iloc[-1]):
+            return None
+        return {
+            "top": _last(top.ffill()),
+            "bottom": _last(bottom.ffill()),
+            "age_bars": int(age.iloc[-1]),
+        }
+
+    return {
+        "ready": True,
+        "bars": n,
+        "close": _last(close),
+        "atr": _last(atr_series),
+        "swing_high": _last(sh_val.where(sh_conf).ffill()),
+        "swing_high_age": int(_bars_since(sh_conf, cap).iloc[-1]),
+        "swing_low": _last(sl_val.where(sl_conf).ffill()),
+        "swing_low_age": int(_bars_since(sl_conf, cap).iloc[-1]),
+        "donchian_high": _last(d_high),
+        "donchian_low": _last(d_low),
+        "supertrend_line": float(st_line[-1]) if np.isfinite(st_line[-1]) else None,
+        "supertrend_dir": int(st_dir[-1]) if np.isfinite(st_dir[-1]) else None,
+        "atr_pctile": _last(rolling_percentile(atr_series, params.vol_pct_window)),
+        "bull_fvg": _fvg_zone(bullish=True),
+        "bear_fvg": _fvg_zone(bullish=False),
+    }
