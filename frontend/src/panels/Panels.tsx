@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
-import { useAgenticResearchStatus, useBacktestLab, useCostModel, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
+import { useAgenticResearchStatus, useBacktestLab, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
 import { apiPost, type ArtifactMetadata, type BacktestDay, type BacktestJobAccepted, type BacktestMonth, type BacktestRunSummary, type BacktestTrade, type CorrectionLane, type JournalRow, type LaneHealth, type LaneHealthProblem, type Position } from "../api";
 
 const usd = (n: unknown) =>
@@ -26,68 +26,37 @@ const ageSec = (s: unknown) => {
 export function Header() {
   const who = useWhoAmI();
   const profile = useOperatorProfile();
-  const risk = useRiskSnapshot();
   const meta = useMeta();
-  const costs = useCostModel();
-  const lanes = useLanes();
-  const snapshot = useSnapshot();
   const [clock, setClock] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
-  const posture = risk.data;
-  const riskUnknown = !posture;
-  const riskUnavailable = risk.isError || (!risk.isLoading && riskUnknown);
   const role = who.data?.role ?? "…";
-  const feedTone = riskUnknown ? "bad" : posture.feed.status === "healthy" ? "good" : posture.feed.status === "stale" ? "warn" : posture.feed.status === "gap" ? "bad" : "neutral";
-  const systemChip = snapshot.data?.chips?.SYSTEM;
-  const systemBand = (systemChip?.band ?? "unknown") as Band;
   const time = clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
   const preferredTimezone = profile.data?.timezone || "UTC";
   const localTime = preferredTimezone === "UTC" ? null : clock.toLocaleTimeString("en-GB", { hour12: false, timeZone: preferredTimezone });
   const displayName = profile.data?.display_name || who.data?.name || "…";
-  const feeWall = costs.data?.taker_round_trip_cost_bps;
-  const sha = meta.data?.build_sha ?? posture?.build_sha;
-  const shadowPurse = lanes.data?.portfolio.shadow_purse_usd;
-  const margin = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.fixed_margin_usd;
-  const leverage = lanes.data?.lanes.find((lane) => lane.observation_class === "shadow_observe")?.sizing_profile?.max_leverage;
+  const sha = meta.data?.build_sha;
   return (
-    <header className="relative z-10 rounded-md border border-line bg-bg/95 px-3 py-2 shadow-lg shadow-black/20 backdrop-blur">
+    <header className="relative z-10 rounded-xl border border-line/60 bg-bg/80 px-3 py-2.5 shadow-[0_16px_50px_rgba(0,0,0,.24)] backdrop-blur-xl">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md border border-brand/40 grid place-items-center text-brand font-mono">VN</div>
+          <div className="relative grid h-9 w-9 place-items-center rounded-lg border border-brand/40 bg-brand/10 font-mono text-[11px] font-bold text-brand shadow-[0_0_25px_rgba(88,166,255,.12)]"><span className="absolute inset-[5px] rounded border border-brand/20" />VN</div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-[15px] font-semibold">VNEDGE</span>
-              <TerminalBadge tone={riskUnavailable ? "bad" : "info"}>{riskUnavailable ? "UNKNOWN" : posture?.runtime_mode ?? "syncing"}</TerminalBadge>
-              <span className="hidden sm:inline text-[11px] font-mono text-dim">BTC · ETH · SOL</span>
+              <span className="text-[14px] font-semibold tracking-[.08em]">VNEDGE</span>
+              <TerminalBadge tone="info">decision workstation</TerminalBadge>
             </div>
-            <div className="text-[11px] font-mono text-dim">mode: {posture?.runtime_label ?? "…"}</div>
+            <div className="mt-0.5 text-[9px] font-mono uppercase tracking-[.12em] text-faint">Delta India · BTCUSD / ETHUSD</div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 flex-wrap justify-end">
-          <span className="hidden text-[11px] font-mono text-dim sm:inline">{time} UTC{localTime ? ` · ${localTime} ${preferredTimezone}` : ""}</span>
-          <TerminalBadge tone={BAND_TONE[systemBand] as never}>system {systemChip?.label ?? "unknown"}</TerminalBadge>
-          <TerminalBadge tone={riskUnknown || posture?.capital.enabled ? "bad" : "neutral"}>capital {riskUnknown ? "UNKNOWN" : posture.capital.enabled ? "ON" : "OFF"}</TerminalBadge>
-          <TerminalBadge tone={riskUnknown || posture?.kill.active ? "bad" : "neutral"}>kill {riskUnknown ? "UNKNOWN" : posture.kill.active ? "ACTIVE" : "clear"}</TerminalBadge>
-          <TerminalBadge tone={feedTone}>{`● public feed ${posture?.feed.label ?? "unknown"}`}</TerminalBadge>
-          <span className="hidden items-center gap-1.5 xl:inline-flex">
-            <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
-            <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
-            <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
-            <TerminalBadge tone="neutral">{displayName} · {role}</TerminalBadge>
-          </span>
-          <details className="relative xl:hidden">
-            <summary className="cursor-pointer list-none rounded-md border border-line px-2 py-[2px] text-[11px] font-mono uppercase text-dim">more</summary>
-            <div className="absolute right-0 top-7 z-30 flex min-w-[260px] flex-col gap-2 rounded-lg border border-line bg-bg p-3 shadow-xl">
-              <span className="font-mono text-[10px] text-faint sm:hidden">{time} UTC{localTime ? ` · ${localTime} ${preferredTimezone}` : ""}</span>
-              <TerminalBadge tone="info">shadow {shadowPurse == null ? "—" : usd(shadowPurse)} · {margin == null ? "—" : usd(margin)} margin · ≤{leverage ?? "—"}x</TerminalBadge>
-              <TerminalBadge tone="warn">fee wall {feeWall == null ? "—" : feeWall.toFixed(1)} bps</TerminalBadge>
-              <TerminalBadge tone="neutral">build {sha ? sha.slice(0, 8) : "…"}</TerminalBadge>
-              <TerminalBadge tone="neutral">{displayName} · {role}</TerminalBadge>
-            </div>
-          </details>
+        <div className="flex items-center gap-3 font-mono text-[9px] text-dim">
+          <span className="hidden md:inline">{time} UTC{localTime ? ` · ${localTime} ${preferredTimezone}` : ""}</span>
+          <span className="hidden h-4 w-px bg-line md:inline" />
+          <span>build <b className="font-medium text-txt">{sha ? sha.slice(0, 8) : "…"}</b></span>
+          <span className="hidden h-4 w-px bg-line sm:inline" />
+          <span className="hidden sm:inline">{displayName} · {role}</span>
         </div>
       </div>
     </header>

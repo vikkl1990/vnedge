@@ -137,6 +137,25 @@ def test_v2_rejects_conflicting_higher_timeframe() -> None:
     assert row["bos15_fire_long"] == 0.0
 
 
+def test_v2_does_not_carry_stale_hour_parent_across_missing_hour() -> None:
+    strategy = StructureBos15mTriggerV2()
+    strategy._hourly = _HourlyContext()
+    frame = _history()
+    missing_hour = frame["timestamp"].dt.floor("h").iloc[-1] - pd.Timedelta(hours=1)
+    frame = frame.loc[frame["timestamp"].dt.floor("h") != missing_hour].reset_index(drop=True)
+
+    prepared = strategy.prepare(frame)
+    expected_hour = prepared["timestamp"].dt.floor("h")
+    stale = prepared["bos15_parent_available_at"].notna() & (
+        prepared["bos15_parent_available_at"] != expected_hour
+    )
+
+    assert stale.any()  # preserved for evidence, never treated as current
+    missing = prepared.loc[~prepared["bos15_parent_identity_ok"]]
+    assert not missing.empty
+    assert missing["bos15_structure_trend"].eq("unavailable").all()
+
+
 def test_v2_diagnostics_name_higher_timeframe_conflict() -> None:
     strategy = StructureBos15mTriggerV2()
     context = _HourlyContext()

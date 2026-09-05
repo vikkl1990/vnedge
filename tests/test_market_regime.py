@@ -132,6 +132,8 @@ def test_aligned_weekly_daily_h4_allows_continuation_long() -> None:
     assert regime.rsi_zone == "mid"
     assert regime.asof_bar is not None
     assert regime.asof_bar[0] in {"4h", "1d", "1w"}
+    assert regime.daily_observations == len(daily)
+    assert regime.ema200_ready is True
 
 
 def test_opposing_4h_fails_closed() -> None:
@@ -168,6 +170,8 @@ def test_insufficient_closed_context_never_grants_permission() -> None:
     assert not regime.ready
     assert regime.family == "flat"
     assert not regime.allow_long and not regime.allow_short
+    assert regime.daily_observations == 7
+    assert regime.ema200_ready is True
 
 
 def test_official_candle_quote_volume_does_not_satisfy_trade_lake_weekly_vwap() -> None:

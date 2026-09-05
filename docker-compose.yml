@@ -66,6 +66,7 @@ services:
       # the shared writer lease refuses dual ownership, router events become
       # the lane clock, and matching Parquet rows remain decision truth.
       VNEDGE_CANONICAL_PRODUCER_MODE: "${VNEDGE_CANONICAL_PRODUCER_MODE:-external_parquet}"
+      VNEDGE_CANONICAL_PARITY_ARTIFACT: "${VNEDGE_CANONICAL_PARITY_ARTIFACT:-research/live_research/canonical_transport_parity.json}"
       # Canonical repair is owned by pulse-recorder under the same writer
       # lease. Scanner startup only consumes the fail-closed health artifact.
       VNEDGE_CANONICAL_MAINTENANCE_OWNER: "pulse_recorder"
@@ -484,6 +485,62 @@ services:
       timeout: 10s
       retries: 3
       start_period: 300s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
+  # Dark router-vs-Parquet proof. It remains collecting under the default
+  # external_parquet topology and can never switch authority itself.
+  canonical-parity-evidence:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - vnedge.runtime.canonical_parity
+      - --journal
+      - /app/logs/paper_trials
+      - --output
+      - /app/research/live_research/canonical_transport_parity.json
+      - --min-observations
+      - "100"
+      - --min-decisions
+      - "1"
+      - --interval-seconds
+      - "900"
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
+  # Full decision-WAL chain and kernel-envelope verifier. Tail validation is
+  # still used at boot; this is the scheduled offline full-file projection.
+  execution-path-audit:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      multi-lane-shadow:
+        condition: service_healthy
+    command:
+      - python
+      - -m
+      - vnedge.runtime.execution_path_audit
+      - --journal
+      - /app/logs/paper_trials
+      - --output
+      - /app/research/live_research/execution_path_audit.json
+      - --interval-seconds
+      - "3600"
+    volumes:
+      - ./logs:/app/logs:ro
+      - ./research/live_research:/app/research/live_research
+    mem_limit: 256m
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "3"}

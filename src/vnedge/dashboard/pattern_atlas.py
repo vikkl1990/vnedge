@@ -296,6 +296,7 @@ def _lane_projection(lane: dict[str, Any]) -> dict[str, Any]:
             *_failed_gates(lane),
         ]
     )
+    readiness = lane.get("runtime_readiness") or {}
     return {
         "lane_id": lane.get("lane_id"),
         "strategy_id": lane.get("strategy_id"),
@@ -354,6 +355,11 @@ def _lane_projection(lane: dict[str, Any]) -> dict[str, Any]:
             "rearms": int((lane.get("shadow_perf") or {}).get("quote_rearms") or 0),
         },
         "runtime_contract": lane.get("runtime_contract"),
+        "authority": {
+            "execution_ready": bool(readiness.get("execution_ready", False)),
+            "live_ready": bool(readiness.get("live_ready", False)),
+            "diagnostic_only": True,
+        },
         "net": {
             "value": lifecycle.get("net_value"),
             "unit": lifecycle.get("net_unit"),
@@ -495,6 +501,9 @@ def build_pattern_atlas_payload(
                     },
                 },
                 "evidence": evidence,
+                "execution_ready": bool(matched) and all(
+                    bool(lane["authority"]["execution_ready"]) for lane in matched
+                ),
             }
         )
 
@@ -517,5 +526,11 @@ def build_pattern_atlas_payload(
             ),
             "accepted": sum(pattern["runtime"]["funnel"]["accepted"] for pattern in patterns),
         },
-        "policy": {"can_trade": False, "can_promote": False, "read_only": True},
+        "policy": {
+            "can_trade": False,
+            "can_promote": False,
+            "read_only": True,
+            "authority": "diagnostic_only",
+            "copy": "Pattern Atlas is not execution readiness or trade authority.",
+        },
     }

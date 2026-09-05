@@ -25,7 +25,6 @@ strategy semantics that research models at bar granularity.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
@@ -75,6 +74,7 @@ from vnedge.runtime.canonical_candle_router import (
     CanonicalCandleSubscription,
     next_durable_candle,
 )
+from vnedge.runtime.canonical_parity import assert_router_authority_artifact
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
@@ -82,6 +82,7 @@ from vnedge.runtime.daily_factory import (
 )
 from vnedge.runtime.execution_contract import KERNEL_PATH_ID, AdapterKind, ExecutionContext
 from vnedge.runtime.execution_kernel import build_kernel
+from vnedge.runtime.execution_path_audit import assert_execution_path_artifact
 from vnedge.runtime.funding_ledger import FundingPrint
 from vnedge.runtime.latency_tracker import (
     ADAPTER_ACK_MS,
@@ -116,7 +117,7 @@ from vnedge.runtime.squeeze_acceptance_observe import (
     SqueezeAcceptanceObserveRunner,
 )
 from vnedge.runtime.squeeze_observe import ScannerApproval, SqueezeObserveRunner
-from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot
+from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot, bar_content_sha256
 from vnedge.strategy.base_strategy import (
     BaseStrategy,
     SignalIntent,
@@ -136,6 +137,32 @@ def _append_equity_history(path: str | Path, now: datetime, equity: float) -> No
     """Append one equity sample without blocking the asyncio decision loop."""
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"ts": now.isoformat(), "equity": round(equity, 4)}) + "\n")
+
+
+def _readiness_artifact_ready(
+    path: str | Path,
+    *,
+    ready_path: tuple[str, ...],
+    now: datetime,
+    max_age: timedelta = timedelta(hours=2),
+) -> bool:
+    """Read a report-only readiness artifact without granting authority."""
+
+    try:
+        payload: object = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return False
+        generated = pd.to_datetime(payload.get("generated_at"), utc=True).to_pydatetime()
+        if generated > now + timedelta(minutes=5) or now - generated > max_age:
+            return False
+        cursor: object = payload
+        for key in ready_path:
+            if not isinstance(cursor, dict):
+                return False
+            cursor = cursor.get(key)
+        return cursor is True
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 _EXIT_ACCEPTED_STATES = frozenset(
@@ -361,6 +388,7 @@ class LivePaperSession:
         if self.canonical_router_authoritative and canonical_candle_subscription is None:
             raise ValueError("authoritative router mode requires a canonical subscription")
         self._last_router_candle: Candle | None = None
+        self._last_canonical_parity: dict[str, object] | None = None
         self._canonical_context_last_closed_at = {
             str(timeframe): timestamp.astimezone(UTC)
             for timeframe, timestamp in (canonical_context_watermarks or {}).items()
@@ -957,6 +985,31 @@ class LivePaperSession:
                     venue_task = asyncio.create_task(venue_queue.get())
                 if canonical_task in done:
                     matched = canonical_task.result()
+                    self._last_router_candle = matched.event.candle
+                    source = "canonical_tick_lake"
+
+                    def candle_hash(candle: Candle, _source: str = source) -> str:
+                        return bar_content_sha256(
+                            {
+                                "open": candle.open,
+                                "high": candle.high,
+                                "low": candle.low,
+                                "close": candle.close,
+                                "volume": candle.volume,
+                                "quote_volume": candle.quote_volume,
+                                "trade_count": candle.trade_count,
+                            },
+                            open_time=candle.open_time,
+                            close_time=candle.close_time,
+                            source=_source,
+                        )
+
+                    self._last_canonical_parity = {
+                        "router_bar_hash": candle_hash(matched.event.candle),
+                        "parquet_bar_hash": candle_hash(matched.candle),
+                        "bar_open": matched.candle.open_time.isoformat(),
+                        "wait_ms": matched.wait_ms,
+                    }
                     self._last_canonical_transport = "router_dark"
                     self._last_router_wait_ms = matched.wait_ms
                     return self._canonical_raw_row(matched.candle)
@@ -1513,18 +1566,69 @@ class LivePaperSession:
         decision_block = (
             "strategy_warmup_incomplete" if len(self.candles) <= self.strategy.warmup_bars else None
         )
+        canonical_parity_ready = False
+        try:
+            assert_router_authority_artifact(
+                os.environ.get(
+                    "VNEDGE_CANONICAL_PARITY_ARTIFACT",
+                    "research/live_research/canonical_transport_parity.json",
+                ),
+                now=at,
+                max_age=timedelta(hours=2),
+            )
+            canonical_parity_ready = True
+        except ValueError:
+            pass
+        execution_audit_ready = False
+        try:
+            assert_execution_path_artifact(
+                os.environ.get(
+                    "VNEDGE_EXECUTION_PATH_AUDIT",
+                    "research/live_research/execution_path_audit.json",
+                ),
+                now=at,
+            )
+            execution_audit_ready = True
+        except ValueError:
+            pass
+        quote_clock = bool(
+            self.runtime_contract is not None
+            and self.runtime_contract.entry_clock == "bbo_acceptance"
+        )
+        quote_parity_ready = (
+            not quote_clock
+            or _readiness_artifact_ready(
+                os.environ.get(
+                    "VNEDGE_QUOTE_PARITY_ARTIFACT",
+                    "research/live_research/quote_parity_status.json",
+                ),
+                ready_path=("summary", "cutover_ready"),
+                now=at,
+            )
+        )
         execution_blockers: list[str | None] = [
             "execution_stage_observe"
             if not self.execution_context.stage.can_submit_orders
             else None,
             "fill_ledger_write_failed" if self._ledger_halt else None,
             "decision_journal_unavailable" if not self.journal.available else None,
+            "decision_journal_recovery_degraded"
+            if self.journal.recovery_degraded
+            else None,
             "unresolved_orders" if self.om.has_unresolved_orders else None,
+            "kernel_envelope_audit_unproven" if not execution_audit_ready else None,
         ]
         return build_runtime_readiness(
             data_blockers=(data_block,),
             decision_blockers=(decision_block,),
-            parity_blockers=("kernel_approval_parity_unproven",),
+            parity_blockers=(
+                "canonical_transport_parity_unproven"
+                if not canonical_parity_ready
+                else None,
+                "quote_approval_parity_unproven"
+                if quote_clock and not quote_parity_ready
+                else None,
+            ),
             execution_blockers=execution_blockers,
             live_blockers=("capital_path_locked", "venue_private_stream_unavailable"),
         )
@@ -3437,23 +3541,17 @@ class LivePaperSession:
             "structure_ready",
             "rt_structure_ready",
         )
-        identity = {
-            name: str(row.get(name, ""))
-            for name in (
-                "timestamp",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "quote_volume",
-                "trade_count",
-                "candle_source",
-            )
-        }
-        row_sha256 = hashlib.sha256(
-            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        decision_close_dt = (
+            bar_open_dt + timedelta(seconds=self._tf_seconds)
+            if self._tf_seconds is not None
+            else bar_open_dt + timedelta(microseconds=1)
+        )
+        row_sha256 = bar_content_sha256(
+            row.to_dict(),
+            open_time=bar_open_dt,
+            close_time=decision_close_dt,
+            source=candle_source,
+        )
         record = {
             "bar_ts": bar_ts,
             "eval_at": eval_at.isoformat(),
@@ -3537,15 +3635,35 @@ class LivePaperSession:
                 self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
         persisted = self.journal.append("lane_eval", record)
         envelope_persisted_at = datetime.now(UTC)
+        if (
+            not backfill
+            and decision_transport == "router_dark"
+            and self._last_canonical_parity is not None
+            and self._last_canonical_parity.get("bar_open") == bar_ts
+        ):
+            self.journal.append(
+                "canonical_transport_parity",
+                {
+                    **self._last_canonical_parity,
+                    "lane_id": str(
+                        (self.trial_meta or {}).get("trial_id")
+                        or self.strategy.strategy_id
+                    ),
+                    "strategy_id": self.strategy.strategy_id,
+                    "exchange": getattr(self.feed, "exchange_id", ""),
+                    "symbol": self.config.symbol,
+                    "timeframe": self.config.timeframe,
+                    "decision_bar_hash": row_sha256,
+                    "decision_ids": decision_ids,
+                    "fired": sig is not None,
+                    "evaluated_at": eval_at.isoformat(),
+                    "decision_transport": decision_transport,
+                },
+            )
         if backfill:
             self._backfill_eval_keys.add(eval_key)
         if not backfill:
             self.last_eval = record
-            decision_close_dt = (
-                bar_open_dt + timedelta(seconds=self._tf_seconds)
-                if self._tf_seconds is not None
-                else bar_open_dt + timedelta(microseconds=1)
-            )
             # Drought is a write-only observer.  It is intentionally called
             # after the decision and after the durable lane-eval append.
             self._drought_event(

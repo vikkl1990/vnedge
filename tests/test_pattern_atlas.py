@@ -105,6 +105,8 @@ def test_pattern_atlas_does_not_merge_symbol_health_or_setup_truth() -> None:
         "can_trade": False,
         "can_promote": False,
         "read_only": True,
+        "authority": "diagnostic_only",
+        "copy": "Pattern Atlas is not execution readiness or trade authority.",
     }
 
 

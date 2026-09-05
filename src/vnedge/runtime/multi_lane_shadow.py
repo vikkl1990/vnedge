@@ -23,6 +23,7 @@ from typing import Any, cast
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.execution.journal import DecisionJournal
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
+from vnedge.runtime.canonical_parity import assert_router_authority_artifact
 from vnedge.runtime.multi_lane import (
     CanonicalProducer,
     LaneSpec,
@@ -114,6 +115,13 @@ def build_integrated_canonical_runtime(
             "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet, "
             "integrated_dark, or integrated_router"
         )
+    if mode == "integrated_router":
+        artifact = str(environ.get("VNEDGE_CANONICAL_PARITY_ARTIFACT", "")).strip()
+        if not artifact:
+            raise ValueError(
+                "integrated_router requires VNEDGE_CANONICAL_PARITY_ARTIFACT"
+            )
+        assert_router_authority_artifact(artifact)
     requested = frozenset(
         _csv(environ.get("VNEDGE_INTEGRATED_RECORDER_EXCHANGES", "binanceusdm"))
     )

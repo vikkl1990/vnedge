@@ -152,7 +152,7 @@ export function PatternAtlas({ onNavigate }: { onNavigate: (tab: string) => void
             <div className="font-mono text-[10px] font-bold uppercase tracking-[.2em] text-brand">VNEDGE Pattern Atlas · runtime diagnostic</div>
             <h1 className="mt-3 max-w-3xl text-2xl font-semibold leading-tight text-txt md:text-4xl">Pattern anatomy joined to the lanes that actually run it.</h1>
             <p className="mt-3 max-w-3xl text-[13px] leading-6 text-dim">Operations, setup lifecycle, and research evidence are separate truths. A healthy watcher can have no setup; an accepted setup can still have no validated edge.</p>
-            <div className="mt-5 flex flex-wrap gap-2"><TerminalBadge tone="info">server-owned contracts</TerminalBadge><TerminalBadge tone="warn">probabilities, not predictions</TerminalBadge><TerminalBadge tone="neutral">read only</TerminalBadge><TerminalBadge tone="bad">capital locked</TerminalBadge></div>
+            <div className="mt-5 flex flex-wrap gap-2"><TerminalBadge tone="info">server-owned contracts</TerminalBadge><TerminalBadge tone="warn">probabilities, not predictions</TerminalBadge><TerminalBadge tone="neutral">diagnostic only</TerminalBadge><TerminalBadge tone="bad">not execution ready</TerminalBadge><TerminalBadge tone="bad">capital locked</TerminalBadge></div>
           </div>
           <div className="grid grid-cols-4 border-t border-line bg-inset/60 lg:border-l lg:border-t-0">
             {[

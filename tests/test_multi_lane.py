@@ -142,6 +142,17 @@ def test_integrated_canonical_runtime_defaults_to_external_parquet():
     assert build_shadow_observe_lane_specs({}) == []
 
 
+def test_integrated_router_refuses_environment_only_cutover(tmp_path):
+    with pytest.raises(ValueError, match="PARITY_ARTIFACT"):
+        build_integrated_canonical_runtime(
+            [],
+            {
+                "VNEDGE_CANONICAL_PRODUCER_MODE": "integrated_router",
+                "VNEDGE_INTEGRATED_RECORDER_EXCHANGES": "delta_india",
+            },
+        )
+
+
 def test_integrated_producer_persist_health_is_bound_per_lane():
     class Producer:
         exchange_id = "binanceusdm"

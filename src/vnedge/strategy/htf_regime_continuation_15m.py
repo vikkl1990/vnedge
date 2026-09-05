@@ -281,6 +281,8 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         out["mreg_daily_macd_hist"] = [item.daily_macd_hist for item in regimes]
         out["mreg_h4_macd_hist"] = [item.h4_macd_hist for item in regimes]
         out["mreg_daily_rsi"] = [item.daily_rsi for item in regimes]
+        out["mreg_daily_observations"] = [item.daily_observations for item in regimes]
+        out["mreg_ema200_ready"] = [float(item.ema200_ready) for item in regimes]
         out["mreg_state"] = [item.state for item in regimes]
         out["mreg_family"] = out["mreg_state"]  # schema-compatibility alias
         out["mreg_reason"] = [item.reason for item in regimes]
@@ -409,6 +411,8 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
                 "daily_macd_hist": row.get("mreg_daily_macd_hist"),
                 "h4_macd_hist": row.get("mreg_h4_macd_hist"),
                 "daily_rsi": row.get("mreg_daily_rsi"),
+                "daily_observations": row.get("mreg_daily_observations"),
+                "ema200_ready": bool(float(row.get("mreg_ema200_ready", 0) or 0)),
                 "regime_state": str(row.get("mreg_state", "flat")),
                 "regime_family": str(row.get("mreg_state", "flat")),
                 "regime_reason": str(row.get("mreg_reason", "unavailable")),

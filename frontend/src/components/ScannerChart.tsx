@@ -142,6 +142,15 @@ export function bucketOpenMs(timestamp: number, timeframe: ChartTimeframe) {
   return Math.floor(timestamp / width) * width;
 }
 
+function causalBarMs(event: ScannerAuditEvent, fallback: number, timeframe: ChartTimeframe) {
+  const explicit = Date.parse(event.bar_ts || "");
+  return Number.isFinite(explicit) ? explicit : bucketOpenMs(fallback, timeframe);
+}
+
+function evidenceKey(event: ScannerAuditEvent) {
+  return event.decision_id || event.intent_key || event.permission_snapshot_id || event.ts;
+}
+
 export function toPlans(
   events: ScannerAuditEvent[] | undefined,
   market: MarketChoice,
@@ -160,9 +169,9 @@ export function toPlans(
     const eventTs = eventTimeMs(event);
     if (!Number.isFinite(eventTs)) continue;
     plans.push({
-      key: `${event.lane}:${event.intent_key || event.ts}:${event.kind}`,
+      key: `${event.lane}:${evidenceKey(event)}:${event.kind}`,
       event_ts_ms: eventTs,
-      bar_ts_ms: bucketOpenMs(eventTs, timeframe),
+      bar_ts_ms: causalBarMs(event, eventTs, timeframe),
       side: event.side,
       entry,
       stop,
@@ -201,9 +210,9 @@ export function toEventMarkers(
     if (!Number.isFinite(eventTs)) continue;
     const eventPrice = event.entry_price ?? event.decision_price ?? event.price;
     markers.push({
-      key: `${event.lane}:${event.intent_key || event.ts}:${event.kind}`,
+      key: `${event.lane}:${evidenceKey(event)}:${event.kind}`,
       event_ts_ms: eventTs,
-      bar_ts_ms: bucketOpenMs(eventTs, timeframe),
+      bar_ts_ms: causalBarMs(event, eventTs, timeframe),
       side: event.side,
       kind: event.kind,
       event_price: typeof eventPrice === "number" ? eventPrice : null,

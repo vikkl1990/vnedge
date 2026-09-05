@@ -225,6 +225,8 @@ class StructureBos15mTriggerV2(BaseStrategy):
             out[f"bos15_{name}"] = math.nan if name not in {
                 "structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason"
             } else "unavailable"
+        out["bos15_parent_available_at"] = pd.NaT
+        out["bos15_parent_identity_ok"] = False
 
         if not hours.empty:
             prepared = self._hourly.prepare(hours).copy()
@@ -244,8 +246,23 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 right_on="available_at",
                 direction="backward",
             ).sort_values("_row")
+            expected_parent = ts.dt.floor("h")
+            parent_available = pd.to_datetime(
+                merged["available_at"], utc=True, errors="coerce"
+            )
+            parent_identity_ok = parent_available.eq(expected_parent.reset_index(drop=True))
+            out["bos15_parent_available_at"] = parent_available.to_numpy()
+            out["bos15_parent_identity_ok"] = parent_identity_ok.to_numpy()
             for name in context_columns:
-                out[f"bos15_{name}"] = merged[f"bos15_{name}"].to_numpy()
+                values = merged[f"bos15_{name}"].copy()
+                unavailable = (
+                    "unavailable"
+                    if name
+                    in {"structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason"}
+                    else math.nan
+                )
+                values.loc[~parent_identity_ok] = unavailable
+                out[f"bos15_{name}"] = values.to_numpy()
 
         p = self.params
         high_level = pd.to_numeric(out["bos15_last_swing_high"], errors="coerce").mul(
@@ -402,6 +419,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
 
         p = self.params
         missing_context = self._missing_permission_context(row)
+        parent_identity_ok = bool(row.get("bos15_parent_identity_ok", False))
         quality_ok = flag("bos15_quality_ok")
         session_ok = flag("bos15_session_ok")
         ready_raw = row.get("bos15_structure_ready", False)
@@ -428,6 +446,8 @@ class StructureBos15mTriggerV2(BaseStrategy):
         failures: list[str] = []
         if missing_context:
             failures.append("htf_context_missing")
+        if not parent_identity_ok:
+            failures.append("structure_parent_missing")
         for ok, reason in (
             (quality_ok, "data_quality_not_ok"),
             (session_ok, "session_closed"),
@@ -450,6 +470,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
         )
         eligible = (
             not missing_context
+            and parent_identity_ok
             and (flag("bos15_fire_long") or flag("bos15_fire_short"))
             and edge_ok
         )
@@ -461,6 +482,10 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 "bos15_quality_ok": quality_ok,
                 "bos15_session_ok": session_ok,
                 "bos15_structure_ready": structure_ready,
+                "bos15_parent_identity_ok": parent_identity_ok,
+                "bos15_parent_available_at": str(
+                    row.get("bos15_parent_available_at", "")
+                ),
                 "bos15_structure_trend": trend,
                 "bos15_htf_structure_trend": htf_trend,
                 "bos15_mtf_reason": str(row.get("bos15_mtf_reason", "unavailable")),

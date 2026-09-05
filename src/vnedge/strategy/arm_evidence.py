@@ -219,7 +219,7 @@ def _canonical_number(value: object) -> str | None:
     return "0" if normalized == 0 else format(normalized, "f")
 
 
-def _bar_content_sha256(
+def bar_content_sha256(
     row: Mapping[str, Any],
     *,
     open_time: datetime,
@@ -247,6 +247,12 @@ def _bar_content_sha256(
     return hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+# Compatibility alias for older internal call sites.  New transport/parity
+# code uses the public name so the ARM envelope and router evidence hash the
+# same normalized candle contract.
+_bar_content_sha256 = bar_content_sha256
 
 
 def _last_eligible_context_row(
@@ -320,7 +326,7 @@ def last_eligible_context_bar(
         open_time=open_time,
         close_time=close_time,
         source=source,
-        content_sha256=_bar_content_sha256(
+        content_sha256=bar_content_sha256(
             row,
             open_time=open_time,
             close_time=close_time,
@@ -453,7 +459,7 @@ def freeze_permission_from_row(
         open_time=decision_open,
         close_time=decision_close,
         source=decision_source,
-        content_sha256=_bar_content_sha256(
+        content_sha256=bar_content_sha256(
             row,
             open_time=decision_open,
             close_time=decision_close,
@@ -485,7 +491,7 @@ def freeze_permission_from_row(
                 if str(bound.get("data_quality", "")).lower() != "ok":
                     raise ValueError(f"bound context row data quality is not ok: {timeframe}")
             source = _evidence_source(bound, require_closed_truth=require_closed_truth)
-            content_sha256 = _bar_content_sha256(
+            content_sha256 = bar_content_sha256(
                 bound,
                 open_time=context_open,
                 close_time=context_close,
@@ -521,6 +527,7 @@ __all__ = [
     "FrozenPermissionSnapshot",
     "ImmutableBarRef",
     "MissingHtfContext",
+    "bar_content_sha256",
     "freeze_permission_from_bound_frames",
     "freeze_permission_from_row",
     "last_eligible_context_bar",

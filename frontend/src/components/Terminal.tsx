@@ -14,12 +14,12 @@ export function TerminalPanel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-md border border-line bg-panel/70 overflow-hidden">
-      <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-inset/35 flex-wrap">
+    <section className="rounded-xl border border-line/70 bg-panel/65 overflow-hidden shadow-[0_18px_55px_rgba(0,0,0,.2)] backdrop-blur-xl">
+      <header className="flex items-center justify-between gap-2 px-4 py-3 border-b border-line/70 bg-inset/30 flex-wrap">
         <h2 className="text-[13px] font-semibold tracking-wide text-txt">{title}</h2>
         {meta ? <span className="text-[11px] font-mono text-dim">{meta}</span> : null}
       </header>
-      <div className="p-3">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   );
 }
@@ -36,7 +36,7 @@ const toneClass: Record<Tone, string> = {
 export function TerminalBadge({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md border px-2 py-[2px] text-[11px] font-mono uppercase ${toneClass[tone]}`}
+      className={`inline-flex items-center rounded-md border bg-black/10 px-2 py-[2px] text-[10px] font-mono font-semibold uppercase tracking-[.04em] ${toneClass[tone]}`}
     >
       {children}
     </span>
@@ -111,15 +111,15 @@ export function TerminalTabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <nav className="flex gap-1 flex-wrap">
+    <nav className="flex gap-1 flex-wrap" aria-label="Workbench views">
       {tabs.map((t) => (
         <button
           key={t.id}
           onClick={() => onChange(t.id)}
-          className={`rounded-md px-3 py-1.5 text-[12px] font-mono border transition-colors ${
+          className={`relative rounded-lg px-3.5 py-2 text-[11px] font-mono font-semibold border transition-all duration-200 ${
             active === t.id
-              ? "border-brand/50 text-brand bg-brand/10"
-              : "border-transparent text-dim hover:text-txt"
+              ? "border-brand/40 text-txt bg-brand/10 shadow-[inset_0_-2px_0_rgba(88,166,255,.75),0_0_18px_rgba(88,166,255,.06)]"
+              : "border-transparent text-dim hover:text-txt hover:bg-white/[.025]"
           }`}
           aria-current={active === t.id ? "page" : undefined}
         >

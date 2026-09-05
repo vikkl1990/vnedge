@@ -905,6 +905,8 @@ export interface ScannerAuditEvent {
   kind: "signal" | "evaluation" | "entry" | "rejection" | "exit";
   source_event: string;
   intent_key?: string;
+  decision_id?: string | null;
+  permission_snapshot_id?: string | null;
   strategy_id: string;
   exchange?: string;
   symbol: string;

@@ -395,6 +395,11 @@ async def test_router_dark_source_uses_matching_durable_candle_as_decision_row(t
         12.0,
     ]
     assert session._last_canonical_transport == "router_dark"
+    assert session._last_canonical_parity is not None
+    assert (
+        session._last_canonical_parity["router_bar_hash"]
+        == session._last_canonical_parity["parquet_bar_hash"]
+    )
     assert session._venue_close_watchdog_count == 1
     assert session.feed.closed_candles.empty()
     assert await session._await_canonical_candle(raw) is True

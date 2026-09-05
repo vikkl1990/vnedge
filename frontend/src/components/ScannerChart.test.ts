@@ -71,6 +71,18 @@ describe("scanner chart evidence mapping", () => {
     });
   });
 
+  it("keys markers by immutable decision evidence and preserves explicit bar time", () => {
+    const item = toEventMarkers(
+      [event({ decision_id: "dec-fixed", bar_ts: "2026-09-04T11:45:00.000Z" })],
+      deltaMarket,
+      "15m",
+      new Map(),
+    )[0];
+
+    expect(item.key).toBe("delta_btc_15m:dec-fixed:entry");
+    expect(item.bar_ts_ms).toBe(Date.parse("2026-09-04T11:45:00.000Z"));
+  });
+
   it("keeps Delta USD and Binance USDT markets separate", () => {
     const lanes = [
       {
