@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,34 @@ from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.scanner_contracts import ScannerRuntimeContract
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
+
+
+def test_atomic_write_scrubs_nonfinite_diagnostics(tmp_path: Path):
+    import numpy as np
+
+    target = tmp_path / "evidence.json"
+    scanner_evidence.atomic_write(
+        target,
+        {
+            "features": {
+                "warmup": math.nan,
+                "overflow": math.inf,
+                "numpy": np.float64(-math.inf),
+                "valid": np.float64(1.25),
+            }
+        },
+    )
+
+    payload = json.loads(target.read_text())
+    assert payload == {
+        "features": {
+            "warmup": None,
+            "overflow": None,
+            "numpy": None,
+            "valid": 1.25,
+        }
+    }
+    json.dumps(payload, allow_nan=False)
 
 
 def test_canonical_storage_normalization_restores_live_closed_quality_contract():
