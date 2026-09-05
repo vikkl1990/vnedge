@@ -512,9 +512,8 @@ def test_quote_replay_uses_runtime_engine_and_candle_before_quote_tie_break(monk
     assert result["intents"] == 1
     assert result["entry_clock"] == "quote_hold"
     assert result["clock_cohort"] == "closed_5m->quote_hold"
-    assert result["intent_keys"] == [
-        "test_quote_scanner|BTCUSDT|long|1767225900600"
-    ]
+    assert len(result["intent_keys"]) == 1
+    assert result["intent_keys"][0].startswith("dec_")
     intent = next(
         row["payload"] for row in result["records"] if row["kind"] == "shadow_intent"
     )
@@ -940,9 +939,8 @@ def test_quote_replay_normalizes_canonical_open_time_and_decimal_frames(monkeypa
     result = scanner_evidence.replay_quote_scanner("test_quote_scanner", candles, quotes)
 
     assert result["intents"] == 1
-    assert result["intent_keys"] == [
-        "test_quote_scanner|BTCUSDT|long|1767225900600"
-    ]
+    assert len(result["intent_keys"]) == 1
+    assert result["intent_keys"][0].startswith("dec_")
     assert result["evidence_window"]["basis"] == "first_clean_quote"
     assert result["evidence_window"]["start"] == "2026-01-01T00:05:00+00:00"
 
@@ -1211,13 +1209,16 @@ def test_quote_replay_uses_shared_approval_guard(monkeypatch):
             intent={},
             failed_checks=("cost_gate:test",),
             explanation="test reject",
-            intent_key=f"test_quote_scanner|BTCUSDT|{fire.side}|{int(ts.timestamp() * 1000)}",
+            # The approval callback may append risk facts, but it may not mint
+            # or replace the closed-bar decision identity.
+            intent_key="",
         ),
     )
 
     intent = next(row for row in result["records"] if row["kind"] == "shadow_intent")
     assert intent["payload"]["approved"] is False
     assert intent["payload"]["failed_checks"] == ["cost_gate:test"]
+    assert intent["payload"]["intent_key"].startswith("dec_")
     assert result["approval_parity_eligible"] is True
     assert "risk_gateway_not_replayed" not in result["performance_blockers"]
 

@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from vnedge.execution.evidence import ExecutionEvidence
 from vnedge.execution.idempotency import IntentRegistry, mint_client_order_id
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_state import IllegalTransition, ManagedOrder, OrderState, StateEvent
@@ -77,6 +78,11 @@ class OrderManager:
         self._adapter = adapter
         self._registry = IntentRegistry()
         self.orders: dict[str, ManagedOrder] = {}  # by client_order_id
+        # Evidence stays beside the managed order rather than inside the
+        # venue-facing OrderIntent.  Every lifecycle event can therefore
+        # repeat the same immutable decision/snapshot envelope without
+        # exposing strategy provenance to an adapter.
+        self._execution_evidence_by_client_id: dict[str, dict[str, object]] = {}
         # Durable idempotency (L2): the in-memory registry alone can't catch a
         # re-presented intent after a RESTART, so a duplicate would get a fresh
         # client_order_id the venue can't dedupe → double-book window. Replay the
@@ -88,6 +94,12 @@ class OrderManager:
         # new risk while it still exists at the venue.
         self._seed_orders_from_journal()
 
+    @property
+    def journal(self) -> DecisionJournal:
+        """Read-only access for lifecycle telemetry; submission stays here."""
+
+        return self._journal
+
     def _seed_registry_from_journal(self) -> None:
         try:
             for rec in self._journal.read_all():
@@ -96,7 +108,10 @@ class OrderManager:
                 p = rec.get("payload") or {}
                 key, coid = p.get("intent_key"), p.get("client_order_id")
                 if key and coid:
-                    self._registry.register(key, coid)
+                    # Multiple definitive reduce-only attempts may share one
+                    # decision id. Journal order is authoritative; the latest
+                    # durable attempt is the duplicate/recovery target.
+                    self._registry.restore(key, coid)
         except Exception as exc:  # noqa: BLE001 — a replay fault must not break construction
             logger.warning("intent registry journal seed failed: %s", exc)
 
@@ -106,10 +121,10 @@ class OrderManager:
     #: rejected, resolved, cancelled, refused, ...) means the order is known/done,
     #: so paper lanes — which ack synchronously — are never rehydrated.
     _UNRESOLVED_LAST_KINDS = frozenset(
-        {"order_intent", "order_timeout_unknown", "reconciling"}
+        {"order_intent", "order_submitted", "order_timeout_unknown", "reconciling"}
     )
     _ORDER_LIFECYCLE_KINDS = frozenset({
-        "order_intent", "order_acknowledged", "order_ack_race_resolved",
+        "order_intent", "order_submitted", "order_acknowledged", "order_ack_race_resolved",
         "order_timeout_unknown", "order_rejected", "order_refused", "order_cancel",
         "order_fill_sync", "cancel_replace_outcome", "reconciling", "order_resolved",
     })
@@ -131,30 +146,46 @@ class OrderManager:
                 continue
             if kind == "order_intent":
                 intents[coid] = rec["payload"]
+                evidence = rec["payload"].get("execution_evidence")
+                if isinstance(evidence, dict):
+                    self._execution_evidence_by_client_id[str(coid)] = dict(evidence)
             last_kind[coid] = kind
+        recoverable_kinds = self._UNRESOLVED_LAST_KINDS | {"order_rejected"}
         for coid, kind in last_kind.items():
-            if kind not in self._UNRESOLVED_LAST_KINDS or coid in self.orders:
+            if kind not in recoverable_kinds or coid in self.orders:
                 continue
             p = intents.get(coid)
             if not p or "intent" not in p:
                 continue  # can't reconstruct the intent — nothing safe to restore
             try:
-                intent = OrderIntent(**p["intent"])
+                intent = self._intent_from_journal(p["intent"])
             except Exception as exc:  # noqa: BLE001 — quarantine bad replay records
                 logger.warning("skipping malformed replay intent for %s: %s", coid, exc)
                 continue
+            if kind == "order_rejected" and not intent.reduce_only:
+                continue
+            restored_state = (
+                OrderState.REJECTED
+                if kind == "order_rejected"
+                else OrderState.TIMEOUT_UNKNOWN
+            )
             order = ManagedOrder(
-                intent_key=p.get("intent_key", ""), client_order_id=coid,
-                intent=intent, state=OrderState.TIMEOUT_UNKNOWN,
+                intent_key=p.get("intent_key", ""),
+                client_order_id=coid,
+                intent=intent,
+                state=restored_state,
+                path_id=p.get("path_id"),
             )
             order.history.append(StateEvent(
-                datetime.now(UTC), OrderState.TIMEOUT_UNKNOWN,
-                f"rehydrated unresolved from journal on startup (last={kind})",
+                datetime.now(UTC),
+                restored_state,
+                f"rehydrated from journal on startup (last={kind})",
             ))
             self.orders[coid] = order
-            logger.critical(
-                "REHYDRATED unresolved order %s (last=%s) — reconciliation required "
-                "before any new risk", coid, kind)
+            if restored_state is OrderState.TIMEOUT_UNKNOWN:
+                logger.critical(
+                    "REHYDRATED unresolved order %s (last=%s) — reconciliation required "
+                    "before any new risk", coid, kind)
 
     @property
     def has_unresolved_orders(self) -> bool:
@@ -171,6 +202,7 @@ class OrderManager:
         market: MarketState,
         *,
         now: datetime | None = None,
+        evidence: ExecutionEvidence | None = None,
     ) -> RiskDecision:
         """Run an observe-only candidate through the canonical risk gateway.
 
@@ -178,60 +210,167 @@ class OrderManager:
         adapter.  It gives OBSERVE the same risk implementation as SHADOW and
         LIVE while preserving the hard rule that observation cannot submit.
         """
-        return self._gateway.evaluate(intent, account, market, now=now)
+        decision = self._gateway.evaluate(intent, account, market, now=now)
+        if evidence is not None:
+            self._journal.append(
+                "candidate_evaluation",
+                {
+                    **self._evidence_envelope(intent, evidence),
+                    **self._risk_payload(decision),
+                    "performance_eligible": False,
+                },
+            )
+        return decision
+
+    @staticmethod
+    def _risk_payload(decision: RiskDecision) -> dict[str, object]:
+        return {
+            "approved": decision.approved,
+            "failed_checks": list(decision.failed_checks),
+            "passed_checks": list(decision.passed_checks),
+            "warning_checks": list(decision.warning_checks),
+            "explanation": decision.explanation,
+        }
+
+    @staticmethod
+    def _evidence_envelope(
+        intent: OrderIntent,
+        evidence: ExecutionEvidence | None,
+        *,
+        intent_key: str | None = None,
+    ) -> dict[str, object]:
+        key = evidence.decision_id if evidence is not None else str(intent_key or "")
+        payload: dict[str, object] = {
+            "intent_key": key,
+            "decision_id": key,
+            "intent": asdict(intent),
+        }
+        if evidence is not None:
+            payload["path_id"] = evidence.path_id
+            payload["execution_evidence"] = evidence.as_dict()
+        return payload
+
+    def _lifecycle_envelope(self, client_order_id: str | None) -> dict[str, object]:
+        """Return the immutable evidence for a journaled venue attempt."""
+
+        coid = str(client_order_id or "")
+        payload: dict[str, object] = {"client_order_id": coid}
+        evidence = self._execution_evidence_by_client_id.get(coid)
+        if evidence is not None:
+            payload.update(
+                {
+                    "path_id": evidence.get("path_id"),
+                    "decision_id": evidence.get("decision_id"),
+                    "intent_key": evidence.get("decision_id"),
+                    "execution_evidence": dict(evidence),
+                }
+            )
+        return payload
+
+    @staticmethod
+    def _intent_from_journal(payload: dict[str, object]) -> OrderIntent:
+        # Schema-1 rows embedded strategy/evidence fields in the venue intent.
+        # They remain readable, but are never sent back to an adapter.
+        clean = dict(payload)
+        for key in ("strategy_id", "permission_snapshot_id", "permission_snapshot"):
+            clean.pop(key, None)
+        return OrderIntent(**clean)  # type: ignore[arg-type]
 
     async def submit(
         self,
         intent: OrderIntent,
         account: AccountState,
         market: MarketState,
-        intent_key: str,
+        intent_key: str | None = None,
         now: datetime | None = None,
         *,
         replaces: str | None = None,
+        evidence: ExecutionEvidence | None = None,
     ) -> ManagedOrder:
         """Run one intent through the full pipeline. Always returns the
         ManagedOrder — inspect .state and .history for the outcome.
 
         ``replaces`` records cancel/replace lineage (the client_order_id of
         the order this one replaces) in the journaled intent."""
+        if evidence is not None:
+            if intent_key is not None and intent_key != evidence.decision_id:
+                raise ValueError("intent_key must equal evidence.decision_id")
+            decision_id = evidence.decision_id
+        elif intent_key:
+            # Compatibility path for non-kernel maintenance/tests. Such rows
+            # deliberately have no path_id and are not execution evidence.
+            decision_id = intent_key
+        else:
+            raise ValueError("submit requires execution evidence or intent_key")
         order = ManagedOrder(
-            intent_key=intent_key,
-            client_order_id=mint_client_order_id(),
+            intent_key=decision_id,
+            client_order_id=None,
             intent=intent,
             replaces=replaces,
+            path_id=evidence.path_id if evidence is not None else None,
         )
+        retry_of: str | None = None
 
         # --- Duplicate decision guard ---------------------------------------
-        if not self._registry.register(intent_key, order.client_order_id):
-            existing = self._registry.existing_order_id(intent_key)
-            order.transition(OrderState.RISK_REQUESTED, "duplicate check")
-            order.transition(
-                OrderState.RISK_REJECTED,
-                f"duplicate intent — already handled as {existing}",
+        existing = self._registry.existing_order_id(decision_id)
+        if existing is not None:
+            prior = self.orders.get(existing)
+            protective_resubmission = (
+                prior is not None
+                and prior.state is OrderState.REJECTED
+                and prior.intent.reduce_only
+                and intent.reduce_only
+                and prior.intent == intent
             )
-            self._journal.append("duplicate_intent_dropped", {
-                "intent_key": intent_key, "existing_order": existing,
-            })
-            logger.warning("duplicate intent dropped: %s", intent_key)
-            self.orders[order.client_order_id] = order
-            return order
+            explicit_route_replacement = (
+                prior is not None
+                and replaces == existing
+                and prior.state in {OrderState.CANCELLED, OrderState.REJECTED}
+                and prior.intent.symbol == intent.symbol
+                and prior.intent.side == intent.side
+                and evidence is not None
+                and evidence.decision_envelope is not None
+            )
+            if protective_resubmission or explicit_route_replacement:
+                # A definitive venue rejection ends that attempt. Protective
+                # exits may be submitted again; a canceled maker may also be
+                # explicitly replaced by its taker route. Both are new venue
+                # attempts with fresh random ids on the SAME market decision.
+                retry_of = existing
+            else:
+                order.transition(OrderState.RISK_REQUESTED, "duplicate check")
+                order.transition(
+                    OrderState.RISK_REJECTED,
+                    f"duplicate intent — already handled as {existing}",
+                )
+                self._journal.append("duplicate_intent_dropped", {
+                    **self._evidence_envelope(intent, evidence, intent_key=decision_id),
+                    "existing_order": existing,
+                })
+                logger.warning("duplicate intent dropped: %s", decision_id)
+                return order
 
         # --- Exits-only guards (journal health, unresolved orders) ----------
         if not intent.reduce_only:
             if not self._journal.available:
-                return self._refuse(order, "decision journal unavailable — exits only")
+                return self._refuse(
+                    order,
+                    "decision journal unavailable — exits only",
+                    evidence=evidence,
+                )
             if self._journal.recovery_degraded:
                 return self._refuse(
                     order,
                     "decision journal recovery degraded — reconcile venue and "
                     "acknowledge recovery before creating new risk",
+                    evidence=evidence,
                 )
             if self.has_unresolved_orders:
                 return self._refuse(
                     order,
                     "order(s) in TIMEOUT_UNKNOWN/RECONCILING — no new risk "
                     "until reconciliation resolves them",
+                    evidence=evidence,
                 )
 
         # --- Pre-trade risk gateway ------------------------------------------
@@ -240,28 +379,40 @@ class OrderManager:
         # synced time. Defaults to wall clock.
         decision = self._gateway.evaluate(intent, account, market, now=now)
         self._journal.append("risk_decision", {
-            "intent_key": intent_key,
-            "client_order_id": order.client_order_id,
-            "approved": decision.approved,
-            "failed_checks": list(decision.failed_checks),
-            "warning_checks": list(decision.warning_checks),
-            "intent": asdict(intent),
+            **self._evidence_envelope(intent, evidence, intent_key=decision_id),
+            **self._risk_payload(decision),
         })
         if not decision.approved:
             order.transition(OrderState.RISK_REJECTED, decision.explanation)
-            self.orders[order.client_order_id] = order
             return order
         order.transition(OrderState.RISK_APPROVED)
+
+        # The venue idempotency id is random and exists only after risk passes.
+        # Register it once, then journal the exact value before adapter submit.
+        order.client_order_id = mint_client_order_id()
+        if retry_of is None:
+            registered = self._registry.register(decision_id, order.client_order_id)
+        else:
+            registered = self._registry.replace_terminal_attempt(
+                decision_id,
+                previous_client_order_id=retry_of,
+                client_order_id=order.client_order_id,
+            )
+        if not registered:
+            raise RuntimeError("decision id raced after risk approval")
+        if evidence is not None:
+            self._execution_evidence_by_client_id[order.client_order_id] = evidence.as_dict()
 
         # --- Journal the intent BEFORE the venue can know about it ----------
         order.transition(OrderState.ORDER_INTENT_CREATED)
         intent_record = {
-            "intent_key": intent_key,
+            **self._evidence_envelope(intent, evidence, intent_key=decision_id),
             "client_order_id": order.client_order_id,
-            "intent": asdict(intent),
         }
         if replaces is not None:
             intent_record["replaces"] = replaces
+        if retry_of is not None:
+            intent_record["retry_of"] = retry_of
         journaled = self._journal.append("order_intent", intent_record)
         if not journaled and not intent.reduce_only:
             # Journal died mid-pipeline: refuse to create unrecorded risk.
@@ -273,18 +424,26 @@ class OrderManager:
         # --- Submit ------------------------------------------------------------
         order.transition(OrderState.SUBMITTING)
         self.orders[order.client_order_id] = order
+        submitted_record = {
+            **self._evidence_envelope(intent, evidence, intent_key=decision_id),
+            "client_order_id": order.client_order_id,
+        }
+        submitted_journaled = self._journal.append("order_submitted", submitted_record)
+        if not submitted_journaled and not intent.reduce_only:
+            order.transition(OrderState.REJECTED, "journal write failed before adapter submit")
+            return order
         try:
             exchange_id = await self._adapter.submit_order(order)
         except AdapterRejection as exc:
             order.transition(OrderState.REJECTED, f"venue rejected: {exc}")
             self._journal.append("order_rejected", {
-                "client_order_id": order.client_order_id, "reason": str(exc),
+                **self._lifecycle_envelope(order.client_order_id), "reason": str(exc),
             })
             return order
         except AdapterTimeout as exc:
             order.transition(OrderState.TIMEOUT_UNKNOWN, str(exc))
             self._journal.append("order_timeout_unknown", {
-                "client_order_id": order.client_order_id, "detail": str(exc),
+                **self._lifecycle_envelope(order.client_order_id), "detail": str(exc),
             })
             logger.critical(
                 "ORDER %s TIMEOUT_UNKNOWN — blocking new risk until reconciled",
@@ -298,24 +457,31 @@ class OrderManager:
             order.transition(OrderState.ACKNOWLEDGED, f"exchange id {exchange_id}")
         else:
             self._journal.append("order_ack_race_resolved", {
-                "client_order_id": order.client_order_id,
+                **self._lifecycle_envelope(order.client_order_id),
                 "exchange_order_id": exchange_id,
                 "state": order.state.value,
             })
         self._journal.append("order_acknowledged", {
-            "client_order_id": order.client_order_id,
+            **self._lifecycle_envelope(order.client_order_id),
             "exchange_order_id": exchange_id,
         })
         return order
 
-    def _refuse(self, order: ManagedOrder, reason: str) -> ManagedOrder:
+    def _refuse(
+        self,
+        order: ManagedOrder,
+        reason: str,
+        *,
+        evidence: ExecutionEvidence | None = None,
+    ) -> ManagedOrder:
         order.transition(OrderState.RISK_REQUESTED, "pre-gateway guard")
         order.transition(OrderState.RISK_REJECTED, reason)
         self._journal.append("order_refused", {
-            "client_order_id": order.client_order_id, "reason": reason,
+            **self._evidence_envelope(order.intent, evidence, intent_key=order.intent_key),
+            "client_order_id": order.client_order_id,
+            "reason": reason,
         })
         logger.warning("order refused: %s", reason)
-        self.orders[order.client_order_id] = order
         return order
 
     async def emergency_flatten(
@@ -341,7 +507,6 @@ class OrderManager:
                 notional_usd=0.0,
                 leverage=1.0,
                 reduce_only=True,
-                strategy_id="emergency_flatten",
             )
             orders.append(
                 await self.submit(
@@ -352,7 +517,7 @@ class OrderManager:
             )
         self._journal.append("emergency_flatten_finished", {
             "flatten_id": flatten_id,
-            "results": {o.client_order_id: o.state.value for o in orders},
+            "results": {str(o.client_order_id or o.intent_key): o.state.value for o in orders},
         })
         return orders
 
@@ -377,7 +542,7 @@ class OrderManager:
         # fill totals so remaining-quantity math downstream is honest.
         await self._refresh_fill_state(order)
         self._journal.append("order_cancel", {
-            "client_order_id": client_order_id, "venue_state": venue_state,
+            **self._lifecycle_envelope(client_order_id), "venue_state": venue_state,
             "filled_quantity": order.filled_quantity,
             "reason": reason,
         })
@@ -439,7 +604,7 @@ class OrderManager:
             changed = True
         if changed:
             self._journal.append("order_fill_sync", {
-                "client_order_id": client_order_id,
+                **self._lifecycle_envelope(client_order_id),
                 "state": order.state.value,
                 "filled_quantity": order.filled_quantity,
                 "fees_paid": order.fees_paid,
@@ -533,7 +698,6 @@ class OrderManager:
             notional_usd=notional_usd,
             leverage=prior.leverage,
             reduce_only=prior.reduce_only,
-            strategy_id=prior.strategy_id,
             order_type=prior.order_type,
             limit_price=limit_price,
         )
@@ -559,7 +723,7 @@ class OrderManager:
     def begin_reconciliation(self, client_order_id: str) -> None:
         order = self.orders[client_order_id]
         order.transition(OrderState.RECONCILING, "reconciliation started")
-        self._journal.append("reconciling", {"client_order_id": client_order_id})
+        self._journal.append("reconciling", self._lifecycle_envelope(client_order_id))
 
     def resolve_order(
         self, client_order_id: str, resolved_state: OrderState, note: str
@@ -569,7 +733,7 @@ class OrderManager:
         order = self.orders[client_order_id]
         order.transition(resolved_state, f"reconciled: {note}")
         self._journal.append("order_resolved", {
-            "client_order_id": client_order_id,
+            **self._lifecycle_envelope(client_order_id),
             "state": resolved_state.value,
             "note": note,
         })
@@ -612,7 +776,7 @@ class OrderManager:
 
         if order.state is state:
             self._journal.append("private_order_update", {
-                "client_order_id": client_order_id,
+                **self._lifecycle_envelope(client_order_id),
                 "state": state.value,
                 "note": note,
                 "no_state_change": True,
@@ -621,7 +785,7 @@ class OrderManager:
 
         if order.is_terminal:
             self._journal.append("private_order_terminal_conflict", {
-                "client_order_id": client_order_id,
+                **self._lifecycle_envelope(client_order_id),
                 "current_state": order.state.value,
                 "venue_state": state.value,
                 "note": note,
@@ -636,7 +800,7 @@ class OrderManager:
             self._transition_from_private_stream(order, state, note)
         except IllegalTransition as exc:
             self._journal.append("private_order_transition_error", {
-                "client_order_id": client_order_id,
+                **self._lifecycle_envelope(client_order_id),
                 "current_state": order.state.value,
                 "venue_state": state.value,
                 "note": note,
@@ -646,7 +810,7 @@ class OrderManager:
             return False
 
         self._journal.append("private_order_update", {
-            "client_order_id": client_order_id,
+            **self._lifecycle_envelope(client_order_id),
             "exchange_order_id": order.exchange_order_id,
             "state": order.state.value,
             "filled_quantity": order.filled_quantity,

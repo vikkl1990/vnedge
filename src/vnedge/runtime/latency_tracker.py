@@ -14,6 +14,12 @@ The clocks are deliberately separate:
 * ``close_to_arm_ms`` — one correlated sample from canonical close boundary to
   the arm state update. This is measured directly; component percentiles are
   never added together.
+* ``kernel_submit_ms`` — risk evaluation, durable journal, and adapter return
+  for one kernel attempt.
+* ``adapter_ack_ms`` — the adapter boundary only: ``SUBMITTING`` to a venue
+  ACK, definitive reject, or ``TIMEOUT_UNKNOWN``.
+* ``quote_age_at_accept_ms`` — wall-clock age of the exact BBO event when a
+  quote-held candidate asks for approval.
 * ``clock_skew_ms`` — magnitude by which an exchange timestamp is ahead of the
   receiving UTC clock. A future event is a data-quality observation, not a
   negative/fast latency sample.
@@ -44,6 +50,9 @@ ACCEPTANCE_HOLD_MS = "acceptance_hold_ms"
 GATE_EVAL_MS = "gate_eval_ms"
 SHADOW_JOURNAL_MS = "shadow_journal_ms"
 TICK_STOP_MS = "tick_stop_ms"
+KERNEL_SUBMIT_MS = "kernel_submit_ms"
+ADAPTER_ACK_MS = "adapter_ack_ms"
+QUOTE_AGE_AT_ACCEPT_MS = "quote_age_at_accept_ms"
 TRADE_INGEST_MS = "trade_ingest_ms"
 BASE_CLOSE_PUBLISH_MS = "base_close_publish_ms"
 AGGREGATE_PUBLISH_MS = "aggregate_publish_ms"

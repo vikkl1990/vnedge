@@ -21,6 +21,24 @@ from vnedge.strategy.realtime_scanners import (
 from vnedge.strategy.squeeze_expansion_breakout_v3 import SqueezeExpansionV3Params
 
 
+def _canonical_h4_context(timestamp: str = "2026-08-24T08:00:00Z") -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp(timestamp),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
+            }
+        ]
+    )
+
+
 def test_realtime_scanner_ids_can_never_emit_bar_close_entries() -> None:
     frame = pd.DataFrame({"close": [100.0]})
     for strategy in (
@@ -216,7 +234,14 @@ def test_bos_v2_uses_close_time_and_keeps_one_episode_for_the_same_swing(monkeyp
         rows.append(
             {
                 "timestamp": pd.Timestamp(f"2026-08-24T11:{minute:02d}:00Z"),
+                "open": 99.5,
+                "high": 101.0,
+                "low": 99.0,
                 "close": 100.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
                 "bos15_structure_ready": True,
                 "bos15_quality_ok": 1.0,
                 "bos15_session_ok": 0.0,
@@ -240,6 +265,7 @@ def test_bos_v2_uses_close_time_and_keeps_one_episode_for_the_same_swing(monkeyp
     monkeypatch.setattr(StructureBosRealtimeV1, "prepare", lambda self, candles: base.copy())
     strategy = StructureBosRealtimeV2()
     strategy.warmup_bars = 0
+    strategy.bind_canonical_context("4h", _canonical_h4_context())
 
     prepared = strategy.prepare(pd.DataFrame())
     first = strategy.realtime_arm(prepared, 0)
@@ -345,11 +371,19 @@ def test_quote_engine_without_a_setup_reports_generic_arm_state() -> None:
 def test_htf_continuation_arm_uses_wide_structure_floor() -> None:
     strategy = HtfStructureContinuationRealtimeV1()
     strategy.warmup_bars = 0
+    strategy.bind_canonical_context("4h", _canonical_h4_context())
     frame = pd.DataFrame(
         [
             {
                 "timestamp": pd.Timestamp("2026-08-24T14:15:00Z"),
+                "open": 99.5,
+                "high": 101.0,
+                "low": 99.0,
                 "close": 100.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
                 "rt_arm_ready": 1.0,
                 "rt_long_level": 101.0,
                 "rt_short_level": 99.0,
@@ -369,6 +403,51 @@ def test_htf_continuation_arm_uses_wide_structure_floor() -> None:
     assert arm.allow_short is False
     assert arm.structural_stop_mode == "structure_floor"
     assert arm.expires_after_bars == 2
+    assert arm.evidence is not None
+    assert arm.evidence.context_bars[0].open_time == pd.Timestamp(
+        "2026-08-24T08:00:00Z"
+    )
+
+
+def test_htf_continuation_rejects_arm_without_bound_4h_context() -> None:
+    strategy = HtfStructureContinuationRealtimeV1()
+    strategy.warmup_bars = 0
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-08-24T14:15:00Z"),
+                "open": 99.5,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
+                "rt_arm_ready": 1.0,
+                "rt_long_level": 101.0,
+                "rt_short_level": 99.0,
+                "rt_atr": 1.0,
+                "rt_allow_long": 1.0,
+                "rt_allow_short": 0.0,
+                "rt_long_structural_stop": 99.5,
+                "rt_short_structural_stop": 101.5,
+                "hsc_htf_aligned_long": 1.0,
+                "hsc_htf_aligned_short": 0.0,
+                "hsc_pullback_long": 1.0,
+                "hsc_volume_ratio": 1.0,
+                "hsc_body_bps": 20.0,
+                "hsc_projected_net_long_bps": 20.0,
+                "bos15_htf_structure_trend": "up",
+                "bos15_structure_trend": "up",
+            }
+        ]
+    )
+
+    assert strategy.realtime_arm(frame, 0) is None
+    diagnostics = strategy.evaluation_diagnostics(frame, 0)
+    assert diagnostics["eligible"] is False
+    assert diagnostics["primary_failed_gate"] == "htf_context_missing"
 
 
 def test_htf_continuation_retains_bound_canonical_context() -> None:

@@ -1,8 +1,8 @@
-"""OHLC-only weekly-regime sibling for official Delta candle history.
+"""OHLC-only weekly-regime sibling on canonical Delta candles.
 
 V1 remains frozen on exact trade-lake weekly VWAP.  V2 deliberately changes
-the weekly classifier under a new strategy ID so official candles without
-quote volume can produce causal context without an HLC3 substitute.
+the weekly classifier under a new strategy ID so canonical candles without
+weekly VWAP can produce causal context without an HLC3 substitute.
 
 MarketRegime owns the weekly/daily/4h permission.  Entry timing uses the
 closed 1h structure derived from complete 15m children plus a closed 15m
@@ -36,14 +36,14 @@ STRATEGY_SPEC = MappingProxyType(
         "entry_clock": "next_15m_open",
         "weekly_classifier": "range_structure_v1",
         "vwap_source": None,
-        "structure_source": "official_ohlc_price_only_v1",
+        "structure_source": "canonical_ohlc_price_only_v1",
         "context": "weekly/daily/4h permission plus closed 1h/15m reclaim",
     }
 )
 
 
 class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
-    """Official-OHLC regime permission with one non-duplicated telescope."""
+    """Canonical-OHLC regime permission with one non-duplicated telescope."""
 
     strategy_id = STRATEGY_ID
     market_regime_config = replace(
@@ -55,7 +55,7 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         self,
         funding: pd.DataFrame | None,
     ) -> StructureBos15mTriggerV3:
-        """Use causal OHLC structure when official candles lack trade fields.
+        """Use causal OHLC structure when canonical rows lack optional fields.
 
         This behavior is isolated to V2.  It does not synthesize quote volume
         or AVWAP: those measurements remain unavailable until the Delta trade
@@ -68,13 +68,12 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         out = super().prepare(candles)
-        out["mreg_structure_source"] = "official_ohlc_price_only_v1"
+        out["mreg_structure_source"] = "canonical_ohlc_price_only_v1"
         out["mreg_avwap_source"] = "unavailable"
         p = self.params
         ready = out["bos15_structure_ready"].fillna(False).astype(bool)
         quality = out["bos15_quality_ok"].eq(1)
         trend = out["bos15_structure_trend"].astype(str)
-        bias = out["bos15_dual_avwap_bias"].astype(str)
         meaningful = (
             pd.to_numeric(out["hsc_volume_ratio"], errors="coerce").ge(p.volume_mult)
             & pd.to_numeric(out["hsc_body_bps"], errors="coerce").ge(
@@ -85,7 +84,6 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
             ready
             & quality
             & trend.eq("up")
-            & ~bias.eq("strong_short")
             & meaningful
             & out["hsc_pullback_long"].eq(1)
             & pd.to_numeric(
@@ -97,7 +95,6 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
             ready
             & quality
             & trend.eq("down")
-            & ~bias.eq("strong_long")
             & meaningful
             & out["hsc_pullback_short"].eq(1)
             & pd.to_numeric(
@@ -132,7 +129,9 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
             and float(row.get("hsc_body_bps", 0)) >= self.params.min_reclaim_body_bps
         )
         pullback = flag("hsc_pullback_long") or flag("hsc_pullback_short")
+        missing_context = self._missing_permission_context(row)
         checks = (
+            (not missing_context, "htf_context_missing"),
             (flag("mreg_ready"), "market_regime_not_ready"),
             (str(row.get("mreg_state")) == "continuation", "regime_flat"),
             (regime_side, "family_mismatch"),
@@ -147,13 +146,14 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         features = dict(diagnostics.get("features", {}))
         features.update(
             {
-                "structure_source": "official_ohlc_price_only_v1",
+                "structure_source": "canonical_ohlc_price_only_v1",
                 "avwap_source": "unavailable",
                 "entry_structure": "closed_1h_structure_plus_15m_reclaim",
+                "htf_context_missing": list(missing_context),
             }
         )
         diagnostics["features"] = features
-        diagnostics["eligible"] = side_ready
+        diagnostics["eligible"] = side_ready and not missing_context
         diagnostics["all_failed_gates"] = failures
         diagnostics["primary_failed_gate"] = failures[0] if failures else None
         return diagnostics

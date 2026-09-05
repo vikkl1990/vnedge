@@ -3,16 +3,35 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from vnedge.runtime.latency_thresholds import decision_compute_limits
+from vnedge.runtime.latency_thresholds import (
+    QUOTE_AGE_AT_ACCEPT_HARD_MS,
+    QUOTE_AGE_AT_ACCEPT_SOFT_MS,
+    decision_compute_limits,
+)
 from vnedge.runtime.latency_tracker import (
+    ADAPTER_ACK_MS,
     BAR_CLOSE_PROCESSING_MS,
     BAR_CLOSE_RECEIPT_MS,
     CANONICAL_WAIT_MS,
     CLOCK_SKEW_MS,
     INGEST_LAG_MS,
+    KERNEL_SUBMIT_MS,
+    QUOTE_AGE_AT_ACCEPT_MS,
     LatencyTracker,
     timeframe_to_seconds,
 )
+
+
+def test_execution_and_quote_freshness_metrics_have_distinct_contracts():
+    tracker = LatencyTracker()
+    tracker.record(KERNEL_SUBMIT_MS, 12.0)
+    tracker.record(ADAPTER_ACK_MS, 8.0)
+    tracker.record(QUOTE_AGE_AT_ACCEPT_MS, 125.0)
+
+    assert tracker.stats(KERNEL_SUBMIT_MS)["last"] == 12.0
+    assert tracker.stats(ADAPTER_ACK_MS)["last"] == 8.0
+    assert tracker.stats(QUOTE_AGE_AT_ACCEPT_MS)["last"] == 125.0
+    assert QUOTE_AGE_AT_ACCEPT_SOFT_MS < QUOTE_AGE_AT_ACCEPT_HARD_MS
 
 
 def test_decision_compute_limits_are_strict_by_default_and_scale_explicitly():

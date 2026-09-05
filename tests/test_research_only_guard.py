@@ -52,6 +52,7 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "htf_regime_continuation_15m_v1",
         "htf_regime_continuation_15m_v2",
         "structure_bounce_route_probe_v2",
+        "macd_hidden_div_15m_v1",
     }
     for sid in RESEARCH_ONLY:
         assert not is_capital_eligible(sid)

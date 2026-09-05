@@ -60,6 +60,7 @@ from vnedge.runtime.canonical_candle_router import (
     warm_subscription_from_store,
 )
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID
 from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
@@ -366,6 +367,17 @@ class MultiLaneProvider:
                 "mode": self._lanes[lid].get("mode", ""),
                 "strategy_id": self._lanes[lid].get("strategy_id", "")
                 or (self._specs_by_id[lid].strategy_id if lid in self._specs_by_id else ""),
+                "path_id": self._lanes[lid].get("session", {}).get("path_id"),
+                "permission_snapshot_id": self._lanes[lid]
+                .get("session", {})
+                .get("permission_snapshot_id"),
+                "candle_source": self._lanes[lid]
+                .get("session", {})
+                .get("candle_source"),
+                "decision_transport": self._lanes[lid]
+                .get("session", {})
+                .get("decision_transport"),
+                "drought": self._lanes[lid].get("session", {}).get("drought"),
                 # per-lane last price + funding so the dashboard watchlist can
                 # show real per-symbol quotes (one live price per lane symbol)
                 "price": self._lanes[lid].get("price"),
@@ -401,6 +413,9 @@ class MultiLaneProvider:
                     "shadow_rejected": self._lanes[lid]
                     .get("session", {})
                     .get("shadow_rejected", 0),
+                    "rejected_htf_context_missing": self._lanes[lid]
+                    .get("session", {})
+                    .get("rejected_htf_context_missing", 0),
                     "risk_rejects": self._lanes[lid].get("session", {}).get("risk_rejects", 0),
                     "sizing_skips": self._lanes[lid].get("session", {}).get("sizing_skips", 0),
                     "submitted": self._lanes[lid].get("session", {}).get("orders_submitted", 0),
@@ -1120,12 +1135,12 @@ def _overlay_canonical_history(
     return out.reset_index().sort_values("timestamp").reset_index(drop=True)
 
 
-_VALIDATED_EXCHANGE_OHLCV_STRATEGIES = frozenset({HtfRegimeContinuation15mV2.strategy_id})
+_VALIDATED_EXCHANGE_OHLCV_STRATEGIES: frozenset[str] = frozenset()
 _CONTEXT_WARMUP_BARS = 800
 
 
 def _allows_validated_exchange_ohlcv(spec: LaneSpec) -> bool:
-    """Whether this exact registered ID may arm from official price-only OHLC."""
+    """Whether an ID may arm from venue OHLCV (none in the runtime roster)."""
     return spec.strategy_id in _VALIDATED_EXCHANGE_OHLCV_STRATEGIES
 
 
@@ -1389,6 +1404,7 @@ async def build_lane(
     canonical_router: CanonicalCandleRouter | None = None,
     canonical_router_exchanges: frozenset[str] = frozenset(),
     canonical_arm_health: Callable[[], str | None] | None = None,
+    canonical_router_authoritative: bool = False,
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     # (A) Bars-based warmup: the operator baseline or the strategy's causal
@@ -1640,7 +1656,10 @@ async def build_lane(
                     opened + pd.Timedelta(context_timeframe)
                 ).to_pydatetime()
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
-    journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
+    journal = DecisionJournal(
+        journal_dir / f"{spec.lane_id}.journal.jsonl",
+        path_id=KERNEL_PATH_ID,
+    )
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange))
@@ -1666,6 +1685,7 @@ async def build_lane(
         quote_evidence=quote_evidence,
         canonical_arm_health=canonical_arm_health,
         canonical_context_watermarks=context_watermarks,
+        canonical_router_authoritative=canonical_router_authoritative,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",
@@ -1719,6 +1739,7 @@ class MultiLaneShadowRunner:
         canonical_router: CanonicalCandleRouter | None = None,
         canonical_producers: tuple[CanonicalProducer, ...] = (),
         canonical_router_exchanges: frozenset[str] = frozenset(),
+        canonical_router_authoritative: bool = False,
     ) -> None:
         self.specs = specs
         self.journal_dir = journal_dir
@@ -1726,25 +1747,11 @@ class MultiLaneShadowRunner:
         self.canonical_router = canonical_router
         self.canonical_producers = canonical_producers
         self.canonical_router_exchanges = canonical_router_exchanges
-        observers = [
-            spec
-            for spec in specs
-            if spec.mode is RunnerMode.SHADOW and spec.strategy_id != "measurement_only_v1"
-        ]
-        shared_equity = min(
-            (Decimal(str(spec.starting_equity)) for spec in observers),
-            default=Decimal(1000),
-        )
-        shared_daily_loss = min(
-            (Decimal(str(spec.daily_loss_usd)) for spec in observers),
-            default=Decimal(20),
-        )
-        self.shadow_portfolio = ShadowPortfolioGate(
-            journal_dir=journal_dir,
-            lane_ids=(spec.lane_id for spec in observers),
-            equity_usd=shared_equity,
-            daily_loss_limit_usd=shared_daily_loss,
-        )
+        self.canonical_router_authoritative = canonical_router_authoritative
+        # Runtime booking is owned by ExecutionKernel/OrderManager only.  The
+        # legacy ShadowPortfolioGate scans shadow_intent/shadow_outcome rows
+        # and would therefore create a second, eventually stale book.
+        self.shadow_portfolio: ShadowPortfolioGate | None = None
 
     def _canonical_arm_health(self, spec: LaneSpec) -> Callable[[], str | None] | None:
         """Bind an integrated producer's durability probe to one lane.
@@ -1798,6 +1805,10 @@ class MultiLaneShadowRunner:
                         self.canonical_router,
                         self.canonical_router_exchanges,
                         self._canonical_arm_health(spec),
+                        (
+                            self.canonical_router_authoritative
+                            and spec.exchange in self.canonical_router_exchanges
+                        ),
                     ),
                     retries=_LANE_BUILD_RETRIES,
                     backoff_s=_LANE_BUILD_BACKOFF_S,

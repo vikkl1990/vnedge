@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import time
@@ -39,11 +40,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
-
 from vnedge.config.risk_config import RiskConfig
 from vnedge.config.settings import Settings
-from vnedge.execution.idempotency import make_intent_key
+from vnedge.execution.evidence import DecisionEnvelope, ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState  # noqa: F401
@@ -54,6 +53,13 @@ from vnedge.risk.risk_manager import (
     OrderIntent,
     PreTradeRiskGateway,
 )
+from vnedge.runtime.execution_contract import (
+    AdapterKind,
+    DataClock,
+    ExecutionContext,
+    ExecutionStage,
+)
+from vnedge.runtime.execution_kernel import build_kernel
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
 
 #: Minimal synthetic market state for the drill: it validates the GATEWAY PATH
@@ -110,6 +116,7 @@ async def run_execution_drill(
     *,
     adapter_factory=None,
     journal: DecisionJournal | None = None,
+    decision_envelope: DecisionEnvelope | None = None,
 ) -> DrillReport:
     report = DrillReport(exchange=config.exchange_id, symbol=config.symbol)
     journal = journal or DecisionJournal(
@@ -143,6 +150,38 @@ async def run_execution_drill(
         )
         journal.append("execution_drill", {"report": _to_dict(report)})
         return report
+
+    # A manual live drill is still a risk-increasing venue attempt. It must be
+    # authorized by a real closed-bar ARM exported from the decision path; the
+    # drill may not fabricate a candle or derive an id from wall-clock time.
+    if decision_envelope is None:
+        report.add(
+            "decision_envelope",
+            False,
+            "a validated closed-bar ARM envelope is required; export one from "
+            "the decision journal and pass --decision-envelope",
+        )
+        journal.append("execution_drill", {"report": _to_dict(report)})
+        return report
+    if (
+        decision_envelope.strategy_id != "execution_drill_v1"
+        or decision_envelope.symbol != config.symbol
+        or decision_envelope.side != "long"
+        or decision_envelope.entry_clock != "manual_drill"
+    ):
+        report.add(
+            "decision_envelope",
+            False,
+            "envelope must bind execution_drill_v1, configured symbol, long side, "
+            "and entry_clock=manual_drill",
+        )
+        journal.append("execution_drill", {"report": _to_dict(report)})
+        return report
+    report.add(
+        "decision_envelope",
+        True,
+        f"decision_id={decision_envelope.decision_id}",
+    )
 
     # --- Notional cap: code constant wins over any configuration ---
     notional = min(config.order_notional_usd, _HARD_MAX_DRILL_NOTIONAL)
@@ -194,7 +233,7 @@ async def run_execution_drill(
         intent = OrderIntent(
             symbol=config.symbol, side="long", quantity=quantity,
             notional_usd=quantity * limit_price, leverage=1.0,
-            reduce_only=False, strategy_id="execution_drill",
+            reduce_only=False,
             order_type="limit", limit_price=limit_price,
         )
         # Route the drill's order through the SAME path production uses:
@@ -205,6 +244,11 @@ async def run_execution_drill(
         now = datetime.now(UTC)
         gateway = PreTradeRiskGateway(RiskConfig(), KillSwitch(kill_file=Path("KILL")))
         om = OrderManager(gateway, journal, adapter)
+        kernel = build_kernel(
+            ExecutionContext(DataClock.LIVE, ExecutionStage.LIVE_SMALL),
+            om,
+            AdapterKind.LIVE,
+        )
         account = AccountState(
             equity_usd=equity, daily_pnl_usd=0.0, peak_equity_usd=equity,
             open_positions=0,
@@ -214,8 +258,8 @@ async def run_execution_drill(
             estimated_slippage_bps=_DRILL_SLIPPAGE_BPS, funding_rate=0.0,
             exchange_healthy=True,
         )
-        key = make_intent_key("execution_drill", config.symbol, "long", pd.Timestamp(now))
-        order = await om.submit(intent, account, market, key, now=now)
+        evidence = ExecutionEvidence.from_decision(decision_envelope)
+        order = await kernel.submit(intent, account, market, evidence=evidence, now=now)
         if order.state is OrderState.RISK_REJECTED:
             report.add(
                 "gateway_approved", False,
@@ -281,6 +325,12 @@ def main(argv=None) -> int:
     p.add_argument("--symbol", default="DOGE/USDT:USDT")
     p.add_argument("--notional", type=float, default=_DEFAULT_NOTIONAL,
                    help=f"order notional USD (hard cap {_HARD_MAX_DRILL_NOTIONAL})")
+    p.add_argument(
+        "--decision-envelope",
+        type=Path,
+        required=True,
+        help="JSON ARM envelope exported from the closed-bar decision journal",
+    )
     args = p.parse_args(argv)
 
     settings = Settings()
@@ -288,7 +338,18 @@ def main(argv=None) -> int:
         exchange_id=args.exchange, symbol=args.symbol,
         order_notional_usd=args.notional,
     )
-    report = asyncio.run(run_execution_drill(settings, config))
+    try:
+        envelope_payload = json.loads(args.decision_envelope.read_text())
+        decision_envelope = DecisionEnvelope.from_dict(envelope_payload)
+    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        p.error(f"invalid --decision-envelope: {exc}")
+    report = asyncio.run(
+        run_execution_drill(
+            settings,
+            config,
+            decision_envelope=decision_envelope,
+        )
+    )
     print()
     print(f"=== execution drill {report.exchange} {report.symbol} ===")
     for s in report.steps:

@@ -758,7 +758,14 @@ def create_app(
                 {"status": "not_ready", "reasons": sorted(set(reasons))},
                 status_code=503,
             )
-        return JSONResponse({"status": "ready", "reasons": []})
+        return JSONResponse(
+            {
+                "status": "ready",
+                "scope": "service_workflow_only",
+                "can_trade": False,
+                "reasons": [],
+            }
+        )
 
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.

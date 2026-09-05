@@ -601,8 +601,10 @@ def build_session(tmp_path, feed, *, mode=RunnerMode.SHADOW, hist=None, provider
     )
 
 
-async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
-    # bar 5 opens one virtual position; bar 6 crashes through its 95 stop.
+async def test_shadow_session_books_entries_and_exits_through_kernel_only(tmp_path):
+    # bar 5 opens through the simulated kernel; bar 6 crosses the stop and the
+    # reduce-only exit must use that same order path. The retired outcome
+    # tracker is not allowed to book a parallel virtual trade.
     rows = [
         [BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0],
         [BASE + 6 * MIN, 100.0, 100.5, 94.0, 96.0, 5.0],
@@ -611,33 +613,16 @@ async def test_shadow_session_resolves_intents_into_virtual_outcomes(tmp_path):
     session = build_session(tmp_path, FakeFeed(rows), provider=provider)
     await session.run(max_bars=2)
 
-    intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    # Seed history never creates an intent and the unresolved bar-5 position
-    # reserves the shadow purse while bar 6 is evaluated.
-    assert len(intents) == 1
-    for record in intents:
-        payload = record["payload"]
-        assert {"stop_price", "take_profit_price", "bar_ts"} <= payload.keys()
-    # The bar-5 intent fired off a 100.0 close: stop 95, target 110.
-    assert intents[0]["payload"]["stop_price"] == pytest.approx(95.0)
-    assert intents[0]["payload"]["take_profit_price"] == pytest.approx(110.0)
-
-    outcomes = [r for r in session.journal.read_all() if r["kind"] == "shadow_outcome"]
-    assert len(outcomes) == 1
-    assert all(o["payload"]["resolution"] == "stop" for o in outcomes)
-    stats = session.shadow_outcomes.stats()
-    assert stats["virtual_trades"] == 1 and stats["wins"] == 0
-    assert stats["net_usd"] < 0
-    assert stats["status"] == "SHADOW_PROBATION"
-    assert stats["trade_compatible"] is False
-    assert stats["open_intents"] == 0
-    # surfaced to the dashboard through session_stats
-    assert provider.snapshots[-1]["session"]["shadow_perf"] == stats
-    events = [e["event"] for e in session.trade_log]
-    assert events.count("shadow_outcome") == 1
-    # SHADOW returns before OrderManager.submit: no broker order and no fill.
-    assert session.om.orders == {}
-    assert session.exchange.get_fills() == []
+    records = session.journal.read_all()
+    assert not [r for r in records if r["kind"] in {"shadow_intent", "shadow_outcome"}]
+    intents = [r for r in records if r["kind"] == "order_intent"]
+    assert intents
+    assert all(r["payload"]["path_id"] == "kernel_v1" for r in intents)
+    assert any(r["payload"]["intent"]["reduce_only"] for r in intents)
+    assert session.shadow_outcomes is None
+    assert session.om.orders
+    assert session.exchange.get_fills()
+    assert provider.snapshots[-1]["session"]["shadow_perf"] is None
 
 
 async def test_kill_file_rejects_shadow_intent_and_tracks_no_virtual_trade(tmp_path):
@@ -649,46 +634,34 @@ async def test_kill_file_rejects_shadow_intent_and_tracks_no_virtual_trade(tmp_p
 
     await session.run(max_bars=1)
 
-    intents = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert intents
-    assert all(record["payload"]["approved"] is False for record in intents)
+    records = session.journal.read_all()
+    assert not [r for r in records if r["kind"] == "shadow_intent"]
+    decisions = [r for r in records if r["kind"] == "risk_decision"]
+    assert decisions
+    assert all(record["payload"]["approved"] is False for record in decisions)
     assert all(
         any("kill_switch" in reason for reason in record["payload"]["failed_checks"])
-        for record in intents
+        for record in decisions
     )
-    assert session.shadow_outcomes.stats()["pending_shadow_intents"] == 0
+    assert session.shadow_outcomes is None
     assert session.last_reject_reason is not None
     assert "kill_switch" in session.last_reject_reason
+    # A failed risk decision is evidence, not a venue-facing ManagedOrder.
     assert session.om.orders == {}
+    assert not [r for r in records if r["kind"] == "order_intent"]
     assert session.exchange.get_fills() == []
 
 
-async def test_restart_replays_history_and_never_double_resolves(tmp_path):
-    # Session 1: only the forward live bar may create an intent.
+async def test_restart_never_restores_the_retired_shadow_outcome_path(tmp_path):
+    # Session 1 journals only kernel orders.
     session1 = build_session(
         tmp_path, FakeFeed([[BASE + 5 * MIN, 100.0, 100.5, 99.5, 100.0, 5.0]])
     )
     await session1.run(max_bars=1)
-    stats = session1.shadow_outcomes.stats()
-    pending = stats.pop("pending_intents")
-    assert stats == {
-        "virtual_trades": 0, "wins": 0, "losses": 0, "net_usd": 0.0,
-        "funding_usd": 0.0, "funding_complete": True,
-        "profit_factor": None, "open_intents": 1,
-        "pending_shadow_intents": 1,
-        "shadow_outcomes_recent": [],
-        "virtual_net_usd": 0.0, "bars_since_signal": 0,
-        "resolutions": {"stop": 0, "target": 0, "timeout": 0},
-        "status": "OBSERVE", "trade_compatible": True,
-        "exit_semantics": "single_exit_parity",
-        "route": "taker", "net_taker_usd": 0.0, "maker_unfilled": 0,
-    }
-    assert len(pending) == 1
-    assert pending[0]["side"] == "long"
-    assert pending[0]["entry_price"] == pytest.approx(100.01)
-    assert pending[0]["stop_price"] == pytest.approx(95.0)
-    assert pending[0]["take_profit_price"] == pytest.approx(110.0)
-    assert pending[0]["decision_bar_ts"] == ts(5).isoformat()
+    assert session1.shadow_outcomes is None
+    first_records = session1.journal.read_all()
+    assert not [r for r in first_records if r["kind"].startswith("shadow_")]
+    assert [r for r in first_records if r["kind"] == "order_intent"]
 
     # restart: seeded history now includes bar 6, which broke the stops while
     # the session was down; a quiet live bar 7 follows
@@ -701,9 +674,10 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
         hist=hist,
     )
     await session2.run(max_bars=1)
-    outcomes = [r for r in session2.journal.read_all() if r["kind"] == "shadow_outcome"]
-    assert len(outcomes) == 1  # stale intent resolved from seeded history
-    assert all(o["payload"]["resolution"] == "stop" for o in outcomes)
+    assert session2.shadow_outcomes is None
+    assert not [
+        r for r in session2.journal.read_all() if r["kind"] in {"shadow_intent", "shadow_outcome"}
+    ]
 
     # third start: nothing pending from those keys, nothing re-resolved
     session3 = build_session(
@@ -713,10 +687,10 @@ async def test_restart_replays_history_and_never_double_resolves(tmp_path):
         ),
     )
     await session3.run(max_bars=1)
-    outcomes = [r for r in session3.journal.read_all() if r["kind"] == "shadow_outcome"]
-    stopped_keys = [o["payload"]["intent_key"] for o in outcomes]
-    assert len(stopped_keys) == len(set(stopped_keys))  # no key resolved twice
-    assert session3.shadow_outcomes.stats()["virtual_trades"] == len(stopped_keys)
+    assert session3.shadow_outcomes is None
+    assert not [
+        r for r in session3.journal.read_all() if r["kind"] in {"shadow_intent", "shadow_outcome"}
+    ]
 
 
 async def test_paper_mode_has_no_virtual_outcome_tracking(tmp_path):

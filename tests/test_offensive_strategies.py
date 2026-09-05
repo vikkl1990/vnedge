@@ -244,4 +244,5 @@ def test_registry_has_only_measurement_and_remaining_core_lanes():
         "htf_regime_continuation_15m_v1",
         "htf_regime_continuation_15m_v2",
         "structure_bounce_route_probe_v2",
+        "macd_hidden_div_15m_v1",
     }

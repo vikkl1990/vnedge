@@ -444,6 +444,33 @@ export interface CorrectionLane {
   observation_class: "shadow_observe" | "measurement" | null;
   exchange: string;
   candle_source: string;
+  decision_transport: string;
+  drought: {
+    drought_class: "ops_silent" | "identity_bug" | "quote_or_cost_wait" | "playbook_wait" | "healthy_wait";
+    last_decision_open: string | null;
+    last_decision_close: string | null;
+    last_eval_at: string | null;
+    last_setup_at: string | null;
+    last_evidence_at: string | null;
+    last_accept_at: string | null;
+    eval_age_s: number | null;
+    setup_age_s: number | null;
+    evidence_age_s: number | null;
+    accept_age_s: number | null;
+    last_decision_id: string | null;
+    last_primary_failed_gate: string | null;
+    primary_gate_counts_24h: Record<string, number>;
+    all_failed_gate_counts_24h: Record<string, number>;
+    skip_runtime: string | null;
+    candle_source: string;
+    decision_transport: string;
+    mreg_ready: boolean | null;
+    structure_ready: boolean | null;
+    quotes_armed: boolean | null;
+    path_id: string;
+  } | null;
+  path_id: string;
+  permission_snapshot_id: string | null;
   symbol: string;
   timeframe: string;
   capital: boolean;
@@ -462,6 +489,10 @@ export interface CorrectionLane {
   gate_eval_ms: number | null;
   shadow_journal_ms: number | null;
   tick_stop_ms: number | null;
+  kernel_submit_ms: number | null;
+  adapter_ack_ms: number | null;
+  quote_age_at_accept_ms: number | null;
+  quote_age_at_accept_hard_ms: number;
   latency_samples: { bar_close: number; canonical_wait: number; decision: number; required: number };
   latency_recovery: Record<string, LatencyRecoveryState>;
   arm_skips: number;
@@ -486,10 +517,14 @@ export interface CorrectionLane {
   runtime_readiness: {
     data_ready: boolean;
     decision_ready: boolean;
+    parity_ready: boolean;
     execution_ready: boolean;
+    live_ready: boolean;
     data_blockers: string[];
     decision_blockers: string[];
+    parity_blockers: string[];
     execution_blockers: string[];
+    live_blockers: string[];
   } | null;
   equity_usd: number | null;
   realized_pnl_usd: number | null;
@@ -631,6 +666,9 @@ export interface PatternAtlasLane {
     decision_lag_ms: number | null;
     quote_ingest_ms: number | null;
     acceptance_hold_ms: number | null;
+    quote_age_at_accept_ms: number | null;
+    kernel_submit_ms: number | null;
+    adapter_ack_ms: number | null;
   };
   quotes: {
     source: string | null;
@@ -848,6 +886,14 @@ export interface JournalRow {
   fees_usd?: number;
   exit_reason?: string;
   resolution?: string;
+  path_id?: string;
+  decision_id?: string | null;
+  permission_snapshot_id?: string | null;
+  candle_source?: string | null;
+  entry_clock?: string | null;
+  execution_contract_id?: string | null;
+  execution_envelope_complete?: boolean;
+  performance_eligible?: boolean;
   [k: string]: unknown;
 }
 
@@ -886,6 +932,18 @@ export interface JournalPayload {
     closed_trades: number;
     actual_realized_pnl_usd: number;
     actual_closed_net_usd: number;
+    headline_actual_closed_net_usd: number | null;
+    mixed_entry_clock_headline: boolean;
+    performance_entry_clocks: string[];
+    execution_contract_pnl: Record<string, {
+      path_id?: string | null;
+      candle_source?: string | null;
+      entry_clock?: string | null;
+      closed: number;
+      wins: number;
+      net_usd: number;
+      win_rate_pct: number;
+    }>;
     actual_closed_trades: number;
     shadow_closed_trades: number;
     scanner_events: number;
@@ -1407,6 +1465,8 @@ export interface PulseForming {
   session_label: string;
   session_active: boolean;
   status: "forming" | "awaiting_trades";
+  bar_state?: "WATCH";
+  decision_eligible?: false;
   data_quality: string;
   [k: string]: unknown;
 }

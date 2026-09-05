@@ -454,8 +454,14 @@ def build_lanes_payload(
                 "mode": mode,
                 "observation_class": observation_class,
                 "exchange": str(lane.get("exchange") or lane.get("lane_exchange") or ""),
-                "candle_source": str(
-                    lane.get("exchange") or lane.get("lane_exchange") or "unknown"
+                "candle_source": str(lane.get("candle_source") or "unknown"),
+                "decision_transport": str(lane.get("decision_transport") or "unknown"),
+                "drought": _mapping(lane.get("drought")) or None,
+                "path_id": str(lane.get("path_id") or "unreported"),
+                "permission_snapshot_id": (
+                    str(lane.get("permission_snapshot_id"))
+                    if lane.get("permission_snapshot_id")
+                    else None
                 ),
                 "symbol": str(lane.get("symbol") or ""),
                 "timeframe": str(lane.get("timeframe") or ""),
@@ -480,6 +486,12 @@ def build_lanes_payload(
                 "gate_eval_ms": _latency_value(lane, "gate_eval_ms"),
                 "shadow_journal_ms": _latency_value(lane, "shadow_journal_ms"),
                 "tick_stop_ms": _latency_value(lane, "tick_stop_ms"),
+                "kernel_submit_ms": _latency_value(lane, "kernel_submit_ms"),
+                "adapter_ack_ms": _latency_value(lane, "adapter_ack_ms"),
+                "quote_age_at_accept_ms": _latency_value(
+                    lane, "quote_age_at_accept_ms"
+                ),
+                "quote_age_at_accept_hard_ms": LT.QUOTE_AGE_AT_ACCEPT_HARD_MS,
                 "latency_samples": {
                     "bar_close": _latency_samples(lane, "bar_close_processing_ms", "feed_lag_ms"),
                     "canonical_wait": _latency_samples(lane, "canonical_wait_ms"),

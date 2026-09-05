@@ -9,21 +9,21 @@ import pytest
 from vnedge.config.risk_config import RiskConfig
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
 from vnedge.data.schemas import normalize_candles
+from vnedge.exchange.readonly_account import PositionRead
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.private_stream import PrivateStreamHealth
-from vnedge.exchange.readonly_account import PositionRead
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.position_sizer import SymbolLimits
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
 from vnedge.risk.risk_manager import AccountState, MarketState, PreTradeRiskGateway
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
-from vnedge.runtime.pre_live_checklist import run_pre_live_checklist
 from vnedge.runtime.live_trader import LiveTraderSession
+from vnedge.runtime.pre_live_checklist import run_pre_live_checklist
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
-BASE = 1_750_000_000_000
+BASE = 1_749_999_600_000  # exact UTC hour; derived minute bars stay aligned
 HOUR = 3_600_000
 SYM = "BTC/USDT:USDT"
 LIMITS = SymbolLimits(
@@ -373,7 +373,7 @@ async def test_timeout_reached_entry_plan_survives_reconciliation(tmp_path):
     assert session._reconciliation_halt is False  # venue agrees → no spurious halt
 
 
-async def test_live_exit_plan_survives_reject_and_retries_with_new_key(tmp_path):
+async def test_live_exit_plan_survives_reject_and_resubmits_same_decision(tmp_path):
     adapter = FakeLiveAdapter(script=["reject", "ack"])
     accounts = FakeAccounts(positions=[FlattenTarget(SYM, "long", 0.01)])
     session, om = wire(
@@ -395,8 +395,18 @@ async def test_live_exit_plan_survives_reject_and_retries_with_new_key(tmp_path)
     await session._submit_exit("stop", datetime.now(UTC))
 
     assert session._plan is None
-    keys = [o.intent_key for o in om.orders.values() if o.intent.reduce_only]
-    assert keys[-1] == keys[-2] + "|retry=1"
+    exits = [o for o in om.orders.values() if o.intent.reduce_only]
+    assert len(exits) == 2
+    records = om._journal.read_all()
+    intents = [
+        r["payload"]
+        for r in records
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
+    ]
+    assert len(intents) == 2
+    assert intents[1]["intent_key"] == intents[0]["intent_key"]
+    assert intents[1]["client_order_id"] != intents[0]["client_order_id"]
+    assert intents[1]["retry_of"] == intents[0]["client_order_id"]
 
 
 async def test_live_timeout_lost_exit_plan_waits_for_reconcile_before_retry(tmp_path):
@@ -423,8 +433,18 @@ async def test_live_timeout_lost_exit_plan_waits_for_reconcile_before_retry(tmp_
     await session._submit_exit("stop", datetime.now(UTC))
 
     assert session._plan is None
-    keys = [o.intent_key for o in om.orders.values() if o.intent.reduce_only]
-    assert keys[-1] == keys[-2] + "|retry=1"
+    exits = [o for o in om.orders.values() if o.intent.reduce_only]
+    assert len(exits) == 2
+    records = om._journal.read_all()
+    intents = [
+        r["payload"]
+        for r in records
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
+    ]
+    assert len(intents) == 2
+    assert intents[1]["intent_key"] == intents[0]["intent_key"]
+    assert intents[1]["client_order_id"] != intents[0]["client_order_id"]
+    assert intents[1]["retry_of"] == intents[0]["client_order_id"]
 
 
 # --- Gap 2: position-level reconciliation fails closed -----------------------------
@@ -688,7 +708,13 @@ async def test_live_tick_stop_uses_shared_exit_engine(tmp_path):
 
     reduce_only = [order for order in om.orders.values() if order.intent.reduce_only]
     assert len(reduce_only) == 1
-    assert "tick_stop" in reduce_only[0].intent_key
+    assert reduce_only[0].intent_key.startswith("dec_")
+    evidence = next(
+        r["payload"]["execution_evidence"]
+        for r in om._journal.read_all()
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
+    )
+    assert evidence["strategy_id"].endswith(":exit:tick_stop")
     assert session._plan is None
 
 

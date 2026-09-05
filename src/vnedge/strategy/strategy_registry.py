@@ -9,6 +9,7 @@ from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
+from vnedge.strategy.macd_hidden_divergence_15m import MacdHiddenDivergence15mV1
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
@@ -54,6 +55,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1,
     HtfRegimeContinuation15mV2.strategy_id: HtfRegimeContinuation15mV2,
     StructureBounceRouteProbeV2.strategy_id: StructureBounceRouteProbeV2,
+    MacdHiddenDivergence15mV1.strategy_id: MacdHiddenDivergence15mV1,
 }
 
 # Observation and pre-registered candidates are deliberately non-capital even
@@ -78,6 +80,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         HtfRegimeContinuation15mV1.strategy_id,
         HtfRegimeContinuation15mV2.strategy_id,
         StructureBounceRouteProbeV2.strategy_id,
+        MacdHiddenDivergence15mV1.strategy_id,
     }
 )
 

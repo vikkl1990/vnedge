@@ -315,6 +315,18 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         decision_engine="base_strategy_routed_entry_v1",
         exit_engine="active_exit_v1",
     ),
+    "macd_hidden_div_15m_v1": ScannerRuntimeContract(
+        strategy_id="macd_hidden_div_15m_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=48,
+        rationale=(
+            "hidden MACD-line divergence at causal 3/3 price pivots; "
+            "next-open research cohort with pivot invalidation"
+        ),
+        decision_engine="base_strategy_next_open_v1",
+        exit_engine="active_exit_v1",
+    ),
 }
 
 SCANNER_RUNTIME_CONTRACTS: Mapping[str, ScannerRuntimeContract] = MappingProxyType(_CONTRACTS)

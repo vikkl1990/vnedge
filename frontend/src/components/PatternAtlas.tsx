@@ -95,6 +95,7 @@ function LaneDiagnostic({ lane, onNavigate }: { lane: PatternAtlasLane; onNaviga
         <span className="text-faint">close → arm</span><span className="text-right">{millis(lane.latency.close_to_arm_ms)}</span>
         <span className="text-faint">receipt / wait</span><span className="text-right">{millis(lane.latency.bar_close_receipt_ms)} / {millis(lane.latency.canonical_wait_ms)}</span>
         <span className="text-faint">decision</span><span className="text-right">{millis(lane.latency.decision_lag_ms)}</span>
+        <span className="text-faint">quote age / ACK</span><span className="text-right">{millis(lane.latency.quote_age_at_accept_ms)} / {millis(lane.latency.adapter_ack_ms)}</span>
         <span className="text-faint">quotes distinct / drop</span><span className="text-right">{lane.quotes.distinct} / {lane.quotes.overflow_drops}</span>
       </div>
       <div className="mt-3 min-h-8 text-[9px] leading-4 text-dim">

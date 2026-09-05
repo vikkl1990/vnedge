@@ -15,6 +15,7 @@ from enum import Enum
 
 from vnedge.exchange.book_imbalance import BookImbalance, imbalance_allows
 from vnedge.execution.trigger_engine import FireDecision, Side
+from vnedge.execution.evidence import DecisionEnvelope
 from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot
 from vnedge.strategy.realtime_entry import StructuralStopMode
 from vnedge.strategy.squeeze_expansion_breakout_v3 import (
@@ -54,6 +55,10 @@ class CompressionArm:
     session_end_hour_utc: int | None = None
     reason: str = "squeeze_acceptance_v3"
     evidence: FrozenPermissionSnapshot | None = None
+    decisions: tuple[DecisionEnvelope, ...] = ()
+
+    def decision_for(self, side: Side) -> DecisionEnvelope | None:
+        return next((item for item in self.decisions if item.side == side), None)
 
 
 @dataclass
