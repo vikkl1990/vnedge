@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -206,8 +206,14 @@ def atomic_write_json(path: str | Path, payload: dict[str, Any]) -> None:
             pass
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield journal rows without materialising multi-gigabyte WAL files.
+
+    The parity fold retains only ``canonical_transport_parity`` observations.
+    Loading every unrelated lane-eval and quote record first can exceed the
+    worker's bounded memory before the filter gets a chance to run.
+    """
+
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             try:
@@ -215,8 +221,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict):
-                rows.append(row)
-    return rows
+                yield row
 
 
 def main() -> None:
@@ -237,7 +242,7 @@ def main() -> None:
                 else [Path(value)]
             )
         ]
-        records = [row for path in paths for row in _read_jsonl(path)]
+        records = (row for path in paths for row in _iter_jsonl(path))
         artifact = build_canonical_parity_artifact(
             records,
             policy=CanonicalParityPolicy(
