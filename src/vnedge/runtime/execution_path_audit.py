@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -128,8 +128,9 @@ def assert_execution_path_artifact(
     return payload
 
 
-def _read(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _iter_records(path: Path) -> Iterator[dict[str, Any]]:
+    """Stream the full WAL while keeping the audit's memory bounded."""
+
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             try:
@@ -137,8 +138,7 @@ def _read(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(value, dict):
-                rows.append(value)
-    return rows
+                yield value
 
 
 def main() -> None:
@@ -152,7 +152,7 @@ def main() -> None:
         paths = sorted(journal.glob("*.jsonl")) if journal.is_dir() else [journal]
         chains = [(path, verify_journal_chain(path)) for path in paths]
         result = build_execution_path_audit(
-            (row for path in paths for row in _read(path)),
+            (row for path in paths for row in _iter_records(path)),
             chain_ok=all(report.ok for _, report in chains),
         )
         result["chains"] = [
