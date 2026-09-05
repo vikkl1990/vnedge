@@ -61,7 +61,6 @@ class TickStopEngine:
                     notional_usd=0.0,
                     leverage=1.0,
                     reduce_only=True,
-                    strategy_id=stop.strategy_id,
                 )
             )
         return tuple(intents)

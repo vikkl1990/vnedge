@@ -34,6 +34,7 @@ import pandas as pd
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
 from vnedge.data.time_machine import TimeMachine
 from vnedge.exchange.readonly_account import PositionRead
+from vnedge.execution.evidence import CostDecisionEvidence, ExecutionEvidence
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
@@ -49,10 +50,10 @@ from vnedge.runtime.daily_factory import (
     session_day,
 )
 from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
-from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.execution_kernel import build_kernel
 from vnedge.runtime.readiness import RuntimeReadiness, build_runtime_readiness
 from vnedge.runtime.run_report import RunReport
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, bind_signal_decision
 from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
@@ -150,7 +151,7 @@ class LiveTraderSession:
         self.gateway = gateway
         self.om = order_manager
         self.execution_context = ExecutionContext.from_trading_mode(settings.trading_mode)
-        self.execution_kernel = ExecutionKernel(
+        self.execution_kernel = build_kernel(
             context=self.execution_context,
             order_manager=order_manager,
             adapter_kind=AdapterKind.LIVE,
@@ -271,6 +272,7 @@ class LiveTraderSession:
             data_blockers=data_blockers,
             decision_blockers=decision_blockers,
             execution_blockers=execution_blockers,
+            live_blockers=("capital_path_not_promoted",),
         )
 
     def private_stream_ready(self, now: datetime | None = None) -> bool:
@@ -464,15 +466,27 @@ class LiveTraderSession:
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
             reduce_only=False,
-            strategy_id=self.strategy.strategy_id,
         )
-        from vnedge.execution.idempotency import make_intent_key
-
-        key = make_intent_key(
-            self.strategy.strategy_id, self.symbol, sig.side, self.candles["timestamp"].iloc[-1]
+        if sig.decision_envelope is None:
+            self.om.journal.append(
+                "entry_evidence_rejected",
+                {
+                    "strategy_id": self.strategy.strategy_id,
+                    "symbol": self.symbol,
+                    "reason": "decision_envelope_missing",
+                },
+            )
+            return
+        evidence = ExecutionEvidence.from_decision(
+            sig.decision_envelope,
+            cost_decision=CostDecisionEvidence.not_evaluated("live_trader"),
         )
         order = await self.execution_kernel.submit(
-            intent, account, self.feed.market_state(), key, now=now
+            intent,
+            account,
+            self.feed.market_state(),
+            evidence=evidence,
+            now=now,
         )
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
@@ -485,11 +499,12 @@ class LiveTraderSession:
         elif order.state is OrderState.TIMEOUT_UNKNOWN:
             self.orders_submitted += 1
             self._factory_entries_today += 1
-            self._parked_entries[order.client_order_id] = (
-                sig,
-                self.candles["timestamp"].iloc[-1],
-                sizing.quantity,
-            )
+            if order.client_order_id is not None:
+                self._parked_entries[order.client_order_id] = (
+                    sig,
+                    self.candles["timestamp"].iloc[-1],
+                    sizing.quantity,
+                )
 
     async def _submit_exit(self, reason: str, now: datetime) -> None:
         positions = await self._read_positions()
@@ -506,7 +521,6 @@ class LiveTraderSession:
             notional_usd=0.0,
             leverage=1.0,
             reduce_only=True,
-            strategy_id=self.strategy.strategy_id,
         )
         account = await self._read_account()
         if account is None:
@@ -526,11 +540,31 @@ class LiveTraderSession:
             ):
                 return
             self._pending_exit_orders.pop(base_key, None)
+        bar_open = pd.Timestamp(self.candles["timestamp"].iloc[-1]).to_pydatetime()
+        evidence = ExecutionEvidence.create(
+            strategy_id=f"{self.strategy.strategy_id}:exit:{reason}",
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            bar_open=bar_open,
+            side=intent.side,
+            htf_snapshot_id=(
+                self._plan.permission_snapshot.snapshot_id
+                if self._plan is not None
+                and self._plan.permission_snapshot is not None
+                else None
+            ),
+            permission_snapshot=(
+                self._plan.permission_snapshot if self._plan is not None else None
+            ),
+            candle_source="parquet",
+            entry_clock="exit",
+            cost_decision=CostDecisionEvidence.not_evaluated("live_exit"),
+        )
         order = await self.execution_kernel.submit(
             intent,
             account,
             self.feed.market_state(),
-            intent_key=self._exit_intent_key(base_key),
+            evidence=evidence,
             now=now,
         )
         self.orders_submitted += 1
@@ -542,8 +576,8 @@ class LiveTraderSession:
             self._preserve_exit_plan(base_key, order)
 
     def _exit_intent_key(self, base_key: str) -> str:
-        attempt = self._exit_retry_attempts.get(base_key, 0)
-        return base_key if attempt == 0 else f"{base_key}|retry={attempt}"
+        # Retries reuse the deterministic decision and the journaled venue id.
+        return base_key
 
     def _clear_exit_plan(self) -> None:
         self._plan = None
@@ -723,8 +757,43 @@ class LiveTraderSession:
                     else:
                         sig = self.strategy.signal(df, idx)
                         if sig is not None:
-                            self.signals += 1
-                            await self._submit_entry(sig, now)
+                            decision_row = df.iloc[idx].to_dict()
+                            decision_row.setdefault("candle_source", "exchange_ohlcv")
+                            try:
+                                sig = bind_signal_decision(
+                                    sig,
+                                    strategy_id=self.strategy.strategy_id,
+                                    symbol=self.symbol,
+                                    timeframe=self.timeframe,
+                                    decision_row=decision_row,
+                                    entry_clock=f"next_{self.timeframe}_open",
+                                    require_existing_snapshot=bool(
+                                        getattr(
+                                            self.strategy,
+                                            "requires_permission_snapshot",
+                                            False,
+                                        )
+                                    ),
+                                )
+                            except (TypeError, ValueError) as exc:
+                                self.om.journal.append(
+                                    "entry_evidence_rejected",
+                                    {
+                                        "strategy_id": self.strategy.strategy_id,
+                                        "symbol": self.symbol,
+                                        "bar_ts": str(df.iloc[idx].get("timestamp")),
+                                        "reason": str(exc),
+                                    },
+                                )
+                                sig = None
+                            if sig is not None:
+                                assert sig.decision_envelope is not None
+                                self.om.journal.append(
+                                    "decision_armed",
+                                    sig.decision_envelope.as_dict(),
+                                )
+                                self.signals += 1
+                                await self._submit_entry(sig, now)
 
                 if self._bars % self.reconcile_every_bars == 0 or self.om.has_unresolved_orders:
                     await self._reconcile()

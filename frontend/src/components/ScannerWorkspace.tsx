@@ -170,6 +170,12 @@ export function ScannerWorkspace({
             <Criterion label="decision" value={decisionWarm ? "measured" : "collecting p95"} detail={selected.decision_lag_ms == null ? `${selected.latency_samples.decision}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.decision_lag_ms.toFixed(1)} ms · ${selected.latency_samples.decision}/${selected.latency_samples.required}`} tone={decisionWarm ? "good" : "warn"} />
             <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />
             <Criterion label="engine path" value={selected.runtime_contract?.decision_engine ?? "unreported"} detail={`exit ${selected.runtime_contract?.exit_engine ?? "unreported"} · ${selected.runtime_contract?.max_holding_bars ?? "—"} bars`} tone={selected.runtime_contract?.decision_engine && selected.runtime_contract?.exit_engine ? "info" : "warn"} />
+            <Criterion
+              label="signal drought"
+              value={(selected.drought?.drought_class ?? "not observed").replace(/_/g, " ")}
+              detail={`eval ${selected.drought?.eval_age_s == null ? "n/a" : age(selected.drought.eval_age_s)} · setup ${selected.drought?.setup_age_s == null ? "none" : age(selected.drought.setup_age_s)} · evidence ${selected.drought?.evidence_age_s == null ? "none" : age(selected.drought.evidence_age_s)} · ${selected.drought?.decision_transport ?? selected.decision_transport}`}
+              tone={selected.drought?.drought_class === "ops_silent" || selected.drought?.drought_class === "identity_bug" ? "bad" : selected.drought?.drought_class === "quote_or_cost_wait" ? "warn" : "info"}
+            />
             {clock?.entry_clock === "execution_route" && <Criterion
               label="route evidence"
               value={selected.entry_route.replace(/_/g, " ")}
@@ -182,6 +188,18 @@ export function ScannerWorkspace({
               detail={`${quoteRejects} rejected · ${quoteDrops} overflow drops · ${quoteStats?.quote_rearms ?? 0} re-arms · ${quoteStats?.quote_source ?? "unknown source"}`}
               tone={!quoteDistinct ? "warn" : quoteDrops ? "warn" : "good"}
             />}
+            {quoteEngine && <Criterion
+              label="quote age p95"
+              value={selected.quote_age_at_accept_ms == null ? "not sampled" : `${selected.quote_age_at_accept_ms.toFixed(1)} ms`}
+              detail={`lane-consumed BBO age at approval · each candidate hard ${selected.quote_age_at_accept_hard_ms.toFixed(0)} ms`}
+              tone={selected.quote_age_at_accept_ms == null ? "neutral" : selected.quote_age_at_accept_ms > selected.quote_age_at_accept_hard_ms ? "bad" : "good"}
+            />}
+            <Criterion
+              label="execution"
+              value={selected.kernel_submit_ms == null ? "not sampled" : `${selected.kernel_submit_ms.toFixed(1)} ms`}
+              detail={`kernel evaluate + WAL + adapter · ACK ${selected.adapter_ack_ms == null ? "not sampled" : `${selected.adapter_ack_ms.toFixed(1)} ms`}`}
+              tone={selected.kernel_submit_ms == null ? "neutral" : "info"}
+            />
             <Criterion label="risk" value={risk?.kill.active || risk?.daily_halt.active ? "blocked" : "clear"} detail={risk?.kill.active ? "kill is latched" : risk?.daily_halt.active ? "daily halt active" : "kill and daily halt clear; capital still disabled"} tone={risk?.kill.active || risk?.daily_halt.active ? "bad" : "good"} />
             <Criterion label="last result" value={outcomeNet == null ? "none" : usd(outcomeNet)} detail={latestOutcome ? String(latestOutcome.reason ?? latestOutcome.resolution ?? "resolved shadow observation") : "no recent resolved outcome"} tone={outcomeNet == null ? "neutral" : outcomeNet >= 0 ? "good" : "bad"} />
             <div className="mt-3 grid gap-2 md:grid-cols-2">

@@ -15,29 +15,136 @@ frequency, durability beats throughput by an enormous margin.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+JOURNAL_SCHEMA_VERSION = 2
+_GENESIS_HASH = "0" * 64
+
+
+def _journal_record_hash(record: dict[str, Any], prev_hash: str) -> str:
+    """Hash one immutable WAL body against the preceding record."""
+
+    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(f"{prev_hash}|{canonical}".encode()).hexdigest()
+
+
+def _v2_record_error(record: dict[str, Any]) -> str | None:
+    """Validate one v2 record without walking its preceding chain."""
+
+    if record.get("schema_version") != JOURNAL_SCHEMA_VERSION:
+        return f"unsupported schema_version {record.get('schema_version')!r}"
+    seq = record.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        return "invalid journal seq"
+    prev_hash = record.get("prev_hash")
+    claimed = record.get("hash")
+    if not isinstance(prev_hash, str) or len(prev_hash) != 64:
+        return "invalid prev_hash"
+    if not isinstance(claimed, str) or len(claimed) != 64:
+        return "invalid hash"
+    core = {key: value for key, value in record.items() if key not in {"prev_hash", "hash"}}
+    if _journal_record_hash(core, prev_hash) != claimed:
+        return "journal record hash mismatch"
+    return None
+
+
+@dataclass(frozen=True)
+class JournalChainReport:
+    ok: bool
+    records: int
+    chained_records: int
+    legacy_records: int
+    first_bad_line: int | None = None
+    reason: str = ""
+
+
+def verify_journal_chain(path: Path | str) -> JournalChainReport:
+    """Offline full-file validation.
+
+    Schema-1 rows are accepted only as a legacy prefix.  The first schema-2
+    row starts a new chain at sequence zero; legacy rows may never appear
+    after that boundary.
+    """
+
+    path = Path(path)
+    if not path.exists():
+        return JournalChainReport(True, 0, 0, 0)
+    prev_hash = _GENESIS_HASH
+    expected_seq = 0
+    records = chained = legacy = 0
+    chain_started = False
+    with path.open(encoding="utf-8") as handle:
+        for lineno, raw in enumerate(handle, start=1):
+            if not raw.strip():
+                continue
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                return JournalChainReport(
+                    False, records, chained, legacy, lineno, f"invalid JSON: {exc}"
+                )
+            if not isinstance(record, dict):
+                return JournalChainReport(
+                    False, records, chained, legacy, lineno, "record is not an object"
+                )
+            schema = record.get("schema_version")
+            if schema is None:
+                if chain_started:
+                    return JournalChainReport(
+                        False,
+                        records,
+                        chained,
+                        legacy,
+                        lineno,
+                        "legacy row after schema-2 chain start",
+                    )
+                legacy += 1
+                records += 1
+                continue
+            chain_started = True
+            error = _v2_record_error(record)
+            if error is None and record.get("seq") != expected_seq:
+                error = f"expected seq {expected_seq}, got {record.get('seq')}"
+            if error is None and record.get("prev_hash") != prev_hash:
+                error = "previous hash link mismatch"
+            if error is not None:
+                return JournalChainReport(
+                    False, records, chained, legacy, lineno, error
+                )
+            prev_hash = str(record["hash"])
+            expected_seq += 1
+            chained += 1
+            records += 1
+    return JournalChainReport(True, records, chained, legacy)
 
 class DecisionJournal:
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, path_id: str | None = None) -> None:
         self.path = Path(path)
+        self.path_id = str(path_id).strip() if path_id is not None else None
+        if path_id is not None and not self.path_id:
+            raise ValueError("path_id must be non-empty when provided")
         self._available = True
         self._recovery_degraded = False
         self._recovery_error = ""
         self._quarantine_path: Path | None = None
+        self._next_seq = 0
+        self._prev_hash = _GENESIS_HASH
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # Probe writability at startup, not at first order.
             with open(self.path, "a", encoding="utf-8"):
                 pass
             self._recover_valid_prefix()
+            self._resume_chain_from_tail()
         except OSError as exc:
             self._mark_unavailable(f"journal probe failed: {exc}")
 
@@ -113,15 +220,28 @@ class DecisionJournal:
             except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
                 bad_reason = str(exc)
             else:
-                # A complete JSON record without its newline would otherwise
-                # concatenate with the next append. Repair that delimiter and
-                # keep the journal available; no decision body was lost.
-                if not tail.endswith(b"\n"):
-                    with self.path.open("ab") as handle:
-                        handle.write(b"\n")
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                return
+                if record.get("schema_version") is not None:
+                    integrity_error = _v2_record_error(record)
+                    if integrity_error is not None:
+                        bad_reason = integrity_error
+                    else:
+                        integrity_error = None
+                else:
+                    integrity_error = None
+                if integrity_error is not None:
+                    # A syntactically complete but modified final record is
+                    # still a torn/untrusted WAL boundary.
+                    pass
+                else:
+                    # A complete JSON record without its newline would otherwise
+                    # concatenate with the next append. Repair that delimiter and
+                    # keep the journal available; no decision body was lost.
+                    if not tail.endswith(b"\n"):
+                        with self.path.open("ab") as handle:
+                            handle.write(b"\n")
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                    return
 
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         quarantine = self.path.with_name(f"{self.path.name}.corrupt.{stamp}")
@@ -146,6 +266,27 @@ class DecisionJournal:
             quarantine,
         )
 
+    def _resume_chain_from_tail(self) -> None:
+        """Resume the v2 chain from the last complete row without an O(file) scan."""
+
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return
+        size = self.path.stat().st_size
+        tail_bytes = min(size, 1 << 20)
+        with self.path.open("rb") as handle:
+            handle.seek(size - tail_bytes)
+            lines = handle.read(tail_bytes).decode("utf-8").splitlines()
+        for raw in reversed(lines):
+            if not raw.strip():
+                continue
+            record = json.loads(raw)
+            if record.get("schema_version") == JOURNAL_SCHEMA_VERSION:
+                self._next_seq = int(record["seq"]) + 1
+                self._prev_hash = str(record["hash"])
+            # A legacy final row starts the first schema-2 chain epoch. Full
+            # offline validation will reject any legacy row inserted later.
+            return
+
     def acknowledge_recovery(self, note: str) -> bool:
         """Explicitly clear a degraded recovery latch after operator reconciliation."""
         if not self._recovery_degraded:
@@ -168,16 +309,44 @@ class DecisionJournal:
     def append(self, kind: str, payload: dict[str, Any]) -> bool:
         """Write one record. Returns False (and flips unavailable) on failure —
         never raises into the order path."""
-        record = {
+        body = dict(payload)
+        if self.path_id is not None:
+            supplied = body.get("path_id")
+            if supplied is not None and supplied != self.path_id:
+                self._mark_unavailable(
+                    f"journal path_id conflict: expected {self.path_id}, got {supplied}"
+                )
+                return False
+            # A journal file contains market/research and execution evidence.
+            # Only records emitted by the execution spine may claim its path.
+            # ShadowOutcomeTracker/scanner rows therefore remain explicitly
+            # ineligible instead of inheriting kernel_v1 from the file.
+            # The caller must prove that a record crossed the kernel.  Merely
+            # naming an event ``order_*`` is not authority: compatibility and
+            # research callers can still use OrderManager directly, and those
+            # rows must remain ineligible for operational P&L.
+            if supplied is not None:
+                body["path_id"] = self.path_id
+        core = {
+            "schema_version": JOURNAL_SCHEMA_VERSION,
+            "seq": self._next_seq,
             "ts": datetime.now(UTC).isoformat(),
             "kind": kind,
-            "payload": payload,
+            "payload": body,
+        }
+        digest = _journal_record_hash(core, self._prev_hash)
+        record = {
+            **core,
+            "prev_hash": self._prev_hash,
+            "hash": digest,
         }
         try:
             with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, default=str) + "\n")
+                f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
+            self._prev_hash = digest
+            self._next_seq += 1
             return True
         except OSError as exc:
             self._mark_unavailable(str(exc))

@@ -15,6 +15,12 @@ from typing import Final, Literal
 import pandas as pd
 
 from vnedge.data.candles import Candle
+from vnedge.strategy.arm_evidence import (
+    FrozenPermissionSnapshot,
+    MissingHtfContext,
+    freeze_permission_from_bound_frames,
+    missing_bound_context,
+)
 from vnedge.strategy.base_strategy import SignalIntent, StrategyExitIntent
 from vnedge.strategy.market_regime import (
     DEFAULT_CONFIG,
@@ -66,6 +72,7 @@ def _append_candle(frame: pd.DataFrame, candle: Candle) -> pd.DataFrame:
                 "vwap": float(candle.vwap) if candle.vwap is not None else math.nan,
                 "is_closed": True,
                 "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
             }
         ]
     )
@@ -79,6 +86,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
     eligibility = "RESEARCH_ONLY"
     canonical_context_timeframes = ("4h", "1d")
     market_regime_config = DEFAULT_CONFIG
+    requires_permission_snapshot = True
 
     def _new_regime_machine(self) -> MarketRegimeMachine:
         return MarketRegimeMachine(self.market_regime_config)
@@ -111,6 +119,40 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             eligible = close_times[close_times <= decision_at]
             identities.append(int(eligible.iloc[-1].value) if not eligible.empty else None)
         return tuple(identities)
+
+    def freeze_permission_snapshot(
+        self,
+        row: pd.Series,
+        *,
+        allow_long: bool,
+        allow_short: bool,
+        reason: str,
+    ) -> FrozenPermissionSnapshot:
+        """Bind permission to the exact HTF rows consumed by the regime."""
+        return freeze_permission_from_bound_frames(
+            row.to_dict(),
+            decision_timeframe="15m",
+            context_frames=self._regime_frames,
+            context_health=self._regime_health,
+            required_context=self.canonical_context_timeframes,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            reason=reason,
+            regime_version=(
+                f"{self.strategy_id}:{self.market_regime_config.weekly_classifier}"
+            ),
+        )
+
+    def _missing_permission_context(self, row: pd.Series) -> tuple[str, ...]:
+        decision_close = (
+            pd.Timestamp(row["timestamp"]) + pd.Timedelta(minutes=15)
+        ).to_pydatetime()
+        return missing_bound_context(
+            context_frames=self._regime_frames,
+            context_health=self._regime_health,
+            required_context=self.canonical_context_timeframes,
+            decision_close=decision_close,
+        )
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:
         super().__init__(funding)
@@ -291,6 +333,17 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             return None
         if (side == "long" and stop >= close) or (side == "short" and stop <= close):
             return None
+        try:
+            permission_snapshot = self.freeze_permission_snapshot(
+                row,
+                allow_long=long_ready,
+                allow_short=short_ready,
+                reason=str(row.get("mreg_reason", "closed_15m_reclaim")),
+            )
+        except MissingHtfContext:
+            return None
+        except (TypeError, ValueError):
+            return None
         return SignalIntent(
             side=side,
             stop_price=stop,
@@ -301,6 +354,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
                 f"h4={row['mreg_h4']} ema={row['mreg_ema_state']} "
                 f"macd={row['mreg_macd_impulse']} rsi={row['mreg_rsi_zone']}"
             ),
+            permission_snapshot=permission_snapshot,
         )
 
     def exit_signal(
@@ -365,14 +419,20 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             }
         )
         failures = list(diagnostics.get("all_failed_gates", []))
-        if not bool(float(row.get("mreg_ready", 0))):
+        missing_context = self._missing_permission_context(row)
+        if missing_context:
+            failures.insert(0, "htf_context_missing")
+            features["htf_context_missing"] = list(missing_context)
+        elif not bool(float(row.get("mreg_ready", 0))):
             failures.insert(0, "market_regime_not_ready")
         elif str(row.get("mreg_state")) != "continuation":
             failures.insert(0, "market_regime_playbook_blocked")
         diagnostics["features"] = features
         diagnostics["all_failed_gates"] = failures
         diagnostics["primary_failed_gate"] = failures[0] if failures else None
-        diagnostics["eligible"] = bool(float(row.get("rt_arm_ready", 0)))
+        diagnostics["eligible"] = (
+            not missing_context and bool(float(row.get("rt_arm_ready", 0)))
+        )
         return diagnostics
 
 

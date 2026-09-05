@@ -337,6 +337,9 @@ def _lane_projection(lane: dict[str, Any]) -> dict[str, Any]:
             "decision_lag_ms": lane.get("decision_lag_ms"),
             "quote_ingest_ms": lane.get("quote_ingest_ms"),
             "acceptance_hold_ms": lane.get("acceptance_hold_ms"),
+            "quote_age_at_accept_ms": lane.get("quote_age_at_accept_ms"),
+            "kernel_submit_ms": lane.get("kernel_submit_ms"),
+            "adapter_ack_ms": lane.get("adapter_ack_ms"),
         },
         "quotes": {
             "source": (lane.get("shadow_perf") or {}).get("quote_source"),

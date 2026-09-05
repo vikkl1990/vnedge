@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, datetime
 
 from vnedge.config.risk_config import RiskConfig
@@ -38,13 +38,18 @@ ALLOWED_TIME_IN_FORCE = ("GTC", "IOC", "FOK", "PO")
 
 @dataclass(frozen=True)
 class OrderIntent:
+    """Adapter-neutral order instruction.
+
+    Strategy, bar, quote, permission, and execution-path provenance belongs in
+    ``ExecutionEvidence`` and must never leak into the venue instruction.
+    """
+
     symbol: str
     side: str  # "long" | "short"
     quantity: float
     notional_usd: float
     leverage: float
     reduce_only: bool = False
-    strategy_id: str = "unknown"
     order_type: str = "market"  # "market" | "limit"
     limit_price: float | None = None
     # Time-in-force for the live execution adapter: "GTC" | "IOC" | "FOK" |
@@ -52,8 +57,18 @@ class OrderIntent:
     # it is live-phase preparation only; the paper/simulated venue maps
     # intents field-by-field and ignores it harmlessly.
     time_in_force: str | None = None
+    # Constructor-only compatibility for schema-1 callers. InitVar values are
+    # deliberately not stored, serialized, or visible to execution adapters.
+    strategy_id: InitVar[str | None] = None
+    permission_snapshot_id: InitVar[str | None] = None
+    permission_snapshot: InitVar[object | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        strategy_id: str | None,
+        permission_snapshot_id: str | None,
+        permission_snapshot: object | None,
+    ) -> None:
         if not self.symbol.strip():
             raise ValueError("symbol must be non-empty")
         if self.side not in {"long", "short"}:
@@ -309,8 +324,10 @@ class PreTradeRiskGateway:
         )
         log = logger.info if decision.approved and not warnings else logger.warning
         log(
-            "risk_decision strategy=%s symbol=%s side=%s reduce_only=%s -> %s",
-            intent.strategy_id, intent.symbol, intent.side, intent.reduce_only,
+            "risk_decision symbol=%s side=%s reduce_only=%s -> %s",
+            intent.symbol,
+            intent.side,
+            intent.reduce_only,
             decision.explanation,
         )
         return decision

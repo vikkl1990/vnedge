@@ -36,6 +36,7 @@ _COUNTER_FIELDS = (
     "sizing_skips",
     "shadow_approved",
     "shadow_rejected",
+    "rejected_htf_context_missing",
     "tick_stop_exits",
     "recon_mismatches",
 )

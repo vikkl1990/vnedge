@@ -61,7 +61,9 @@ def test_regime_v2_does_not_apply_a_second_four_hour_bos_veto(monkeypatch) -> No
                 "bos15_structure_ready": 1.0,
                 "bos15_quality_ok": 1.0,
                 "bos15_structure_trend": "down",
-                "bos15_dual_avwap_bias": "n/a",
+                # V2 uses the OHLC-only weekly classifier. A stale legacy
+                # AVWAP column must not add a second, unavailable-data veto.
+                "bos15_dual_avwap_bias": "strong_long",
                 "hsc_volume_ratio": 2.0,
                 "hsc_body_bps": 25.0,
                 "hsc_pullback_long": 0.0,
@@ -84,7 +86,7 @@ def test_regime_v2_does_not_apply_a_second_four_hour_bos_veto(monkeypatch) -> No
 
     assert prepared.iloc[0]["rt_allow_short"] == 1.0
     assert prepared.iloc[0]["rt_arm_ready"] == 1.0
-    assert prepared.iloc[0]["mreg_structure_source"] == ("official_ohlc_price_only_v1")
+    assert prepared.iloc[0]["mreg_structure_source"] == ("canonical_ohlc_price_only_v1")
 
 
 def test_regime_strategy_cannot_create_a_quote_arm() -> None:
@@ -256,3 +258,83 @@ def test_regime_invalidation_requests_reduce_only_exit() -> None:
     assert intent is not None
     assert intent.reason == "htf_bias_invalidated"
     assert intent.exit_price == 99.0
+
+
+def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
+    strategy = HtfRegimeContinuation15mV2()
+    strategy.warmup_bars = 0
+    h4 = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-09-04T04:00:00Z"),
+                "open": 98.0,
+                "high": 103.0,
+                "low": 97.0,
+                "close": 101.0,
+                "volume": 80.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "canonical_tick_lake",
+            }
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-09-03T00:00:00Z"),
+                "open": 95.0,
+                "high": 104.0,
+                "low": 94.0,
+                "close": 101.0,
+                "volume": 400.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "router",
+            }
+        ]
+    )
+    strategy.bind_canonical_context("4h", h4)
+    strategy.bind_canonical_context("1d", daily)
+    prepared = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-09-04T12:00:00Z"),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "router",
+                "rt_allow_long": 1.0,
+                "rt_allow_short": 0.0,
+                "rt_long_structural_stop": 98.0,
+                "mreg_weekly": "up",
+                "mreg_daily": "mid",
+                "mreg_h4": "up",
+                "mreg_ema_state": "up",
+                "mreg_macd_impulse": "on",
+                "mreg_rsi_zone": "mid",
+                "mreg_reason": "aligned",
+            }
+        ]
+    )
+
+    intent = strategy.signal(prepared, 0)
+
+    assert intent is not None
+    assert intent.permission_snapshot is not None
+    assert intent.permission_snapshot.context_bars[0].open_time == pd.Timestamp(
+        "2026-09-04T04:00:00Z"
+    )
+    assert intent.permission_snapshot.context_bars[1].source == "router"
+
+    # Losing the bound daily row after feature preparation must not leave a
+    # floor-derived permission behind. The production signal boundary checks
+    # the actual context store again before constructing an intent.
+    strategy.bind_canonical_context("1d", pd.DataFrame())
+    assert strategy.signal(prepared, 0) is None
+    diagnostics = strategy.evaluation_diagnostics(prepared, 0)
+    assert diagnostics["primary_failed_gate"] == "htf_context_missing"
+    assert diagnostics["eligible"] is False

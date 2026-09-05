@@ -41,6 +41,16 @@ def snapshot() -> dict:
                 "mode": "shadow (live data)",
                 "symbol": "BTC/USD:USD",
                 "timeframe": "1h",
+                "candle_source": "canonical_tick_lake",
+                "decision_transport": "router",
+                "drought": {
+                    "drought_class": "playbook_wait",
+                    "eval_age_s": 12.0,
+                    "evidence_age_s": 86_400.0,
+                    "mreg_ready": None,
+                    "structure_ready": None,
+                    "quotes_armed": None,
+                },
                 "feed": "ok",
                 "gapped_candles": 1,
                 "time_machine": {
@@ -97,6 +107,10 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["last_signal_age_seconds"] is None
     assert measurement["candle_status"] == "ok"
     assert measurement["candle_age_ms"] == 4200.0
+    assert measurement["candle_source"] == "canonical_tick_lake"
+    assert measurement["decision_transport"] == "router"
+    assert measurement["drought"]["drought_class"] == "playbook_wait"
+    assert measurement["drought"]["mreg_ready"] is None
     assert measurement["bar_close_processing_ms"] == 120.0
     assert measurement["bar_close_receipt_ms"] == 120.0
     assert measurement["canonical_wait_ms"] is None

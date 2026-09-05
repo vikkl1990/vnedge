@@ -18,6 +18,12 @@ import pandas as pd
 
 from vnedge.data.symbols import canonical_symbol
 from vnedge.plan.cost_model import CostModel
+from vnedge.strategy.arm_evidence import (
+    FrozenPermissionSnapshot,
+    MissingHtfContext,
+    freeze_permission_from_bound_frames,
+    missing_bound_context,
+)
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.structure_bos_1h import PARAMS as BOS_1H_PARAMS
 from vnedge.strategy.structure_bos_1h import StructureBos1H
@@ -128,6 +134,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
     # 50 complete 1h bars plus room for 4h context and one trigger child.
     warmup_bars = 224
     canonical_context_timeframes = ("4h",)
+    requires_permission_snapshot = True
 
     def __init__(
         self,
@@ -150,6 +157,42 @@ class StructureBos15mTriggerV2(BaseStrategy):
 
     def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
         self._hourly.set_canonical_context_health(timeframe, healthy)
+
+    def freeze_permission_snapshot(
+        self,
+        row: pd.Series,
+        *,
+        allow_long: bool,
+        allow_short: bool,
+        reason: str,
+    ) -> FrozenPermissionSnapshot:
+        """Freeze the actual last eligible 4h row, never a calendar guess."""
+        return freeze_permission_from_bound_frames(
+            row.to_dict(),
+            decision_timeframe="15m",
+            context_frames={"4h": self._hourly.htf_candles},
+            context_health={
+                "4h": self._hourly._canonical_htf_current is True,
+            },
+            required_context=self.canonical_context_timeframes,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            reason=reason,
+            regime_version=self.strategy_id,
+        )
+
+    def _missing_permission_context(self, row: pd.Series) -> tuple[str, ...]:
+        decision_close = (
+            pd.Timestamp(row["timestamp"]) + pd.Timedelta(minutes=15)
+        ).to_pydatetime()
+        return missing_bound_context(
+            context_frames={"4h": self._hourly.htf_candles},
+            context_health={
+                "4h": self._hourly._canonical_htf_current is True,
+            },
+            required_context=self.canonical_context_timeframes,
+            decision_close=decision_close,
+        )
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         required = {"timestamp", "open", "high", "low", "close", "volume"}
@@ -320,6 +363,19 @@ class StructureBos15mTriggerV2(BaseStrategy):
         projected_net = risk / close * 10_000 * self.params.reward_r - self.params.round_trip_cost_bps
         if projected_net < self.params.min_projected_net_bps:
             return None
+        try:
+            permission_snapshot = self.freeze_permission_snapshot(
+                row,
+                allow_long=side == "long",
+                allow_short=side == "short",
+                reason=self.strategy_id,
+            )
+        except MissingHtfContext:
+            return None
+        except (TypeError, ValueError):
+            # A context-aware signal without the exact bar that granted its
+            # permission is not replayable and must never enter the kernel.
+            return None
         return SignalIntent(
             side=side,
             stop_price=stop,
@@ -328,6 +384,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 f"structure_bos_15m_trigger_v2 side={side} context=closed_1h_4h "
                 f"confirmation=15m projected_net={projected_net:.1f}bps virtual_only"
             ),
+            permission_snapshot=permission_snapshot,
         )
 
     def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
@@ -344,6 +401,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
             return bool(number(name) or 0)
 
         p = self.params
+        missing_context = self._missing_permission_context(row)
         quality_ok = flag("bos15_quality_ok")
         session_ok = flag("bos15_session_ok")
         ready_raw = row.get("bos15_structure_ready", False)
@@ -368,6 +426,8 @@ class StructureBos15mTriggerV2(BaseStrategy):
         projected = projected_long if long_context else projected_short if short_context else None
         edge_ok = projected is not None and projected >= p.min_projected_net_bps
         failures: list[str] = []
+        if missing_context:
+            failures.append("htf_context_missing")
         for ok, reason in (
             (quality_ok, "data_quality_not_ok"),
             (session_ok, "session_closed"),
@@ -388,7 +448,11 @@ class StructureBos15mTriggerV2(BaseStrategy):
             if volume is not None and volume_base is not None and volume_base > 0
             else None
         )
-        eligible = (flag("bos15_fire_long") or flag("bos15_fire_short")) and edge_ok
+        eligible = (
+            not missing_context
+            and (flag("bos15_fire_long") or flag("bos15_fire_short"))
+            and edge_ok
+        )
         return {
             "eligible": eligible,
             "primary_failed_gate": failures[0] if failures else None,
@@ -409,6 +473,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 "bos15_last_swing_high": number("bos15_last_swing_high"),
                 "bos15_last_swing_low": number("bos15_last_swing_low"),
                 "bos15_projected_net_bps": projected,
+                "htf_context_missing": list(missing_context),
             },
             "thresholds": {
                 "session_start_hour_utc": p.session_start_hour_utc,

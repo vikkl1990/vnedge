@@ -1,0 +1,503 @@
+{
+  "strategy_id": "regime_stat_arb_pair_v1",
+  "symbols": [
+    "BTCUSD",
+    "ETHUSD"
+  ],
+  "timeframe": "1h",
+  "start": "2026-03-04T14:00:00+00:00",
+  "end": "2026-08-31T14:00:00+00:00",
+  "bars": 4321,
+  "folds": 7,
+  "cointegrated_folds": 7,
+  "fold_diagnostics": [
+    {
+      "fold": 1,
+      "train_start": "2026-03-04T14:00:00+00:00",
+      "train_end": "2026-06-02T13:00:00+00:00",
+      "test_start": "2026-06-02T14:00:00+00:00",
+      "test_end": "2026-06-16T13:00:00+00:00",
+      "beta": 0.749156644176444,
+      "adf_t": -0.9999778187916775,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.03230104227167112,
+        0.04018189407056188
+      ],
+      "regime_sigmas": [
+        0.016868413080318664,
+        0.023117516874591054
+      ],
+      "transition": [
+        [
+          0.9983262967206001,
+          0.001673703279399877
+        ],
+        [
+          0.0020857372640334664,
+          0.9979142627359666
+        ]
+      ]
+    },
+    {
+      "fold": 2,
+      "train_start": "2026-03-18T14:00:00+00:00",
+      "train_end": "2026-06-16T13:00:00+00:00",
+      "test_start": "2026-06-16T14:00:00+00:00",
+      "test_end": "2026-06-30T13:00:00+00:00",
+      "beta": 0.6357235693504848,
+      "adf_t": -1.277566696020778,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.045973598290597904,
+        0.028427915011175763
+      ],
+      "regime_sigmas": [
+        0.012790856840375012,
+        0.02296832434529455
+      ],
+      "transition": [
+        [
+          0.9975760199500359,
+          0.0024239800499641917
+        ],
+        [
+          0.0007502003826284272,
+          0.9992497996173715
+        ]
+      ]
+    },
+    {
+      "fold": 3,
+      "train_start": "2026-04-01T14:00:00+00:00",
+      "train_end": "2026-06-30T13:00:00+00:00",
+      "test_start": "2026-06-30T14:00:00+00:00",
+      "test_end": "2026-07-14T13:00:00+00:00",
+      "beta": 0.6535058941405774,
+      "adf_t": -1.8996470058850077,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.01793235456062403,
+        0.0420104493727075
+      ],
+      "regime_sigmas": [
+        0.026922814263507823,
+        0.006837869444793757
+      ],
+      "transition": [
+        [
+          0.9993389090910034,
+          0.0006610909089965531
+        ],
+        [
+          0.0015477264816751463,
+          0.9984522735183249
+        ]
+      ]
+    },
+    {
+      "fold": 4,
+      "train_start": "2026-04-15T14:00:00+00:00",
+      "train_end": "2026-07-14T13:00:00+00:00",
+      "test_start": "2026-07-14T14:00:00+00:00",
+      "test_end": "2026-07-28T13:00:00+00:00",
+      "beta": 0.722758737081021,
+      "adf_t": -2.0504755104565895,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.02515088187707825,
+        0.021448179452158024
+      ],
+      "regime_sigmas": [
+        0.0163934964349649,
+        0.01393966134748852
+      ],
+      "transition": [
+        [
+          0.9959486054934883,
+          0.004051394506511755
+        ],
+        [
+          0.0034514747220530982,
+          0.9965485252779468
+        ]
+      ]
+    },
+    {
+      "fold": 5,
+      "train_start": "2026-04-29T14:00:00+00:00",
+      "train_end": "2026-07-28T13:00:00+00:00",
+      "test_start": "2026-07-28T14:00:00+00:00",
+      "test_end": "2026-08-11T13:00:00+00:00",
+      "beta": 0.7984595473564094,
+      "adf_t": -1.1557029332224815,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.032295032459261463,
+        0.020768385064297103
+      ],
+      "regime_sigmas": [
+        0.016106953283710482,
+        0.012089560109325603
+      ],
+      "transition": [
+        [
+          0.997630214737528,
+          0.0023697852624719614
+        ],
+        [
+          0.0015221658571535892,
+          0.9984778341428464
+        ]
+      ]
+    },
+    {
+      "fold": 6,
+      "train_start": "2026-05-13T14:00:00+00:00",
+      "train_end": "2026-08-11T13:00:00+00:00",
+      "test_start": "2026-08-11T14:00:00+00:00",
+      "test_end": "2026-08-25T13:00:00+00:00",
+      "beta": 0.7860343326706843,
+      "adf_t": -1.1138107159794655,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.03433434546713448,
+        0.031394146470562864
+      ],
+      "regime_sigmas": [
+        0.01768950541147314,
+        0.012268466598948567
+      ],
+      "transition": [
+        [
+          0.9990287247487104,
+          0.0009712752512895625
+        ],
+        [
+          0.0017735203128209152,
+          0.9982264796871791
+        ]
+      ]
+    },
+    {
+      "fold": 7,
+      "train_start": "2026-05-27T14:00:00+00:00",
+      "train_end": "2026-08-25T13:00:00+00:00",
+      "test_start": "2026-08-25T14:00:00+00:00",
+      "test_end": "2026-08-31T14:00:00+00:00",
+      "beta": 0.5508310014240232,
+      "adf_t": -2.788492673565382,
+      "adf_critical": 999.0,
+      "cointegrated": true,
+      "regime_means": [
+        -0.02141079635020561,
+        0.026922736827063132
+      ],
+      "regime_sigmas": [
+        0.011448326560783194,
+        0.022513623445439578
+      ],
+      "transition": [
+        [
+          0.998327189345754,
+          0.001672810654245975
+        ],
+        [
+          0.002105655465174486,
+          0.9978943445348255
+        ]
+      ]
+    }
+  ],
+  "trades": [
+    {
+      "fold": 1,
+      "entry_time": "2026-06-04T00:00:00+00:00",
+      "exit_time": "2026-06-05T17:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 1,
+      "entry_probability": 0.9936045655381078,
+      "entry_z": -1.8669918484183388,
+      "expected_edge_bps": 246.7487157552778,
+      "hold_bars": 42,
+      "exit_reason": "mean_reverted",
+      "gross_bps": 261.14513025402385,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 245.34513025402384,
+      "net_gate_bps": 242.34513025402384
+    },
+    {
+      "fold": 2,
+      "entry_time": "2026-06-18T23:00:00+00:00",
+      "exit_time": "2026-06-25T23:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 1,
+      "entry_probability": 0.9998949355763453,
+      "entry_z": -1.65849615392631,
+      "expected_edge_bps": 232.88089933147452,
+      "hold_bars": 169,
+      "exit_reason": "time_stop",
+      "gross_bps": 22.49859378221793,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 6.69859378221793,
+      "net_gate_bps": 3.6985937822179302
+    },
+    {
+      "fold": 2,
+      "entry_time": "2026-06-26T19:00:00+00:00",
+      "exit_time": "2026-06-30T12:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 1,
+      "entry_probability": 0.9998818235826067,
+      "entry_z": -1.6804143196123387,
+      "expected_edge_bps": 235.95858035266633,
+      "hold_bars": 90,
+      "exit_reason": "regime_break",
+      "gross_bps": -62.67608929553019,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -78.47608929553019,
+      "net_gate_bps": -81.47608929553019
+    },
+    {
+      "fold": 4,
+      "entry_time": "2026-07-14T15:00:00+00:00",
+      "exit_time": "2026-07-21T15:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999938545716,
+      "entry_z": -1.8605556078103558,
+      "expected_edge_bps": 177.0474940407083,
+      "hold_bars": 169,
+      "exit_reason": "time_stop",
+      "gross_bps": 112.30996502706336,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 96.50996502706336,
+      "net_gate_bps": 93.50996502706336
+    },
+    {
+      "fold": 5,
+      "entry_time": "2026-07-28T15:00:00+00:00",
+      "exit_time": "2026-08-04T15:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999644,
+      "entry_z": -2.31022364553509,
+      "expected_edge_bps": 206.90298198952374,
+      "hold_bars": 169,
+      "exit_reason": "time_stop",
+      "gross_bps": 99.22907197493795,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 83.42907197493795,
+      "net_gate_bps": 80.42907197493795
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-14T09:00:00+00:00",
+      "exit_time": "2026-08-19T21:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999996,
+      "entry_z": -1.6734278481903488,
+      "expected_edge_bps": 165.74211612163435,
+      "hold_bars": 133,
+      "exit_reason": "z_stop",
+      "gross_bps": -212.59851271675646,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -228.39851271675647,
+      "net_gate_bps": -231.39851271675647
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-19T22:00:00+00:00",
+      "exit_time": "2026-08-19T23:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999980743,
+      "entry_z": -4.627543269506071,
+      "expected_edge_bps": 458.32798513648294,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": 33.969107134934205,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 18.169107134934205,
+      "net_gate_bps": 15.169107134934205
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T00:00:00+00:00",
+      "exit_time": "2026-08-20T01:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999995949,
+      "entry_z": -4.277399813897426,
+      "expected_edge_bps": 423.6485591059695,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": -12.24251137190429,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -28.04251137190429,
+      "net_gate_bps": -31.04251137190429
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T02:00:00+00:00",
+      "exit_time": "2026-08-20T03:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999996779,
+      "entry_z": -4.2234001992899195,
+      "expected_edge_bps": 418.30024940473004,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": -4.770711375012389,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -20.57071137501239,
+      "net_gate_bps": -23.57071137501239
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T04:00:00+00:00",
+      "exit_time": "2026-08-20T05:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999994572,
+      "entry_z": -4.345309288297874,
+      "expected_edge_bps": 430.3745497150119,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": 26.012469876208925,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 10.212469876208925,
+      "net_gate_bps": 7.2124698762089245
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T06:00:00+00:00",
+      "exit_time": "2026-08-20T07:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999998086,
+      "entry_z": -4.098385456515798,
+      "expected_edge_bps": 405.91835434054093,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": 6.685540282205136,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -9.114459717794865,
+      "net_gate_bps": -12.114459717794865
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T08:00:00+00:00",
+      "exit_time": "2026-08-20T09:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.99999999999993,
+      "entry_z": -3.845111111214388,
+      "expected_edge_bps": 380.8331820129902,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": 79.4402146146228,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": 63.640214614622806,
+      "net_gate_bps": 60.640214614622806
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T10:00:00+00:00",
+      "exit_time": "2026-08-20T12:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999979,
+      "entry_z": -2.8005807507240816,
+      "expected_edge_bps": 277.3792610756923,
+      "hold_bars": 3,
+      "exit_reason": "z_stop",
+      "gross_bps": -24.87005551857176,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -40.67005551857176,
+      "net_gate_bps": -43.67005551857176
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T13:00:00+00:00",
+      "exit_time": "2026-08-20T16:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999971,
+      "entry_z": -2.9041869091975436,
+      "expected_edge_bps": 287.64077546795886,
+      "hold_bars": 4,
+      "exit_reason": "z_stop",
+      "gross_bps": -29.448660737893302,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -45.2486607378933,
+      "net_gate_bps": -48.2486607378933
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T17:00:00+00:00",
+      "exit_time": "2026-08-20T18:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999911,
+      "entry_z": -3.265938410237788,
+      "expected_edge_bps": 323.46990270366604,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": -6.714954829536076,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -22.514954829536077,
+      "net_gate_bps": -25.514954829536077
+    },
+    {
+      "fold": 6,
+      "entry_time": "2026-08-20T19:00:00+00:00",
+      "exit_time": "2026-08-20T20:00:00+00:00",
+      "side": "long_spread",
+      "entry_state": 0,
+      "entry_probability": 0.9999999999999957,
+      "entry_z": -3.032238929614115,
+      "expected_edge_bps": 300.3234930768744,
+      "hold_bars": 2,
+      "exit_reason": "z_stop",
+      "gross_bps": 4.979625755469663,
+      "execution_cost_bps": 15.8,
+      "gate_cost_bps": 18.8,
+      "net_execution_bps": -10.820374244530338,
+      "net_gate_bps": -13.820374244530338
+    }
+  ],
+  "gross_bps": 292.94822285647933,
+  "execution_cost_bps": 252.8,
+  "gate_cost_bps": 300.8,
+  "net_execution_bps": 40.14822285647934,
+  "net_gate_bps": -7.851777143520657,
+  "win_rate": 0.4375,
+  "profit_factor": 1.0829755040560276,
+  "max_drawdown_bps": 313.35844888623353,
+  "performance_eligible": false,
+  "funding_included": false,
+  "verdict": "INSUFFICIENT"
+}

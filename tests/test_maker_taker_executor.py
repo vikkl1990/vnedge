@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from vnedge.config.risk_config import RiskConfig
+from vnedge.execution.evidence import DecisionEnvelope, ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.maker_taker_executor import (
     ExecutorState,
@@ -22,6 +23,7 @@ from vnedge.scalping.microstructure import MarketMicroState, PrivateStreamState,
 from vnedge.scalping.parameter_registry import DEFAULT_SCALPER_PARAMETER_REGISTRY
 from vnedge.scalping.risk import ScalperRiskConfig, ScalperRiskGateway
 from vnedge.scalping.strategy import QuoteIntent
+from vnedge.strategy.arm_evidence import freeze_permission_from_row
 
 NOW = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 SYM = "BTC/USDT:USDT"
@@ -87,7 +89,7 @@ def intent(**overrides) -> OrderIntent:
         notional_usd=100.0,
         leverage=1.0,
         reduce_only=False,
-        strategy_id="executor_test",
+        strategy_id="executor_test_v1",
         order_type="limit",
         limit_price=99.99,
     )
@@ -95,10 +97,43 @@ def intent(**overrides) -> OrderIntent:
     return OrderIntent(**defaults)
 
 
+def evidence() -> ExecutionEvidence:
+    snapshot = freeze_permission_from_row(
+        {
+            "timestamp": NOW,
+            "open": 99.5,
+            "high": 100.5,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 100.0,
+            "quote_volume": 10_000.0,
+            "trade_count": 50,
+            "is_closed": True,
+            "data_quality": "ok",
+            "candle_source": "canonical_tick_lake",
+        },
+        decision_timeframe="5m",
+        context_timeframes=(),
+        allow_long=True,
+        allow_short=False,
+        reason="executor_test",
+    )
+    arm = DecisionEnvelope.create(
+        strategy_id="executor_test_v1",
+        symbol=SYM,
+        timeframe="5m",
+        side="long",
+        permission_snapshot=snapshot,
+        entry_clock="quote_hold",
+    )
+    return ExecutionEvidence.from_decision(arm)
+
+
 def plan(**overrides) -> MakerTakerExecutionPlan:
     defaults = dict(
         executor_id="exec_1",
         intent=intent(),
+        evidence=evidence(),
         expected_edge_bps=20.0,
         fee_profile=DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile("binanceusdm"),
         maker_ttl_ms=250,
@@ -119,6 +154,7 @@ def test_plan_from_quote_intent_maps_scalper_contract():
     built = MakerTakerExecutionPlan.from_quote_intent(
         executor_id="quote_exec",
         quote=quote,
+        evidence=evidence(),
         fee_profile=DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile("binanceusdm"),
         fallback_edge_decay_bps=2.0,
     )
@@ -137,6 +173,7 @@ def test_plan_from_quote_intent_requires_post_only():
         MakerTakerExecutionPlan.from_quote_intent(
             executor_id="quote_exec",
             quote=quote,
+            evidence=evidence(),
             fee_profile=DEFAULT_SCALPER_PARAMETER_REGISTRY.fee_profile("binanceusdm"),
         )
 

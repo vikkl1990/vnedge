@@ -81,6 +81,14 @@ CLOSED_BAR_LAG_LIMITS_MS: dict[str, tuple[int, int, int]] = {
 SNAPSHOT_AGE_SOFT_P99_MS = 3000
 SNAPSHOT_AGE_HARD_P99_MS = 10000
 
+# --- executable quote freshness (ms) ----------------------------------------
+# This is a point-in-time candidate gate, not a rolling p95 gate.  The quote
+# acceptance contract already rejects a venue-to-receipt lag over two seconds;
+# this second check covers time spent queued or computing after local receipt.
+# Snapshot age is deliberately unrelated and remains UI-only.
+QUOTE_AGE_AT_ACCEPT_SOFT_MS = 1000
+QUOTE_AGE_AT_ACCEPT_HARD_MS = 2000
+
 # --- feed continuity (aligned with the existing feed guard + Time Machine) ---
 FUTURE_TOLERANCE_MS = 2000
 GAP_MULT = 1.5

@@ -41,6 +41,13 @@
   .lbl{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--txt-faint); font-weight:600}
 
   .app{max-width:none; min-height:100vh; margin:0; padding:14px 18px 46px 94px; display:flex; flex-direction:column; gap:14px}
+  .legacy-display-banner{
+    display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--brand-line);
+    border-radius:8px;background:var(--brand-soft);color:var(--txt-dim);font:700 11px var(--mono);
+  }
+  .legacy-display-banner b{color:var(--brand);letter-spacing:.12em}
+  .legacy-display-banner a{color:var(--info);text-decoration:none}
+  .legacy-display-banner a:hover{text-decoration:underline}
 
   /* ---------- terminal shell ---------- */
   .rail{
@@ -692,16 +699,21 @@
 
 <div class="app">
 
+  <div class="legacy-display-banner" role="status">
+    <b>LEGACY DISPLAY ONLY</b>
+    <span>Operational readiness and execution truth live in <a href="/app/">/app</a>.</span>
+  </div>
+
   <!-- ===== COMMAND BAR ===== -->
   <header class="cmd">
     <div class="brand">
       <div class="glyph"><svg viewBox="0 0 48 48"><use href="#vnmark"/></svg></div>
       <div>
         <div class="wordmark">VN&nbsp;<b>EDGE</b></div>
-        <div class="brand-sub">Autonomous Perps Desk</div>
+        <div class="brand-sub">Legacy telemetry display</div>
       </div>
     </div>
-    <span class="live"><i></i>Live · streaming</span>
+    <span class="live"><i></i>Telemetry · display only</span>
 
     <div class="shield" title="This bot evaluates the market and holds shadow/paper positions only. It never places live orders.">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -3028,7 +3040,10 @@
       latRow("Acceptance hold",lat.acceptance_hold_ms)+
       latRow("Gate eval",lat.gate_eval_ms)+
       latRow("Shadow journal",lat.shadow_journal_ms)+
-      latRow("Tick stop",lat.tick_stop_ms);
+      latRow("Tick stop",lat.tick_stop_ms)+
+      latRow("Kernel submit",lat.kernel_submit_ms)+
+      latRow("Adapter ACK",lat.adapter_ack_ms)+
+      latRow("Quote age at accept",lat.quote_age_at_accept_ms);
   }
   function renderBuildMeta(m){
     var b=(m&&m.build_sha)?String(m.build_sha).slice(0,10):"--";
@@ -3367,24 +3382,28 @@
   // one place for a closed trade's net — shadow virtual, then paper net, then raw realized
   function jTradeNet(t){ return (t.virtual_net_usd!=null)?+t.virtual_net_usd:(t.net_after_this_fill_fee_usd!=null)?+t.net_after_this_fill_fee_usd:(+t.realized_pnl_usd||0); }
   function renderJournal(d){
-    var s=d.summary||{}, rp=(s.actual_closed_net_usd!=null?+s.actual_closed_net_usd:+s.actual_realized_pnl_usd)||0, vn=+s.virtual_net_usd||0;
+    var s=d.summary||{}, mixedClock=s.mixed_entry_clock_headline===true, rp=(s.headline_actual_closed_net_usd!=null?+s.headline_actual_closed_net_usd:+s.actual_realized_pnl_usd)||0, vn=+s.virtual_net_usd||0;
     document.getElementById("jkpis").innerHTML=
-      jTile("Paper closed net","<span class='num "+(rp<0?"dn":"up")+"'>"+jMoney(rp)+"</span>",(s.actual_closed_trades||0)+" actual closes")+
+      jTile(mixedClock?"Paper net · split":"Paper closed net",mixedClock?"<span class='num' style='color:var(--warn)'>SPLIT BY CLOCK</span>":"<span class='num "+(rp<0?"dn":"up")+"'>"+jMoney(rp)+"</span>",mixedClock?"use execution-contract cohorts; aggregate is audit-only":(s.actual_closed_trades||0)+" actual closes")+
       jTile("Fees paid","<span class='num' style='color:var(--txt-dim)'>$"+(+s.fees_usd||0).toFixed(2)+"</span>",(s.fills||0)+" fills")+
       jTile("Shadow closed","<span class='num'>"+(s.shadow_closed_trades||0)+"</span>",jMoney(vn)+" virtual net")+
       jTile("Open orders","<span class='num'>"+(s.open_orders||0)+"</span>",(s.orders||0)+" total");
     // cohort split: keep the deliberate controls (which exist to lose) from
     // making the tracked candidates' book look worse than it is.
-    var cp=s.cohort_pnl||{};
+    var cp=s.cohort_pnl||{}, xp=s.execution_contract_pnl||{};
     var order=["tracked","research","control"];
-    if($("jCohort"))$("jCohort").innerHTML=order.filter(function(k){return cp[k];}).map(function(k){
+    var xcards=Object.keys(xp).sort().map(function(k){var c=xp[k],net=+c.net_usd||0;return "<div class='jcohcard tracked'>"+
+      "<div class='ch'><span class='cl'>"+jEsc(k)+"</span><span class='cv "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span></div>"+
+      "<div class='cs'>"+(c.closed||0)+" closed · "+(c.win_rate_pct||0)+"% win</div>"+
+      "<div class='cn'>isolated execution-clock cohort</div></div>";});
+    if($("jCohort"))$("jCohort").innerHTML=xcards.concat(order.filter(function(k){return cp[k];}).map(function(k){
       var c=cp[k], net=+c.net_usd||0;
       return "<div class='jcohcard "+k+"'>"+
         "<div class='ch'><span class='cl'>"+jEsc(c.label||k)+"</span>"+
         "<span class='cv "+(net<0?"dn":"up")+"'>"+jMoney(net)+"</span></div>"+
         "<div class='cs'>"+(c.closed||0)+" closed · "+(c.win_rate_pct||0)+"% win</div>"+
         "<div class='cn'>"+jEsc(c.note||"")+"</div></div>";
-    }).join("")||"<div class='jempty'>No closed trades yet.</div>";
+    })).join("")||"<div class='jempty'>No closed trades yet.</div>";
     // per-lane P&L rollup, worst/best first
     var lp=s.lane_pnl||{};
     var laneRows=Object.keys(lp).map(function(k){return {lane:k,closed:lp[k].closed,net:+lp[k].net_usd||0};})

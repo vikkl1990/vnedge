@@ -99,19 +99,20 @@ def build_integrated_canonical_runtime(
 ) -> tuple[CanonicalCandleRouter | None, tuple[CanonicalProducer, ...], frozenset[str]]:
     """Build the opt-in colocated canonical producer for dark parity.
 
-    ``external_parquet`` preserves the deployed baseline. ``integrated_dark``
-    is deliberately explicit: its writer lease refuses startup while the
-    legacy pulse recorder still owns the venue, and lane decisions continue
-    to use matched Parquet rows until parity evidence permits a later cutover.
+    ``external_parquet`` preserves the legacy baseline. ``integrated_dark``
+    compares routed events to durable rows. ``integrated_router`` makes the
+    immutable routed candle the decision clock while Parquet remains rebuild
+    truth. Both integrated modes require the single-writer lease.
     """
     mode = str(
         environ.get("VNEDGE_CANONICAL_PRODUCER_MODE", "external_parquet")
     ).strip().lower()
     if mode == "external_parquet":
         return None, (), frozenset()
-    if mode != "integrated_dark":
+    if mode not in {"integrated_dark", "integrated_router"}:
         raise ValueError(
-            "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet or integrated_dark"
+            "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet, "
+            "integrated_dark, or integrated_router"
         )
     requested = frozenset(
         _csv(environ.get("VNEDGE_INTEGRATED_RECORDER_EXCHANGES", "binanceusdm"))
@@ -666,10 +667,16 @@ async def main() -> int:
             lanes,
             journal_dir,
             provider,
-            canonical_router=canonical_router,
-            canonical_producers=canonical_producers,
-            canonical_router_exchanges=canonical_exchanges,
-        ).run()
+        canonical_router=canonical_router,
+        canonical_producers=canonical_producers,
+        canonical_router_exchanges=canonical_exchanges,
+        canonical_router_authoritative=(
+            os.environ.get("VNEDGE_CANONICAL_PRODUCER_MODE", "external_parquet")
+            .strip()
+            .lower()
+            == "integrated_router"
+        ),
+    ).run()
         return 0
     finally:
         if server_task is not None:

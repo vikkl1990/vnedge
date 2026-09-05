@@ -304,6 +304,7 @@ def build_session(
     execution_cost_exchange_id=None,
     canonical_candle_store=None,
     canonical_candle_subscription=None,
+    canonical_router_authoritative=False,
     canonical_candle_wait_seconds=0.0,
     entry_route=EntryRoute.AUTO,
     maker_fill_ttl_bars=1,
@@ -339,6 +340,7 @@ def build_session(
         trial_meta=trial_meta,
         canonical_candle_store=canonical_candle_store,
         canonical_candle_subscription=canonical_candle_subscription,
+        canonical_router_authoritative=canonical_router_authoritative,
     )
     return session, exchange
 
@@ -396,6 +398,55 @@ async def test_router_dark_source_uses_matching_durable_candle_as_decision_row(t
     assert session._venue_close_watchdog_count == 1
     assert session.feed.closed_candles.empty()
     assert await session._await_canonical_candle(raw) is True
+
+
+@pytest.mark.asyncio
+async def test_authoritative_router_uses_durable_trade_event_without_parquet_poll(tmp_path):
+    opened = datetime(2026, 8, 26, 13, tzinfo=UTC)
+    candle = Candle(
+        symbol=SYM,
+        timeframe="1h",
+        open_time=opened,
+        close_time=opened + timedelta(hours=1),
+        open=Decimal(100),
+        high=Decimal(103),
+        low=Decimal(99),
+        close=Decimal(102),
+        volume=Decimal(14),
+        quote_volume=Decimal(1420),
+        trade_count=50,
+    )
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    router = CanonicalCandleRouter()
+    subscription = router.subscribe("binanceusdm", SYM, "1h")
+    router.publisher(
+        "binanceusdm",
+        clock=lambda: candle.close_time + timedelta(milliseconds=5),
+        raw_trade_durable=True,
+    )(candle)
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        canonical_candle_store=store,
+        canonical_candle_subscription=subscription,
+        canonical_router_authoritative=True,
+    )
+
+    raw = await session._next_closed_candle()
+
+    assert raw == [
+        int(opened.timestamp() * 1000),
+        100.0,
+        103.0,
+        99.0,
+        102.0,
+        14.0,
+    ]
+    assert session._last_canonical_transport == "router"
+    assert session._last_router_candle == candle
+    assert session._append_candle(raw) is True
+    assert session.candles.iloc[-1]["candle_source"] == "canonical_tick_lake"
+    assert session._last_canonical_transport == "router"
 
 
 @pytest.mark.asyncio
@@ -582,6 +633,29 @@ def test_eval_record_contains_gate_contract_and_data_provenance(tmp_path):
     assert len(record["data_source"]["decision_row_sha256"]) == 64
 
 
+def test_eval_record_counts_named_htf_context_rejection(tmp_path):
+    strategy = DiagnosticLong()
+    strategy.evaluation_diagnostics = lambda _df, _index: {  # type: ignore[method-assign]
+        "eligible": False,
+        "primary_failed_gate": "htf_context_missing",
+        "all_failed_gates": ["htf_context_missing"],
+    }
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=strategy,
+        mode=RunnerMode.SHADOW,
+    )
+    prepared = history()
+    prepared["candle_source"] = "canonical_tick_lake"
+
+    session._record_eval(prepared, len(prepared) - 1, None)
+
+    assert session.rejected_htf_context_missing == 1
+    record = session.journal.read_all()[-1]["payload"]
+    assert record["primary_failed_gate"] == "htf_context_missing"
+
+
 def test_v3_shadow_session_selects_quote_acceptance_runner(tmp_path):
     session, _ = build_session(
         tmp_path,
@@ -645,7 +719,7 @@ async def test_strategy_prepare_yields_event_loop_to_peer_lanes(tmp_path):
 
 
 async def test_shadow_outcome_reuses_scanner_frame_for_same_bar(tmp_path):
-    """A closed bar gets one feature build even when outcomes also consume it."""
+    """Shadow uses the kernel and never constructs the legacy outcome fork."""
     strategy = CountingPrepareLong()
     session, _ = build_session(
         tmp_path,
@@ -653,12 +727,12 @@ async def test_shadow_outcome_reuses_scanner_frame_for_same_bar(tmp_path):
         strategy=strategy,
         mode=RunnerMode.SHADOW,
     )
-    assert session.shadow_outcomes is not None
+    assert session.shadow_outcomes is None
 
     await session.run(max_bars=1)
 
-    # One startup shadow-prime build plus one build for the forward bar.  The
-    # outcome resolver reuses that second frame instead of preparing again.
+    # One startup build plus one forward build; no separate outcome engine may
+    # run prepare() a third time.
     assert strategy.prepare_calls == 2
 
 
@@ -785,6 +859,33 @@ async def test_latency_is_measured_end_to_end(tmp_path):
     assert snap["canonical_wait_ms"]["n"] >= 1
     assert snap["decision_lag_ms"]["n"] >= 1  # eval ran (plan was None)
     assert snap["decision_lag_ms"]["last"] >= 0.0
+    assert snap["kernel_submit_ms"]["n"] == 1
+    assert snap["kernel_submit_ms"]["last"] >= 0.0
+    assert snap["adapter_ack_ms"]["n"] == 1
+    assert snap["adapter_ack_ms"]["last"] >= 0.0
+
+
+def test_quote_age_at_accept_hard_rejects_only_new_candidate(tmp_path):
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        mode=RunnerMode.SHADOW,
+    )
+    quote_ts = datetime.now(UTC) - timedelta(seconds=3)
+    session._active_quote_context = {
+        "event_ts": quote_ts,
+        "received_ts": quote_ts,
+        "source": "test:stale_quote",
+        "exchange_timestamped": True,
+    }
+
+    approval = session._approve_scanner_fire(object(), 0, quote_ts)
+
+    assert approval.approved is False
+    assert approval.failed_checks == ("quote_age_at_accept_hard",)
+    stats = session.latency.stats("quote_age_at_accept_ms")
+    assert stats is not None
+    assert stats["last"] >= 3_000.0
 
 
 _HR_MS = 3_600_000
@@ -1072,7 +1173,7 @@ def test_no_trial_scorecard_without_a_trial(tmp_path):
     assert session._trial_scorecard() is None
 
 
-async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
+async def test_shadow_live_submits_only_through_simulated_kernel(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
 
@@ -1083,12 +1184,18 @@ async def test_shadow_live_evaluates_and_journals_without_submission(tmp_path):
     # intent; a restart is not a market event.
     assert report.signals_generated == 1
     assert report.shadow_approved == 1
-    assert report.orders_submitted == 0
-    assert report.fills == 0
-    assert exchange.get_positions() == []
-    records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(records) == 1
-    assert all(r["payload"]["approved"] is True for r in records)
+    assert report.orders_submitted == 1
+    assert report.fills == 1
+    assert len(exchange.get_positions()) == 1
+    records = session.journal.read_all()
+    assert not [r for r in records if r["kind"] == "shadow_intent"]
+    kernel_records = [
+        r
+        for r in records
+        if r["kind"] in {"risk_decision", "order_intent"}
+    ]
+    assert [r for r in kernel_records if r["kind"] == "order_intent"]
+    assert all(r["payload"]["path_id"] == "kernel_v1" for r in kernel_records)
 
 
 async def test_shadow_prime_never_enters_from_seeded_history(tmp_path):
@@ -1159,19 +1266,19 @@ def test_runtime_frame_uses_strategy_contract_not_legacy_4096_floor(tmp_path):
     assert session._working_frame_limit < 4096
 
 
-async def test_shadow_book_blocks_overlapping_virtual_positions(tmp_path):
+async def test_shadow_kernel_blocks_overlapping_positions(tmp_path):
     feed = FakeFeed(live_rows(n=2))
     session, _ = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
 
     report = await session.run(max_bars=2)
 
-    # AlwaysLong fires on every forward bar, but the first unresolved virtual
-    # trade reserves the purse until its outcome is known.
-    records = [r for r in session.journal.read_all() if r["kind"] == "shadow_intent"]
+    # AlwaysLong fires on every forward bar, but the first kernel-managed plan
+    # owns the position; there is no independent virtual reservation book.
+    records = [r for r in session.journal.read_all() if r["kind"] == "order_intent"]
     assert len(records) == 1
     assert report.shadow_approved == 1
-    assert session.shadow_outcomes is not None
-    assert session.shadow_outcomes.has_pending
+    assert session.shadow_outcomes is None
+    assert session._plan is not None
 
 
 def test_squeeze_shadow_uses_canonical_scanner_not_legacy_outcomes(tmp_path):
@@ -1433,6 +1540,11 @@ async def test_timeout_reached_entry_activates_plan_after_reconciliation(tmp_pat
     assert report.fills == 2
     assert exchange.get_positions() == []
     assert report.reconciliation_mismatches == 0
+    timeout_ack = session.latency.stats(
+        "adapter_ack_ms{intent=entry,outcome=timeout_unknown}"
+    )
+    assert timeout_ack is not None
+    assert timeout_ack["n"] == 1
 
 
 async def test_restored_orphan_position_trips_kill_and_blocks_entries(tmp_path):
@@ -1480,12 +1592,23 @@ async def test_lane_eval_journaled_for_every_evaluated_bar(tmp_path):
         assert r["payload"]["strategy_id"] == "always_long"
         assert r["payload"]["exchange"] == "fake"
         assert r["payload"]["timeframe"] == "1h"
+        assert r["payload"]["eval_at"]
+        assert r["payload"]["data_source"]["candle_source"] == "unreported"
+        assert r["payload"]["data_source"]["decision_transport"] == "parquet"
         assert r["payload"]["signal"]["side"] == "long"
         assert r["payload"]["signal"]["take_profit_levels"] == []
         assert "features" in r["payload"] and "thresholds" in r["payload"]
     # the newest evaluation is surfaced for the dashboard snapshot
     assert session.last_eval is not None
     assert session.last_eval["fired"] is True
+    drought = session.signal_drought.snapshot(
+        now=datetime.now(UTC), timeframe_seconds=3600
+    )
+    assert drought.last_eval_at == session.last_eval["eval_at"]
+    assert drought.last_evidence_at is not None
+    assert drought.last_accept_at is not None
+    assert drought.candle_source == "unreported"
+    assert drought.decision_transport == "parquet"
 
 
 async def test_shadow_prime_backfills_observability_records(tmp_path):
@@ -1531,7 +1654,7 @@ async def test_trade_log_narrates_signal_to_verdict(tmp_path):
     events = [e["event"] for e in session.trade_log]
     # Only the forward live bar fires; seeded history is observability-only.
     assert events.count("signal_fired") == 1
-    assert events.count("shadow_approved") == 1
+    assert events.count("order_submitted") == 1
     assert all("ts" in e and "detail" in e for e in session.trade_log)
 
 
@@ -1648,7 +1771,11 @@ async def test_tick_stop_breach_exits_between_bars(tmp_path):
     # the exit went through the FULL OrderManager pipeline as reduce-only
     intents = [r for r in session.journal.read_all() if r["kind"] == "order_intent"]
     assert intents[-1]["payload"]["intent"]["reduce_only"] is True
-    assert intents[-1]["payload"]["intent_key"].startswith(f"exit|{SYM}|tick_stop|")
+    assert intents[-1]["payload"]["intent_key"].startswith("dec_")
+    assert (
+        intents[-1]["payload"]["execution_evidence"]["strategy_id"]
+        == "long_once:exit:tick_stop"
+    )
 
 
 async def test_stale_feed_warns_but_tick_stop_reduce_only_exits(tmp_path):
@@ -1668,7 +1795,7 @@ async def test_stale_feed_warns_but_tick_stop_reduce_only_exits(tmp_path):
     assert any("data_freshness" in w for w in exit_decision["warning_checks"])
 
 
-async def test_rejected_tick_stop_preserves_plan_then_retries_with_new_key(tmp_path):
+async def test_rejected_tick_stop_resubmits_same_decision_as_new_attempt(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(
         tmp_path,
@@ -1692,12 +1819,15 @@ async def test_rejected_tick_stop_preserves_plan_then_retries_with_new_key(tmp_p
     assert exchange.get_positions() == []
     assert session._plan is None
     intents = [
-        r["payload"]["intent_key"]
+        r["payload"]
         for r in session.journal.read_all()
-        if r["kind"] == "order_intent"
+        if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
     ]
-    assert intents[-2].startswith(f"exit|{SYM}|tick_stop|")
-    assert intents[-1] == intents[-2] + "|retry=1"
+    assert len(intents) == 2
+    assert intents[0]["intent_key"].startswith("dec_")
+    assert intents[1]["intent_key"] == intents[0]["intent_key"]
+    assert intents[1]["client_order_id"] != intents[0]["client_order_id"]
+    assert intents[1]["retry_of"] == intents[0]["client_order_id"]
 
 
 async def test_timeout_lost_tick_stop_preserves_until_reconcile_then_retries(tmp_path):
@@ -1730,11 +1860,14 @@ async def test_timeout_lost_tick_stop_preserves_until_reconcile_then_retries(tmp
     assert exchange.get_positions() == []
     assert session._plan is None
     intents = [
-        r["payload"]["intent_key"]
+        r["payload"]
         for r in session.journal.read_all()
         if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
     ]
-    assert intents[-1] == intents[-2] + "|retry=1"
+    assert len(intents) == 2
+    assert intents[1]["intent_key"] == intents[0]["intent_key"]
+    assert intents[1]["client_order_id"] != intents[0]["client_order_id"]
+    assert intents[1]["retry_of"] == intents[0]["client_order_id"]
 
 
 async def test_tick_quote_without_breach_does_not_exit(tmp_path):
@@ -1814,24 +1947,24 @@ async def test_tick_stop_short_side_triggers_on_ask(tmp_path):
     assert records[0]["payload"]["ask"] == 105.4
 
 
-async def test_shadow_lane_unaffected_by_tick_stops(tmp_path):
+async def test_shadow_lane_uses_same_tick_stop_path_as_paper(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, mode=RunnerMode.SHADOW)
     await session.run(max_bars=1)
-    assert session._plan is None  # shadow never arms a plan
+    assert session._plan is not None
 
     feed.quote = (10.0, 10.02)  # would breach any long stop if a plan existed
     await run_idle_ticks(session, seconds=0.1)
 
     assert exchange.get_positions() == []
-    assert session.orders_submitted == 0
-    assert session.tick_stop_exits == 0
-    assert not [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
+    assert session.orders_submitted == 2  # entry + reduce-only stop exit
+    assert session.tick_stop_exits == 1
+    assert [r for r in session.journal.read_all() if r["kind"] == "tick_stop_exit"]
 
 
-async def test_tick_stop_mode_guard_holds_even_with_forced_shadow_plan(tmp_path):
-    # belt and braces: even if a plan were ever armed in shadow by mistake,
-    # the explicit mode guard keeps tick stops from submitting anything
+async def test_tick_stop_requires_a_kernel_position_even_with_forced_shadow_plan(tmp_path):
+    # A hand-forced plan without a kernel position must not manufacture an
+    # exit order. Normal shadow entries create both through the kernel.
     from vnedge.runtime.live_paper import _LivePlan
 
     feed = FakeFeed([])

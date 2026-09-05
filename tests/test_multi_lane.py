@@ -187,7 +187,7 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     assert bool(overlaid.iloc[0]["is_closed"]) is True
 
 
-def test_htf_v2_may_seed_only_validated_price_only_exchange_history():
+def test_htf_v2_refuses_validated_price_only_exchange_history_for_permission():
     exchange = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
@@ -205,7 +205,7 @@ def test_htf_v2_may_seed_only_validated_price_only_exchange_history():
     )
     assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv_validated"
     assert overlaid.iloc[0]["data_quality"] == "ok"
-    assert _allows_validated_exchange_ohlcv(
+    assert not _allows_validated_exchange_ohlcv(
         LaneSpec(
             lane_id="htf_v2",
             exchange="delta_india",
@@ -509,21 +509,11 @@ def test_checked_in_observer_roster_is_valid() -> None:
     specs = build_shadow_observe_roster_specs(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
-    assert len(specs) == 10
-    assert all(spec.strategy_id != "squeeze_expansion_breakout_v4" for spec in specs)
-    assert sum(spec.strategy_id == "session_continuation_realtime_v2" for spec in specs) == 2
+    assert len(specs) == 2
+    assert {spec.strategy_id for spec in specs} == {"htf_regime_continuation_15m_v2"}
+    assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}
     assert sum(spec.strategy_id == "htf_regime_continuation_15m_v2" for spec in specs) == 2
-    assert all(spec.strategy_id != "htf_structure_continuation_realtime_v1" for spec in specs)
-    assert sum(spec.strategy_id == "structure_bos_realtime_v2" for spec in specs) == 2
-    route_specs = [
-        spec for spec in specs if spec.strategy_id == "structure_bounce_route_probe_v2"
-    ]
-    assert len(route_specs) == 2
-    assert {(spec.symbol, spec.entry_route.value) for spec in route_specs} == {
-        ("BTC/USD:USD", "taker"),
-        ("ETH/USD:USD", "maker_retest"),
-    }
-    assert all(spec.maker_fill_ttl_bars == 6 for spec in route_specs)
+    assert all(spec.entry_route.value == "taker" for spec in specs)
     assert all(not spec.is_primary for spec in specs)
     assert {spec.exchange for spec in specs} == {"delta_india"}
     assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}

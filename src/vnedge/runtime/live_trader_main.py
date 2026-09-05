@@ -49,6 +49,7 @@ from vnedge.execution.private_stream import (
 )
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID
 from vnedge.runtime.live_trader import LiveTraderSession
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
 
@@ -268,7 +269,10 @@ async def run_live_trader(
         config.symbol,
         config.strategy_id,
     )
-    journal = DecisionJournal(f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl")
+    journal = DecisionJournal(
+        f"logs/live/{config.exchange}_{config.strategy_id}.journal.jsonl",
+        path_id=KERNEL_PATH_ID,
+    )
     if config.exchange.lower() in {"delta", "delta_india", "deltaindia"}:
         from vnedge.exchange.delta_snapshot_validation import bootstrap_delta_product_specs
 

@@ -10,6 +10,21 @@ from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV
 
 
 class _HourlyContext:
+    _canonical_htf_current = True
+    htf_candles = pd.DataFrame(
+        {
+            "timestamp": [pd.Timestamp("2026-08-22 08:00", tz="UTC")],
+            "open": [99.0],
+            "high": [103.0],
+            "low": [98.0],
+            "close": [102.0],
+            "volume": [1_000.0],
+            "data_quality": ["ok"],
+            "is_closed": [True],
+            "candle_source": ["canonical_tick_lake"],
+        }
+    )
+
     def prepare(self, hours: pd.DataFrame) -> pd.DataFrame:
         out = hours.copy()
         out["structure_ready"] = True
@@ -36,6 +51,7 @@ def _history() -> pd.DataFrame:
             "volume": 100.0,
             "data_quality": "ok",
             "is_closed": True,
+            "candle_source": "canonical_tick_lake",
         }
     )
     frame.loc[frame.index[-1], ["open", "high", "close", "volume"]] = [
@@ -61,6 +77,23 @@ def test_v2_uses_closed_hour_context_and_15m_break_confirmation() -> None:
     assert signal is not None
     assert signal.side == "long"
     assert "context=closed_1h_4h" in signal.reason
+    assert signal.permission_snapshot is not None
+    assert signal.permission_snapshot.context_bars[0].open_time == pd.Timestamp(
+        "2026-08-22 08:00", tz="UTC"
+    )
+
+
+def test_v2_rejects_fire_when_bound_hour_context_disappears() -> None:
+    strategy = StructureBos15mTriggerV2()
+    context = _HourlyContext()
+    strategy._hourly = context
+    prepared = strategy.prepare(_history())
+    context.htf_candles = pd.DataFrame()
+
+    assert strategy.signal(prepared, len(prepared) - 1) is None
+    diagnostics = strategy.evaluation_diagnostics(prepared, len(prepared) - 1)
+    assert diagnostics["primary_failed_gate"] == "htf_context_missing"
+    assert diagnostics["eligible"] is False
 
 
 def test_hour_frame_normalizes_equivalent_delta_symbol_spellings() -> None:

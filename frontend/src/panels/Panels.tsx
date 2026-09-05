@@ -182,18 +182,19 @@ export function DeskPanel() {
       key: "strategy_id", header: "Lane", render: (r) => <span className="block min-w-[190px]"><span className={r.eligibility === "KILLED" ? "font-mono text-faint line-through" : "font-mono text-txt"}>{r.strategy_id}</span><span className="block text-[9px] text-faint">{r.eligibility} · {r.observation_class === "shadow_observe" ? "SHADOW_OBSERVE" : r.mode}</span></span>,
     },
     { key: "market", header: "Market", render: (r) => <span className="whitespace-nowrap font-mono">{r.symbol || "—"}<span className="block text-[9px] text-faint">decision {r.timeframe || "—"}</span></span> },
-    { key: "engine", header: "Entry engine", render: (r) => <span className="block whitespace-nowrap font-mono">{r.lifecycle.engine_kind === "quote_acceptance" ? "BBO accept" : r.lifecycle.engine_kind === "maker_retest" ? "maker retest" : r.lifecycle.engine_kind === "taker" ? "taker now" : r.lifecycle.engine_kind === "next_open" ? "next open" : "measurement"}<span className="block text-[9px] text-faint">{r.lifecycle.fill_evidence?.replace(/_/g, " ") ?? `protect ${r.runtime_contract?.protection_clock ?? "—"}`}</span></span> },
+    { key: "engine", header: "Entry engine", render: (r) => <span className="block whitespace-nowrap font-mono">{r.lifecycle.engine_kind === "quote_acceptance" ? "BBO accept" : r.lifecycle.engine_kind === "maker_retest" ? "maker retest" : r.lifecycle.engine_kind === "taker" ? "taker now" : r.lifecycle.engine_kind === "next_open" ? "next open" : "measurement"}<span className="block text-[9px] text-faint">path {r.path_id}</span><span className="block text-[9px] text-faint">{r.lifecycle.fill_evidence?.replace(/_/g, " ") ?? `protect ${r.runtime_contract?.protection_clock ?? "—"}`}</span></span> },
     { key: "state", header: "Setup state", render: (r) => <span className="block min-w-[105px]"><TerminalBadge tone={setupTone(r.lifecycle.state)}>{r.lifecycle.state}</TerminalBadge><span className="mt-1 block max-w-[150px] truncate font-mono text-[9px] text-faint" title={r.lifecycle.arm_state ?? r.current_waiting_reason}>{r.lifecycle.arm_state ?? r.current_waiting_reason}</span></span> },
-    { key: "readiness", header: "Readiness D/S/X", render: (r) => {
+    { key: "readiness", header: "Ready D/S/P/X/L", render: (r) => {
       const ready = r.runtime_readiness;
-      if (!ready) return <span className="font-mono text-faint">— / — / —</span>;
-      const blockers = ready.execution_blockers.join(" · ") || "all runtime stages ready";
-      return <span className="block min-w-[120px] font-mono" title={blockers}><span className={ready.data_ready ? "text-long" : "text-short"}>{ready.data_ready ? "✓" : "✕"}</span> / <span className={ready.decision_ready ? "text-long" : "text-short"}>{ready.decision_ready ? "✓" : "✕"}</span> / <span className={ready.execution_ready ? "text-long" : "text-warn"}>{ready.execution_ready ? "✓" : "✕"}</span><span className="mt-1 block max-w-[150px] truncate text-[9px] text-faint">{ready.execution_blockers[0] ?? "ready"}</span></span>;
+      if (!ready) return <span className="font-mono text-faint">— / — / — / — / —</span>;
+      const blockers = ready.live_blockers.join(" · ") || "all runtime stages ready";
+      const mark = (ok: boolean, warn = false) => <span className={ok ? "text-long" : warn ? "text-warn" : "text-short"}>{ok ? "✓" : "✕"}</span>;
+      return <span className="block min-w-[135px] font-mono" title={blockers}>{mark(ready.data_ready)} / {mark(ready.decision_ready)} / {mark(ready.parity_ready, true)} / {mark(ready.execution_ready, true)} / {mark(ready.live_ready)}<span className="mt-1 block max-w-[165px] truncate text-[9px] text-faint">{ready.live_blockers[0] ?? "ready"}</span></span>;
     } },
     { key: "funnel", header: "Lifecycle", render: (r) => <span className="block min-w-[180px] font-mono"><span className="block">arm {r.lifecycle.armed_entries} → cand {r.lifecycle.candidates} → acc {r.lifecycle.accepted}</span><span className="block text-[9px] text-faint">rej {r.lifecycle.rejected}: cost {r.lifecycle.cost_rejected} · size {r.lifecycle.sizing_rejected} · risk {r.lifecycle.risk_rejected} · {r.lifecycle.fires == null ? "fires n/a" : `fires ${r.lifecycle.fires}`}</span></span> },
     { key: "context", header: "Session / HTF", render: (r) => <span className="block min-w-[100px] font-mono">{r.lifecycle.session_state}<span className="block text-[9px] text-faint">HTF {r.lifecycle.htf_context_age_seconds == null ? "n/a" : ageSec(r.lifecycle.htf_context_age_seconds)}</span></span> },
     { key: "close-lag", header: "Close → arm p95", align: "right", render: (r) => <span title={`${r.latency_samples.bar_close}/${r.latency_samples.required} receipt samples`}><span className="block">{r.close_to_arm_ms == null ? "—" : `${r.close_to_arm_ms.toFixed(1)} ms`}</span><span className="block text-[9px] text-faint">receipt {r.bar_close_receipt_ms == null ? "—" : `${r.bar_close_receipt_ms.toFixed(0)} ms`} · wait {r.canonical_wait_ms == null ? "—" : `${r.canonical_wait_ms.toFixed(0)} ms`}</span></span> },
-    { key: "waiting", header: "Why waiting", render: (r) => <span className="block min-w-[145px]"><span className="font-mono text-dim">{r.current_waiting_reason}</span><span className="block text-[9px] text-faint">{r.arm_skips.toLocaleString("en-US")} arm skips</span></span> },
+    { key: "waiting", header: "Why waiting", render: (r) => <span className="block min-w-[165px]"><span className="font-mono text-dim">{r.drought?.drought_class?.replace(/_/g, " ") ?? r.current_waiting_reason}</span><span className="block text-[9px] text-faint">eval {r.drought?.eval_age_s == null ? "n/a" : ageSec(r.drought.eval_age_s)} · evidence {r.drought?.evidence_age_s == null ? "none" : ageSec(r.drought.evidence_age_s)}</span><span className="block text-[9px] text-faint">{r.drought?.last_primary_failed_gate ?? `${r.arm_skips.toLocaleString("en-US")} arm skips`}</span></span> },
     { key: "virtual", header: "Shadow booked", align: "right", render: (r) => r.lifecycle.net_unit !== "USD" ? "—" : <span className="block min-w-[105px] font-mono">{usd(r.lifecycle.net_value)}<span className="block text-[9px] text-faint">USD · {r.lifecycle.resolved} resolved · {r.lifecycle.pending} pending</span></span> },
     { key: "cost", header: "Gate wall", render: (r) => <span className="whitespace-nowrap font-mono">{r.cost_profile}<span className="block text-[9px] text-faint">{r.round_trip_bps == null ? "not reported" : `${r.round_trip_bps.toFixed(1)} bps RT`}</span></span> },
     { key: "health", header: "Ops health", render: (r) => {
@@ -228,11 +229,13 @@ export function DeskPanel() {
               <span className="text-faint">positions / pending</span><span className="text-right font-mono">{lane.open_positions} / {lane.shadow_perf?.pending_shadow_intents ?? 0}</span>
               <span className="text-faint">decision engine</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_engine ?? "unreported"}</span>
               <span className="text-faint">execution route</span><span className="text-right font-mono break-all">{lane.entry_route}{lane.entry_route === "maker_retest" ? ` · ${lane.maker_fill_ttl_bars ?? "—"} bars TTL` : ""}</span>
+              <span className="text-faint">kernel path</span><span className="text-right font-mono break-all">{lane.path_id}</span>
+              <span className="text-faint">permission snapshot</span><span className="text-right font-mono break-all">{lane.permission_snapshot_id ?? "not armed"}</span>
               <span className="text-faint">fill evidence</span><span className="text-right font-mono break-all">{lane.lifecycle.fill_evidence?.replace(/_/g, " ") ?? "not route-specific"}</span>
               <span className="text-faint">clock contract</span><span className="text-right font-mono break-all">{lane.runtime_contract?.decision_tf ?? lane.timeframe} close → {lane.runtime_contract?.entry_clock === "bbo_acceptance" ? "BBO" : lane.runtime_contract?.entry_clock === "execution_route" ? lane.entry_route : "next open"} → {lane.runtime_contract?.protection_clock ?? "ticks"}</span>
               <span className="text-faint">last-closed context</span><span className="text-right font-mono break-all">{(lane.runtime_contract?.context_tfs ?? []).map((tf) => `${tf} ${ageSec(lane.runtime_contract?.context_age_seconds?.[tf])}`).join(" · ") || "none"}</span>
               <span className="text-faint">operational blockers</span><span className="text-right font-mono break-all">{lane.health_reasons?.join(" · ") || "none"}</span>
-              <span className="text-faint">data / signal / execute</span><span className="text-right font-mono break-all">{lane.runtime_readiness ? `${lane.runtime_readiness.data_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.decision_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.execution_ready ? "ready" : "blocked"}` : "not reported"}</span>
+              <span className="text-faint">data / signal / parity / execute / live</span><span className="text-right font-mono break-all">{lane.runtime_readiness ? `${lane.runtime_readiness.data_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.decision_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.parity_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.execution_ready ? "ready" : "blocked"} / ${lane.runtime_readiness.live_ready ? "ready" : "blocked"}` : "not reported"}</span>
               <span className="text-faint">execution blockers</span><span className="text-right font-mono break-all">{lane.runtime_readiness?.execution_blockers.join(" · ") || "none"}</span>
               <span className="text-faint">close receipt p95</span><span className="text-right font-mono">{lane.health_details?.bar_close_receipt?.p95_ms == null ? "—" : `${lane.health_details.bar_close_receipt.p95_ms.toFixed(1)} ms`} / hard {lane.health_details?.bar_close_receipt?.hard_ms ?? "—"} ms</span>
               <span className="text-faint">decision compute p95</span><span className="text-right font-mono">{lane.health_details?.decision_compute?.p95_ms == null ? "—" : `${lane.health_details.decision_compute.p95_ms.toFixed(1)} ms`} / hard {lane.health_details?.decision_compute?.hard_ms ?? "—"} ms</span>
@@ -1192,12 +1195,14 @@ export function JournalPanel() {
   const [laneFilter, setLaneFilter] = useState("all");
   const rows = data?.closed_trades ?? [];
   const summary = data?.summary;
-  const actualRows = rows.filter((row) => row.kind === "actual_closing_fill");
+  const actualRows = rows.filter((row) => row.kind === "actual_closing_fill" && row.performance_eligible === true);
   const rowsNet = actualRows.reduce((total, row) => {
     const value = row.net_after_this_fill_fee_usd ?? row.net_pnl_usd;
     return total + (typeof value === "number" && Number.isFinite(value) ? value : 0);
   }, 0);
   const summaryNet = summary?.actual_closed_net_usd;
+  const mixedEntryClocks = summary?.mixed_entry_clock_headline === true;
+  const executionContracts = Object.entries(summary?.execution_contract_pnl ?? {});
   const shadowHistoryComplete = summary?.shadow_history_complete === true;
   const reconciliationDelta = typeof summaryNet === "number" ? rowsNet - summaryNet : null;
   const completeTradePopulation = (data?.page?.totals.closed_trades ?? rows.length) <= rows.length;
@@ -1224,6 +1229,7 @@ export function JournalPanel() {
   const lastDecisionTs = decisionTimes[decisionTimes.length - 1];
   const cols: Column<JournalRow>[] = [
     { key: "lane", header: "Lane", render: (r) => <span className="font-mono">{r.lane ?? r.symbol ?? "—"}</span> },
+    { key: "path", header: "Path / evidence", render: (r) => <span className="block font-mono">{r.execution_contract_id ?? r.path_id ?? "legacy"}<span className={`block text-[9px] ${r.performance_eligible ? "text-long" : "text-warn"}`}>{r.performance_eligible ? "performance eligible" : "evidence only"}{r.decision_id ? ` · ${r.decision_id}` : ""}{r.permission_snapshot_id ? ` · ${r.permission_snapshot_id}` : ""}</span></span> },
     { key: "side", header: "Side", render: (r) => r.side ?? "—" },
     {
       key: "pnl",
@@ -1231,7 +1237,7 @@ export function JournalPanel() {
       align: "right",
       render: (r) => {
         const net = r.net_pnl_usd ?? r.net_after_this_fill_fee_usd ?? r.virtual_net_usd;
-        return <span className={signed(net)}>{usd(net)}</span>;
+        return <span className={r.performance_eligible ? signed(net) : "text-faint"}>{r.performance_eligible ? usd(net) : "evidence only"}</span>;
       },
     },
     { key: "exit", header: "Exit", render: (r) => <span className="text-dim">{r.exit_reason ?? r.resolution ?? "—"}</span> },
@@ -1249,7 +1255,13 @@ export function JournalPanel() {
   return (
     <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${data?.page?.totals.closed_trades ?? rows.length} closed · page ${Math.floor(offset / pageSize) + 1} · 20s`}>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Paper net" value={usd(summary?.actual_closed_net_usd)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3">
+          <Kpi
+            label={mixedEntryClocks ? "Paper net · split" : "Paper net"}
+            value={mixedEntryClocks ? "SPLIT BY CLOCK" : usd(summary?.headline_actual_closed_net_usd)}
+          />
+          {mixedEntryClocks ? <div className="mt-1 text-[9px] font-mono text-warn">Use execution-contract cohorts; aggregate is audit-only.</div> : null}
+        </div>
         <div className="rounded-lg border border-line bg-inset p-3">
           <Kpi label="Paper fees" value={usd(summary?.fees_usd)} />
           <div className="mt-1 text-[9px] font-mono text-faint">shadow modeled {usd(summary?.shadow_execution_fees_usd)}</div>
@@ -1262,6 +1274,17 @@ export function JournalPanel() {
         {completeTradePopulation ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)}` : " · matched") : " · paged"}
         {` · shadow ${summary?.shadow_closed_trades ?? 0} closed / ${usd(summary?.virtual_net_usd)} · ${shadowHistoryComplete ? "full-stream matched" : `history ${summary?.shadow_history_state ?? "unavailable"}`}`}
       </div>
+      {executionContracts.length > 0 ? (
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {executionContracts.map(([contractId, contract]) => (
+            <div key={contractId} className="rounded-lg border border-line bg-inset px-3 py-2">
+              <div className="break-all font-mono text-[10px] text-brand">{contractId}</div>
+              <div className={`mt-1 font-mono text-sm ${signed(contract.net_usd)}`}>{usd(contract.net_usd)}</div>
+              <div className="text-[9px] font-mono text-faint">{contract.closed} closed · {contract.win_rate_pct}% win</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-4 flex flex-wrap items-center gap-2" role="group" aria-label="Journal view">
         {(["all", "scanner", "decisions", "trades"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md border px-3 py-1.5 text-[10px] font-mono uppercase ${view === item ? "border-brand/50 bg-brand/10 text-brand" : "border-line text-dim"}`}>{item}</button>)}
         <input aria-label="Search journal" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="search event, reason, lane…" className="min-w-[220px] border border-line bg-inset px-2.5 py-1.5 font-mono text-[10px] text-txt placeholder:text-faint focus:border-brand focus:outline-none" />

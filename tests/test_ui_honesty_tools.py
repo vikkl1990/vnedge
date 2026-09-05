@@ -67,10 +67,33 @@ def test_journal_fleet_view_excludes_retired_lanes(tmp_path):
     # active lane: +10 realized
     _write(tmp_path / "live.fills.jsonl", [
         {"ts": "2026-07-27T00:00:00Z", "lane": "live", "side": "buy", "price": 100,
-         "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "BTC/USDT"},
+         "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05, "symbol": "BTC/USDT",
+         "client_order_id": "entry-live-1"},
         {"ts": "2026-07-27T01:00:00Z", "lane": "live", "side": "sell", "price": 110,
          "quantity": 1, "realized_pnl_usd": 10, "fee_usd": 0.05, "symbol": "BTC/USDT",
          "client_order_id": "exit-live-1"},
+    ])
+    _write(tmp_path / "live.journal.jsonl", [
+        {
+                "ts": "2026-07-27T00:00:00Z", "kind": "order_intent", "payload": {
+                    "path_id": "kernel_v1", "client_order_id": "entry-live-1", "intent": {
+                        "symbol": "BTC/USDT", "side": "long", "quantity": 1,
+                        "strategy_id": "test",
+                    },
+                    "execution_evidence": {
+                        "decision_id": "decision-live-1",
+                        "strategy_id": "test_v1",
+                        "candle_source": "parquet",
+                        "entry_clock": "next_1h_open",
+                        "execution_contract_id": "kernel_v1|parquet|next_1h_open",
+                    },
+                },
+        },
+        {
+            "ts": "2026-07-27T00:00:00.001Z", "kind": "order_submitted", "payload": {
+                "path_id": "kernel_v1", "client_order_id": "entry-live-1",
+            },
+        },
     ])
     # retired lane still on disk: -50 realized — must NOT pollute the fleet view
     _write(tmp_path / "retired.fills.jsonl", [
@@ -259,10 +282,32 @@ def test_journal_enriches_trades_with_exchange_hold_and_lane_rollup(tmp_path):
     _write(tmp_path / "quant_signal_pack_v1_bybit_ethusdt_shadow.fills.jsonl", [
         {"ts": "2026-07-27T00:00:00Z", "lane": "quant_signal_pack_v1_bybit_ethusdt_shadow",
          "side": "buy", "price": 100, "quantity": 1, "realized_pnl_usd": 0, "fee_usd": 0.05,
-         "symbol": "ETH/USDT", "venue": "bybit"},
+         "symbol": "ETH/USDT", "venue": "bybit", "client_order_id": "entry-bybit-1"},
         {"ts": "2026-07-27T02:30:00Z", "lane": "quant_signal_pack_v1_bybit_ethusdt_shadow",
          "side": "sell", "price": 110, "quantity": 1, "realized_pnl_usd": 10, "fee_usd": 0.05,
          "symbol": "ETH/USDT", "venue": "bybit"},
+    ])
+    _write(tmp_path / "quant_signal_pack_v1_bybit_ethusdt_shadow.journal.jsonl", [
+        {
+                "ts": "2026-07-27T00:00:00Z", "kind": "order_intent", "payload": {
+                    "path_id": "kernel_v1", "client_order_id": "entry-bybit-1", "intent": {
+                        "symbol": "ETH/USDT", "side": "long", "quantity": 1,
+                        "strategy_id": "quant_signal_pack_v1",
+                    },
+                    "execution_evidence": {
+                        "decision_id": "decision-bybit-1",
+                        "strategy_id": "quant_signal_pack_v1",
+                        "candle_source": "parquet",
+                        "entry_clock": "next_1h_open",
+                        "execution_contract_id": "kernel_v1|parquet|next_1h_open",
+                    },
+                },
+        },
+        {
+            "ts": "2026-07-27T00:00:00.001Z", "kind": "order_submitted", "payload": {
+                "path_id": "kernel_v1", "client_order_id": "entry-bybit-1",
+            },
+        },
     ])
     snap = {"lane_id": "quant_signal_pack_v1_bybit_ethusdt_shadow",
             "lanes": [{"lane_id": "quant_signal_pack_v1_bybit_ethusdt_shadow"}]}
