@@ -20,9 +20,10 @@ expected, and honest.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -199,7 +200,7 @@ def build_meta_label_dataset(
 
     frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
     summary = {
-        "samples": int(len(frame)),
+        "samples": len(frame),
         "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
         "dropped_no_symbol": no_symbol,
         "dropped_no_bar": no_bar,
@@ -250,18 +251,40 @@ def build_meta_label_dataset_from_log(
         )
 
     fired = feature_log[feature_log["decision"] == "fired"].copy()
+    # Startup backfill rows are reconstructions, not live decisions; excluding
+    # them keeps operational labels tied to real kernel-crossed fires (review
+    # P2: operational labels require backfill=false).
+    if "backfill" in fired.columns:
+        fired = fired[~fired["backfill"].fillna(False).astype(bool)]
     fired["bar_ts_dt"] = pd.to_datetime(fired["bar_ts"], utc=True, errors="coerce")
     fired = fired.dropna(subset=["bar_ts_dt"])
-    # index by (strategy_id, symbol) -> ascending bar frames for asof matching
-    grouped: dict[tuple[str, str], pd.DataFrame] = {}
-    for (strategy, symbol), part in fired.groupby(["strategy_id", "symbol"]):
-        grouped[(str(strategy), str(symbol))] = part.sort_values("bar_ts_dt")
+    # Strongest shared key is the lane (it encodes exchange+symbol+timeframe+
+    # strategy), then side — so the join cannot select the wrong lane, venue,
+    # timeframe, or direction (review P1). Fall back to (strategy, symbol, side)
+    # only when a lane id is absent on either side.
+    has_lane = "lane" in fired.columns and fired["lane"].astype(str).str.len().gt(0).any()
+    has_side = "side" in fired.columns
+    if has_lane:
+        key_cols = ["lane", "side"] if has_side else ["lane"]
+    else:
+        key_cols = ["strategy_id", "symbol", "side"] if has_side else ["strategy_id", "symbol"]
+    grouped: dict[tuple, pd.DataFrame] = {}
+    for key, part in fired.groupby(key_cols):
+        grouped[tuple(str(k) for k in (key if isinstance(key, tuple) else (key,)))] = (
+            part.sort_values("bar_ts_dt")
+        )
+
+    def _trade_key(trade: TradeOutcome) -> tuple:
+        if has_lane and trade.lane:
+            return (str(trade.lane), str(trade.side)) if has_side else (str(trade.lane),)
+        base = (str(trade.strategy), str(trade.symbol))
+        return (*base, str(trade.side)) if has_side else base
 
     tolerance = pd.Timedelta(seconds=float(tolerance_seconds))
     rows: list[dict] = []
     no_log_row = nan_feature = 0
     for trade in trades:
-        part = grouped.get((trade.strategy, trade.symbol))
+        part = grouped.get(_trade_key(trade))
         if part is None:
             no_log_row += 1
             continue
@@ -291,9 +314,9 @@ def build_meta_label_dataset_from_log(
 
     frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
     summary = {
-        "samples": int(len(frame)),
+        "samples": len(frame),
         "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
-        "matched": int(len(frame)),
+        "matched": len(frame),
         "dropped_no_log_row": no_log_row,
         "dropped_nan_feature": nan_feature,
         "by_strategy": (

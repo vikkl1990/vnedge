@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from vnedge.ml.feature_matrix import FEATURE_COLUMNS
@@ -98,3 +97,46 @@ def test_empty_log_returns_empty_not_error():
         pd.DataFrame(),
     )
     assert len(frame) == 0 and summary["samples"] == 0
+
+
+def _log_v2(rows: list[dict]) -> pd.DataFrame:
+    base = {col: 0.0 for col in FEATURE_COLUMNS}
+    cols = (
+        ["ts", "bar_ts", "strategy_id", "symbol", "lane", "side",
+         "decision", "backfill"] + FEATURE_COLUMNS
+    )
+    return pd.DataFrame([{**base, **r} for r in rows], columns=cols)
+
+
+def test_backfill_rows_are_excluded():
+    log = _log_v2([
+        {"strategy_id": "s1", "symbol": "BTC/USDT:USDT", "lane": "L1", "side": "long",
+         "decision": "fired", "backfill": True,
+         "bar_ts": "2026-01-01T12:00:00+00:00", "rsi14": 71.0},
+    ])
+    trade = TradeOutcome("s1", "BTC/USDT:USDT", "long",
+                         pd.Timestamp("2026-01-01T12:05:00+00:00"), 5.0, lane="L1")
+    _, summary = build_meta_label_dataset_from_log([trade], log)
+    assert summary["matched"] == 0  # backfill reconstruction is not a live fire
+
+
+def test_join_discriminates_on_lane_and_side():
+    log = _log_v2([
+        {"strategy_id": "s1", "symbol": "BTC/USDT:USDT", "lane": "L1", "side": "long",
+         "decision": "fired", "backfill": False,
+         "bar_ts": "2026-01-01T12:00:00+00:00", "rsi14": 60.0},
+        {"strategy_id": "s1", "symbol": "BTC/USDT:USDT", "lane": "L2", "side": "short",
+         "decision": "fired", "backfill": False,
+         "bar_ts": "2026-01-01T12:00:00+00:00", "rsi14": 40.0},
+    ])
+    # a long trade on lane L1 must pick the L1/long row (rsi14=60), never L2/short
+    trade = TradeOutcome("s1", "BTC/USDT:USDT", "long",
+                         pd.Timestamp("2026-01-01T12:05:00+00:00"), 3.0, lane="L1")
+    frame, summary = build_meta_label_dataset_from_log([trade], log)
+    assert summary["matched"] == 1
+    assert frame["rsi14"].iloc[0] == 60.0
+    # a short trade on L2 picks the other row
+    trade2 = TradeOutcome("s1", "BTC/USDT:USDT", "short",
+                          pd.Timestamp("2026-01-01T12:05:00+00:00"), -1.0, lane="L2")
+    frame2, _ = build_meta_label_dataset_from_log([trade2], log)
+    assert frame2["rsi14"].iloc[0] == 40.0
