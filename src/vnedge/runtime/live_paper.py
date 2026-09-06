@@ -3665,6 +3665,7 @@ class LivePaperSession:
                     df, index,
                     decision="fired" if sig is not None else "pass",
                     bar_ts=bar_ts,
+                    decision_bar_hash=row_sha256,
                     decision_id=decision_id,
                     side=(getattr(sig, "side", None) if sig is not None else None),
                     skip_reason=skip_reason,
@@ -4615,6 +4616,12 @@ class LivePaperSession:
         )
         self.journal.append("live_paper_report", report.to_dict())
         return report
+
+    def close_observability(self) -> None:
+        """Drain fail-soft background evidence writers during shutdown."""
+        if self._feature_log is not None:
+            self._feature_log.close()
+            self._feature_log = None
 
     def _reconcile(self):
         report = self.reconciler.run()

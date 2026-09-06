@@ -6,11 +6,13 @@ re-deriving features — train/serve skew is closed by construction.
 
 Three properties this module must guarantee, each learned from PR-#395 review:
 
-1. **Off the decision loop.** ``enqueue`` copies a bounded, immutable frame
+1. **Off the decision loop.** ``enqueue`` copies the complete bounded working
+   frame through the decision row and hands it to a background worker; the
    snapshot and hands it to a background worker; the expensive
    ``build_feature_matrix`` and the file write run on that worker, never on the
    trading event loop. The decision path pays only a small bounded copy.
-2. **Deterministic from recorded inputs.** The logged vector is exactly
+2. **Deterministic from recorded inputs.** The logged model-plane vector is
+   exactly
    ``build_feature_matrix(snapshot, funding, params)`` on the immutable
    snapshot with the writer's real ``FeatureParams`` and whatever optional
    inputs (funding/OI/benchmark) were actually available — recorded in the
@@ -83,14 +85,6 @@ def feature_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _decision_bar_hash(frame: pd.DataFrame, index: int) -> str:
-    row = frame.iloc[index]
-    parts = [str(row.get("timestamp"))]
-    for col in ("open", "high", "low", "close", "volume"):
-        parts.append(f"{col}={row.get(col)}")
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
-
-
 class FeatureLogWriter:
     """Append one JSONL row per evaluation from a background worker."""
 
@@ -117,8 +111,6 @@ class FeatureLogWriter:
         self._funding = funding
         self._optional_inputs = ("funding",) if funding is not None else ()
         self.fingerprint = feature_fingerprint(self.params, self._optional_inputs)
-        # Snapshot enough history that the matrix computes non-NaN at the bar.
-        self._snapshot_bars = int(self.params.warmup_bars) + 4
         self.rows_written = 0
         self.errors = 0
         self.dropped = 0
@@ -136,20 +128,26 @@ class FeatureLogWriter:
         *,
         decision: str,
         bar_ts: str,
+        decision_bar_hash: str,
         decision_id: str | None = None,
         side: str | None = None,
         skip_reason: str | None = None,
         backfill: bool = False,
     ) -> bool:
-        """Copy a bounded immutable snapshot and hand it to the worker.
+        """Copy the bounded working prefix and hand it to the worker.
+
+        Exponential features retain memory older than ``warmup_bars``.  The
+        caller already bounds the live working frame, so trimming it again
+        here would create a second, non-equivalent feature series.
 
         Non-blocking: drops (counted) rather than block the event loop when the
         queue is full. Returns False on drop or any error.
         """
         try:
-            start = max(0, index - self._snapshot_bars)
-            snapshot = frame.iloc[start : index + 1].copy(deep=True)
-            local_index = index - start
+            if not decision_bar_hash:
+                raise ValueError("canonical decision_bar_hash is required")
+            snapshot = frame.iloc[: index + 1].copy(deep=True)
+            local_index = index
             meta = {
                 "bar_ts": bar_ts,
                 "decision": decision,
@@ -157,7 +155,13 @@ class FeatureLogWriter:
                 "side": side,
                 "skip_reason": skip_reason,
                 "backfill": bool(backfill),
-                "decision_bar_hash": _decision_bar_hash(frame, index),
+                "decision_bar_hash": decision_bar_hash,
+                "source_row_count": len(snapshot),
+                "source_start_ts": (
+                    str(snapshot["timestamp"].iloc[0])
+                    if "timestamp" in snapshot.columns and not snapshot.empty
+                    else None
+                ),
             }
             self._queue.put_nowait((snapshot, local_index, meta))
             return True
@@ -207,6 +211,8 @@ class FeatureLogWriter:
             "skip_reason": meta["skip_reason"],
             "backfill": meta["backfill"],
             "decision_bar_hash": meta["decision_bar_hash"],
+            "source_row_count": meta["source_row_count"],
+            "source_start_ts": meta["source_start_ts"],
             "optional_inputs": list(self._optional_inputs),
             "features": features,
         }
@@ -238,14 +244,10 @@ class FeatureLogWriter:
     def close(self, timeout: float = 5.0) -> None:
         """Stop the worker after draining what is queued."""
         try:
-            self._queue.put_nowait(_SENTINEL)
+            self._queue.put(_SENTINEL, timeout=timeout)
         except queue.Full:
-            try:
-                self._queue.get_nowait()
-                self._queue.task_done()
-                self._queue.put_nowait(_SENTINEL)
-            except Exception:  # noqa: BLE001
-                return
+            self.dropped += 1
+            return
         self._worker.join(timeout=timeout)
 
 
