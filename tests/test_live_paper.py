@@ -771,8 +771,15 @@ async def test_continuous_quotes_do_not_repaint_the_candle_clock(tmp_path):
             await asyncio.sleep(0.001)
 
     producer = asyncio.create_task(publish_quotes())
-    await session.run(deadline_seconds=0.04)
+    runner = asyncio.create_task(session.run(deadline_seconds=30.0))
     await producer
+    for _ in range(100):
+        if housekeeping_calls:
+            break
+        await asyncio.sleep(0.01)
+    runner.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await runner
 
     assert session.time_machine is not None
     assert housekeeping_calls > 0
