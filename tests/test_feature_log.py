@@ -1,4 +1,4 @@
-"""Feature log: rows, fingerprint contract, fail-soft, round-trip."""
+"""Feature log: off-loop worker, identity, full fingerprint, fail-soft."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import pandas as pd
 from vnedge.ml.feature_log import (
     FEATURE_LOG_SCHEMA_VERSION,
     FeatureLogWriter,
-    feature_columns_fingerprint,
+    feature_fingerprint,
     read_feature_log,
 )
-from vnedge.ml.feature_matrix import FEATURE_COLUMNS
+from vnedge.ml.feature_matrix import FEATURE_COLUMNS, FeatureParams
 
 
 def _frame(n: int = 420, seed: int = 3) -> pd.DataFrame:
@@ -33,72 +33,94 @@ def _frame(n: int = 420, seed: int = 3) -> pd.DataFrame:
     )
 
 
-def _writer(tmp_path: Path) -> FeatureLogWriter:
+def _writer(tmp_path: Path, **kw) -> FeatureLogWriter:
     return FeatureLogWriter(
         tmp_path / "lane.features.jsonl",
-        strategy_id="test_strategy",
-        symbol="BTC/USDT:USDT",
-        timeframe="1h",
+        strategy_id="s1", symbol="BTC/USDT:USDT", timeframe="1h",
+        exchange="binanceusdm", lane_id="L1", **kw,
     )
 
 
-def test_append_writes_full_contract_row(tmp_path: Path):
+def test_row_carries_full_identity_and_contract(tmp_path: Path):
     writer = _writer(tmp_path)
     frame = _frame()
-    ok = writer.append(frame, len(frame) - 1, decision="fired",
-                       bar_ts="2026-01-18T11:00:00+00:00", intent_key="k1")
-    assert ok and writer.rows_written == 1 and writer.errors == 0
+    assert writer.enqueue(
+        frame, len(frame) - 1, decision="fired", bar_ts="2026-01-18T11:00:00+00:00",
+        decision_id="D-42", side="long",
+    )
+    writer.close()
     record = json.loads(writer.path.read_text().splitlines()[0])
     assert record["v"] == FEATURE_LOG_SCHEMA_VERSION
-    assert record["fingerprint"] == feature_columns_fingerprint()
-    assert record["decision"] == "fired" and record["intent_key"] == "k1"
+    assert record["fingerprint"] == writer.fingerprint
+    assert record["decision_id"] == "D-42" and record["side"] == "long"
+    assert record["exchange"] == "binanceusdm" and record["lane"] == "L1"
+    assert record["decision"] == "fired" and record["backfill"] is False
+    assert len(record["decision_bar_hash"]) == 16
     assert set(record["features"].keys()) == set(FEATURE_COLUMNS)
-    # numeric features are numbers-or-null, never NaN strings
-    assert all(v is None or isinstance(v, (int, float)) for v in record["features"].values())
+    assert writer.rows_written == 1 and writer.errors == 0
 
 
-def test_append_is_fail_soft_on_garbage(tmp_path: Path):
+def test_worker_runs_off_the_calling_thread(tmp_path: Path):
+    writer = _writer(tmp_path)
+    frame = _frame()
+    writer.enqueue(frame, len(frame) - 1, decision="pass", bar_ts="a")
+    assert writer.rows_written == 0  # not computed inline on the caller
+    writer.flush()
+    assert writer.rows_written == 1
+    writer.close()
+
+
+def test_snapshot_is_immutable_against_later_mutation(tmp_path: Path):
+    writer = _writer(tmp_path)
+    frame = _frame()
+    idx = len(frame) - 1
+    writer.enqueue(frame, idx, decision="pass", bar_ts="a")
+    frame.iloc[idx, frame.columns.get_loc("close")] *= 2.0  # mutate after enqueue
+    writer.flush()
+    writer.close()
+    from vnedge.ml.feature_matrix import build_feature_matrix
+
+    original = _frame()
+    expected = build_feature_matrix(original, None, FeatureParams()).iloc[idx]
+    logged = json.loads(writer.path.read_text().splitlines()[0])["features"]
+    assert logged["ret_1"] is not None
+    assert abs(logged["ret_1"] - float(expected["ret_1"])) < 1e-9
+
+
+def test_enqueue_is_fail_soft_on_garbage(tmp_path: Path):
     writer = _writer(tmp_path)
     bad = pd.DataFrame({"nope": [1, 2, 3]})
-    ok = writer.append(bad, 1, decision="pass", bar_ts="x")
-    assert ok is False and writer.errors == 1
-    assert not writer.path.exists()
+    writer.enqueue(bad, 1, decision="pass", bar_ts="x")
+    writer.flush()
+    writer.close()
+    assert writer.rows_written == 0  # nothing raised, nothing written
 
 
-def test_same_bar_appends_reuse_one_matrix(tmp_path: Path):
+def test_fingerprint_covers_params_and_inputs():
+    base = feature_fingerprint(FeatureParams())
+    changed = feature_fingerprint(FeatureParams(vol_window=99))
+    assert base != changed, "params change must change the fingerprint"
+    with_funding = feature_fingerprint(FeatureParams(), ("funding",))
+    assert with_funding != base, "optional-input contract must change it"
+
+
+def test_read_refuses_mixed_and_unexpected_fingerprints(tmp_path: Path):
     writer = _writer(tmp_path)
     frame = _frame()
-    calls = {"n": 0}
-    original = writer._matrix_for
-
-    def counting(f):
-        calls["n"] += 1
-        return original(f)
-
-    # count underlying builds via the cache key: two appends, same bar
-    writer.append(frame, len(frame) - 1, decision="pass", bar_ts="a")
-    cached = writer._cache_frame is not None
-    writer.append(frame, len(frame) - 1, decision="fired", bar_ts="a")
-    assert cached and writer.rows_written == 2
-
-
-def test_read_round_trip_and_mixed_fingerprint_refusal(tmp_path: Path):
-    writer = _writer(tmp_path)
-    frame = _frame()
-    writer.append(frame, len(frame) - 1, decision="pass", bar_ts="b1")
-    writer.append(frame, len(frame) - 2, decision="fired", bar_ts="b0")
-    loaded = read_feature_log([writer.path])
-    assert len(loaded) == 2
-    assert set(FEATURE_COLUMNS) <= set(loaded.columns)
+    writer.enqueue(frame, len(frame) - 1, decision="pass", bar_ts="b1")
+    writer.enqueue(frame, len(frame) - 2, decision="fired", bar_ts="b0")
+    writer.close()
+    loaded = read_feature_log([writer.path], expected_fingerprint=writer.fingerprint)
+    assert len(loaded) == 2 and set(FEATURE_COLUMNS) <= set(loaded.columns)
     assert sorted(loaded["decision"]) == ["fired", "pass"]
 
-    # corrupt one row's fingerprint -> reader must refuse the blend
     lines = writer.path.read_text().splitlines()
     bad = json.loads(lines[0])
     bad["fingerprint"] = "deadbeefdeadbeef"
     writer.path.write_text("\n".join([json.dumps(bad), lines[1]]) + "\n")
-    try:
-        read_feature_log([writer.path])
-        raise AssertionError("mixed fingerprints must raise")
-    except ValueError:
-        pass
+    for kwargs in ({}, {"expected_fingerprint": writer.fingerprint}):
+        try:
+            read_feature_log([writer.path], **kwargs)
+            raise AssertionError("mismatched fingerprint must raise")
+        except ValueError:
+            pass

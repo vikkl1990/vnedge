@@ -53,6 +53,7 @@ from vnedge.execution.evidence import CostDecisionEvidence, ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
+from vnedge.ml.feature_log import FeatureLogWriter
 from vnedge.ml.regime_v0 import RegimeV0
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
@@ -629,7 +630,7 @@ class LivePaperSession:
         # indexes. Consulted by the entry path ONLY; exits never touch it.
         self.protections = ProtectionState(config.effective_protections())
         self._protection_block_logged = False  # one trade_log event per episode
-        self._feature_log = None  # W5.1 writer, created lazily on first eval
+        self._feature_log: FeatureLogWriter | None = None  # W5.1, lazy
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
@@ -3635,9 +3636,9 @@ class LivePaperSession:
                 _ts = df["timestamp"].iloc[index]
                 self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
         persisted = self.journal.append("lane_eval", record)
-        # W5.1 feature log: the exact model-plane feature vector for this
-        # evaluation, appended fail-soft beside the lane's other artifacts.
-        # A feature-log failure can never affect the decision or the journal.
+        # W5.1 feature log: hand a bounded immutable snapshot to a background
+        # worker that computes and writes the exact model-plane vector off the
+        # decision loop. Joinable by decision identity; fail-soft by contract.
         try:
             if self._feature_log is None and getattr(self.journal, "path", None):
                 from vnedge.ml.feature_log import FeatureLogWriter
@@ -3650,15 +3651,26 @@ class LivePaperSession:
                     strategy_id=self.strategy.strategy_id,
                     symbol=self.config.symbol,
                     timeframe=self.config.timeframe,
+                    exchange=str(getattr(self.feed, "exchange_id", "") or ""),
+                    lane_id=str(
+                        (self.trial_meta or {}).get("trial_id")
+                        or self.strategy.strategy_id
+                    ),
                 )
             if self._feature_log is not None:
-                self._feature_log.append(
+                decision_id = None
+                if sig is not None and getattr(sig, "decision_envelope", None) is not None:
+                    decision_id = getattr(sig.decision_envelope, "decision_id", None)
+                self._feature_log.enqueue(
                     df, index,
                     decision="fired" if sig is not None else "pass",
                     bar_ts=bar_ts,
+                    decision_id=decision_id,
+                    side=(getattr(sig, "side", None) if sig is not None else None),
+                    skip_reason=skip_reason,
                     backfill=backfill,
                 )
-        except Exception:  # noqa: BLE001 — observability must stay fail-soft
+        except Exception:  # noqa: BLE001,S110 — observability must stay fail-soft
             pass
         envelope_persisted_at = datetime.now(UTC)
         if (
