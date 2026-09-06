@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from vnedge.research.ai_family_deflation import ROUND_TRIP_BPS, replay_daily_bps
+from vnedge.research.ai_family_deflation import (
+    DeflationCostContract,
+    replay_daily_bps,
+)
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
 
@@ -37,10 +41,13 @@ def _candles(n: int, closes: list[float] | None = None) -> pd.DataFrame:
 
 def test_replay_books_target_hit_net_of_costs():
     closes = [100.0, 100.0, 100.0, 100.0, 112.0, 100.0, 100.0, 100.0]
-    daily = replay_daily_bps(_OneShot(), _candles(8, closes), hold_bars=4)
+    costs = DeflationCostContract()
+    daily = replay_daily_bps(
+        _OneShot(), _candles(8, closes), hold_bars=4, cost_contract=costs
+    )
     # entry next open (100), target 110 hit on the 112 bar: gross 1000 bps
     total = float(daily.sum())
-    assert abs(total - (1000.0 - ROUND_TRIP_BPS)) < 1e-6
+    assert abs(total - (1000.0 - costs.execution_cost_bps)) < 1e-6
     # zero-filled across the covered span
     assert (daily == 0.0).sum() >= 0
     assert len(daily) >= 1
@@ -50,7 +57,10 @@ def test_replay_zero_fills_flat_days():
     n = 24 * 6  # six days, signal only on day one
     closes = [100.0] * n
     closes[4] = 112.0  # target bar
-    daily = replay_daily_bps(_OneShot(), _candles(n, closes), hold_bars=4)
+    daily = replay_daily_bps(
+        _OneShot(), _candles(n, closes), hold_bars=4,
+        cost_contract=DeflationCostContract(),
+    )
     assert len(daily) == 6
     assert (daily.iloc[1:] == 0.0).all()
 
@@ -71,3 +81,13 @@ def test_family_stats_shapes(monkeypatch, tmp_path):
     sharpes = [float(np.mean(x) / np.std(x, ddof=1)) for x in (a, b)]
     dsr = deflated_sharpe_ratio(a, n_trials=84, trial_sharpes=sharpes)
     assert 0.0 <= float(dsr) <= 1.0
+
+
+def test_delta_cost_contract_separates_booked_pnl_from_gate_wall():
+    swing = DeflationCostContract(cost_profile_id="delta_swing")
+    scalp = DeflationCostContract(cost_profile_id="delta_scalp")
+    assert swing.execution_cost_bps == pytest.approx(15.8)
+    assert swing.gate_cost_bps == pytest.approx(18.8)
+    assert scalp.execution_cost_bps == pytest.approx(17.8)
+    assert scalp.gate_cost_bps == pytest.approx(19.8)
+    assert swing.as_dict()["funding_included"] is False

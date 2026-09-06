@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,17 +41,64 @@ from vnedge.ml.validation import (
     effective_number_of_trials,
     probability_of_backtest_overfitting,
 )
+from vnedge.plan.cost_model import COST_PROFILES, CostModel
 from vnedge.strategy.ai_sandbox import load_ai_strategy
 
-#: all-in taker round trip, bps (Delta 5.9 x 2) — same figure as the slices
-ROUND_TRIP_BPS = 11.8
 #: holding cap per timeframe expressed in bars (~2 days)
 HOLD_BARS = {"5m": 576, "15m": 192, "30m": 96, "1h": 48, "4h": 12, "1d": 2}
 
 
+@dataclass(frozen=True, slots=True)
+class DeflationCostContract:
+    """The execution bill shared by every cell in one family artifact."""
+
+    cost_profile_id: str = "delta_swing"
+    venue: str = "delta_india"
+    clock: str = "next_open"
+    entry_liquidity: str = "taker"
+    exit_liquidity: str = "taker"
+    fill_assumption: str = "bar_next_open_stop_target"
+    funding_included: bool = False
+
+    def __post_init__(self) -> None:
+        if self.cost_profile_id not in COST_PROFILES:
+            raise ValueError(f"unknown cost profile {self.cost_profile_id!r}")
+        if self.clock != "next_open":
+            raise ValueError("family deflation supports next_open only")
+        if self.entry_liquidity != "taker" or self.exit_liquidity != "taker":
+            raise ValueError("bar replay cannot prove maker queue fills")
+        if self.funding_included:
+            raise ValueError("family deflation has no funding tape")
+
+    @property
+    def execution_cost_bps(self) -> float:
+        return CostModel.for_profile(self.cost_profile_id).round_trip_bps(
+            include_safety=False
+        )
+
+    @property
+    def gate_cost_bps(self) -> float:
+        return CostModel.for_profile(self.cost_profile_id).round_trip_bps(
+            include_safety=True
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "cost_profile_id": self.cost_profile_id,
+            "venue": self.venue,
+            "clock": self.clock,
+            "entry_liquidity": self.entry_liquidity,
+            "exit_liquidity": self.exit_liquidity,
+            "execution_cost_bps": self.execution_cost_bps,
+            "gate_cost_bps": self.gate_cost_bps,
+            "fill_assumption": self.fill_assumption,
+            "funding_included": self.funding_included,
+        }
+
+
 def replay_daily_bps(
     strategy: Any, frame: pd.DataFrame, *, hold_bars: int,
-    round_trip_bps: float = ROUND_TRIP_BPS,
+    cost_contract: DeflationCostContract,
 ) -> pd.Series:
     """Zero-filled per-UTC-day net bps from a next-open, stop/target replay.
 
@@ -95,7 +143,10 @@ def replay_daily_bps(
                     exit_price, exit_index = target, j
                     break
         direction = 1.0 if intent.side == "long" else -1.0
-        net = direction * (exit_price / entry - 1.0) * 1e4 - round_trip_bps
+        net = (
+            direction * (exit_price / entry - 1.0) * 1e4
+            - cost_contract.execution_cost_bps
+        )
         day = pd.Timestamp(df.iloc[i + 1]["timestamp"]).date()
         daily[day] = daily.get(day, 0.0) + net
         open_until = exit_index
@@ -114,11 +165,13 @@ def run_family_deflation(
     symbol: str = "BTC/USDT:USDT",
     timeframes: tuple[str, ...] = ("30m", "1h", "4h"),
     strategy_dir: str = "data/strategies/ai",
+    cost_contract: DeflationCostContract | None = None,
     n_trials: float | None = None,
     n_blocks: int = 10,
 ) -> dict[str, Any]:
     from vnedge.data.parquet_store import ParquetStore
 
+    cost_contract = cost_contract or DeflationCostContract()
     store = ParquetStore(data_root)
     sources = sorted(Path(strategy_dir).glob("*.py"))
     series: dict[str, pd.Series] = {}
@@ -138,7 +191,9 @@ def run_family_deflation(
             cell = f"{path.stem}@{timeframe}"
             try:
                 cls = load_ai_strategy(path.read_text())
-                daily = replay_daily_bps(cls(), frame, hold_bars=hold)
+                daily = replay_daily_bps(
+                    cls(), frame, hold_bars=hold, cost_contract=cost_contract
+                )
             except Exception as exc:  # noqa: BLE001 — a bad cell is data, not a crash
                 skipped.append({"cell": cell, "reason": f"{type(exc).__name__}: {exc}"})
                 continue
@@ -174,14 +229,14 @@ def run_family_deflation(
         if width >= n_blocks * 2 else float("nan")
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(UTC).isoformat(),
         "read_only": True,
-        "exchange": exchange,
+        "data_exchange": exchange,
         "symbol": symbol,
         "timeframes": list(timeframes),
-        "executor": "bar_next_open_fee_flat_v1",
-        "round_trip_bps": ROUND_TRIP_BPS,
+        "executor": "bar_next_open_stop_target_v2",
+        "cost_contract": cost_contract.as_dict(),
         "days_per_cell": int(width),
         "cells_evaluated": evaluated,
         "cells_skipped": skipped,
@@ -213,6 +268,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeframes", default="30m,1h,4h")
     parser.add_argument("--strategy-dir", default="data/strategies/ai")
     parser.add_argument(
+        "--cost-profile-id",
+        choices=sorted(COST_PROFILES),
+        default="delta_swing",
+        help="booked execution profile; its safety reserve is reported only as gate cost",
+    )
+    parser.add_argument("--execution-venue", default="delta_india")
+    parser.add_argument(
         "--n-trials", type=float, default=None,
         help="HONEST total configurations ever tried in this family "
              "(defaults to cells evaluated now, which is a floor)",
@@ -225,7 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     payload = run_family_deflation(
         data_root=args.data_root, exchange=args.exchange, symbol=args.symbol,
         timeframes=tuple(t.strip() for t in args.timeframes.split(",") if t.strip()),
-        strategy_dir=args.strategy_dir, n_trials=args.n_trials,
+        strategy_dir=args.strategy_dir,
+        cost_contract=DeflationCostContract(
+            cost_profile_id=args.cost_profile_id,
+            venue=args.execution_venue,
+        ),
+        n_trials=args.n_trials,
     )
     atomic_write(args.out, payload)
     print(f"cells={payload['cells_evaluated']} days={payload['days_per_cell']} "
