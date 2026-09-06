@@ -49,6 +49,9 @@ class ConfluenceParams:
     oi_change_window: int = 6
     rel_return_window: int = 24
     rel_z_window: int = 96
+    delta_z_window: int = 48
+    cvd_window: int = 24
+    delta_div_window: int = 6
 
     @property
     def warmup_bars(self) -> int:
@@ -57,6 +60,7 @@ class ConfluenceParams:
             self.divergence_lookback,
             self.obv_z_window,
             self.rel_z_window,
+            self.delta_z_window,
         ) + 2
 
 
@@ -68,6 +72,10 @@ CONFLUENCE_FEATURE_COLUMNS = [
     "oi_z", "oi_change", "oi_price_div",
     "rel_ret", "rel_strength_z",
     "is_weekend",
+    # aggressor-side flow from canonical taker_buy_volume. Missing/invalid
+    # input is neutral only together with an explicit zero coverage flag.
+    "taker_flow_coverage", "taker_buy_ratio", "delta_ratio", "delta_z",
+    "cvd_slope", "delta_price_div",
 ]
 
 
@@ -104,7 +112,7 @@ def _divergence(
 
 def add_confluence_features(
     df: pd.DataFrame,
-    params: ConfluenceParams = ConfluenceParams(),
+    params: ConfluenceParams | None = None,
     *,
     open_interest: pd.Series | None = None,
     benchmark_close: pd.Series | None = None,
@@ -114,6 +122,7 @@ def add_confluence_features(
     ``open_interest`` and ``benchmark_close`` must be aligned to ``df``'s
     index when given; absent, their features are neutral (0.0), never NaN.
     """
+    params = params or ConfluenceParams()
     out = df.copy()
     close = out["close"]
 
@@ -170,6 +179,62 @@ def add_confluence_features(
     else:
         out["rel_ret"] = 0.0
         out["rel_strength_z"] = 0.0
+
+    # Aggressor-side flow: canonical candles carry ``taker_buy_volume`` (the
+    # base volume that lifted the ask). Signed bar delta = taker buy minus
+    # taker sell = 2*taker_buy - volume. This is the "is the move real?"
+    # question answered from data already recorded — until now consumed by
+    # nothing.  A separate coverage feature prevents absent/invalid input from
+    # becoming observationally identical to a genuinely balanced tape.
+    if "taker_buy_volume" in out.columns:
+        vol = pd.to_numeric(out["volume"], errors="coerce")
+        taker_buy = pd.to_numeric(out["taker_buy_volume"], errors="coerce")
+        valid = (
+            np.isfinite(vol)
+            & np.isfinite(taker_buy)
+            & (vol > 0)
+            & (taker_buy >= 0)
+            & (taker_buy <= vol)
+        )
+        safe_vol = vol.where(valid)
+        buy_ratio = taker_buy.where(valid) / safe_vol
+        signed = (2.0 * taker_buy - vol).where(valid)  # + net aggressive buying
+        delta_ratio = signed / safe_vol
+        coverage_window = max(
+            params.delta_z_window,
+            params.cvd_window,
+            params.delta_div_window,
+        )
+        covered = valid.rolling(coverage_window).sum().eq(coverage_window)
+        out["taker_flow_coverage"] = covered.astype(float)
+        # Raw fraction remains 0..1. ``delta_ratio`` is the centered [-1, 1]
+        # series; naming the centered value taker_buy_ratio was misleading.
+        out["taker_buy_ratio"] = buy_ratio.where(covered, 0.0).fillna(0.0)
+        out["delta_ratio"] = delta_ratio.where(covered, 0.0).fillna(0.0)
+        out["delta_z"] = _zscore(delta_ratio, params.delta_z_window).where(
+            covered, 0.0
+        ).fillna(0.0)
+        # cumulative volume delta slope: recent net flow over recent volume
+        cvd_flow = signed.rolling(params.cvd_window).sum()
+        cvd_vol = vol.rolling(params.cvd_window).sum()
+        out["cvd_slope"] = (cvd_flow / cvd_vol.where(cvd_vol > 0)).where(
+            covered, 0.0
+        ).fillna(0.0)
+        # divergence: price up on net selling (-1) or price down on net buying
+        # (+1) = a move the tape does not back; else 0
+        price_up = close.pct_change(params.delta_div_window) > 0
+        flow_pos = signed.rolling(params.delta_div_window).sum() > 0
+        out["delta_price_div"] = (
+            ((price_up & ~flow_pos).astype(float) * -1.0)
+            + ((~price_up & flow_pos).astype(float) * 1.0)
+        ).where(covered, 0.0).fillna(0.0)
+    else:
+        out["taker_flow_coverage"] = 0.0
+        out["taker_buy_ratio"] = 0.0
+        out["delta_ratio"] = 0.0
+        out["delta_z"] = 0.0
+        out["cvd_slope"] = 0.0
+        out["delta_price_div"] = 0.0
 
     day = pd.to_datetime(out["timestamp"], utc=True).dt.dayofweek
     out["is_weekend"] = (day >= 5).astype(float)
