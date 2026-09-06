@@ -1908,6 +1908,7 @@ class MultiLaneShadowRunner:
                 f"session failed: {exc}",
             )
         finally:
+            runtime.session.close_observability()
             quote_evidence = runtime.session.quote_evidence
             if quote_evidence is not None:
                 try:

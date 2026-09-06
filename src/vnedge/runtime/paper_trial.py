@@ -339,6 +339,7 @@ async def run_trial(manifest_path: Path, hours: float, dashboard: bool) -> int:
     try:
         report = await session.run(deadline_seconds=hours * 3600)
     finally:
+        session.close_observability()
         await feed.stop()
         if server_task is not None:
             server_task.cancel()
