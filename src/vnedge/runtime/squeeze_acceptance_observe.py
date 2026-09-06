@@ -414,15 +414,15 @@ class SqueezeAcceptanceObserveRunner:
             return None
         self.candidates += 1
         arm = self.acceptance.arm
-        decision = arm.decision_for(fire.side) if arm is not None else None
-        if decision is None:
+        arm_decision = arm.decision_for(fire.side) if arm is not None else None
+        if arm_decision is None:
             self.rejected += 1
             self._count_rejection(("decision_envelope_missing",))
             self.acceptance.last_reason = "decision_envelope_missing"
             return None
         arm_evidence = arm.evidence.as_dict() if arm is not None and arm.evidence else None
         accepted_evidence = ExecutionEvidence.from_decision(
-            decision,
+            arm_decision,
             quote_sequence=sequence,
             bbo_ts=ts,
             quote_age_ms=max(
@@ -434,12 +434,12 @@ class SqueezeAcceptanceObserveRunner:
         self.journal.append(
             "decision_accepted",
             {
-                "intent_key": decision.decision_id,
-                "decision_id": decision.decision_id,
-                "path_id": decision.path_id,
+                "intent_key": arm_decision.decision_id,
+                "decision_id": arm_decision.decision_id,
+                "path_id": arm_decision.path_id,
                 "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
-                "arm_envelope": decision.as_dict(),
+                "arm_envelope": arm_decision.as_dict(),
                 "execution_evidence": accepted_evidence.as_dict(),
                 "quote_sequence": sequence,
                 "bbo_ts": ts.isoformat(),
@@ -464,9 +464,9 @@ class SqueezeAcceptanceObserveRunner:
                 explanation=fire.reason,
                 notional_usd=self.notional_usd,
                 margin_usd=self.margin_usd,
-                intent_key=decision.decision_id,
+                intent_key=arm_decision.decision_id,
                 execution_evidence=ExecutionEvidence.from_decision(
-                    decision,
+                    arm_decision,
                     quote_sequence=sequence,
                     bbo_ts=ts,
                     quote_age_ms=max(
@@ -479,7 +479,7 @@ class SqueezeAcceptanceObserveRunner:
                 ).as_dict(),
             )
         )
-        if approval.intent_key and approval.intent_key != decision.decision_id:
+        if approval.intent_key and approval.intent_key != arm_decision.decision_id:
             self.rejected += 1
             self._count_rejection(("decision_identity_mismatch",))
             self.acceptance.last_reason = "decision_identity_mismatch"
@@ -487,11 +487,11 @@ class SqueezeAcceptanceObserveRunner:
         if not approval.intent_key:
             approval = replace(
                 approval,
-                intent_key=decision.decision_id,
+                intent_key=arm_decision.decision_id,
                 execution_evidence=(
                     approval.execution_evidence
                     or ExecutionEvidence.from_decision(
-                        decision,
+                        arm_decision,
                         quote_sequence=sequence,
                         bbo_ts=ts,
                         quote_age_ms=max(
@@ -505,7 +505,7 @@ class SqueezeAcceptanceObserveRunner:
                 ),
             )
         self.last_approval = approval
-        key = decision.decision_id
+        key = arm_decision.decision_id
         journal_started = time.perf_counter()
         try:
             self.journal.append(
@@ -535,7 +535,7 @@ class SqueezeAcceptanceObserveRunner:
                     "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
                     "episode_id": fire.episode_id,
                     "arm_evidence": arm_evidence,
-                    "arm_envelope": decision.as_dict(),
+                    "arm_envelope": arm_decision.as_dict(),
                     "margin_usd": approval.margin_usd or self.margin_usd,
                     "take_profit_price": None,
                     "take_profit_levels": [],
@@ -577,7 +577,7 @@ class SqueezeAcceptanceObserveRunner:
             "funding_cost_usd": 0.0,
             "funding_event_ids": set(),
             "arm_evidence": arm_evidence,
-            "arm_envelope": decision.as_dict(),
+            "arm_envelope": arm_decision.as_dict(),
             "execution_evidence": approval.execution_evidence,
         }
         self.fires += 1
