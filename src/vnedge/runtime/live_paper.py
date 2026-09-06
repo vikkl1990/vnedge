@@ -629,6 +629,7 @@ class LivePaperSession:
         # indexes. Consulted by the entry path ONLY; exits never touch it.
         self.protections = ProtectionState(config.effective_protections())
         self._protection_block_logged = False  # one trade_log event per episode
+        self._feature_log = None  # W5.1 writer, created lazily on first eval
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
@@ -3634,6 +3635,31 @@ class LivePaperSession:
                 _ts = df["timestamp"].iloc[index]
                 self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
         persisted = self.journal.append("lane_eval", record)
+        # W5.1 feature log: the exact model-plane feature vector for this
+        # evaluation, appended fail-soft beside the lane's other artifacts.
+        # A feature-log failure can never affect the decision or the journal.
+        try:
+            if self._feature_log is None and getattr(self.journal, "path", None):
+                from vnedge.ml.feature_log import FeatureLogWriter
+
+                journal_path = Path(self.journal.path)
+                self._feature_log = FeatureLogWriter(
+                    journal_path.with_name(
+                        journal_path.name.replace(".journal.jsonl", "") + ".features.jsonl"
+                    ),
+                    strategy_id=self.strategy.strategy_id,
+                    symbol=self.config.symbol,
+                    timeframe=self.config.timeframe,
+                )
+            if self._feature_log is not None:
+                self._feature_log.append(
+                    df, index,
+                    decision="fired" if sig is not None else "pass",
+                    bar_ts=bar_ts,
+                    backfill=backfill,
+                )
+        except Exception:  # noqa: BLE001 — observability must stay fail-soft
+            pass
         envelope_persisted_at = datetime.now(UTC)
         if (
             not backfill
