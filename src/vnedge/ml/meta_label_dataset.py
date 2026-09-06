@@ -20,9 +20,10 @@ expected, and honest.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -33,7 +34,15 @@ _OUTCOME_KINDS = ("shadow_outcome", "live_paper_exit", "tick_stop_exit")
 _NET_FIELDS = ("virtual_net_usd", "net_usd", "realized_pnl_usd")
 
 #: columns attached alongside the features + label for traceability / grouping
-META_COLUMNS = ["strategy", "symbol", "side", "entry_ts", "net_usd", "lane"]
+META_COLUMNS = [
+    "strategy",
+    "symbol",
+    "side",
+    "entry_ts",
+    "net_usd",
+    "lane",
+    "decision_id",
+]
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,9 @@ class TradeOutcome:
     entry_ts: pd.Timestamp
     net_usd: float
     lane: str = ""
+    decision_id: str = ""
+    path_id: str = ""
+    performance_eligible: bool = False
 
 
 def _first_present(record: Mapping[str, Any], keys: Iterable[str]):
@@ -99,6 +111,17 @@ def parse_journal_trades(
                 entry_ts=entry_ts,
                 net_usd=float(net),
                 lane=str(record.get("lane") or body.get("lane") or default_lane),
+                decision_id=str(body.get("decision_id") or body.get("intent_key") or ""),
+                path_id=str(
+                    body.get("path_id")
+                    or (
+                        body.get("execution_evidence", {}).get("path_id")
+                        if isinstance(body.get("execution_evidence"), dict)
+                        else ""
+                    )
+                    or ""
+                ),
+                performance_eligible=body.get("performance_eligible") is True,
             )
         )
     return out
@@ -136,7 +159,7 @@ def build_meta_label_dataset(
     *,
     candles_by_lane: Mapping[str, pd.DataFrame] | None = None,
     funding_by_symbol: Mapping[str, pd.DataFrame] | None = None,
-    params: FeatureParams = FeatureParams(),
+    params: FeatureParams | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Join causal features at each trade's entry bar with its win/loss label.
 
@@ -153,6 +176,7 @@ def build_meta_label_dataset(
     only the lane's own candles align a coarse-timeframe entry to its bar. The
     symbol map remains the fallback for trades from lanes with no candle cache.
     """
+    params = params or FeatureParams()
     funding_by_symbol = funding_by_symbol or {}
     candles_by_lane = candles_by_lane or {}
 
@@ -195,11 +219,12 @@ def build_meta_label_dataset(
         row["entry_ts"] = trade.entry_ts
         row["net_usd"] = trade.net_usd
         row["lane"] = trade.lane
+        row["decision_id"] = trade.decision_id
         rows.append(row)
 
     frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
     summary = {
-        "samples": int(len(frame)),
+        "samples": len(frame),
         "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
         "dropped_no_symbol": no_symbol,
         "dropped_no_bar": no_bar,
@@ -207,5 +232,145 @@ def build_meta_label_dataset(
         "by_strategy": (
             frame.groupby("strategy").size().to_dict() if len(frame) else {}
         ),
+    }
+    return frame, summary
+
+
+def build_meta_label_dataset_from_log(
+    trades: Iterable[TradeOutcome],
+    feature_log: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict]:
+    """Join trades to the EXACT feature vectors the runtime logged.
+
+    This is the train/serve-skew-free path (correction-spec W5.1 -> W5.2): the
+    label comes from the trade outcome, but the features come from the live
+    feature log (``ml.feature_log``) — the same numbers the decision was made
+    on — rather than being re-derived from candles. Re-derivation can silently
+    diverge from what the runtime actually computed (a warmup edge, a params
+    drift, a different candle source); this path cannot.
+
+    Each operational outcome matches exactly one fired feature-log row by
+    ``decision_id``. Approximate timestamp/lane/side joins are forbidden: two
+    arms can share those values and still represent different immutable bars
+    or permission snapshots. Outcomes without the kernel path and explicit
+    performance eligibility are research diagnostics, not labels.
+
+    Returns ``(dataframe, summary)`` with the same columns as
+    :func:`build_meta_label_dataset` plus a ``feature_source`` marker.
+    """
+    if feature_log.empty:
+        empty = pd.DataFrame(columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
+        return empty, {
+            "samples": 0,
+            "win_rate": 0.0,
+            "matched": 0,
+            "dropped_no_log_row": 0,
+            "dropped_missing_decision_id": 0,
+            "dropped_ineligible_outcome": 0,
+            "dropped_identity_mismatch": 0,
+            "dropped_duplicate_outcome": 0,
+            "dropped_nan_feature": 0,
+            "by_strategy": {},
+            "feature_source": "log",
+        }
+
+    present = [c for c in FEATURE_COLUMNS if c in feature_log.columns]
+    missing_cols = [c for c in FEATURE_COLUMNS if c not in feature_log.columns]
+    if missing_cols:
+        raise ValueError(
+            f"feature log is missing {len(missing_cols)} contract column(s): "
+            f"{missing_cols[:5]}{'...' if len(missing_cols) > 5 else ''}"
+        )
+
+    if "decision_id" not in feature_log.columns:
+        raise ValueError("feature log is missing decision_id")
+    fired = feature_log[feature_log["decision"] == "fired"].copy()
+    # Startup backfill rows are reconstructions, not live decisions; excluding
+    # them keeps operational labels tied to real kernel-crossed fires (review
+    # P2: operational labels require backfill=false).
+    if "backfill" in fired.columns:
+        fired = fired[~fired["backfill"].fillna(False).astype(bool)]
+    fired["decision_id"] = fired["decision_id"].fillna("").astype(str)
+    fired = fired[fired["decision_id"].str.len().gt(0)]
+    duplicates = fired["decision_id"].duplicated(keep=False)
+    if duplicates.any():
+        duplicate_ids = sorted(fired.loc[duplicates, "decision_id"].unique())
+        raise ValueError(
+            "feature log contains duplicate decision_id row(s): "
+            + ", ".join(duplicate_ids[:5])
+        )
+    by_decision_id = fired.set_index("decision_id", drop=False)
+
+    rows: list[dict] = []
+    no_log_row = missing_decision_id = ineligible = identity_mismatch = 0
+    duplicate_outcome = nan_feature = 0
+    used_decisions: set[str] = set()
+    for trade in trades:
+        decision_id = str(trade.decision_id).strip()
+        if not decision_id:
+            missing_decision_id += 1
+            continue
+        if trade.path_id != "kernel_v1" or not trade.performance_eligible:
+            ineligible += 1
+            continue
+        if decision_id in used_decisions:
+            duplicate_outcome += 1
+            continue
+        if decision_id not in by_decision_id.index:
+            no_log_row += 1
+            continue
+        logged = by_decision_id.loc[decision_id]
+        identity_fields = (
+            ("strategy_id", trade.strategy),
+            ("symbol", trade.symbol),
+            ("side", trade.side),
+        )
+        if any(
+            column in logged.index
+            and str(logged[column]).strip()
+            and str(logged[column]) != str(expected)
+            for column, expected in identity_fields
+        ):
+            identity_mismatch += 1
+            continue
+        if (
+            trade.lane
+            and "lane" in logged.index
+            and str(logged["lane"]).strip()
+            and str(logged["lane"]) != trade.lane
+        ):
+            identity_mismatch += 1
+            continue
+        feature_values = logged[present]
+        if feature_values.isna().any():
+            nan_feature += 1
+            continue
+        row = {col: float(feature_values[col]) for col in FEATURE_COLUMNS}
+        row["meta_label"] = 1.0 if trade.net_usd > 0 else 0.0
+        row["strategy"] = trade.strategy
+        row["symbol"] = trade.symbol
+        row["side"] = trade.side
+        row["entry_ts"] = trade.entry_ts
+        row["net_usd"] = trade.net_usd
+        row["lane"] = trade.lane
+        row["decision_id"] = decision_id
+        rows.append(row)
+        used_decisions.add(decision_id)
+
+    frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
+    summary = {
+        "samples": len(frame),
+        "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
+        "matched": len(frame),
+        "dropped_no_log_row": no_log_row,
+        "dropped_missing_decision_id": missing_decision_id,
+        "dropped_ineligible_outcome": ineligible,
+        "dropped_identity_mismatch": identity_mismatch,
+        "dropped_duplicate_outcome": duplicate_outcome,
+        "dropped_nan_feature": nan_feature,
+        "by_strategy": (
+            frame.groupby("strategy").size().to_dict() if len(frame) else {}
+        ),
+        "feature_source": "log",
     }
     return frame, summary
