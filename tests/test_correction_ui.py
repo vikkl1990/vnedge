@@ -41,6 +41,16 @@ def snapshot() -> dict:
                 "mode": "shadow (live data)",
                 "symbol": "BTC/USD:USD",
                 "timeframe": "1h",
+                "candle_source": "canonical_tick_lake",
+                "decision_transport": "router",
+                "drought": {
+                    "drought_class": "playbook_wait",
+                    "eval_age_s": 12.0,
+                    "evidence_age_s": 86_400.0,
+                    "mreg_ready": None,
+                    "structure_ready": None,
+                    "quotes_armed": None,
+                },
                 "feed": "ok",
                 "gapped_candles": 1,
                 "time_machine": {
@@ -52,6 +62,14 @@ def snapshot() -> dict:
                     "decision_lag_ms": {"p95": 4.5, "n": 20},
                 },
                 "decision_skips": {"forming_1h": 2},
+                "runtime_readiness": {
+                    "data_ready": True,
+                    "decision_ready": True,
+                    "execution_ready": False,
+                    "data_blockers": [],
+                    "decision_blockers": [],
+                    "execution_blockers": ["execution_stage_observe"],
+                },
                 "cost_profile": "delta_swing",
                 "plan_overlay": {"round_trip_bps": 13.0},
                 "journal": {"available": True, "recovery_degraded": True},
@@ -89,14 +107,29 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["last_signal_age_seconds"] is None
     assert measurement["candle_status"] == "ok"
     assert measurement["candle_age_ms"] == 4200.0
+    assert measurement["candle_source"] == "canonical_tick_lake"
+    assert measurement["decision_transport"] == "router"
+    assert measurement["drought"]["drought_class"] == "playbook_wait"
+    assert measurement["drought"]["mreg_ready"] is None
     assert measurement["bar_close_processing_ms"] == 120.0
     assert measurement["bar_close_receipt_ms"] == 120.0
     assert measurement["canonical_wait_ms"] is None
     assert measurement["decision_lag_ms"] == 4.5
     assert measurement["latency_samples"] == {
-        "bar_close": 20, "canonical_wait": 0, "decision": 20, "required": 20
+        "bar_close": 20,
+        "canonical_wait": 0,
+        "decision": 20,
+        "required": 20,
     }
     assert measurement["arm_skips"] == 2
+    assert measurement["runtime_readiness"] == {
+        "data_ready": True,
+        "decision_ready": True,
+        "execution_ready": False,
+        "data_blockers": [],
+        "decision_blockers": [],
+        "execution_blockers": ["execution_stage_observe"],
+    }
     assert measurement["last_signal_reason"] == "observe_only"
     assert measurement["cost_profile"] == "delta_swing"
     assert measurement["round_trip_bps"] == 13.0
@@ -128,9 +161,9 @@ def test_lane_projection_uses_server_health_bands() -> None:
     assert projected["health_details"]["bar_close_receipt"] == {
         "p95_ms": 120.0,
         "samples": 20,
-        "soft_ms": 500,
-        "hard_ms": 2000,
-        "recovery_ms": 1500,
+        "soft_ms": 5000,
+        "hard_ms": 15000,
+        "recovery_ms": 10000,
         "band": "blocked",
     }
 
@@ -158,7 +191,7 @@ def test_lane_projection_reports_simultaneous_latency_failures() -> None:
         "bar_close_lag_hard",
         "decision_lag_hard",
     ]
-    assert projected["health_details"]["bar_close_receipt"]["hard_ms"] == 2_000
+    assert projected["health_details"]["bar_close_receipt"]["hard_ms"] == 8_000
     assert projected["health_details"]["decision_compute"] == {
         "p95_ms": 4_200.0,
         "samples": 101,
@@ -208,11 +241,13 @@ def test_lane_projection_distinguishes_current_latency_recovery_from_old_reject(
 
 def test_structure_observe_is_not_mislabeled_as_measurement() -> None:
     snap = snapshot()
-    snap["runtime_control"].update({
-        "shadow_observe_strategies": ["structure_bos_1h"],
-        "shadow_observe_timeframes": ["1h"],
-        "lane_set_hash": "abc123",
-    })
+    snap["runtime_control"].update(
+        {
+            "shadow_observe_strategies": ["structure_bos_1h"],
+            "shadow_observe_timeframes": ["1h"],
+            "lane_set_hash": "abc123",
+        }
+    )
     snap["lanes"] = [
         {
             "lane_id": "shadow_observe_binanceusdm_btc",
@@ -305,6 +340,9 @@ def test_quote_lane_lifecycle_does_not_relabel_candidates_as_fires() -> None:
     assert lane["lifecycle"] == {
         "engine_kind": "quote_acceptance",
         "decision_engine": "quote_acceptance_v1",
+        "entry_route": "auto",
+        "maker_fill_ttl_bars": None,
+        "fill_evidence": None,
         "state": "armed",
         "armed_current": True,
         "arm_state": "armed_long",
@@ -363,6 +401,41 @@ def test_next_open_lane_keeps_real_closed_bar_fire_count() -> None:
     assert lifecycle["accepted"] == 2
 
 
+def test_routed_shadow_lane_labels_execution_and_proxy_evidence() -> None:
+    snap = snapshot()
+    snap["lanes"] = [
+        {
+            "lane_id": "shadow_route_eth",
+            "exchange": "delta_india",
+            "strategy_id": "structure_bounce_route_probe_v2",
+            "mode": "shadow (live data)",
+            "symbol": "ETH/USD:USD",
+            "timeframe": "5m",
+            "feed": "ok",
+            "entry_route": "maker_retest",
+            "maker_fill_ttl_bars": 6,
+            "bands": {
+                "age": "ok",
+                "bar_close_lag": "ok",
+                "decision_lag": "ok",
+                "dd": "ok",
+            },
+            "funnel": {"live_signals": 4, "shadow_approved": 3},
+            "shadow_perf": {"virtual_trades": 2, "virtual_net_usd": 8.5},
+            "runtime_contract": {
+                "entry_clock": "execution_route",
+                "decision_engine": "base_strategy_routed_entry_v1",
+            },
+        }
+    ]
+
+    lane = build_lanes_payload(snap, now=NOW)["lanes"][0]
+    assert lane["entry_route"] == "maker_retest"
+    assert lane["maker_fill_ttl_bars"] == 6
+    assert lane["lifecycle"]["engine_kind"] == "maker_retest"
+    assert lane["lifecycle"]["fill_evidence"] == "closed_bar_touch_proxy"
+
+
 def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() -> None:
     snap = snapshot()
     sizing = {
@@ -386,12 +459,8 @@ def test_sizing_contract_is_only_exposed_for_actionable_virtual_or_paper_rows() 
     )
 
     payload = build_lanes_payload(snap, now=NOW)
-    measurement = next(
-        row for row in payload["lanes"] if row["observation_class"] == "measurement"
-    )
-    observer = next(
-        row for row in payload["lanes"] if row["observation_class"] == "shadow_observe"
-    )
+    measurement = next(row for row in payload["lanes"] if row["observation_class"] == "measurement")
+    observer = next(row for row in payload["lanes"] if row["observation_class"] == "shadow_observe")
 
     assert measurement["sizing_profile"] is None
     assert observer["sizing_profile"] == sizing

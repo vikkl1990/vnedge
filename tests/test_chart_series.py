@@ -91,6 +91,22 @@ def test_the_series_is_bounded() -> None:
     assert payload["truncated"] is True
 
 
+def test_chart_series_honours_provider_range_in_epoch_milliseconds() -> None:
+    start = datetime(2026, 8, 1, 3, tzinfo=UTC)
+    end = datetime(2026, 8, 1, 5, tzinfo=UTC)
+    payload = candles_payload(
+        _Store(10),
+        "BTCUSDT",
+        "1h",
+        limit=500,
+        from_ms=int(start.timestamp() * 1_000),
+        to_ms=int(end.timestamp() * 1_000),
+    )
+    assert payload["count"] == 3
+    assert payload["candles"][0]["time"] == int(start.timestamp())
+    assert payload["candles"][-1]["time"] == int(end.timestamp())
+
+
 def test_an_unreadable_store_yields_an_empty_series_not_a_crash() -> None:
     class _Broken:
         def read(self, *_):

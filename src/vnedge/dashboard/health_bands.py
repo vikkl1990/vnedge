@@ -121,10 +121,15 @@ def _latency_samples(latency: object) -> list[int]:
 def lane_bands(lane: dict) -> dict:
     tf = str(lane.get("timeframe") or "")
     tm = lane.get("time_machine") or {}
-    age = (tm.get("age_ms") or {}).get(tf)
+    # Gate/colour on missed close delivery, not raw time since the last closed
+    # candle.  Old snapshots fall back to age_ms until every process is on the
+    # new schema.
+    overdue = (tm.get("closed_bar_overdue_ms") or {}).get(tf)
+    age = overdue if overdue is not None else (tm.get("age_ms") or {}).get(tf)
     lat = lane.get("latency") or {}
     decision_stats = _latency_metric(lat, "decision_lag_ms")
     bar_stats = _latency_metric(lat, "bar_close_processing_ms", "feed_lag_ms")
+    bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(tf)
     decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(tf)
     dlag = LT.classify_latency_stats(
         decision_stats,
@@ -134,9 +139,9 @@ def lane_bands(lane: dict) -> dict:
     )
     blag = LT.classify_latency_stats(
         bar_stats,
-        soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-        hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
-        recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
+        soft_ms=bar_soft,
+        hard_ms=bar_hard,
+        recovery_ms=bar_recovery,
     )
     sc = lane.get("trial_scorecard") or {}
     return {

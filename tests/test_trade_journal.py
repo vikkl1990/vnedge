@@ -208,27 +208,63 @@ def test_trade_journal_projects_fills_orders_and_virtual_trades(tmp_path):
             {
                 "ts": "2026-07-16T01:00:00+00:00",
                 "kind": "risk_decision",
-                "payload": {"client_order_id": "entry-1", "approved": True},
+                "payload": {
+                    "approved": True,
+                    "path_id": "kernel_v1",
+                        "execution_evidence": {
+                            "decision_id": "dec_entry_1",
+                            "strategy_id": "sats_5m_scalper_v1",
+                            "htf_snapshot_id": "0123456789abcdef01234567",
+                            "candle_source": "parquet",
+                            "entry_clock": "next_5m_open",
+                            "execution_contract_id": "kernel_v1|parquet|next_5m_open",
+                        },
+                },
             },
             {
                 "ts": "2026-07-16T01:00:01+00:00",
                 "kind": "order_intent",
                 "payload": {
+                    "path_id": "kernel_v1",
                     "client_order_id": "entry-1",
+                        "execution_evidence": {
+                            "decision_id": "dec_entry_1",
+                            "strategy_id": "sats_5m_scalper_v1",
+                            "htf_snapshot_id": "0123456789abcdef01234567",
+                            "candle_source": "parquet",
+                            "entry_clock": "next_5m_open",
+                            "execution_contract_id": "kernel_v1|parquet|next_5m_open",
+                        },
                     "intent": {
                         "symbol": "ETH/USD:USD",
                         "side": "long",
                         "quantity": 0.2,
                         "order_type": "market",
                         "reduce_only": False,
-                        "strategy_id": "sats_5m_scalper_v1",
                     },
                 },
             },
             {
                 "ts": "2026-07-16T01:00:02+00:00",
+                "kind": "order_submitted",
+                "payload": {
+                    "path_id": "kernel_v1",
+                    "client_order_id": "entry-1",
+                        "execution_evidence": {
+                            "decision_id": "dec_entry_1",
+                            "strategy_id": "sats_5m_scalper_v1",
+                            "htf_snapshot_id": "0123456789abcdef01234567",
+                            "candle_source": "parquet",
+                            "entry_clock": "next_5m_open",
+                            "execution_contract_id": "kernel_v1|parquet|next_5m_open",
+                        },
+                },
+            },
+            {
+                "ts": "2026-07-16T01:00:03+00:00",
                 "kind": "order_acknowledged",
                 "payload": {
+                    "path_id": "kernel_v1",
                     "client_order_id": "entry-1",
                     "exchange_order_id": "ex-1",
                 },
@@ -308,8 +344,13 @@ def test_trade_journal_projects_fills_orders_and_virtual_trades(tmp_path):
     assert payload["summary"]["fees_usd"] == 0.19
     assert payload["summary"]["actual_closed_net_usd"] == 1.41
     assert payload["summary"]["actual_closed_fees_usd"] == 0.19
-    assert payload["summary"]["virtual_net_usd"] == 1.85
+    assert payload["summary"]["virtual_net_usd"] == 0
+    assert payload["summary"]["performance_eligible_closed_trades"] == 1
     assert payload["orders"][0]["state"] == "acknowledged"
+    assert payload["orders"][0]["decision_id"] == "dec_entry_1"
+    assert payload["orders"][0]["permission_snapshot_id"] == (
+        "0123456789abcdef01234567"
+    )
     assert {row["kind"] for row in payload["closed_trades"]} == {
         "actual_closing_fill",
         "shadow_outcome",
@@ -382,8 +423,8 @@ def test_trade_journal_paginates_rows_without_changing_full_ledger_totals(tmp_pa
 
     assert first["summary"]["closed_trades"] == 3
     assert second["summary"]["closed_trades"] == 3
-    assert first["summary"]["virtual_net_usd"] == 6.0
-    assert second["summary"]["virtual_net_usd"] == 6.0
+    assert first["summary"]["virtual_net_usd"] == 0
+    assert second["summary"]["virtual_net_usd"] == 0
     assert len(first["closed_trades"]) == 2
     assert len(second["closed_trades"]) == 1
     assert first["page"]["has_more"] is True
@@ -452,9 +493,9 @@ def test_trade_journal_uses_full_stream_shadow_ledger_when_tail_lost_outcome(tmp
 
     assert payload["summary"]["closed_trades"] == 1
     assert payload["summary"]["shadow_closed_trades"] == 1
-    assert payload["summary"]["virtual_net_usd"] == -12.3
-    assert payload["summary"]["shadow_execution_fees_usd"] == 0.4
-    assert payload["summary"]["shadow_funding_usd"] == 0.1
+    assert payload["summary"]["virtual_net_usd"] == 0
+    assert payload["summary"]["shadow_execution_fees_usd"] == 0
+    assert payload["summary"]["shadow_funding_usd"] == 0
     assert payload["summary"]["shadow_history_complete"] is True
     assert payload["summary"]["reconciliation_state"] == "matched"
     assert payload["closed_trades"][0]["source"] == "scanner_evidence_full_stream"
@@ -477,11 +518,11 @@ def test_lane_cohort_classification():
 
 def test_cohort_rollup_separates_controls_from_tracked():
     trades = [
-        {"lane": "velocity_sats_5m_scalper_delta_india_eth_usd_usd_shadow", "virtual_net_usd": -10.0},
-        {"lane": "velocity_sats_5m_scalper_delta_india_btc_usd_usd_shadow", "virtual_net_usd": -5.0},
-        {"lane": "funding_mr_btc_v1_20260703", "virtual_net_usd": 4.0},
-        {"lane": "papertrial_stealth_trail_bbp_v1_delta_india_eth_usd_usd_4h", "virtual_net_usd": -1.0},
-        {"lane": "quant_signal_pack_v1_binanceusdm_ethusdt_shadow", "virtual_net_usd": -3.0},
+        {"lane": "velocity_sats_5m_scalper_delta_india_eth_usd_usd_shadow", "virtual_net_usd": -10.0, "performance_eligible": True},
+        {"lane": "velocity_sats_5m_scalper_delta_india_btc_usd_usd_shadow", "virtual_net_usd": -5.0, "performance_eligible": True},
+        {"lane": "funding_mr_btc_v1_20260703", "virtual_net_usd": 4.0, "performance_eligible": True},
+        {"lane": "papertrial_stealth_trail_bbp_v1_delta_india_eth_usd_usd_4h", "virtual_net_usd": -1.0, "performance_eligible": True},
+        {"lane": "quant_signal_pack_v1_binanceusdm_ethusdt_shadow", "virtual_net_usd": -3.0, "performance_eligible": True},
     ]
     roll = _cohort_pnl_rollup(trades)
     assert set(roll) == {"tracked", "research", "control"}
@@ -499,3 +540,96 @@ def test_cohort_rollup_present_in_journal_summary(tmp_path):
     out = build_trade_journal(snapshot=None, journal_dir=tmp_path, history_path=tmp_path / "none")
     assert "cohort_pnl" in out["summary"]
     assert set(out["summary"]["cohort_pnl"]) == {"tracked", "research", "control"}
+
+
+def test_execution_clock_cohorts_never_share_operator_headline(tmp_path):
+    fill_rows = []
+    journal_rows = []
+    for index, (clock, minute) in enumerate((("quote_hold", 0), ("next_15m_open", 20))):
+        entry_id = f"entry-{index}"
+        contract_id = f"kernel_v1|parquet|{clock}"
+        fill_rows.extend(
+            [
+                {
+                    "ts": f"2026-08-28T01:{minute:02d}:00+00:00",
+                    "mode": "paper",
+                    "venue": "delta_india",
+                    "strategy_id": "test_v1",
+                    "symbol": "BTC/USD:USD",
+                    "side": "buy",
+                    "quantity": 1.0,
+                    "price": 100.0,
+                    "fee_usd": 0.1,
+                    "realized_pnl_usd": 0.0,
+                    "client_order_id": entry_id,
+                    "hash": f"h-{index}-entry",
+                },
+                {
+                    "ts": f"2026-08-28T01:{minute + 5:02d}:00+00:00",
+                    "mode": "paper",
+                    "venue": "delta_india",
+                    "strategy_id": "test_v1",
+                    "symbol": "BTC/USD:USD",
+                    "side": "sell",
+                    "quantity": 1.0,
+                    "price": 101.0,
+                    "fee_usd": 0.1,
+                    "realized_pnl_usd": 1.0,
+                    "client_order_id": f"exit-{index}",
+                    "hash": f"h-{index}-exit",
+                },
+            ]
+        )
+        evidence = {
+            "decision_id": f"decision-{index}",
+            "strategy_id": "test_v1",
+            "candle_source": "parquet",
+            "entry_clock": clock,
+            "execution_contract_id": contract_id,
+        }
+        journal_rows.extend(
+            [
+                {
+                    "ts": f"2026-08-28T01:{minute:02d}:00+00:00",
+                    "kind": "order_intent",
+                    "payload": {
+                        "path_id": "kernel_v1",
+                        "client_order_id": entry_id,
+                        "execution_evidence": evidence,
+                        "intent": {
+                            "symbol": "BTC/USD:USD",
+                            "side": "long",
+                            "quantity": 1.0,
+                            "notional_usd": 100.0,
+                            "leverage": 1.0,
+                        },
+                    },
+                },
+                {
+                    "ts": f"2026-08-28T01:{minute:02d}:01+00:00",
+                    "kind": "order_submitted",
+                    "payload": {
+                        "path_id": "kernel_v1",
+                        "client_order_id": entry_id,
+                        "execution_evidence": evidence,
+                    },
+                },
+            ]
+        )
+    write_jsonl(tmp_path / "alpha.fills.jsonl", fill_rows)
+    write_jsonl(tmp_path / "alpha.journal.jsonl", journal_rows)
+
+    payload = build_trade_journal(
+        snapshot={"lane_id": "alpha"},
+        journal_dir=tmp_path,
+        lane="alpha",
+    )
+
+    summary = payload["summary"]
+    assert summary["mixed_entry_clock_headline"] is True
+    assert summary["headline_actual_closed_net_usd"] is None
+    assert summary["performance_entry_clocks"] == ["next_15m_open", "quote_hold"]
+    assert set(summary["execution_contract_pnl"]) == {
+        "kernel_v1|parquet|next_15m_open",
+        "kernel_v1|parquet|quote_hold",
+    }

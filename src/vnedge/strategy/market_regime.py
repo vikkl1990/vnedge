@@ -96,6 +96,8 @@ class MarketRegime:
     daily_macd_hist: float | None = None
     h4_macd_hist: float | None = None
     daily_rsi: float | None = None
+    daily_observations: int = 0
+    ema200_ready: bool = False
 
     @property
     def family(self) -> PlaybookFamily:
@@ -639,6 +641,18 @@ def regime_from_closed(
         }
         if telescope is not None
         else {}
+    )
+    daily_climate_probe = pd.to_numeric(
+        daily_frame.get("close", pd.Series(dtype=float)), errors="coerce"
+    ).ewm(
+        span=config.daily_ema_climate,
+        adjust=False,
+        min_periods=config.daily_ema_climate,
+    ).mean()
+    telescope_fields["daily_observations"] = len(daily_frame)
+    telescope_fields["ema200_ready"] = bool(
+        not daily_climate_probe.empty
+        and np.isfinite(float(daily_climate_probe.iloc[-1]))
     )
 
     def resolved(

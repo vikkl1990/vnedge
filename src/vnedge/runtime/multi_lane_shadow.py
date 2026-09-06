@@ -23,13 +23,14 @@ from typing import Any, cast
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.execution.journal import DecisionJournal
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
+from vnedge.runtime.canonical_parity import assert_router_authority_artifact
 from vnedge.runtime.multi_lane import (
     CanonicalProducer,
     LaneSpec,
     MultiLaneProvider,
     MultiLaneShadowRunner,
 )
-from vnedge.runtime.runner_config import RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerMode
 from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 from vnedge.strategy.strategy_registry import (
     get_strategy_class,
@@ -45,8 +46,8 @@ DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
 _SUPPORTED_COST_EXCHANGES = frozenset({"binanceusdm", "bybit", "delta", "delta_india"})
 OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
-OBSERVER_ROSTER_VERSION = 2
-_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, OBSERVER_ROSTER_VERSION})
+OBSERVER_ROSTER_VERSION = 3
+_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, 2, OBSERVER_ROSTER_VERSION})
 _OBSERVER_FIELDS = frozenset(
     {
         "strategy_id",
@@ -57,6 +58,8 @@ _OBSERVER_FIELDS = frozenset(
         "daily_loss_usd",
         "trail_atr_mult",
         "cost_exchange",
+        "entry_route",
+        "maker_fill_ttl_bars",
         "revision",
         "enabled",
     }
@@ -97,20 +100,28 @@ def build_integrated_canonical_runtime(
 ) -> tuple[CanonicalCandleRouter | None, tuple[CanonicalProducer, ...], frozenset[str]]:
     """Build the opt-in colocated canonical producer for dark parity.
 
-    ``external_parquet`` preserves the deployed baseline. ``integrated_dark``
-    is deliberately explicit: its writer lease refuses startup while the
-    legacy pulse recorder still owns the venue, and lane decisions continue
-    to use matched Parquet rows until parity evidence permits a later cutover.
+    ``external_parquet`` preserves the legacy baseline. ``integrated_dark``
+    compares routed events to durable rows. ``integrated_router`` makes the
+    immutable routed candle the decision clock while Parquet remains rebuild
+    truth. Both integrated modes require the single-writer lease.
     """
     mode = str(
         environ.get("VNEDGE_CANONICAL_PRODUCER_MODE", "external_parquet")
     ).strip().lower()
     if mode == "external_parquet":
         return None, (), frozenset()
-    if mode != "integrated_dark":
+    if mode not in {"integrated_dark", "integrated_router"}:
         raise ValueError(
-            "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet or integrated_dark"
+            "VNEDGE_CANONICAL_PRODUCER_MODE must be external_parquet, "
+            "integrated_dark, or integrated_router"
         )
+    if mode == "integrated_router":
+        artifact = str(environ.get("VNEDGE_CANONICAL_PARITY_ARTIFACT", "")).strip()
+        if not artifact:
+            raise ValueError(
+                "integrated_router requires VNEDGE_CANONICAL_PARITY_ARTIFACT"
+            )
+        assert_router_authority_artifact(artifact)
     requested = frozenset(
         _csv(environ.get("VNEDGE_INTEGRATED_RECORDER_EXCHANGES", "binanceusdm"))
     )
@@ -134,7 +145,12 @@ def build_integrated_canonical_runtime(
         )
         if not symbols:
             continue
-        subscriber = router.publisher(exchange)
+        subscriber = router.publisher(
+            exchange,
+            raw_trade_durable=True,
+            reorder_bound_ms=250,
+            late_trade_policy="reject",
+        )
         producer: CanonicalProducer
         if exchange == DELTA_EXCHANGE:
             producer = DeltaTickRecorder(
@@ -420,6 +436,22 @@ def build_shadow_observe_roster_specs(
             raise ValueError(
                 f"observer {strategy_id} has unsupported cost_exchange {cost_exchange!r}"
             )
+        route_raw = str(row.get("entry_route", "auto")).strip().lower()
+        try:
+            entry_route = EntryRoute(route_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"observer {strategy_id} has invalid entry_route {route_raw!r}"
+            ) from exc
+        if int(roster_version) >= 3 and entry_route is EntryRoute.AUTO:
+            raise ValueError(
+                f"observer {strategy_id} roster v3 requires explicit entry_route"
+            )
+        maker_fill_ttl_bars = int(row.get("maker_fill_ttl_bars", 1))
+        if not 1 <= maker_fill_ttl_bars <= 288:
+            raise ValueError(
+                f"observer {strategy_id} maker_fill_ttl_bars must be in [1, 288]"
+            )
         if not enabled:
             continue
         for configured_symbol in symbols:
@@ -436,6 +468,8 @@ def build_shadow_observe_roster_specs(
                     daily_loss_usd=daily_loss_usd,
                     trail_atr_mult=trail_atr_mult,
                     execution_cost_exchange=cost_exchange,
+                    entry_route=entry_route,
+                    maker_fill_ttl_bars=maker_fill_ttl_bars,
                     is_primary=False,
                 )
             )
@@ -641,10 +675,16 @@ async def main() -> int:
             lanes,
             journal_dir,
             provider,
-            canonical_router=canonical_router,
-            canonical_producers=canonical_producers,
-            canonical_router_exchanges=canonical_exchanges,
-        ).run()
+        canonical_router=canonical_router,
+        canonical_producers=canonical_producers,
+        canonical_router_exchanges=canonical_exchanges,
+        canonical_router_authoritative=(
+            os.environ.get("VNEDGE_CANONICAL_PRODUCER_MODE", "external_parquet")
+            .strip()
+            .lower()
+            == "integrated_router"
+        ),
+    ).run()
         return 0
     finally:
         if server_task is not None:

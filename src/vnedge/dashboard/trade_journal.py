@@ -18,6 +18,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from vnedge.runtime.execution_contract import (
+    KERNEL_PATH_ID,
+    PERMISSION_SNAPSHOT_REQUIRED,
+)
+
 
 @dataclass(frozen=True)
 class TradeJournalConfig:
@@ -96,16 +101,34 @@ def build_trade_journal(
     # Aggregates sum the FULL read window (same population as actual_closed_net),
     # NOT the display-truncated lists — otherwise the headline realized/fees would
     # only reflect the last `limit` rows and disagree with actual_closed_net.
-    actual_realized = sum(_float(row.get("realized_pnl_usd")) for row in fills)
-    fees = sum(_float(row.get("fee_usd")) for row in fills)
-    virtual_net = sum(_float(row.get("virtual_net_usd")) for row in closed_trades)
-    shadow_fees = sum(_float(row.get("fees_usd")) for row in shadow_closed)
-    shadow_funding = sum(_float(row.get("funding_usd")) for row in shadow_closed)
-    actual_closed_net = sum(_float(row.get("net_after_this_fill_fee_usd")) for row in actual_closed)
-    actual_closed_fees = sum(_float(row.get("fee_usd")) for row in actual_closed)
+    performance_closed = [row for row in closed_trades if row.get("performance_eligible")]
+    performance_actual = [
+        row for row in performance_closed if row.get("kind") == "actual_closing_fill"
+    ]
+    performance_shadow = [
+        row for row in performance_closed if row.get("kind") != "actual_closing_fill"
+    ]
+    actual_realized = sum(_float(row.get("realized_pnl_usd")) for row in performance_actual)
+    fees = sum(_float(row.get("fee_usd")) for row in performance_actual)
+    virtual_net = sum(_float(row.get("virtual_net_usd")) for row in performance_shadow)
+    shadow_fees = sum(_float(row.get("fees_usd")) for row in performance_shadow)
+    shadow_funding = sum(_float(row.get("funding_usd")) for row in performance_shadow)
+    actual_closed_net = sum(
+        _float(row.get("net_after_this_fill_fee_usd")) for row in performance_actual
+    )
+    actual_closed_fees = sum(_float(row.get("fee_usd")) for row in performance_actual)
     open_orders_total = sum(1 for row in order_rows if _is_open_order(row))
     lane_pnl = _lane_pnl_rollup(closed_trades)
     cohort_pnl = _cohort_pnl_rollup(closed_trades)
+    execution_contract_pnl = _execution_contract_pnl_rollup(closed_trades)
+    performance_entry_clocks = sorted(
+        {
+            str(row.get("entry_clock"))
+            for row in performance_closed
+            if row.get("entry_clock")
+        }
+    )
+    mixed_entry_clock_headline = len(performance_entry_clocks) > 1
 
     # Paginate for DISPLAY only. Aggregates above always use the full audited
     # read window, so moving between pages cannot change headline accounting.
@@ -134,6 +157,8 @@ def build_trade_journal(
             "closed_trades": totals["closed_trades"],
             "actual_closed_trades": len(actual_closed),
             "shadow_closed_trades": len(shadow_closed),
+            "performance_eligible_closed_trades": len(performance_closed),
+            "performance_path_id": KERNEL_PATH_ID,
             "events": totals["events"],
             "scanner_events": totals["scanner_events"],
             "journals_scanned": _count_paths(root, ".journal.jsonl", lane, active),
@@ -145,10 +170,19 @@ def build_trade_journal(
             "shadow_funding_usd": round(shadow_funding, 6),
             "virtual_net_usd": round(virtual_net, 6),
             "actual_closed_net_usd": round(actual_closed_net, 6),
+            # ``actual_closed_net_usd`` remains the audit/reconciliation sum.
+            # Operator cards must use the headline field: it deliberately
+            # disappears when unlike entry clocks would otherwise be mixed.
+            "headline_actual_closed_net_usd": (
+                None if mixed_entry_clock_headline else round(actual_closed_net, 6)
+            ),
+            "mixed_entry_clock_headline": mixed_entry_clock_headline,
+            "performance_entry_clocks": performance_entry_clocks,
             "actual_closed_fees_usd": round(actual_closed_fees, 6),
             "lane_position_counts": lane_counts,
             "lane_pnl": lane_pnl,
             "cohort_pnl": cohort_pnl,
+            "execution_contract_pnl": execution_contract_pnl,
             "history_lane": _primary_lane(history_path),
             "shadow_history_source": (
                 "scanner_evidence_full_stream"
@@ -500,6 +534,7 @@ def _project_journals(
     for lane, record in journal_rows:
         kind = str(record.get("kind") or "")
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        path_id = str(payload.get("path_id") or "")
         ts = _record_ts(record, payload)
         if kind in _ORDER_KINDS:
             _apply_order_event(orders, lane, ts, kind, payload)
@@ -511,6 +546,8 @@ def _project_journals(
                     "event": kind,
                     "detail": _event_detail(kind, payload),
                     "source": "decision_journal",
+                    "path_id": path_id or None,
+                    "performance_eligible": path_id == KERNEL_PATH_ID,
                 }
             )
         if kind == "shadow_outcome":
@@ -523,6 +560,7 @@ def _project_journals(
 _ORDER_KINDS = {
     "risk_decision",
     "order_intent",
+    "order_submitted",
     "order_acknowledged",
     "order_rejected",
     "order_timeout_unknown",
@@ -533,6 +571,7 @@ _ORDER_KINDS = {
 }
 
 _EVENT_KINDS = _ORDER_KINDS | {
+    "candidate_evaluation",
     "shadow_intent",
     "shadow_outcome",
     "scalp_shadow_intent",
@@ -751,6 +790,13 @@ def _ensure_order(
             "last_event": "",
             "reason": "",
             "source": "decision_journal",
+            "path_id": None,
+            "decision_id": None,
+            "permission_snapshot_id": None,
+            "candle_source": None,
+            "entry_clock": None,
+            "execution_contract_id": None,
+            "execution_envelope_complete": False,
         },
     )
     row["ts"] = max(str(row.get("ts") or ""), ts)
@@ -766,9 +812,51 @@ def _apply_order_event(
 ) -> None:
     coid = _order_id(payload)
     intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+    evidence = (
+        payload.get("execution_evidence")
+        if isinstance(payload.get("execution_evidence"), dict)
+        else {}
+    )
+    # Risk is evaluated before a venue id exists.  A rejected candidate is
+    # evidence, not a ManagedOrder and must not inflate the order blotter.
+    if kind == "risk_decision" and not coid:
+        return
     if not coid and isinstance(intent, dict):
         coid = str(payload.get("client_order_id") or "")
     row = _ensure_order(orders, lane, ts, coid)
+    path_id = str(payload.get("path_id") or "")
+    if path_id:
+        row["path_id"] = path_id
+    if evidence:
+        row["decision_id"] = evidence.get("decision_id") or row.get("decision_id")
+        row["strategy_id"] = evidence.get("strategy_id") or row.get("strategy_id", "")
+        row["permission_snapshot_id"] = (
+            evidence.get("htf_snapshot_id") or row.get("permission_snapshot_id")
+        )
+        row["candle_source"] = evidence.get("candle_source") or row.get("candle_source")
+        row["entry_clock"] = evidence.get("entry_clock") or row.get("entry_clock")
+        row["execution_contract_id"] = (
+            evidence.get("execution_contract_id") or row.get("execution_contract_id")
+        )
+        row["execution_envelope_complete"] = _execution_envelope_complete(
+            {
+                "path_id": row.get("path_id"),
+                "decision_id": row.get("decision_id"),
+                "strategy_id": row.get("strategy_id"),
+                "permission_snapshot_id": row.get("permission_snapshot_id"),
+                "permission_snapshot": evidence.get("permission_snapshot"),
+                "candle_source": row.get("candle_source"),
+                "entry_clock": row.get("entry_clock"),
+                "execution_contract_id": row.get("execution_contract_id"),
+            }
+        )
+    if kind == "order_submitted":
+        row["submitted"] = True
+    row["performance_eligible"] = (
+        row.get("path_id") == KERNEL_PATH_ID
+        and bool(row.get("submitted"))
+        and bool(row.get("execution_envelope_complete"))
+    )
     row["last_event"] = kind
     if intent:
         row.update(
@@ -779,7 +867,6 @@ def _apply_order_event(
                 "quantity": _float(intent.get("quantity"), row.get("quantity", 0.0)),
                 "limit_price": intent.get("limit_price", row.get("limit_price")),
                 "reduce_only": bool(intent.get("reduce_only", row.get("reduce_only"))),
-                "strategy_id": intent.get("strategy_id", row.get("strategy_id", "")),
             }
         )
     if kind == "risk_decision":
@@ -787,6 +874,8 @@ def _apply_order_event(
         row["reason"] = ", ".join(payload.get("failed_checks") or [])
     elif kind == "order_intent":
         row["state"] = "intent_created"
+    elif kind == "order_submitted":
+        row["state"] = "submitting"
     elif kind == "order_acknowledged":
         row["state"] = "acknowledged"
         row["exchange_order_id"] = str(payload.get("exchange_order_id") or "")
@@ -874,30 +963,59 @@ def _with_captured_bps(trade: dict[str, Any]) -> dict[str, Any]:
 
 def _intent_economics(
     journal_rows: list[tuple[str, dict[str, Any]]]
-) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Leverage + notional from journaled intents so trades can show margin.
 
     order_intent is keyed by client_order_id (paper trades join on their entry
     order); shadow_intent by intent_key (shadow outcomes join on that)."""
-    by_coid: dict[str, dict[str, float]] = {}
-    by_key: dict[str, dict[str, float]] = {}
+    by_coid: dict[str, dict[str, Any]] = {}
+    by_key: dict[str, dict[str, Any]] = {}
+    submitted_ids = {
+        str((record.get("payload") or {}).get("client_order_id") or "")
+        for _lane, record in journal_rows
+        if record.get("kind") == "order_submitted"
+        and isinstance(record.get("payload"), dict)
+    }
     for _lane, record in journal_rows:
         kind = str(record.get("kind") or "")
         if kind not in ("order_intent", "shadow_intent"):
             continue
-        payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
         intent = payload.get("intent") if isinstance(payload.get("intent"), dict) else {}
+        evidence = (
+            payload.get("execution_evidence")
+            if isinstance(payload.get("execution_evidence"), dict)
+            else {}
+        )
         if not intent:
             continue
         econ = {
             "leverage": _float(intent.get("leverage")),
             "notional_usd": _float(intent.get("notional_usd")),
+            "path_id": str(payload.get("path_id") or "") or None,
+            "decision_id": evidence.get("decision_id"),
+            "strategy_id": evidence.get("strategy_id"),
+            "permission_snapshot_id": evidence.get("htf_snapshot_id"),
+            "permission_snapshot": evidence.get("permission_snapshot"),
+            "candle_source": evidence.get("candle_source"),
+            "entry_clock": evidence.get("entry_clock"),
+            "execution_contract_id": evidence.get("execution_contract_id"),
         }
-        if econ["leverage"] <= 0 and econ["notional_usd"] <= 0:
+        econ["execution_envelope_complete"] = _execution_envelope_complete(econ)
+        # Path attribution is independent of optional sizing display fields.
+        # A valid kernel intent may omit leverage/notional in an older journal
+        # while still being the authoritative source for its fill ledger row.
+        if (
+            econ["leverage"] <= 0
+            and econ["notional_usd"] <= 0
+            and econ["path_id"] is None
+            and econ["permission_snapshot_id"] is None
+        ):
             continue
         if kind == "order_intent":
             coid = str(payload.get("client_order_id") or intent.get("client_order_id") or "")
             if coid:
+                econ["submitted"] = coid in submitted_ids
                 by_coid[coid] = econ
         else:
             key = str(payload.get("intent_key") or "")
@@ -906,10 +1024,11 @@ def _intent_economics(
     return by_coid, by_key
 
 
-def _attach_economics(trade: dict[str, Any], econ: dict[str, float] | None) -> None:
+def _attach_economics(trade: dict[str, Any], econ: dict[str, Any] | None) -> None:
     """Attach leverage / notional / margin to a trade in place. Notional falls
     back to entry_price × quantity when the intent didn't carry it."""
     if not econ:
+        trade["performance_eligible"] = False
         return
     lev = _float(econ.get("leverage"))
     notional = _float(econ.get("notional_usd"))
@@ -919,6 +1038,43 @@ def _attach_economics(trade: dict[str, Any], econ: dict[str, float] | None) -> N
     trade["notional_usd"] = round(notional, 2) if notional > 0 else None
     if lev > 0 and notional > 0:
         trade["margin_usd"] = round(notional / lev, 2)
+    trade["path_id"] = econ.get("path_id")
+    trade["decision_id"] = econ.get("decision_id")
+    trade["strategy_id"] = econ.get("strategy_id") or trade.get("strategy_id")
+    trade["permission_snapshot_id"] = econ.get("permission_snapshot_id")
+    trade["candle_source"] = econ.get("candle_source")
+    trade["entry_clock"] = econ.get("entry_clock")
+    trade["execution_contract_id"] = econ.get("execution_contract_id")
+    trade["execution_envelope_complete"] = bool(
+        econ.get("execution_envelope_complete")
+    )
+    trade["performance_eligible"] = (
+        econ.get("path_id") == KERNEL_PATH_ID
+        and bool(econ.get("submitted"))
+        and bool(econ.get("execution_envelope_complete"))
+    )
+
+
+def _execution_envelope_complete(econ: Mapping[str, Any]) -> bool:
+    """Only sourced kernel attempts may enter operational P&L projections."""
+
+    source = str(econ.get("candle_source") or "")
+    clock = str(econ.get("entry_clock") or "")
+    contract_id = str(econ.get("execution_contract_id") or "")
+    strategy_id = str(econ.get("strategy_id") or "")
+    if (
+        econ.get("path_id") != KERNEL_PATH_ID
+        or not str(econ.get("decision_id") or "")
+        or source in {"", "unreported"}
+        or clock in {"", "unreported"}
+        or contract_id != f"{KERNEL_PATH_ID}|{source}|{clock}"
+    ):
+        return False
+    if strategy_id in PERMISSION_SNAPSHOT_REQUIRED:
+        return bool(econ.get("permission_snapshot_id")) and isinstance(
+            econ.get("permission_snapshot"), Mapping
+        )
+    return True
 
 
 def _trade_net(trade: dict[str, Any]) -> float:
@@ -990,6 +1146,10 @@ def _build_closed_trades(
         _attach_economics(trade, econ_by_coid.get(str(trade.get("entry_client_order_id") or "")))
     for trade in virtual_trades:
         _attach_economics(trade, econ_by_key.get(str(trade.get("intent_key") or "")))
+        # Legacy observe trackers never passed through ExecutionKernel.submit;
+        # a newly path-tagged journal file must not make those virtual fills
+        # eligible for performance attribution.
+        trade["performance_eligible"] = False
     out = [_with_captured_bps(t) for t in paired + virtual_trades]
     for trade in out:
         trade["exchange"] = trade.get("venue") or _lane_exchange(str(trade.get("lane", "")))
@@ -1003,12 +1163,51 @@ def _lane_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[str,
     """Per-lane P&L rollup for the journal view: {lane: {closed, net_usd}}."""
     roll: dict[str, dict[str, Any]] = {}
     for trade in closed_trades:
+        if not trade.get("performance_eligible"):
+            continue
         lane = str(trade.get("lane") or "?")
         entry = roll.setdefault(lane, {"closed": 0, "net_usd": 0.0})
         entry["closed"] += 1
         entry["net_usd"] += _trade_net(trade)
     for entry in roll.values():
         entry["net_usd"] = round(entry["net_usd"], 4)
+    return roll
+
+
+def _execution_contract_pnl_rollup(
+    closed_trades: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Split operational P&L by candle transport and entry-clock contract."""
+
+    roll: dict[str, dict[str, Any]] = {}
+    for trade in closed_trades:
+        if not trade.get("performance_eligible"):
+            continue
+        contract_id = str(trade.get("execution_contract_id") or "")
+        if not contract_id:
+            continue
+        entry = roll.setdefault(
+            contract_id,
+            {
+                "path_id": trade.get("path_id"),
+                "candle_source": trade.get("candle_source"),
+                "entry_clock": trade.get("entry_clock"),
+                "closed": 0,
+                "wins": 0,
+                "net_usd": 0.0,
+            },
+        )
+        net = _trade_net(trade)
+        entry["closed"] += 1
+        entry["wins"] += 1 if net > 0 else 0
+        entry["net_usd"] += net
+    for entry in roll.values():
+        entry["net_usd"] = round(entry["net_usd"], 4)
+        entry["win_rate_pct"] = (
+            round(entry["wins"] / entry["closed"] * 100, 1)
+            if entry["closed"]
+            else 0.0
+        )
     return roll
 
 
@@ -1057,6 +1256,8 @@ def _cohort_pnl_rollup(closed_trades: list[dict[str, Any]]) -> dict[str, dict[st
         for cohort in _COHORT_ORDER
     }
     for trade in closed_trades:
+        if not trade.get("performance_eligible"):
+            continue
         entry = roll[_lane_cohort(str(trade.get("lane") or ""))]
         net = _trade_net(trade)
         entry["closed"] += 1
@@ -1307,6 +1508,8 @@ def _shadow_outcome_trade(lane: str, ts: str, payload: dict[str, Any]) -> dict[s
         "tp_reached": int(payload.get("tp_reached") or 0),
         "bars_held": int(payload.get("bars_held") or 0),
         "source": "decision_journal",
+        "path_id": payload.get("path_id"),
+        "performance_eligible": False,
     }
 
 
@@ -1328,6 +1531,8 @@ def _scalp_outcome_trade(lane: str, ts: str, payload: dict[str, Any]) -> dict[st
         "maker_filled": payload.get("maker_filled"),
         "intent_key": payload.get("intent_key", ""),
         "source": "decision_journal",
+        "path_id": payload.get("path_id"),
+        "performance_eligible": False,
     }
 
 

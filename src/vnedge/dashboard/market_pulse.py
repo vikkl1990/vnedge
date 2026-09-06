@@ -1182,6 +1182,11 @@ class MarketPulseService:
             if all(current.get(key) is not None for key in ("open", "high", "low", "close"))
             else "awaiting_trades"
         )
+        # Forming data is a display clock only.  The explicit WATCH contract
+        # prevents clients from mistaking the live-painted point for a closed
+        # decision bar.
+        current["bar_state"] = "WATCH"
+        current["decision_eligible"] = False
         return current
 
     def hours(self, exchange: str, symbol: str, *, limit: int = 48) -> dict[str, Any]:

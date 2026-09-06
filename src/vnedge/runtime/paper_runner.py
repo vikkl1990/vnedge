@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from vnedge.execution.idempotency import make_intent_key
+from vnedge.execution.evidence import CostDecisionEvidence, ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
@@ -42,12 +42,12 @@ from vnedge.runtime.active_exit import (
     ExitEngineConfig,
 )
 from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
-from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.execution_kernel import build_kernel
 from vnedge.runtime.market_replay import MarketReplay, quote_from_price
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.run_report import RunReport
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
+from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, bind_signal_decision
 from vnedge.strategy.indicators import atr as _atr_indicator
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class PaperRunner:
             config.mode,
             live_clock=False,
         )
-        self.execution_kernel = ExecutionKernel(
+        self.execution_kernel = build_kernel(
             self.execution_context,
             order_manager,
             AdapterKind.SIMULATED,
@@ -135,10 +135,12 @@ class PaperRunner:
             symbol=self.config.symbol, side=sig.side, quantity=sizing.quantity,
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
-            reduce_only=False, strategy_id=self.strategy.strategy_id,
+            reduce_only=False,
         )
 
     def _seed_plan_from_venue(self, plan: _TradePlan) -> None:
+        if plan.order.client_order_id is None:
+            return
         status = self.exchange.get_order_status(plan.order.client_order_id)
         if status is not None and status.filled_qty > 0:
             plan.exit_state.seed_entry(
@@ -174,11 +176,27 @@ class PaperRunner:
             symbol=self.config.symbol,
             side="short" if pos.quantity > 0 else "long",
             quantity=close_qty, notional_usd=0.0, leverage=1.0,
-            reduce_only=True, strategy_id=self.strategy.strategy_id,
+            reduce_only=True,
+        )
+        evidence = ExecutionEvidence.create(
+            strategy_id=f"{self.strategy.strategy_id}:exit:{reason}",
+            symbol=self.config.symbol,
+            timeframe=self.config.timeframe,
+            bar_open=bar_ts.to_pydatetime(),
+            side=intent.side,
+            htf_snapshot_id=(
+                plan.signal.permission_snapshot.snapshot_id
+                if plan.signal.permission_snapshot is not None
+                else None
+            ),
+            permission_snapshot=plan.signal.permission_snapshot,
+            candle_source="replay",
+            entry_clock="exit",
+            cost_decision=CostDecisionEvidence.not_evaluated("paper_exit"),
         )
         order = await self.execution_kernel.submit(
             intent, self.tracker.account_state(), self.replay.market_state(self._bar_index),
-            intent_key=f"exit|{self.config.symbol}|{reason}|{int(bar_ts.value)}",
+            evidence=evidence,
             now=bar_ts.to_pydatetime(),
         )
         self.orders_submitted += 1
@@ -290,6 +308,7 @@ class PaperRunner:
         start = max(self.strategy.warmup_bars, 1)
 
         pending_signal: SignalIntent | None = None
+        pending_decision_ts: pd.Timestamp | None = None
         plan: _TradePlan | None = None
         parked: dict[str, _TradePlan] = {}  # TIMEOUT_UNKNOWN entries by coid
         equities: list[float] = []
@@ -308,42 +327,52 @@ class PaperRunner:
             if pending_signal is not None and plan is None and not parked:
                 intent = self._build_entry_intent(pending_signal, float(bar["open"]))
                 if intent is not None:
-                    key = make_intent_key(
-                        self.strategy.strategy_id, cfg.symbol, intent.side, ts
-                    )
-                    if cfg.mode is RunnerMode.SHADOW:
-                        risk_decision = self.execution_kernel.evaluate_candidate(
-                            intent, self.tracker.account_state(), market, now=ts,
+                    decision_ts = pending_decision_ts or pd.Timestamp(ts)
+                    if pending_signal.decision_envelope is None:
+                        self.journal.append(
+                            "entry_evidence_rejected",
+                            {
+                                "strategy_id": self.strategy.strategy_id,
+                                "symbol": cfg.symbol,
+                                "bar_ts": decision_ts.isoformat(),
+                                "reason": "decision_envelope_missing",
+                            },
                         )
-                        self.journal.append("shadow_intent", {
-                            "intent_key": key, "approved": risk_decision.approved,
-                            "explanation": risk_decision.explanation,
-                            "signal_reason": pending_signal.reason,
-                        })
-                        if risk_decision.approved:
-                            self.shadow_approved += 1
-                        else:
+                        pending_signal = None
+                        pending_decision_ts = None
+                        continue
+                    evidence = ExecutionEvidence.from_decision(
+                        pending_signal.decision_envelope,
+                        cost_decision=CostDecisionEvidence.not_evaluated("paper_runner"),
+                    )
+                    order = await self.execution_kernel.submit(
+                        intent,
+                        self.tracker.account_state(),
+                        market,
+                        evidence=evidence,
+                        now=ts.to_pydatetime(),
+                    )
+                    if order.state is OrderState.RISK_REJECTED:
+                        self.risk_rejects += 1
+                        if cfg.mode is RunnerMode.SHADOW:
                             self.shadow_rejected += 1
                     else:
-                        order = await self.execution_kernel.submit(
-                            intent, self.tracker.account_state(), market, key,
-                            now=ts.to_pydatetime(),
-                        )
-                        if order.state is OrderState.RISK_REJECTED:
-                            self.risk_rejects += 1
-                        else:
-                            self.orders_submitted += 1
-                            exit_state = ExitEngine.from_signal(
-                                pending_signal,
-                                config=self._exit_config,
-                            ).state
-                            new_plan = _TradePlan(pending_signal, order, j, exit_state)
-                            self._seed_plan_from_venue(new_plan)
-                            if order.state is OrderState.TIMEOUT_UNKNOWN:
+                        self.orders_submitted += 1
+                        if cfg.mode is RunnerMode.SHADOW:
+                            self.shadow_approved += 1
+                        exit_state = ExitEngine.from_signal(
+                            pending_signal,
+                            config=self._exit_config,
+                        ).state
+                        new_plan = _TradePlan(pending_signal, order, j, exit_state)
+                        self._seed_plan_from_venue(new_plan)
+                        if order.state is OrderState.TIMEOUT_UNKNOWN:
+                            if order.client_order_id is not None:
                                 parked[order.client_order_id] = new_plan
-                            elif order.state is OrderState.ACKNOWLEDGED:
-                                plan = new_plan
+                        elif order.state is OrderState.ACKNOWLEDGED:
+                            plan = new_plan
             pending_signal = None
+            pending_decision_ts = None
 
             # 3) exit management (paper mode) — stop first, always
             if plan is not None:
@@ -391,8 +420,44 @@ class PaperRunner:
             ):
                 sig = self.strategy.signal(df, j)
                 if sig is not None:
-                    self.signals += 1
-                    pending_signal = sig
+                    decision_row = bar.to_dict()
+                    decision_row.setdefault("candle_source", "research_replay")
+                    try:
+                        sig = bind_signal_decision(
+                            sig,
+                            strategy_id=self.strategy.strategy_id,
+                            symbol=cfg.symbol,
+                            timeframe=cfg.timeframe,
+                            decision_row=decision_row,
+                            entry_clock=f"next_{cfg.timeframe}_open",
+                            require_existing_snapshot=bool(
+                                getattr(
+                                    self.strategy,
+                                    "requires_permission_snapshot",
+                                    False,
+                                )
+                            ),
+                        )
+                    except (TypeError, ValueError) as exc:
+                        self.journal.append(
+                            "entry_evidence_rejected",
+                            {
+                                "strategy_id": self.strategy.strategy_id,
+                                "symbol": cfg.symbol,
+                                "bar_ts": str(ts),
+                                "reason": str(exc),
+                            },
+                        )
+                        sig = None
+                    if sig is not None:
+                        self.signals += 1
+                        pending_signal = sig
+                        pending_decision_ts = pd.Timestamp(ts)
+                        assert sig.decision_envelope is not None
+                        self.journal.append(
+                            "decision_armed",
+                            sig.decision_envelope.as_dict(),
+                        )
 
             # 5) periodic reconciliation
             if (j - start) % cfg.reconcile_every_bars == 0 or parked:

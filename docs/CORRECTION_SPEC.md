@@ -229,6 +229,22 @@ replay parity before router decision authority is enabled. The default Docker
 topology and empty capital allowlist remain unchanged until that artifact is
 clean.
 
+Router authority is now mechanically gated, not documentary. Dark lanes emit
+`canonical_transport_parity` after evaluation with router, durable-Parquet,
+and decision-row hashes plus any decision IDs. The scheduled
+`canonical-parity-evidence` projection requires at least seven days, 100
+observations, one real decision identity, zero hash mismatches, and zero fires
+without an envelope. `integrated_router` refuses startup unless the resulting
+artifact is fresh and cutover-ready. An environment toggle alone can no longer
+remove Parquet authority.
+
+The scheduled `execution-path-audit` performs full-file WAL chain validation
+offline and rejects any new-risk `order_submitted` row without a valid
+`kernel_v1` ARM envelope. Observer `shadow_intent`/`shadow_outcome` rows remain
+research-only and are a hard audit failure if they claim performance or kernel
+authority. Tail-only boot validation remains unchanged so large evidence
+journals cannot stall the decision process.
+
 The first VM comparison on 2026-08-29 correctly failed: the standalone
 book-recorder websocket accepted a BTC short about two seconds before the
 lane's independent websocket did, and the live latency gate rejected and

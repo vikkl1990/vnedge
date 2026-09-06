@@ -8,9 +8,9 @@ TanStack Query. Ships a small **Terminal\*** component library (`TerminalPanel`,
 palette.
 
 ## Status
-**Foundation + core panels (Desk book, Journal), not full parity.** The classic
-dashboard remains the primary cockpit at `/`; this ships alongside it at `/app`.
-Remaining classic panels port onto these same primitives incrementally.
+`/app` is the primary operational cockpit and the only UI allowed to represent
+readiness or execution truth. The classic dashboard at `/` is a legacy,
+display-only telemetry surface until its remaining panels are retired or ported.
 
 ## Build & serve
 ```bash

@@ -786,6 +786,7 @@ class StructureBos1H(BaseStrategy):
                     "taker_buy_volume",
                     "data_quality",
                     "is_closed",
+                    "candle_source",
                 )
             )
             self._canonical_htf_current = False
@@ -824,6 +825,7 @@ class StructureBos1H(BaseStrategy):
                     "taker_buy_volume": float(candle.taker_buy_volume),
                     "data_quality": "ok",
                     "is_closed": candle.is_closed,
+                    "candle_source": "canonical_tick_lake",
                 }
             ]
         )

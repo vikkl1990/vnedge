@@ -29,6 +29,14 @@ def test_classify_p99_generic():
     assert LT.classify_p99(None, 500, 2000) == "unknown"
 
 
+def test_closed_bar_delivery_budget_scales_with_causal_timeframe():
+    assert LT.closed_bar_receipt_limits("1m") == (500, 2000, 1500)
+    assert LT.closed_bar_receipt_limits("5m") == (2000, 5000, 4000)
+    assert LT.closed_bar_receipt_limits("15m") == (3000, 8000, 6000)
+    assert LT.closed_bar_receipt_limits("1h") == (5000, 15000, 10000)
+    assert LT.closed_bar_receipt_limits("unknown") == (500, 2000, 1500)
+
+
 def test_arm_gate_only_hard_blocks():
     assert LT.blocks_new_arms("hard") is True
     assert LT.blocks_new_arms("soft") is False

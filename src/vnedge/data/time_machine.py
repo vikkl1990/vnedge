@@ -237,11 +237,39 @@ class TimeMachine:
 
     def age_ms(self, symbol: str, tf: TF, now: datetime) -> float | None:
         """Milliseconds since the last exchange update for (symbol, tf), or None
-        if the TF has never updated. Used by the decision-path latency budget."""
+        if the TF has never updated. This is raw operator telemetry; a closed
+        bar is not decision-stale merely because this value grows between its
+        close and the next expected timeframe boundary."""
         last = self._last_update.get((symbol, tf))
         if last is None:
             return None
         return max(0.0, (now - last).total_seconds() * 1000.0)
+
+    def closed_bar_overdue_ms(self, symbol: str, tf: TF, now: datetime) -> float | None:
+        """Milliseconds past the next expected decision-bar close.
+
+        A closed 15m bar remains the latest causal decision input throughout
+        the following 15m interval.  Comparing ``now`` directly with its
+        exchange timestamp therefore produces a false HARD breach seconds
+        after every healthy close.  This clock stays at zero until the next
+        close is due, then measures only delivery lateness.  The existing
+        timeframe health/gap checks remain authoritative for larger stalls.
+        """
+        last_closed = self.get_last_closed(symbol, tf)
+        if last_closed is not None:
+            # ``exchange_ts`` is the process's exchange-referenced receipt
+            # clock in the live runners.  Taking the later reference preserves
+            # deterministic replay/paper sessions whose historical bar times
+            # intentionally differ from wall time, without widening a live
+            # bar beyond one decision interval after receipt.
+            reference = max(last_closed.close_time, last_closed.exchange_ts)
+            deadline = reference + timedelta(seconds=_TF_SECONDS[tf])
+            return max(0.0, (now - deadline).total_seconds() * 1000.0)
+
+        forming = self.get_forming(symbol, tf)
+        if forming is not None:
+            return max(0.0, (now - forming.close_time).total_seconds() * 1000.0)
+        return None
 
     def get_forming(self, symbol: str, tf: TF) -> CandleState | None:
         return self._forming.get((symbol, tf))
@@ -307,5 +335,10 @@ class TimeMachine:
                 tf: round(a, 1)
                 for tf in self.tfs
                 if (a := self.age_ms(symbol, tf, now)) is not None
+            }
+            out["closed_bar_overdue_ms"] = {
+                tf: round(a, 1)
+                for tf in self.tfs
+                if (a := self.closed_bar_overdue_ms(symbol, tf, now)) is not None
             }
         return out

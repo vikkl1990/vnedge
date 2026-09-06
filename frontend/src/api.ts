@@ -6,6 +6,18 @@ export interface BrowserSession {
   expires_at: string | null;
 }
 
+/** Remove legacy URL credentials before React, links, or screenshots copy them. */
+export function urlWithoutCredentials(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.searchParams.delete("token");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export function scrubCredentialFromBrowserUrl(): void {
+  if (!new URL(window.location.href).searchParams.has("token")) return;
+  window.history.replaceState(null, "", urlWithoutCredentials(window.location.href));
+}
+
 export interface ReadinessStatus {
   status: "ready" | "not_ready" | "unknown";
   reasons: string[];
@@ -200,22 +212,51 @@ export interface ChartCandles {
   source: string;    // "canonical_lake"
   count: number;
   truncated: boolean;
+  range?: { from_ms?: number | null; to_ms?: number | null };
   candles: ChartCandle[];
 }
 
-export interface ChartMarker {
-  time: number;
-  position: "aboveBar" | "belowBar";
-  shape: "arrowUp" | "arrowDown" | "circle";
-  color: string;
-  text: string;
+export interface MechanismFvgZone {
+  top: number;
+  bottom: number;
+  age_bars: number;
 }
 
-export interface ChartMarkers {
+/** Drawable mechanism context from the ML plane's own definitions. */
+export interface MechanismContext {
   symbol: string;
-  count: number;
-  journals: number;
-  markers: ChartMarker[];
+  timeframe: string;
+  source: string;
+  ready: boolean;
+  as_of?: number;
+  close?: number;
+  atr?: number;
+  swing_high?: number | null;
+  swing_high_age?: number;
+  swing_low?: number | null;
+  swing_low_age?: number;
+  donchian_high?: number | null;
+  donchian_low?: number | null;
+  supertrend_line?: number | null;
+  supertrend_dir?: 1 | -1 | null;
+  atr_pctile?: number | null;
+  bull_fvg?: MechanismFvgZone | null;
+  bear_fvg?: MechanismFvgZone | null;
+}
+
+export async function fetchMechanismContext(
+  symbol: string,
+  timeframe: ChartTimeframe,
+  exchange = "binanceusdm",
+): Promise<MechanismContext> {
+  const dataSymbol = symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
+  const q = new URLSearchParams({ timeframe, exchange });
+  return apiGet<MechanismContext>(
+    `/api/candles/${encodeURIComponent(dataSymbol)}/context?${q}`,
+  );
 }
 
 export async function fetchChartCandles(
@@ -223,19 +264,19 @@ export async function fetchChartCandles(
   timeframe: ChartTimeframe,
   n = 500,
   exchange = "binanceusdm",
+  range?: { fromMs?: number; toMs?: number },
 ): Promise<ChartCandles> {
+  // The HTTP/storage identity is canonical (BTCUSDT / BTCUSD), while lanes
+  // carry venue-native CCXT symbols (BTC/USDT:USDT / BTC/USD:USD).
+  const dataSymbol = symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
   const q = new URLSearchParams({ timeframe, n: String(n), exchange });
-  return apiGet<ChartCandles>(`/api/candles/${encodeURIComponent(symbol)}?${q}`);
-}
-
-/** Where the lanes actually got in and out, for overlay on the candles. */
-export async function fetchChartMarkers(
-  symbol: string,
-  n = 500,
-): Promise<ChartMarkers> {
-  const q = new URLSearchParams({ n: String(n) });
-  return apiGet<ChartMarkers>(
-    `/api/candles/${encodeURIComponent(symbol)}/markers?${q}`,
+  if (range?.fromMs !== undefined) q.set("from_ms", String(Math.trunc(range.fromMs)));
+  if (range?.toMs !== undefined) q.set("to_ms", String(Math.trunc(range.toMs)));
+  return apiGet<ChartCandles>(
+    `/api/candles/${encodeURIComponent(dataSymbol)}?${q}`,
   );
 }
 
@@ -362,7 +403,7 @@ export interface ScannerRuntimeContract {
   decision_tf?: string;
   context_tfs?: string[];
   structure_clock?: "closed_bar";
-  entry_clock?: "next_open" | "bbo_acceptance";
+  entry_clock?: "next_open" | "bbo_acceptance" | "execution_route";
   protection_clock?: "ticks";
   context_last_closed_at?: Record<string, string>;
   context_age_seconds?: Record<string, number>;
@@ -403,6 +444,33 @@ export interface CorrectionLane {
   observation_class: "shadow_observe" | "measurement" | null;
   exchange: string;
   candle_source: string;
+  decision_transport: string;
+  drought: {
+    drought_class: "ops_silent" | "identity_bug" | "quote_or_cost_wait" | "playbook_wait" | "healthy_wait";
+    last_decision_open: string | null;
+    last_decision_close: string | null;
+    last_eval_at: string | null;
+    last_setup_at: string | null;
+    last_evidence_at: string | null;
+    last_accept_at: string | null;
+    eval_age_s: number | null;
+    setup_age_s: number | null;
+    evidence_age_s: number | null;
+    accept_age_s: number | null;
+    last_decision_id: string | null;
+    last_primary_failed_gate: string | null;
+    primary_gate_counts_24h: Record<string, number>;
+    all_failed_gate_counts_24h: Record<string, number>;
+    skip_runtime: string | null;
+    candle_source: string;
+    decision_transport: string;
+    mreg_ready: boolean | null;
+    structure_ready: boolean | null;
+    quotes_armed: boolean | null;
+    path_id: string;
+  } | null;
+  path_id: string;
+  permission_snapshot_id: string | null;
   symbol: string;
   timeframe: string;
   capital: boolean;
@@ -421,6 +489,10 @@ export interface CorrectionLane {
   gate_eval_ms: number | null;
   shadow_journal_ms: number | null;
   tick_stop_ms: number | null;
+  kernel_submit_ms: number | null;
+  adapter_ack_ms: number | null;
+  quote_age_at_accept_ms: number | null;
+  quote_age_at_accept_hard_ms: number;
   latency_samples: { bar_close: number; canonical_wait: number; decision: number; required: number };
   latency_recovery: Record<string, LatencyRecoveryState>;
   arm_skips: number;
@@ -428,6 +500,8 @@ export interface CorrectionLane {
   last_signal_reason: string;
   current_waiting_reason: string;
   cost_profile: string;
+  entry_route: "auto" | "taker" | "maker_retest" | string;
+  maker_fill_ttl_bars: number | null;
   round_trip_bps: number | null;
   health: "ok" | "degraded" | "blocked" | "unknown";
   health_reason: string | null;
@@ -440,14 +514,29 @@ export interface CorrectionLane {
     recovery_ms: number;
     band: "ok" | "degraded" | "blocked" | "unknown" | string;
   }>;
+  runtime_readiness: {
+    data_ready: boolean;
+    decision_ready: boolean;
+    parity_ready: boolean;
+    execution_ready: boolean;
+    live_ready: boolean;
+    data_blockers: string[];
+    decision_blockers: string[];
+    parity_blockers: string[];
+    execution_blockers: string[];
+    live_blockers: string[];
+  } | null;
   equity_usd: number | null;
   realized_pnl_usd: number | null;
   unrealized_pnl_usd: number | null;
   open_positions: number;
   funnel: Record<string, number>;
   lifecycle: {
-    engine_kind: "quote_acceptance" | "next_open" | "measurement";
+    engine_kind: "quote_acceptance" | "next_open" | "measurement" | "taker" | "maker_retest";
     decision_engine: string;
+    entry_route: string;
+    maker_fill_ttl_bars: number | null;
+    fill_evidence: "closed_bar_touch_proxy" | "next_closed_bar_open_proxy" | "venue_order_lifecycle" | null;
     state: "watching" | "armed" | "holding" | "accepted" | "session_blocked" | "degraded";
     armed_current: boolean;
     arm_state: string | null;
@@ -544,6 +633,111 @@ export interface LanesPayload {
   read_only: true;
   can_promote: false;
   can_trade: false;
+}
+
+export type PatternFamily = "expansion" | "continuation" | "reclaim" | "reversal";
+
+export interface PatternAtlasLane {
+  lane_id: string;
+  strategy_id: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  ops: {
+    state: string;
+    reasons: string[];
+    details: Record<string, unknown>;
+    candle_status: string | null;
+    candle_age_ms: number | null;
+  };
+  setup: {
+    state: string;
+    armed_current: boolean;
+    reasons: string[];
+    failed_gates: string[];
+    session_state: string | null;
+    htf_context_age_seconds: number | null;
+  };
+  funnel: Record<string, number>;
+  latency: {
+    close_to_arm_ms: number | null;
+    bar_close_receipt_ms: number | null;
+    canonical_wait_ms: number | null;
+    decision_lag_ms: number | null;
+    quote_ingest_ms: number | null;
+    acceptance_hold_ms: number | null;
+    quote_age_at_accept_ms: number | null;
+    kernel_submit_ms: number | null;
+    adapter_ack_ms: number | null;
+  };
+  quotes: {
+    source: string | null;
+    seen: number;
+    distinct: number;
+    duplicates: number;
+    overflow_drops: number;
+    rearms: number;
+  };
+  runtime_contract: ScannerRuntimeContract | null;
+  net: { value: number | null; unit: string | null; basis: string | null };
+}
+
+export interface PatternAtlasPattern {
+  id: string;
+  name: string;
+  thesis: string;
+  family: PatternFamily;
+  decision_tf: "5m" | "15m" | "1h";
+  context: string;
+  entry_clock: string;
+  protection_clock: string;
+  regime: string;
+  direction: string;
+  rules: string[];
+  invalidation: string;
+  economics: string;
+  caution: string;
+  strategy_ids: string[];
+  sketch: "squeeze" | "range" | "bos" | "reclaim" | "session" | "sweep" | "pullback" | "regime";
+  runtime: {
+    ops_state: string;
+    setup_state: string;
+    lanes: PatternAtlasLane[];
+    lane_count: number;
+    funnel: Record<string, number>;
+    net_usd: number;
+    blockers: { ops: string[]; setup: string[]; evidence: string[] };
+  };
+  evidence: {
+    state: string;
+    strongest_state: string;
+    exact_ids: Array<{
+      strategy_id: string;
+      state: string;
+      judgments: number;
+      preregistrations: string[];
+      burned_windows: Array<Record<string, unknown>>;
+      catalogued: boolean;
+    }>;
+    has_preregistration: boolean;
+    judgments: number;
+  };
+}
+
+export interface PatternAtlasPayload {
+  schema: "vnedge.pattern_atlas.v2";
+  generated_at: string | null;
+  source_snapshot_at: string | null;
+  snapshot_state: string;
+  patterns: PatternAtlasPattern[];
+  summary: {
+    patterns: number;
+    runtime_lanes: number;
+    ops_blocked: number;
+    active_setups: number;
+    accepted: number;
+  };
+  policy: { can_trade: false; can_promote: false; read_only: true };
 }
 
 export interface PortfolioScope {
@@ -692,6 +886,14 @@ export interface JournalRow {
   fees_usd?: number;
   exit_reason?: string;
   resolution?: string;
+  path_id?: string;
+  decision_id?: string | null;
+  permission_snapshot_id?: string | null;
+  candle_source?: string | null;
+  entry_clock?: string | null;
+  execution_contract_id?: string | null;
+  execution_envelope_complete?: boolean;
+  performance_eligible?: boolean;
   [k: string]: unknown;
 }
 
@@ -703,6 +905,8 @@ export interface ScannerAuditEvent {
   kind: "signal" | "evaluation" | "entry" | "rejection" | "exit";
   source_event: string;
   intent_key?: string;
+  decision_id?: string | null;
+  permission_snapshot_id?: string | null;
   strategy_id: string;
   exchange?: string;
   symbol: string;
@@ -730,6 +934,18 @@ export interface JournalPayload {
     closed_trades: number;
     actual_realized_pnl_usd: number;
     actual_closed_net_usd: number;
+    headline_actual_closed_net_usd: number | null;
+    mixed_entry_clock_headline: boolean;
+    performance_entry_clocks: string[];
+    execution_contract_pnl: Record<string, {
+      path_id?: string | null;
+      candle_source?: string | null;
+      entry_clock?: string | null;
+      closed: number;
+      wins: number;
+      net_usd: number;
+      win_rate_pct: number;
+    }>;
     actual_closed_trades: number;
     shadow_closed_trades: number;
     scanner_events: number;
@@ -1251,6 +1467,8 @@ export interface PulseForming {
   session_label: string;
   session_active: boolean;
   status: "forming" | "awaiting_trades";
+  bar_state?: "WATCH";
+  decision_eligible?: false;
   data_quality: string;
   [k: string]: unknown;
 }

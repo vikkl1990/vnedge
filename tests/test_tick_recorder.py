@@ -444,6 +444,11 @@ def test_recorder_batch_deduplicates_replays_and_reorders_bounded_jitter(tmp_pat
     assert metrics["trades_dup_pending"] == 1
     assert metrics["trades_dup_ws"] == 1
     assert metrics["seen_set_size"] == 4
+    assert metrics["reorder_bound_ms"] == 250
+    assert metrics["max_seen_event_ts_ms"] == 3000
+    assert metrics["watermark_event_ts_ms"] == 2750
+    assert metrics["released_through_ts_ms"] == 3000
+    assert metrics["pending_reorder"] == 0
 
 
 def test_missing_trade_ids_are_applied_once_per_arrival_without_synthetic_identity(tmp_path):
@@ -675,6 +680,10 @@ def test_delta_recorder_deduplicates_native_id_and_rejects_changed_body(tmp_path
     metrics = rec.trade_metrics_snapshot()["BTCUSD"]
     assert metrics["trades_dup_ws"] == 1
     assert metrics["trades_conflict"] == 1
+    assert metrics["reorder_bound_ms"] == 250
+    assert metrics["max_seen_event_ts_ms"] == DAY_TS
+    assert metrics["released_through_ts_ms"] == DAY_TS
+    assert metrics["pending_reorder"] == 0
     assert (tmp_path / "reports" / "trade_integrity" / "conflicts.jsonl").exists()
 
 

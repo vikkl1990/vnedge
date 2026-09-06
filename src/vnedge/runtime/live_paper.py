@@ -25,7 +25,6 @@ strategy semantics that research models at bar granularity.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
@@ -50,10 +49,10 @@ from vnedge.exchange.live_feed import (
     QuoteUpdate,
     quote_overflow_drops,
 )
-from vnedge.execution.idempotency import make_intent_key
+from vnedge.execution.evidence import CostDecisionEvidence, ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
-from vnedge.execution.order_state import OrderState
+from vnedge.execution.order_state import ManagedOrder, OrderState
 from vnedge.ml.regime_v0 import RegimeV0
 from vnedge.paper.paper_reconciliation import PaperReconciler
 from vnedge.paper.simulated_exchange import SimulatedExchange
@@ -63,7 +62,7 @@ from vnedge.plan.trade_plan import plan_gate
 from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.risk.position_sizer import size_position
 from vnedge.risk.protections import ProtectionState
-from vnedge.risk.risk_manager import MarketState, OrderIntent, PreTradeRiskGateway
+from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent, PreTradeRiskGateway
 from vnedge.runtime import latency_thresholds as LT
 from vnedge.runtime.active_exit import (
     ActiveExitDecision,
@@ -75,20 +74,25 @@ from vnedge.runtime.canonical_candle_router import (
     CanonicalCandleSubscription,
     next_durable_candle,
 )
+from vnedge.runtime.canonical_parity import assert_router_authority_artifact
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
     should_force_flatten,
 )
-from vnedge.runtime.execution_contract import AdapterKind, ExecutionContext
-from vnedge.runtime.execution_kernel import ExecutionKernel
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID, AdapterKind, ExecutionContext
+from vnedge.runtime.execution_kernel import build_kernel
+from vnedge.runtime.execution_path_audit import assert_execution_path_artifact
 from vnedge.runtime.funding_ledger import FundingPrint
 from vnedge.runtime.latency_tracker import (
+    ADAPTER_ACK_MS,
     BAR_CLOSE_PROCESSING_MS,
     CLOSE_TO_ARM_MS,
     DECISION_LAG_MS,
     GATE_EVAL_MS,
     HTF_CONTEXT_WAIT_MS,
+    KERNEL_SUBMIT_MS,
+    QUOTE_AGE_AT_ACCEPT_MS,
     QUOTE_INGEST_MS,
     QUOTE_ON_QUOTE_MS,
     LatencyTracker,
@@ -97,21 +101,29 @@ from vnedge.runtime.latency_tracker import (
 from vnedge.runtime.portfolio_tracker import PortfolioTracker
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
 from vnedge.runtime.quote_ordering import quote_update_order_key
+from vnedge.runtime.readiness import RuntimeReadiness, build_runtime_readiness
 from vnedge.runtime.run_report import RunReport
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.scanner_engine import build_quote_acceptance_engine
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.shadow_outcomes import (
     ShadowOutcomeTracker,
     VirtualOutcome,
-    is_maker_route_strategy,
+    resolve_entry_route,
 )
 from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
+from vnedge.runtime.signal_drought import SignalDroughtTracker
 from vnedge.runtime.squeeze_acceptance_observe import (
     SqueezeAcceptanceObserveRunner,
 )
 from vnedge.runtime.squeeze_observe import ScannerApproval, SqueezeObserveRunner
-from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
+from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot, bar_content_sha256
+from vnedge.strategy.base_strategy import (
+    BaseStrategy,
+    SignalIntent,
+    StrategyExitIntent,
+    bind_signal_decision,
+)
 from vnedge.strategy.indicators import atr as _atr_indicator
 from vnedge.strategy.scanner_contracts import (
     resolve_scanner_cost_profile,
@@ -125,6 +137,32 @@ def _append_equity_history(path: str | Path, now: datetime, equity: float) -> No
     """Append one equity sample without blocking the asyncio decision loop."""
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"ts": now.isoformat(), "equity": round(equity, 4)}) + "\n")
+
+
+def _readiness_artifact_ready(
+    path: str | Path,
+    *,
+    ready_path: tuple[str, ...],
+    now: datetime,
+    max_age: timedelta = timedelta(hours=2),
+) -> bool:
+    """Read a report-only readiness artifact without granting authority."""
+
+    try:
+        payload: object = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return False
+        generated = pd.to_datetime(payload.get("generated_at"), utc=True).to_pydatetime()
+        if generated > now + timedelta(minutes=5) or now - generated > max_age:
+            return False
+        cursor: object = payload
+        for key in ready_path:
+            if not isinstance(cursor, dict):
+                return False
+            cursor = cursor.get(key)
+        return cursor is True
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 _EXIT_ACCEPTED_STATES = frozenset(
@@ -167,7 +205,36 @@ def _signal_payload(sig: SignalIntent | None) -> dict | None:
         "take_profit_price": sig.take_profit_price,
         "take_profit_levels": list(sig.take_profit_levels),
         "reason": sig.reason,
+        "permission_snapshot": (
+            sig.permission_snapshot.as_dict() if sig.permission_snapshot is not None else None
+        ),
     }
+
+
+def _decision_transport(value: str | None) -> str:
+    """Collapse runtime handoff labels into stable reporting cohorts."""
+
+    return "router" if str(value or "").startswith("router") else "parquet"
+
+
+def _tri_state(row: pd.Series, *names: str) -> bool | None:
+    """Read an optional boolean plane without turning absence into ``False``."""
+
+    for name in names:
+        if name not in row.index:
+            continue
+        value = row.get(name)
+        if value is None or pd.isna(value):
+            continue
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "ready"}:
+                return True
+            if normalized in {"false", "no", "0", "unavailable"}:
+                return False
+            continue
+        return bool(value)
+    return None
 
 
 @dataclass
@@ -228,6 +295,7 @@ class LivePaperSession:
         quote_evidence: QuoteEvidenceRecorder | None = None,
         canonical_arm_health: Callable[[], str | None] | None = None,
         canonical_context_watermarks: Mapping[str, datetime] | None = None,
+        canonical_router_authoritative: bool = False,
     ) -> None:
         self.strategy = strategy
         self.feed = feed
@@ -275,13 +343,19 @@ class LivePaperSession:
         self.gateway = gateway
         self.om = order_manager
         self.execution_context = ExecutionContext.from_runner_mode(config.mode)
-        self.execution_kernel = ExecutionKernel(
+        self.execution_kernel = build_kernel(
             context=self.execution_context,
             order_manager=order_manager,
             adapter_kind=AdapterKind.SIMULATED,
         )
         self.exchange = exchange
         self.journal = journal
+        # A runtime journal is evidence from the one execution path.  Tests and
+        # small embedding callers historically constructed an unbound journal;
+        # bind it here before either this session or OrderManager can append.
+        if self.journal.path_id is None:
+            self.journal.path_id = KERNEL_PATH_ID
+        journal_records = journal.read_all()
         self._backfill_eval_keys: set[tuple[str, str, str, str]] = {
             (
                 str(payload.get("strategy_id", "")),
@@ -289,7 +363,7 @@ class LivePaperSession:
                 str(payload.get("timeframe", "")),
                 str(payload.get("bar_ts", "")),
             )
-            for record in journal.read_all()
+            for record in journal_records
             for payload in [record.get("payload")]
             if record.get("kind") == "lane_eval"
             and isinstance(payload, dict)
@@ -300,6 +374,8 @@ class LivePaperSession:
         self.alert_engine = alert_engine
         self.equity_history_path = equity_history_path
         self.fill_ledger = fill_ledger
+        self._ledger_halt = False
+        self._ledger_error: str | None = None
         self.funnel_store = funnel_store
         self.latency_store = latency_store
         self.gap_store = gap_store
@@ -308,12 +384,21 @@ class LivePaperSession:
         self.canonical_candle_subscription = canonical_candle_subscription
         self.quote_evidence = quote_evidence
         self.canonical_arm_health = canonical_arm_health
+        self.canonical_router_authoritative = bool(canonical_router_authoritative)
+        if self.canonical_router_authoritative and canonical_candle_subscription is None:
+            raise ValueError("authoritative router mode requires a canonical subscription")
+        self._last_router_candle: Candle | None = None
+        self._last_canonical_parity: dict[str, object] | None = None
         self._canonical_context_last_closed_at = {
             str(timeframe): timestamp.astimezone(UTC)
             for timeframe, timestamp in (canonical_context_watermarks or {}).items()
         }
         self._last_canonical_transport = "parquet_poll"
         self._last_router_wait_ms: float | None = None
+        # Set only while one lane-consumed BBO is synchronously traversing the
+        # quote-acceptance callback. It lets the approval boundary measure and
+        # fail closed on the exact quote that produced the candidate.
+        self._active_quote_context: dict[str, object] | None = None
         # In router-dark mode the venue kline is a watchdog, never decision
         # truth.  Keep draining it while we wait for the canonical event so
         # the feed queue cannot overflow merely because ownership moved to
@@ -340,6 +425,17 @@ class LivePaperSession:
             logger.warning("unparseable timeframe %r — feed-lag disabled", config.timeframe)
             self._tf_seconds = None
         self._tf_ms: int | None = self._tf_seconds * 1000 if self._tf_seconds else None
+        self.signal_drought = SignalDroughtTracker(
+            lane_id=str((trial_meta or {}).get("trial_id") or strategy.strategy_id),
+            strategy_id=strategy.strategy_id,
+            symbol=config.symbol,
+            timeframe=config.timeframe,
+            path_id=KERNEL_PATH_ID,
+        )
+        try:
+            self.signal_drought.restore(journal_records)
+        except Exception:  # telemetry recovery may never prevent lane startup
+            logger.exception("signal drought WAL projection failed")
         # feed-continuity guard: a WS reconnect can silently skip closed bars,
         # and a wedged loop can leave a bar undelivered. Either would poison the
         # contiguous-index indicators. On a gap we heal (REST gap-fill) or fail
@@ -461,7 +557,8 @@ class LivePaperSession:
                     cost_profile=self.cost_profile,
                     bar_minutes=(self._tf_seconds or 300) / 60.0,
                     approve_fire=self._approve_scanner_fire,
-                    require_book_imbalance=data_exchange.lower() in {
+                    require_book_imbalance=data_exchange.lower()
+                    in {
                         "delta",
                         "delta_india",
                         "deltaindia",
@@ -489,33 +586,27 @@ class LivePaperSession:
         self.signals = self.orders_submitted = self.risk_rejects = 0
         self.sizing_skips = self.dropped_candles = self.recon_mismatches = 0
         self.shadow_approved = self.shadow_rejected = 0
+        self.rejected_htf_context_missing = 0
+        self._last_permission_snapshot_id: str | None = None
+        self._last_permission_snapshot: FrozenPermissionSnapshot | None = None
         self.evals = self.live_evals = self.backfill_evals = 0
         self.live_signals = self.backfill_signals = 0
         self.tick_stop_exits = 0
         self._last_heartbeat_at: datetime | None = None
         self._shadow_exit_df: pd.DataFrame | None = None
-        # SHADOW lanes never fill, so per-lane edge is invisible without
-        # virtual resolution: approved intents are resolved forward on
-        # closed bars with backtester semantics (journal = durable store).
-        self.shadow_outcomes: ShadowOutcomeTracker | None = (
-            ShadowOutcomeTracker(
-                journal,
-                fill_model=exchange.fill_model,
-                max_holding_bars=config.max_holding_bars,
-                # Strategies whose edge is defined after MAKER fees get the
-                # resting-limit route (touch-to-fill + maker entry fee); every
-                # other lane stays all-taker. Observability only either way.
-                maker_route=is_maker_route_strategy(strategy.strategy_id),
-                # Same ATR-chandelier trail as the paper/live ActiveExitState, so
-                # a shadow lane predicts its paper twin instead of the legacy
-                # fixed-stop exit. Fed the identical _trail_atr() per bar below.
-                trail_atr_mult=config.trail_atr_mult,
-                cost_model=self.cost_model,
-                strategy_exit=self._shadow_strategy_exit,
-            )
-            if config.mode is RunnerMode.SHADOW and self.scanner_observer is None
-            else None
+        # SHADOW and PAPER now share the simulated ExecutionKernel path.  The
+        # legacy shadow outcome tracker remains available to offline evidence
+        # readers, but is never allowed to book a runtime fill.
+        self.configured_entry_route = config.entry_route
+        self.entry_route = resolve_entry_route(config.entry_route, strategy.strategy_id)
+        # Preserve the historical two-bar resting TTL for AUTO-routed maker
+        # strategies. New manifests are explicit and use their frozen TTL.
+        self.maker_fill_ttl_bars = (
+            self._MAKER_ENTRY_TTL_BARS
+            if config.entry_route is EntryRoute.AUTO and self.entry_route is EntryRoute.MAKER_RETEST
+            else config.maker_fill_ttl_bars
         )
+        self.shadow_outcomes: ShadowOutcomeTracker | None = None
         self.last_eval: dict | None = None
         self.last_reject_reason: str | None = None
         # chronological trade narrative for the dashboard journal panel:
@@ -644,6 +735,13 @@ class LivePaperSession:
             self.latency.record(QUOTE_INGEST_MS, quote_event["ingest_lag_ms"])
             quote_compute_started = time.perf_counter()
             try:
+                self._active_quote_context = {
+                    "event_ts": update.ts,
+                    "received_ts": update.received_ts,
+                    "sequence": update.sequence,
+                    "source": update.source,
+                    "exchange_timestamped": update.exchange_timestamped,
+                }
                 quote_args = {
                     "bid": update.bid,
                     "ask": update.ask,
@@ -658,6 +756,7 @@ class LivePaperSession:
                     quote_args["book"] = update.book
                 fire = observer.on_quote(**quote_args)
             finally:
+                self._active_quote_context = None
                 self.latency.record(
                     QUOTE_ON_QUOTE_MS,
                     (time.perf_counter() - quote_compute_started) * 1000.0,
@@ -679,9 +778,7 @@ class LivePaperSession:
                     "approved": bool(
                         (approval is not None and approval.approved) or approved_delta > 0
                     ),
-                    "failed_checks": (
-                        list(approval.failed_checks) if approval is not None else []
-                    ),
+                    "failed_checks": (list(approval.failed_checks) if approval is not None else []),
                     "path": "live_quote_acceptance",
                 }
                 self.last_fired_ts = update.ts.isoformat()
@@ -721,7 +818,8 @@ class LivePaperSession:
         close and keeps a partial bar out of the indicator windows); a strictly
         older timestamp is dropped as non-forward (replay)."""
         ts = pd.to_datetime(raw_row[0], unit="ms", utc=True)
-        self._refresh_canonical_tail()
+        if not self.canonical_router_authoritative:
+            self._refresh_canonical_tail()
         row: dict[str, object] = {
             "timestamp": ts,
             "open": float(raw_row[1]),
@@ -730,7 +828,33 @@ class LivePaperSession:
             "close": float(raw_row[4]),
             "volume": float(raw_row[5]),
         }
-        if self.canonical_candle_store is not None:
+        if self.canonical_router_authoritative:
+            canonical = self._last_router_candle
+            if canonical is None or canonical.open_time != ts.to_pydatetime():
+                raise RuntimeError("authoritative router candle identity was not retained")
+            row.update(
+                {
+                    "open": float(canonical.open),
+                    "high": float(canonical.high),
+                    "low": float(canonical.low),
+                    "close": float(canonical.close),
+                    "volume": float(canonical.volume),
+                    "quote_volume": float(canonical.quote_volume),
+                    "trade_count": canonical.trade_count,
+                    "taker_buy_volume": float(canonical.taker_buy_volume),
+                    "vwap": (
+                        float(canonical.vwap) if canonical.vwap is not None else float("nan")
+                    ),
+                    "data_quality": "ok",
+                    "is_closed": True,
+                    "timeframe": self.config.timeframe,
+                    "symbol": self.config.symbol,
+                    # Router and Parquet carry the same canonical candle.  The
+                    # handoff is transport metadata, never bar identity.
+                    "candle_source": "canonical_tick_lake",
+                }
+            )
+        elif self.canonical_candle_store is not None:
             try:
                 canonical = self.canonical_candle_store.read_at(
                     self.config.symbol,
@@ -829,6 +953,14 @@ class LivePaperSession:
             return await self.feed.closed_candles.get()
         if self.canonical_candle_store is None:
             raise RuntimeError("canonical router dark mode requires a durable store")
+        if self.canonical_router_authoritative:
+            event = await subscription.get()
+            if event.raw_trade_durable is not True:
+                raise RuntimeError("authoritative router event lacks durable raw-trade proof")
+            self._last_router_candle = event.candle
+            self._last_canonical_transport = "router"
+            self._last_router_wait_ms = 0.0
+            return self._canonical_raw_row(event.candle)
         canonical_task = asyncio.create_task(
             next_durable_candle(
                 subscription,
@@ -838,9 +970,7 @@ class LivePaperSession:
             )
         )
         venue_queue = getattr(self.feed, "closed_candles", None)
-        venue_task = (
-            asyncio.create_task(venue_queue.get()) if venue_queue is not None else None
-        )
+        venue_task = asyncio.create_task(venue_queue.get()) if venue_queue is not None else None
         try:
             while True:
                 waiting = {canonical_task}
@@ -855,6 +985,31 @@ class LivePaperSession:
                     venue_task = asyncio.create_task(venue_queue.get())
                 if canonical_task in done:
                     matched = canonical_task.result()
+                    self._last_router_candle = matched.event.candle
+                    source = "canonical_tick_lake"
+
+                    def candle_hash(candle: Candle, _source: str = source) -> str:
+                        return bar_content_sha256(
+                            {
+                                "open": candle.open,
+                                "high": candle.high,
+                                "low": candle.low,
+                                "close": candle.close,
+                                "volume": candle.volume,
+                                "quote_volume": candle.quote_volume,
+                                "trade_count": candle.trade_count,
+                            },
+                            open_time=candle.open_time,
+                            close_time=candle.close_time,
+                            source=_source,
+                        )
+
+                    self._last_canonical_parity = {
+                        "router_bar_hash": candle_hash(matched.event.candle),
+                        "parquet_bar_hash": candle_hash(matched.candle),
+                        "bar_open": matched.candle.open_time.isoformat(),
+                        "wait_ms": matched.wait_ms,
+                    }
                     self._last_canonical_transport = "router_dark"
                     self._last_router_wait_ms = matched.wait_ms
                     return self._canonical_raw_row(matched.candle)
@@ -878,7 +1033,7 @@ class LivePaperSession:
         and journal the precise reason. The bar is never silently evaluated
         and then repaired after its decision opportunity has passed.
         """
-        if self._last_canonical_transport == "router_dark":
+        if self._last_canonical_transport in {"router", "router_dark"}:
             # ``_next_closed_candle`` already proved byte-equivalent durable
             # truth for this identity. Re-reading here would reintroduce the
             # very disk race the dark adapter exists to measure.
@@ -929,8 +1084,7 @@ class LivePaperSession:
             self.runtime_contract.context_tfs
             if self.runtime_contract is not None
             else tuple(
-                str(value)
-                for value in getattr(self.strategy, "canonical_context_timeframes", ())
+                str(value) for value in getattr(self.strategy, "canonical_context_timeframes", ())
             )
         )
         ingest = getattr(self.strategy, "ingest_canonical_context", None)
@@ -989,8 +1143,8 @@ class LivePaperSession:
                 )
                 continue
             ingest(canonical)
-            self._canonical_context_last_closed_at[timeframe] = (
-                canonical.open_time + timedelta(milliseconds=context_ms)
+            self._canonical_context_last_closed_at[timeframe] = canonical.open_time + timedelta(
+                milliseconds=context_ms
             )
             if callable(set_health):
                 set_health(timeframe, True)
@@ -1030,9 +1184,7 @@ class LivePaperSession:
             return
         newest = pd.Timestamp(self.candles["timestamp"].iloc[-1])
         terminal_before = (
-            newest - pd.Timedelta(milliseconds=2 * self._tf_ms)
-            if self._tf_ms is not None
-            else None
+            newest - pd.Timedelta(milliseconds=2 * self._tf_ms) if self._tf_ms is not None else None
         )
         for index in candidates:
             opened = pd.Timestamp(self.candles.at[index, "timestamp"])
@@ -1363,6 +1515,7 @@ class LivePaperSession:
         # immature samples remain visible to operators without halting arms.
         latency = getattr(self, "latency", None)
         if latency is not None:
+            bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(self.config.timeframe)
             decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
                 self.config.timeframe
             )
@@ -1370,9 +1523,9 @@ class LivePaperSession:
             if LT.blocks_new_arms(
                 LT.classify_latency_stats(
                     bar_stats,
-                    soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-                    hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
-                    recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
+                    soft_ms=bar_soft,
+                    hard_ms=bar_hard,
+                    recovery_ms=bar_recovery,
                 )
             ):
                 return "bar_close_lag_hard"
@@ -1398,26 +1551,101 @@ class LivePaperSession:
             if health != "ok":
                 return f"decision_tf_{health}"
             hard = LT.TM_AGE_HARD_LAST_MS.get(tf)
-            age = tm.age_ms(self.config.symbol, tf, now)
-            if hard is not None and age is not None and age > hard:
+            overdue = tm.closed_bar_overdue_ms(self.config.symbol, tf, now)
+            if hard is not None and overdue is not None and overdue > hard:
                 return "tm_age_hard"
         except Exception as exc:  # noqa: BLE001 — unknown state must fail closed
             logger.error("time machine arm check failed — blocking entry: %s", exc)
             return "tm_error"
         return None
 
+    def _runtime_readiness(self, now: datetime | None = None) -> RuntimeReadiness:
+        """Report the three independent readiness layers without granting authority."""
+        at = now or datetime.now(UTC)
+        data_block = self._candle_path_arm_block(at)
+        decision_block = (
+            "strategy_warmup_incomplete" if len(self.candles) <= self.strategy.warmup_bars else None
+        )
+        canonical_parity_ready = False
+        try:
+            assert_router_authority_artifact(
+                os.environ.get(
+                    "VNEDGE_CANONICAL_PARITY_ARTIFACT",
+                    "research/live_research/canonical_transport_parity.json",
+                ),
+                now=at,
+                max_age=timedelta(hours=2),
+            )
+            canonical_parity_ready = True
+        except ValueError:
+            pass
+        execution_audit_ready = False
+        try:
+            assert_execution_path_artifact(
+                os.environ.get(
+                    "VNEDGE_EXECUTION_PATH_AUDIT",
+                    "research/live_research/execution_path_audit.json",
+                ),
+                now=at,
+            )
+            execution_audit_ready = True
+        except ValueError:
+            pass
+        quote_clock = bool(
+            self.runtime_contract is not None
+            and self.runtime_contract.entry_clock == "bbo_acceptance"
+        )
+        quote_parity_ready = (
+            not quote_clock
+            or _readiness_artifact_ready(
+                os.environ.get(
+                    "VNEDGE_QUOTE_PARITY_ARTIFACT",
+                    "research/live_research/quote_parity_status.json",
+                ),
+                ready_path=("summary", "cutover_ready"),
+                now=at,
+            )
+        )
+        execution_blockers: list[str | None] = [
+            "execution_stage_observe"
+            if not self.execution_context.stage.can_submit_orders
+            else None,
+            "fill_ledger_write_failed" if self._ledger_halt else None,
+            "decision_journal_unavailable" if not self.journal.available else None,
+            "decision_journal_recovery_degraded"
+            if self.journal.recovery_degraded
+            else None,
+            "unresolved_orders" if self.om.has_unresolved_orders else None,
+            "kernel_envelope_audit_unproven" if not execution_audit_ready else None,
+        ]
+        return build_runtime_readiness(
+            data_blockers=(data_block,),
+            decision_blockers=(decision_block,),
+            parity_blockers=(
+                "canonical_transport_parity_unproven"
+                if not canonical_parity_ready
+                else None,
+                "quote_approval_parity_unproven"
+                if quote_clock and not quote_parity_ready
+                else None,
+            ),
+            execution_blockers=execution_blockers,
+            live_blockers=("capital_path_locked", "venue_private_stream_unavailable"),
+        )
+
     def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
         """Operator-visible proof behind automatic latency recovery."""
         decision_soft, decision_hard, decision_recovery = LT.decision_compute_limits(
             self.config.timeframe
         )
+        bar_soft, bar_hard, bar_recovery = LT.closed_bar_receipt_limits(self.config.timeframe)
         bar_stats = self.latency.stats(BAR_CLOSE_PROCESSING_MS) or self.latency.stats("feed_lag_ms")
         return {
             "bar_close_processing_ms": LT.latency_recovery_state(
                 bar_stats,
-                soft_ms=LT.CLOSED_BAR_LAG_SOFT_P99_MS,
-                hard_ms=LT.CLOSED_BAR_LAG_HARD_P99_MS,
-                recovery_ms=LT.CLOSED_BAR_LAG_RECOVERY_MS,
+                soft_ms=bar_soft,
+                hard_ms=bar_hard,
+                recovery_ms=bar_recovery,
             ),
             "decision_lag_ms": LT.latency_recovery_state(
                 self.latency.stats(DECISION_LAG_MS),
@@ -1554,6 +1782,16 @@ class LivePaperSession:
             }
         )
 
+    def _drought_event(self, method: str, **payload: object) -> object | None:
+        """Isolate read-only telemetry from every decision and execution path."""
+
+        try:
+            callback = getattr(self.signal_drought, method)
+            return callback(**payload)
+        except Exception:  # drought is observability, never permission
+            logger.exception("signal drought telemetry failed during %s", method)
+            return None
+
     def _mode_label(self) -> str:
         if self.config.mode is RunnerMode.SHADOW:
             return "shadow (live data)"
@@ -1613,6 +1851,7 @@ class LivePaperSession:
                 "mode": self.config.mode.value,
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
+                "runtime_readiness": self._runtime_readiness(now).to_dict(),
                 "runner_state": (
                     "in_position"
                     if self._plan is not None
@@ -1631,6 +1870,7 @@ class LivePaperSession:
                 "sizing_skips": self.sizing_skips,
                 "shadow_approved": self.shadow_approved,
                 "shadow_rejected": self.shadow_rejected,
+                "rejected_htf_context_missing": self.rejected_htf_context_missing,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 # feed-continuity guard: reduce-only reason (or None) + counters
@@ -1790,6 +2030,9 @@ class LivePaperSession:
             "decision_price": decision_price,
             "stop_price": sig.stop_price,
             "take_profit_price": sig.take_profit_price,
+            "entry_limit_price": sig.entry_limit_price,
+            "entry_route": self.entry_route.value,
+            "maker_fill_ttl_bars": self.maker_fill_ttl_bars,
             "decision_tf": (
                 self.runtime_contract.decision_tf
                 if self.runtime_contract is not None
@@ -1815,31 +2058,60 @@ class LivePaperSession:
                 if self.runtime_contract is not None
                 else "ticks"
             ),
+            "permission_snapshot_id": (
+                sig.permission_snapshot.snapshot_id
+                if sig.permission_snapshot is not None
+                else None
+            ),
+            "permission_snapshot": (
+                sig.permission_snapshot.as_dict()
+                if sig.permission_snapshot is not None
+                else None
+            ),
+            "decision_id": (
+                sig.decision_envelope.decision_id
+                if sig.decision_envelope is not None
+                else None
+            ),
+            "arm_envelope": (
+                sig.decision_envelope.as_dict()
+                if sig.decision_envelope is not None
+                else None
+            ),
         }
-        # A shadow intent is a real reservation in the virtual book even
-        # though it never reaches an exchange.  Treat it exactly like an open
-        # plan for entry concurrency: otherwise every later signal can stack a
-        # second notional on the same purse while PortfolioTracker still shows
-        # no position.  Keep this guard here (rather than only in ``run``) so a
-        # future/direct caller cannot bypass the single-book invariant.
         if (
-            self.config.mode is RunnerMode.SHADOW
-            and self.shadow_outcomes is not None
-            and self.shadow_outcomes.has_pending
+            bool(getattr(self.strategy, "requires_permission_snapshot", False))
+            and sig.permission_snapshot is None
         ):
-            self.last_reject_reason = "shadow_book: unresolved virtual position"
+            self.last_reject_reason = "evidence: required permission snapshot missing"
             self.journal.append(
-                "shadow_entry_blocked",
+                "entry_evidence_rejected",
                 {**scanner_context, "reason": self.last_reject_reason},
-            )
-            self._log_trade_event(
-                "shadow_entry_blocked",
-                f"{sig.side} — unresolved virtual position already reserves the purse"[:140],
-                now,
             )
             return
         bid, ask = self.feed.quote
-        ref_price = ask if sig.side == "long" else bid
+        maker = self.entry_route is EntryRoute.MAKER_RETEST
+        if maker and sig.entry_limit_price is None:
+            if self.configured_entry_route is EntryRoute.AUTO:
+                # Compatibility for frozen legacy maker IDs. New explicit
+                # maker-retest lanes must carry the route-neutral setup level.
+                ref_price = bid if sig.side == "long" else ask
+            else:
+                self.last_reject_reason = "entry_route: maker_retest requires entry_limit_price"
+                self.journal.append(
+                    "entry_route_rejected",
+                    {**scanner_context, "reason": self.last_reject_reason},
+                )
+                self._log_trade_event("entry_route_rejected", self.last_reject_reason, now)
+                return
+        else:
+            ref_price = (
+                float(sig.entry_limit_price)
+                if maker and sig.entry_limit_price is not None
+                else ask
+                if sig.side == "long"
+                else bid
+            )
         targets = [
             float(target)
             for target in (sig.take_profit_price, *sig.take_profit_levels)
@@ -1867,9 +2139,6 @@ class LivePaperSession:
             (target - ref_price) / ref_price * 10_000.0
             if sig.side == "long"
             else (ref_price - target) / ref_price * 10_000.0
-        )
-        maker = self.config.mode is not RunnerMode.SHADOW and is_maker_route_strategy(
-            self.strategy.strategy_id
         )
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
@@ -1921,10 +2190,9 @@ class LivePaperSession:
                 now,
             )
             return
-        # Maker-edge strategies post a passive resting limit at the near touch
-        # (bid for a long, ask for a short) instead of crossing the spread — the
-        # route their scorecard edge is defined on. SHADOW never places real
-        # orders, so it stays market (its virtual pricing is handled separately).
+        # One explicit route reaches every stage. A maker-retest signal rests
+        # at the strategy's structure level; SHADOW no longer journals a fake
+        # market order while its outcome tracker books maker fees.
         intent = OrderIntent(
             symbol=self.config.symbol,
             side=sig.side,
@@ -1932,104 +2200,51 @@ class LivePaperSession:
             notional_usd=sizing.notional_usd,
             leverage=max(sizing.required_leverage, 1.0),
             reduce_only=False,
-            strategy_id=self.strategy.strategy_id,
             order_type="limit" if maker else "market",
-            limit_price=(bid if sig.side == "long" else ask) if maker else None,
+            limit_price=ref_price if maker else None,
+            time_in_force="PO" if maker else None,
         )
-        key = make_intent_key(
-            self.strategy.strategy_id,
-            self.config.symbol,
-            sig.side,
-            decision_bar_ts,
-        )
-        if self.config.mode is RunnerMode.SHADOW:
-            decision = self.execution_kernel.evaluate_candidate(
-                intent, self.tracker.account_state(), self._market_state(), now=now
-            )
-            if decision.approved and self.shadow_portfolio is not None:
-                shared = self.shadow_portfolio.evaluate_entry(
-                    lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
-                    symbol=self.config.symbol,
-                    side=sig.side,
-                    margin_usd=Decimal(str(intent.notional_usd / intent.leverage)),
-                    now=now,
-                    intent_key=key,
-                )
-                if not shared.allowed:
-                    self.shadow_rejected += 1
-                    self.last_reject_reason = f"shadow_portfolio: {shared.reason}"
-                    self.journal.append(
-                        "shadow_portfolio_rejected",
-                        {
-                            **scanner_context,
-                            "reason": shared.reason,
-                            "active_margin_usd": str(shared.active_margin_usd),
-                            "daily_net_usd": str(shared.daily_net_usd),
-                            "unresolved_intents": shared.unresolved_intents,
-                        },
-                    )
-                    self._log_trade_event("shadow_portfolio_rejected", self.last_reject_reason, now)
-                    return
+        if sig.decision_envelope is None:
+            self.last_reject_reason = "evidence: decision envelope missing at submit"
             self.journal.append(
-                "shadow_intent",
-                {
-                    "intent_key": key,
-                    "approved": decision.approved,
-                    "failed_checks": list(decision.failed_checks),
-                    "passed_checks": list(decision.passed_checks),
-                    "explanation": decision.explanation,
-                    "intent": asdict(intent),
-                    "signal_reason": sig.reason,
-                    # stop/target/decision bar make the intent resolvable into a
-                    # virtual outcome later (and on restart, from the journal)
-                    "stop_price": sig.stop_price,
-                    "take_profit_price": sig.take_profit_price,
-                    "take_profit_levels": list(sig.take_profit_levels),
-                    "bar_ts": decision_bar_ts.isoformat(),
-                    "timeframe": self.config.timeframe,
-                    "decision_price": decision_price,
-                },
+                "entry_evidence_rejected",
+                {**scanner_context, "reason": self.last_reject_reason},
             )
-            if decision.approved:
-                self.shadow_approved += 1
-                self._factory_entries_today += 1
-                if self.shadow_outcomes is not None:
-                    self.shadow_outcomes.track(
-                        intent_key=key,
-                        symbol=self.data_symbol,
-                        side=sig.side,
-                        quantity=intent.quantity,
-                        notional_usd=intent.notional_usd,
-                        stop_price=sig.stop_price,
-                        take_profit_price=sig.take_profit_price,
-                        decision_bar_ts=decision_bar_ts,
-                        signal_reason=sig.reason,
-                        take_profit_levels=sig.take_profit_levels,
-                    )
-                self._log_trade_event(
-                    "shadow_approved",
-                    f"{sig.side} {intent.quantity:g} @ ~{ref_price:g} — {sig.reason}"[:140],
-                    now,
-                )
-            else:
-                self.shadow_rejected += 1
-                self.last_reject_reason = f"gateway: {', '.join(decision.failed_checks)}"
-                self._log_trade_event(
-                    "shadow_rejected",
-                    f"{sig.side} — failed: {', '.join(decision.failed_checks)}"[:140],
-                    now,
-                )
             return
-        order = await self.execution_kernel.submit(
-            intent, self.tracker.account_state(), self._market_state(), key, now=now
+        evidence = ExecutionEvidence.from_decision(
+            sig.decision_envelope,
+            cost_decision=CostDecisionEvidence.from_result(
+                cost_decision, profile=self.cost_profile
+            ),
+        )
+        order = await self._submit_kernel(
+            intent,
+            self.tracker.account_state(),
+            self._market_state(),
+            evidence,
+            now=now,
+            intent_kind="entry",
         )
         if order.state is OrderState.RISK_REJECTED:
             self.risk_rejects += 1
+            if order.history and order.history[-1].note:
+                self.last_reject_reason = order.history[-1].note
+            if self.config.mode is RunnerMode.SHADOW:
+                self.shadow_rejected += 1
             self._log_trade_event(
                 "risk_rejected", f"{sig.side} — gateway rejected entry"[:140], now
             )
         else:
             self.orders_submitted += 1
+            self._drought_event(
+                "note_accept",
+                decision_id=evidence.decision_id,
+                approved_at=now,
+            )
+            if self.config.mode is RunnerMode.SHADOW:
+                self.shadow_approved += 1
+            self._last_permission_snapshot_id = evidence.htf_snapshot_id
+            self._last_permission_snapshot = sig.permission_snapshot
             self._factory_entries_today += 1
             self._log_trade_event(
                 "order_submitted",
@@ -2037,6 +2252,8 @@ class LivePaperSession:
                 now,
             )
             plan = self._new_plan(sig, self.candles["timestamp"].iloc[-1])
+            if order.client_order_id is None:
+                raise RuntimeError("approved kernel order has no client_order_id")
             self._seed_plan_from_venue(plan, order.client_order_id)
             venue_status = self.exchange.get_order_status(order.client_order_id)
             filled = venue_status is not None and venue_status.filled_qty > 0
@@ -2059,9 +2276,7 @@ class LivePaperSession:
         finally:
             self.latency.record(GATE_EVAL_MS, (time.perf_counter() - started) * 1000.0)
 
-    def _approve_scanner_fire_impl(
-        self, fire, bar_index: int, bar_ts: datetime
-    ) -> ScannerApproval:
+    def _approve_scanner_fire_impl(self, fire, bar_index: int, bar_ts: datetime) -> ScannerApproval:
         """Run a scanner candidate through the normal sizing+risk boundary.
 
         This returns data to the read-only scanner runner; it never calls
@@ -2074,6 +2289,62 @@ class LivePaperSession:
                 intent={},
                 failed_checks=("scanner_shadow_only",),
                 explanation="canonical scanner runner has no paper/live authority",
+            )
+        quote_context = self._active_quote_context or {}
+        quote_event = quote_context.get("event_ts", bar_ts)
+        if not isinstance(quote_event, datetime) or quote_event.tzinfo is None:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("quote_clock_invalid",),
+                explanation="scanner candidate has no timezone-aware quote event clock",
+            )
+        quote_age_ms = max(
+            0.0,
+            (datetime.now(UTC) - quote_event.astimezone(UTC)).total_seconds() * 1000.0,
+        )
+        self.latency.record_labeled(
+            QUOTE_AGE_AT_ACCEPT_MS,
+            quote_age_ms,
+            source=str(quote_context.get("source") or "unknown"),
+            exchange_timestamped=(
+                "yes" if bool(quote_context.get("exchange_timestamped")) else "no"
+            ),
+        )
+        if quote_age_ms > LT.QUOTE_AGE_AT_ACCEPT_HARD_MS:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("quote_age_at_accept_hard",),
+                explanation=(
+                    f"quote age {quote_age_ms:.1f}ms exceeds executable freshness "
+                    f"limit {LT.QUOTE_AGE_AT_ACCEPT_HARD_MS}ms"
+                ),
+            )
+        acceptance = (
+            getattr(self.scanner_observer, "acceptance", None)
+            if self.scanner_observer is not None
+            else None
+        )
+        arm = getattr(acceptance, "arm", None)
+        permission_snapshot = getattr(arm, "evidence", None)
+        arm_decision = arm.decision_for(fire.side) if arm is not None else None
+        if arm_decision is None:
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("decision_envelope_missing",),
+                explanation="quote acceptance has no closed-bar ARM identity",
+            )
+        if (
+            bool(getattr(self.strategy, "requires_permission_snapshot", False))
+            and permission_snapshot is None
+        ):
+            return ScannerApproval(
+                approved=False,
+                intent={},
+                failed_checks=("permission_evidence_missing",),
+                explanation="context-aware scanner fire has no frozen permission evidence",
             )
         try:
             ref_price = float(fire.entry)
@@ -2090,7 +2361,9 @@ class LivePaperSession:
         factory_block = self._daily_factory_entry_block_reason(bar_ts)
         protected, protection_reason = self.protections.entries_allowed(bar_index)
         local_failure = (
-            f"candle_path:{cp_block}"
+            "execution:fill_ledger_write_failed"
+            if self._ledger_halt
+            else f"candle_path:{cp_block}"
             if cp_block is not None
             else factory_block
             if factory_block is not None
@@ -2161,23 +2434,31 @@ class LivePaperSession:
             notional_usd=sizing.notional_usd,
             leverage=leverage,
             reduce_only=False,
-            strategy_id=self.strategy.strategy_id,
             order_type="market",
+        )
+        raw_quote_sequence = quote_context.get("sequence")
+        quote_sequence = (
+            raw_quote_sequence
+            if isinstance(raw_quote_sequence, (int, str))
+            else None
+        )
+        evidence = ExecutionEvidence.from_decision(
+            arm_decision,
+            quote_sequence=quote_sequence,
+            bbo_ts=quote_event,
+            quote_age_ms=quote_age_ms,
+            cost_decision=CostDecisionEvidence.from_result(
+                cost_decision, profile=self.cost_profile
+            ),
         )
         decision = self.execution_kernel.evaluate_candidate(
             intent,
             self.tracker.account_state(),
             self._market_state(),
+            evidence=evidence,
             now=datetime.now(UTC),
         )
-        key_prefix = {
-            "squeeze_expansion_breakout_v2": "squeeze_observe",
-            "squeeze_expansion_breakout_v3": "squeeze_acceptance_v3",
-            "squeeze_expansion_breakout_v4": "squeeze_expansion_breakout_v4",
-        }.get(self.strategy.strategy_id, self.strategy.strategy_id)
-        intent_key = (
-            f"{key_prefix}|{self.data_symbol}|{fire.side}|{int(bar_ts.timestamp() * 1000)}"
-        )
+        intent_key = evidence.decision_id
         if decision.approved and self.shadow_portfolio is not None:
             shared = self.shadow_portfolio.evaluate_entry(
                 lane_id=str((self.trial_meta or {}).get("trial_id", "unknown")),
@@ -2197,7 +2478,14 @@ class LivePaperSession:
                     notional_usd=intent.notional_usd,
                     margin_usd=intent.notional_usd / leverage,
                     intent_key=intent_key,
+                    execution_evidence=evidence.as_dict(),
                 )
+        if decision.approved:
+            self._drought_event(
+                "note_accept",
+                decision_id=evidence.decision_id,
+                approved_at=datetime.now(UTC),
+            )
         return ScannerApproval(
             approved=decision.approved,
             intent=asdict(intent),
@@ -2207,6 +2495,7 @@ class LivePaperSession:
             notional_usd=intent.notional_usd,
             margin_usd=intent.notional_usd / leverage,
             intent_key=intent_key,
+            execution_evidence=evidence.as_dict(),
         )
 
     def _scanner_payoff_hypothesis_r(self) -> float:
@@ -2259,7 +2548,7 @@ class LivePaperSession:
             )
             return
         pending.bars_waited += 1
-        if pending.bars_waited >= self._MAKER_ENTRY_TTL_BARS:
+        if pending.bars_waited >= self.maker_fill_ttl_bars:
             await self.om.cancel_order(pending.client_order_id, reason="maker entry TTL — no touch")
             self._pending_entry = None
             self._log_trade_event(
@@ -2502,15 +2791,31 @@ class LivePaperSession:
             notional_usd=0.0,
             leverage=1.0,
             reduce_only=True,
-            strategy_id=self.strategy.strategy_id,
         )
-        intent_key = self._exit_intent_key(base_key)
-        order = await self.execution_kernel.submit(
+        bar_open = pd.Timestamp(self.candles["timestamp"].iloc[-1]).to_pydatetime()
+        evidence = ExecutionEvidence.create(
+            strategy_id=f"{self.strategy.strategy_id}:exit:{reason}",
+            symbol=self.config.symbol,
+            timeframe=self.config.timeframe,
+            bar_open=bar_open,
+            side=intent.side,
+            htf_snapshot_id=self._last_permission_snapshot_id,
+            permission_snapshot=self._last_permission_snapshot,
+            candle_source=(
+                str(self.candles.iloc[-1].get("candle_source", "canonical_tick_lake"))
+                if not self.candles.empty
+                else "canonical_tick_lake"
+            ),
+            entry_clock="exit",
+            cost_decision=CostDecisionEvidence.not_evaluated("reduce_only_exit"),
+        )
+        order = await self._submit_kernel(
             intent,
             self.tracker.account_state(),
             self._market_state(),
-            intent_key=intent_key,
+            evidence,
             now=now,
+            intent_kind="exit",
         )
         self.orders_submitted += 1
         if order.state in _EXIT_ACCEPTED_STATES:
@@ -2519,9 +2824,76 @@ class LivePaperSession:
             self._preserve_exit_plan(base_key, order, reason, final=final, decision=decision)
         return order
 
+    async def _submit_kernel(
+        self,
+        intent: OrderIntent,
+        account: AccountState,
+        market: MarketState,
+        evidence: ExecutionEvidence,
+        *,
+        now: datetime,
+        intent_kind: str,
+    ) -> ManagedOrder:
+        """Measure one complete kernel attempt and its adapter-only boundary.
+
+        Risk rejects intentionally have no adapter sample.  ACK, definitive
+        venue reject, and TIMEOUT_UNKNOWN all do: those are the three adapter
+        returns an operator must distinguish before claiming live readiness.
+        """
+        started = time.perf_counter()
+        try:
+            order = await self.execution_kernel.submit(
+                intent,
+                account,
+                market,
+                evidence=evidence,
+                now=now,
+            )
+        except Exception:
+            self.latency.record_labeled(
+                KERNEL_SUBMIT_MS,
+                (time.perf_counter() - started) * 1000.0,
+                intent=intent_kind,
+                outcome="exception",
+            )
+            raise
+        self.latency.record_labeled(
+            KERNEL_SUBMIT_MS,
+            (time.perf_counter() - started) * 1000.0,
+            intent=intent_kind,
+            outcome=order.state.value,
+        )
+        adapter_ms = self._adapter_ack_latency_ms(order)
+        if adapter_ms is not None:
+            self.latency.record_labeled(
+                ADAPTER_ACK_MS,
+                adapter_ms,
+                intent=intent_kind,
+                outcome=order.state.value,
+            )
+        return order
+
+    @staticmethod
+    def _adapter_ack_latency_ms(order: ManagedOrder) -> float | None:
+        """Return ``SUBMITTING`` → adapter terminal response for one order."""
+        submitted_at: datetime | None = None
+        adapter_states = {
+            OrderState.ACKNOWLEDGED,
+            OrderState.REJECTED,
+            OrderState.TIMEOUT_UNKNOWN,
+        }
+        for event in order.history:
+            if event.state is OrderState.SUBMITTING:
+                submitted_at = event.timestamp
+                continue
+            if submitted_at is not None and event.state in adapter_states:
+                return max(0.0, (event.timestamp - submitted_at).total_seconds() * 1000.0)
+        return None
+
     def _exit_intent_key(self, base_key: str) -> str:
-        attempt = self._exit_retry_attempts.get(base_key, 0)
-        return base_key if attempt == 0 else f"{base_key}|retry={attempt}"
+        # A retry is the same decision and the same journaled venue attempt.
+        # Attempt counters are telemetry only; they must never mutate identity.
+        return base_key
 
     def _mark_exit_accepted(self, reason: str, *, final: bool = True) -> None:
         if not final:
@@ -2536,6 +2908,8 @@ class LivePaperSession:
 
     def _clear_exit_plan(self) -> None:
         self._plan = None
+        self._last_permission_snapshot_id = None
+        self._last_permission_snapshot = None
         self._pending_exit_orders.clear()
         self._pending_exit_finals.clear()
         self._pending_exit_decisions.clear()
@@ -2589,14 +2963,13 @@ class LivePaperSession:
         backtester models TPs at bar granularity, so tick TPs would make
         paper results diverge from research.
 
-        Shadow lanes never hold fills/positions, so no plan is ever armed
-        there and this never triggers; the explicit mode guard documents that
-        and keeps it true even if a plan were ever armed by mistake.
+        SHADOW and PAPER both hold simulated positions through the same kernel,
+        so both use this exact protective path.  Only their later promotion
+        authority differs; reduce-only protection does not.
         """
         if (
             self._plan is None
             or not self.config.tick_stops_enabled
-            or self.config.mode is RunnerMode.SHADOW
             or self.feed.quote is None
         ):
             return
@@ -3020,7 +3393,13 @@ class LivePaperSession:
         values that drove it. This is the observability record that turns
         'no signal for days' from a mystery into a measurement (how far from
         each threshold every bar actually was)."""
-        bar_ts = df["timestamp"].iloc[index].isoformat()
+        eval_at = datetime.now(UTC)
+        bar_open_dt = pd.Timestamp(df["timestamp"].iloc[index]).to_pydatetime()
+        if bar_open_dt.tzinfo is None:
+            bar_open_dt = bar_open_dt.replace(tzinfo=UTC)
+        else:
+            bar_open_dt = bar_open_dt.astimezone(UTC)
+        bar_ts = bar_open_dt.isoformat()
         eval_key = (
             self.strategy.strategy_id,
             self.config.symbol,
@@ -3088,6 +3467,12 @@ class LivePaperSession:
             skip_reason = str(primary_failed_gate)
             if not backfill:
                 self.last_reject_reason = skip_reason
+        if (
+            not backfill
+            and sig is None
+            and primary_failed_gate == "htf_context_missing"
+        ):
+            self.rejected_htf_context_missing += 1
 
         source_window = df.iloc[
             max(0, index + 1 - max(1, int(getattr(self.strategy, "warmup_bars", 1)))) : index + 1
@@ -3102,7 +3487,9 @@ class LivePaperSession:
                 .items()
             }
             canonical_rows = source_window.loc[
-                source_window["candle_source"].astype(str).eq("canonical_tick_lake")
+                source_window["candle_source"]
+                .astype(str)
+                .isin({"canonical_tick_lake", "router"})
             ]
             latest_canonical = (
                 canonical_rows["timestamp"].iloc[-1].isoformat()
@@ -3113,29 +3500,64 @@ class LivePaperSession:
             source_counts = {"unreported": len(source_window)}
             latest_canonical = None
         candle_source = str(row.get("candle_source", "unreported"))
-        identity = {
-            name: str(row.get(name, ""))
-            for name in (
-                "timestamp",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "quote_volume",
-                "trade_count",
-                "candle_source",
+        decision_transport = _decision_transport(self._last_canonical_transport)
+        decision_ids: list[str] = []
+        if sig is not None and sig.decision_envelope is not None:
+            decision_ids.append(sig.decision_envelope.decision_id)
+        acceptance = (
+            getattr(self.scanner_observer, "acceptance", None)
+            if self.scanner_observer is not None
+            else None
+        )
+        active_arm = getattr(acceptance, "arm", None)
+        if active_arm is not None:
+            decision_ids.extend(
+                str(item.decision_id)
+                for item in getattr(active_arm, "decisions", ())
+                if getattr(item, "decision_id", None)
             )
-        }
-        row_sha256 = hashlib.sha256(
-            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        approval = (
+            getattr(self.scanner_observer, "last_approval", None)
+            if self.scanner_observer is not None
+            else None
+        )
+        approval_evidence = (
+            getattr(approval, "execution_evidence", None)
+            if approval is not None
+            else None
+        )
+        if isinstance(approval_evidence, dict) and approval_evidence.get("decision_id"):
+            decision_ids.append(str(approval_evidence["decision_id"]))
+        decision_ids = list(dict.fromkeys(decision_ids))
+        quotes_armed = (
+            bool(active_arm is not None and not bool(getattr(acceptance, "position_open", False)))
+            if self.scanner_observer is not None
+            else None
+        )
+        mreg_ready = _tri_state(row, "mreg_ready")
+        structure_ready = _tri_state(
+            row,
+            "bos15_structure_ready",
+            "structure_ready",
+            "rt_structure_ready",
+        )
+        decision_close_dt = (
+            bar_open_dt + timedelta(seconds=self._tf_seconds)
+            if self._tf_seconds is not None
+            else bar_open_dt + timedelta(microseconds=1)
+        )
+        row_sha256 = bar_content_sha256(
+            row.to_dict(),
+            open_time=bar_open_dt,
+            close_time=decision_close_dt,
+            source=candle_source,
+        )
         record = {
             "bar_ts": bar_ts,
+            "eval_at": eval_at.isoformat(),
             "decision_at": (
                 (
-                    pd.Timestamp(row["timestamp"])
-                    + pd.Timedelta(seconds=self._tf_seconds)
+                    pd.Timestamp(row["timestamp"]) + pd.Timedelta(seconds=self._tf_seconds)
                 ).isoformat()
                 if self._tf_seconds is not None
                 else bar_ts
@@ -3170,6 +3592,10 @@ class LivePaperSession:
             "data_clock": self.execution_context.clock.value,
             "execution_stage": self.execution_context.stage.value,
             "fired": sig is not None,
+            "decision_ids": decision_ids,
+            "mreg_ready": mreg_ready,
+            "structure_ready": structure_ready,
+            "quotes_armed": quotes_armed,
             "signal_reason": sig.reason if sig is not None else None,
             "skip_reason": skip_reason,
             "signal": _signal_payload(sig),
@@ -3181,9 +3607,10 @@ class LivePaperSession:
             "distance_to_threshold": diagnostics.get("distance_to_threshold", {}),
             "data_source": {
                 "candle_source": candle_source,
+                "decision_transport": decision_transport,
                 "window_source_counts": source_counts,
                 "exchange_fallback_used": any(
-                    name != "canonical_tick_lake" for name in source_counts
+                    name not in {"canonical_tick_lake", "router"} for name in source_counts
                 ),
                 "latest_canonical_timestamp": latest_canonical,
                 "decision_row_sha256": row_sha256,
@@ -3206,11 +3633,73 @@ class LivePaperSession:
                 self.live_signals += 1
                 _ts = df["timestamp"].iloc[index]
                 self.last_fired_ts = _ts.isoformat() if hasattr(_ts, "isoformat") else str(_ts)
-        self.journal.append("lane_eval", record)
+        persisted = self.journal.append("lane_eval", record)
+        envelope_persisted_at = datetime.now(UTC)
+        if (
+            not backfill
+            and decision_transport == "router_dark"
+            and self._last_canonical_parity is not None
+            and self._last_canonical_parity.get("bar_open") == bar_ts
+        ):
+            self.journal.append(
+                "canonical_transport_parity",
+                {
+                    **self._last_canonical_parity,
+                    "lane_id": str(
+                        (self.trial_meta or {}).get("trial_id")
+                        or self.strategy.strategy_id
+                    ),
+                    "strategy_id": self.strategy.strategy_id,
+                    "exchange": getattr(self.feed, "exchange_id", ""),
+                    "symbol": self.config.symbol,
+                    "timeframe": self.config.timeframe,
+                    "decision_bar_hash": row_sha256,
+                    "decision_ids": decision_ids,
+                    "fired": sig is not None,
+                    "evaluated_at": eval_at.isoformat(),
+                    "decision_transport": decision_transport,
+                },
+            )
         if backfill:
             self._backfill_eval_keys.add(eval_key)
         if not backfill:
             self.last_eval = record
+            # Drought is a write-only observer.  It is intentionally called
+            # after the decision and after the durable lane-eval append.
+            self._drought_event(
+                "note_eval",
+                decision_open=bar_open_dt,
+                decision_close=decision_close_dt,
+                evaluated_at=eval_at,
+                eligible=eligible or bool(quotes_armed),
+                fired=sig is not None,
+                decision_id=(decision_ids[-1] if persisted and decision_ids else None),
+                primary_failed_gate=primary_failed_gate,
+                all_failed_gates=failed_gates,
+                skip_runtime=(
+                    str(skip_reason).split(":", 1)[0] if skip_reason else None
+                ),
+                candle_source=candle_source,
+                decision_transport=decision_transport,
+                mreg_ready=mreg_ready,
+                structure_ready=structure_ready,
+                quotes_armed=quotes_armed,
+            )
+            if persisted:
+                for decision_id in decision_ids:
+                    self._drought_event(
+                        "note_evidence",
+                        decision_id=decision_id,
+                        persisted_at=envelope_persisted_at,
+                    )
+            if approval is not None and bool(getattr(approval, "approved", False)):
+                approved_id = str(getattr(approval, "intent_key", "") or "")
+                if approved_id:
+                    self._drought_event(
+                        "note_accept",
+                        decision_id=approved_id,
+                        approved_at=eval_at,
+                    )
         if sig is not None and not backfill:
             from datetime import datetime as _dt
 
@@ -3265,41 +3754,76 @@ class LivePaperSession:
                 f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
                 now,
             )
-            self.fill_ledger.append(
-                {
-                    "ts": now.isoformat(),
-                    "mode": self.config.mode.value,
-                    "venue": getattr(self.feed, "exchange_id", "paper"),
-                    "strategy_id": self.strategy.strategy_id,
-                    "symbol": fill.symbol,
-                    "side": "buy" if fill.buy else "sell",
-                    "quantity": fill.quantity,
-                    "price": fill.price,
-                    "fee_usd": fill.fee_usd,
-                    "realized_pnl_usd": fill.realized_pnl_usd,
-                    "client_order_id": fill.client_order_id,
-                    "exchange_seq": fill.seq,
-                    "mid_at_send": fill.mid_at_send,
-                    "fill_price": fill.price,
-                    "realized_exec_bps": fill.realized_exec_bps,
-                    "liquidity": fill.liquidity,
-                    "schedule_fee_bps": (
-                        self.exchange.fill_model.maker_fee_bps
-                        if fill.liquidity == "maker"
-                        else self.exchange.fill_model.taker_fee_bps
-                    ),
-                    "fee_leg": fee_leg,
-                    "hold_seconds": None,
-                    "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
-                    "execution_label_resolved": fill.realized_exec_bps is not None,
-                    "execution_label_schema_version": "execution_cost_label_v1",
-                }
-            )
+            try:
+                self.fill_ledger.append(
+                    {
+                        "ts": now.isoformat(),
+                        "mode": self.config.mode.value,
+                        "venue": getattr(self.feed, "exchange_id", "paper"),
+                        "strategy_id": self.strategy.strategy_id,
+                        "symbol": fill.symbol,
+                        "side": "buy" if fill.buy else "sell",
+                        "quantity": fill.quantity,
+                        "price": fill.price,
+                        "fee_usd": fill.fee_usd,
+                        "realized_pnl_usd": fill.realized_pnl_usd,
+                        "client_order_id": fill.client_order_id,
+                        "exchange_seq": fill.seq,
+                        "mid_at_send": fill.mid_at_send,
+                        "fill_price": fill.price,
+                        "realized_exec_bps": fill.realized_exec_bps,
+                        "liquidity": fill.liquidity,
+                        "schedule_fee_bps": (
+                            self.exchange.fill_model.maker_fee_bps
+                            if fill.liquidity == "maker"
+                            else self.exchange.fill_model.taker_fee_bps
+                        ),
+                        "fee_leg": fee_leg,
+                        "hold_seconds": None,
+                        "close_fee_waived": fee_leg == "close" and fill.fee_usd == 0,
+                        "execution_label_resolved": fill.realized_exec_bps is not None,
+                        "execution_label_schema_version": "execution_cost_label_v1",
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - entries must fail closed
+                self._ledger_halt = True
+                self._ledger_error = str(exc)
+                logger.error("fill ledger append failed for %s: %s", fill.client_order_id, exc)
+                try:
+                    self.journal.append(
+                        "execution_readiness_blocked",
+                        {
+                            "ts": now.isoformat(),
+                            "reason": "fill_ledger_write_failed",
+                            "detail": self._ledger_error,
+                            "client_order_id": fill.client_order_id,
+                            "entries_allowed": False,
+                            "reduce_only_exits_allowed": True,
+                        },
+                    )
+                except Exception as journal_exc:  # noqa: BLE001 - latch is authoritative
+                    logger.error(
+                        "failed to journal fill-ledger halt for %s: %s",
+                        fill.client_order_id,
+                        journal_exc,
+                    )
+                return
         self._ledgered_fills = len(fills)
 
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
             return
+        snapshot_now = datetime.now(UTC)
+        drought_snapshot = self._drought_event(
+            "snapshot",
+            now=snapshot_now,
+            timeframe_seconds=self._tf_seconds,
+        )
+        drought = (
+            drought_snapshot.to_dict()
+            if drought_snapshot is not None and hasattr(drought_snapshot, "to_dict")
+            else None
+        )
         snapshot = build_snapshot(
             mode=self._mode_label(),
             live_trading_enabled=False,
@@ -3323,8 +3847,18 @@ class LivePaperSession:
             funding_rate=getattr(self.feed, "funding_rate", 0.0),
             session_stats={
                 "started_at": self._started_at.isoformat(),
+                "path_id": KERNEL_PATH_ID,
+                "permission_snapshot_id": self._last_permission_snapshot_id,
+                "candle_source": (
+                    str(self.candles.iloc[-1].get("candle_source", "canonical_tick_lake"))
+                    if not self.candles.empty
+                    else "canonical_tick_lake"
+                ),
+                "decision_transport": _decision_transport(self._last_canonical_transport),
+                "drought": drought,
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
+                "runtime_readiness": self._runtime_readiness(snapshot_now).to_dict(),
                 "bars_processed": self.bars_processed,
                 "evals": self.evals,
                 "live_evals": self.live_evals,
@@ -3338,6 +3872,7 @@ class LivePaperSession:
                 "tick_stop_exits": self.tick_stop_exits,
                 "shadow_approved": self.shadow_approved,
                 "shadow_rejected": self.shadow_rejected,
+                "rejected_htf_context_missing": self.rejected_htf_context_missing,
                 "recon_mismatches": self.recon_mismatches,
                 "dropped_candles": self.dropped_candles,
                 # feed-continuity guard: reduce-only reason (or None) + counters
@@ -3367,6 +3902,8 @@ class LivePaperSession:
                 "cost_profile_source": self.cost_profile_source,
                 "data_exchange": getattr(self.feed, "exchange_id", ""),
                 "execution_cost_exchange": self.execution_cost_exchange_id,
+                "entry_route": self.entry_route.value,
+                "maker_fill_ttl_bars": self.maker_fill_ttl_bars,
                 "scanner_cost_hypothesis": self.last_scanner_cost_hypothesis,
                 "runtime_contract": (
                     {
@@ -3416,9 +3953,7 @@ class LivePaperSession:
                 "last_fired_ts": self.last_fired_ts,
                 "last_quote_signal": self.last_quote_signal,
                 "quote_evidence": (
-                    self.quote_evidence.snapshot()
-                    if self.quote_evidence is not None
-                    else None
+                    self.quote_evidence.snapshot() if self.quote_evidence is not None else None
                 ),
                 "last_eval": self.last_eval,
                 "last_reject_reason": self.last_reject_reason,
@@ -3507,7 +4042,7 @@ class LivePaperSession:
         """
         return await asyncio.to_thread(self.strategy.prepare, self.candles)
 
-    def _shadow_prime(self) -> None:
+    def _shadow_prime(self, df: pd.DataFrame | None = None) -> None:
         """SHADOW lanes only: backfill observability from seeded bars.
 
         The live loop otherwise acts only on bars that close AFTER startup, so
@@ -3521,7 +4056,11 @@ class LivePaperSession:
             return
         if len(self.candles) <= self.strategy.warmup_bars:
             return
-        df = self.strategy.prepare(self.candles)
+        if df is None:
+            # Compatibility for direct unit-test/caller use.  The runtime
+            # supplies its single startup frame so this fallback is never on
+            # the production event-loop hot path.
+            df = self.strategy.prepare(self.candles)
         last = len(df) - 1
         first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
         backfill_fired = 0
@@ -3555,7 +4094,7 @@ class LivePaperSession:
         trial_id = str((self.trial_meta or {}).get("trial_id") or "")
         return self.config.mode is RunnerMode.PAPER and trial_id.endswith("_paper_observation")
 
-    async def _paper_observation_prime(self) -> None:
+    async def _paper_observation_prime(self, df: pd.DataFrame | None = None) -> None:
         """PAPER observation lanes: prime observability, never restart-enter.
 
         Governed paper trials deliberately do not prime on startup because a
@@ -3571,7 +4110,8 @@ class LivePaperSession:
             return
         if len(self.candles) <= self.strategy.warmup_bars:
             return
-        df = self.strategy.prepare(self.candles)
+        if df is None:
+            df = await self._prepare_strategy_for_bar()
         last = len(df) - 1
         first = max(self.strategy.warmup_bars, last - self._SHADOW_PRIME_BACKFILL_BARS + 1)
         backfill_fired = 0
@@ -3605,19 +4145,45 @@ class LivePaperSession:
         bars = 0
         prepared_warmup = self.strategy.warmup_bars
 
+        # Restore, scanner priming, and shadow observability all require the
+        # same immutable view of the seeded candle frame.  Historically each
+        # path called ``strategy.prepare`` independently and synchronously.
+        # With 8+ lanes that serialized minutes of pandas work on the shared
+        # asyncio loop: health stayed green while /state, BBO handling, and
+        # the first real decisions were frozen.  Build once in a worker and
+        # share the result across the startup consumers.
+        startup_frame: pd.DataFrame | None = None
+        needs_startup_frame = (
+            (self.shadow_outcomes is not None and self.shadow_outcomes.has_pending)
+            or self.scanner_observer is not None
+            or self.config.mode is RunnerMode.SHADOW
+            or self._is_paper_observation_lane()
+        )
+        if needs_startup_frame:
+            startup_frame = await self._prepare_strategy_for_bar()
+
         if self.shadow_outcomes is not None and self.shadow_outcomes.has_pending:
             # restart: intents journaled before the shutdown resolve against
             # the seeded history first, so an already-hit stop or target is
             # never mis-resolved later at live prices
-            self._shadow_exit_df = self.strategy.prepare(self.candles).reset_index(drop=True)
+            assert startup_frame is not None
+            self._shadow_exit_df = startup_frame.reset_index(drop=True)
             self._log_shadow_outcomes(self.shadow_outcomes.replay(self._shadow_exit_df), started)
         if self.scanner_observer is not None:
-            self.scanner_observer.restore(
-                self.strategy.prepare(self.candles).reset_index(drop=True)
+            assert startup_frame is not None
+            # Restore replays every retained row to reconstruct a durable arm
+            # or open virtual position. Range lanes legitimately retain more
+            # than 2,000 rows, so this pure-Python loop must not run on the
+            # shared asyncio thread where it would pause BBO and /state.
+            await asyncio.to_thread(
+                self.scanner_observer.restore,
+                startup_frame.reset_index(drop=True),
             )
 
-        self._shadow_prime()
-        await self._paper_observation_prime()
+        # The observability backfill is also CPU work. It never mutates feed or
+        # order state, so isolate it with the prepared frame just like restore.
+        await asyncio.to_thread(self._shadow_prime, startup_frame)
+        await self._paper_observation_prime(startup_frame)
         self._record_runner_heartbeat("runner_started", started, force=True)
 
         while True:
@@ -3803,7 +4369,9 @@ class LivePaperSession:
                         source=(
                             "router"
                             if self._last_canonical_transport == "router_dark"
-                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                            else "parquet_hit"
+                            if canonical_ready
+                            else "parquet_timeout"
                         ),
                         armed="yes" if armed else "no",
                     )
@@ -3845,7 +4413,13 @@ class LivePaperSession:
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
                 cp_block = self._candle_path_arm_block(now)
-                if cp_block is not None:
+                if self._ledger_halt:
+                    sig = None
+                    reason = "execution:fill_ledger_write_failed"
+                    self._decision_skips[reason] = self._decision_skips.get(reason, 0) + 1
+                    self._record_eval(df, idx, sig, skip_reason=reason)
+                    self._log_trade_event("execution_blocked", reason, now)
+                elif cp_block is not None:
                     # decision-TF candle path unsafe to arm on: block the NEW
                     # entry (exits already ran above). Fail-closed for entries.
                     sig = None
@@ -3862,11 +4436,53 @@ class LivePaperSession:
                     sig = None
                     self._record_eval(df, idx, sig, skip_reason=block_reason)
                     if not self._protection_block_logged:
-                        self._log_trade_event("protection_blocked", block_reason[:140], now)
+                        self._log_trade_event(
+                            "protection_blocked",
+                            (block_reason or "protection_blocked")[:140],
+                            now,
+                        )
                         self._protection_block_logged = True
                 else:
                     self._protection_block_logged = False
                     sig = self.strategy.signal(df, idx)
+                    if sig is not None:
+                        try:
+                            sig = bind_signal_decision(
+                                sig,
+                                strategy_id=self.strategy.strategy_id,
+                                symbol=self.config.symbol,
+                                timeframe=self.config.timeframe,
+                                decision_row=df.iloc[idx].to_dict(),
+                                entry_clock=(
+                                    self.runtime_contract.evidence_entry_clock
+                                    if self.runtime_contract is not None
+                                    else f"next_{self.config.timeframe}_open"
+                                ),
+                                require_existing_snapshot=bool(
+                                    getattr(
+                                        self.strategy,
+                                        "requires_permission_snapshot",
+                                        False,
+                                    )
+                                ),
+                            )
+                        except (TypeError, ValueError) as exc:
+                            self.journal.append(
+                                "entry_evidence_rejected",
+                                {
+                                    "strategy_id": self.strategy.strategy_id,
+                                    "symbol": self.config.symbol,
+                                    "bar_ts": str(df.iloc[idx].get("timestamp")),
+                                    "reason": str(exc),
+                                },
+                            )
+                            sig = None
+                        else:
+                            assert sig.decision_envelope is not None
+                            self.journal.append(
+                                "decision_armed",
+                                sig.decision_envelope.as_dict(),
+                            )
                     self._record_eval(df, idx, sig)
                 self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
                 if close_receipt_lag_ms is not None:
@@ -3877,7 +4493,9 @@ class LivePaperSession:
                         source=(
                             "router"
                             if self._last_canonical_transport == "router_dark"
-                            else "parquet_hit" if canonical_ready else "parquet_timeout"
+                            else "parquet_hit"
+                            if canonical_ready
+                            else "parquet_timeout"
                         ),
                         armed="yes" if sig is not None else "no",
                     )
@@ -3955,6 +4573,7 @@ class LivePaperSession:
             shadow_rejected=self.shadow_rejected,
             reconciliation_mismatches=self.recon_mismatches,
             final_equity_usd=self.tracker.equity_usd(),
+            runtime_readiness=self._runtime_readiness().to_dict(),
         )
         self.journal.append("live_paper_report", report.to_dict())
         return report

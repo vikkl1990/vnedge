@@ -12,9 +12,15 @@ from typing import cast
 import pandas as pd
 
 from vnedge.exchange.book_imbalance import BookImbalance
+from vnedge.execution.evidence import (
+    CostDecisionEvidence,
+    DecisionEnvelope,
+    ExecutionEvidence,
+)
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.conversion_taxonomy import conversion_reject_category
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.runtime.latency_tracker import (
@@ -25,6 +31,11 @@ from vnedge.runtime.latency_tracker import (
 )
 from vnedge.runtime.scanner_session import SessionCosts
 from vnedge.runtime.squeeze_observe import FireGuard, JournalSink, ScannerApproval
+from vnedge.strategy.arm_evidence import (
+    FrozenPermissionSnapshot,
+    MissingHtfContext,
+    freeze_permission_from_row,
+)
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
 from vnedge.strategy.squeeze_expansion_breakout_v3 import PARAMS
@@ -51,6 +62,8 @@ class SqueezeAcceptanceObserveRunner:
         )
     )
     costs: SessionCosts = field(default_factory=lambda: SessionCosts.from_profile("delta_scalp"))
+    decision_timeframe: str = "5m"
+    context_timeframes: tuple[str, ...] = ()
     latency: LatencyTracker | None = None
     open_meta: dict | None = None
     candidates: int = 0
@@ -66,6 +79,9 @@ class SqueezeAcceptanceObserveRunner:
     _restore_error: str | None = field(default=None, init=False, repr=False)
     _last_journaled_acceptance: str | None = field(default=None, init=False, repr=False)
     _last_journaled_episode: int | None = field(default=None, init=False, repr=False)
+    _journaled_quote_diagnostics: set[tuple[int | None, str]] = field(
+        default_factory=set, init=False, repr=False
+    )
     _armed_episodes: set[tuple[str, int]] = field(default_factory=set, init=False, repr=False)
     _last_bid: float | None = field(default=None, init=False, repr=False)
     _last_ask: float | None = field(default=None, init=False, repr=False)
@@ -96,6 +112,13 @@ class SqueezeAcceptanceObserveRunner:
         for record in read_all():
             payload = record.get("payload", {})
             key = str(payload.get("intent_key") or "")
+            belongs_to_runner = (
+                str(payload.get("strategy_id") or "") == self.strategy_id
+                and str(payload.get("symbol") or "") == self.symbol
+            ) or (
+                key.startswith(f"{self.intent_prefix}|")
+                and f"|{self.symbol}|" in key
+            )
             if (
                 record.get("kind") == "scanner_transition"
                 and str(payload.get("strategy_id") or "") == self.strategy_id
@@ -105,7 +128,7 @@ class SqueezeAcceptanceObserveRunner:
                 self._armed_episodes.add(
                     (str(payload.get("symbol") or self.symbol), int(payload["episode_id"]))
                 )
-            if record.get("kind") == "shadow_intent" and key.startswith(f"{self.intent_prefix}|"):
+            if record.get("kind") == "shadow_intent" and belongs_to_runner:
                 self.candidates += 1
                 if payload.get("approved"):
                     intents[key] = payload
@@ -113,16 +136,14 @@ class SqueezeAcceptanceObserveRunner:
                 else:
                     self.rejected += 1
                     self._count_rejection(payload.get("failed_checks"))
-            elif record.get("kind") == "shadow_outcome" and key.startswith(
-                f"{self.intent_prefix}|"
-            ):
+            elif record.get("kind") == "shadow_outcome" and belongs_to_runner:
                 resolved.add(key)
                 self.outcomes += 1
                 self.net_usd += float(payload.get("virtual_net_usd") or 0.0)
             elif (
                 record.get("kind") == "funding_applied"
                 and payload.get("book") == "quote_shadow"
-                and key.startswith(f"{self.intent_prefix}|")
+                and belongs_to_runner
             ):
                 cost, event_ids = funding_by_intent.get(key, (0.0, set()))
                 event_id = str(payload.get("funding_event_id") or "")
@@ -194,7 +215,20 @@ class SqueezeAcceptanceObserveRunner:
                 self._restore_error = "v3 scanner decision bar absent from warmup"
                 return
 
-        for index in range(len(df)):
+        # ``prepare()`` has already computed the complete causal feature frame.
+        # Replaying every prepared row here is both unnecessary and expensive:
+        # a flat quote scanner can only retain an arm for its short grace
+        # window.  Historical arm transitions are restored from the journal in
+        # ``__post_init__``.  An open durable position is different: replay its
+        # exit path from the entry candle so stop/trail/strategy exits remain
+        # restart-equivalent.
+        if pending is not None and entry_index is not None:
+            replay_start = min(entry_index, len(df))
+        else:
+            arm_tail_bars = max(4, int(self.acceptance.config.arm_grace_bars) + 1)
+            replay_start = max(0, len(df) - arm_tail_bars)
+
+        for index in range(replay_start, len(df)):
             self.current_bar_index = index
             self._update_arm_from_row(df.iloc[index], index)
             if pending is not None and index == entry_index:
@@ -226,6 +260,9 @@ class SqueezeAcceptanceObserveRunner:
                     "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
                     "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
                     "funding_event_ids": set(pending.get("funding_event_ids") or ()),
+                    "arm_evidence": pending.get("arm_evidence"),
+                    "arm_envelope": pending.get("arm_envelope"),
+                    "execution_evidence": pending.get("execution_evidence"),
                 }
                 self._restore_payload = None
             if self.open_meta is not None and entry_index is not None and index >= entry_index:
@@ -277,6 +314,7 @@ class SqueezeAcceptanceObserveRunner:
                 "margin_usd": float(pending.get("margin_usd") or self.margin_usd),
                 "funding_cost_usd": float(pending.get("funding_cost_usd") or 0.0),
                 "funding_event_ids": set(pending.get("funding_event_ids") or ()),
+                "arm_evidence": pending.get("arm_evidence"),
             }
             self._restore_payload = None
 
@@ -375,6 +413,41 @@ class SqueezeAcceptanceObserveRunner:
         if fire is None:
             return None
         self.candidates += 1
+        arm = self.acceptance.arm
+        decision = arm.decision_for(fire.side) if arm is not None else None
+        if decision is None:
+            self.rejected += 1
+            self._count_rejection(("decision_envelope_missing",))
+            self.acceptance.last_reason = "decision_envelope_missing"
+            return None
+        arm_evidence = arm.evidence.as_dict() if arm is not None and arm.evidence else None
+        accepted_evidence = ExecutionEvidence.from_decision(
+            decision,
+            quote_sequence=sequence,
+            bbo_ts=ts,
+            quote_age_ms=max(
+                0.0,
+                ((received_ts or ts) - ts).total_seconds() * 1000.0,
+            ),
+            cost_decision=CostDecisionEvidence.not_evaluated("accepted_before_approval"),
+        )
+        self.journal.append(
+            "decision_accepted",
+            {
+                "intent_key": decision.decision_id,
+                "decision_id": decision.decision_id,
+                "path_id": decision.path_id,
+                "strategy_id": self.strategy_id,
+                "symbol": self.symbol,
+                "arm_envelope": decision.as_dict(),
+                "execution_evidence": accepted_evidence.as_dict(),
+                "quote_sequence": sequence,
+                "bbo_ts": ts.isoformat(),
+                "quote_received_ts": (received_ts or ts).isoformat(),
+                "quote_age_ms": accepted_evidence.quote_age_ms,
+                "performance_eligible": False,
+            },
+        )
         approval = (
             self.approve_fire(fire, self.current_bar_index, ts)
             if self.approve_fire is not None
@@ -391,18 +464,55 @@ class SqueezeAcceptanceObserveRunner:
                 explanation=fire.reason,
                 notional_usd=self.notional_usd,
                 margin_usd=self.margin_usd,
+                intent_key=decision.decision_id,
+                execution_evidence=ExecutionEvidence.from_decision(
+                    decision,
+                    quote_sequence=sequence,
+                    bbo_ts=ts,
+                    quote_age_ms=max(
+                        0.0,
+                        ((received_ts or ts) - ts).total_seconds() * 1000.0,
+                    ),
+                    cost_decision=CostDecisionEvidence.not_evaluated(
+                        "observe_without_gateway"
+                    ),
+                ).as_dict(),
             )
         )
+        if approval.intent_key and approval.intent_key != decision.decision_id:
+            self.rejected += 1
+            self._count_rejection(("decision_identity_mismatch",))
+            self.acceptance.last_reason = "decision_identity_mismatch"
+            return None
+        if not approval.intent_key:
+            approval = replace(
+                approval,
+                intent_key=decision.decision_id,
+                execution_evidence=(
+                    approval.execution_evidence
+                    or ExecutionEvidence.from_decision(
+                        decision,
+                        quote_sequence=sequence,
+                        bbo_ts=ts,
+                        quote_age_ms=max(
+                            0.0,
+                            ((received_ts or ts) - ts).total_seconds() * 1000.0,
+                        ),
+                        cost_decision=CostDecisionEvidence.not_evaluated(
+                            "rejected_before_cost_or_risk"
+                        ),
+                    ).as_dict()
+                ),
+            )
         self.last_approval = approval
-        key = approval.intent_key or (
-            f"{self.intent_prefix}|{self.symbol}|{fire.side}|{int(ts.timestamp() * 1000)}"
-        )
+        key = decision.decision_id
         journal_started = time.perf_counter()
         try:
             self.journal.append(
                 "shadow_intent",
                 {
                     "intent_key": key,
+                    "decision_id": key,
                     "strategy_id": self.strategy_id,
                     "symbol": self.symbol,
                     "approved": approval.approved,
@@ -410,6 +520,8 @@ class SqueezeAcceptanceObserveRunner:
                     "passed_checks": list(approval.passed_checks),
                     "explanation": approval.explanation or fire.reason,
                     "intent": approval.intent,
+                    "execution_evidence": approval.execution_evidence,
+                    "performance_eligible": False,
                     "signal_reason": fire.reason,
                     "entry_price": fire.entry,
                     "stop_price": fire.stop,
@@ -422,6 +534,8 @@ class SqueezeAcceptanceObserveRunner:
                     "quote_exchange_timestamped": exchange_timestamped,
                     "quote_ingest_lag_seconds": self.acceptance.last_quote_lag_seconds,
                     "episode_id": fire.episode_id,
+                    "arm_evidence": arm_evidence,
+                    "arm_envelope": decision.as_dict(),
                     "margin_usd": approval.margin_usd or self.margin_usd,
                     "take_profit_price": None,
                     "take_profit_levels": [],
@@ -462,6 +576,9 @@ class SqueezeAcceptanceObserveRunner:
             "margin_usd": approval.margin_usd or self.margin_usd,
             "funding_cost_usd": 0.0,
             "funding_event_ids": set(),
+            "arm_evidence": arm_evidence,
+            "arm_envelope": decision.as_dict(),
+            "execution_evidence": approval.execution_evidence,
         }
         self.fires += 1
         return fire
@@ -496,6 +613,8 @@ class SqueezeAcceptanceObserveRunner:
             {
                 "book": "quote_shadow",
                 "intent_key": meta.get("intent_key"),
+                "decision_id": meta.get("intent_key"),
+                "path_id": KERNEL_PATH_ID,
                 "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
                 "funding_event_id": event.event_id,
@@ -520,11 +639,38 @@ class SqueezeAcceptanceObserveRunner:
         exchange_timestamped: bool,
     ) -> None:
         reason = self.acceptance.last_reason
+        arm = self.acceptance.arm
+        episode = arm.episode_id if arm is not None else None
+
+        # These are per-quote diagnostics, not lifecycle transitions.  A
+        # combined ticker/L1 feed legitimately alternates ``quote_duplicate``
+        # and ``no_active_arm`` while flat.  Persisting every alternation used
+        # to fsync several records per second per lane, growing journals to
+        # ~1 GiB and starving the candle/event loop until the safety latency
+        # gate blocked every new arm.  Keep the first observation per arm
+        # episode (or once while flat); cumulative counters remain present on
+        # every real arm/probe/accept transition and in the runtime snapshot.
+        diagnostic_reasons = {
+            "invalid_quote",
+            "quote_clock_skew",
+            "quote_ingest_lag",
+            "quote_out_of_order",
+            "quote_duplicate",
+            "no_active_arm",
+            "quote_outside_session",
+            "one_net_position",
+            "cooldown",
+            "daily_fire_budget",
+        }
+        if reason in diagnostic_reasons:
+            diagnostic_key = (episode, reason)
+            if diagnostic_key in self._journaled_quote_diagnostics:
+                return
+            self._journaled_quote_diagnostics.add(diagnostic_key)
         if reason == self._last_journaled_acceptance:
             return
         self._last_journaled_acceptance = reason
-        arm = self.acceptance.arm
-        self._last_journaled_episode = arm.episode_id if arm is not None else None
+        self._last_journaled_episode = episode
         self.journal.append(
             "scanner_transition",
             {
@@ -552,6 +698,13 @@ class SqueezeAcceptanceObserveRunner:
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
+                "arm_evidence": arm.evidence.as_dict() if arm is not None and arm.evidence else None,
+                "decision_ids": {
+                    item.side: item.decision_id for item in arm.decisions
+                } if arm is not None else {},
+                "arm_envelopes": [
+                    item.as_dict() for item in arm.decisions
+                ] if arm is not None else [],
             },
         )
 
@@ -570,8 +723,43 @@ class SqueezeAcceptanceObserveRunner:
             prepared = getattr(self, "_prepared_frame", None)
             if isinstance(prepared, pd.DataFrame):
                 arm = self.strategy.realtime_arm(prepared, index)
+                if arm is None and bool(
+                    getattr(self.strategy, "requires_permission_snapshot", False)
+                ):
+                    explain = getattr(self.strategy, "evaluation_diagnostics", None)
+                    try:
+                        diagnostics = explain(prepared, index) if callable(explain) else {}
+                    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                        # Diagnostics must never become a second decision path.
+                        # The strategy already refused the arm; an explanation
+                        # failure may reduce observability but cannot revive it.
+                        diagnostics = {}
+                    if (
+                        isinstance(diagnostics, dict)
+                        and diagnostics.get("primary_failed_gate") == "htf_context_missing"
+                    ):
+                        self.acceptance.last_reason = "htf_context_missing"
+                        self._journal_arm_transition(previous_reason, journal_event_ts)
+                        return
                 if isinstance(arm, RealtimeEntryArm):
-                    self.acceptance.update_arm(self._compression_arm(arm, index))
+                    try:
+                        bound_arm = self._compression_arm(arm, index, row)
+                    except MissingHtfContext:
+                        self.acceptance.last_reason = "htf_context_missing"
+                        self._journal_arm_transition(previous_reason, journal_event_ts)
+                        return
+                    except (TypeError, ValueError):
+                        self.acceptance.last_reason = "permission_evidence_unbound"
+                        self._journal_arm_transition(previous_reason, journal_event_ts)
+                        return
+                    if (
+                        bool(getattr(self.strategy, "requires_permission_snapshot", False))
+                        and bound_arm.evidence is None
+                    ):
+                        self.acceptance.last_reason = "htf_context_missing"
+                        self._journal_arm_transition(previous_reason, journal_event_ts)
+                        return
+                    self.acceptance.update_arm(bound_arm)
                     self._journal_arm_transition(previous_reason, journal_event_ts)
                     return
         values = {
@@ -596,6 +784,13 @@ class SqueezeAcceptanceObserveRunner:
                 vwap=values["sqz_vwap24"],
                 bar_index=index,
                 compressed=values["sqz_compressed"] > 0,
+                evidence=(evidence := self._freeze_arm_evidence(
+                    row,
+                    allow_long=True,
+                    allow_short=True,
+                    reason="squeeze_acceptance_v3",
+                )),
+                decisions=self._decision_envelopes(evidence),
             )
         )
         self._journal_arm_transition(previous_reason, journal_event_ts)
@@ -646,11 +841,55 @@ class SqueezeAcceptanceObserveRunner:
                 "quote_overflow_drops": self.acceptance.quote_overflow_drops,
                 "quote_rearms": self.acceptance.quote_rearms,
                 "overflow_probe_resets": self.acceptance.overflow_probe_resets,
+                "arm_evidence": arm.evidence.as_dict() if arm is not None and arm.evidence else None,
+                "decision_ids": {
+                    item.side: item.decision_id for item in arm.decisions
+                } if arm is not None else {},
+                "arm_envelopes": [
+                    item.as_dict() for item in arm.decisions
+                ] if arm is not None else [],
             },
         )
 
-    @staticmethod
-    def _compression_arm(arm: RealtimeEntryArm, index: int) -> CompressionArm:
+    def _freeze_arm_evidence(
+        self,
+        row: pd.Series,
+        *,
+        allow_long: bool,
+        allow_short: bool,
+        reason: str,
+    ) -> FrozenPermissionSnapshot | None:
+        if not self.decision_timeframe:
+            return None
+        builder = getattr(self.strategy, "freeze_permission_snapshot", None)
+        if callable(builder):
+            return builder(
+                row,
+                allow_long=allow_long,
+                allow_short=allow_short,
+                reason=reason,
+            )
+        return freeze_permission_from_row(
+            row.to_dict(),
+            decision_timeframe=self.decision_timeframe,
+            context_timeframes=self.context_timeframes,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            reason=reason,
+        )
+
+    def _compression_arm(
+        self,
+        arm: RealtimeEntryArm,
+        index: int,
+        row: pd.Series,
+    ) -> CompressionArm:
+        evidence = arm.evidence or self._freeze_arm_evidence(
+            row,
+            allow_long=arm.allow_long,
+            allow_short=arm.allow_short,
+            reason=arm.reason,
+        )
         return CompressionArm(
             episode_id=arm.episode_id,
             box_high=arm.long_level,
@@ -670,6 +909,38 @@ class SqueezeAcceptanceObserveRunner:
             session_start_hour_utc=arm.session_start_hour_utc,
             session_end_hour_utc=arm.session_end_hour_utc,
             reason=arm.reason,
+            evidence=evidence,
+            decisions=self._decision_envelopes(evidence),
+        )
+
+    def _decision_envelopes(
+        self, evidence: FrozenPermissionSnapshot | None
+    ) -> tuple[DecisionEnvelope, ...]:
+        """Mint side-specific identities once, on the closed-bar arm."""
+
+        if evidence is None:
+            raise ValueError("decision envelope requires frozen closed-bar evidence")
+        entry_clock = "quote_hold"
+        runtime_contract = getattr(self, "runtime_contract", None)
+        if runtime_contract is not None:
+            entry_clock = str(runtime_contract.evidence_entry_clock)
+        return tuple(
+            DecisionEnvelope.create(
+                strategy_id=self.strategy_id,
+                symbol=self.symbol,
+                timeframe=(
+                    self.decision_timeframe
+                    or evidence.decision_bar.timeframe
+                ),
+                side=side,
+                permission_snapshot=evidence,
+                entry_clock=entry_clock,
+            )
+            for side, allowed in (
+                ("long", evidence.allow_long),
+                ("short", evidence.allow_short),
+            )
+            if allowed
         )
 
     @staticmethod
@@ -730,6 +1001,8 @@ class SqueezeAcceptanceObserveRunner:
             "shadow_outcome",
             {
                 "intent_key": meta.get("intent_key"),
+                "decision_id": meta.get("intent_key"),
+                "path_id": KERNEL_PATH_ID,
                 "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
                 "resolution": decision.reason,
@@ -762,6 +1035,9 @@ class SqueezeAcceptanceObserveRunner:
                 "captured_bps_basis": "gross",
                 "net_won": net_bps > 0,
                 "signal_reason": meta.get("reason", ""),
+                "arm_evidence": meta.get("arm_evidence"),
+                "arm_envelope": meta.get("arm_envelope"),
+                "execution_evidence": meta.get("execution_evidence"),
                 "bar_ts": bar_ts.isoformat(),
             },
         )

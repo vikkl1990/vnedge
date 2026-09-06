@@ -14,12 +14,13 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from enum import Enum
 
+from vnedge.execution.evidence import ExecutionEvidence
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
 from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent
-from vnedge.scalping.parameter_registry import ExchangeFeeProfile
 from vnedge.scalping.microstructure import MarketMicroState
+from vnedge.scalping.parameter_registry import ExchangeFeeProfile
 from vnedge.scalping.risk import ScalperRiskGateway
 from vnedge.scalping.strategy import QuoteIntent
 
@@ -52,6 +53,7 @@ class RouteCheck:
 class MakerTakerExecutionPlan:
     executor_id: str
     intent: OrderIntent
+    evidence: ExecutionEvidence
     expected_edge_bps: float
     fee_profile: ExchangeFeeProfile
     maker_ttl_ms: int
@@ -67,6 +69,17 @@ class MakerTakerExecutionPlan:
             raise ValueError("executor_id is required")
         if self.intent.reduce_only:
             raise ValueError("maker/taker entry executor does not manage reduce-only exits")
+        if self.evidence.decision_envelope is None:
+            raise ValueError("maker/taker entry requires a closed-bar decision envelope")
+        if (
+            self.evidence.symbol != self.intent.symbol
+            or self.evidence.side != self.intent.side
+            or (
+                self.intent.strategy_id is not None
+                and self.evidence.strategy_id != self.intent.strategy_id
+            )
+        ):
+            raise ValueError("maker/taker evidence does not match entry intent")
         if self.intent.limit_price is None or self.intent.limit_price <= 0:
             raise ValueError("maker-first execution requires a positive maker limit_price")
         if self.maker_ttl_ms <= 0:
@@ -89,6 +102,7 @@ class MakerTakerExecutionPlan:
         *,
         executor_id: str,
         quote: QuoteIntent,
+        evidence: ExecutionEvidence,
         fee_profile: ExchangeFeeProfile,
         fallback_enabled: bool = True,
         min_maker_net_edge_bps: float = 0.0,
@@ -96,13 +110,14 @@ class MakerTakerExecutionPlan:
         min_taker_net_edge_bps: float = 0.0,
         min_taker_cost_coverage: float = 1.0,
         fallback_edge_decay_bps: float = 0.0,
-    ) -> "MakerTakerExecutionPlan":
+    ) -> MakerTakerExecutionPlan:
         """Adapt a scalper QuoteIntent into the maker-first executor contract."""
         if not quote.post_only:
             raise ValueError("maker/taker executor requires QuoteIntent.post_only=True")
         return cls(
             executor_id=executor_id,
             intent=quote.intent,
+            evidence=evidence,
             expected_edge_bps=quote.expected_edge_bps,
             fee_profile=fee_profile,
             maker_ttl_ms=quote.ttl_ms,
@@ -187,6 +202,8 @@ class MakerTakerExecutor:
     ) -> ExecutorReport:
         self._journal.append("executor_started", {
             "executor_id": plan.executor_id,
+            "decision_id": plan.evidence.decision_id,
+            "path_id": plan.evidence.path_id,
             "strategy_id": plan.intent.strategy_id,
             "symbol": plan.intent.symbol,
             "side": plan.intent.side,
@@ -245,7 +262,7 @@ class MakerTakerExecutor:
             maker_intent,
             account,
             self._order_manager_market(market, micro_market),
-            intent_key=f"{plan.executor_id}|maker",
+            evidence=plan.evidence,
             now=now,
         )
         self._record_scalper_order(maker, now)
@@ -384,8 +401,9 @@ class MakerTakerExecutor:
             taker_intent,
             taker_account,
             self._order_manager_market(market_at_fallback or market, taker_micro_market),
-            intent_key=f"{plan.executor_id}|taker_fallback",
+            evidence=plan.evidence,
             now=now,
+            replaces=maker.client_order_id,
         )
         self._record_scalper_order(taker, now)
         self._journal.append("executor_taker_submitted", {

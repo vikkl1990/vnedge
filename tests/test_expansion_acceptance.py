@@ -330,9 +330,51 @@ def test_shadow_runner_reports_rejection_categories_without_double_counting() ->
     assert stats["portfolio_rejected"] == 1
 
 
+def test_flat_restore_replays_only_causally_live_arm_tail() -> None:
+    runner = SqueezeAcceptanceObserveRunner(journal=_Journal(), symbol="BTCUSD")
+    start = datetime(2026, 8, 20, tzinfo=UTC)
+    bars = pd.DataFrame(
+        [
+            {
+                "timestamp": start + timedelta(minutes=5 * index),
+                "open": 99.5,
+                "high": 100.0,
+                "low": 99.0,
+                "close": 99.8,
+                "volume": 1000.0,
+                "sqz_episode": float(index),
+                "sqz_range_high": 100.0,
+                "sqz_range_low": 99.0,
+                "sqz_atr": 0.25,
+                "sqz_vwap24": 99.5,
+                "sqz_compressed": 1.0,
+            }
+            for index in range(2_018)
+        ]
+    )
+    evaluated: list[int] = []
+    update_arm = runner._update_arm_from_row
+
+    def record_update(row: pd.Series, index: int, **kwargs: object) -> None:
+        evaluated.append(index)
+        update_arm(row, index, **kwargs)  # type: ignore[arg-type]
+
+    runner._update_arm_from_row = record_update  # type: ignore[method-assign]
+    runner.restore(bars)
+
+    assert evaluated == list(range(len(bars) - 4, len(bars)))
+    assert runner.current_bar_index == len(bars) - 1
+    assert runner.acceptance.arm is not None
+    assert runner.acceptance.arm.episode_id == len(bars) - 1
+
+
 def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     journal = _Journal()
-    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USDT:USDT")
+    runner = SqueezeAcceptanceObserveRunner(
+        journal=journal,
+        symbol="BTC/USDT:USDT",
+        decision_timeframe="5m",
+    )
     bars = pd.DataFrame([
         {
             "timestamp": datetime(2026, 8, 20, tzinfo=UTC),
@@ -360,6 +402,10 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert len(intent) == 1
     assert intent[0]["entry_price"] == 100.09
     assert intent[0]["intent"]["strategy_id"] == "squeeze_expansion_breakout_v3"
+    assert intent[0]["arm_evidence"]["decision_bar"]["state"] == "closed_immutable"
+    assert intent[0]["arm_evidence"]["decision_bar"]["open_time"] == (
+        datetime(2026, 8, 20, tzinfo=UTC).isoformat()
+    )
     transitions = [
         payload for kind, payload in journal.records if kind == "scanner_transition"
     ]
@@ -386,8 +432,32 @@ def test_shadow_runner_journals_quote_entry_and_after_cost_outcome() -> None:
     assert outcomes[0]["cost_profile"] == "delta_scalp"
     assert outcomes[0]["cost_contract_version"] == "scanner_cost_v1"
     assert outcomes[0]["funding_complete"] is True
+    assert outcomes[0]["arm_evidence"] == intent[0]["arm_evidence"]
     assert "mfe_bps" in outcomes[0] and "mae_bps" in outcomes[0]
     assert runner.acceptance.long.state is AcceptanceState.ARMED
+
+
+def test_shadow_runner_does_not_fsync_every_inert_quote() -> None:
+    """Flat/duplicate quote telemetry is diagnostic, not a state transition."""
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTC/USD:USD")
+    t0 = datetime(2026, 9, 2, tzinfo=UTC)
+
+    # Alternating fresh and duplicate ticker/L1 frames used to defeat the
+    # adjacent-reason de-duplicator and append several fsynced records/second.
+    for second in range(10):
+        ts = t0 + timedelta(seconds=second)
+        runner.on_quote(bid=100.0, ask=100.5, ts=ts, sequence=second)
+        runner.on_quote(bid=100.0, ask=100.5, ts=ts, sequence=second)
+
+    transitions = [
+        payload for kind, payload in journal.records if kind == "scanner_transition"
+    ]
+    assert {payload["state"] for payload in transitions} == {
+        "no_active_arm",
+        "quote_duplicate",
+    }
+    assert len(transitions) == 2
 
 
 def test_quote_shadow_books_only_explicit_settled_funding_print() -> None:

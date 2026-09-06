@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import numbers
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -59,12 +60,13 @@ from vnedge.runtime.canonical_candle_router import (
     warm_subscription_from_store,
 )
 from vnedge.runtime.daily_factory import DailySignalFactoryConfig
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID
 from vnedge.runtime.funnel_store import LaneFunnelStore
 from vnedge.runtime.latency_store import LaneLatencyStore, RecorderLatencyStore
 from vnedge.runtime.live_paper import LivePaperSession
 from vnedge.runtime.paper_trial import LiveFundingMR
 from vnedge.runtime.quote_evidence import QuoteEvidenceRecorder
-from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
+from vnedge.runtime.runner_config import EntryRoute, RunnerConfig, RunnerMode
 from vnedge.runtime.shadow_portfolio import ShadowPortfolioGate
 from vnedge.strategy.base_strategy import BaseStrategy
 from vnedge.strategy.composite import CompositeSignalStrategy
@@ -89,6 +91,7 @@ from vnedge.strategy.strategy_registry import is_capital_eligible
 from vnedge.strategy.structure_bos_1h import StructureBos1H
 from vnedge.strategy.structure_bos_15m_trigger_v2 import StructureBos15mTriggerV2
 from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
+from vnedge.strategy.structure_bounce_route_probe_v2 import StructureBounceRouteProbeV2
 from vnedge.strategy.trend_continuation import TrendContinuation
 from vnedge.strategy.vol_expansion_breakout import VolatilityExpansionBreakout
 
@@ -122,6 +125,13 @@ class LaneSpec:
     # Public-data venue is not an execution-cost assumption. Shadow scanners
     # may observe Binance while conservatively modelling Delta India fees.
     execution_cost_exchange: str | None = None
+    # Explicit execution policy. AUTO exists only for legacy manifests.
+    entry_route: EntryRoute = EntryRoute.AUTO
+    maker_fill_ttl_bars: int = 1
+
+    def __post_init__(self) -> None:
+        if not 1 <= int(self.maker_fill_ttl_bars) <= 288:
+            raise ValueError("maker_fill_ttl_bars must be in [1, 288]")
 
     @property
     def data_symbol(self) -> str:
@@ -357,6 +367,17 @@ class MultiLaneProvider:
                 "mode": self._lanes[lid].get("mode", ""),
                 "strategy_id": self._lanes[lid].get("strategy_id", "")
                 or (self._specs_by_id[lid].strategy_id if lid in self._specs_by_id else ""),
+                "path_id": self._lanes[lid].get("session", {}).get("path_id"),
+                "permission_snapshot_id": self._lanes[lid]
+                .get("session", {})
+                .get("permission_snapshot_id"),
+                "candle_source": self._lanes[lid]
+                .get("session", {})
+                .get("candle_source"),
+                "decision_transport": self._lanes[lid]
+                .get("session", {})
+                .get("decision_transport"),
+                "drought": self._lanes[lid].get("session", {}).get("drought"),
                 # per-lane last price + funding so the dashboard watchlist can
                 # show real per-symbol quotes (one live price per lane symbol)
                 "price": self._lanes[lid].get("price"),
@@ -392,6 +413,9 @@ class MultiLaneProvider:
                     "shadow_rejected": self._lanes[lid]
                     .get("session", {})
                     .get("shadow_rejected", 0),
+                    "rejected_htf_context_missing": self._lanes[lid]
+                    .get("session", {})
+                    .get("rejected_htf_context_missing", 0),
                     "risk_rejects": self._lanes[lid].get("session", {}).get("risk_rejects", 0),
                     "sizing_skips": self._lanes[lid].get("session", {}).get("sizing_skips", 0),
                     "submitted": self._lanes[lid].get("session", {}).get("orders_submitted", 0),
@@ -418,14 +442,13 @@ class MultiLaneProvider:
                 # cumulative funnel survives restarts (LaneFunnelStore); these
                 # two let the dashboard show "last fired 2d ago · 4h bars"
                 "last_fired_ts": self._lanes[lid].get("session", {}).get("last_fired_ts"),
-                "last_quote_signal": self._lanes[lid]
-                .get("session", {})
-                .get("last_quote_signal"),
+                "last_quote_signal": self._lanes[lid].get("session", {}).get("last_quote_signal"),
                 "timeframe": self._lanes[lid].get("session", {}).get("timeframe"),
                 # pipeline latency: bar_close_processing_ms (close -> dequeue)
                 # + decision_lag_ms (bar -> signal), each {last,p50,p95,max,n}
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
                 "latency_recovery": self._lanes[lid].get("session", {}).get("latency_recovery"),
+                "runtime_readiness": self._lanes[lid].get("session", {}).get("runtime_readiness"),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
@@ -443,6 +466,10 @@ class MultiLaneProvider:
                 "execution_cost_exchange": self._lanes[lid]
                 .get("session", {})
                 .get("execution_cost_exchange"),
+                "entry_route": self._lanes[lid].get("session", {}).get("entry_route"),
+                "maker_fill_ttl_bars": self._lanes[lid]
+                .get("session", {})
+                .get("maker_fill_ttl_bars"),
                 "scanner_cost_hypothesis": self._lanes[lid]
                 .get("session", {})
                 .get("scanner_cost_hypothesis"),
@@ -515,16 +542,37 @@ def _lane_trade_compatibility(snapshot: dict) -> dict:
 
 
 def _json_safe(obj):
-    """Recursively replace non-finite floats (inf/-inf/nan) with None.
+    """Return a recursively JSON-native snapshot.
 
-    Starlette serializes JSON with allow_nan=False, so one inf/nan anywhere in
-    the published snapshot raises ValueError and 500s /state (or drops /ws) —
-    which silently freezes the dashboard on stale data. Null is always safe.
+    Strategy features originate in pandas/numpy, so otherwise-valid values can
+    be numpy scalar types which the stdlib encoder rejects.  Starlette also
+    serializes with ``allow_nan=False``.  Normalize both classes of value at
+    the provider boundary so HTTP and websocket consumers see the same payload.
     """
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
+    if obj is None or isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, Decimal):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if isinstance(obj, numbers.Integral):
+        return int(obj)
+    if isinstance(obj, numbers.Real):
+        value = float(obj)
+        return value if math.isfinite(value) else None
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    # numpy scalar classes expose item(), while ordinary runtime/domain
+    # objects do not.  Recurse because item() can return another scalar type.
+    item = getattr(obj, "item", None)
+    if callable(item):
+        try:
+            native = item()
+        except (TypeError, ValueError):
+            native = obj
+        if native is not obj:
+            return _json_safe(native)
     if isinstance(obj, dict):
-        return {key: _json_safe(value) for key, value in obj.items()}
+        return {str(_json_safe(key)): _json_safe(value) for key, value in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(value) for value in obj]
     return obj
@@ -792,16 +840,16 @@ def _build_single_strategy(
             return realtime_scanner_class(seed_funding)
     if strategy_id == HtfRegimeContinuation15mV1.strategy_id:
         if params:
-            raise ValueError(
-                f"{strategy_id} parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return HtfRegimeContinuation15mV1(seed_funding)
     if strategy_id == HtfRegimeContinuation15mV2.strategy_id:
         if params:
-            raise ValueError(
-                f"{strategy_id} parameters are frozen; configure a new strategy ID"
-            )
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return HtfRegimeContinuation15mV2(seed_funding)
+    if strategy_id == StructureBounceRouteProbeV2.strategy_id:
+        if params:
+            raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
+        return StructureBounceRouteProbeV2(seed_funding)
     if strategy_id == "trend_continuation_v1":
         # candle-only; funding is a mild static filter (fine for a shadow lane)
         return TrendContinuation(seed_funding, **params)
@@ -1048,17 +1096,34 @@ def _canonical_candle_frame(
 def _overlay_canonical_history(
     history: pd.DataFrame,
     canonical: pd.DataFrame,
+    *,
+    allow_validated_exchange_ohlcv: bool = False,
 ) -> pd.DataFrame:
+    """Overlay exact trade-derived rows onto one validated venue history.
+
+    Exchange OHLCV is non-armable by default because it cannot satisfy the
+    quote-volume/trade-count contract used by range, AVWAP, and flow lanes.
+    The sole opt-in is a strategy whose registered contract explicitly names
+    official price-only OHLC as its structure source.
+    """
+    default_quality = "ok" if allow_validated_exchange_ohlcv else "gap"
+    default_source = (
+        "exchange_ohlcv_validated" if allow_validated_exchange_ohlcv else "exchange_ohlcv"
+    )
     if canonical.empty:
         out = history.copy()
         # Absence of the canonical lake must not be more permissive than a
         # partially populated lake. Every exchange-only row is explicit and
         # non-armable until exact trade-derived truth is available.
-        out["data_quality"] = "gap"
+        out["data_quality"] = default_quality
         out["is_closed"] = True
-        out["candle_source"] = "exchange_ohlcv"
+        out["candle_source"] = default_source
         return out
-    out = history.copy().set_index("timestamp")
+    out = history.copy()
+    out["data_quality"] = default_quality
+    out["is_closed"] = True
+    out["candle_source"] = default_source
+    out = out.set_index("timestamp")
     exact = canonical.copy().set_index("timestamp")
     for name in exact.columns:
         if name not in out:
@@ -1066,8 +1131,29 @@ def _overlay_canonical_history(
         overlap = out.index.intersection(exact.index)
         if len(overlap):
             out.loc[overlap, name] = exact.loc[overlap, name]
-    out["candle_source"] = out["candle_source"].fillna("exchange_ohlcv")
+    out["candle_source"] = out["candle_source"].fillna(default_source)
     return out.reset_index().sort_values("timestamp").reset_index(drop=True)
+
+
+_VALIDATED_EXCHANGE_OHLCV_STRATEGIES: frozenset[str] = frozenset()
+_CONTEXT_WARMUP_BARS = 800
+
+
+def _allows_validated_exchange_ohlcv(spec: LaneSpec) -> bool:
+    """Whether an ID may arm from venue OHLCV (none in the runtime roster)."""
+    return spec.strategy_id in _VALIDATED_EXCHANGE_OHLCV_STRATEGIES
+
+
+def _warmup_since_for_timeframe(
+    timeframe: str,
+    until_ms: int,
+    *,
+    bars: int,
+) -> int:
+    """Return a close-boundary-aligned lookback for one independent clock."""
+    timeframe_ms = _timeframe_ms(timeframe)
+    boundary = (until_ms // timeframe_ms) * timeframe_ms
+    return boundary - max(1, int(bars)) * timeframe_ms
 
 
 def _canonical_runtime_store(
@@ -1118,6 +1204,8 @@ _FIXED_STRATEGY_WARMUPS: dict[str, int] = {
     **{strategy.strategy_id: strategy.warmup_bars for strategy in NEW_RESEARCH_SCANNERS},
     **{strategy.strategy_id: strategy.warmup_bars for strategy in REALTIME_SCANNERS},
     HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1.warmup_bars,
+    HtfRegimeContinuation15mV2.strategy_id: HtfRegimeContinuation15mV2.warmup_bars,
+    StructureBounceRouteProbeV2.strategy_id: StructureBounceRouteProbeV2.warmup_bars,
 }
 
 
@@ -1316,6 +1404,7 @@ async def build_lane(
     canonical_router: CanonicalCandleRouter | None = None,
     canonical_router_exchanges: frozenset[str] = frozenset(),
     canonical_arm_health: Callable[[], str | None] | None = None,
+    canonical_router_authoritative: bool = False,
 ) -> _LaneRuntime:
     """Seed warmup history + build an isolated LivePaperSession for one venue."""
     # (A) Bars-based warmup: the operator baseline or the strategy's causal
@@ -1351,6 +1440,8 @@ async def build_lane(
             not_before=datetime.fromtimestamp(since / 1000, tz=UTC),
         )
     funding_history_unsupported = False
+    allow_validated_exchange_ohlcv = _allows_validated_exchange_ohlcv(spec)
+    context_seed_frames: dict[str, pd.DataFrame] = {}
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
         # the gap since the last run; degrades to a full fetch on any cache miss.
@@ -1370,13 +1461,58 @@ async def build_lane(
                 spec.lane_id,
             )
             canonical_history = pd.DataFrame()
-        history = _overlay_canonical_history(history, canonical_history)
+        history = _overlay_canonical_history(
+            history,
+            canonical_history,
+            allow_validated_exchange_ohlcv=allow_validated_exchange_ohlcv,
+        )
         strategy_requirement = _strategy_warmup_requirement(spec)
         if len(history) <= strategy_requirement:
             raise RuntimeError(
                 f"lane {spec.lane_id} warmup incomplete: {len(history)} bars; "
                 f"strategy requires more than {strategy_requirement}"
             )
+        # V2 deliberately declares an official price-only OHLC contract. Its
+        # daily EMA200 and weekly structure need an independent HTF window;
+        # reusing the 15m ``since`` timestamp made readiness impossible.
+        runtime_contract = scanner_runtime_contract(spec.strategy_id)
+        if allow_validated_exchange_ohlcv and runtime_contract is not None:
+            for context_timeframe in runtime_contract.context_tfs:
+                context_since = _warmup_since_for_timeframe(
+                    context_timeframe,
+                    until,
+                    bars=_CONTEXT_WARMUP_BARS,
+                )
+                context_spec = replace(spec, timeframe=context_timeframe)
+                exchange_context = await _warmup_candles(
+                    rest,
+                    context_spec,
+                    journal_dir / f"{spec.lane_id}.context_{context_timeframe}.candles.parquet",
+                    context_since,
+                    until,
+                )
+                try:
+                    exact_context = await asyncio.to_thread(
+                        _canonical_candle_frame,
+                        canonical_store,
+                        spec.symbol,
+                        context_timeframe,
+                        since_ms=context_since,
+                        until_ms=until,
+                    )
+                except (OSError, ValueError):
+                    logger.exception(
+                        "lane %s canonical %s context overlay unavailable; "
+                        "using validated official OHLC for the registered V2 contract",
+                        spec.lane_id,
+                        context_timeframe,
+                    )
+                    exact_context = pd.DataFrame()
+                context_seed_frames[context_timeframe] = _overlay_canonical_history(
+                    exchange_context,
+                    exact_context,
+                    allow_validated_exchange_ohlcv=True,
+                )
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
         except NotSupported:
@@ -1449,6 +1585,8 @@ async def build_lane(
         canonical_candle_wait_seconds=8.0,
         trail_atr_mult=spec.trail_atr_mult,
         execution_cost_exchange_id=spec.execution_cost_exchange,
+        entry_route=spec.entry_route,
+        maker_fill_ttl_bars=spec.maker_fill_ttl_bars,
     )
     strategy = _build_strategy(spec, seed_funding, feed, funding_store_path=funding_store_path)
     quote_evidence = (
@@ -1469,10 +1607,7 @@ async def build_lane(
     declared_context_timeframes = tuple(
         str(value) for value in getattr(strategy, "canonical_context_timeframes", ())
     )
-    if (
-        runtime_contract is not None
-        and declared_context_timeframes != runtime_contract.context_tfs
-    ):
+    if runtime_contract is not None and declared_context_timeframes != runtime_contract.context_tfs:
         raise ValueError(
             f"{spec.strategy_id} runtime context contract requires "
             f"{runtime_contract.context_tfs}, strategy declares "
@@ -1487,22 +1622,29 @@ async def build_lane(
     context_binder = getattr(strategy, "bind_canonical_context", None)
     if context_timeframes and callable(context_binder):
         for context_timeframe in context_timeframes:
-            try:
-                context_history = await asyncio.to_thread(
-                    _canonical_candle_frame,
-                    canonical_store,
-                    spec.symbol,
+            context_history = context_seed_frames.get(context_timeframe)
+            if context_history is None:
+                context_since = _warmup_since_for_timeframe(
                     context_timeframe,
-                    since_ms=since,
-                    until_ms=until,
+                    until,
+                    bars=_CONTEXT_WARMUP_BARS,
                 )
-            except (OSError, ValueError):
-                logger.exception(
-                    "lane %s canonical %s context unavailable; scanner remains fail-closed",
-                    spec.lane_id,
-                    context_timeframe,
-                )
-                context_history = pd.DataFrame()
+                try:
+                    context_history = await asyncio.to_thread(
+                        _canonical_candle_frame,
+                        canonical_store,
+                        spec.symbol,
+                        context_timeframe,
+                        since_ms=context_since,
+                        until_ms=until,
+                    )
+                except (OSError, ValueError):
+                    logger.exception(
+                        "lane %s canonical %s context unavailable; scanner remains fail-closed",
+                        spec.lane_id,
+                        context_timeframe,
+                    )
+                    context_history = pd.DataFrame()
             context_binder(context_timeframe, context_history)
             if not context_history.empty:
                 opened = pd.Timestamp(context_history["timestamp"].iloc[-1])
@@ -1514,7 +1656,10 @@ async def build_lane(
                     opened + pd.Timedelta(context_timeframe)
                 ).to_pydatetime()
     exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
-    journal = DecisionJournal(journal_dir / f"{spec.lane_id}.journal.jsonl")
+    journal = DecisionJournal(
+        journal_dir / f"{spec.lane_id}.journal.jsonl",
+        path_id=KERNEL_PATH_ID,
+    )
     kill = KillSwitch(kill_file=journal_dir / f"{spec.lane_id}.KILL")
     gateway = PreTradeRiskGateway(config.risk, kill)
     om = OrderManager(gateway, journal, PaperBroker(exchange))
@@ -1540,6 +1685,7 @@ async def build_lane(
         quote_evidence=quote_evidence,
         canonical_arm_health=canonical_arm_health,
         canonical_context_watermarks=context_watermarks,
+        canonical_router_authoritative=canonical_router_authoritative,
         trial_meta={
             "trial_id": spec.lane_id,
             "started": "2026-07-04",
@@ -1550,6 +1696,8 @@ async def build_lane(
             "daily_stop_usd": spec.daily_loss_usd,
             "promotion_source": spec.exchange,
             "daily_factory": daily_factory.model_dump(),
+            "entry_route": spec.entry_route.value,
+            "maker_fill_ttl_bars": spec.maker_fill_ttl_bars,
         },
     )
     # Expectations make a moved/edited store fail closed instead of injecting
@@ -1591,6 +1739,7 @@ class MultiLaneShadowRunner:
         canonical_router: CanonicalCandleRouter | None = None,
         canonical_producers: tuple[CanonicalProducer, ...] = (),
         canonical_router_exchanges: frozenset[str] = frozenset(),
+        canonical_router_authoritative: bool = False,
     ) -> None:
         self.specs = specs
         self.journal_dir = journal_dir
@@ -1598,25 +1747,11 @@ class MultiLaneShadowRunner:
         self.canonical_router = canonical_router
         self.canonical_producers = canonical_producers
         self.canonical_router_exchanges = canonical_router_exchanges
-        observers = [
-            spec
-            for spec in specs
-            if spec.mode is RunnerMode.SHADOW and spec.strategy_id != "measurement_only_v1"
-        ]
-        shared_equity = min(
-            (Decimal(str(spec.starting_equity)) for spec in observers),
-            default=Decimal(1000),
-        )
-        shared_daily_loss = min(
-            (Decimal(str(spec.daily_loss_usd)) for spec in observers),
-            default=Decimal(20),
-        )
-        self.shadow_portfolio = ShadowPortfolioGate(
-            journal_dir=journal_dir,
-            lane_ids=(spec.lane_id for spec in observers),
-            equity_usd=shared_equity,
-            daily_loss_limit_usd=shared_daily_loss,
-        )
+        self.canonical_router_authoritative = canonical_router_authoritative
+        # Runtime booking is owned by ExecutionKernel/OrderManager only.  The
+        # legacy ShadowPortfolioGate scans shadow_intent/shadow_outcome rows
+        # and would therefore create a second, eventually stale book.
+        self.shadow_portfolio: ShadowPortfolioGate | None = None
 
     def _canonical_arm_health(self, spec: LaneSpec) -> Callable[[], str | None] | None:
         """Bind an integrated producer's durability probe to one lane.
@@ -1670,6 +1805,10 @@ class MultiLaneShadowRunner:
                         self.canonical_router,
                         self.canonical_router_exchanges,
                         self._canonical_arm_health(spec),
+                        (
+                            self.canonical_router_authoritative
+                            and spec.exchange in self.canonical_router_exchanges
+                        ),
                     ),
                     retries=_LANE_BUILD_RETRIES,
                     backoff_s=_LANE_BUILD_BACKOFF_S,

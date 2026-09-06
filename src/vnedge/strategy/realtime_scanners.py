@@ -22,6 +22,7 @@ import pandas as pd
 
 from vnedge.data.candles import Candle
 from vnedge.plan.cost_model import CostModel
+from vnedge.strategy.arm_evidence import MissingHtfContext
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, StrategyExitIntent
 from vnedge.strategy.range_expansion_observer_v4 import (
     RangeExpansionObserverV4,
@@ -373,6 +374,19 @@ class StructureBosRealtimeV1(_QuoteEntryOnly, StructureBos15mTriggerV3):
         close = float(row["close"])
         if not _finite_positive(long_level, short_level, atr, close):
             return None
+        allow_long = bool(row["rt_allow_long"])
+        allow_short = bool(row["rt_allow_short"])
+        try:
+            evidence = self.freeze_permission_snapshot(
+                row,
+                allow_long=allow_long,
+                allow_short=allow_short,
+                reason=self.strategy_id,
+            )
+        except MissingHtfContext:
+            return None
+        except (TypeError, ValueError):
+            return None
         return RealtimeEntryArm(
             episode_id=_episode(row, index),
             bar_index=index,
@@ -380,14 +394,15 @@ class StructureBosRealtimeV1(_QuoteEntryOnly, StructureBos15mTriggerV3):
             short_level=short_level,
             atr=atr,
             reference_price=close,
-            allow_long=bool(row["rt_allow_long"]),
-            allow_short=bool(row["rt_allow_short"]),
+            allow_long=allow_long,
+            allow_short=allow_short,
             long_structural_stop=float(row["rt_long_structural_stop"]),
             short_structural_stop=float(row["rt_short_structural_stop"]),
             expires_after_bars=1,
             session_start_hour_utc=self.params.session_start_hour_utc,
             session_end_hour_utc=self.params.session_end_hour_utc,
             reason=self.strategy_id,
+            evidence=evidence,
         )
 
 
@@ -476,10 +491,12 @@ class StructureBosRealtimeV2(StructureBosRealtimeV1):
             session_start_hour_utc=arm.session_start_hour_utc,
             session_end_hour_utc=arm.session_end_hour_utc,
             reason=self.strategy_id,
+            evidence=arm.evidence,
         )
 
     def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
         row = df.iloc[index]
+        missing_context = self._missing_permission_context(row)
 
         def number(name: str) -> float | None:
             try:
@@ -518,8 +535,10 @@ class StructureBosRealtimeV2(StructureBosRealtimeV1):
             (inside, "boundary_already_crossed"),
         )
         failures = [reason for ok, reason in checks if not ok]
+        if missing_context:
+            failures.insert(0, "htf_context_missing")
         return {
-            "eligible": flag("rt_arm_ready"),
+            "eligible": not missing_context and flag("rt_arm_ready"),
             "primary_failed_gate": failures[0] if failures else None,
             "all_failed_gates": failures,
             "features": {
@@ -531,6 +550,7 @@ class StructureBosRealtimeV2(StructureBosRealtimeV1):
                 "projected_net_bps": projected,
                 "long_level": number("rt_long_level"),
                 "short_level": number("rt_short_level"),
+                "htf_context_missing": list(missing_context),
             },
             "thresholds": {
                 "min_projected_net_bps": self.params.min_projected_net_bps,
@@ -765,6 +785,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
     realtime_trail_arm_r = 2.0
     realtime_trail_atr_mult = 1.5
     canonical_context_timeframes = StructureBos15mTriggerV3.canonical_context_timeframes
+    requires_permission_snapshot = True
 
     def _new_structure_engine(
         self,
@@ -789,6 +810,24 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
 
     def set_canonical_context_health(self, timeframe: str, healthy: bool) -> None:
         self._structure.set_canonical_context_health(timeframe, healthy)
+
+    def freeze_permission_snapshot(
+        self,
+        row: pd.Series,
+        *,
+        allow_long: bool,
+        allow_short: bool,
+        reason: str,
+    ):
+        return self._structure.freeze_permission_snapshot(
+            row,
+            allow_long=allow_long,
+            allow_short=allow_short,
+            reason=reason,
+        )
+
+    def _missing_permission_context(self, row: pd.Series) -> tuple[str, ...]:
+        return self._structure._missing_permission_context(row)
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
         # Build the frozen BoS context with its own parameter object.  This
@@ -914,6 +953,19 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
         close = float(row["close"])
         if not _finite_positive(long_level, short_level, atr, close):
             return None
+        allow_long = bool(row["rt_allow_long"])
+        allow_short = bool(row["rt_allow_short"])
+        try:
+            evidence = self.freeze_permission_snapshot(
+                row,
+                allow_long=allow_long,
+                allow_short=allow_short,
+                reason=self.strategy_id,
+            )
+        except MissingHtfContext:
+            return None
+        except (TypeError, ValueError):
+            return None
         return RealtimeEntryArm(
             episode_id=_episode(row, index),
             bar_index=index,
@@ -921,13 +973,14 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
             short_level=short_level,
             atr=atr,
             reference_price=close,
-            allow_long=bool(row["rt_allow_long"]),
-            allow_short=bool(row["rt_allow_short"]),
+            allow_long=allow_long,
+            allow_short=allow_short,
             long_structural_stop=float(row["rt_long_structural_stop"]),
             short_structural_stop=float(row["rt_short_structural_stop"]),
             structural_stop_mode="structure_floor",
             expires_after_bars=2,
             reason=self.strategy_id,
+            evidence=evidence,
         )
 
     def exit_signal(
@@ -971,6 +1024,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
 
     def evaluation_diagnostics(self, df: pd.DataFrame, index: int) -> dict[str, object]:
         row = df.iloc[index]
+        missing_context = self._missing_permission_context(row)
 
         def number(name: str) -> float | None:
             try:
@@ -1008,7 +1062,9 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
             )
             if not ok
         ]
-        eligible = flag("rt_arm_ready")
+        if missing_context:
+            failures.insert(0, "htf_context_missing")
+        eligible = not missing_context and flag("rt_arm_ready")
         return {
             "eligible": eligible,
             "primary_failed_gate": failures[0] if failures else None,
@@ -1023,6 +1079,7 @@ class HtfStructureContinuationRealtimeV1(_QuoteEntryOnly, BaseStrategy):
                 "payoff_hypothesis_after_cost_bps": projected,
                 "payoff_hypothesis_basis": "stop_distance_x_reward_r_minus_cost_not_expected_ev",
                 "entry_mode": "live_quote_hold",
+                "htf_context_missing": list(missing_context),
             },
             "thresholds": {
                 "volume_mult": p.volume_mult,

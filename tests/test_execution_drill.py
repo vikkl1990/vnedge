@@ -1,14 +1,18 @@
 """Mainnet execution drill — gates, caps, lifecycle, flat-precondition."""
 
+from datetime import UTC, datetime
+
 import pytest
 
 from vnedge.config.settings import Settings
+from vnedge.execution.evidence import DecisionEnvelope
 from vnedge.execution.journal import DecisionJournal
 from vnedge.runtime.execution_drill import (
     _HARD_MAX_DRILL_NOTIONAL,
     DrillConfig,
     run_execution_drill,
 )
+from vnedge.strategy.arm_evidence import freeze_permission_from_row
 
 LIVE_ENV = {
     "trading_mode": "live_small",
@@ -70,6 +74,37 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
 
+def _decision(symbol: str = "DOGE/USDT:USDT") -> DecisionEnvelope:
+    snapshot = freeze_permission_from_row(
+        {
+            "timestamp": datetime(2026, 9, 5, 12, 0, tzinfo=UTC),
+            "open": 0.08,
+            "high": 0.081,
+            "low": 0.079,
+            "close": 0.08,
+            "volume": 1000.0,
+            "quote_volume": 80.0,
+            "trade_count": 100,
+            "is_closed": True,
+            "data_quality": "ok",
+            "candle_source": "canonical_tick_lake",
+        },
+        decision_timeframe="1m",
+        context_timeframes=(),
+        allow_long=True,
+        allow_short=False,
+        reason="bounded_live_drill",
+    )
+    return DecisionEnvelope.create(
+        strategy_id="execution_drill_v1",
+        symbol=symbol,
+        timeframe="1m",
+        side="long",
+        permission_snapshot=snapshot,
+        entry_clock="manual_drill",
+    )
+
+
 async def test_drill_refuses_without_three_gates(tmp_path, monkeypatch):
     _env(monkeypatch, tmp_path)
     settings = Settings()  # backtest mode — gates closed
@@ -82,6 +117,25 @@ async def test_drill_refuses_without_three_gates(tmp_path, monkeypatch):
     assert report.steps[0].name == "live_gates" and not report.steps[0].ok
 
 
+async def test_live_drill_refuses_to_fabricate_a_decision_envelope(tmp_path, monkeypatch):
+    _env(monkeypatch, tmp_path)
+    settings = Settings(**LIVE_ENV)
+    fake = FakeAdapter()
+
+    report = await run_execution_drill(
+        settings,
+        DrillConfig(exchange_id="binanceusdm"),
+        adapter_factory=lambda: fake,
+        journal=DecisionJournal(tmp_path / "drill.jsonl"),
+    )
+
+    assert not report.cleared
+    assert any(
+        step.name == "decision_envelope" and not step.ok for step in report.steps
+    )
+    assert fake.submitted == []
+
+
 async def test_drill_happy_path_clears(tmp_path, monkeypatch):
     _env(monkeypatch, tmp_path)
     settings = Settings(**LIVE_ENV)
@@ -90,6 +144,7 @@ async def test_drill_happy_path_clears(tmp_path, monkeypatch):
         settings, DrillConfig(exchange_id="binanceusdm", order_notional_usd=8.0),
         adapter_factory=lambda: fake,
         journal=DecisionJournal(tmp_path / "drill.jsonl"),
+        decision_envelope=_decision(),
     )
     assert report.cleared, [s for s in report.steps if not s.ok]
     assert len(fake.submitted) == 1
@@ -111,6 +166,7 @@ async def test_drill_notional_hard_cap(tmp_path, monkeypatch):
         DrillConfig(exchange_id="binanceusdm", order_notional_usd=10_000.0),
         adapter_factory=lambda: fake,
         journal=DecisionJournal(tmp_path / "drill.jsonl"),
+        decision_envelope=_decision(),
     )
     assert report.cleared
     assert fake.submitted[0].intent.notional_usd <= _HARD_MAX_DRILL_NOTIONAL
@@ -124,6 +180,7 @@ async def test_drill_refuses_on_existing_exposure(tmp_path, monkeypatch):
         settings, DrillConfig(exchange_id="binanceusdm"),
         adapter_factory=lambda: fake,
         journal=DecisionJournal(tmp_path / "drill.jsonl"),
+        decision_envelope=_decision(),
     )
     assert not report.cleared
     assert fake.submitted == []  # never places an order near real exposure
@@ -167,6 +224,7 @@ async def test_drill_order_routes_through_the_gateway(tmp_path, monkeypatch):
     report = await run_execution_drill(
         settings, DrillConfig(exchange_id="binanceusdm"),
         adapter_factory=lambda: fake, journal=DecisionJournal(tmp_path / "d.jsonl"),
+        decision_envelope=_decision(),
     )
     assert not report.cleared
     ga = [s for s in report.steps if s.name == "gateway_approved"]
@@ -183,6 +241,7 @@ async def test_drill_client_order_id_is_uuid_not_timestamp(tmp_path, monkeypatch
     await run_execution_drill(
         settings, DrillConfig(exchange_id="binanceusdm"),
         adapter_factory=lambda: fake, journal=DecisionJournal(tmp_path / "d.jsonl"),
+        decision_envelope=_decision(),
     )
     assert len(fake.submitted) == 1
     coid = fake.submitted[0].client_order_id

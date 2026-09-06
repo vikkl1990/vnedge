@@ -202,31 +202,16 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
     )
 
     active = {
-        "range_expansion_realtime_v2": (
-            "quote_acceptance_v2",
-            "scanner_exit_v1",
-            "2",
-        ),
-        "structure_bos_realtime_v2": (
-            "quote_acceptance_v2",
-            "scanner_exit_v1",
-            "2",
-        ),
         "htf_regime_continuation_15m_v2": (
             "base_strategy_next_open_v1",
             "scanner_exit_v1",
             "1",
         ),
-        "session_continuation_realtime_v2": (
-            "quote_acceptance_v2",
-            "scanner_exit_v1",
-            "2",
-        ),
     }
     rows = {row["strategy_id"]: row for row in payload["revisions"] if row["strategy_id"] in active}
 
-    assert payload["provenance"]["active_roster_revisions"] == 4
-    assert payload["summary"]["explicit_revisions"] >= 4
+    assert payload["provenance"]["active_roster_revisions"] == 1
+    assert payload["summary"]["explicit_revisions"] >= 1
     assert set(rows) == set(active)
     for strategy_id, (decision_engine, exit_engine, engine_version) in active.items():
         row = rows[strategy_id]
@@ -238,6 +223,13 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
         assert "ENGINE_PARITY_NOT_REPORTED" in row["governance_flags"]
         assert row["latest_judgment"] is None
         assert row["can_trade"] is False
+
+    v2 = rows["htf_regime_continuation_15m_v2"]
+    assert v2["symbols"] == ("BTC/USD:USD", "ETH/USD:USD")
+    assert v2["params"]["execution_policy"] == {
+        "BTC/USD:USD": {"entry_route": "taker", "maker_fill_ttl_bars": 1},
+        "ETH/USD:USD": {"entry_route": "taker", "maker_fill_ttl_bars": 1},
+    }
 
 
 def test_workflow_keeps_shadow_evidence_separate_from_backtest_metrics(tmp_path):

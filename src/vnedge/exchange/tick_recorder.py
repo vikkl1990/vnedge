@@ -889,6 +889,13 @@ class TickRecorder:
             canonical_symbol(symbol): {
                 **counters,
                 "seen_set_size": len(self._seen_trade_ids.get(symbol, ())),
+                "reorder_bound_ms": _TRADE_REORDER_MS,
+                "max_seen_event_ts_ms": self._max_seen_trade_ts_ms.get(symbol, 0),
+                "watermark_event_ts_ms": max(
+                    0, self._max_seen_trade_ts_ms.get(symbol, 0) - _TRADE_REORDER_MS
+                ),
+                "released_through_ts_ms": self._last_trade_ts_ms.get(symbol, 0),
+                "pending_reorder": len(self._trade_reorder.get(symbol, ())),
             }
             for symbol, counters in self._trade_metrics.items()
         }
@@ -1566,6 +1573,13 @@ class DeltaTickRecorder:
             canonical_symbol(symbol): {
                 **counters,
                 "seen_set_size": len(self._seen_trade_ids.get(symbol, ())),
+                "reorder_bound_ms": _TRADE_REORDER_MS,
+                "max_seen_event_ts_ms": self._max_seen_trade_ts_ms.get(symbol, 0),
+                "watermark_event_ts_ms": max(
+                    0, self._max_seen_trade_ts_ms.get(symbol, 0) - _TRADE_REORDER_MS
+                ),
+                "released_through_ts_ms": self._last_trade_ts_ms.get(symbol, 0),
+                "pending_reorder": len(self._trade_reorder.get(symbol, ())),
             }
             for symbol, counters in self._trade_metrics.items()
         }

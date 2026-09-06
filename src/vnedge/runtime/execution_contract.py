@@ -18,6 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+KERNEL_PATH_ID = "kernel_v1"
+PERMISSION_SNAPSHOT_REQUIRED = frozenset({"htf_regime_continuation_15m_v2"})
+
 
 class DataClock(str, Enum):
     REPLAY = "replay"
@@ -70,14 +73,13 @@ class ExecutionContext:
     ) -> ExecutionContext:
         """Map the legacy paper/shadow runner names to their real authority.
 
-        Legacy ``shadow`` is observation-only. Legacy ``paper`` is the
-        simulated-execution stage operators traditionally call paper trading.
+        Legacy ``shadow`` and ``paper`` now share the same simulated execution
+        authority.  Their operator labels differ, but neither may fork around
+        the canonical order manager / journal path.
         """
 
         value = str(getattr(mode, "value", mode)).lower()
-        if value == "shadow":
-            stage = ExecutionStage.OBSERVE
-        elif value == "paper":
+        if value in {"shadow", "paper"}:
             stage = ExecutionStage.SHADOW
         else:
             raise ValueError(f"unsupported runner mode {value!r}")

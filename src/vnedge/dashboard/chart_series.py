@@ -15,17 +15,22 @@ Read-only. This module has no order, promotion or settings authority.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import UTC
 from typing import Any
-
-UTC = timezone.utc
 
 #: Never hand an unbounded series to a browser; a year of 1m bars is 525k rows.
 MAX_BARS = 5_000
 
 
-def candles_payload(store: Any, symbol: str, timeframe: str, *,
-                    limit: int = 500) -> dict[str, Any]:
+def candles_payload(
+    store: Any,
+    symbol: str,
+    timeframe: str,
+    *,
+    limit: int = 500,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
+) -> dict[str, Any]:
     """Canonical OHLCV shaped for lightweight-charts.
 
     Decimals become floats only at this boundary. They stay Decimal everywhere
@@ -34,7 +39,7 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
     limit = max(1, min(int(limit), MAX_BARS))
     try:
         rows = list(store.read(symbol, timeframe))
-    except Exception:
+    except Exception:  # noqa: BLE001 - read-only UI must degrade on store failures
         rows = []
 
     # Lightweight Charts requires strictly monotonic series input.  The store
@@ -50,6 +55,12 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
         )
         by_time[epoch] = candle
     ordered = sorted(by_time.items())
+    if from_ms is not None:
+        from_epoch = int(from_ms) // 1_000
+        ordered = [(epoch, candle) for epoch, candle in ordered if epoch >= from_epoch]
+    if to_ms is not None:
+        to_epoch = int(to_ms) // 1_000
+        ordered = [(epoch, candle) for epoch, candle in ordered if epoch <= to_epoch]
     tail = ordered[-limit:]
     return {
         "symbol": symbol,
@@ -57,6 +68,7 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
         "source": "canonical_lake",
         "count": len(tail),
         "truncated": len(ordered) > len(tail),
+        "range": {"from_ms": from_ms, "to_ms": to_ms},
         "candles": [
             {
                 "time": epoch,
@@ -67,3 +79,45 @@ def candles_payload(store: Any, symbol: str, timeframe: str, *,
             for epoch, c in tail
         ],
     }
+
+
+def mechanism_context_payload(store: Any, symbol: str, timeframe: str, *,
+                              limit: int = 600) -> dict[str, Any]:
+    """Drawable mechanism context for the chart, from the canonical store.
+
+    Same store discipline as ``candles_payload``; the context itself comes
+    from ``ml.mechanism_features.mechanism_context`` — the model's own
+    definitions — so the chart can never show the operator a different
+    market than the ML plane sees. Read-only, presentation-only.
+    """
+    import pandas as pd
+
+    from vnedge.ml.mechanism_features import mechanism_context
+
+    limit = max(1, min(int(limit), MAX_BARS))
+    try:
+        rows = list(store.read(symbol, timeframe))
+    except Exception:  # noqa: BLE001 - read-only UI must degrade on store failures
+        rows = []
+    base = {"symbol": symbol, "timeframe": timeframe, "source": "canonical_lake"}
+    if not rows:
+        return {**base, "ready": False, "bars": 0}
+    rows = rows[-limit:]
+    frame = pd.DataFrame(
+        {
+            "timestamp": [candle.open_time for candle in rows],
+            "open": [float(candle.open) for candle in rows],
+            "high": [float(candle.high) for candle in rows],
+            "low": [float(candle.low) for candle in rows],
+            "close": [float(candle.close) for candle in rows],
+            "volume": [float(candle.volume) for candle in rows],
+        }
+    )
+    context = mechanism_context(frame)
+    last = rows[-1]
+    epoch = (
+        int(last.open_time.replace(tzinfo=UTC).timestamp())
+        if last.open_time.tzinfo is None
+        else int(last.open_time.timestamp())
+    )
+    return {**base, "as_of": epoch, **context}

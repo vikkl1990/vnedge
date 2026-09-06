@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, fetchChartCandles, type AgenticResearchStatus, type BacktestLabPayload, type ChartTimeframe, type CostModelPayload, type DataProductsPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
+import { apiGet, fetchChartCandles, type AgenticResearchStatus, type BacktestLabPayload, type ChartTimeframe, type CostModelPayload, type DataProductsPayload, type ExchangeConnectionPublic, type HourBrief, type JournalPayload, type LanesPayload, type MetaPayload, type MlStatus, type OperatorProfile, type PatternAtlasPayload, type PulsePayload, type ReadinessStatus, type ResearchScorecard, type RiskSnapshot, type SettingsSecurity, type Snapshot, type StrategyWorkflowPayload, type WhoAmI } from "./api";
 
 export function useWhoAmI() {
   return useQuery({
@@ -67,6 +67,14 @@ export function useLanes() {
   return useQuery({
     queryKey: ["correction-lanes"],
     queryFn: () => apiGet<LanesPayload>("/api/lanes"),
+    refetchInterval: 5_000,
+  });
+}
+
+export function usePatternAtlas() {
+  return useQuery({
+    queryKey: ["pattern-atlas"],
+    queryFn: () => apiGet<PatternAtlasPayload>("/api/patterns"),
     refetchInterval: 5_000,
   });
 }

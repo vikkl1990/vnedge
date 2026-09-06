@@ -1048,13 +1048,13 @@ export function MarketPulse() {
         </TerminalPanel>
 
         <div className="flex flex-col gap-4">
-          <TerminalPanel title="This hour" meta="forming · never persisted">
+          <TerminalPanel title="This hour" meta="WATCH · forming · display only · never persisted">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="text-[11px] font-mono text-faint">{forming?.price_source === "last_trade" ? "LIVE LAST" : "LIVE MID"}</div>
                 <div className="text-3xl font-mono tabular-nums">{priceText((forming?.mid as number | null | undefined) ?? book?.mid)}</div>
               </div>
-              <TerminalBadge tone={formingActive ? "info" : "neutral"}>{formingActive ? "forming" : "awaiting trades"}</TerminalBadge>
+              <TerminalBadge tone={formingActive ? "info" : "neutral"}>{formingActive ? "WATCH" : "awaiting trades"}</TerminalBadge>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Metric label="Range" value={`${fmt(formingRange)} bps`} note={formingRangeVsMedian == null ? "24h median unavailable" : `${fmt(formingRangeVsMedian, 2)}× 24h median`} />

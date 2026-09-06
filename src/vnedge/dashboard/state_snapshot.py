@@ -29,9 +29,7 @@ class FeedHealth:
     last_update_ms: float = 0.0
 
 
-def _risk_status(
-    kill: KillSwitch, journal: DecisionJournal, om: OrderManager
-) -> str:
+def _risk_status(kill: KillSwitch, journal: DecisionJournal, om: OrderManager) -> str:
     if kill.is_active:
         return "kill_switch_active"
     if not journal.available:
@@ -92,7 +90,8 @@ def build_snapshot(
         )
     venue_orders = {s.client_order_id: s for s in exchange.get_open_orders()}
     managed_orders = {
-        coid: order for coid, order in order_manager.orders.items()
+        coid: order
+        for coid, order in order_manager.orders.items()
         if coid in venue_orders or order.is_unresolved
     }
     open_order_ids = list(venue_orders)
@@ -104,29 +103,39 @@ def build_snapshot(
         intent = managed.intent if managed is not None else None
         last_event = managed.history[-1] if managed is not None and managed.history else None
         state = managed.state.value if managed is not None else status.state
-        open_orders.append({
-            "client_order_id": coid,
-            "exchange_order_id": (
-                managed.exchange_order_id if managed is not None and managed.exchange_order_id
-                else status.exchange_order_id if status is not None else ""
-            ),
-            "state": state,
-            "side": intent.side if intent is not None else "",
-            "order_type": intent.order_type if intent is not None else "",
-            "limit_price": intent.limit_price if intent is not None else None,
-            "reduce_only": intent.reduce_only if intent is not None else False,
-            "requested_qty": (
-                status.requested_qty if status is not None else intent.quantity if intent is not None else 0.0
-            ),
-            "filled_qty": status.filled_qty if status is not None else 0.0,
-            "avg_fill_price": status.avg_fill_price if status is not None else 0.0,
-            "state_age_ms": (
-                (now - last_event.timestamp).total_seconds() * 1000.0
-                if last_event is not None else None
-            ),
-            "last_note": last_event.note if last_event is not None else "",
-            "reason": status.reason if status is not None else "",
-        })
+        open_orders.append(
+            {
+                "client_order_id": coid,
+                "exchange_order_id": (
+                    managed.exchange_order_id
+                    if managed is not None and managed.exchange_order_id
+                    else status.exchange_order_id
+                    if status is not None
+                    else ""
+                ),
+                "state": state,
+                "side": intent.side if intent is not None else "",
+                "order_type": intent.order_type if intent is not None else "",
+                "limit_price": intent.limit_price if intent is not None else None,
+                "reduce_only": intent.reduce_only if intent is not None else False,
+                "requested_qty": (
+                    status.requested_qty
+                    if status is not None
+                    else intent.quantity
+                    if intent is not None
+                    else 0.0
+                ),
+                "filled_qty": status.filled_qty if status is not None else 0.0,
+                "avg_fill_price": status.avg_fill_price if status is not None else 0.0,
+                "state_age_ms": (
+                    (now - last_event.timestamp).total_seconds() * 1000.0
+                    if last_event is not None
+                    else None
+                ),
+                "last_note": last_event.note if last_event is not None else "",
+                "reason": status.reason if status is not None else "",
+            }
+        )
     recent_fills = [
         {
             "seq": fill.seq,
@@ -157,10 +166,12 @@ def build_snapshot(
                 # whole /state payload fail JSON serialization (500).
                 "spread_bps": (
                     (quote[1] - quote[0]) / ((quote[0] + quote[1]) / 2.0) * 10_000.0
-                    if (quote[0] + quote[1]) > 0 else 0.0
+                    if (quote[0] + quote[1]) > 0
+                    else 0.0
                 ),
             }
-            if quote is not None else None
+            if quote is not None
+            else None
         ),
         "funding_rate": funding_rate,
         "session": session_stats or {},
@@ -192,9 +203,7 @@ def build_snapshot(
             "available": journal.available,
             "recovery_degraded": journal.recovery_degraded,
             "recovery_error": journal.recovery_error or None,
-            "quarantine_path": (
-                str(journal.quarantine_path) if journal.quarantine_path else None
-            ),
+            "quarantine_path": (str(journal.quarantine_path) if journal.quarantine_path else None),
         },
         # --- canonical candle-path contract (promoted from session so the UI
         # and any client can type against ONE stable schema; the multi-lane
@@ -203,5 +212,6 @@ def build_snapshot(
         "time_machine": (session_stats or {}).get("time_machine"),
         "latency": (session_stats or {}).get("latency"),
         "latency_recovery": (session_stats or {}).get("latency_recovery"),
+        "runtime_readiness": (session_stats or {}).get("runtime_readiness"),
     }
-    return annotate(_snap)   # attach server-computed chips + per-lane bands
+    return annotate(_snap)  # attach server-computed chips + per-lane bands

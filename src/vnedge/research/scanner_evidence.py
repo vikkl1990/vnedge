@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import numbers
 import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -1621,10 +1623,57 @@ def build_journal_report(
     return report
 
 
+def _strict_json_safe(value: Any) -> Any:
+    """Normalize pandas/numpy diagnostics for strict evidence JSON.
+
+    Scanner diagnostics legitimately contain warm-up NaN values.  Evidence
+    files deliberately use ``allow_nan=False`` so those process-local sentinels
+    cannot leak onto the wire as non-standard JSON.  Preserve the strict
+    contract by representing non-finite numbers as JSON null instead of
+    weakening the encoder.
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            native = item()
+        except (TypeError, ValueError):
+            native = value
+        if native is not value:
+            return _strict_json_safe(native)
+    if isinstance(value, dict):
+        return {
+            str(_strict_json_safe(key)): _strict_json_safe(item_value)
+            for key, item_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_strict_json_safe(item_value) for item_value in value]
+    return value
+
+
 def atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, allow_nan=False, default=str), encoding="utf-8")
+    tmp.write_text(
+        json.dumps(
+            _strict_json_safe(payload),
+            indent=2,
+            allow_nan=False,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
     os.replace(tmp, path)
 
 

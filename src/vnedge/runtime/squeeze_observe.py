@@ -43,6 +43,7 @@ class ScannerApproval:
     notional_usd: float = 0.0
     margin_usd: float = 0.0
     intent_key: str = ""
+    execution_evidence: dict = field(default_factory=dict)
 
 
 FireGuard = Callable[[FireDecision, int, datetime], ScannerApproval]
@@ -245,6 +246,8 @@ class SqueezeObserveRunner:
             "passed_checks": list(approval.passed_checks),
             "explanation": approval.explanation or fire.reason,
             "intent": approval.intent,
+            "execution_evidence": approval.execution_evidence,
+            "performance_eligible": False,
             "signal_reason": fire.reason,
             "entry_price": fire.entry,
             "stop_price": fire.stop,

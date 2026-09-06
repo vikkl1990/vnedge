@@ -84,8 +84,12 @@ class StateEvent:
 @dataclass
 class ManagedOrder:
     intent_key: str  # deterministic decision identity — minted once, journaled
-    client_order_id: str  # idempotency key sent to the venue — never regenerated
+    # ``None`` is valid only for a decision rejected before risk approval.
+    # A venue-facing order receives one random id after the gateway passes and
+    # that exact value is then journaled/reused for its entire lifecycle.
+    client_order_id: str | None
     intent: OrderIntent
+    path_id: str | None = None
     state: OrderState = OrderState.SIGNAL_CREATED
     exchange_order_id: str | None = None
     filled_quantity: float = 0.0
@@ -102,7 +106,8 @@ class ManagedOrder:
         allowed = LEGAL_TRANSITIONS[self.state]
         if new_state not in allowed:
             raise IllegalTransition(
-                f"{self.client_order_id}: {self.state.value} -> {new_state.value} "
+                f"{self.client_order_id or self.intent_key}: "
+                f"{self.state.value} -> {new_state.value} "
                 f"is not a legal transition (allowed: {sorted(s.value for s in allowed)})"
             )
         self.state = new_state

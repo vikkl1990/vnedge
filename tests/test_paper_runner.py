@@ -16,7 +16,7 @@ from vnedge.runtime.paper_runner import PaperRunner
 from vnedge.runtime.runner_config import RunnerConfig, RunnerMode
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 
-BASE = 1_750_000_000_000
+BASE = 1_749_999_600_000  # exact UTC hour; decision evidence requires TF alignment
 HOUR = 3_600_000
 SYM = "BTC/USDT:USDT"
 FLAT = (100.0, 101.0, 99.0, 100.0)
@@ -147,7 +147,7 @@ async def test_signal_fills_next_bar_open_not_signal_bar(tmp_path):
     assert entry_fill.price == pytest.approx(expected)
 
 
-async def test_shadow_mode_changes_nothing(tmp_path):
+async def test_shadow_mode_uses_kernel_with_simulated_adapter(tmp_path):
     bars = [FLAT] * 6 + [(100.0, 107.0, 99.5, 106.5)] + [FLAT] * 3
     runner, exchange, _, journal = build_world(
         tmp_path, make_candles(bars), OneShotStrategy(4, LONG), mode=RunnerMode.SHADOW
@@ -157,13 +157,15 @@ async def test_shadow_mode_changes_nothing(tmp_path):
     assert report.mode == "shadow"
     assert report.signals_generated == 1
     assert report.shadow_approved == 1
-    assert report.orders_submitted == 0
-    assert report.fills == 0
-    assert exchange.get_fills() == []
-    assert report.final_equity_usd == pytest.approx(runner.config.starting_equity_usd)
+    assert report.orders_submitted == 2
+    assert report.fills == 2
+    assert len(exchange.get_fills()) == 2
+    assert report.final_equity_usd > runner.config.starting_equity_usd
     shadow_records = [r for r in journal.read_all() if r["kind"] == "shadow_intent"]
-    assert len(shadow_records) == 1
-    assert shadow_records[0]["payload"]["approved"] is True
+    assert shadow_records == []
+    kernel_orders = [r for r in journal.read_all() if r["kind"] == "order_intent"]
+    assert len(kernel_orders) == 2
+    assert all(r["payload"]["path_id"] == "kernel_v1" for r in kernel_orders)
 
 
 async def test_timeout_unknown_parks_plan_until_reconciled(tmp_path):

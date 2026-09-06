@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from vnedge.backtest.metrics import BacktestMetrics
 
@@ -26,6 +27,7 @@ class RunReport:
     shadow_rejected: int
     reconciliation_mismatches: int
     final_equity_usd: float
+    runtime_readiness: dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

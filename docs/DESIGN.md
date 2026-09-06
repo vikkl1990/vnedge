@@ -77,13 +77,72 @@ Fail-closed rule on any mismatch:
 
 ## 4. Decision journal / WAL (milestone 5)
 
-Local append-only JSONL, written **before** any order submission: signal,
-features hash, risk decision (all failed/passed checks), intent + idempotency
-key, submission, ack, fills, errors. This is the recovery baseline after a
-crash and the source for the audit ledger.
+Local append-only JSONL, written **before** any order submission: risk decision
+(all failed/passed checks), intent + idempotency key, explicit submission
+boundary, ack, and errors. Schema-2 records carry a monotonic `seq` plus a
+SHA-256 `prev_hash`/`hash` chain. Startup validates the tearable tail and
+resumes from its last durable sequence; the offline verifier walks the whole
+chain. This is a sourced **execution stream**, not an event store for candles
+or scanner frames. Market replay remains the canonical trade/candle lake.
 
 Journal-unavailable rule: if the journal cannot be written (disk full,
 permission), no new risk-increasing orders; reduce-only exits still allowed.
+
+### Execution identity and evidence boundary
+
+Decision identity and venue idempotency are deliberately separate:
+
+- `decision_id` is minted once at **ARM** as a deterministic digest of
+  strategy id/version, symbol, decision timeframe, normalized decision-bar
+  content hash, side, frozen permission snapshot id, and entry clock. Quote
+  sequence, venue id, and `path_id` are deliberately excluded. Replay uses it
+  to compare the same market decision and suppress duplicate decisions.
+- `client_order_id` is random, minted exactly once after the risk gateway
+  approves and persisted before submission. An ambiguous transport retry or
+  restart reuses that journaled value verbatim; it is never derived from a
+  timestamp or bar. A definitive venue rejection ends that attempt. A later
+  permitted reduce-only resubmission uses a new random id, linked by
+  `retry_of`, while retaining the same deterministic decision id.
+- `snapshot_id` identifies the immutable permission context at arm time.
+- `path_id=kernel_v1` is provenance, not an idempotency key. Only a caller
+  that supplies kernel evidence may stamp it.
+
+`path_id` is intentionally not overloaded with market transport or fill-clock
+semantics. `ExecutionEvidence` records `candle_source` and `entry_clock`, and
+derives `execution_contract_id = path_id|candle_source|entry_clock` for
+reporting. `quote_hold`, `next_<tf>_open`, and closed-bar cohorts must never
+share an operator P&L headline.
+
+`OrderIntent` is adapter-neutral and contains only the venue instruction.
+Strategy, timeframe, bar, quote, HTF, and cost provenance live in the frozen
+`ExecutionEvidence` envelope persisted beside the intent and `RiskDecision`.
+The adapter receives the intent plus the minted `client_order_id`, never the
+evidence envelope.
+
+The stream is append-only by stage: `ARM` creates `DecisionEnvelope`;
+`ACCEPT` adds BBO sequence/time/age; `APPROVE` adds CostGate and RiskDecision;
+`SUBMIT` adds the venue intent and randomly minted client id; `FILL` adds the
+venue fill; `RESOLVE` adds exit, fees, and funding. Every stage retains the
+same `decision_id`. New risk without the ARM envelope is refused. Operational
+Desk/Journal views project these rows and never synthesize an identifier.
+
+Strategies in `PERMISSION_SNAPSHOT_REQUIRED` must attach the complete
+`FrozenPermissionSnapshot`, not only its digest. Its decision and context refs
+come from the actual rows selected by canonical context binding, must be closed
+no later than the decision bar, and bind trusted source plus candle-content
+hashes. Calendar flooring is not sufficient evidence and a missing bound row
+refuses the arm.
+
+The one authority boundary is `build_kernel(...)`: OBSERVE evaluates and
+journals a candidate without creating a `ManagedOrder`; SHADOW submits through
+the simulated adapter; LIVE submits through the live adapter. Research shadow
+outcomes without `path_id=kernel_v1` remain evidence-only and are excluded from
+execution-readiness and execution P&L. `order_intent` alone is not proof of a
+side effect: operational P&L additionally requires an `order_submitted`
+descendant for the same `client_order_id`.
+The same evidence envelope is repeated on candidate, risk, intent, submission,
+fill/reconciliation, and terminal journal events so a projection never has to
+join against mutable "latest HTF" state.
 
 ## 5. Risk config overrides (v2)
 

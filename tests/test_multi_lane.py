@@ -14,9 +14,11 @@ from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
     MultiLaneShadowRunner,
+    _allows_validated_exchange_ohlcv,
     _build_single_strategy,
     _canonical_runtime_store,
     _overlay_canonical_history,
+    _warmup_since_for_timeframe,
 )
 from vnedge.runtime.multi_lane_shadow import (
     build_capital_lane_specs,
@@ -140,6 +142,17 @@ def test_integrated_canonical_runtime_defaults_to_external_parquet():
     assert build_shadow_observe_lane_specs({}) == []
 
 
+def test_integrated_router_refuses_environment_only_cutover(tmp_path):
+    with pytest.raises(ValueError, match="PARITY_ARTIFACT"):
+        build_integrated_canonical_runtime(
+            [],
+            {
+                "VNEDGE_CANONICAL_PRODUCER_MODE": "integrated_router",
+                "VNEDGE_INTEGRATED_RECORDER_EXCHANGES": "delta_india",
+            },
+        )
+
+
 def test_integrated_producer_persist_health_is_bound_per_lane():
     class Producer:
         exchange_id = "binanceusdm"
@@ -183,6 +196,53 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv"
     assert overlaid.iloc[0]["data_quality"] == "gap"
     assert bool(overlaid.iloc[0]["is_closed"]) is True
+
+
+def test_htf_v2_refuses_validated_price_only_exchange_history_for_permission():
+    exchange = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [100.5],
+            "volume": [10.0],
+        }
+    )
+    overlaid = _overlay_canonical_history(
+        exchange,
+        pd.DataFrame(),
+        allow_validated_exchange_ohlcv=True,
+    )
+    assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv_validated"
+    assert overlaid.iloc[0]["data_quality"] == "ok"
+    assert not _allows_validated_exchange_ohlcv(
+        LaneSpec(
+            lane_id="htf_v2",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id=HtfRegimeContinuation15mV2.strategy_id,
+        )
+    )
+    assert not _allows_validated_exchange_ohlcv(
+        LaneSpec(
+            lane_id="range",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id="range_expansion_realtime_v2",
+        )
+    )
+
+
+def test_context_warmup_uses_its_own_timeframe_clock():
+    until = int(pd.Timestamp("2026-09-01T12:34:00Z").timestamp() * 1000)
+    daily_since = _warmup_since_for_timeframe("1d", until, bars=800)
+    h4_since = _warmup_since_for_timeframe("4h", until, bars=800)
+
+    assert (until // 86_400_000) * 86_400_000 - daily_since == 800 * 86_400_000
+    assert (until // 14_400_000) * 14_400_000 - h4_since == 800 * 14_400_000
 
 
 def test_non_binance_measurement_does_not_wait_on_unowned_canonical_store(tmp_path):
@@ -460,12 +520,11 @@ def test_checked_in_observer_roster_is_valid() -> None:
     specs = build_shadow_observe_roster_specs(
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
-    assert len(specs) == 8
-    assert all(spec.strategy_id != "squeeze_expansion_breakout_v4" for spec in specs)
-    assert sum(spec.strategy_id == "session_continuation_realtime_v2" for spec in specs) == 2
+    assert len(specs) == 2
+    assert {spec.strategy_id for spec in specs} == {"htf_regime_continuation_15m_v2"}
+    assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}
     assert sum(spec.strategy_id == "htf_regime_continuation_15m_v2" for spec in specs) == 2
-    assert all(spec.strategy_id != "htf_structure_continuation_realtime_v1" for spec in specs)
-    assert sum(spec.strategy_id == "structure_bos_realtime_v2" for spec in specs) == 2
+    assert all(spec.entry_route.value == "taker" for spec in specs)
     assert all(not spec.is_primary for spec in specs)
     assert {spec.exchange for spec in specs} == {"delta_india"}
     assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}

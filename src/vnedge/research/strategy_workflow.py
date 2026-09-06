@@ -665,14 +665,14 @@ def _active_roster_states(path: Path) -> dict[str, RevisionState]:
 
     The append-only workflow ledger remains the authority for mutations and
     parity events.  The checked-in roster is nevertheless a reviewed, Git-
-    versioned declaration of what is *actually running*, so its v2 revision
+    versioned declaration of what is *actually running*, so its v2/v3 revision
     contracts must not be downgraded to synthetic catalog rows in the UI.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(payload, dict) or payload.get("version") != 2:
+    if not isinstance(payload, dict) or payload.get("version") not in {2, 3}:
         return {}
     rows = payload.get("observers")
     if not isinstance(rows, list):
@@ -683,32 +683,81 @@ def _active_roster_states(path: Path) -> dict[str, RevisionState]:
 
     created_at = str(payload.get("registered_at") or "")
     states: dict[str, RevisionState] = {}
-    seen: set[str] = set()
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for raw in rows:
         if not isinstance(raw, dict):
             continue
         if raw.get("enabled", True) is False:
             continue
         strategy_id = str(raw.get("strategy_id") or "").strip()
+        if not strategy_id:
+            continue
+        grouped.setdefault(strategy_id, []).append(raw)
+
+    for strategy_id, strategy_rows in grouped.items():
+        raw = strategy_rows[0]
         revision_raw = raw.get("revision")
         strategy_cls = STRATEGIES.get(strategy_id)
         contract = scanner_runtime_contract(strategy_id)
-        if (
-            not strategy_id
-            or strategy_id in seen
-            or strategy_cls is None
-            or contract is None
-            or not isinstance(revision_raw, dict)
+        if strategy_cls is None or contract is None or not isinstance(revision_raw, dict):
+            continue
+        # A strategy may have multiple symbol-specific execution routes while
+        # retaining one route-neutral setup revision.  Preserve that runtime
+        # policy in the frozen workflow row instead of silently keeping only
+        # the first roster entry.
+        revision_fingerprint = {
+            key: revision_raw.get(key)
+            for key in (
+                "version",
+                "mechanism",
+                "decision_engine",
+                "exit_engine",
+                "backtest_engine",
+                "engine_version",
+            )
+        }
+        if any(
+            not isinstance(item.get("revision"), dict)
+            or {
+                key: item["revision"].get(key)
+                for key in revision_fingerprint
+            }
+            != revision_fingerprint
+            or str(item.get("timeframe") or "").strip()
+            != str(raw.get("timeframe") or "").strip()
+            for item in strategy_rows[1:]
         ):
             continue
-        seen.add(strategy_id)
         params_obj = getattr(strategy_cls, "params", None)
         params = asdict(params_obj) if is_dataclass(params_obj) else {}
         runtime = asdict(contract)
-        frozen_params = {"strategy": params, "runtime": runtime}
+        execution_routes: dict[str, dict[str, Any]] = {}
+        for item in strategy_rows:
+            route = str(item.get("entry_route") or "auto")
+            ttl = int(item.get("maker_fill_ttl_bars") or 1)
+            for symbol in item.get("symbols", ()):
+                if str(symbol):
+                    execution_routes[str(symbol)] = {
+                        "entry_route": route,
+                        "maker_fill_ttl_bars": ttl,
+                    }
+        frozen_params = {
+            "strategy": params,
+            "runtime": runtime,
+            "execution_policy": execution_routes,
+        }
         version = str(revision_raw.get("version") or "").strip()
         mechanism = str(revision_raw.get("mechanism") or "").strip()
-        symbols = tuple(sorted({str(v) for v in raw.get("symbols", ()) if str(v)}))
+        symbols = tuple(
+            sorted(
+                {
+                    str(symbol)
+                    for item in strategy_rows
+                    for symbol in item.get("symbols", ())
+                    if str(symbol)
+                }
+            )
+        )
         timeframe = str(raw.get("timeframe") or "").strip()
         if not version or not mechanism or not symbols or not timeframe:
             continue

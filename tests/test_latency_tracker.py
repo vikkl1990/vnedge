@@ -3,16 +3,35 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from vnedge.runtime.latency_thresholds import decision_compute_limits
+from vnedge.runtime.latency_thresholds import (
+    QUOTE_AGE_AT_ACCEPT_HARD_MS,
+    QUOTE_AGE_AT_ACCEPT_SOFT_MS,
+    decision_compute_limits,
+)
 from vnedge.runtime.latency_tracker import (
+    ADAPTER_ACK_MS,
     BAR_CLOSE_PROCESSING_MS,
     BAR_CLOSE_RECEIPT_MS,
     CANONICAL_WAIT_MS,
     CLOCK_SKEW_MS,
     INGEST_LAG_MS,
+    KERNEL_SUBMIT_MS,
+    QUOTE_AGE_AT_ACCEPT_MS,
     LatencyTracker,
     timeframe_to_seconds,
 )
+
+
+def test_execution_and_quote_freshness_metrics_have_distinct_contracts():
+    tracker = LatencyTracker()
+    tracker.record(KERNEL_SUBMIT_MS, 12.0)
+    tracker.record(ADAPTER_ACK_MS, 8.0)
+    tracker.record(QUOTE_AGE_AT_ACCEPT_MS, 125.0)
+
+    assert tracker.stats(KERNEL_SUBMIT_MS)["last"] == 12.0
+    assert tracker.stats(ADAPTER_ACK_MS)["last"] == 8.0
+    assert tracker.stats(QUOTE_AGE_AT_ACCEPT_MS)["last"] == 125.0
+    assert QUOTE_AGE_AT_ACCEPT_SOFT_MS < QUOTE_AGE_AT_ACCEPT_HARD_MS
 
 
 def test_decision_compute_limits_are_strict_by_default_and_scale_explicitly():
@@ -169,10 +188,10 @@ def test_restore_rebaselines_pre_receipt_close_history() -> None:
         }
     )
 
-    assert restored == 1
+    assert restored == 0
     assert tracker.stats(BAR_CLOSE_PROCESSING_MS) is None
     assert tracker.stats("feed_lag_ms") is None
-    assert tracker.stats("decision_lag_ms")["last"] == 12.0
+    assert tracker.stats("decision_lag_ms") is None
 
 
 def test_restore_rebaselines_receipt_v2_warmup_seam_history() -> None:
@@ -190,11 +209,37 @@ def test_restore_rebaselines_receipt_v2_warmup_seam_history() -> None:
         }
     )
 
-    assert restored == 1
+    assert restored == 0
     assert tracker.stats("bar_close_receipt_ms") is None
     assert tracker.stats(BAR_CLOSE_PROCESSING_MS) is None
     assert tracker.stats("feed_lag_ms") is None
-    assert tracker.stats("decision_lag_ms")["last"] == 242.0
+    assert tracker.stats("decision_lag_ms") is None
+
+
+def test_restore_rebaselines_pre_bounded_quote_journal_gate_history() -> None:
+    tracker = LatencyTracker()
+    restored = tracker.restore_state(
+        {
+            "version": 1,
+            "bar_close_semantics": "receipt_live_v3",
+            "series": {
+                "bar_close_receipt_ms": [5_979.0],
+                "bar_close_processing_ms": [5_979.0],
+                "feed_lag_ms": [5_979.0],
+                "decision_lag_ms": [27_769.0],
+                "canonical_wait_ms": [812.0],
+                "quote_ingest_ms": [63.0],
+            },
+        }
+    )
+
+    assert restored == 2
+    assert tracker.stats("bar_close_receipt_ms") is None
+    assert tracker.stats(BAR_CLOSE_PROCESSING_MS) is None
+    assert tracker.stats("feed_lag_ms") is None
+    assert tracker.stats("decision_lag_ms") is None
+    assert tracker.stats("canonical_wait_ms")["last"] == 812.0
+    assert tracker.stats("quote_ingest_ms")["last"] == 63.0
 
 
 def test_event_latency_separates_ingest_from_future_clock_skew():

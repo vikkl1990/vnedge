@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from vnedge.data.candles import (
+    BarState,
     Candle,
     CandleAggregator,
     CandleBuilder,
@@ -61,6 +62,7 @@ def test_floor_time_is_utc_epoch_aligned() -> None:
 
 def test_candle_validates_shape_and_exposes_metrics() -> None:
     candle = candle_at(0)
+    assert candle.state is BarState.CLOSED_IMMUTABLE
     assert candle.range_bps == D("300")
     assert candle.body_bps == D("100")
     assert candle.duration == timedelta(hours=1)
@@ -77,6 +79,7 @@ def test_builder_rolls_closed_bar_and_tracks_trade_fields() -> None:
 
     forming = builder.forming()
     assert forming is not None and not forming.is_closed
+    assert forming.state is BarState.FORMING
     assert (forming.open, forming.high, forming.low, forming.close) == (
         D("100"),
         D("110"),
@@ -90,6 +93,7 @@ def test_builder_rolls_closed_bar_and_tracks_trade_fields() -> None:
 
     closed = builder.on_trade(START + timedelta(minutes=2), D("120"), D("1"))
     assert closed is not None and closed.is_closed
+    assert closed.state is BarState.CLOSED_IMMUTABLE
     assert closed.open_time == START
     # No synthetic 00:01 candle is created; the new forming bar starts at 00:02.
     assert builder.forming() is not None
