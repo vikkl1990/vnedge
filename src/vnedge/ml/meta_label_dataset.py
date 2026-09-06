@@ -209,3 +209,96 @@ def build_meta_label_dataset(
         ),
     }
     return frame, summary
+
+
+def build_meta_label_dataset_from_log(
+    trades: Iterable[TradeOutcome],
+    feature_log: pd.DataFrame,
+    *,
+    tolerance_seconds: float = 900.0,
+) -> tuple[pd.DataFrame, dict]:
+    """Join trades to the EXACT feature vectors the runtime logged.
+
+    This is the train/serve-skew-free path (correction-spec W5.1 -> W5.2): the
+    label comes from the trade outcome, but the features come from the live
+    feature log (``ml.feature_log``) — the same numbers the decision was made
+    on — rather than being re-derived from candles. Re-derivation can silently
+    diverge from what the runtime actually computed (a warmup edge, a params
+    drift, a different candle source); this path cannot.
+
+    Each trade matches the fired feature-log row for the same
+    ``(strategy, symbol)`` whose ``bar_ts`` is the latest at or before the
+    trade's entry within ``tolerance_seconds`` (a causal join — the arming bar
+    precedes the fill). Unmatched trades are dropped and COUNTED, never guessed;
+    read the summary before trusting a small dataset.
+
+    Returns ``(dataframe, summary)`` with the same columns as
+    :func:`build_meta_label_dataset` plus a ``feature_source`` marker.
+    """
+    if feature_log.empty:
+        empty = pd.DataFrame(columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
+        return empty, {"samples": 0, "win_rate": 0.0, "matched": 0,
+                       "dropped_no_log_row": 0, "dropped_nan_feature": 0,
+                       "by_strategy": {}, "feature_source": "log"}
+
+    present = [c for c in FEATURE_COLUMNS if c in feature_log.columns]
+    missing_cols = [c for c in FEATURE_COLUMNS if c not in feature_log.columns]
+    if missing_cols:
+        raise ValueError(
+            f"feature log is missing {len(missing_cols)} contract column(s): "
+            f"{missing_cols[:5]}{'...' if len(missing_cols) > 5 else ''}"
+        )
+
+    fired = feature_log[feature_log["decision"] == "fired"].copy()
+    fired["bar_ts_dt"] = pd.to_datetime(fired["bar_ts"], utc=True, errors="coerce")
+    fired = fired.dropna(subset=["bar_ts_dt"])
+    # index by (strategy_id, symbol) -> ascending bar frames for asof matching
+    grouped: dict[tuple[str, str], pd.DataFrame] = {}
+    for (strategy, symbol), part in fired.groupby(["strategy_id", "symbol"]):
+        grouped[(str(strategy), str(symbol))] = part.sort_values("bar_ts_dt")
+
+    tolerance = pd.Timedelta(seconds=float(tolerance_seconds))
+    rows: list[dict] = []
+    no_log_row = nan_feature = 0
+    for trade in trades:
+        part = grouped.get((trade.strategy, trade.symbol))
+        if part is None:
+            no_log_row += 1
+            continue
+        entry = pd.Timestamp(trade.entry_ts)
+        if entry.tzinfo is None:
+            entry = entry.tz_localize("UTC")
+        eligible = part[
+            (part["bar_ts_dt"] <= entry) & (part["bar_ts_dt"] >= entry - tolerance)
+        ]
+        if eligible.empty:
+            no_log_row += 1
+            continue
+        logged = eligible.iloc[-1]
+        feature_values = logged[present]
+        if feature_values.isna().any():
+            nan_feature += 1
+            continue
+        row = {col: float(feature_values[col]) for col in FEATURE_COLUMNS}
+        row["meta_label"] = 1.0 if trade.net_usd > 0 else 0.0
+        row["strategy"] = trade.strategy
+        row["symbol"] = trade.symbol
+        row["side"] = trade.side
+        row["entry_ts"] = trade.entry_ts
+        row["net_usd"] = trade.net_usd
+        row["lane"] = trade.lane
+        rows.append(row)
+
+    frame = pd.DataFrame(rows, columns=FEATURE_COLUMNS + ["meta_label"] + META_COLUMNS)
+    summary = {
+        "samples": int(len(frame)),
+        "win_rate": float(frame["meta_label"].mean()) if len(frame) else 0.0,
+        "matched": int(len(frame)),
+        "dropped_no_log_row": no_log_row,
+        "dropped_nan_feature": nan_feature,
+        "by_strategy": (
+            frame.groupby("strategy").size().to_dict() if len(frame) else {}
+        ),
+        "feature_source": "log",
+    }
+    return frame, summary
