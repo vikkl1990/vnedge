@@ -87,3 +87,42 @@ def test_feature_matrix_contract_includes_confluence_columns():
     assert len(tail) > 0
     assert not tail["rsi14"].isna().any()
     assert (tail["is_weekend"].isin([0.0, 1.0])).all()
+
+
+def _frame_with_taker(n: int = 400, seed: int = 8) -> pd.DataFrame:
+    df = _frame(n, seed)
+    rng = np.random.default_rng(seed + 1)
+    # taker_buy is a fraction of volume, varying so delta features are non-trivial
+    frac = np.clip(rng.normal(0.5, 0.15, n), 0.05, 0.95)
+    df["taker_buy_volume"] = df["volume"].to_numpy() * frac
+    return df
+
+
+def test_taker_flow_signed_delta_is_correct():
+    df = _frame_with_taker()
+    out = add_confluence_features(df, ConfluenceParams())
+    # delta_ratio = (2*taker_buy - volume)/volume at a mid bar
+    i = 300
+    vol = float(df["volume"].iloc[i]); tb = float(df["taker_buy_volume"].iloc[i])
+    expected = (2.0 * tb - vol) / vol
+    assert abs(float(out["delta_ratio"].iloc[i]) - expected) < 1e-9
+    # taker_buy_ratio centered on 0
+    assert abs(float(out["taker_buy_ratio"].iloc[i]) - (tb / vol - 0.5)) < 1e-9
+
+
+def test_taker_flow_absent_is_neutral():
+    out = add_confluence_features(_frame(), ConfluenceParams())  # no taker column
+    tail = out.iloc[ConfluenceParams().warmup_bars :]
+    for col in ("taker_buy_ratio", "delta_ratio", "delta_z", "cvd_slope", "delta_price_div"):
+        assert (tail[col] == 0.0).all(), f"{col} not neutral without taker_buy_volume"
+
+
+def test_taker_flow_is_causal_under_future_mutation():
+    base = _frame_with_taker()
+    mutated = base.copy()
+    mutated.loc[320:, ["close", "volume", "taker_buy_volume"]] *= 1.5
+    params = ConfluenceParams()
+    a = add_confluence_features(base, params)
+    b = add_confluence_features(mutated, params)
+    for col in ("taker_buy_ratio", "delta_ratio", "delta_z", "cvd_slope", "delta_price_div"):
+        assert float(a[col].iloc[300]) == float(b[col].iloc[300]), f"{col} leaked future"

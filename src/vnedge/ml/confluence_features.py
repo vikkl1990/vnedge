@@ -49,6 +49,9 @@ class ConfluenceParams:
     oi_change_window: int = 6
     rel_return_window: int = 24
     rel_z_window: int = 96
+    delta_z_window: int = 48
+    cvd_window: int = 24
+    delta_div_window: int = 6
 
     @property
     def warmup_bars(self) -> int:
@@ -57,6 +60,7 @@ class ConfluenceParams:
             self.divergence_lookback,
             self.obv_z_window,
             self.rel_z_window,
+            self.delta_z_window,
         ) + 2
 
 
@@ -68,6 +72,9 @@ CONFLUENCE_FEATURE_COLUMNS = [
     "oi_z", "oi_change", "oi_price_div",
     "rel_ret", "rel_strength_z",
     "is_weekend",
+    # aggressor-side flow from canonical taker_buy_volume (neutral when the
+    # candle source carries no taker breakdown, e.g. the REST research lake)
+    "taker_buy_ratio", "delta_ratio", "delta_z", "cvd_slope", "delta_price_div",
 ]
 
 
@@ -170,6 +177,39 @@ def add_confluence_features(
     else:
         out["rel_ret"] = 0.0
         out["rel_strength_z"] = 0.0
+
+    # Aggressor-side flow: canonical candles carry ``taker_buy_volume`` (the
+    # base volume that lifted the ask). Signed bar delta = taker buy minus
+    # taker sell = 2*taker_buy - volume. This is the "is the move real?"
+    # question answered from data already recorded — until now consumed by
+    # nothing. Absent column (REST research lake) -> neutral, never NaN.
+    if "taker_buy_volume" in out.columns:
+        vol = pd.to_numeric(out["volume"], errors="coerce")
+        taker_buy = pd.to_numeric(out["taker_buy_volume"], errors="coerce")
+        safe_vol = vol.where(vol > 0)
+        # centered so 0 = balanced tape, + = net buy aggression
+        out["taker_buy_ratio"] = ((taker_buy / safe_vol) - 0.5).fillna(0.0)
+        signed = 2.0 * taker_buy - vol            # + net aggressive buying
+        out["delta_ratio"] = (signed / safe_vol).fillna(0.0)
+        out["delta_z"] = _zscore(signed.fillna(0.0), params.delta_z_window).fillna(0.0)
+        # cumulative volume delta slope: recent net flow over recent volume
+        cvd_flow = signed.rolling(params.cvd_window).sum()
+        cvd_vol = vol.rolling(params.cvd_window).sum()
+        out["cvd_slope"] = (cvd_flow / cvd_vol.where(cvd_vol > 0)).fillna(0.0)
+        # divergence: price up on net selling (-1) or price down on net buying
+        # (+1) = a move the tape does not back; else 0
+        price_up = close.pct_change(params.delta_div_window) > 0
+        flow_pos = signed.rolling(params.delta_div_window).sum() > 0
+        out["delta_price_div"] = (
+            ((price_up & ~flow_pos).astype(float) * -1.0)
+            + ((~price_up & flow_pos).astype(float) * 1.0)
+        ).fillna(0.0)
+    else:
+        out["taker_buy_ratio"] = 0.0
+        out["delta_ratio"] = 0.0
+        out["delta_z"] = 0.0
+        out["cvd_slope"] = 0.0
+        out["delta_price_div"] = 0.0
 
     day = pd.to_datetime(out["timestamp"], utc=True).dt.dayofweek
     out["is_weekend"] = (day >= 5).astype(float)
