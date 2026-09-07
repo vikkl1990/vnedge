@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
 import numpy as np
 import pandas as pd
 
+from vnedge.data.candles import Candle
 from vnedge.strategy.htf_regime_continuation_15m import (
     HtfRegimeContinuation15mV1,
 )
@@ -340,6 +344,55 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
     diagnostics = strategy.evaluation_diagnostics(prepared, 0)
     assert diagnostics["primary_failed_gate"] == "htf_context_missing"
     assert diagnostics["eligible"] is False
+
+
+def test_live_context_advance_retains_evidence_identity() -> None:
+    strategy = HtfRegimeContinuation15mV2()
+    h4 = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2026-09-06T20:00:00Z"),
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.0,
+                "close": 101.0,
+                "volume": 10.0,
+                "is_closed": True,
+                "data_quality": "ok",
+                "timeframe": "4h",
+                "symbol": "BTCUSD",
+                "candle_source": "exchange_ohlcv_validated",
+            }
+        ]
+    )
+    daily = h4.assign(
+        timestamp=pd.Timestamp("2026-09-06T00:00:00Z"),
+        timeframe="1d",
+    )
+    strategy.bind_canonical_context("4h", h4)
+    strategy.bind_canonical_context("1d", daily)
+    opened = datetime(2026, 9, 7, tzinfo=UTC)
+    strategy.ingest_canonical_context(
+        Candle(
+            symbol="BTCUSD",
+            timeframe="4h",
+            open_time=opened,
+            close_time=opened + timedelta(hours=4),
+            open=Decimal(101),
+            high=Decimal(103),
+            low=Decimal(100),
+            close=Decimal(102),
+            volume=Decimal(12),
+            quote_volume=Decimal(1224),
+            trade_count=20,
+        )
+    )
+
+    latest = strategy._regime_frames["4h"].iloc[-1]
+    assert latest["timeframe"] == "4h"
+    assert latest["symbol"] == "BTCUSD"
+    decision = pd.Series({"timestamp": pd.Timestamp("2026-09-07T04:00:00Z")})
+    assert strategy._missing_permission_context(decision) == ()
 
 
 def test_live_latest_prepare_matches_full_reference_on_decision_row() -> None:

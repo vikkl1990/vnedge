@@ -72,6 +72,8 @@ def _append_candle(frame: pd.DataFrame, candle: Candle) -> pd.DataFrame:
                 "vwap": float(candle.vwap) if candle.vwap is not None else math.nan,
                 "is_closed": True,
                 "data_quality": "ok",
+                "timeframe": candle.timeframe,
+                "symbol": candle.symbol,
                 "candle_source": "canonical_tick_lake",
             }
         ]
