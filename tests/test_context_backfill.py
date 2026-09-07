@@ -15,7 +15,6 @@ from vnedge.data.parquet_store import ParquetStore
 from vnedge.data.schemas import normalize_candles
 from vnedge.research.universe import ResearchTarget, discover_exchange_targets
 
-
 BASE = 1_735_689_600_000  # 2025-01-01T00:00:00Z
 DAY = 86_400_000
 FIFTEEN_MINUTES = 900_000
@@ -81,6 +80,21 @@ def test_chunk_ranges_and_target_expansion_are_deterministic():
     assert len(chunks) == 5
     assert chunks[0].dataset_id == "binanceusdm|BTC/USDT:USDT|4h"
     assert chunks[-1].dataset_id == "binanceusdm|BTC/USDT:USDT|15m"
+
+
+def test_chunk_builder_clamps_each_timeframe_to_last_closed_boundary():
+    chunks = build_chunks(
+        (ResearchTarget("delta_india", "BTC/USD:USD"),),
+        timeframes=("15m", "1d"),
+        timeframe_days={"15m": 1, "1d": 2},
+        chunk_days={"15m": 1, "1d": 2},
+        until_ms=BASE + DAY + 13 * 60_000,
+    )
+
+    fifteen = next(chunk for chunk in chunks if chunk.timeframe == "15m")
+    daily = next(chunk for chunk in chunks if chunk.timeframe == "1d")
+    assert fifteen.until_ms == BASE + DAY
+    assert daily.until_ms == BASE + DAY
 
 
 def test_manifest_path_defaults_under_data_root(tmp_path):

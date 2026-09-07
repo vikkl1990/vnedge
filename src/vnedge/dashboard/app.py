@@ -1642,19 +1642,21 @@ def create_app(
             offset = max(0, int(offset))
         except ValueError:
             raise HTTPException(status_code=400, detail="offset must be an integer")
-        return JSONResponse(
-            build_trade_journal(
-                snapshot=provider.latest(),
-                journal_dir=lane_dir,
-                history_path=history_path,
-                scanner_evidence_path=Path(
-                    "research/live_research/scanner_evidence_latest.json"
-                ),
-                lane=lane,
-                since=since,
-                limit=limit,
-                offset=offset,
+        payload = await asyncio.to_thread(
+            build_trade_journal,
+            snapshot=provider.latest(),
+            journal_dir=lane_dir,
+            history_path=history_path,
+            scanner_evidence_path=Path(
+                "research/live_research/scanner_evidence_latest.json"
             ),
+            lane=lane,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
+        return JSONResponse(
+            payload,
             headers=_identity(user),
         )
 
@@ -1675,16 +1677,15 @@ def create_app(
             limit = max(1, min(int(limit), 20000))
         except ValueError:
             raise HTTPException(status_code=400, detail="limit must be an integer")
-        return JSONResponse(
-            build_session_regime(
-                snapshot=provider.latest(),
-                journal_dir=lane_dir,
-                lane=lane,
-                since=since,
-                limit=limit,
-            ),
-            headers=_identity(user),
+        payload = await asyncio.to_thread(
+            build_session_regime,
+            snapshot=provider.latest(),
+            journal_dir=lane_dir,
+            lane=lane,
+            since=since,
+            limit=limit,
         )
+        return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/incidents")
     async def incidents(request: Request) -> JSONResponse:
@@ -1703,11 +1704,16 @@ def create_app(
             alert_files.extend(
                 p for p in sorted(lane_dir.glob("*.alerts.jsonl")) if p != alerts_path
             )
-        merged = (
-            _alert_incidents(alert_files)
-            + _journal_incidents(lane_dir)
-            + _snapshot_health_incidents(provider.latest())
-        )
+        snapshot = provider.latest()
+
+        def load_incidents() -> list[dict]:
+            return (
+                _alert_incidents(alert_files)
+                + _journal_incidents(lane_dir)
+                + _snapshot_health_incidents(snapshot)
+            )
+
+        merged = await asyncio.to_thread(load_incidents)
         merged.sort(key=lambda record: record["ts"], reverse=True)
         return JSONResponse(merged[:limit], headers=_identity(user))
 
@@ -2878,10 +2884,23 @@ def create_app(
         the approved paper-probe promotion queue. Read-only research surface —
         cannot trade or promote."""
         _authorized(request)
-        forensics = _read_json_payload(fee_wall_forensics_file, {"reports": []})
-        probes = _read_json_payload(fee_wall_probes_file, {"paper_probes": []})
-        probe_actuals = _read_json_payload(
-            fee_wall_probe_actuals_file, {"rows": [], "summary": {}}
+
+        def read_scorecard_artifacts() -> tuple[dict, dict, dict, dict]:
+            return (
+                _read_json_payload(fee_wall_forensics_file, {"reports": []}),
+                _read_json_payload(fee_wall_probes_file, {"paper_probes": []}),
+                _read_json_payload(
+                    fee_wall_probe_actuals_file, {"rows": [], "summary": {}}
+                ),
+                _artifact_payload(
+                    fee_wall_forensics_file,
+                    {"reports": []},
+                    historical=True,
+                )["artifact"],
+            )
+
+        forensics, probes, probe_actuals, forensics_artifact = await asyncio.to_thread(
+            read_scorecard_artifacts
         )
         by: dict = {}
         for r in forensics.get("reports", []):
@@ -2972,11 +2991,7 @@ def create_app(
                 "runtime_alignment": runtime_alignment,
                 "can_trade": False,
                 "can_promote": False,
-                "artifact": _artifact_payload(
-                    fee_wall_forensics_file,
-                    {"reports": []},
-                    historical=True,
-                )["artifact"],
+                "artifact": forensics_artifact,
             }
         )
 

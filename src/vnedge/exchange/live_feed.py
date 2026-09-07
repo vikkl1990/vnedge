@@ -253,6 +253,7 @@ class LiveMarketFeed:
             maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
         )
         self.quote: tuple[float, float] | None = None  # (bid, ask)
+        self.last_quote_update: QuoteUpdate | None = None
         self.funding_rate: float = 0.0
         # SETTLED funding prints [(ts_ms, rate), ...] refreshed with the rate.
         # Strategies validated on settled-print series (funding-MR) must read
@@ -381,7 +382,7 @@ class LiveMarketFeed:
                     ask = float(ob["asks"][0][0])
                     if 0 < bid <= ask:
                         self.quote = (bid, ask)
-                        _publish_latest_quote(
+                        self.last_quote_update = _publish_latest_quote(
                             self.quote_updates,
                             bid=bid,
                             ask=ask,
@@ -493,6 +494,7 @@ class RestPollingMarketFeed:
             maxsize=QUOTE_ACCEPTANCE_BUFFER_SIZE
         )
         self.quote: tuple[float, float] | None = None
+        self.last_quote_update: QuoteUpdate | None = None
         self.funding_rate: float = 0.0
         self.funding_events: list[tuple[int, float]] = []  # settled prints (ts_ms, rate)
         self.book_metrics: dict | None = None  # L2 metrics (native-ws subclasses)
@@ -640,7 +642,7 @@ class RestPollingMarketFeed:
                     ask = float(book["asks"][0][0])
                     if 0 < bid <= ask:
                         self.quote = (bid, ask)
-                        _publish_latest_quote(
+                        self.last_quote_update = _publish_latest_quote(
                             self.quote_updates,
                             bid=bid,
                             ask=ask,
@@ -847,7 +849,7 @@ class DeltaWsFeed(RestPollingMarketFeed):
             # authoritative and will publish on its own event clock.
             return
         self.quote = (live_snapshot.bid, live_snapshot.ask)
-        _publish_latest_quote(
+        self.last_quote_update = _publish_latest_quote(
             self.quote_updates,
             bid=live_snapshot.bid,
             ask=live_snapshot.ask,

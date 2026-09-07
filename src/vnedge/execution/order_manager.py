@@ -450,6 +450,19 @@ class OrderManager:
                 order.client_order_id,
             )
             return order
+        except Exception as exc:  # noqa: BLE001 - venue receipt is unknowable
+            # Once adapter submission begins, an arbitrary transport/client
+            # failure is semantically a timeout: the order may have landed.
+            # Never leave it in SUBMITTING (which is not an unresolved state).
+            order.transition(OrderState.TIMEOUT_UNKNOWN, str(exc))
+            self._journal.append("order_submit_fault_unknown", {
+                **self._lifecycle_envelope(order.client_order_id), "detail": str(exc),
+            })
+            logger.critical(
+                "ORDER %s SUBMIT FAULT UNKNOWN — reconciliation required",
+                order.client_order_id,
+            )
+            return order
 
         if order.exchange_order_id is None:
             order.exchange_order_id = exchange_id

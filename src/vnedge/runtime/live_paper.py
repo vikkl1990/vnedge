@@ -377,6 +377,8 @@ class LivePaperSession:
         self.fill_ledger = fill_ledger
         self._ledger_halt = False
         self._ledger_error: str | None = None
+        self._account_store_halt = False
+        self._account_store_error: str | None = None
         self.funnel_store = funnel_store
         self.latency_store = latency_store
         self.gap_store = gap_store
@@ -1772,6 +1774,7 @@ class LivePaperSession:
             if not self.execution_context.stage.can_submit_orders
             else None,
             "fill_ledger_write_failed" if self._ledger_halt else None,
+            "account_store_write_failed" if self._account_store_halt else None,
             "decision_journal_unavailable" if not self.journal.available else None,
             "decision_journal_recovery_degraded"
             if self.journal.recovery_degraded
@@ -2348,7 +2351,16 @@ class LivePaperSession:
                 {**scanner_context, "reason": self.last_reject_reason},
             )
             return
-        bid, ask = self.feed.quote
+        executable_quote = self._executable_quote(now)
+        if executable_quote is None:
+            self.last_reject_reason = "quote: executable quote missing or stale"
+            self.journal.append(
+                "entry_quote_rejected",
+                {**scanner_context, "reason": self.last_reject_reason},
+            )
+            self._log_trade_event("entry_quote_rejected", self.last_reject_reason, now)
+            return
+        bid, ask = executable_quote
         maker = self.entry_route is EntryRoute.MAKER_RETEST
         if maker and sig.entry_limit_price is None:
             if self.configured_entry_route is EntryRoute.AUTO:
@@ -2400,24 +2412,19 @@ class LivePaperSession:
             else (ref_price - target) / ref_price * 10_000.0
         )
         if sig.expected_gross_edge_bps is None:
-            if self.runtime_contract is not None:
-                self.last_reject_reason = "cost_gate: edge_estimate_missing"
-                self.journal.append(
-                    "cost_rejected",
-                    {
-                        **scanner_context,
-                        "reason": self.last_reject_reason,
-                        "gross_payoff_room_bps": gross_payoff_room_bps,
-                    },
-                )
-                self._log_trade_event("cost_rejected", self.last_reject_reason, now)
-                return
-            # Compatibility only for unregistered test/legacy strategies.
-            signal_edge_bps = gross_payoff_room_bps
-            edge_model_id = "legacy_target_proxy_non_scanner"
-        else:
-            signal_edge_bps = float(sig.expected_gross_edge_bps)
-            edge_model_id = str(sig.edge_model_id)
+            self.last_reject_reason = "cost_gate: edge_estimate_missing"
+            self.journal.append(
+                "cost_rejected",
+                {
+                    **scanner_context,
+                    "reason": self.last_reject_reason,
+                    "gross_payoff_room_bps": gross_payoff_room_bps,
+                },
+            )
+            self._log_trade_event("cost_rejected", self.last_reject_reason, now)
+            return
+        signal_edge_bps = float(sig.expected_gross_edge_bps)
+        edge_model_id = str(sig.edge_model_id)
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
             side=sig.side,
@@ -2643,6 +2650,8 @@ class LivePaperSession:
         local_failure = (
             "execution:fill_ledger_write_failed"
             if self._ledger_halt
+            else "execution:account_store_write_failed"
+            if self._account_store_halt
             else f"candle_path:{cp_block}"
             if cp_block is not None
             else factory_block
@@ -3321,7 +3330,67 @@ class LivePaperSession:
         # the already-closed position/plan
         self._ledger_new_fills(now)
         if self.account_store is not None:
-            self.account_store.save_from(self.exchange, self.tracker, plan=self._serialize_plan())
+            self._persist_account_store(now, reason="tick_stop")
+
+    async def handle_lane_fault(self, exc: BaseException, now: datetime) -> None:
+        """Best-effort reduce-only protection before a failed lane is torn down.
+
+        The supervisor still re-raises the original lane failure.  This hook
+        exists only to avoid leaving a known open simulated/live plan without
+        an exit engine while the rest of the fleet appears healthy.
+        """
+        positions = {p.symbol: p for p in self.exchange.get_positions()}
+        if self._plan is None and self.config.symbol not in positions:
+            return
+        self.journal.append(
+            "lane_fault_open_position",
+            {
+                "strategy_id": self.strategy.strategy_id,
+                "symbol": self.config.symbol,
+                "error": str(exc),
+                "entries_allowed": False,
+                "reduce_only_exit_attempted": True,
+            },
+        )
+        if self._plan is not None:
+            key_ts = int(self._plan.entry_bar_ts.value)
+        elif not self.candles.empty:
+            key_ts = int(pd.Timestamp(self.candles["timestamp"].iloc[-1]).value)
+        else:
+            raise RuntimeError("lane fault with open position but no decision bar identity")
+        order = await self._submit_exit("lane_fault", key_ts, now)
+        if order is not None:
+            self._ledger_new_fills(now)
+            self._persist_account_store(now, reason="lane_fault")
+
+    def _executable_quote(self, now: datetime) -> tuple[float, float] | None:
+        """Return a fresh executable BBO for both bar and quote entry paths."""
+        quote = self.feed.quote
+        if quote is None:
+            return None
+        bid, ask = quote
+        if not (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask):
+            return None
+        update = getattr(self.feed, "last_quote_update", None)
+        quote_ts = getattr(update, "ts", None)
+        if quote_ts is None:
+            quote_ts = self.feed.market_state().last_update
+        if not isinstance(quote_ts, datetime) or quote_ts.tzinfo is None:
+            return None
+        age_ms = (now - quote_ts.astimezone(UTC)).total_seconds() * 1000.0
+        self.latency.record_labeled(
+            QUOTE_AGE_AT_ACCEPT_MS,
+            max(0.0, age_ms),
+            source=str(getattr(update, "source", "market_state_fallback")),
+            exchange_timestamped=(
+                "yes" if bool(getattr(update, "exchange_timestamped", False)) else "no"
+            ),
+        )
+        if age_ms < -LT.QUOTE_AGE_AT_ACCEPT_HARD_MS:
+            return None
+        if age_ms > LT.QUOTE_AGE_AT_ACCEPT_HARD_MS:
+            return None
+        return float(bid), float(ask)
 
     async def _idle_housekeeping(self, now: datetime) -> None:
         """Run safety/freshness work on every loop without a closed candle.
@@ -4072,18 +4141,14 @@ class LivePaperSession:
         if self.fill_ledger is None:
             return
         fills = self.exchange.get_fills()
-        for fill in fills[self._ledgered_fills :]:
+        for index, fill in enumerate(
+            fills[self._ledgered_fills :], start=self._ledgered_fills
+        ):
             managed_order = self.om.orders.get(fill.client_order_id)
             fee_leg = (
                 "close"
                 if managed_order is not None and managed_order.intent.reduce_only
                 else "open"
-            )
-            self._log_trade_event(
-                "fill",
-                f"{'buy' if fill.buy else 'sell'} {fill.quantity:g} @ {fill.price:g} "
-                f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
-                now,
             )
             try:
                 self.fill_ledger.append(
@@ -4139,7 +4204,38 @@ class LivePaperSession:
                         journal_exc,
                     )
                 return
-        self._ledgered_fills = len(fills)
+            # Commit the cursor after each durable append. If a later append
+            # fails, already-chained fills are never replayed on the next pass.
+            self._ledgered_fills = index + 1
+            self._log_trade_event(
+                "fill",
+                f"{'buy' if fill.buy else 'sell'} {fill.quantity:g} @ {fill.price:g} "
+                f"fee ${fill.fee_usd:.2f} pnl ${fill.realized_pnl_usd:+.2f}"[:140],
+                now,
+            )
+
+    def _persist_account_store(self, now: datetime, *, reason: str) -> None:
+        if self.account_store is None or self._account_store_halt:
+            return
+        try:
+            self.account_store.save_from(
+                self.exchange, self.tracker, plan=self._serialize_plan()
+            )
+        except OSError as exc:
+            self._account_store_halt = True
+            self._account_store_error = str(exc)
+            logger.error("paper account store write failed: %s", exc)
+            self.journal.append(
+                "execution_readiness_blocked",
+                {
+                    "ts": now.isoformat(),
+                    "reason": "account_store_write_failed",
+                    "detail": self._account_store_error,
+                    "operation": reason,
+                    "entries_allowed": False,
+                    "reduce_only_exits_allowed": True,
+                },
+            )
 
     def _publish_snapshot(self) -> None:
         if self.provider is None and self.alert_engine is None:
@@ -4757,9 +4853,13 @@ class LivePaperSession:
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
                 allowed, block_reason = self.protections.entries_allowed(idx)
                 cp_block = self._candle_path_arm_block(now)
-                if self._ledger_halt:
+                if self._ledger_halt or self._account_store_halt:
                     sig = None
-                    reason = "execution:fill_ledger_write_failed"
+                    reason = (
+                        "execution:fill_ledger_write_failed"
+                        if self._ledger_halt
+                        else "execution:account_store_write_failed"
+                    )
                     self._decision_skips[reason] = self._decision_skips.get(reason, 0) + 1
                     self._record_eval(df, idx, sig, skip_reason=reason)
                     self._log_trade_event("execution_blocked", reason, now)
@@ -4887,10 +4987,7 @@ class LivePaperSession:
             self._ledger_new_fills(now)
             self._record_runner_heartbeat("bar_processed", now, force=True)
 
-            if self.account_store is not None:
-                self.account_store.save_from(
-                    self.exchange, self.tracker, plan=self._serialize_plan()
-                )
+            self._persist_account_store(now, reason="bar_processed")
             if self.funnel_store is not None:
                 self.funnel_store.save_from(self)
             if self.latency_store is not None:

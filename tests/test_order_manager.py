@@ -55,6 +55,11 @@ class RejectAdapter:
         raise AdapterRejection("insufficient margin at venue")
 
 
+class FaultAdapter:
+    async def submit_order(self, order):
+        raise RuntimeError("socket reset after write")
+
+
 @pytest.fixture
 def journal(tmp_path):
     return DecisionJournal(tmp_path / "journal.jsonl")
@@ -191,6 +196,17 @@ async def test_risk_rejection_never_reaches_adapter(journal, gateway):
     assert order.state is S.RISK_REJECTED
     assert order.client_order_id is None
     assert adapter.submissions == []
+
+
+async def test_unclassified_submit_fault_becomes_timeout_unknown(journal, gateway):
+    om = OrderManager(gateway, journal, FaultAdapter())
+
+    order = await om.submit(intent(), account(), market(), key(0))
+
+    assert order.state is S.TIMEOUT_UNKNOWN
+    assert om.has_unresolved_orders
+    rows = journal.read_all()
+    assert any(row["kind"] == "order_submit_fault_unknown" for row in rows)
 
 
 async def test_kernel_evidence_mints_venue_id_only_after_risk_pass(journal, gateway):

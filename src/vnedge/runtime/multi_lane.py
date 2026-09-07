@@ -2018,6 +2018,15 @@ class MultiLaneShadowRunner:
                 runtime.spec.symbol,
                 f"session failed: {exc}",
             )
+            try:
+                await runtime.session.handle_lane_fault(exc, datetime.now(UTC))
+            except Exception as flatten_exc:  # noqa: BLE001 - original fault still wins
+                logger.critical(
+                    "lane %s fault protection failed: %s",
+                    runtime.spec.lane_id,
+                    flatten_exc,
+                )
+            raise
         finally:
             runtime.session.close_observability()
             quote_evidence = runtime.session.quote_evidence

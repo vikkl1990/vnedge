@@ -2,6 +2,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pandas as pd
+
 from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.data.scanner_prereq import (
     DEFAULT_REQUIREMENTS,
@@ -146,6 +148,39 @@ def test_scanner_prerequisites_fail_closed_on_non_exact_volume(tmp_path):
     assert report.ready is False
     assert report.rows[0].reason == "non_exact_volume"
     assert report.rows[0].invalid_exact_volume_bars == 1
+
+
+def test_scanner_prerequisites_refuse_unstamped_legacy_identity(tmp_path):
+    now = datetime(2026, 8, 22, 12, 3, tzinfo=UTC)
+    candles = _candles(
+        "BTCUSDT", "5m", 3, datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+    )
+    store = CandleParquetStore(tmp_path, exchange="binanceusdm")
+    store.upsert(candles)
+    path = store.partition_path(candles[0])
+    legacy = pd.read_parquet(path).drop(
+        columns=[
+            "source",
+            "content_sha256",
+            "data_quality",
+            "coverage_ok",
+            "parent_open",
+            "is_closed",
+        ]
+    )
+    legacy.to_parquet(path, index=False)
+
+    report = scanner_prerequisites(
+        tmp_path,
+        exchange="binanceusdm",
+        symbols=["BTC/USDT:USDT"],
+        requirements={"5m": 3},
+        now=now,
+    )
+
+    assert report.ready is False
+    assert report.rows[0].reason == "identity_not_persisted"
+    assert report.rows[0].invalid_identity_bars == 3
 
 
 def test_scanner_prerequisites_report_exact_gap_diagnostics(tmp_path):

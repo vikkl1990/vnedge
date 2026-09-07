@@ -44,6 +44,9 @@ class MetaLabelGates:
     n_groups: int = 6
     n_test_groups: int = 2
     embargo_pct: float = 0.02
+    # Purge at least the immediately preceding decision observation. Callers
+    # with a longer registered label horizon must override this frozen gate.
+    label_horizon: int = 1
     prob_threshold: float = 0.50
     # Deliberately WIDE so the configs select genuinely different trade sets —
     # near-identical thresholds make PBO measure noise, not overfit.
@@ -117,7 +120,15 @@ def evaluate_meta_labeler(
     ``frame`` is the output of build_meta_label_dataset: FEATURE_COLUMNS +
     ``meta_label`` (1 win / 0 loss) + ``net_usd`` per closed trade.
     """
-    samples = int(len(frame))
+    if "entry_ts" not in frame.columns:
+        raise ValueError("meta-label frame requires entry_ts chronology")
+    if gates.label_horizon < 1:
+        raise ValueError("meta-label CPCV label_horizon must be positive")
+    # CPCV cuts row-index blocks. Establish one global chronology before any
+    # split, fit, baseline, or PBO calculation; lane-file concatenation order
+    # is not market time.
+    frame = frame.sort_values("entry_ts", kind="stable").reset_index(drop=True)
+    samples = len(frame)
     win_rate = float(frame["meta_label"].mean()) if samples else 0.0
 
     if samples < gates.min_labels:
@@ -156,6 +167,7 @@ def evaluate_meta_labeler(
     splits = combinatorial_purged_splits(
         samples, n_groups=gates.n_groups, n_test_groups=gates.n_test_groups,
         embargo_pct=gates.embargo_pct,
+        label_horizon=gates.label_horizon,
     )
     oos_pred_sum = np.zeros(samples)
     oos_pred_cnt = np.zeros(samples)

@@ -108,6 +108,27 @@ def bind_signal_decision(
     require_snapshot = require_existing_snapshot or bool(required_context)
     decision_ref = assert_decision_row(decision_row, timeframe=timeframe) if strict else None
 
+    if contract is not None:
+        if contract.oos_gross_edge_bps is None or contract.edge_model_id is None:
+            if signal.expected_gross_edge_bps is not None:
+                raise ValueError(
+                    "registered scanner signal carries an unversioned edge estimate"
+                )
+        else:
+            if (
+                signal.expected_gross_edge_bps is not None
+                and (
+                    signal.expected_gross_edge_bps != contract.oos_gross_edge_bps
+                    or signal.edge_model_id != contract.edge_model_id
+                )
+            ):
+                raise ValueError("signal edge estimate disagrees with scanner contract")
+            signal = replace(
+                signal,
+                expected_gross_edge_bps=contract.oos_gross_edge_bps,
+                edge_model_id=contract.edge_model_id,
+            )
+
     if signal.decision_envelope is not None:
         return signal
     snapshot = signal.permission_snapshot

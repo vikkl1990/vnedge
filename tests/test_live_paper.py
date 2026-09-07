@@ -110,7 +110,13 @@ class AlwaysLong(BaseStrategy):
 
     def signal(self, df, index):
         close = float(df["close"].iloc[index])
-        return SignalIntent("long", stop_price=close * 0.95, take_profit_price=close * 1.10)
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.10,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
+        )
 
 
 class LadderLong(AlwaysLong):
@@ -124,6 +130,8 @@ class LadderLong(AlwaysLong):
             take_profit_price=close * 1.10,
             take_profit_levels=(close * 1.03, close * 1.06, close * 1.10),
             reason="ladder plan",
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
         )
 
 
@@ -137,6 +145,20 @@ class ThinEdgeLong(AlwaysLong):
             stop_price=close * 0.99,
             take_profit_price=close * 1.0005,
             reason="gross edge below round-trip wall",
+            expected_gross_edge_bps=5.0,
+            edge_model_id="fixture_oos_edge_v1",
+        )
+
+
+class MissingEdgeLong(AlwaysLong):
+    strategy_id = "missing_edge_long"
+
+    def signal(self, df, index):
+        close = float(df["close"].iloc[index])
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.10,
         )
 
 
@@ -876,6 +898,21 @@ async def test_closed_candle_triggers_full_pipeline(tmp_path):
     assert fill.price == pytest.approx(100.01 * (1 + 2 / 10_000))  # ask + slippage
 
 
+async def test_lane_fault_flattens_known_position_reduce_only(tmp_path):
+    session, exchange = build_session(tmp_path, FakeFeed(live_rows(n=1)))
+    await session.run(max_bars=1)
+    assert exchange.get_positions()
+
+    await session.handle_lane_fault(RuntimeError("worker failed"), datetime.now(UTC))
+
+    assert exchange.get_positions() == []
+    assert session.orders_submitted == 2
+    assert any(
+        row["kind"] == "lane_fault_open_position"
+        for row in session.journal.read_all()
+    )
+
+
 async def test_every_entry_path_rejects_edge_below_cost_wall(tmp_path):
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed, strategy=ThinEdgeLong())
@@ -894,6 +931,23 @@ async def test_every_entry_path_rejects_edge_below_cost_wall(tmp_path):
         == pd.to_datetime(BASE + 5 * MIN, unit="ms", utc=True).isoformat()
     )
     assert session.last_reject_reason.startswith("cost_gate:")
+
+
+async def test_missing_edge_never_uses_target_distance_as_expectancy(tmp_path):
+    feed = FakeFeed(live_rows(n=1))
+    session, exchange = build_session(tmp_path, feed, strategy=MissingEdgeLong())
+
+    report = await session.run(max_bars=1)
+
+    assert report.signals_generated == 1
+    assert report.orders_submitted == 0
+    assert exchange.get_positions() == []
+    rejection = next(
+        row for row in session.journal.read_all()
+        if row["kind"] == "cost_rejected"
+    )
+    assert rejection["payload"]["reason"] == "cost_gate: edge_estimate_missing"
+    assert rejection["payload"]["gross_payoff_room_bps"] > 0
 
 
 async def test_latency_is_measured_end_to_end(tmp_path):
@@ -1109,7 +1163,13 @@ async def test_stale_feed_blocks_entries(tmp_path):
     session, exchange = build_session(tmp_path, feed)
     report = await session.run(max_bars=1)
     assert report.signals_generated == 1
-    assert report.risk_rejects == 1  # data_freshness failed at the gateway
+    # Executable-side freshness is rejected before sizing/risk.  The gateway
+    # remains a second line of defence, not the first consumer of a stale BBO.
+    assert report.risk_rejects == 0
+    assert any(
+        row["kind"] == "entry_quote_rejected"
+        for row in session.journal.read_all()
+    )
     assert exchange.get_positions() == []
 
 
@@ -1478,6 +1538,8 @@ class LadderLongOnce(LongOnce):
             take_profit_price=close * 1.06,
             take_profit_levels=(close * 1.02, close * 1.04, close * 1.06),
             reason="test ladder",
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
         )
 
 
@@ -1696,6 +1758,60 @@ async def test_fills_are_chained_into_the_ledger(tmp_path):
     rec = __import__("json").loads((tmp_path / "fills.jsonl").read_text())
     assert rec["symbol"] == SYM and rec["mode"] == "paper"
     assert rec["strategy_id"] == "always_long"
+
+
+def test_fill_ledger_cursor_commits_each_successful_append(tmp_path):
+    from vnedge.paper.simulated_exchange import PaperOrderRequest
+
+    session, exchange = build_session(tmp_path, FakeFeed([]))
+    exchange.set_quote(SYM, 100.0, 100.1)
+    exchange.submit_order(PaperOrderRequest("open", SYM, True, 0.5))
+    exchange.submit_order(
+        PaperOrderRequest("close", SYM, False, 0.5, reduce_only=True)
+    )
+
+    class FailSecondAppendOnce:
+        def __init__(self):
+            self.calls = 0
+            self.rows = []
+
+        def append(self, row):
+            self.calls += 1
+            if self.calls == 2:
+                raise OSError("disk full")
+            self.rows.append(dict(row))
+            return "hash"
+
+    ledger = FailSecondAppendOnce()
+    session.fill_ledger = ledger
+    now = datetime.now(UTC)
+
+    session._ledger_new_fills(now)
+    assert session._ledgered_fills == 1
+    assert [row["client_order_id"] for row in ledger.rows] == ["open"]
+
+    session._ledger_new_fills(now)
+    assert session._ledgered_fills == 2
+    assert [row["client_order_id"] for row in ledger.rows] == ["open", "close"]
+
+
+def test_account_store_write_failure_latches_entry_halt(tmp_path):
+    session, _exchange = build_session(tmp_path, FakeFeed([]))
+
+    class BrokenStore:
+        def save_from(self, *args, **kwargs):
+            raise OSError("read-only filesystem")
+
+    session.account_store = BrokenStore()
+    session._persist_account_store(datetime.now(UTC), reason="test")
+
+    assert session._account_store_halt is True
+    assert "account_store_write_failed" in session._runtime_readiness().execution_blockers
+    blocked = [
+        row for row in session.journal.read_all()
+        if row["kind"] == "execution_readiness_blocked"
+    ]
+    assert blocked[-1]["payload"]["reduce_only_exits_allowed"] is True
 
 
 async def test_trade_log_narrates_signal_to_verdict(tmp_path):
@@ -2142,13 +2258,21 @@ class MakerLongOnce(BaseStrategy):
             return None
         self._fired = True
         close = float(df["close"].iloc[index])
-        return SignalIntent("long", stop_price=close * 0.95, take_profit_price=close * 1.10)
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.10,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
+        )
 
 
 class ExplicitMakerLongOnce(MakerLongOnce):
     """Route-neutral setup carries its structure-derived passive level."""
 
-    strategy_id = "structure_bounce_route_probe_v2"
+    # An isolated fixture id: registered production contracts own their edge
+    # estimate and may not accept one injected by a test strategy.
+    strategy_id = "explicit_maker_fixture_v1"
 
     def signal(self, df, index):
         signal = super().signal(df, index)

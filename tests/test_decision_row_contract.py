@@ -6,6 +6,7 @@ import pytest
 
 from vnedge.strategy.arm_evidence import assert_decision_row, bar_content_sha256
 from vnedge.strategy.base_strategy import SignalIntent, bind_signal_decision
+from vnedge.strategy.scanner_contracts import ScannerRuntimeContract
 
 
 def _row(**changes):
@@ -127,3 +128,60 @@ def test_strict_context_free_binding_keeps_the_stamped_bar_identity() -> None:
 
     assert signal.permission_snapshot is not None
     assert signal.permission_snapshot.decision_bar.content_sha256 == row["content_sha256"]
+
+
+def test_registered_edge_estimate_is_stamped_from_contract(monkeypatch) -> None:
+    contract = ScannerRuntimeContract(
+        strategy_id="edge_test_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=4,
+        rationale="test fixture",
+        edge_model_id="oos_fixture_v1",
+        oos_gross_edge_bps=31.5,
+    )
+    monkeypatch.setattr(
+        "vnedge.strategy.base_strategy.scanner_runtime_contract",
+        lambda _strategy_id: contract,
+    )
+
+    signal = bind_signal_decision(
+        SignalIntent(side="long", stop_price=99.0),
+        strategy_id="edge_test_v1",
+        symbol="BTC/USD:USD",
+        timeframe="15m",
+        decision_row=_row(),
+        entry_clock="next_15m_open",
+    )
+
+    assert signal.expected_gross_edge_bps == 31.5
+    assert signal.edge_model_id == "oos_fixture_v1"
+
+
+def test_registered_signal_cannot_override_unversioned_contract_edge(monkeypatch) -> None:
+    contract = ScannerRuntimeContract(
+        strategy_id="edge_test_v1",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=4,
+        rationale="test fixture",
+    )
+    monkeypatch.setattr(
+        "vnedge.strategy.base_strategy.scanner_runtime_contract",
+        lambda _strategy_id: contract,
+    )
+
+    with pytest.raises(ValueError, match="unversioned edge"):
+        bind_signal_decision(
+            SignalIntent(
+                side="long",
+                stop_price=99.0,
+                expected_gross_edge_bps=31.5,
+                edge_model_id="inside_scanner",
+            ),
+            strategy_id="edge_test_v1",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            decision_row=_row(),
+            entry_clock="next_15m_open",
+        )

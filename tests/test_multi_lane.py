@@ -21,6 +21,7 @@ from vnedge.runtime.multi_lane import (
     _build_single_strategy,
     _canonical_candle_frame,
     _canonical_runtime_store,
+    _LaneRuntime,
     _overlay_canonical_history,
     _warmup_since_for_timeframe,
 )
@@ -64,6 +65,36 @@ def test_multi_lane_provider_reports_primary_snapshot_age():
 
     assert age is not None
     assert 0.0 <= age < 1.0
+
+
+async def test_lane_fault_invokes_position_protection_then_propagates():
+    calls: list[str] = []
+
+    class Session:
+        quote_evidence = None
+
+        async def run(self, *, deadline_seconds=None):
+            raise RuntimeError("lane exploded")
+
+        async def handle_lane_fault(self, exc, now):
+            calls.append(f"protect:{exc}")
+
+        def close_observability(self):
+            calls.append("close")
+
+    class Feed:
+        async def stop(self):
+            calls.append("stop")
+
+    spec = LaneSpec("btc", "delta_india", "BTC/USD:USD", timeframe="15m")
+    provider = MultiLaneProvider("btc")
+    runner = MultiLaneShadowRunner([spec], Path("logs"), provider)
+    runtime = _LaneRuntime(spec=spec, session=Session(), feed=Feed())
+
+    with pytest.raises(RuntimeError, match="lane exploded"):
+        await runner._run_lane(runtime, deadline_seconds=None)
+
+    assert calls == ["protect:lane exploded", "close", "stop"]
 
 
 def test_multi_lane_imports_recorder_latency_as_read_only_process_gauges(tmp_path, monkeypatch):

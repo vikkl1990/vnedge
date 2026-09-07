@@ -21,7 +21,12 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 
-from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore, floor_time
+from vnedge.data.candles import (
+    TF_SECONDS,
+    CandleParquetStore,
+    CanonicalBarRecord,
+    floor_time,
+)
 from vnedge.data.structure_mtf import MTF_PARAMS
 from vnedge.data.symbols import canonical_symbol
 from vnedge.strategy.regime_router import DEFAULT_CONFIG as REGIME_CONFIG
@@ -95,6 +100,7 @@ class PrerequisiteState:
     gap_count: int
     first_gap_open: str | None
     invalid_exact_volume_bars: int
+    invalid_identity_bars: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +120,7 @@ class ScannerPrerequisiteReport:
 
 
 def _validate_tail(
-    candles: Sequence[Candle],
+    records: Sequence[CanonicalBarRecord],
     *,
     symbol: str,
     timeframe: str,
@@ -122,8 +128,9 @@ def _validate_tail(
     now: datetime,
 ) -> PrerequisiteState:
     expected_close = floor_time(now, timeframe)
-    ordered = sorted(candles, key=lambda candle: candle.open_time)
-    tail = ordered[-required_bars:]
+    ordered = sorted(records, key=lambda record: record.open_time)
+    tail_records = ordered[-required_bars:]
+    tail = [record.candle for record in tail_records]
     latest_close = tail[-1].close_time if tail else None
     missing_bars = max(0, required_bars - len(tail))
     lag_seconds = (
@@ -155,6 +162,16 @@ def _validate_tail(
             or candle.vwap is None
         )
     )
+    invalid_identity_bars = sum(
+        1
+        for record in tail_records
+        if (
+            not record.identity_persisted
+            or record.source != "canonical_tick_lake"
+            or record.data_quality != "ok"
+            or not record.coverage_ok
+        )
+    )
     issues: list[str] = []
     if missing_bars:
         issues.append("insufficient_history")
@@ -164,6 +181,8 @@ def _validate_tail(
         issues.append("non_contiguous")
     if invalid_exact_volume_bars:
         issues.append("non_exact_volume")
+    if invalid_identity_bars:
+        issues.append("identity_not_persisted")
     reason = issues[0] if issues else "ok"
 
     return PrerequisiteState(
@@ -181,6 +200,7 @@ def _validate_tail(
         gap_count=gap_count,
         first_gap_open=(first_gap_open.isoformat() if first_gap_open else None),
         invalid_exact_volume_bars=invalid_exact_volume_bars,
+        invalid_identity_bars=invalid_identity_bars,
     )
 
 
@@ -199,7 +219,7 @@ def scanner_prerequisites(
     store = CandleParquetStore(candle_root, exchange=exchange)
     rows = tuple(
         _validate_tail(
-            store.read(_symbol_key(symbol), timeframe),
+            store.read_records(_symbol_key(symbol), timeframe),
             symbol=_symbol_key(symbol),
             timeframe=timeframe,
             required_bars=required_bars,

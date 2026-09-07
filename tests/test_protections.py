@@ -287,7 +287,13 @@ class FixedStopLong(BaseStrategy):
         return candles.copy()
 
     def signal(self, df, index):
-        return SignalIntent("long", stop_price=95.0, take_profit_price=200.0)
+        return SignalIntent(
+            "long",
+            stop_price=95.0,
+            take_profit_price=200.0,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
+        )
 
 
 def frame(rows):

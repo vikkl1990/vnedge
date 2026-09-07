@@ -10,9 +10,10 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from vnedge.ml.feature_matrix import FEATURE_COLUMNS
-from vnedge.ml.meta_labeler import MetaLabelReport, evaluate_meta_labeler
+from vnedge.ml.meta_labeler import MetaLabelGates, MetaLabelReport, evaluate_meta_labeler
 
 
 def _dataset(n: int, *, predictive: bool, seed: int = 11) -> pd.DataFrame:
@@ -84,3 +85,23 @@ def test_pbo_discriminates_signal_from_noise():
     bad = evaluate_meta_labeler(_dataset(800, predictive=False)).metrics["pbo"]
     # a real edge overfits far less than noise
     assert good < bad
+
+
+def test_evaluation_is_invariant_to_input_concatenation_order():
+    chronological = _dataset(800, predictive=True)
+    reversed_rows = chronological.iloc[::-1].reset_index(drop=True)
+
+    expected = evaluate_meta_labeler(chronological)
+    actual = evaluate_meta_labeler(reversed_rows)
+
+    assert actual.status == expected.status
+    assert actual.metrics == expected.metrics
+    assert actual.gates == expected.gates
+
+
+def test_cpcv_refuses_zero_label_horizon():
+    with pytest.raises(ValueError, match="label_horizon"):
+        evaluate_meta_labeler(
+            _dataset(800, predictive=True),
+            gates=MetaLabelGates(label_horizon=0),
+        )

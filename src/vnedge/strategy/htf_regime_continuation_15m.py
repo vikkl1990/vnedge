@@ -173,6 +173,11 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         self._regime_health = {"4h": False, "1d": False}
         self._weekly_vwap_artifacts = pd.DataFrame()
         self._weekly_vwap_symbol: str | None = None
+        # The live fold owns hysteresis across decision closes. Full prepare()
+        # replaces it with the machine advanced across that exact prefix;
+        # prepare_latest() then continues the same state instead of starting a
+        # stateless classifier on every 15m bar.
+        self._live_regime_machine = self._new_regime_machine()
 
     def bind_weekly_vwap_artifacts(self, artifacts: pd.DataFrame) -> None:
         """Bind the cached Delta trade-lake weekly VWAP dataset.
@@ -323,6 +328,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         out["rt_arm_ready"] = (
             out["rt_allow_long"].eq(1) | out["rt_allow_short"].eq(1)
         ).astype(float)
+        self._live_regime_machine = regime_machine
         return out
 
     def prepare_latest(self, candles: pd.DataFrame) -> pd.DataFrame:
@@ -349,7 +355,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         decision_at = pd.Timestamp(out.iloc[-1]["timestamp"]) + pd.Timedelta(minutes=15)
         regime = self._regime_at(
             decision_at,
-            machine=self._new_regime_machine(),
+            machine=self._live_regime_machine,
         )
         # Populate the diagnostic columns for the bounded display frame, but
         # permit decisions on the newest row only (see the zeroing below).

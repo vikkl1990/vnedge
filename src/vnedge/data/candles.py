@@ -791,13 +791,12 @@ class CandleParquetStore:
             lock_path = path.with_suffix(f"{path.suffix}.lock")
             with _exclusive_lock(lock_path):
                 if path.exists():
-                    # A pre-schema Delta partition cannot be promoted merely
-                    # because a newer bar lands in the same file. Historical
-                    # Delta rows may predate contract-to-base conversion;
-                    # keep them readable and hashed, but fail them closed
-                    # until an explicit tape rebuild or operator attestation.
-                    legacy_quality = "partial" if self.exchange == "delta_india" else "ok"
-                    legacy_coverage = self.exchange != "delta_india"
+                    # A pre-schema partition cannot be promoted merely because
+                    # a newer bar lands in the same file. Origin is unknown on
+                    # every venue; only an explicit operator migration may
+                    # attest provenance and coverage.
+                    legacy_quality = "partial"
+                    legacy_coverage = False
                     existing = self._upgrade_frame(
                         pd.read_parquet(path),
                         source="canonical_tick_lake",

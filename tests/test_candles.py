@@ -529,8 +529,9 @@ def test_parquet_store_partitions_round_trips_and_upserts(tmp_path) -> None:
         store.upsert((forming,))
 
 
-def test_delta_legacy_rows_fail_closed_when_partition_is_upgraded(tmp_path) -> None:
-    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+@pytest.mark.parametrize("exchange", ["delta_india", "binanceusdm"])
+def test_legacy_rows_fail_closed_when_partition_is_upgraded(tmp_path, exchange) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange=exchange)
     first = candle_at(0)
     path = store.partition_path(first)
     path.parent.mkdir(parents=True)
@@ -562,7 +563,7 @@ def test_delta_legacy_rows_fail_closed_when_partition_is_upgraded(tmp_path) -> N
 
     audit = audit_lake(
         tmp_path / "candles",
-        exchange="delta_india",
+        exchange=exchange,
         symbol=first.symbol,
         timeframe=first.timeframe,
     )

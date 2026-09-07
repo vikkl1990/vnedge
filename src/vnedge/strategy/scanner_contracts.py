@@ -66,6 +66,11 @@ class ScannerRuntimeContract:
     allowed_symbols: tuple[str, ...] = ()
     allowed_exchanges: tuple[str, ...] = ()
     cost_profile_id: str | None = None
+    # A target is payoff room, not expectancy.  A registered bar-signal
+    # scanner may only cross CostGate when its frozen contract names the OOS
+    # estimate that should be attached to each emitted SignalIntent.
+    edge_model_id: str | None = None
+    oos_gross_edge_bps: float | None = None
     structure_clock: StructureClock = "closed_bar"
     protection_clock: ProtectionClock = "ticks"
 
@@ -99,6 +104,12 @@ class ScannerRuntimeContract:
             raise ValueError("scanner allowed_exchanges cannot contain blanks")
         if self.cost_profile_id is not None and not self.cost_profile_id.strip():
             raise ValueError("scanner cost_profile_id cannot be blank")
+        if (self.edge_model_id is None) != (self.oos_gross_edge_bps is None):
+            raise ValueError("scanner edge_model_id and oos_gross_edge_bps must be paired")
+        if self.edge_model_id is not None and not self.edge_model_id.strip():
+            raise ValueError("scanner edge_model_id cannot be blank")
+        if self.oos_gross_edge_bps is not None and self.oos_gross_edge_bps < 0:
+            raise ValueError("scanner oos_gross_edge_bps cannot be negative")
         decision_seconds = _TF_SECONDS[self.timeframe]
         for context in self.context_timeframes:
             if context not in _TF_SECONDS:

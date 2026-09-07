@@ -569,8 +569,13 @@ class AlwaysLong(BaseStrategy):
 
     def signal(self, df, index):
         close = float(df["close"].iloc[index])
-        return SignalIntent("long", stop_price=close * 0.95,
-                            take_profit_price=close * 1.10)
+        return SignalIntent(
+            "long",
+            stop_price=close * 0.95,
+            take_profit_price=close * 1.10,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
+        )
 
 
 class CaptureProvider:

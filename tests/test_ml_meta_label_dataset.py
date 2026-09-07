@@ -114,7 +114,8 @@ def test_build_dataset_drops_warmup_unknown_and_missing():
     assert summary["samples"] == 1
     assert summary["dropped_no_symbol"] == 1
     assert summary["dropped_no_bar"] == 1
-    assert summary["dropped_nan_feature"] == 1
+    assert summary["dropped_warmup"] == 1
+    assert summary["dropped_nan_feature"] == 0
 
 
 def test_empty_input_is_honest_not_an_error():

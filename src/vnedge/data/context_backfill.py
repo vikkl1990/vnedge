@@ -13,10 +13,10 @@ import json
 import logging
 import sys
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterable
 
 import pandas as pd
 from ccxt.base.errors import ExchangeError, NotSupported
@@ -33,7 +33,6 @@ from vnedge.research.universe import (
     discover_research_targets,
     load_research_targets,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -228,8 +227,23 @@ def build_chunks(
         for timeframe in timeframes:
             if timeframe not in TIMEFRAME_MS:
                 raise ValueError(f"unknown timeframe: {timeframe}")
-            start_ms = since_ms if since_ms is not None else until_ms - timeframe_days[timeframe] * 86_400_000
-            for start, end in chunk_ranges(start_ms, until_ms, chunk_days=chunk_days[timeframe]):
+            # The venue's newest OHLC row is forming until its full timeframe
+            # has elapsed. Clamp every dataset independently to the latest
+            # close boundary so a partial row can never be checkpointed as
+            # durable research coverage.
+            closed_until_ms = _floor_to_step(until_ms, TIMEFRAME_MS[timeframe])
+            start_ms = (
+                since_ms
+                if since_ms is not None
+                else closed_until_ms - timeframe_days[timeframe] * 86_400_000
+            )
+            if start_ms >= closed_until_ms:
+                continue
+            for start, end in chunk_ranges(
+                start_ms,
+                closed_until_ms,
+                chunk_days=chunk_days[timeframe],
+            ):
                 chunks.append(BackfillChunk(target.exchange, target.symbol, timeframe, start, end))
     return tuple(chunks)
 
@@ -523,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         summary = asyncio.run(run_backfill(args))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("context backfill failed: %s", exc)
         return 1
     if args.json:

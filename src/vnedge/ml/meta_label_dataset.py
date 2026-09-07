@@ -196,7 +196,7 @@ def build_meta_label_dataset(
     }
 
     rows: list[dict] = []
-    no_symbol = no_bar = nan_feature = 0
+    no_symbol = no_bar = nan_feature = warmup = 0
     for trade in trades:
         fm = feats_by_lane.get(trade.lane) if trade.lane else None
         if fm is None:
@@ -206,6 +206,10 @@ def build_meta_label_dataset(
             continue
         if trade.entry_ts not in fm.index:
             no_bar += 1
+            continue
+        position = int(fm.index.get_indexer([trade.entry_ts])[0])
+        if position < params.warmup_bars:
+            warmup += 1
             continue
         feature_row = fm.loc[trade.entry_ts, FEATURE_COLUMNS]
         if feature_row.isna().any():
@@ -229,6 +233,7 @@ def build_meta_label_dataset(
         "dropped_no_symbol": no_symbol,
         "dropped_no_bar": no_bar,
         "dropped_nan_feature": nan_feature,
+        "dropped_warmup": warmup,
         "by_strategy": (
             frame.groupby("strategy").size().to_dict() if len(frame) else {}
         ),

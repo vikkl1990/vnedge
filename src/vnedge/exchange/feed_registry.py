@@ -113,6 +113,10 @@ class SharedFeedView:
         return self._quote_feed.quote
 
     @property
+    def last_quote_update(self) -> QuoteUpdate | None:
+        return getattr(self._quote_feed, "last_quote_update", None)
+
+    @property
     def forming_candle(self) -> list | None:
         return getattr(self._feed, "forming_candle", None)
 
