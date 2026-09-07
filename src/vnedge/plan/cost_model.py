@@ -5,7 +5,7 @@ allowed a private fee assumption; a plan's cost fields are filled from here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # Canonical default fee/slip constants — the ONE source. The backtest FeeModel /
 # SlippageModel and the paper FillModel default from these (see their modules),
@@ -48,6 +48,12 @@ _DELTA_SWING = CostModelConfig(
     gate_safety_mult=2.0,
     fee_gst_mult=1.18,
 )
+# Pair-scoped cost identities intentionally begin with the same conservative
+# Delta tariff/slippage vector.  The distinct IDs prevent later measured BTC
+# or ETH execution changes from rewriting the other pair's evidence stream.
+# Changing either vector requires a new profile version.
+_DELTA_SWING_BTC_V1 = replace(_DELTA_SWING, profile="delta_swing_btc_v1")
+_DELTA_SWING_ETH_V1 = replace(_DELTA_SWING, profile="delta_swing_eth_v1")
 _SCALP = CostModelConfig(
     profile="scalp", default_slip_entry_bps=2.0, default_slip_exit_bps=2.0,
     safety_buffer_bps=2.0, gate_safety_mult=3.0,
@@ -64,6 +70,8 @@ _DELTA_SCALP = CostModelConfig(
 COST_PROFILES: dict[str, CostModelConfig] = {
     "swing": _SWING,
     "delta_swing": _DELTA_SWING,
+    "delta_swing_btc_v1": _DELTA_SWING_BTC_V1,
+    "delta_swing_eth_v1": _DELTA_SWING_ETH_V1,
     "scalp": _SCALP,
     "delta_scalp": _DELTA_SCALP,
 }

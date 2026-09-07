@@ -37,6 +37,10 @@ from vnedge.runtime.multi_lane_shadow import (
 from vnedge.runtime.runner_config import RunnerMode
 from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
+from vnedge.strategy.htf_regime_continuation_15m_v2_pairs import (
+    HtfRegimeContinuation15mV2BTCUSD,
+    HtfRegimeContinuation15mV2ETHUSD,
+)
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
 from vnedge.strategy.range_expansion_observer_v3 import RangeExpansionObserverV3
@@ -583,9 +587,20 @@ def test_checked_in_observer_roster_is_valid() -> None:
         {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": "config/shadow-observers.v1.json"}
     )
     assert len(specs) == 2
-    assert {spec.strategy_id for spec in specs} == {"htf_regime_continuation_15m_v2"}
+    assert {spec.strategy_id for spec in specs} == {
+        "htf_regime_continuation_15m_v2__BTCUSD",
+        "htf_regime_continuation_15m_v2__ETHUSD",
+    }
     assert {spec.symbol for spec in specs} == {"BTC/USD:USD", "ETH/USD:USD"}
-    assert sum(spec.strategy_id == "htf_regime_continuation_15m_v2" for spec in specs) == 2
+    assert {
+        spec.strategy_id: spec.data_symbol for spec in specs
+    } == {
+        "htf_regime_continuation_15m_v2__BTCUSD": "BTCUSD",
+        "htf_regime_continuation_15m_v2__ETHUSD": "ETHUSD",
+    }
+    assert {
+        spec.execution_cost_profile_id for spec in specs
+    } == {"delta_swing_btc_v1", "delta_swing_eth_v1"}
     assert all(spec.entry_route.value == "taker" for spec in specs)
     assert all(not spec.is_primary for spec in specs)
     assert {spec.exchange for spec in specs} == {"delta_india"}
@@ -606,6 +621,75 @@ def test_lane_factory_builds_the_ohlc_only_regime_successor() -> None:
             {"weekly_classifier": "vwap_structure_v1"},
             None,
             None,
+        )
+
+
+@pytest.mark.parametrize(
+    "strategy_id, expected_type",
+    [
+        ("htf_regime_continuation_15m_v2__BTCUSD", HtfRegimeContinuation15mV2BTCUSD),
+        ("htf_regime_continuation_15m_v2__ETHUSD", HtfRegimeContinuation15mV2ETHUSD),
+    ],
+)
+def test_lane_factory_builds_pair_scoped_v2(strategy_id, expected_type) -> None:
+    strategy = _build_single_strategy(strategy_id, {}, None, None)
+
+    assert type(strategy) is expected_type
+
+
+@pytest.mark.parametrize(
+    "strategy_id, symbol, cost_profile_id, message",
+    [
+        (
+            "htf_regime_continuation_15m_v2__BTCUSD",
+            "ETH/USD:USD",
+            "delta_swing_btc_v1",
+            "permits symbols",
+        ),
+        (
+            "htf_regime_continuation_15m_v2__BTCUSD",
+            "BTC/USD:USD",
+            "delta_swing_eth_v1",
+            "requires cost_profile_id",
+        ),
+    ],
+)
+def test_pair_scoped_roster_rejects_cross_pair_binding(
+    tmp_path, strategy_id, symbol, cost_profile_id, message
+) -> None:
+    path = tmp_path / "pair-roster.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "registered_at": "2026-09-07T00:00:00+00:00",
+                "observers": [
+                    {
+                        "strategy_id": strategy_id,
+                        "exchange": "delta_india",
+                        "cost_exchange": "delta_india",
+                        "cost_profile_id": cost_profile_id,
+                        "symbols": [symbol],
+                        "timeframe": "15m",
+                        "revision": {
+                            "version": "2",
+                            "mechanism": "pair-scoped continuation",
+                            "decision_engine": "base_strategy_next_open_v1",
+                            "exit_engine": "scanner_exit_v1",
+                            "backtest_engine": "vnedge_closed_bar_replay",
+                            "engine_version": "1",
+                        },
+                        "entry_route": "taker",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        build_shadow_observe_roster_specs(
+            {"MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH": str(path)}
         )
 
 

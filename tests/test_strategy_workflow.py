@@ -202,7 +202,12 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
     )
 
     active = {
-        "htf_regime_continuation_15m_v2": (
+        "htf_regime_continuation_15m_v2__BTCUSD": (
+            "base_strategy_next_open_v1",
+            "scanner_exit_v1",
+            "1",
+        ),
+        "htf_regime_continuation_15m_v2__ETHUSD": (
             "base_strategy_next_open_v1",
             "scanner_exit_v1",
             "1",
@@ -210,8 +215,8 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
     }
     rows = {row["strategy_id"]: row for row in payload["revisions"] if row["strategy_id"] in active}
 
-    assert payload["provenance"]["active_roster_revisions"] == 1
-    assert payload["summary"]["explicit_revisions"] >= 1
+    assert payload["provenance"]["active_roster_revisions"] == 2
+    assert payload["summary"]["explicit_revisions"] >= 2
     assert set(rows) == set(active)
     for strategy_id, (decision_engine, exit_engine, engine_version) in active.items():
         row = rows[strategy_id]
@@ -224,11 +229,23 @@ def test_active_roster_has_explicit_engine_identity_without_faking_parity(tmp_pa
         assert row["latest_judgment"] is None
         assert row["can_trade"] is False
 
-    v2 = rows["htf_regime_continuation_15m_v2"]
-    assert v2["symbols"] == ("BTC/USD:USD", "ETH/USD:USD")
-    assert v2["params"]["execution_policy"] == {
-        "BTC/USD:USD": {"entry_route": "taker", "maker_fill_ttl_bars": 1},
-        "ETH/USD:USD": {"entry_route": "taker", "maker_fill_ttl_bars": 1},
+    btc = rows["htf_regime_continuation_15m_v2__BTCUSD"]
+    assert btc["symbols"] == ("BTC/USD:USD",)
+    assert btc["params"]["execution_policy"] == {
+        "BTC/USD:USD": {
+            "entry_route": "taker",
+            "maker_fill_ttl_bars": 1,
+            "cost_profile_id": "delta_swing_btc_v1",
+        },
+    }
+    eth = rows["htf_regime_continuation_15m_v2__ETHUSD"]
+    assert eth["symbols"] == ("ETH/USD:USD",)
+    assert eth["params"]["execution_policy"] == {
+        "ETH/USD:USD": {
+            "entry_route": "taker",
+            "maker_fill_ttl_bars": 1,
+            "cost_profile_id": "delta_swing_eth_v1",
+        },
     }
 
 

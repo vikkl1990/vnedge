@@ -20,8 +20,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.execution.journal import DecisionJournal
+from vnedge.plan.cost_model import COST_PROFILES
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
 from vnedge.runtime.canonical_parity import assert_router_authority_artifact
 from vnedge.runtime.multi_lane import (
@@ -46,8 +48,8 @@ DEFAULT_PRIMARY_LANE_ID = "measurement_binanceusdm_btc_usdt_usdt"
 DELTA_EXCHANGE = "delta_india"
 _SUPPORTED_COST_EXCHANGES = frozenset({"binanceusdm", "bybit", "delta", "delta_india"})
 OBSERVER_ROSTER_PATH_ENV = "MULTI_LANE_SHADOW_OBSERVE_ROSTER_PATH"
-OBSERVER_ROSTER_VERSION = 3
-_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, 2, OBSERVER_ROSTER_VERSION})
+OBSERVER_ROSTER_VERSION = 4
+_SUPPORTED_OBSERVER_ROSTER_VERSIONS = frozenset({1, 2, 3, OBSERVER_ROSTER_VERSION})
 _OBSERVER_FIELDS = frozenset(
     {
         "strategy_id",
@@ -58,6 +60,7 @@ _OBSERVER_FIELDS = frozenset(
         "daily_loss_usd",
         "trail_atr_mult",
         "cost_exchange",
+        "cost_profile_id",
         "entry_route",
         "maker_fill_ttl_bars",
         "revision",
@@ -419,6 +422,30 @@ def build_shadow_observe_roster_specs(
             timeframe=timeframe,
             roster_version=int(roster_version),
         )
+        contract = scanner_runtime_contract(strategy_id)
+        if (
+            contract is not None
+            and contract.allowed_exchanges
+            and exchange not in contract.allowed_exchanges
+        ):
+            raise ValueError(
+                f"observer {strategy_id} permits exchanges "
+                f"{contract.allowed_exchanges}, got {exchange!r}"
+            )
+        normalized_symbols = tuple(
+            canonical_symbol(_venue_symbol(exchange, symbol.strip())) for symbol in symbols
+        )
+        if contract is not None and contract.allowed_symbols and any(
+            symbol not in contract.allowed_symbols for symbol in normalized_symbols
+        ):
+            raise ValueError(
+                f"observer {strategy_id} permits symbols {contract.allowed_symbols}, "
+                f"got {normalized_symbols}"
+            )
+        if int(roster_version) >= 4 and len(symbols) != 1:
+            raise ValueError(
+                f"observer {strategy_id} roster v4 requires exactly one symbol per row"
+            )
         starting_equity = _manifest_float(
             row.get("starting_equity", 500), field="starting_equity", minimum=0
         )
@@ -435,6 +462,24 @@ def build_shadow_observe_roster_specs(
         if cost_exchange not in _SUPPORTED_COST_EXCHANGES:
             raise ValueError(
                 f"observer {strategy_id} has unsupported cost_exchange {cost_exchange!r}"
+            )
+        cost_profile_id = str(row.get("cost_profile_id", "")).strip() or None
+        if int(roster_version) >= 4 and cost_profile_id is None:
+            raise ValueError(
+                f"observer {strategy_id} roster v4 requires cost_profile_id"
+            )
+        if cost_profile_id is not None and cost_profile_id not in COST_PROFILES:
+            raise ValueError(
+                f"observer {strategy_id} has unknown cost_profile_id {cost_profile_id!r}"
+            )
+        if (
+            contract is not None
+            and contract.cost_profile_id is not None
+            and cost_profile_id != contract.cost_profile_id
+        ):
+            raise ValueError(
+                f"observer {strategy_id} requires cost_profile_id "
+                f"{contract.cost_profile_id!r}, got {cost_profile_id!r}"
             )
         route_raw = str(row.get("entry_route", "auto")).strip().lower()
         try:
@@ -468,6 +513,7 @@ def build_shadow_observe_roster_specs(
                     daily_loss_usd=daily_loss_usd,
                     trail_atr_mult=trail_atr_mult,
                     execution_cost_exchange=cost_exchange,
+                    execution_cost_profile_id=cost_profile_id,
                     entry_route=entry_route,
                     maker_fill_ttl_bars=maker_fill_ttl_bars,
                     is_primary=False,

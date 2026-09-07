@@ -1,12 +1,33 @@
 {
-  "version": 3,
-  "registered_at": "2026-09-05T00:00:00+00:00",
+  "version": 4,
+  "registered_at": "2026-09-07T13:38:17+00:00",
   "observers": [
     {
-      "strategy_id": "htf_regime_continuation_15m_v2",
+      "strategy_id": "htf_regime_continuation_15m_v2__BTCUSD",
       "exchange": "delta_india",
       "cost_exchange": "delta_india",
-      "symbols": ["BTC/USD:USD", "ETH/USD:USD"],
+      "symbols": ["BTC/USD:USD"],
+      "cost_profile_id": "delta_swing_btc_v1",
+      "timeframe": "15m",
+      "revision": {
+        "version": "2",
+        "mechanism": "weekly range structure plus bound daily/4h permission and closed 15m reclaim",
+        "decision_engine": "base_strategy_next_open_v1",
+        "exit_engine": "scanner_exit_v1",
+        "backtest_engine": "vnedge_closed_bar_replay",
+        "engine_version": "1"
+      },
+      "starting_equity": 1000,
+      "daily_loss_usd": 20,
+      "trail_atr_mult": 0,
+      "entry_route": "taker"
+    },
+    {
+      "strategy_id": "htf_regime_continuation_15m_v2__ETHUSD",
+      "exchange": "delta_india",
+      "cost_exchange": "delta_india",
+      "symbols": ["ETH/USD:USD"],
+      "cost_profile_id": "delta_swing_eth_v1",
       "timeframe": "15m",
       "revision": {
         "version": "2",

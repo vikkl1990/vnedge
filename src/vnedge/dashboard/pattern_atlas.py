@@ -146,6 +146,8 @@ PATTERN_DEFINITIONS: tuple[PatternDefinition, ...] = (
         strategy_ids=(
             "htf_regime_continuation_15m_v1",
             "htf_regime_continuation_15m_v2",
+            "htf_regime_continuation_15m_v2__BTCUSD",
+            "htf_regime_continuation_15m_v2__ETHUSD",
             "htf_structure_continuation_realtime_v1",
         ),
         sketch="regime",

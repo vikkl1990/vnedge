@@ -491,9 +491,13 @@ class LivePaperSession:
         ex = config.execution_cost_exchange_id or data_exchange
         self.execution_cost_exchange_id = ex
         self.cost_profile_source = (
-            "explicit_execution_venue"
-            if config.execution_cost_exchange_id
-            else "market_data_venue_fallback"
+            "explicit_cost_profile"
+            if config.execution_cost_profile_id
+            else (
+                "explicit_execution_venue"
+                if config.execution_cost_exchange_id
+                else "market_data_venue_fallback"
+            )
         )
         runtime_contract = scanner_runtime_contract(strategy.strategy_id)
         self.runtime_contract = runtime_contract
@@ -517,10 +521,19 @@ class LivePaperSession:
                     f"{runtime_contract.max_holding_bars}, got "
                     f"{config.max_holding_bars}"
                 )
-            self.cost_profile = resolve_scanner_cost_profile(
+            resolved_cost_profile = resolve_scanner_cost_profile(
                 runtime_contract,
                 exchange_id=ex,
             )
+            if (
+                config.execution_cost_profile_id is not None
+                and config.execution_cost_profile_id != resolved_cost_profile
+            ):
+                raise ValueError(
+                    f"{strategy.strategy_id} requires cost_profile_id="
+                    f"{resolved_cost_profile}, got {config.execution_cost_profile_id}"
+                )
+            self.cost_profile = config.execution_cost_profile_id or resolved_cost_profile
         elif tf in {"1m", "5m", "15m"}:
             self.cost_profile = "delta_scalp" if "delta" in ex.lower() else "scalp"
         else:

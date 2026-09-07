@@ -40,6 +40,8 @@ class CostProfile(str, Enum):
     SCALP = "scalp"  # aggressive HF (Binance USDT-M)
     SWING = "swing"  # fallback / slower holds
     DELTA_SWING = "delta_swing"  # Delta India swing (18% GST, swing slippage)
+    DELTA_SWING_BTC_V1 = "delta_swing_btc_v1"
+    DELTA_SWING_ETH_V1 = "delta_swing_eth_v1"
     DELTA_SCALP = "delta_scalp"  # Delta India HF (adds 18% GST on fees)
 
 

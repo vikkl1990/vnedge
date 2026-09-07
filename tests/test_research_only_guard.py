@@ -51,6 +51,8 @@ def test_measurement_runtime_is_explicitly_non_capital():
         "htf_structure_continuation_realtime_v1",
         "htf_regime_continuation_15m_v1",
         "htf_regime_continuation_15m_v2",
+        "htf_regime_continuation_15m_v2__BTCUSD",
+        "htf_regime_continuation_15m_v2__ETHUSD",
         "structure_bounce_route_probe_v2",
         "macd_hidden_div_15m_v1",
     }
@@ -101,6 +103,8 @@ def test_shadow_observe_is_a_separate_narrow_permission():
         "session_continuation_realtime_v2",
         "htf_structure_continuation_realtime_v1",
         "htf_regime_continuation_15m_v2",
+        "htf_regime_continuation_15m_v2__BTCUSD",
+        "htf_regime_continuation_15m_v2__ETHUSD",
         "structure_bounce_route_probe_v2",
     }
     assert is_shadow_observe_eligible("squeeze_expansion_breakout_v2")

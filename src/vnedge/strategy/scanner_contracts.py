@@ -61,6 +61,11 @@ class ScannerRuntimeContract:
         "canonical_tick_lake",
         "router",
     )
+    # Pair-scoped registrations freeze their universe and cost identity here.
+    # Empty ``allowed_symbols`` preserves historical universe-scoped IDs.
+    allowed_symbols: tuple[str, ...] = ()
+    allowed_exchanges: tuple[str, ...] = ()
+    cost_profile_id: str | None = None
     structure_clock: StructureClock = "closed_bar"
     protection_clock: ProtectionClock = "ticks"
 
@@ -84,6 +89,16 @@ class ScannerRuntimeContract:
             raise ValueError("scanner context_candle_sources cannot contain duplicates")
         if any(not source.strip() for source in self.context_candle_sources):
             raise ValueError("scanner context candle sources cannot be blank")
+        if len(set(self.allowed_symbols)) != len(self.allowed_symbols):
+            raise ValueError("scanner allowed_symbols cannot contain duplicates")
+        if any(not symbol.strip() for symbol in self.allowed_symbols):
+            raise ValueError("scanner allowed_symbols cannot contain blanks")
+        if len(set(self.allowed_exchanges)) != len(self.allowed_exchanges):
+            raise ValueError("scanner allowed_exchanges cannot contain duplicates")
+        if any(not exchange.strip() for exchange in self.allowed_exchanges):
+            raise ValueError("scanner allowed_exchanges cannot contain blanks")
+        if self.cost_profile_id is not None and not self.cost_profile_id.strip():
+            raise ValueError("scanner cost_profile_id cannot be blank")
         decision_seconds = _TF_SECONDS[self.timeframe]
         for context in self.context_timeframes:
             if context not in _TF_SECONDS:
@@ -321,6 +336,48 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
             "exchange_ohlcv_validated",
         ),
     ),
+    "htf_regime_continuation_15m_v2__BTCUSD": ScannerRuntimeContract(
+        strategy_id="htf_regime_continuation_15m_v2__BTCUSD",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale=(
+            "BTCUSD-scoped official-candle weekly range/structure permission; "
+            "closed 15m reclaim and next-open entry"
+        ),
+        decision_engine="base_strategy_next_open_v1",
+        exit_engine="scanner_exit_v1",
+        context_timeframes=("4h", "1d"),
+        context_candle_sources=(
+            "canonical_tick_lake",
+            "router",
+            "exchange_ohlcv_validated",
+        ),
+        allowed_symbols=("BTCUSD",),
+        allowed_exchanges=("delta_india",),
+        cost_profile_id="delta_swing_btc_v1",
+    ),
+    "htf_regime_continuation_15m_v2__ETHUSD": ScannerRuntimeContract(
+        strategy_id="htf_regime_continuation_15m_v2__ETHUSD",
+        timeframe="15m",
+        cost_family="swing",
+        max_holding_bars=192,
+        rationale=(
+            "ETHUSD-scoped official-candle weekly range/structure permission; "
+            "closed 15m reclaim and next-open entry"
+        ),
+        decision_engine="base_strategy_next_open_v1",
+        exit_engine="scanner_exit_v1",
+        context_timeframes=("4h", "1d"),
+        context_candle_sources=(
+            "canonical_tick_lake",
+            "router",
+            "exchange_ohlcv_validated",
+        ),
+        allowed_symbols=("ETHUSD",),
+        allowed_exchanges=("delta_india",),
+        cost_profile_id="delta_swing_eth_v1",
+    ),
     "structure_bounce_route_probe_v2": ScannerRuntimeContract(
         strategy_id="structure_bounce_route_probe_v2",
         timeframe="5m",
@@ -365,6 +422,8 @@ def resolve_scanner_cost_profile(
     family's execution assumptions. Venue selection is explicit here so a
     Delta swing lane cannot silently inherit the untaxed cross-venue fallback.
     """
+    if contract.cost_profile_id is not None:
+        return contract.cost_profile_id
     if "delta" in exchange_id.lower():
         if contract.cost_family == "scalp":
             return "delta_scalp"

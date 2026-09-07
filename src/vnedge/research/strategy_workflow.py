@@ -665,14 +665,14 @@ def _active_roster_states(path: Path) -> dict[str, RevisionState]:
 
     The append-only workflow ledger remains the authority for mutations and
     parity events.  The checked-in roster is nevertheless a reviewed, Git-
-    versioned declaration of what is *actually running*, so its v2/v3 revision
+    versioned declaration of what is *actually running*, so its v2/v3/v4 revision
     contracts must not be downgraded to synthetic catalog rows in the UI.
     """
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(payload, dict) or payload.get("version") not in {2, 3}:
+    if not isinstance(payload, dict) or payload.get("version") not in {2, 3, 4}:
         return {}
     rows = payload.get("observers")
     if not isinstance(rows, list):
@@ -740,6 +740,7 @@ def _active_roster_states(path: Path) -> dict[str, RevisionState]:
                     execution_routes[str(symbol)] = {
                         "entry_route": route,
                         "maker_fill_ttl_bars": ttl,
+                        "cost_profile_id": str(item.get("cost_profile_id") or ""),
                     }
         frozen_params = {
             "strategy": params,

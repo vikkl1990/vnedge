@@ -104,6 +104,9 @@ class RunnerConfig(BaseModel):
     # the same; shadow deployments that model Delta fees while reading Binance
     # must name ``delta_india`` explicitly.
     execution_cost_exchange_id: str | None = None
+    # New pair-scoped lanes name the exact immutable cost profile. Historical
+    # lanes may omit it and retain venue/family resolution.
+    execution_cost_profile_id: str | None = None
     # Entry routing is execution policy, not signal logic.  Keeping it on the
     # runner makes one scanner cohort comparable across shadow/paper/live.
     entry_route: EntryRoute = EntryRoute.AUTO

@@ -9,6 +9,7 @@ from vnedge.strategy.funding_mean_reversion import FundingMeanReversion
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
+from vnedge.strategy.htf_regime_continuation_15m_v2_pairs import PAIR_STRATEGIES
 from vnedge.strategy.macd_hidden_divergence_15m import MacdHiddenDivergence15mV1
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
@@ -54,6 +55,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     **{strategy.strategy_id: strategy for strategy in REALTIME_SCANNERS},
     HtfRegimeContinuation15mV1.strategy_id: HtfRegimeContinuation15mV1,
     HtfRegimeContinuation15mV2.strategy_id: HtfRegimeContinuation15mV2,
+    **{strategy.strategy_id: strategy for strategy in PAIR_STRATEGIES},
     StructureBounceRouteProbeV2.strategy_id: StructureBounceRouteProbeV2,
     MacdHiddenDivergence15mV1.strategy_id: MacdHiddenDivergence15mV1,
 }
@@ -79,6 +81,7 @@ RESEARCH_ONLY: frozenset[str] = frozenset(
         *(strategy.strategy_id for strategy in REALTIME_SCANNERS),
         HtfRegimeContinuation15mV1.strategy_id,
         HtfRegimeContinuation15mV2.strategy_id,
+        *(strategy.strategy_id for strategy in PAIR_STRATEGIES),
         StructureBounceRouteProbeV2.strategy_id,
         MacdHiddenDivergence15mV1.strategy_id,
     }
@@ -113,6 +116,7 @@ SHADOW_OBSERVE: frozenset[str] = frozenset(
         *(strategy.strategy_id for strategy in SHADOW_RESEARCH_SCANNERS),
         *(strategy.strategy_id for strategy in REALTIME_SCANNERS),
         HtfRegimeContinuation15mV2.strategy_id,
+        *(strategy.strategy_id for strategy in PAIR_STRATEGIES),
         StructureBounceRouteProbeV2.strategy_id,
     }
 )

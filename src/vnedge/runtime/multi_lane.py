@@ -76,6 +76,7 @@ from vnedge.strategy.fee_wall_momentum_observer import FeeWallMomentumObserver
 from vnedge.strategy.funding_squeeze_continuation import FundingSqueezeContinuation
 from vnedge.strategy.htf_regime_continuation_15m import HtfRegimeContinuation15mV1
 from vnedge.strategy.htf_regime_continuation_15m_v2 import HtfRegimeContinuation15mV2
+from vnedge.strategy.htf_regime_continuation_15m_v2_pairs import PAIR_STRATEGIES
 from vnedge.strategy.measurement_only import MeasurementOnly
 from vnedge.strategy.panic_reversal import PanicReversal
 from vnedge.strategy.range_expansion_observer import RangeExpansionObserver
@@ -126,6 +127,9 @@ class LaneSpec:
     # Public-data venue is not an execution-cost assumption. Shadow scanners
     # may observe Binance while conservatively modelling Delta India fees.
     execution_cost_exchange: str | None = None
+    # Explicit pair/cell cost identity. When present it must match the
+    # strategy runtime contract and is carried unchanged into the lane.
+    execution_cost_profile_id: str | None = None
     # Explicit execution policy. AUTO exists only for legacy manifests.
     entry_route: EntryRoute = EntryRoute.AUTO
     maker_fill_ttl_bars: int = 1
@@ -133,6 +137,10 @@ class LaneSpec:
     def __post_init__(self) -> None:
         if not 1 <= int(self.maker_fill_ttl_bars) <= 288:
             raise ValueError("maker_fill_ttl_bars must be in [1, 288]")
+        if self.execution_cost_profile_id is not None and not str(
+            self.execution_cost_profile_id
+        ).strip():
+            raise ValueError("execution_cost_profile_id cannot be blank")
 
     @property
     def data_symbol(self) -> str:
@@ -848,6 +856,13 @@ def _build_single_strategy(
         if params:
             raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
         return HtfRegimeContinuation15mV2(seed_funding)
+    for pair_strategy in PAIR_STRATEGIES:
+        if strategy_id == pair_strategy.strategy_id:
+            if params:
+                raise ValueError(
+                    f"{strategy_id} parameters are frozen; configure a new strategy ID"
+                )
+            return pair_strategy(seed_funding)
     if strategy_id == StructureBounceRouteProbeV2.strategy_id:
         if params:
             raise ValueError(f"{strategy_id} parameters are frozen; configure a new strategy ID")
@@ -1648,6 +1663,24 @@ async def build_lane(
             f"{spec.strategy_id} runtime contract requires "
             f"{runtime_contract.timeframe}, got {spec.timeframe}"
         )
+    if (
+        runtime_contract is not None
+        and runtime_contract.allowed_symbols
+        and spec.data_symbol not in runtime_contract.allowed_symbols
+    ):
+        raise ValueError(
+            f"{spec.strategy_id} permits symbols {runtime_contract.allowed_symbols}, "
+            f"got {spec.data_symbol}"
+        )
+    if (
+        runtime_contract is not None
+        and runtime_contract.allowed_exchanges
+        and spec.exchange not in runtime_contract.allowed_exchanges
+    ):
+        raise ValueError(
+            f"{spec.strategy_id} permits exchanges {runtime_contract.allowed_exchanges}, "
+            f"got {spec.exchange}"
+        )
     config = RunnerConfig(
         mode=spec.mode,
         symbol=spec.symbol,
@@ -1662,6 +1695,7 @@ async def build_lane(
         canonical_candle_wait_seconds=8.0,
         trail_atr_mult=spec.trail_atr_mult,
         execution_cost_exchange_id=spec.execution_cost_exchange,
+        execution_cost_profile_id=spec.execution_cost_profile_id,
         entry_route=spec.entry_route,
         maker_fill_ttl_bars=spec.maker_fill_ttl_bars,
     )

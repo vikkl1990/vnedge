@@ -2,14 +2,28 @@
 import pytest
 
 from vnedge.plan import (
-    AISpec, CostModel, CostSpec, EntrySpec, ProfitSpec, RiskSpec, Target,
-    TradePlan, plan_gate,
+    AISpec,
+    CostModel,
+    CostSpec,
+    EntrySpec,
+    ProfitSpec,
+    RiskSpec,
+    Target,
+    TradePlan,
+    plan_gate,
 )
 from vnedge.plan.cost_model import COST_PROFILES
 
 
 def test_profiles_registered():
-    assert set(COST_PROFILES) == {"swing", "delta_swing", "scalp", "delta_scalp"}
+    assert set(COST_PROFILES) == {
+        "swing",
+        "delta_swing",
+        "delta_swing_btc_v1",
+        "delta_swing_eth_v1",
+        "scalp",
+        "delta_scalp",
+    }
 
 
 def test_for_profile_and_unknown():
@@ -42,6 +56,19 @@ def test_delta_swing_applies_gst_without_inheriting_scalp_slippage():
     assert cm.config.default_slip_exit_bps == 2.0
     assert cm.round_trip_bps(include_safety=False) == pytest.approx(15.8)
     assert cm.round_trip_bps() == pytest.approx(18.8)
+
+
+def test_pair_scoped_delta_swing_profiles_start_from_same_frozen_baseline():
+    baseline = CostModel.for_profile("delta_swing")
+    for profile in ("delta_swing_btc_v1", "delta_swing_eth_v1"):
+        pair = CostModel.for_profile(profile)
+        assert pair.profile == profile
+        assert pair.round_trip_bps(include_safety=False) == baseline.round_trip_bps(
+            include_safety=False
+        )
+        assert pair.round_trip_bps(include_safety=True) == baseline.round_trip_bps(
+            include_safety=True
+        )
 
 
 def test_swing_has_no_free_exit_window():
