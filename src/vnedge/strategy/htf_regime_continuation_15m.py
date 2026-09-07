@@ -318,6 +318,86 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
         ).astype(float)
         return out
 
+    def prepare_latest(self, candles: pd.DataFrame) -> pd.DataFrame:
+        """Prepare the live decision row without replaying HTF history.
+
+        ``prepare`` remains the frozen full-frame reference used by research,
+        startup reconstruction, and parity tests.  A forward live close only
+        consumes the newest row, however. Re-running the weekly/daily/4h
+        telescope for every historical 15m row made two symbol lanes contend
+        for several seconds at the same boundary.
+
+        The structure parent still receives the complete bounded frame. Only
+        the permission fold is reduced to the exact newest decision close.
+        Earlier rows are explicitly made ineligible so this latest-only frame
+        cannot accidentally be used as a historical replay.
+        """
+        live_candles = candles.tail(self.warmup_bars + 1).reset_index(drop=True)
+        out = super().prepare(live_candles)
+        if out.empty:
+            return self.prepare(candles)
+        base_long = bool(float(out.iloc[-1].get("rt_allow_long", 0)))
+        base_short = bool(float(out.iloc[-1].get("rt_allow_short", 0)))
+
+        decision_at = pd.Timestamp(out.iloc[-1]["timestamp"]) + pd.Timedelta(minutes=15)
+        regime = self._regime_at(
+            decision_at,
+            machine=self._new_regime_machine(),
+        )
+        # Populate the diagnostic columns for the bounded display frame, but
+        # permit decisions on the newest row only (see the zeroing below).
+        regimes = [regime] * len(out)
+        out["mreg_weekly"] = [item.weekly for item in regimes]
+        out["mreg_weekly_classifier"] = self.market_regime_config.weekly_classifier
+        out["mreg_daily"] = [item.daily for item in regimes]
+        out["mreg_h4"] = [item.h4 for item in regimes]
+        out["mreg_ema_state"] = [item.ema_state for item in regimes]
+        out["mreg_macd_impulse"] = [item.macd_impulse for item in regimes]
+        out["mreg_rsi_zone"] = [item.rsi_zone for item in regimes]
+        out["mreg_daily_ema21"] = [item.daily_ema21 for item in regimes]
+        out["mreg_daily_ema50"] = [item.daily_ema50 for item in regimes]
+        out["mreg_daily_ema200"] = [item.daily_ema200 for item in regimes]
+        out["mreg_daily_macd_hist"] = [item.daily_macd_hist for item in regimes]
+        out["mreg_h4_macd_hist"] = [item.h4_macd_hist for item in regimes]
+        out["mreg_daily_rsi"] = [item.daily_rsi for item in regimes]
+        out["mreg_daily_observations"] = [item.daily_observations for item in regimes]
+        out["mreg_ema200_ready"] = [float(item.ema200_ready) for item in regimes]
+        out["mreg_state"] = [item.state for item in regimes]
+        out["mreg_family"] = out["mreg_state"]
+        out["mreg_reason"] = [item.reason for item in regimes]
+        out["mreg_exit_reason"] = [item.exit_reason for item in regimes]
+        out["mreg_asof_tf"] = [
+            item.asof_bar[0] if item.asof_bar is not None else None for item in regimes
+        ]
+        out["mreg_asof_close_time"] = [
+            item.asof_bar[1] if item.asof_bar is not None else None for item in regimes
+        ]
+        out["mreg_ready"] = 0.0
+        out["mreg_allow_long"] = 0.0
+        out["mreg_allow_short"] = 0.0
+        out["rt_allow_long"] = 0.0
+        out["rt_allow_short"] = 0.0
+        out["rt_arm_ready"] = 0.0
+
+        last = out.index[-1]
+        out.at[last, "mreg_ready"] = float(regime.ready)
+        out.at[last, "mreg_allow_long"] = float(regime.allows_scanner("htf", "long"))
+        out.at[last, "mreg_allow_short"] = float(regime.allows_scanner("htf", "short"))
+        # Preserve the structure engine's setup result before applying the HTF
+        # side veto. The V2 subclass may recompute its price-only readiness on
+        # this same latest row.
+        out.at[last, "rt_allow_long"] = float(
+            base_long and regime.allows_scanner("htf", "long")
+        )
+        out.at[last, "rt_allow_short"] = float(
+            base_short and regime.allows_scanner("htf", "short")
+        )
+        out.at[last, "rt_arm_ready"] = float(
+            bool(out.at[last, "rt_allow_long"]) or bool(out.at[last, "rt_allow_short"])
+        )
+        out.attrs["vnedge_latest_only"] = True
+        return out
+
     def realtime_arm(self, df: pd.DataFrame, index: int) -> RealtimeEntryArm | None:
         del df, index
         return None

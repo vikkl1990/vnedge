@@ -72,7 +72,14 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         )
 
     def prepare(self, candles: pd.DataFrame) -> pd.DataFrame:
-        out = super().prepare(candles)
+        return self._apply_price_only_contract(super().prepare(candles))
+
+    def prepare_latest(self, candles: pd.DataFrame) -> pd.DataFrame:
+        """Live-only last-row preparation; full ``prepare`` remains reference."""
+        return self._apply_price_only_contract(super().prepare_latest(candles))
+
+    def _apply_price_only_contract(self, out: pd.DataFrame) -> pd.DataFrame:
+        """Apply V2's explicit OHLC structure rules to a prepared frame."""
         out["mreg_structure_source"] = "canonical_ohlc_price_only_v1"
         out["mreg_avwap_source"] = "unavailable"
         p = self.params

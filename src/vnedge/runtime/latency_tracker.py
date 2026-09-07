@@ -60,6 +60,7 @@ PARQUET_PERSIST_MS = "parquet_persist_ms"
 CLOCK_SKEW_MS = "clock_skew_ms"
 
 _TF_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+_GATE_EPOCH = "htf_latest_decision_v5"
 
 
 def timeframe_to_seconds(timeframe: str) -> int:
@@ -223,12 +224,11 @@ class LatencyTracker:
             "version": 1,
             "bar_close_semantics": "receipt_live_v3",
             # Gating samples are only comparable within one runtime-cost
-            # epoch.  The pre-v4 quote path synchronously fsynced repeated
-            # inert diagnostics, starving the event loop and contaminating
-            # both close-receipt and decision-compute p95.  Keep the epoch
-            # stable across ordinary deploys; change it only when a proven
-            # runtime defect changes the meaning of the safety samples.
-            "gate_epoch": "bounded_quote_journal_v4",
+            # epoch. V5 separates the live latest-row decision fold from the
+            # frozen full-history reference prepare. Pre-v5 decision samples
+            # include historical HTF recomputation and cross-lane contention,
+            # so they cannot shape the corrected new-arm safety gate.
+            "gate_epoch": _GATE_EPOCH,
             "maxlen": self.maxlen,
             "series": {name: list(values) for name, values in self._series.items()},
         }
@@ -247,7 +247,7 @@ class LatencyTracker:
         if not isinstance(raw_series, Mapping):
             raise TypeError("latency checkpoint series must be a mapping")
         legacy_close_semantics = state.get("bar_close_semantics") != "receipt_live_v3"
-        stale_gate_epoch = state.get("gate_epoch") != "bounded_quote_journal_v4"
+        stale_gate_epoch = state.get("gate_epoch") != _GATE_EPOCH
 
         restored: dict[str, deque[float]] = {}
         count = 0
@@ -286,8 +286,8 @@ class LatencyTracker:
             # corrupt checkpoint could be reported as successfully restored.
             if skip_legacy_close or skip_stale_gate:
                 # Pre-v3 close samples used a different receipt definition.
-                # Pre-v4 gating samples describe the known quote-WAL fsync
-                # storm.  Neither may shape the current new-arm safety gate.
+                # Stale gating samples describe a superseded runtime compute
+                # path. Neither may shape the current new-arm safety gate.
                 continue
             bounded = values[-self.maxlen :]
             if bounded:

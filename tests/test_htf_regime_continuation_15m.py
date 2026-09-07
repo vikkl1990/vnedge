@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from vnedge.strategy.htf_regime_continuation_15m import (
@@ -339,3 +340,65 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
     diagnostics = strategy.evaluation_diagnostics(prepared, 0)
     assert diagnostics["primary_failed_gate"] == "htf_context_missing"
     assert diagnostics["eligible"] is False
+
+
+def test_live_latest_prepare_matches_full_reference_on_decision_row() -> None:
+    strategy = HtfRegimeContinuation15mV2()
+
+    def bars(start: str, *, periods: int, freq: str, base: float) -> pd.DataFrame:
+        timestamps = pd.date_range(start, periods=periods, freq=freq, tz="UTC")
+        drift = np.linspace(0.0, periods * 0.2, periods)
+        close = base + drift + np.sin(np.arange(periods) / 5.0)
+        return pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": close - 0.2,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 100.0 + (np.arange(periods) % 11),
+                "is_closed": True,
+                "data_quality": "ok",
+                "candle_source": "exchange_ohlcv_validated",
+            }
+        )
+
+    strategy.bind_canonical_context(
+        "4h", bars("2025-10-01", periods=800, freq="4h", base=90.0)
+    )
+    strategy.bind_canonical_context(
+        "1d", bars("2024-07-01", periods=800, freq="1D", base=70.0)
+    )
+    decision = bars("2026-08-24", periods=448, freq="15min", base=100.0)
+    decision["candle_source"] = "canonical_tick_lake"
+
+    full = strategy.prepare(decision)
+    latest = strategy.prepare_latest(decision)
+    columns = [
+        "mreg_weekly",
+        "mreg_daily",
+        "mreg_h4",
+        "mreg_ema_state",
+        "mreg_macd_impulse",
+        "mreg_rsi_zone",
+        "mreg_state",
+        "mreg_reason",
+        "mreg_ready",
+        "mreg_allow_long",
+        "mreg_allow_short",
+        "rt_allow_long",
+        "rt_allow_short",
+        "rt_arm_ready",
+        "bos15_structure_ready",
+        "bos15_structure_trend",
+        "hsc_pullback_long",
+        "hsc_pullback_short",
+    ]
+    pd.testing.assert_series_equal(
+        latest.iloc[-1][columns],
+        full.iloc[-1][columns],
+        check_names=False,
+    )
+    assert latest.attrs["vnedge_latest_only"] is True
+    assert latest.iloc[:-1]["mreg_ready"].eq(0).all()
+    assert latest.iloc[:-1]["rt_arm_ready"].eq(0).all()

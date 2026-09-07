@@ -4137,7 +4137,7 @@ class LivePaperSession:
     # snapshot publish. Tests shrink it via instance override.
     _IDLE_TICK_SECONDS = 5.0
 
-    async def _prepare_strategy_for_bar(self) -> pd.DataFrame:
+    async def _prepare_strategy_for_bar(self, *, latest_only: bool = False) -> pd.DataFrame:
         """Prepare one closed-bar feature frame without blocking peer lanes.
 
         Multi-lane shadow runs share a single asyncio event loop.  Strategy
@@ -4152,7 +4152,12 @@ class LivePaperSession:
         each lane owns its own candle frame and strategy instance, so the
         objects passed to the worker remain session-local.
         """
-        return await asyncio.to_thread(self.strategy.prepare, self.candles)
+        prepare = self.strategy.prepare
+        if latest_only:
+            candidate = getattr(self.strategy, "prepare_latest", None)
+            if callable(candidate):
+                prepare = candidate
+        return await asyncio.to_thread(prepare, self.candles)
 
     def _shadow_prime(self, df: pd.DataFrame | None = None) -> None:
         """SHADOW lanes only: backfill observability from seeded bars.
@@ -4434,7 +4439,7 @@ class LivePaperSession:
             # forward closed bar) keeps replay and VM shadow semantics aligned.
             if self.scanner_observer is not None and len(self.candles) > prepared_warmup:
                 _dec_t0 = time.perf_counter()
-                scanner_df = await self._prepare_strategy_for_bar()
+                scanner_df = await self._prepare_strategy_for_bar(latest_only=True)
                 prepared_frame = scanner_df
                 scanner_idx = len(scanner_df) - 1
                 before_candidates = self.scanner_observer.candidates
@@ -4526,7 +4531,7 @@ class LivePaperSession:
                 # steps. Measured on every eval, blocked or not, so a slow
                 # strategy shows up even when it never fires.
                 _dec_t0 = time.perf_counter()
-                df = await self._prepare_strategy_for_bar()
+                df = await self._prepare_strategy_for_bar(latest_only=True)
                 prepared_frame = df
                 idx = len(df) - 1
                 factory_block = self._daily_factory_entry_block_reason(bar_clock)
@@ -4639,7 +4644,7 @@ class LivePaperSession:
                 # intent journaled above (bar_ts == this bar) is untouched —
                 # its virtual fill is the NEXT bar, like the backtester
                 if prepared_frame is None:
-                    prepared_frame = await self._prepare_strategy_for_bar()
+                    prepared_frame = await self._prepare_strategy_for_bar(latest_only=True)
                 self._shadow_exit_df = prepared_frame.reset_index(drop=True)
                 self._log_shadow_outcomes(
                     # feed the IDENTICAL canonical ATR the paper/live trail uses,
