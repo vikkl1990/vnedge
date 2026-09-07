@@ -14,6 +14,7 @@ from vnedge.runtime.multi_lane import (
     LaneSpec,
     MultiLaneProvider,
     MultiLaneShadowRunner,
+    _allows_validated_exchange_context,
     _allows_validated_exchange_ohlcv,
     _build_single_strategy,
     _canonical_runtime_store,
@@ -198,7 +199,7 @@ def test_missing_canonical_history_is_explicitly_non_armable():
     assert bool(overlaid.iloc[0]["is_closed"]) is True
 
 
-def test_htf_v2_refuses_validated_price_only_exchange_history_for_permission():
+def test_htf_v2_allows_validated_price_only_context_but_not_decision_history():
     exchange = pd.DataFrame(
         {
             "timestamp": pd.to_datetime(["2026-08-22T00:00:00Z"]),
@@ -225,7 +226,25 @@ def test_htf_v2_refuses_validated_price_only_exchange_history_for_permission():
             strategy_id=HtfRegimeContinuation15mV2.strategy_id,
         )
     )
+    assert _allows_validated_exchange_context(
+        LaneSpec(
+            lane_id="htf_v2",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id=HtfRegimeContinuation15mV2.strategy_id,
+        )
+    )
     assert not _allows_validated_exchange_ohlcv(
+        LaneSpec(
+            lane_id="range",
+            exchange="delta_india",
+            symbol="BTC/USD:USD",
+            timeframe="15m",
+            strategy_id="range_expansion_realtime_v2",
+        )
+    )
+    assert not _allows_validated_exchange_context(
         LaneSpec(
             lane_id="range",
             exchange="delta_india",

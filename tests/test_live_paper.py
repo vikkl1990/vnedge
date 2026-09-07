@@ -451,6 +451,7 @@ async def test_authoritative_router_uses_durable_trade_event_without_parquet_pol
     assert session._last_router_candle == candle
     assert session._append_candle(raw) is True
     assert session.candles.iloc[-1]["candle_source"] == "canonical_tick_lake"
+    assert len(session.candles.iloc[-1]["content_sha256"]) == 64
     assert session._last_canonical_transport == "router"
 
 
@@ -489,6 +490,45 @@ async def test_runtime_advances_canonical_htf_only_on_close_boundary(tmp_path):
     assert strategy.context == [context]
     assert strategy.context_health == [("4h", True)]
     assert store.reads[0][1:] == ("4h", opened)
+
+
+@pytest.mark.asyncio
+async def test_runtime_retries_missed_htf_bind_on_next_decision_bar(tmp_path):
+    opened = datetime(2026, 8, 26, 0, tzinfo=UTC)
+    context = Candle(
+        symbol=SYM,
+        timeframe="4h",
+        open_time=opened,
+        close_time=opened + timedelta(hours=4),
+        open=Decimal(100),
+        high=Decimal(104),
+        low=Decimal(99),
+        close=Decimal(103),
+        volume=Decimal(10),
+        quote_volume=Decimal(1020),
+        trade_count=20,
+    )
+    store = IndexedCanonicalStore(None)
+    strategy = CanonicalContextLong()
+    session, _ = build_session(
+        tmp_path,
+        FakeFeed([]),
+        strategy=strategy,
+        timeframe="1h",
+        canonical_candle_store=store,
+    )
+    boundary = int(datetime(2026, 8, 26, 3, tzinfo=UTC).timestamp() * 1000)
+    await session._refresh_canonical_strategy_context([boundary, 1, 1, 1, 1, 1])
+    assert strategy.context == []
+    assert strategy.context_health[-1] == ("4h", False)
+
+    store.candle = context
+    next_bar = int(datetime(2026, 8, 26, 4, tzinfo=UTC).timestamp() * 1000)
+    await session._refresh_canonical_strategy_context([next_bar, 1, 1, 1, 1, 1])
+
+    assert strategy.context == [context]
+    assert strategy.context_health[-1] == ("4h", True)
+    assert session._canonical_context_retry == set()
 
 
 def test_active_scanner_runtime_contract_controls_cost_and_hold(tmp_path):
@@ -2120,6 +2160,8 @@ class ExplicitMakerLongOnce(MakerLongOnce):
             take_profit_price=signal.take_profit_price,
             entry_limit_price=99.5,
             reason="paired route cohort",
+            expected_gross_edge_bps=100.0,
+            edge_model_id="fixture_oos_edge_v1",
         )
 
 
@@ -2388,6 +2430,7 @@ def test_next_close_reconciles_recent_exchange_row_from_canonical_lake(tmp_path)
     assert session._append_candle([next_ts, 104, 105, 103, 104.5, 5])
     repaired = session.candles.iloc[-2]
     assert repaired["candle_source"] == "canonical_tick_lake"
+    assert len(repaired["content_sha256"]) == 64
     assert repaired["quote_volume"] == pytest.approx(2550)
     assert repaired["trade_count"] == 42
 

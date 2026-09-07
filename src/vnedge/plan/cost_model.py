@@ -119,7 +119,15 @@ class CostModel:
         self, gross_bps: float, *, funding_bps: float = 0.0,
         maker_entry: bool = False, maker_exit: bool = False,
     ) -> float:
-        """gross_bps (signed realized move) minus full round-trip cost."""
+        """Booked PnL: gross move minus fees/slippage/funding only.
+
+        The safety reserve belongs to pre-trade gating and is never charged to
+        the account. Call ``round_trip_bps(include_safety=True)`` explicitly
+        when displaying the research wall.
+        """
         return gross_bps - self.round_trip_bps(
-            maker_entry=maker_entry, maker_exit=maker_exit, funding_bps=funding_bps
+            maker_entry=maker_entry,
+            maker_exit=maker_exit,
+            funding_bps=funding_bps,
+            include_safety=False,
         )

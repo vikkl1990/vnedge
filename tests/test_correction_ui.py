@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from vnedge.dashboard.app import SnapshotProvider, create_app
@@ -132,7 +133,10 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     }
     assert measurement["last_signal_reason"] == "observe_only"
     assert measurement["cost_profile"] == "delta_swing"
-    assert measurement["round_trip_bps"] == 13.0
+    assert measurement["round_trip_bps"] == pytest.approx(15.8)
+    assert measurement["execution_cost_bps"] == pytest.approx(15.8)
+    assert measurement["gate_cost_bps"] == pytest.approx(18.8)
+    assert measurement["approval_gross_floor_bps"] == pytest.approx(19.8)
     assert measurement["why_no_fire"] == ("measurement lane emits no OrderIntent by design")
     assert measurement["health"] == "blocked"  # canonical gap band, not feed-only OK
     assert measurement["health_reason"] == "candle_gap"
@@ -360,9 +364,10 @@ def test_quote_lane_lifecycle_does_not_relabel_candidates_as_fires() -> None:
         "pending": 0,
         "session_state": "eligible",
         "htf_context_age_seconds": 900.0,
-        "net_value": -10.81,
-        "net_unit": "USD",
-        "net_basis": "shadow_booked_execution",
+        "net_value": None,
+        "net_unit": None,
+        "net_basis": None,
+        "performance_eligible": False,
     }
 
 

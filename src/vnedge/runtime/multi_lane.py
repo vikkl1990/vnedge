@@ -1144,6 +1144,22 @@ def _allows_validated_exchange_ohlcv(spec: LaneSpec) -> bool:
     return spec.strategy_id in _VALIDATED_EXCHANGE_OHLCV_STRATEGIES
 
 
+def _allows_validated_exchange_context(spec: LaneSpec) -> bool:
+    """Whether denial-only HTF context may use validated official OHLCV.
+
+    This is deliberately separate from ``_allows_validated_exchange_ohlcv``:
+    V2's telescope declares official Delta OHLC as an input, while its 15m
+    decision candle remains canonical tick-lake/router truth.
+    """
+
+    contract = scanner_runtime_contract(spec.strategy_id)
+    return bool(
+        contract is not None
+        and contract.context_tfs
+        and "exchange_ohlcv_validated" in contract.context_candle_sources
+    )
+
+
 def _warmup_since_for_timeframe(
     timeframe: str,
     until_ms: int,
@@ -1441,6 +1457,7 @@ async def build_lane(
         )
     funding_history_unsupported = False
     allow_validated_exchange_ohlcv = _allows_validated_exchange_ohlcv(spec)
+    allow_validated_exchange_context = _allows_validated_exchange_context(spec)
     context_seed_frames: dict[str, pd.DataFrame] = {}
     async with CcxtPublicClient(spec.exchange) as rest:
         # (B) Cache + gap-fill: reuse the persisted candle window and fetch only
@@ -1476,7 +1493,7 @@ async def build_lane(
         # daily EMA200 and weekly structure need an independent HTF window;
         # reusing the 15m ``since`` timestamp made readiness impossible.
         runtime_contract = scanner_runtime_contract(spec.strategy_id)
-        if allow_validated_exchange_ohlcv and runtime_contract is not None:
+        if allow_validated_exchange_context and runtime_contract is not None:
             for context_timeframe in runtime_contract.context_tfs:
                 context_since = _warmup_since_for_timeframe(
                     context_timeframe,

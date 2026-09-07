@@ -394,6 +394,11 @@ class LivePaperSession:
             str(timeframe): timestamp.astimezone(UTC)
             for timeframe, timestamp in (canonical_context_watermarks or {}).items()
         }
+        # A context close can become durable just after the bounded wait at
+        # its boundary. Keep retrying that exact identity on later decision
+        # bars; otherwise one transient miss poisons the lane until the next
+        # 4h/1d boundary.
+        self._canonical_context_retry: set[str] = set()
         self._last_canonical_transport = "parquet_poll"
         self._last_router_wait_ms: float | None = None
         # Set only while one lane-consumed BBO is synchronously traversing the
@@ -564,6 +569,7 @@ class LivePaperSession:
                         "delta_india",
                         "deltaindia",
                     },
+                    require_canonical_decision=True,
                 )
                 if quote_acceptance and runtime_contract is not None
                 else SqueezeObserveRunner(
@@ -902,6 +908,16 @@ class LivePaperSession:
                         "candle_source": "exchange_ohlcv",
                     }
                 )
+        if row.get("candle_source") == "canonical_tick_lake":
+            opened = ts.to_pydatetime()
+            if self._tf_seconds is None:
+                raise RuntimeError("canonical decision row requires a supported timeframe")
+            row["content_sha256"] = bar_content_sha256(
+                row,
+                open_time=opened,
+                close_time=opened + timedelta(seconds=self._tf_seconds),
+                source="canonical_tick_lake",
+            )
         if len(self.candles):
             last_ts = self.candles["timestamp"].iloc[-1]
             if ts == last_ts:
@@ -1075,7 +1091,7 @@ class LivePaperSession:
             await asyncio.sleep(min(poll, max(0.0, deadline - loop.time())))
 
     async def _refresh_canonical_strategy_context(self, raw_row: list) -> bool:
-        """Advance canonical HTF context only at its actual close boundary.
+        """Advance HTF context at its close boundary and retry missed binds.
 
         The venue LTF close is merely the clock event. A structure scanner may
         consume a new 4h state only after the exact trade-derived 4h candle is
@@ -1106,10 +1122,21 @@ class LivePaperSession:
             }.get(timeframe)
             if context_ms is None:
                 raise ValueError(f"unsupported canonical context timeframe: {timeframe}")
-            if base_close_ms % context_ms != 0:
+            is_boundary = base_close_ms % context_ms == 0
+            expected_open_ms = (base_close_ms // context_ms) * context_ms - context_ms
+            expected_close = datetime.fromtimestamp(
+                (expected_open_ms + context_ms) / 1000,
+                tz=UTC,
+            )
+            last_closed = self._canonical_context_last_closed_at.get(timeframe)
+            retry_due = (
+                timeframe in self._canonical_context_retry
+                or (last_closed is not None and last_closed < expected_close)
+            )
+            if not is_boundary and not retry_due:
                 continue
             boundary_observed = True
-            opened = pd.to_datetime(base_close_ms - context_ms, unit="ms", utc=True)
+            opened = pd.to_datetime(expected_open_ms, unit="ms", utc=True)
             deadline = loop.time() + float(self.config.canonical_candle_wait_seconds)
             canonical: Candle | None = None
             while canonical is None:
@@ -1131,6 +1158,7 @@ class LivePaperSession:
                     )
                 )
             if canonical is None:
+                self._canonical_context_retry.add(timeframe)
                 if callable(set_health):
                     set_health(timeframe, False)
                 self.journal.append(
@@ -1145,6 +1173,7 @@ class LivePaperSession:
                 )
                 continue
             ingest(canonical)
+            self._canonical_context_retry.discard(timeframe)
             self._canonical_context_last_closed_at[timeframe] = canonical.open_time + timedelta(
                 milliseconds=context_ms
             )
@@ -1219,6 +1248,15 @@ class LivePaperSession:
                 "candle_source": "canonical_tick_lake",
                 "canonical_repair_state": "repaired",
             }
+            if self._tf_seconds is None:
+                raise RuntimeError("canonical repair requires a supported timeframe")
+            values["content_sha256"] = bar_content_sha256(
+                values,
+                open_time=opened.to_pydatetime(),
+                close_time=opened.to_pydatetime()
+                + timedelta(seconds=self._tf_seconds),
+                source="canonical_tick_lake",
+            )
             for name, value in values.items():
                 self.candles.at[index, name] = value
 
@@ -2137,11 +2175,30 @@ class LivePaperSession:
             self._log_trade_event("cost_rejected", self.last_reject_reason, now)
             return
         target = max(favorable) if sig.side == "long" else min(favorable)
-        signal_edge_bps = (
+        gross_payoff_room_bps = (
             (target - ref_price) / ref_price * 10_000.0
             if sig.side == "long"
             else (ref_price - target) / ref_price * 10_000.0
         )
+        if sig.expected_gross_edge_bps is None:
+            if self.runtime_contract is not None:
+                self.last_reject_reason = "cost_gate: edge_estimate_missing"
+                self.journal.append(
+                    "cost_rejected",
+                    {
+                        **scanner_context,
+                        "reason": self.last_reject_reason,
+                        "gross_payoff_room_bps": gross_payoff_room_bps,
+                    },
+                )
+                self._log_trade_event("cost_rejected", self.last_reject_reason, now)
+                return
+            # Compatibility only for unregistered test/legacy strategies.
+            signal_edge_bps = gross_payoff_room_bps
+            edge_model_id = "legacy_target_proxy_non_scanner"
+        else:
+            signal_edge_bps = float(sig.expected_gross_edge_bps)
+            edge_model_id = str(sig.edge_model_id)
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
             side=sig.side,
@@ -2154,7 +2211,7 @@ class LivePaperSession:
             # known settlement falls inside the frozen hold horizon.
             current_funding_rate=0.0,
             symbol=self.config.symbol,
-            available_room_bps=signal_edge_bps,
+            available_room_bps=gross_payoff_room_bps,
         )
         if not cost_decision.approved:
             self.last_reject_reason = f"cost_gate: {cost_decision.reason}"
@@ -2163,6 +2220,8 @@ class LivePaperSession:
                 {
                     **scanner_context,
                     "signal_edge_bps": signal_edge_bps,
+                    "edge_model_id": edge_model_id,
+                    "gross_payoff_room_bps": gross_payoff_room_bps,
                     "expected_net_bps": str(cost_decision.expected_net_bps),
                     "total_cost_bps": str(cost_decision.cost.total_cost_bps),
                     "min_required_bps": str(cost_decision.min_required_bps),
@@ -2383,16 +2442,30 @@ class LivePaperSession:
 
         risk_bps = abs(ref_price - float(fire.stop)) / ref_price * 10_000.0
         reward_r = self._scanner_payoff_hypothesis_r()
-        signal_edge_bps = risk_bps * reward_r
+        gross_payoff_room_bps = risk_bps * reward_r
         self.last_scanner_cost_hypothesis = {
             "basis": "stop_distance_times_frozen_reward_r_not_empirical_expectancy",
             "risk_bps": round(risk_bps, 4),
             "reward_r": round(reward_r, 4),
-            "gross_payoff_room_bps": round(signal_edge_bps, 4),
+            "gross_payoff_room_bps": round(gross_payoff_room_bps, 4),
             "gate_cost_bps": round(float(self.cost_model.round_trip_bps()), 4),
             "execution_cost_exchange": self.execution_cost_exchange_id,
             "cost_profile": self.cost_profile,
         }
+        if fire.expected_gross_edge_bps is None:
+            if self.runtime_contract is not None:
+                return ScannerApproval(
+                    approved=False,
+                    intent={},
+                    failed_checks=("cost_gate:edge_estimate_missing",),
+                    explanation=(
+                        "registered quote scanner has payoff geometry but no "
+                        "versioned expected-edge estimate"
+                    ),
+                )
+            signal_edge_bps = gross_payoff_room_bps
+        else:
+            signal_edge_bps = float(fire.expected_gross_edge_bps)
         cost_decision = self.entry_cost_gate.evaluate(
             signal_edge_bps=signal_edge_bps,
             side=fire.side,
@@ -2402,7 +2475,7 @@ class LivePaperSession:
             ),
             current_funding_rate=0.0,
             symbol=self.config.symbol,
-            available_room_bps=signal_edge_bps,
+            available_room_bps=gross_payoff_room_bps,
         )
         if not cost_decision.approved:
             return ScannerApproval(
@@ -4382,6 +4455,11 @@ class LivePaperSession:
                     if fire is not None and approval is not None and approval.approved
                     else None
                 )
+                observer_identity_rejected = (
+                    fire is None
+                    and str(getattr(self.scanner_observer.acceptance, "last_reason", ""))
+                    in {"permission_evidence_unbound", "decision_envelope_missing"}
+                )
                 self._record_eval(
                     scanner_df,
                     scanner_idx,
@@ -4389,6 +4467,8 @@ class LivePaperSession:
                     skip_reason=(
                         approval.explanation
                         if fire is not None and approval is not None and not approval.approved
+                        else "entry_evidence_rejected"
+                        if observer_identity_rejected
                         else None
                     ),
                 )
@@ -4484,6 +4564,7 @@ class LivePaperSession:
                 else:
                     self._protection_block_logged = False
                     sig = self.strategy.signal(df, idx)
+                    evidence_skip_reason: str | None = None
                     if sig is not None:
                         try:
                             sig = bind_signal_decision(
@@ -4504,6 +4585,10 @@ class LivePaperSession:
                                         False,
                                     )
                                 ),
+                                require_canonical_truth=(
+                                    self.canonical_candle_store is not None
+                                    or self.canonical_router_authoritative
+                                ),
                             )
                         except (TypeError, ValueError) as exc:
                             self.journal.append(
@@ -4515,6 +4600,7 @@ class LivePaperSession:
                                     "reason": str(exc),
                                 },
                             )
+                            evidence_skip_reason = "entry_evidence_rejected"
                             sig = None
                         else:
                             assert sig.decision_envelope is not None
@@ -4522,7 +4608,12 @@ class LivePaperSession:
                                 "decision_armed",
                                 sig.decision_envelope.as_dict(),
                             )
-                    self._record_eval(df, idx, sig)
+                    self._record_eval(
+                        df,
+                        idx,
+                        sig,
+                        skip_reason=evidence_skip_reason,
+                    )
                 self.latency.record(DECISION_LAG_MS, (time.perf_counter() - _dec_t0) * 1000.0)
                 if close_receipt_lag_ms is not None:
                     self.latency.record_labeled(

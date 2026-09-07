@@ -274,7 +274,7 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
                 "volume": 80.0,
                 "is_closed": True,
                 "data_quality": "ok",
-                "candle_source": "canonical_tick_lake",
+                "candle_source": "exchange_ohlcv_validated",
             }
         ]
     )
@@ -289,7 +289,7 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
                 "volume": 400.0,
                 "is_closed": True,
                 "data_quality": "ok",
-                "candle_source": "router",
+                "candle_source": "exchange_ohlcv_validated",
             }
         ]
     )
@@ -328,7 +328,8 @@ def test_next_open_signal_carries_actual_bound_permission_snapshot() -> None:
     assert intent.permission_snapshot.context_bars[0].open_time == pd.Timestamp(
         "2026-09-04T04:00:00Z"
     )
-    assert intent.permission_snapshot.context_bars[1].source == "router"
+    assert intent.permission_snapshot.context_bars[0].source == "exchange_ohlcv_validated"
+    assert intent.permission_snapshot.context_bars[1].source == "exchange_ohlcv_validated"
 
     # Losing the bound daily row after feature preparation must not leave a
     # floor-derived permission behind. The production signal boundary checks

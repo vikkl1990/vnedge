@@ -15,6 +15,7 @@ Contract that keeps lookahead bias structurally impossible:
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -24,8 +25,13 @@ import pandas as pd
 
 from vnedge.data.candles import floor_time
 from vnedge.execution.evidence import DecisionEnvelope
-from vnedge.strategy.arm_evidence import FrozenPermissionSnapshot, freeze_permission_from_row
+from vnedge.strategy.arm_evidence import (
+    FrozenPermissionSnapshot,
+    assert_decision_row,
+    freeze_permission_from_row,
+)
 from vnedge.strategy.realtime_entry import RealtimeEntryArm
+from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 
 
 @dataclass(frozen=True)
@@ -51,12 +57,23 @@ class SignalIntent:
     #: ARM identity minted from this strategy's closed decision bar. Runtime
     #: entry paths refuse new risk when this is absent.
     decision_envelope: DecisionEnvelope | None = None
+    #: OOS/research estimate used by CostGate. Target distance is payoff room,
+    #: not expectancy, and must never be substituted for this on a registered
+    #: scanner contract.
+    expected_gross_edge_bps: float | None = None
+    edge_model_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.stop_price <= 0:
             raise ValueError("stop_price must be positive — stop-less intents are forbidden")
         if self.entry_limit_price is not None and self.entry_limit_price <= 0:
             raise ValueError("entry_limit_price must be positive when supplied")
+        if self.expected_gross_edge_bps is not None and not math.isfinite(
+            self.expected_gross_edge_bps
+        ):
+            raise ValueError("expected_gross_edge_bps must be finite when supplied")
+        if (self.expected_gross_edge_bps is None) != (self.edge_model_id is None):
+            raise ValueError("edge estimate and edge_model_id must be supplied together")
 
 
 def bind_signal_decision(
@@ -68,6 +85,7 @@ def bind_signal_decision(
     decision_row: Mapping[str, object],
     entry_clock: str,
     require_existing_snapshot: bool = False,
+    require_canonical_truth: bool | None = None,
 ) -> SignalIntent:
     """Mint a next-open ARM envelope from one closed decision row.
 
@@ -76,11 +94,25 @@ def bind_signal_decision(
     the runtime never manufactures HTF references from calendar flooring.
     """
 
+    contract = scanner_runtime_contract(strategy_id)
+    required_context = contract.context_tfs if contract is not None else ()
+    allowed_context_sources = (
+        contract.context_candle_sources
+        if contract is not None
+        else ("canonical_tick_lake", "router")
+    )
+    # The runtime boundary explicitly opts into canonical-source enforcement.
+    # Direct research/backtest callers still get the immutable envelope but
+    # may operate on documented historical fixtures.
+    strict = bool(require_canonical_truth)
+    require_snapshot = require_existing_snapshot or bool(required_context)
+    decision_ref = assert_decision_row(decision_row, timeframe=timeframe) if strict else None
+
     if signal.decision_envelope is not None:
         return signal
     snapshot = signal.permission_snapshot
     if snapshot is None:
-        if require_existing_snapshot:
+        if require_snapshot:
             raise ValueError("required permission snapshot missing at ARM")
         try:
             snapshot = freeze_permission_from_row(
@@ -90,6 +122,8 @@ def bind_signal_decision(
                 allow_long=signal.side == "long",
                 allow_short=signal.side == "short",
                 reason=signal.reason or strategy_id,
+                regime_version=strategy_id,
+                require_closed_truth=strict,
             )
         except ValueError as exc:
             # Old unit fixtures predate TF-aligned candle identity. Keep this
@@ -119,6 +153,20 @@ def bind_signal_decision(
                 allow_short=signal.side == "short",
                 reason=signal.reason or strategy_id,
             )
+    if strict:
+        assert decision_ref is not None
+        if snapshot.decision_bar != decision_ref:
+            raise ValueError("permission snapshot decision bar does not match asserted row")
+        actual_context = tuple(bar.timeframe for bar in snapshot.context_bars)
+        if actual_context != tuple(required_context):
+            raise ValueError("permission snapshot context does not match scanner contract")
+        if any(
+            bar.close_time > snapshot.decision_bar.close_time
+            or bar.source not in allowed_context_sources
+            or bar.content_sha256 is None
+            for bar in snapshot.context_bars
+        ):
+            raise ValueError("permission snapshot contains unbound context")
     decision = DecisionEnvelope.create(
         strategy_id=strategy_id,
         symbol=symbol,

@@ -49,6 +49,12 @@ class CostEstimate(BaseModel):
     slippage_bps: Decimal  # round-trip spread/impact + maker adverse selection
     funding_bps: Decimal  # signed: +cost for the paying side, -rebate for the other
     total_cost_bps: Decimal
+    # Explicit, non-overlapping cost semantics. ``total_cost_bps`` remains a
+    # compatibility alias for booked execution cost.
+    booked_execution_bps: Decimal
+    safety_reserve_bps: Decimal
+    gate_cost_bps: Decimal
+    approval_gross_floor_bps: Decimal
     execution_model_id: str = "rules_only"
     execution_model_fallback: bool = True
     execution_model_reason: str | None = None
@@ -63,6 +69,7 @@ class CostGateResult(BaseModel):
     model_config = {"frozen": True}
     approved: bool
     expected_net_bps: Decimal
+    expected_gross_edge_bps: Decimal
     min_required_bps: Decimal
     cost: CostEstimate
     available_room_bps: Decimal | None = None
@@ -215,6 +222,15 @@ class CostGate:
         )
 
         total = fee_bps + slippage_bps + funding_bps
+        booked_execution = total
+        safety_reserve = _dec(p.safety_buffer_bps)
+        gate_cost = (
+            fee_bps
+            + slippage_bps
+            + max(funding_bps, Decimal(0))
+            + safety_reserve
+        )
+        approval_gross_floor = total + self.min_net_edge_bps
         net = edge - total
         edge_ok = net >= self.min_net_edge_bps
         room = None if available_room_bps is None else _dec(available_room_bps)
@@ -249,6 +265,7 @@ class CostGate:
         return CostGateResult(
             approved=approved,
             expected_net_bps=net,
+            expected_gross_edge_bps=edge,
             min_required_bps=self.min_net_edge_bps,
             available_room_bps=room,
             min_room_bps=min_room,
@@ -257,6 +274,10 @@ class CostGate:
                 slippage_bps=slippage_bps,
                 funding_bps=funding_bps,
                 total_cost_bps=total,
+                booked_execution_bps=booked_execution,
+                safety_reserve_bps=safety_reserve,
+                gate_cost_bps=gate_cost,
+                approval_gross_floor_bps=approval_gross_floor,
                 execution_model_id=execution_model_id,
                 execution_model_fallback=execution_model_fallback,
                 execution_model_reason=execution_model_reason,

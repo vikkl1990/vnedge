@@ -74,6 +74,7 @@ def build_quote_acceptance_engine(
     notional_usd: float = 3000.0,
     margin_usd: float = 100.0,
     require_book_imbalance: bool = False,
+    require_canonical_decision: bool = False,
 ) -> SqueezeAcceptanceObserveRunner:
     """Build the canonical quote scanner used by both live and replay.
 
@@ -117,6 +118,7 @@ def build_quote_acceptance_engine(
         costs=SessionCosts.from_profile(cost_profile, bar_minutes=bar_minutes),
         decision_timeframe=contract.timeframe,
         context_timeframes=contract.context_timeframes,
+        require_canonical_decision=require_canonical_decision,
     )
 
 

@@ -44,6 +44,11 @@ class CostDecisionEvidence:
     expected_net_bps: str | None = None
     total_cost_bps: str | None = None
     min_required_bps: str | None = None
+    expected_gross_edge_bps: str | None = None
+    booked_execution_bps: str | None = None
+    safety_reserve_bps: str | None = None
+    gate_cost_bps: str | None = None
+    approval_gross_floor_bps: str | None = None
     reason: str | None = None
 
     @classmethod
@@ -56,6 +61,7 @@ class CostDecisionEvidence:
         expected_net = getattr(result, "expected_net_bps", None)
         total_cost = getattr(cost, "total_cost_bps", None)
         min_required = getattr(result, "min_required_bps", None)
+        expected_gross = getattr(result, "expected_gross_edge_bps", None)
         reason = getattr(result, "reason", None)
         return cls(
             approved=bool(getattr(result, "approved", False)),
@@ -63,6 +69,19 @@ class CostDecisionEvidence:
             expected_net_bps=str(expected_net) if expected_net is not None else None,
             total_cost_bps=str(total_cost) if total_cost is not None else None,
             min_required_bps=str(min_required) if min_required is not None else None,
+            expected_gross_edge_bps=(
+                str(expected_gross) if expected_gross is not None else None
+            ),
+            booked_execution_bps=(
+                str(getattr(cost, "booked_execution_bps", "")) or None
+            ),
+            safety_reserve_bps=(
+                str(getattr(cost, "safety_reserve_bps", "")) or None
+            ),
+            gate_cost_bps=str(getattr(cost, "gate_cost_bps", "")) or None,
+            approval_gross_floor_bps=(
+                str(getattr(cost, "approval_gross_floor_bps", "")) or None
+            ),
             reason=str(reason) if reason else None,
         )
 
@@ -73,6 +92,11 @@ class CostDecisionEvidence:
             "expected_net_bps": self.expected_net_bps,
             "total_cost_bps": self.total_cost_bps,
             "min_required_bps": self.min_required_bps,
+            "expected_gross_edge_bps": self.expected_gross_edge_bps,
+            "booked_execution_bps": self.booked_execution_bps,
+            "safety_reserve_bps": self.safety_reserve_bps,
+            "gate_cost_bps": self.gate_cost_bps,
+            "approval_gross_floor_bps": self.approval_gross_floor_bps,
             "reason": self.reason,
         }
 

@@ -20,7 +20,7 @@ from vnedge.execution.evidence import (
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.conversion_taxonomy import conversion_reject_category
-from vnedge.runtime.execution_contract import KERNEL_PATH_ID
+from vnedge.runtime.execution_contract import KERNEL_PATH_ID, RESEARCH_OBSERVE_PATH_ID
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.runtime.latency_tracker import (
@@ -34,6 +34,7 @@ from vnedge.runtime.squeeze_observe import FireGuard, JournalSink, ScannerApprov
 from vnedge.strategy.arm_evidence import (
     FrozenPermissionSnapshot,
     MissingHtfContext,
+    assert_decision_row,
     freeze_permission_from_row,
 )
 from vnedge.strategy.base_strategy import BaseStrategy
@@ -64,6 +65,7 @@ class SqueezeAcceptanceObserveRunner:
     costs: SessionCosts = field(default_factory=lambda: SessionCosts.from_profile("delta_scalp"))
     decision_timeframe: str = "5m"
     context_timeframes: tuple[str, ...] = ()
+    require_canonical_decision: bool = False
     latency: LatencyTracker | None = None
     open_meta: dict | None = None
     candidates: int = 0
@@ -513,6 +515,7 @@ class SqueezeAcceptanceObserveRunner:
                 {
                     "intent_key": key,
                     "decision_id": key,
+                    "path_id": RESEARCH_OBSERVE_PATH_ID,
                     "strategy_id": self.strategy_id,
                     "symbol": self.symbol,
                     "approved": approval.approved,
@@ -614,7 +617,7 @@ class SqueezeAcceptanceObserveRunner:
                 "book": "quote_shadow",
                 "intent_key": meta.get("intent_key"),
                 "decision_id": meta.get("intent_key"),
-                "path_id": KERNEL_PATH_ID,
+                "path_id": RESEARCH_OBSERVE_PATH_ID,
                 "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
                 "funding_event_id": event.event_id,
@@ -775,6 +778,21 @@ class SqueezeAcceptanceObserveRunner:
         }
         if not all(math.isfinite(values[n]) for n in values):
             return
+        try:
+            evidence = self._freeze_arm_evidence(
+                row,
+                allow_long=True,
+                allow_short=True,
+                reason="squeeze_acceptance_v3",
+            )
+        except MissingHtfContext:
+            self.acceptance.last_reason = "htf_context_missing"
+            self._journal_arm_transition(previous_reason, journal_event_ts)
+            return
+        except (TypeError, ValueError):
+            self.acceptance.last_reason = "permission_evidence_unbound"
+            self._journal_arm_transition(previous_reason, journal_event_ts)
+            return
         self.acceptance.update_arm(
             CompressionArm(
                 episode_id=int(values["sqz_episode"]),
@@ -784,12 +802,7 @@ class SqueezeAcceptanceObserveRunner:
                 vwap=values["sqz_vwap24"],
                 bar_index=index,
                 compressed=values["sqz_compressed"] > 0,
-                evidence=(evidence := self._freeze_arm_evidence(
-                    row,
-                    allow_long=True,
-                    allow_short=True,
-                    reason="squeeze_acceptance_v3",
-                )),
+                evidence=evidence,
                 decisions=self._decision_envelopes(evidence),
             )
         )
@@ -861,21 +874,36 @@ class SqueezeAcceptanceObserveRunner:
     ) -> FrozenPermissionSnapshot | None:
         if not self.decision_timeframe:
             return None
+        row_payload = row.to_dict()
+        asserted = (
+            assert_decision_row(row_payload, timeframe=self.decision_timeframe)
+            if self.require_canonical_decision
+            else None
+        )
         builder = getattr(self.strategy, "freeze_permission_snapshot", None)
         if callable(builder):
-            return builder(
+            snapshot = builder(
                 row,
                 allow_long=allow_long,
                 allow_short=allow_short,
                 reason=reason,
             )
+            if asserted is not None and snapshot.decision_bar != asserted:
+                raise ValueError("quote arm snapshot does not bind the asserted decision row")
+            return snapshot
+        if self.context_timeframes:
+            raise MissingHtfContext(
+                tuple(f"{timeframe}:snapshot_builder_missing" for timeframe in self.context_timeframes)
+            )
         return freeze_permission_from_row(
-            row.to_dict(),
+            row_payload,
             decision_timeframe=self.decision_timeframe,
             context_timeframes=self.context_timeframes,
             allow_long=allow_long,
             allow_short=allow_short,
             reason=reason,
+            regime_version=f"{self.strategy_id}.decision_v1",
+            require_closed_truth=self.require_canonical_decision,
         )
 
     def _compression_arm(
@@ -911,6 +939,8 @@ class SqueezeAcceptanceObserveRunner:
             reason=arm.reason,
             evidence=evidence,
             decisions=self._decision_envelopes(evidence),
+            expected_gross_edge_bps=arm.expected_gross_edge_bps,
+            edge_model_id=arm.edge_model_id,
         )
 
     def _decision_envelopes(
@@ -1002,7 +1032,7 @@ class SqueezeAcceptanceObserveRunner:
             {
                 "intent_key": meta.get("intent_key"),
                 "decision_id": meta.get("intent_key"),
-                "path_id": KERNEL_PATH_ID,
+                "path_id": RESEARCH_OBSERVE_PATH_ID,
                 "strategy_id": self.strategy_id,
                 "symbol": self.symbol,
                 "resolution": decision.reason,
@@ -1039,6 +1069,7 @@ class SqueezeAcceptanceObserveRunner:
                 "arm_envelope": meta.get("arm_envelope"),
                 "execution_evidence": meta.get("execution_evidence"),
                 "bar_ts": bar_ts.isoformat(),
+                "performance_eligible": False,
             },
         )
         return net_bps > 0
@@ -1053,6 +1084,8 @@ class SqueezeAcceptanceObserveRunner:
             float(open_position["unrealized_net_usd"]) if open_position is not None else 0.0
         )
         return {
+            "path_id": RESEARCH_OBSERVE_PATH_ID,
+            "performance_eligible": False,
             "virtual_trades": self.outcomes,
             # Compatibility: net_usd remains CLOSED/resolved PnL. Consumers
             # that want current shadow equity must use total_net_usd.

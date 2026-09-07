@@ -460,6 +460,8 @@ def _cost_model_payload() -> dict:
             # active Delta profile used by CostGate and shadow accounting.
             venue_model = CostModel.for_profile("delta_scalp")
             venue_config = venue_model.config
+            venue_execution = venue_model.round_trip_bps(include_safety=False)
+            venue_wall = venue_model.round_trip_bps(include_safety=True)
             exchanges.append(
                 {
                     "exchange": prof.exchange,
@@ -482,6 +484,9 @@ def _cost_model_payload() -> dict:
                     "taker_round_trip_cost_bps": round(
                         venue_model.round_trip_bps(), 2
                     ),
+                    "execution_cost_bps": round(venue_execution, 2),
+                    "gate_cost_bps": round(venue_wall, 2),
+                    "approval_gross_floor_bps": round(venue_execution + 4.0, 2),
                 }
             )
             continue
@@ -508,9 +513,12 @@ def _cost_model_payload() -> dict:
         # Two labelled round-trip cost models (no safety buffer — the raw wall).
         "maker_first_rt_bps": round(maker_first_rt, 2),
         "taker_rt_bps": round(taker_rt, 2),
-        # With the research safety buffer applied (what the gates actually use).
+        # Legacy aliases with the research reserve applied.
         "maker_first_cost_bps": round(canonical.round_trip_bps(maker_entry=True), 2),
         "taker_round_trip_cost_bps": round(canonical.round_trip_bps(), 2),
+        "execution_cost_bps": round(taker_rt, 2),
+        "gate_cost_bps": round(canonical.round_trip_bps(), 2),
+        "approval_gross_floor_bps": round(taker_rt + 4.0, 2),
         # Per-exchange schedules for the calculator (Binance / Bybit / Delta).
         "exchanges": exchanges,
         "paper_fill_model": {

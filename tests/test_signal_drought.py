@@ -113,6 +113,22 @@ def test_fire_without_envelope_is_identity_bug() -> None:
     )
 
 
+def test_explicit_entry_evidence_rejection_is_identity_bug() -> None:
+    value = tracker()
+    note_eval(
+        value,
+        eligible=False,
+        fired=False,
+        primary="entry_evidence_rejected",
+        all_failed=("entry_evidence_rejected", "market_regime_playbook_blocked"),
+    )
+
+    out = value.snapshot(now=NOW + timedelta(seconds=10), timeframe_seconds=900)
+
+    assert out.drought_class == "identity_bug"
+    assert out.primary_gate_counts_24h == {"entry_evidence_rejected": 1}
+
+
 def test_long_eval_age_is_ops_silent() -> None:
     value = tracker()
     note_eval(value, decision_id="dec_old")

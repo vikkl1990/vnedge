@@ -10,10 +10,10 @@ from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder
 from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent, RiskDecision
 from vnedge.runtime.execution_contract import (
-    PERMISSION_SNAPSHOT_REQUIRED,
     AdapterKind,
     ExecutionContext,
     ExecutionStage,
+    strategy_requires_permission_snapshot,
 )
 
 
@@ -82,7 +82,7 @@ class ExecutionKernel:
             raise ValueError("execution evidence does not match venue intent")
         if (
             not intent.reduce_only
-            and evidence.strategy_id in PERMISSION_SNAPSHOT_REQUIRED
+            and strategy_requires_permission_snapshot(evidence.strategy_id)
             and (
                 evidence.htf_snapshot_id is None
                 or evidence.permission_snapshot is None

@@ -50,6 +50,11 @@ async def test_delta_owner_runs_native_recorder_without_binance_maintenance(
 
     monkeypatch.setattr(owner, "DeltaTickRecorder", Recorder)
     monkeypatch.setattr(owner, "_maintenance_loop", forbidden_maintenance)
+    monkeypatch.setattr(
+        owner,
+        "_bootstrap_delta_tail",
+        lambda **kwargs: calls.update({"bootstrap": kwargs}),
+    )
 
     with pytest.raises(RuntimeError, match="Delta canonical recorder exited"):
         await owner.run_owner(
@@ -62,3 +67,4 @@ async def test_delta_owner_runs_native_recorder_without_binance_maintenance(
     assert calls["symbols"] == ["BTC/USD:USD", "ETH/USD:USD"]
     assert calls["lease"] is False
     assert calls["kwargs"]["trades_only"] is True
+    assert calls["bootstrap"]["symbols"] == ("BTC/USD:USD", "ETH/USD:USD")

@@ -56,6 +56,8 @@ class CompressionArm:
     reason: str = "squeeze_acceptance_v3"
     evidence: FrozenPermissionSnapshot | None = None
     decisions: tuple[DecisionEnvelope, ...] = ()
+    expected_gross_edge_bps: float | None = None
+    edge_model_id: str | None = None
 
     def decision_for(self, side: Side) -> DecisionEnvelope | None:
         return next((item for item in self.decisions if item.side == side), None)
@@ -376,6 +378,8 @@ class ExpansionAcceptanceEngine:
                     f"samples={lifecycle.probe_samples} chase={chase:.1f}bps "
                     f"episode={self.arm.episode_id} current_quote_entry virtual_only"
                 ),
+                expected_gross_edge_bps=self.arm.expected_gross_edge_bps,
+                edge_model_id=self.arm.edge_model_id,
             )
         return None
 

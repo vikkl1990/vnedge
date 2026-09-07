@@ -67,7 +67,10 @@ def _evidence(
     side: str = "long",
 ) -> ExecutionEvidence:
     if (
-        strategy_id == "htf_regime_continuation_15m_v2"
+        strategy_id in {
+            "htf_regime_continuation_15m_v2",
+            "structure_bos_15m_trigger_v2",
+        }
         and permission_snapshot is None
     ):
         return ExecutionEvidence.create(
@@ -224,6 +227,23 @@ async def test_htf_v2_cannot_submit_without_frozen_permission() -> None:
             evidence=_evidence(strategy_id="htf_regime_continuation_15m_v2"),
         )
 
+    assert manager.calls == []
+
+
+async def test_any_registered_context_scanner_requires_frozen_permission() -> None:
+    manager = _RecordingOrderManager()
+    kernel = ExecutionKernel(
+        ExecutionContext(DataClock.LIVE, ExecutionStage.SHADOW),
+        cast(OrderManager, manager),
+        AdapterKind.SIMULATED,
+    )
+    with pytest.raises(PermissionError, match="requires a frozen permission"):
+        await kernel.submit(
+            _intent(),
+            _account(),
+            _market(),
+            evidence=_evidence(strategy_id="structure_bos_15m_trigger_v2"),
+        )
     assert manager.calls == []
 
 

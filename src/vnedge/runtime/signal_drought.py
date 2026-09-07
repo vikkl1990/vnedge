@@ -310,7 +310,10 @@ class SignalDroughtTracker:
             all_counts.update(event.all_failed)
         if timeframe_seconds is None or eval_age is None or eval_age > 1.5 * timeframe_seconds:
             drought_class: DroughtClass = "ops_silent"
-        elif self._last_fire_without_evidence_at is not None:
+        elif (
+            self._last_fire_without_evidence_at is not None
+            or self.last_primary_failed_gate == "entry_evidence_rejected"
+        ):
             drought_class = "identity_bug"
         elif self.last_setup_at is not None and (
             self.last_accept_at is None or self.last_setup_at > self.last_accept_at

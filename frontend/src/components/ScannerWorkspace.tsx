@@ -151,7 +151,7 @@ export function ScannerWorkspace({
                   <button key={lane.lane_id} onClick={() => setSelectedId(lane.lane_id)} className={`w-full border px-2.5 py-2 text-left ${active ? "border-brand/60 bg-brand/10" : "border-line bg-inset/50 hover:border-line2"}`}>
                     <div className="flex items-center justify-between gap-2"><span className="font-mono text-[11px]">{lane.symbol} · {lane.timeframe}</span><TerminalBadge tone={healthTone(lane.health)}>{lane.health}</TerminalBadge></div>
                     <div className="mt-1 truncate text-[10px] text-dim">{lane.strategy_id}</div>
-                    <div className="mt-1 flex justify-between font-mono text-[10px] text-faint"><span>signal {age(lane.last_signal_age_seconds)}</span><span>{usd(lane.shadow_perf?.virtual_net_usd)}</span></div>
+                    <div className="mt-1 flex justify-between font-mono text-[10px] text-faint"><span>signal {age(lane.last_signal_age_seconds)}</span><span>{lane.shadow_perf?.performance_eligible ? usd(lane.shadow_perf.virtual_net_usd) : "research"}</span></div>
                   </button>
                 );
               })}
@@ -168,7 +168,7 @@ export function ScannerWorkspace({
             <Criterion label="clock" value={`${clock?.decision_tf ?? selected.timeframe} close`} detail={`entry ${entryLabel} · protect ${clock?.protection_clock ?? "ticks"} · context ${contextTfs.join("/") || "none"}`} tone={clock?.structure_clock === "closed_bar" ? "good" : "warn"} />
             <Criterion label="close path" value={closeWarm ? "measured" : "collecting p95"} detail={selected.bar_close_processing_ms == null ? `${selected.latency_samples.bar_close}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.bar_close_processing_ms.toFixed(1)} ms · ${selected.latency_samples.bar_close}/${selected.latency_samples.required}`} tone={closeWarm ? "good" : "warn"} />
             <Criterion label="decision" value={decisionWarm ? "measured" : "collecting p95"} detail={selected.decision_lag_ms == null ? `${selected.latency_samples.decision}/${selected.latency_samples.required} persisted samples` : `p95 ${selected.decision_lag_ms.toFixed(1)} ms · ${selected.latency_samples.decision}/${selected.latency_samples.required}`} tone={decisionWarm ? "good" : "warn"} />
-            <Criterion label="cost wall" value={selected.round_trip_bps == null ? "unknown" : `${selected.round_trip_bps.toFixed(1)} bps`} detail={`${selected.cost_profile} · never bypassed by scanner state`} tone={selected.round_trip_bps == null ? "warn" : "info"} />
+            <Criterion label="cost contract" value={selected.execution_cost_bps == null ? "unknown" : `${selected.execution_cost_bps.toFixed(1)} / ${selected.gate_cost_bps?.toFixed(1) ?? "—"} bps`} detail={`${selected.cost_profile} · booked / reserve wall · approval gross ${selected.approval_gross_floor_bps?.toFixed(1) ?? "—"} bps`} tone={selected.execution_cost_bps == null ? "warn" : "info"} />
             <Criterion label="engine path" value={selected.runtime_contract?.decision_engine ?? "unreported"} detail={`exit ${selected.runtime_contract?.exit_engine ?? "unreported"} · ${selected.runtime_contract?.max_holding_bars ?? "—"} bars`} tone={selected.runtime_contract?.decision_engine && selected.runtime_contract?.exit_engine ? "info" : "warn"} />
             <Criterion
               label="signal drought"

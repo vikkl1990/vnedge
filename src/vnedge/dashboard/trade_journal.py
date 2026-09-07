@@ -20,7 +20,7 @@ from typing import Any
 
 from vnedge.runtime.execution_contract import (
     KERNEL_PATH_ID,
-    PERMISSION_SNAPSHOT_REQUIRED,
+    strategy_requires_permission_snapshot,
 )
 
 
@@ -1070,7 +1070,7 @@ def _execution_envelope_complete(econ: Mapping[str, Any]) -> bool:
         or contract_id != f"{KERNEL_PATH_ID}|{source}|{clock}"
     ):
         return False
-    if strategy_id in PERMISSION_SNAPSHOT_REQUIRED:
+    if strategy_requires_permission_snapshot(strategy_id):
         return bool(econ.get("permission_snapshot_id")) and isinstance(
             econ.get("permission_snapshot"), Mapping
         )

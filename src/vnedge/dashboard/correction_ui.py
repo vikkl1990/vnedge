@@ -36,17 +36,32 @@ LIVE_BLOCKED_MESSAGE = (
 LANES_SNAPSHOT_SLA_MS = 15_000.0
 
 
-def _lane_round_trip_bps(lane: Mapping[str, Any], plan: Mapping[str, Any]) -> float | None:
-    reported = _number(plan.get("round_trip_bps") or lane.get("round_trip_bps"))
-    if reported is not None:
-        return reported
+def _lane_cost_contract(lane: Mapping[str, Any], plan: Mapping[str, Any]) -> dict[str, float | None]:
+    """Expose booked cost, research reserve, and approval floor separately."""
+
     profile = str(lane.get("cost_profile") or "").strip()
     if not profile:
-        return None
+        reported = _number(plan.get("round_trip_bps") or lane.get("round_trip_bps"))
+        return {
+            "execution_cost_bps": reported,
+            "gate_cost_bps": None,
+            "approval_gross_floor_bps": None,
+        }
     try:
-        return CostModel.for_profile(profile).round_trip_bps()
+        model = CostModel.for_profile(profile)
     except ValueError:
-        return None
+        return {
+            "execution_cost_bps": None,
+            "gate_cost_bps": None,
+            "approval_gross_floor_bps": None,
+        }
+    execution = model.round_trip_bps(include_safety=False)
+    return {
+        "execution_cost_bps": execution,
+        "gate_cost_bps": model.round_trip_bps(include_safety=True),
+        # CostGate's default approval equation is booked cost + 4 bps net.
+        "approval_gross_floor_bps": execution + 4.0,
+    }
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -282,7 +297,13 @@ def _scanner_lifecycle(
     numeric_context_ages = [
         number for value in context_ages.values() if (number := _number(value)) is not None
     ]
-    net_value = _number(perf.get("virtual_net_usd"))
+    performance_eligible = (
+        perf.get("path_id") == "kernel_v1"
+        and perf.get("performance_eligible") is True
+    )
+    net_value = (
+        _number(perf.get("virtual_net_usd")) if performance_eligible else None
+    )
     return {
         "engine_kind": engine_kind,
         "decision_engine": decision_engine,
@@ -323,6 +344,7 @@ def _scanner_lifecycle(
         "net_value": net_value,
         "net_unit": "USD" if net_value is not None else None,
         "net_basis": "shadow_booked_execution" if net_value is not None else None,
+        "performance_eligible": performance_eligible,
     }
 
 
@@ -512,7 +534,13 @@ def build_lanes_payload(
                     if lane.get("maker_fill_ttl_bars") is not None
                     else None
                 ),
-                "round_trip_bps": _lane_round_trip_bps(lane, plan),
+                **(
+                    lambda costs: {
+                        # Deprecated compatibility alias: booked execution.
+                        "round_trip_bps": costs["execution_cost_bps"],
+                        **costs,
+                    }
+                )(_lane_cost_contract(lane, plan)),
                 "health": health,
                 "health_reason": health_reasons[0] if health_reasons else None,
                 "health_reasons": health_reasons,

@@ -437,6 +437,7 @@ class PaperRunner:
                                     False,
                                 )
                             ),
+                            require_canonical_truth=False,
                         )
                     except (TypeError, ValueError) as exc:
                         self.journal.append(

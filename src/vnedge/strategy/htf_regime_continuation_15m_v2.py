@@ -46,6 +46,11 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
     """Canonical-OHLC regime permission with one non-duplicated telescope."""
 
     strategy_id = STRATEGY_ID
+    permission_context_sources = (
+        "canonical_tick_lake",
+        "router",
+        "exchange_ohlcv_validated",
+    )
     market_regime_config = replace(
         DEFAULT_CONFIG,
         weekly_classifier="range_structure_v1",

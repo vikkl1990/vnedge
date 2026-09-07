@@ -55,6 +55,7 @@ from vnedge.runtime.readiness import RuntimeReadiness, build_runtime_readiness
 from vnedge.runtime.run_report import RunReport
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent, bind_signal_decision
 from vnedge.strategy.indicators import atr as _atr_indicator
+from vnedge.strategy.scanner_contracts import scanner_runtime_contract
 
 logger = logging.getLogger(__name__)
 
@@ -773,6 +774,16 @@ class LiveTraderSession:
                                             "requires_permission_snapshot",
                                             False,
                                         )
+                                    ),
+                                    # Registered production scanners must bind
+                                    # canonical closed-bar truth. Legacy test
+                                    # strategies remain isolated from the
+                                    # scanner registry and cannot be promoted.
+                                    require_canonical_truth=(
+                                        scanner_runtime_contract(
+                                            self.strategy.strategy_id
+                                        )
+                                        is not None
                                     ),
                                 )
                             except (TypeError, ValueError) as exc:

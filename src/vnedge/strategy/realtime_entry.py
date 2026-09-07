@@ -42,6 +42,8 @@ class RealtimeEntryArm:
     session_end_hour_utc: int | None = None
     reason: str = "realtime_scanner"
     evidence: FrozenPermissionSnapshot | None = None
+    expected_gross_edge_bps: float | None = None
+    edge_model_id: str | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -69,6 +71,12 @@ class RealtimeEntryArm:
                 raise ValueError("realtime arm structural stop must be positive")
         if self.structural_stop_mode not in {"risk_cap", "structure_floor"}:
             raise ValueError("realtime arm structural stop mode is invalid")
+        if self.expected_gross_edge_bps is not None and not math.isfinite(
+            self.expected_gross_edge_bps
+        ):
+            raise ValueError("realtime arm edge estimate must be finite")
+        if (self.expected_gross_edge_bps is None) != (self.edge_model_id is None):
+            raise ValueError("realtime edge estimate and model id must be paired")
 
 
 __all__ = ["RealtimeEntryArm", "StructuralStopMode"]

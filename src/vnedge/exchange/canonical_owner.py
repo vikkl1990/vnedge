@@ -16,6 +16,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from vnedge.data.candle_bootstrap import bootstrap_candles
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.exchange.writer_lease import CanonicalWriterLease
 from vnedge.runtime.scanner_startup import (
@@ -35,6 +36,54 @@ def _positive_seconds(environ: Mapping[str, str], name: str, default: float) -> 
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
+
+
+def _nonnegative_int(environ: Mapping[str, str], name: str, default: int) -> int:
+    try:
+        value = int(environ.get(name, str(default)))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise ValueError(f"{name} cannot be negative")
+    return value
+
+
+def _bootstrap_delta_tail(
+    *,
+    symbols: Sequence[str],
+    data_root: Path,
+    candle_root: Path,
+    environ: Mapping[str, str],
+) -> None:
+    """Repair recent Delta candle seams before the live writer starts.
+
+    The owner already holds the canonical writer lease here, so the repair
+    and recorder never overlap. A zero-day setting explicitly disables the
+    bounded replay; the default covers reconnect/startup seams without
+    pretending to be a historical Delta trade backfill.
+    """
+
+    days = _nonnegative_int(environ, "VNEDGE_DELTA_BOOTSTRAP_DAYS", 7)
+    if days == 0:
+        return
+    report = bootstrap_candles(
+        data_root,
+        candle_root,
+        source_exchange="delta_india",
+        target_exchange="delta_india",
+        symbols=symbols,
+        days=days,
+    )
+    logger.info(
+        "Delta canonical tail bootstrap: %s symbols, %s shards, %s trades, "
+        "%s candles, %s rejected, %s existing minutes skipped",
+        report.symbols,
+        report.shards,
+        report.trades,
+        report.candles,
+        report.rejected,
+        report.skipped_existing_minutes,
+    )
 
 
 def maintenance_commands(environ: Mapping[str, str], *, full: bool) -> tuple[tuple[str, ...], ...]:
@@ -129,6 +178,13 @@ async def run_owner(
     tasks: tuple[asyncio.Task[None], ...] = ()
     try:
         if exchange == "delta_india":
+            await asyncio.to_thread(
+                _bootstrap_delta_tail,
+                symbols=symbols,
+                data_root=data_root,
+                candle_root=candle_root,
+                environ=environ,
+            )
             recorder = DeltaTickRecorder(
                 list(symbols),
                 data_root,

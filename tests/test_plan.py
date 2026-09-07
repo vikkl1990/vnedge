@@ -24,7 +24,7 @@ def _plan(*, side="long", expected_net_bps=30.0, targets=None, stop_bps=40.0,
 def test_cost_model_math():
     cm = CostModel()
     assert cm.round_trip_bps() == 17.0                 # 5+5+2+2+3(safety)
-    assert cm.net_bps(30.0) == 13.0
+    assert cm.net_bps(30.0) == 16.0                 # booked; reserve is not PnL
     assert cm.round_trip_bps(funding_bps=4.0) == 21.0
     assert cm.round_trip_bps(maker_entry=True) == 14.0  # 2+5+2+2+3
 

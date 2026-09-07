@@ -503,6 +503,9 @@ export interface CorrectionLane {
   entry_route: "auto" | "taker" | "maker_retest" | string;
   maker_fill_ttl_bars: number | null;
   round_trip_bps: number | null;
+  execution_cost_bps: number | null;
+  gate_cost_bps: number | null;
+  approval_gross_floor_bps: number | null;
   health: "ok" | "degraded" | "blocked" | "unknown";
   health_reason: string | null;
   health_reasons: string[];
@@ -557,6 +560,7 @@ export interface CorrectionLane {
     net_value: number | null;
     net_unit: "USD" | null;
     net_basis: "shadow_booked_execution" | null;
+    performance_eligible: boolean;
   };
   sizing_profile: SizingProfile | null;
   runtime_contract: ScannerRuntimeContract | null;
@@ -565,6 +569,8 @@ export interface CorrectionLane {
   why_no_fire: string;
   last_reject_reason: string | null;
   shadow_perf: {
+    path_id?: string;
+    performance_eligible?: boolean;
     virtual_trades?: number;
     armed_entries?: number;
     candidates?: number;
@@ -995,10 +1001,16 @@ export interface MetaPayload {
 export interface CostModelPayload {
   taker_round_trip_cost_bps: number;
   maker_first_cost_bps: number;
+  execution_cost_bps: number;
+  gate_cost_bps: number;
+  approval_gross_floor_bps: number;
   exchanges: Array<{
     exchange: string;
     label: string;
     taker_round_trip_cost_bps: number;
+    execution_cost_bps?: number;
+    gate_cost_bps?: number;
+    approval_gross_floor_bps?: number;
   }>;
 }
 

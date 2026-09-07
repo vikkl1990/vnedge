@@ -54,6 +54,13 @@ class ScannerRuntimeContract:
     decision_engine: DecisionEngine = "base_strategy_next_open_v1"
     exit_engine: ExitEngine = "active_exit_v1"
     context_timeframes: tuple[str, ...] = ()
+    # Context provenance is part of the scanner contract. Decision candles
+    # remain canonical-only at the runtime boundary; a strategy may opt into
+    # a separately validated source for denial-only HTF context.
+    context_candle_sources: tuple[str, ...] = (
+        "canonical_tick_lake",
+        "router",
+    )
     structure_clock: StructureClock = "closed_bar"
     protection_clock: ProtectionClock = "ticks"
 
@@ -71,6 +78,12 @@ class ScannerRuntimeContract:
             )
         if len(set(self.context_timeframes)) != len(self.context_timeframes):
             raise ValueError("scanner context_timeframes cannot contain duplicates")
+        if not self.context_candle_sources:
+            raise ValueError("scanner context_candle_sources cannot be empty")
+        if len(set(self.context_candle_sources)) != len(self.context_candle_sources):
+            raise ValueError("scanner context_candle_sources cannot contain duplicates")
+        if any(not source.strip() for source in self.context_candle_sources):
+            raise ValueError("scanner context candle sources cannot be blank")
         decision_seconds = _TF_SECONDS[self.timeframe]
         for context in self.context_timeframes:
             if context not in _TF_SECONDS:
@@ -302,6 +315,11 @@ _CONTRACTS: dict[str, ScannerRuntimeContract] = {
         decision_engine="base_strategy_next_open_v1",
         exit_engine="scanner_exit_v1",
         context_timeframes=("4h", "1d"),
+        context_candle_sources=(
+            "canonical_tick_lake",
+            "router",
+            "exchange_ohlcv_validated",
+        ),
     ),
     "structure_bounce_route_probe_v2": ScannerRuntimeContract(
         strategy_id="structure_bounce_route_probe_v2",

@@ -85,6 +85,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
     strategy_id = STRATEGY_ID
     eligibility = "RESEARCH_ONLY"
     canonical_context_timeframes = ("4h", "1d")
+    permission_context_sources = ("canonical_tick_lake", "router")
     market_regime_config = DEFAULT_CONFIG
     requires_permission_snapshot = True
 
@@ -141,6 +142,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             regime_version=(
                 f"{self.strategy_id}:{self.market_regime_config.weekly_classifier}"
             ),
+            allowed_context_sources=self.permission_context_sources,
         )
 
     def _missing_permission_context(self, row: pd.Series) -> tuple[str, ...]:
@@ -152,6 +154,7 @@ class HtfRegimeContinuation15mV1(HtfStructureContinuationRealtimeV1):
             context_health=self._regime_health,
             required_context=self.canonical_context_timeframes,
             decision_close=decision_close,
+            allowed_context_sources=self.permission_context_sources,
         )
 
     def __init__(self, funding: pd.DataFrame | None = None) -> None:

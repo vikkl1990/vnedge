@@ -166,38 +166,59 @@ def complete_weeks_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     ts = work["timestamp"]
     work["week_open"] = ts.dt.floor("D") - pd.to_timedelta(ts.dt.dayofweek, unit="D")
-    rows: list[dict[str, object]] = []
+    work["day"] = ts.dt.floor("D")
+    if "volume" not in work:
+        work["volume"] = np.nan
+    if "quote_volume" not in work:
+        work["quote_volume"] = np.nan
+
+    grouped = work.groupby("week_open", sort=True, observed=True)
+    weeks = grouped.agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", lambda values: values.sum(min_count=7)),
+        quote_volume=("quote_volume", lambda values: values.sum(min_count=7)),
+        row_count=("timestamp", "size"),
+        day_count=("day", "nunique"),
+        first_day=("day", "first"),
+        last_day=("day", "last"),
+        last_timestamp=("timestamp", "last"),
+    ).reset_index()
     one_day = pd.Timedelta(days=1)
-    for week_open, group in work.groupby("week_open", sort=True):
-        group = group.sort_values("timestamp")
-        expected = pd.date_range(week_open, periods=7, freq="1D", tz="UTC")
-        actual = pd.DatetimeIndex(group["timestamp"].dt.floor("D"))
-        if len(group) != 7 or not actual.equals(expected):
-            continue
-        if group.iloc[-1]["timestamp"] + one_day != week_open + pd.Timedelta(days=7):
-            continue
-        volume_series = group.get("volume", pd.Series(np.nan, index=group.index))
-        quote_series = group.get("quote_volume", pd.Series(np.nan, index=group.index))
-        volume = float(volume_series.sum()) if volume_series.notna().all() else math.nan
-        quote = float(quote_series.sum()) if quote_series.notna().all() else math.nan
-        # Weekly value must remain the exact canonical quote/base ratio.  HLC3
-        # is a different measurement and silently substituting it would let a
-        # lower-quality exchange candle change the playbook permission.
-        vwap = quote / volume if volume > 0 and quote > 0 else math.nan
-        rows.append(
-            {
-                "timestamp": week_open,
-                "open": float(group.iloc[0]["open"]),
-                "high": float(group["high"].max()),
-                "low": float(group["low"].min()),
-                "close": float(group.iloc[-1]["close"]),
-                "volume": volume,
-                "quote_volume": quote,
-                "vwap": vwap,
-                "is_closed": True,
-            }
-        )
-    return pd.DataFrame(rows)
+    seven_days = pd.Timedelta(days=7)
+    complete = (
+        weeks["row_count"].eq(7)
+        & weeks["day_count"].eq(7)
+        & weeks["first_day"].eq(weeks["week_open"])
+        & weeks["last_day"].eq(weeks["week_open"] + pd.Timedelta(days=6))
+        & (weeks["last_timestamp"] + one_day).eq(weeks["week_open"] + seven_days)
+    )
+    weeks = weeks.loc[complete].copy()
+    if weeks.empty:
+        return pd.DataFrame()
+    # Weekly value remains the exact quote/base ratio. For price-only V2 the
+    # two sums are NaN and the structure classifier simply ignores VWAP.
+    weeks["vwap"] = np.where(
+        weeks["volume"].gt(0) & weeks["quote_volume"].gt(0),
+        weeks["quote_volume"] / weeks["volume"],
+        np.nan,
+    )
+    weeks["is_closed"] = True
+    return weeks.rename(columns={"week_open": "timestamp"})[
+        [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "quote_volume",
+            "vwap",
+            "is_closed",
+        ]
+    ].reset_index(drop=True)
 
 
 def _attach_trade_lake_weekly_vwap(

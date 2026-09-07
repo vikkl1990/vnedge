@@ -199,9 +199,14 @@ def _row_text(row: Mapping[str, Any], names: Sequence[str], default: str) -> str
     return default
 
 
-def _evidence_source(row: Mapping[str, Any], *, require_closed_truth: bool) -> str:
+def _evidence_source(
+    row: Mapping[str, Any],
+    *,
+    require_closed_truth: bool,
+    allowed_sources: Sequence[str] = tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
+) -> str:
     source = str(row.get("candle_source", "unreported")).strip()
-    if require_closed_truth and source not in TRUSTED_PERMISSION_CANDLE_SOURCES:
+    if require_closed_truth and source not in frozenset(allowed_sources):
         raise ValueError(f"untrusted permission candle source: {source}")
     return source
 
@@ -247,6 +252,82 @@ def bar_content_sha256(
     return hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def assert_decision_row(
+    row: Mapping[str, Any],
+    *,
+    timeframe: str,
+) -> ImmutableBarRef:
+    """Validate and hash one immutable canonical decision candle.
+
+    This is the single runtime boundary assertion.  Strategies may calculate
+    any number of features, but no arm may be minted from a forming, repaired,
+    exchange-OHLC, off-grid, or numerically invalid row.
+    """
+
+    if not _true_flag(row.get("is_closed")):
+        raise ValueError("decision_row_not_closed")
+    if str(row.get("data_quality", "")).lower() != "ok":
+        raise ValueError("decision_row_quality_not_ok")
+    source = _evidence_source(row, require_closed_truth=True)
+    try:
+        seconds = TF_SECONDS[timeframe]
+    except KeyError as exc:
+        raise ValueError(f"unsupported decision timeframe: {timeframe!r}") from exc
+    open_time = _utc_datetime(row.get("timestamp", row.get("open_time")))
+    if open_time != floor_time(open_time, timeframe):
+        raise ValueError("decision_row_not_timeframe_aligned")
+    expected_close = open_time + timedelta(seconds=seconds)
+    if row.get("close_time") is not None:
+        close_time = _utc_datetime(row["close_time"])
+        if close_time != expected_close:
+            raise ValueError("decision_row_close_time_mismatch")
+    else:
+        close_time = expected_close
+
+    prices: dict[str, Decimal] = {}
+    for name in ("open", "high", "low", "close"):
+        try:
+            value = Decimal(str(row.get(name)))
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"decision_row_{name}_invalid") from None
+        if not value.is_finite() or value <= 0:
+            raise ValueError(f"decision_row_{name}_invalid")
+        prices[name] = value
+    if prices["high"] < max(prices["open"], prices["close"], prices["low"]):
+        raise ValueError("decision_row_ohlc_incoherent")
+    if prices["low"] > min(prices["open"], prices["close"], prices["high"]):
+        raise ValueError("decision_row_ohlc_incoherent")
+    for name in ("volume", "quote_volume", "trade_count"):
+        if name not in row or row.get(name) is None:
+            continue
+        try:
+            value = Decimal(str(row.get(name)))
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"decision_row_{name}_invalid") from None
+        if not value.is_finite() or value < 0:
+            raise ValueError(f"decision_row_{name}_invalid")
+
+    expected_hash = bar_content_sha256(
+        row,
+        open_time=open_time,
+        close_time=close_time,
+        source=source,
+    )
+    supplied_hash = str(row.get("content_sha256") or "").strip().lower()
+    if not supplied_hash:
+        raise ValueError("decision_row_content_hash_missing")
+    if supplied_hash != expected_hash:
+        raise ValueError("decision_row_content_hash_mismatch")
+
+    return ImmutableBarRef(
+        timeframe=timeframe,
+        open_time=open_time,
+        close_time=close_time,
+        source=source,
+        content_sha256=supplied_hash,
+    )
 
 
 # Compatibility alias for older internal call sites.  New transport/parity
@@ -296,6 +377,7 @@ def last_eligible_context_bar(
     *,
     timeframe: str,
     decision_close: datetime,
+    allowed_sources: Sequence[str] = tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
 ) -> ImmutableBarRef | None:
     """Return the exact trusted immutable context bar visible to a decision."""
 
@@ -316,7 +398,11 @@ def last_eligible_context_bar(
         raise ValueError(f"bound context row is not closed: {timeframe}")
     if str(row.get("data_quality", "")).lower() != "ok":
         raise ValueError(f"bound context row data quality is not ok: {timeframe}")
-    source = _evidence_source(row, require_closed_truth=True)
+    source = _evidence_source(
+        row,
+        require_closed_truth=True,
+        allowed_sources=allowed_sources,
+    )
     open_time = _utc_datetime(row.get("timestamp", row.get("open_time")))
     close_time = _utc_datetime(
         row.get("close_time", open_time + timedelta(seconds=seconds))
@@ -341,6 +427,7 @@ def missing_bound_context(
     context_health: Mapping[str, bool],
     required_context: Sequence[str],
     decision_close: datetime,
+    allowed_context_sources: Sequence[str] = tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
 ) -> tuple[str, ...]:
     """Explain which declared HTF permissions cannot be sourced."""
 
@@ -354,6 +441,7 @@ def missing_bound_context(
                 context_frames.get(timeframe),
                 timeframe=timeframe,
                 decision_close=decision_close,
+                allowed_sources=allowed_context_sources,
             )
         except (TypeError, ValueError):
             missing.append(f"{timeframe}:invalid")
@@ -374,6 +462,7 @@ def freeze_permission_from_bound_frames(
     allow_short: bool,
     reason: str,
     regime_version: str,
+    allowed_context_sources: Sequence[str] = tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
 ) -> FrozenPermissionSnapshot:
     """Freeze permission from actual bound HTF rows or reject before an arm.
 
@@ -393,6 +482,7 @@ def freeze_permission_from_bound_frames(
         context_health=context_health,
         required_context=required_context,
         decision_close=decision_close,
+        allowed_context_sources=allowed_context_sources,
     )
     if missing:
         raise MissingHtfContext(missing)
@@ -417,6 +507,7 @@ def freeze_permission_from_bound_frames(
         regime_version=regime_version,
         require_bound_context=True,
         require_closed_truth=True,
+        allowed_context_sources=allowed_context_sources,
     )
 
 
@@ -432,6 +523,7 @@ def freeze_permission_from_row(
     regime_version: str = "unreported",
     require_bound_context: bool = False,
     require_closed_truth: bool = False,
+    allowed_context_sources: Sequence[str] = tuple(TRUSTED_PERMISSION_CANDLE_SOURCES),
 ) -> FrozenPermissionSnapshot:
     """Freeze the exact closed-bar permission visible when an arm was created.
 
@@ -490,7 +582,11 @@ def freeze_permission_from_row(
                     raise ValueError(f"bound context row is not closed: {timeframe}")
                 if str(bound.get("data_quality", "")).lower() != "ok":
                     raise ValueError(f"bound context row data quality is not ok: {timeframe}")
-            source = _evidence_source(bound, require_closed_truth=require_closed_truth)
+            source = _evidence_source(
+                bound,
+                require_closed_truth=require_closed_truth,
+                allowed_sources=allowed_context_sources,
+            )
             content_sha256 = bar_content_sha256(
                 bound,
                 open_time=context_open,
@@ -527,6 +623,7 @@ __all__ = [
     "FrozenPermissionSnapshot",
     "ImmutableBarRef",
     "MissingHtfContext",
+    "assert_decision_row",
     "bar_content_sha256",
     "freeze_permission_from_bound_frames",
     "freeze_permission_from_row",

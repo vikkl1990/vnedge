@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { CorrectionLane, ScannerAuditEvent } from "../api";
-import { useCostModel, useJournal, useLanes } from "../queries";
+import { useJournal, useLanes } from "../queries";
 import { TerminalBadge } from "./Terminal";
 
 const ScannerChart = lazy(() => import("./ScannerChart").then((module) => ({ default: module.ScannerChart })));
@@ -87,7 +87,6 @@ function EvidenceTape({ lane, events }: { lane: CorrectionLane; events: ScannerA
 export function StrategyWorkbench() {
   const lanesQuery = useLanes();
   const journal = useJournal(100, 0);
-  const costs = useCostModel();
   const lanes = useMemo(() => (lanesQuery.data?.lanes ?? []).filter((lane) => lane.observation_class === "shadow_observe"), [lanesQuery.data]);
   const [selectedId, setSelectedId] = useState("");
   const lane = lanes.find((item) => item.lane_id === selectedId) ?? lanes[0] ?? null;
@@ -119,7 +118,7 @@ export function StrategyWorkbench() {
           <div><span>Scale</span><strong>{lane.timeframe}</strong></div>
           <div><span>Clock</span><strong>{text(lane.runtime_contract?.entry_clock)}</strong></div>
           <div><span>Mode</span><strong>{lane.mode}</strong></div>
-          <div><span>Cost</span><strong>{lane.cost_profile} · {lane.round_trip_bps?.toFixed(1) ?? costs.data?.taker_round_trip_cost_bps?.toFixed(1) ?? "—"} bps</strong></div>
+          <div><span>Booked / wall</span><strong>{lane.execution_cost_bps?.toFixed(1) ?? "—"} / {lane.gate_cost_bps?.toFixed(1) ?? "—"} bps</strong></div>
         </div>
       </section>
 
@@ -185,7 +184,7 @@ export function StrategyWorkbench() {
           <div className="performance-card__metrics">
             <div><span>Resolved</span><strong>{lane.lifecycle.resolved}</strong></div>
             <div><span>Booked net</span><strong className={(lane.lifecycle.net_value ?? 0) < 0 ? "text-short" : "text-long"}>{lane.lifecycle.net_value == null ? "—" : `$${lane.lifecycle.net_value.toFixed(2)}`}</strong></div>
-            <div><span>Gate wall</span><strong>{lane.round_trip_bps?.toFixed(1) ?? "—"} bps</strong></div>
+            <div><span>Booked / wall / approve</span><strong>{lane.execution_cost_bps?.toFixed(1) ?? "—"} / {lane.gate_cost_bps?.toFixed(1) ?? "—"} / {lane.approval_gross_floor_bps?.toFixed(1) ?? "—"} bps</strong></div>
             <div><span>Entry clock</span><strong>{text(lane.runtime_contract?.entry_clock)}</strong></div>
           </div>
           {lane.lifecycle.resolved < 20 && <div className="sample-warning"><span>UNDER-SAMPLED</span><p>Performance exists for audit, but the population is too small for a promotion claim.</p></div>}

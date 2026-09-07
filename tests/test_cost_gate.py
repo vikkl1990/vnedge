@@ -81,6 +81,11 @@ def test_delta_swing_uses_gst_with_swing_execution_floor():
     # CostGate reports executable expected cost; the separate 3 bps plan
     # reserve remains a promotion/plan margin, not a venue charge.
     assert result.cost.total_cost_bps == Decimal("15.800")
+    assert result.cost.booked_execution_bps == Decimal("15.800")
+    assert result.cost.safety_reserve_bps == Decimal("3.0")
+    assert result.cost.gate_cost_bps == Decimal("18.800")
+    assert result.cost.approval_gross_floor_bps == Decimal("19.800")
+    assert result.expected_gross_edge_bps == Decimal("100")
 
 
 def test_result_is_frozen():

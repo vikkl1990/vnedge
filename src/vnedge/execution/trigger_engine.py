@@ -167,6 +167,8 @@ class FireDecision:
     # ``expires_bar``.
     pending: bool = False
     expires_bar: int | None = None
+    expected_gross_edge_bps: float | None = None
+    edge_model_id: str | None = None
 
 
 @dataclass

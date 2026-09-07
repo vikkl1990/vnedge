@@ -19,7 +19,28 @@ from dataclasses import dataclass
 from enum import Enum
 
 KERNEL_PATH_ID = "kernel_v1"
+RESEARCH_OBSERVE_PATH_ID = "research_observe"
 PERMISSION_SNAPSHOT_REQUIRED = frozenset({"htf_regime_continuation_15m_v2"})
+
+
+def strategy_requires_permission_snapshot(strategy_id: str) -> bool:
+    """Return whether a registered strategy declares higher-timeframe context.
+
+    Keep the historical allow-list for restored evidence, but derive the live
+    rule from the scanner contract.  Adding a new context-aware strategy must
+    therefore fail closed without remembering to edit a second list here.
+    The import is intentionally lazy to avoid a runtime-contract import cycle.
+    """
+
+    if strategy_id in PERMISSION_SNAPSHOT_REQUIRED:
+        return True
+    try:
+        from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+
+        contract = scanner_runtime_contract(strategy_id)
+    except (ImportError, RuntimeError):
+        return False
+    return bool(contract is not None and contract.context_tfs)
 
 
 class DataClock(str, Enum):
