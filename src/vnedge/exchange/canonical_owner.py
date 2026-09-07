@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import time
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from vnedge.data.candle_bootstrap import bootstrap_candles
+from vnedge.data.candles import CandleParquetStore
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.exchange.writer_lease import CanonicalWriterLease
 from vnedge.runtime.scanner_startup import (
@@ -26,6 +29,9 @@ from vnedge.runtime.scanner_startup import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CANONICAL_IDENTITY_MIGRATION_VERSION = 2
+_BINANCE_CANONICAL_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
 
 
 def _positive_seconds(environ: Mapping[str, str], name: str, default: float) -> float:
@@ -84,6 +90,68 @@ def _bootstrap_delta_tail(
         report.rejected,
         report.skipped_existing_minutes,
     )
+
+
+def _attest_binance_legacy_identity_once(
+    *,
+    symbols: Sequence[str],
+    data_root: Path,
+    candle_root: Path,
+    environ: Mapping[str, str],
+) -> None:
+    """Run the reviewed pre-schema Binance provenance migration once.
+
+    Old Binance partitions were produced from the exact aggTrade tape but did
+    not persist provenance columns.  Normal writes deliberately disclose them
+    as partial; only the canonical owner, while holding the writer lease, may
+    make the one-time attestation.  Delta is excluded because its historical
+    context may legitimately be official OHLC rather than trade-derived.
+    """
+    configured = str(
+        environ.get(
+            "VNEDGE_CANONICAL_IDENTITY_MIGRATION_MARKER",
+            data_root / "state" / "canonical_identity_v2_binanceusdm.json",
+        )
+    ).strip()
+    marker = Path(configured)
+    if marker.exists():
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"canonical identity migration marker unreadable: {marker}") from exc
+        if int(payload.get("version") or 0) == _CANONICAL_IDENTITY_MIGRATION_VERSION:
+            return
+        raise RuntimeError(f"unsupported canonical identity migration marker: {marker}")
+
+    store = CandleParquetStore(candle_root, exchange="binanceusdm")
+    rows = 0
+    for symbol in symbols:
+        for timeframe in _BINANCE_CANONICAL_TIMEFRAMES:
+            rows += store.stamp_legacy_partitions(
+                symbol,
+                timeframe,
+                source="canonical_tick_lake",
+            )
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_suffix(marker.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "version": _CANONICAL_IDENTITY_MIGRATION_VERSION,
+                "exchange": "binanceusdm",
+                "symbols": list(symbols),
+                "timeframes": list(_BINANCE_CANONICAL_TIMEFRAMES),
+                "rows_attested": rows,
+                "completed_at": datetime.now(UTC).isoformat(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, marker)
+    logger.info("attested %s legacy Binance canonical rows; marker=%s", rows, marker)
 
 
 def maintenance_commands(environ: Mapping[str, str], *, full: bool) -> tuple[tuple[str, ...], ...]:
@@ -197,6 +265,13 @@ async def run_owner(
                 trades_only=False,
             )
         else:
+            await asyncio.to_thread(
+                _attest_binance_legacy_identity_once,
+                symbols=symbols,
+                data_root=data_root,
+                candle_root=candle_root,
+                environ=environ,
+            )
             recorder = TickRecorder(
                 exchange,
                 list(symbols),

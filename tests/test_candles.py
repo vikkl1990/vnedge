@@ -171,10 +171,10 @@ def test_pipeline_builds_exact_1m_to_1d_chain_deterministically() -> None:
         "5m": 48,
         "15m": 16,
         "1h": 4,
-            "4h": 1,
-            "1d": 0,
-            "1w": 0,
-        }
+        "4h": 1,
+        "1d": 0,
+        "1w": 0,
+    }
     four_hour = output["4h"][0]
     assert (four_hour.open, four_hour.close) == (D("100"), D("339"))
     assert four_hour.volume == D("240")
@@ -332,9 +332,7 @@ def test_store_reads_exact_canonical_bar_from_its_partition(tmp_path) -> None:
     store.upsert((expected,))
 
     assert store.read_at(expected.symbol, "1h", expected.open_time) == expected
-    assert store.read_at(
-        expected.symbol, "1h", expected.open_time + timedelta(hours=1)
-    ) is None
+    assert store.read_at(expected.symbol, "1h", expected.open_time + timedelta(hours=1)) is None
 
 
 def test_get_bar_returns_persisted_provenance_without_asof_carry(tmp_path) -> None:
@@ -355,11 +353,14 @@ def test_get_bar_returns_persisted_provenance_without_asof_carry(tmp_path) -> No
     assert record.volume_base == expected.volume
     assert record.volume_notional == expected.quote_volume
     assert record.parent_open == floor_time(expected.open_time, "4h")
-    assert store.get_bar(
-        expected.symbol,
-        "1h",
-        expected.open_time + timedelta(hours=1),
-    ) is None
+    assert (
+        store.get_bar(
+            expected.symbol,
+            "1h",
+            expected.open_time + timedelta(hours=1),
+        )
+        is None
+    )
 
 
 def test_legacy_partition_discloses_unstamped_then_migrates(tmp_path) -> None:
@@ -386,6 +387,40 @@ def test_legacy_partition_discloses_unstamped_then_migrates(tmp_path) -> None:
     after = store.get_bar(expected.symbol, "1h", expected.open_time)
     assert after is not None and after.identity_persisted is True
     assert after.content_sha256 == before.content_sha256
+
+
+def test_explicit_legacy_attestation_promotes_rows_already_disclosed_as_partial(
+    tmp_path,
+) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange="binanceusdm")
+    legacy_candle = candle_at(0)
+    store.upsert((legacy_candle,))
+    path = store.partition_path(legacy_candle)
+    pd.read_parquet(path).drop(
+        columns=[
+            "source",
+            "content_sha256",
+            "data_quality",
+            "coverage_ok",
+            "parent_open",
+            "is_closed",
+        ]
+    ).to_parquet(path, index=False)
+
+    # A normal write must disclose the unknown row instead of laundering it.
+    store.upsert((candle_at(1),))
+    disclosed = store.get_bar(legacy_candle.symbol, "1h", legacy_candle.open_time)
+    assert disclosed is not None
+    assert disclosed.data_quality == "partial"
+    assert disclosed.coverage_ok is False
+
+    # The reviewed owner migration is the only operation that promotes it.
+    assert store.stamp_legacy_partitions(legacy_candle.symbol, "1h") == 2
+    attested = store.read_records(legacy_candle.symbol, "1h")
+    assert all(record.identity_persisted for record in attested)
+    assert all(record.source == "canonical_tick_lake" for record in attested)
+    assert all(record.data_quality == "ok" for record in attested)
+    assert all(record.coverage_ok for record in attested)
 
 
 def test_week_buckets_start_monday_and_require_seven_complete_dailies() -> None:

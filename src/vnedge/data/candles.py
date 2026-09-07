@@ -75,9 +75,7 @@ CANDLE_STORAGE_COLUMNS = (
     "is_closed",
 )
 
-BAR_SOURCES = frozenset(
-    {"canonical_tick_lake", "official_delta_ohlc", "repaired"}
-)
+BAR_SOURCES = frozenset({"canonical_tick_lake", "official_delta_ohlc", "repaired"})
 BAR_QUALITIES = frozenset({"ok", "gap", "partial"})
 
 _DECIMAL_FIELDS = (
@@ -652,8 +650,7 @@ class CandleParquetStore:
                 quantized = value.quantize(_STORAGE_QUANTUM, rounding=ROUND_HALF_EVEN)
             except InvalidOperation as exc:  # genuinely out of column range
                 raise ValueError(
-                    f"value {value} does not fit decimal128"
-                    f"({_STORAGE_PRECISION}, {_STORAGE_SCALE})"
+                    f"value {value} does not fit decimal128({_STORAGE_PRECISION}, {_STORAGE_SCALE})"
                 ) from exc
         return quantized
 
@@ -820,11 +817,15 @@ class CandleParquetStore:
         *,
         source: str = "canonical_tick_lake",
     ) -> int:
-        """Atomically migrate legacy partitions to the provenance schema.
+        """Atomically attest legacy partitions to the provenance schema.
 
-        The caller must select the source explicitly.  This method never mixes
-        official backfill into the canonical live source and never changes
-        OHLCV values.
+        The caller must select the source explicitly and is asserting that
+        every selected row came from that source.  This is intentionally
+        stronger than :meth:`_upgrade_frame`: a normal upsert may already have
+        disclosed an old row as ``partial``/uncovered before the reviewed
+        owner migration gets a chance to attest it.  The explicit migration
+        therefore replaces provenance, quality and hashes while leaving OHLCV
+        values unchanged.
         """
         if source not in BAR_SOURCES:
             raise ValueError(f"unsupported candle source: {source}")
@@ -841,6 +842,20 @@ class CandleParquetStore:
                     source=source,
                     timeframe=timeframe,
                 )
+                if not bool(upgraded["is_closed"].all()):
+                    raise ValueError(f"refusing to attest forming candle rows in {path}")
+                upgraded["source"] = source
+                upgraded["data_quality"] = "ok"
+                upgraded["coverage_ok"] = True
+                for index, row in upgraded.iterrows():
+                    opened = pd.Timestamp(row["open_time"]).to_pydatetime()
+                    closed = pd.Timestamp(row["close_time"]).to_pydatetime()
+                    upgraded.at[index, "content_sha256"] = bar_content_sha256(
+                        _decision_hash_row(row.to_dict()),
+                        open_time=opened,
+                        close_time=closed,
+                        source=source,
+                    )
                 self._write_atomic(path, upgraded)
                 rows += len(upgraded)
         return rows
@@ -904,9 +919,7 @@ class CandleParquetStore:
         )
         raw_hash = row.get("content_sha256")
         persisted_hash = (
-            str(raw_hash).strip().lower()
-            if raw_hash is not None and not pd.isna(raw_hash)
-            else ""
+            str(raw_hash).strip().lower() if raw_hash is not None and not pd.isna(raw_hash) else ""
         )
         expected_hash = bar_content_sha256(
             _decision_hash_row(dict(row)),
@@ -1104,9 +1117,7 @@ class CandlePipeline:
             # The base builder is also restart state. Without this boundary a
             # replayed/late trade can reopen history that Parquet has already
             # declared immutable.
-            self.builder._closed_through = max(
-                candle.close_time for candle in base_rows
-            )
+            self.builder._closed_through = max(candle.close_time for candle in base_rows)
         rebuilt_count = 0
         for source, target in _AGGREGATION_CHAIN:
             aggregator = self._aggregators.get(source)
@@ -1127,18 +1138,12 @@ class CandlePipeline:
             # newer target bar already exists. Reconstruct only bars whose
             # complete source bucket is present; source gaps therefore remain
             # visible and existing authoritative bars are never rewritten.
-            rebuilt = [
-                candle for candle in complete if candle.open_time not in existing_opens
-            ]
+            rebuilt = [candle for candle in complete if candle.open_time not in existing_opens]
             if rebuilt:
                 self.store.upsert(rebuilt)
                 rebuilt_count += len(rebuilt)
                 target_rows = [*target_rows, *rebuilt]
-            target_close = (
-                max(candle.close_time for candle in target_rows)
-                if target_rows
-                else None
-            )
+            target_close = max(candle.close_time for candle in target_rows) if target_rows else None
             pending = [
                 candle
                 for candle in source_rows
