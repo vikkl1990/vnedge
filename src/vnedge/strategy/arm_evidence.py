@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from vnedge.data.bar_identity import bar_content_sha256
 from vnedge.data.candles import TF_SECONDS, BarState, floor_time
 
 TRUSTED_PERMISSION_CANDLE_SOURCES = frozenset(
@@ -209,49 +210,6 @@ def _evidence_source(
     if require_closed_truth and source not in frozenset(allowed_sources):
         raise ValueError(f"untrusted permission candle source: {source}")
     return source
-
-
-def _canonical_number(value: object) -> str | None:
-    if value is None:
-        return None
-    try:
-        number = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        return None
-    if not number.is_finite():
-        return None
-    normalized = number.normalize()
-    return "0" if normalized == 0 else format(normalized, "f")
-
-
-def bar_content_sha256(
-    row: Mapping[str, Any],
-    *,
-    open_time: datetime,
-    close_time: datetime,
-    source: str,
-) -> str:
-    """Hash normalized bar content, independent of Python/pandas scalar types."""
-    identity = {
-        "open_time": open_time.isoformat(),
-        "close_time": close_time.isoformat(),
-        "open": _canonical_number(row.get("open")),
-        "high": _canonical_number(row.get("high")),
-        "low": _canonical_number(row.get("low")),
-        "close": _canonical_number(row.get("close")),
-        "volume": _canonical_number(row.get("volume")),
-        "quote_volume": _canonical_number(row.get("quote_volume")),
-        "trade_count": _canonical_number(row.get("trade_count")),
-        "source": source,
-    }
-    # Compatibility-only provenance for old synthetic fixtures whose raw
-    # timestamp was not aligned to the declared TF. Production canonical rows
-    # never set this field because their identity is already exact.
-    if row.get("source_open_time") is not None:
-        identity["source_open_time"] = str(row["source_open_time"])
-    return hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def assert_decision_row(

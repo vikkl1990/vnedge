@@ -224,6 +224,22 @@ class CanonicalCandleSink:
         store = CandleParquetStore(root, exchange=exchange)
         self.exchange = exchange
         self.symbols = tuple(symbols)
+        self._amount_multiplier: dict[str, Decimal] = {
+            symbol: Decimal(1) for symbol in symbols
+        }
+        if exchange == "delta_india":
+            from vnedge.exchange.delta_snapshot_validation import BASELINE
+
+            for symbol in symbols:
+                native = canonical_symbol(symbol)
+                product = BASELINE.get(native)
+                if product is None:
+                    raise ValueError(
+                        f"Delta candle sink has no frozen contract multiplier for {native}"
+                    )
+                self._amount_multiplier[symbol] = Decimal(
+                    str(product["contract_value"])
+                )
         bound_subscribers = tuple(subscribers)
         self.pipelines = {
             symbol: CandlePipeline(
@@ -522,7 +538,10 @@ class CanonicalCandleSink:
                     Trade(
                         timestamp=datetime.fromtimestamp(int(row["ts_ms"]) / 1000, tz=UTC),
                         price=Decimal(str(row["price"])),
-                        amount=Decimal(str(row["amount"])),
+                        amount=(
+                            Decimal(str(row["amount"]))
+                            * self._amount_multiplier[symbol]
+                        ),
                         is_buyer_maker=(
                             False if side == "buy" else True if side == "sell" else None
                         ),
@@ -566,7 +585,7 @@ class CanonicalCandleSink:
         self.pipelines[symbol].on_trade(
             datetime.fromtimestamp(int(trade["timestamp"]) / 1000, tz=UTC),
             trade["price"],
-            trade["amount"],
+            Decimal(str(trade["amount"])) * self._amount_multiplier[symbol],
             buyer_maker,
         )
 
@@ -1293,6 +1312,7 @@ class DeltaTickRecorder:
         connect=None,
         clock=None,
     ) -> None:
+        from vnedge.exchange.delta_snapshot_validation import BASELINE
         from vnedge.exchange.delta_ws import (
             DELTA_INDIA_WS_URL,
             DeltaPublicWsClient,
@@ -1306,6 +1326,16 @@ class DeltaTickRecorder:
         root = Path(root)
         self.exchange_id = exchange_id
         self.symbols = [delta_native_symbol(s) for s in symbols]
+        unknown = [symbol for symbol in self.symbols if symbol not in BASELINE]
+        if unknown:
+            raise ValueError(
+                "Delta canonical recorder has no frozen contract multiplier for "
+                + ",".join(unknown)
+            )
+        self._contract_values = {
+            symbol: Decimal(str(BASELINE[symbol]["contract_value"]))
+            for symbol in self.symbols
+        }
         self.root = root
         self.levels = levels
         self.trades_only = trades_only
@@ -1410,17 +1440,25 @@ class DeltaTickRecorder:
         ts_raw = msg.get("timestamp")
         ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._epoch_ms()
         try:
-            buf.add(
-                _book_row(
-                    _delta_ob(buy, sell),
-                    self.levels,
-                    ts_ms,
-                    received_ts_ms=self._epoch_ms(),
-                    sequence=(msg.get("sequence") or msg.get("sequence_no") or msg.get("nonce")),
-                    source=f"{self.exchange_id}:ob_l1",
-                    exchange_timestamped=ts_raw is not None,
-                )
+            received_ts_ms = self._epoch_ms()
+            row = _book_row(
+                _delta_ob(buy, sell),
+                self.levels,
+                ts_ms,
+                received_ts_ms=received_ts_ms,
+                sequence=(msg.get("sequence") or msg.get("sequence_no") or msg.get("nonce")),
+                source=f"{self.exchange_id}:ob_l1",
+                exchange_timestamped=ts_raw is not None,
             )
+            row.update(
+                {
+                    "captured_at_ms": received_ts_ms,
+                    "overflow_drops": 0,
+                    "evidence_scope": "recorder_raw",
+                    "parity_eligible": False,
+                }
+            )
+            buf.add(row)
         except (KeyError, TypeError, ValueError):
             return
         self.book_count += 1
@@ -1437,11 +1475,18 @@ class DeltaTickRecorder:
         try:
             timestamp_ms = int(trade["ts_ms"])
             price = Decimal(str(trade["price"]))
-            amount = Decimal(str(trade["size"]))
+            size_contracts = Decimal(str(trade["size"]))
+            contract_value = self._contract_values[sym]
+            amount = size_contracts * contract_value
             normalized: dict[str, Any] = {
                 "ts_ms": timestamp_ms,
                 "price": float(price),
-                "amount": float(amount),
+                # Raw Delta turnover stays in integer contracts.  The explicit
+                # base amount is the only quantity allowed into CandleBuilder.
+                "amount": float(size_contracts),
+                "size_contracts": float(size_contracts),
+                "contract_value": float(contract_value),
+                "base_amount": float(amount),
                 "side": side,
                 "trade_id": trade_id,
             }
@@ -1488,8 +1533,10 @@ class DeltaTickRecorder:
             if key in self._seen_trade_ids[sym]:
                 metrics["trades_dup_ws"] += 1
                 return
-        row = public_trade.storage_row()
-        row["ts_ms"] = timestamp_ms
+        # Persist venue-native contract counts plus the reviewed conversion.
+        # ``PublicTrade`` above validates the derived base-coin atom; its
+        # generic storage row is intentionally not used for Delta.
+        row = normalized
         if key is not None:
             assert trade_id is not None
             order = self._seen_trade_order[sym]

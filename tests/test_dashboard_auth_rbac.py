@@ -132,6 +132,87 @@ def test_ready_fails_closed_when_feed_or_lane_evidence_is_missing():
     ]
 
 
+def test_ready_uses_delta_operational_lane_not_primary_measurement_feed():
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "feed_health": {"candles": "stale"},
+            "lane_health": {"process_healthy": True},
+            "lanes": [
+                {
+                    "lane_id": "shadow_delta_btc",
+                    "exchange": "delta_india",
+                    "observation_class": "shadow_observe",
+                    "runtime_readiness": {
+                        "data_ready": True,
+                        "decision_ready": True,
+                        "parity_ready": False,
+                        "execution_ready": False,
+                        "live_ready": False,
+                    },
+                    "lake_contract": {
+                        "identity_ok": True,
+                        "daily_bars": 730,
+                        "ema200_ready": True,
+                        "missing_context_tfs": [],
+                    },
+                }
+            ],
+        }
+    )
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["can_trade"] is False
+    assert payload["readiness"]["data_ready"] is True
+    assert payload["readiness"]["decision_ready"] is True
+    assert payload["readiness"]["parity_ready"] is False
+
+
+def test_ready_exposes_delta_daily_and_identity_blockers():
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "feed_health": {"candles": "ok"},
+            "lane_health": {"process_healthy": True},
+            "lanes": [
+                {
+                    "lane_id": "shadow_delta_btc",
+                    "exchange": "delta_india",
+                    "observation_class": "shadow_observe",
+                    "runtime_readiness": {
+                        "data_ready": True,
+                        "decision_ready": False,
+                        "parity_ready": False,
+                        "execution_ready": False,
+                        "live_ready": False,
+                    },
+                    "lake_contract": {
+                        "identity_ok": False,
+                        "daily_bars": 6,
+                        "ema200_ready": False,
+                        "missing_context_tfs": ["1d"],
+                    },
+                }
+            ],
+        }
+    )
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert "lane_decision_not_ready:shadow_delta_btc" in payload["reasons"]
+    assert "lane_identity_unproven:shadow_delta_btc" in payload["reasons"]
+    assert payload["readiness"]["lanes"][0]["daily_bars"] == 6
+    assert payload["readiness"]["lanes"][0]["ema200_ready"] is False
+
+
 def test_whoami_reports_role_and_permissions():
     store = TokenStore([
         DashboardUser(name="viewer1", token="vt", role="viewer"),

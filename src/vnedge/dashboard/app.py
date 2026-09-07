@@ -694,6 +694,14 @@ def create_app(
             )
 
         reasons: list[str] = []
+        readiness_layers: dict[str, object] = {
+            "data_ready": False,
+            "decision_ready": False,
+            "parity_ready": False,
+            "execution_ready": False,
+            "live_ready": False,
+            "lanes": [],
+        }
         max_snapshot_age = float(
             os.environ.get("DASHBOARD_READY_MAX_SNAPSHOT_AGE_SECONDS", "30")
         )
@@ -713,11 +721,57 @@ def create_app(
         elif snapshot_age > max_snapshot_age:
             reasons.append("snapshot_stale")
 
-        feed = snapshot.get("feed_health")
-        if not isinstance(feed, dict):
-            reasons.append("primary_feed_missing")
-        elif str(feed.get("candles", "")).lower() != "ok":
-            reasons.append("primary_feed_unhealthy")
+        lanes = [row for row in snapshot.get("lanes") or [] if isinstance(row, dict)]
+        operational_lanes = [
+            row
+            for row in lanes
+            if row.get("observation_class") == "shadow_observe"
+            and str(row.get("exchange", "")).lower() == "delta_india"
+        ]
+        if operational_lanes:
+            layer_rows: list[dict[str, object]] = []
+            for lane in operational_lanes:
+                runtime = lane.get("runtime_readiness")
+                runtime = runtime if isinstance(runtime, dict) else {}
+                lake_contract = lane.get("lake_contract")
+                lake_contract = lake_contract if isinstance(lake_contract, dict) else {}
+                lane_id = str(lane.get("lane_id") or "unknown")
+                row = {
+                    "lane_id": lane_id,
+                    "data_ready": runtime.get("data_ready") is True,
+                    "decision_ready": runtime.get("decision_ready") is True,
+                    "parity_ready": runtime.get("parity_ready") is True,
+                    "execution_ready": runtime.get("execution_ready") is True,
+                    "live_ready": runtime.get("live_ready") is True,
+                    "identity_ok": lake_contract.get("identity_ok") is True,
+                    "daily_bars": lake_contract.get("daily_bars"),
+                    "ema200_ready": lake_contract.get("ema200_ready"),
+                    "missing_context_tfs": lake_contract.get("missing_context_tfs") or [],
+                }
+                layer_rows.append(row)
+                if not row["data_ready"]:
+                    reasons.append(f"lane_data_not_ready:{lane_id}")
+                if not row["decision_ready"]:
+                    reasons.append(f"lane_decision_not_ready:{lane_id}")
+                if not row["identity_ok"]:
+                    reasons.append(f"lane_identity_unproven:{lane_id}")
+            readiness_layers = {
+                "data_ready": all(row["data_ready"] for row in layer_rows),
+                "decision_ready": all(row["decision_ready"] for row in layer_rows),
+                "parity_ready": all(row["parity_ready"] for row in layer_rows),
+                "execution_ready": all(row["execution_ready"] for row in layer_rows),
+                "live_ready": all(row["live_ready"] for row in layer_rows),
+                "lanes": layer_rows,
+            }
+        else:
+            # Compatibility for single-lane and bootstrap deployments. Once a
+            # Delta operational roster exists, a green primary measurement
+            # feed can no longer stand in for its decision lake.
+            feed = snapshot.get("feed_health")
+            if not isinstance(feed, dict):
+                reasons.append("primary_feed_missing")
+            elif str(feed.get("candles", "")).lower() != "ok":
+                reasons.append("primary_feed_unhealthy")
         lane_health = snapshot.get("lane_health")
         if not isinstance(lane_health, dict):
             reasons.append("lane_health_missing")
@@ -763,7 +817,13 @@ def create_app(
 
         if reasons:
             return JSONResponse(
-                {"status": "not_ready", "reasons": sorted(set(reasons))},
+                {
+                    "status": "not_ready",
+                    "scope": "service_workflow_only",
+                    "can_trade": False,
+                    "readiness": readiness_layers,
+                    "reasons": sorted(set(reasons)),
+                },
                 status_code=503,
             )
         return JSONResponse(
@@ -771,6 +831,7 @@ def create_app(
                 "status": "ready",
                 "scope": "service_workflow_only",
                 "can_trade": False,
+                "readiness": readiness_layers,
                 "reasons": [],
             }
         )

@@ -52,6 +52,13 @@ prerequisite-health artifact. Until the proof succeeds, every new scanner arm
 is blocked while exits and observability continue. The flow never falls back
 to exchange OHLCV as exact VWAP history.
 
+`delta-recorder` is the single Delta market-data owner. One production public
+socket records BTCUSD/ETHUSD trades plus L1, converts integer contracts to
+base volume only at the candle boundary, and builds the strict
+1m→5m→15m→1h→4h→1d→1w ladder. Its raw L1 is audit/replay input, not approval
+parity; only lane-consumed quote evidence can prove the live accept sequence.
+See `docs/CANONICAL_LAKE.md` for identity, repair, and readiness rules.
+
 The final proof is persisted at
 `data/reports/scanner_prerequisites.json`. It verifies current contiguous
 exact-volume 5m/15m/1h/4h tails for BTC and ETH. Its companion

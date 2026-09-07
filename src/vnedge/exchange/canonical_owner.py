@@ -190,7 +190,11 @@ async def run_owner(
                 data_root,
                 exchange_id=exchange,
                 candle_root=candle_root,
-                trades_only=True,
+                levels=1,
+                # One Delta socket owns the immutable trade and L1 tapes.
+                # Recorder BBO is raw audit/replay input; lane-consumed quote
+                # evidence remains the only acceptance-parity authority.
+                trades_only=False,
             )
         else:
             recorder = TickRecorder(

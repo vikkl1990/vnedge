@@ -66,5 +66,6 @@ async def test_delta_owner_runs_native_recorder_without_binance_maintenance(
 
     assert calls["symbols"] == ["BTC/USD:USD", "ETH/USD:USD"]
     assert calls["lease"] is False
-    assert calls["kwargs"]["trades_only"] is True
+    assert calls["kwargs"]["trades_only"] is False
+    assert calls["kwargs"]["levels"] == 1
     assert calls["bootstrap"]["symbols"] == ("BTC/USD:USD", "ETH/USD:USD")

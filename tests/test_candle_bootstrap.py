@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pandas as pd
 import pytest
 
 from vnedge.data import candle_bootstrap
 from vnedge.data.candle_bootstrap import bootstrap_candles, trade_shards
-from vnedge.data.candles import CandleParquetStore
+from vnedge.data.candles import Candle, CandleParquetStore
 
 START = datetime(2026, 8, 15, tzinfo=UTC)
 
@@ -66,6 +67,91 @@ def test_bootstrap_replays_shards_into_closed_hour(tmp_path) -> None:
     assert CandleParquetStore(
         tmp_path / "candles", exchange="binanceusdm"
     ).read("BTCUSDT", "1h") == hours
+
+
+def test_delta_bootstrap_converts_contracts_to_base_before_vwap(tmp_path) -> None:
+    directory = tmp_path / "ticks/exchange=delta_india/symbol=BTCUSD/stream=trades/20260815"
+    directory.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ts_ms": int(START.timestamp() * 1000),
+                "price": 60_000.0,
+                "amount": 2.0,
+                "side": "buy",
+            }
+        ]
+    ).to_parquet(directory / f"{int(START.timestamp() * 1000)}-000001.parquet")
+
+    bootstrap_candles(
+        tmp_path,
+        tmp_path / "candles",
+        source_exchange="delta_india",
+        target_exchange="delta_india",
+        symbols=["BTC/USD:USD"],
+        close_through=START + timedelta(minutes=1),
+    )
+
+    minute = CandleParquetStore(
+        tmp_path / "candles", exchange="delta_india"
+    ).read("BTCUSD", "1m")[0]
+    assert minute.volume == Decimal("0.002")
+    assert minute.quote_volume == Decimal(120)
+    assert minute.vwap == Decimal(60000)
+
+
+def test_delta_repair_replays_and_replaces_legacy_contract_volume(tmp_path) -> None:
+    directory = tmp_path / "ticks/exchange=delta_india/symbol=BTCUSD/stream=trades/20260815"
+    directory.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ts_ms": int(START.timestamp() * 1000),
+                "price": 60_000.0,
+                "amount": 2.0,
+                "side": "buy",
+            }
+        ]
+    ).to_parquet(directory / f"{int(START.timestamp() * 1000)}-000001.parquet")
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    # Simulate the old bug: contracts were persisted as if they were BTC.
+    store.upsert(
+        (
+            Candle(
+                symbol="BTCUSD",
+                timeframe="1m",
+                open_time=START,
+                close_time=START + timedelta(minutes=1),
+                open=Decimal(60000),
+                high=Decimal(60000),
+                low=Decimal(60000),
+                close=Decimal(60000),
+                volume=Decimal(2),
+                quote_volume=Decimal(120000),
+                trade_count=1,
+                taker_buy_volume=Decimal(2),
+                vwap=Decimal(60000),
+                is_closed=True,
+            ),
+        )
+    )
+
+    report = bootstrap_candles(
+        tmp_path,
+        tmp_path / "candles",
+        source_exchange="delta_india",
+        target_exchange="delta_india",
+        symbols=["BTC/USD:USD"],
+        close_through=START + timedelta(minutes=1),
+        replace_existing=True,
+    )
+
+    repaired = store.get_bar("BTCUSD", "1m", START)
+    assert report.trades == 1
+    assert repaired is not None
+    assert repaired.volume_base == Decimal("0.002")
+    assert repaired.volume_notional == Decimal(120)
+    assert repaired.coverage_ok is True
 
 
 def test_trade_shards_uses_newest_available_days(tmp_path) -> None:

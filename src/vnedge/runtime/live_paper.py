@@ -40,7 +40,7 @@ from pathlib import Path
 import pandas as pd
 
 from vnedge.dashboard.state_snapshot import FeedHealth, build_snapshot
-from vnedge.data.candles import Candle, CandleParquetStore
+from vnedge.data.candles import TF_SECONDS, Candle, CandleParquetStore
 from vnedge.data.gaps import GapKind, GapParquetStore, GapRecord
 from vnedge.data.symbols import canonical_symbol
 from vnedge.data.time_machine import TimeMachine
@@ -863,12 +863,30 @@ class LivePaperSession:
                 }
             )
         elif self.canonical_candle_store is not None:
+            canonical_record = None
             try:
-                canonical = self.canonical_candle_store.read_at(
-                    self.config.symbol,
-                    self.config.timeframe,
-                    ts.to_pydatetime(),
-                )
+                get_bar = getattr(self.canonical_candle_store, "get_bar", None)
+                if callable(get_bar):
+                    canonical_record = get_bar(
+                        self.config.symbol,
+                        self.config.timeframe,
+                        ts.to_pydatetime(),
+                    )
+                    canonical = (
+                        canonical_record.candle
+                        if canonical_record is not None
+                        and canonical_record.identity_persisted
+                        and canonical_record.source == "canonical_tick_lake"
+                        and canonical_record.data_quality == "ok"
+                        and canonical_record.coverage_ok
+                        else None
+                    )
+                else:
+                    canonical = self.canonical_candle_store.read_at(
+                        self.config.symbol,
+                        self.config.timeframe,
+                        ts.to_pydatetime(),
+                    )
             except (OSError, ValueError):
                 canonical = None
             if canonical is not None:
@@ -893,6 +911,12 @@ class LivePaperSession:
                         "timeframe": self.config.timeframe,
                         "symbol": self.config.symbol,
                         "candle_source": "canonical_tick_lake",
+                        "content_sha256": (
+                            canonical_record.content_sha256
+                            if canonical_record is not None
+                            else None
+                        ),
+                        "coverage_ok": True,
                     }
                 )
             else:
@@ -912,12 +936,16 @@ class LivePaperSession:
             opened = ts.to_pydatetime()
             if self._tf_seconds is None:
                 raise RuntimeError("canonical decision row requires a supported timeframe")
-            row["content_sha256"] = bar_content_sha256(
+            expected_hash = bar_content_sha256(
                 row,
                 open_time=opened,
                 close_time=opened + timedelta(seconds=self._tf_seconds),
                 source="canonical_tick_lake",
             )
+            supplied_hash = str(row.get("content_sha256") or "")
+            if supplied_hash and supplied_hash != expected_hash:
+                raise RuntimeError("canonical lake content hash disagrees with decision row")
+            row["content_sha256"] = supplied_hash or expected_hash
         if len(self.candles):
             last_ts = self.candles["timestamp"].iloc[-1]
             if ts == last_ts:
@@ -1065,12 +1093,30 @@ class LivePaperSession:
         deadline = loop.time() + timeout
         while True:
             try:
-                canonical = await asyncio.to_thread(
-                    self.canonical_candle_store.read_at,
-                    self.config.symbol,
-                    self.config.timeframe,
-                    opened.to_pydatetime(),
-                )
+                get_bar = getattr(self.canonical_candle_store, "get_bar", None)
+                if callable(get_bar):
+                    record = await asyncio.to_thread(
+                        get_bar,
+                        self.config.symbol,
+                        self.config.timeframe,
+                        opened.to_pydatetime(),
+                    )
+                    canonical = (
+                        record.candle
+                        if record is not None
+                        and record.identity_persisted
+                        and record.source == "canonical_tick_lake"
+                        and record.data_quality == "ok"
+                        and record.coverage_ok
+                        else None
+                    )
+                else:
+                    canonical = await asyncio.to_thread(
+                        self.canonical_candle_store.read_at,
+                        self.config.symbol,
+                        self.config.timeframe,
+                        opened.to_pydatetime(),
+                    )
             except (OSError, ValueError):
                 canonical = None
             if canonical is not None:
@@ -1141,12 +1187,30 @@ class LivePaperSession:
             canonical: Candle | None = None
             while canonical is None:
                 try:
-                    canonical = await asyncio.to_thread(
-                        self.canonical_candle_store.read_at,
-                        self.config.symbol,
-                        timeframe,
-                        opened.to_pydatetime(),
-                    )
+                    get_bar = getattr(self.canonical_candle_store, "get_bar", None)
+                    if callable(get_bar):
+                        record = await asyncio.to_thread(
+                            get_bar,
+                            self.config.symbol,
+                            timeframe,
+                            opened.to_pydatetime(),
+                        )
+                        canonical = (
+                            record.candle
+                            if record is not None
+                            and record.identity_persisted
+                            and record.source == "canonical_tick_lake"
+                            and record.data_quality == "ok"
+                            and record.coverage_ok
+                            else None
+                        )
+                    else:
+                        canonical = await asyncio.to_thread(
+                            self.canonical_candle_store.read_at,
+                            self.config.symbol,
+                            timeframe,
+                            opened.to_pydatetime(),
+                        )
                 except (OSError, ValueError):
                     canonical = None
                 if canonical is not None or loop.time() >= deadline:
@@ -1219,12 +1283,30 @@ class LivePaperSession:
         )
         for index in candidates:
             opened = pd.Timestamp(self.candles.at[index, "timestamp"])
+            canonical_record = None
             try:
-                canonical = self.canonical_candle_store.read_at(
-                    self.config.symbol,
-                    self.config.timeframe,
-                    opened.to_pydatetime(),
-                )
+                get_bar = getattr(self.canonical_candle_store, "get_bar", None)
+                if callable(get_bar):
+                    canonical_record = get_bar(
+                        self.config.symbol,
+                        self.config.timeframe,
+                        opened.to_pydatetime(),
+                    )
+                    canonical = (
+                        canonical_record.candle
+                        if canonical_record is not None
+                        and canonical_record.identity_persisted
+                        and canonical_record.source == "canonical_tick_lake"
+                        and canonical_record.data_quality == "ok"
+                        and canonical_record.coverage_ok
+                        else None
+                    )
+                else:
+                    canonical = self.canonical_candle_store.read_at(
+                        self.config.symbol,
+                        self.config.timeframe,
+                        opened.to_pydatetime(),
+                    )
             except (OSError, ValueError):
                 continue
             if canonical is None:
@@ -1247,16 +1329,25 @@ class LivePaperSession:
                 "symbol": self.config.symbol,
                 "candle_source": "canonical_tick_lake",
                 "canonical_repair_state": "repaired",
+                "coverage_ok": True,
             }
             if self._tf_seconds is None:
                 raise RuntimeError("canonical repair requires a supported timeframe")
-            values["content_sha256"] = bar_content_sha256(
+            expected_hash = bar_content_sha256(
                 values,
                 open_time=opened.to_pydatetime(),
                 close_time=opened.to_pydatetime()
                 + timedelta(seconds=self._tf_seconds),
                 source="canonical_tick_lake",
             )
+            supplied_hash = (
+                canonical_record.content_sha256
+                if canonical_record is not None
+                else ""
+            )
+            if supplied_hash and supplied_hash != expected_hash:
+                raise RuntimeError("canonical repair hash disagrees with decision row")
+            values["content_sha256"] = supplied_hash or expected_hash
             for name, value in values.items():
                 self.candles.at[index, name] = value
 
@@ -1603,9 +1694,26 @@ class LivePaperSession:
         """Report the three independent readiness layers without granting authority."""
         at = now or datetime.now(UTC)
         data_block = self._candle_path_arm_block(at)
-        decision_block = (
-            "strategy_warmup_incomplete" if len(self.candles) <= self.strategy.warmup_bars else None
-        )
+        lake_contract = self._lake_decision_status(at)
+        decision_blockers: list[str | None] = [
+            "strategy_warmup_incomplete"
+            if len(self.candles) <= self.strategy.warmup_bars
+            else None,
+            "decision_identity_unproven"
+            if not lake_contract["identity_ok"]
+            else None,
+            "daily_context_below_200"
+            if lake_contract["daily_required"]
+            and int(lake_contract["daily_bars"] or 0) < 200
+            else None,
+            "daily_ema200_not_ready"
+            if lake_contract["daily_required"]
+            and not lake_contract["ema200_ready"]
+            else None,
+            "htf_context_identity_missing"
+            if lake_contract["missing_context_tfs"]
+            else None,
+        ]
         canonical_parity_ready = False
         try:
             assert_router_authority_artifact(
@@ -1660,7 +1768,7 @@ class LivePaperSession:
         ]
         return build_runtime_readiness(
             data_blockers=(data_block,),
-            decision_blockers=(decision_block,),
+            decision_blockers=decision_blockers,
             parity_blockers=(
                 "canonical_transport_parity_unproven"
                 if not canonical_parity_ready
@@ -1672,6 +1780,103 @@ class LivePaperSession:
             execution_blockers=execution_blockers,
             live_blockers=("capital_path_locked", "venue_private_stream_unavailable"),
         )
+
+    def _lake_decision_status(self, now: datetime | None = None) -> dict[str, object]:
+        """Read-only proof that the lane is bound to one lake ladder.
+
+        Market state (for example ``mean_revert``) is deliberately absent from
+        blockers: a ready playbook may deny a trade without making the data
+        path unhealthy.
+        """
+        at = now or datetime.now(UTC)
+        last_eval = self.last_eval if isinstance(self.last_eval, dict) else {}
+        data_source = last_eval.get("data_source")
+        data_source = data_source if isinstance(data_source, dict) else {}
+        source = str(data_source.get("candle_source") or "unreported")
+        digest = str(data_source.get("decision_row_sha256") or "")
+        identity_ok = source in {"canonical_tick_lake", "router"} and (
+            len(digest) == 64 and all(char in "0123456789abcdef" for char in digest.lower())
+        )
+        features = last_eval.get("features")
+        features = features if isinstance(features, dict) else {}
+        try:
+            daily_bars = int(float(features.get("daily_observations") or 0))
+        except (TypeError, ValueError):
+            daily_bars = 0
+        ema200_ready = bool(features.get("ema200_ready", False))
+        context_tfs = tuple(
+            self.runtime_contract.context_tfs
+            if self.runtime_contract is not None
+            else getattr(self.strategy, "canonical_context_timeframes", ())
+        )
+        frames = getattr(self.strategy, "_regime_frames", {})
+        health = getattr(self.strategy, "_regime_health", {})
+        allowed_sources = set(
+            self.runtime_contract.context_candle_sources
+            if self.runtime_contract is not None
+            else ("canonical_tick_lake", "router")
+        )
+        context: dict[str, dict[str, object]] = {}
+        missing: list[str] = []
+        decision_close_raw = last_eval.get("decision_at")
+        try:
+            decision_close = pd.Timestamp(decision_close_raw).to_pydatetime()
+            if decision_close.tzinfo is None:
+                decision_close = decision_close.replace(tzinfo=UTC)
+            else:
+                decision_close = decision_close.astimezone(UTC)
+        except (TypeError, ValueError):
+            decision_close = at
+        for timeframe in context_tfs:
+            frame = frames.get(timeframe) if isinstance(frames, dict) else None
+            row: pd.Series | None = None
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+                seconds = TF_SECONDS.get(timeframe)
+                if seconds is not None:
+                    eligible = frame.loc[
+                        timestamps + pd.Timedelta(seconds=seconds)
+                        <= pd.Timestamp(decision_close)
+                    ]
+                    if not eligible.empty:
+                        row = eligible.iloc[-1]
+            row_source = str(row.get("candle_source", "unreported")) if row is not None else ""
+            row_hash = str(row.get("content_sha256", "")) if row is not None else ""
+            bound = bool(
+                row is not None
+                and bool(health.get(timeframe, False))
+                and row_source in allowed_sources
+                and len(row_hash) == 64
+            )
+            close_time = None
+            age_seconds = None
+            if row is not None and TF_SECONDS.get(timeframe) is not None:
+                close_dt = (
+                    pd.Timestamp(row["timestamp"])
+                    + pd.Timedelta(seconds=TF_SECONDS[timeframe])
+                ).to_pydatetime()
+                close_time = close_dt.isoformat()
+                age_seconds = max(0.0, (at - close_dt.astimezone(UTC)).total_seconds())
+            context[timeframe] = {
+                "bound": bound,
+                "source": row_source or None,
+                "content_sha256": row_hash or None,
+                "close_time": close_time,
+                "age_seconds": age_seconds,
+            }
+            if not bound:
+                missing.append(timeframe)
+        return {
+            "identity_ok": identity_ok,
+            "candle_source": source,
+            "decision_transport": str(data_source.get("decision_transport") or "unreported"),
+            "decision_bar_content_sha256": digest or None,
+            "daily_required": "1d" in context_tfs,
+            "daily_bars": daily_bars,
+            "ema200_ready": ema200_ready,
+            "context": context,
+            "missing_context_tfs": missing,
+        }
 
     def _latency_recovery_snapshot(self) -> dict[str, dict[str, object]]:
         """Operator-visible proof behind automatic latency recovery."""
@@ -1892,6 +2097,7 @@ class LivePaperSession:
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
                 "runtime_readiness": self._runtime_readiness(now).to_dict(),
+                "lake_contract": self._lake_decision_status(now),
                 "runner_state": (
                     "in_position"
                     if self._plan is not None
@@ -3971,6 +4177,7 @@ class LivePaperSession:
                 "data_clock": self.execution_context.clock.value,
                 "execution_stage": self.execution_context.stage.value,
                 "runtime_readiness": self._runtime_readiness(snapshot_now).to_dict(),
+                "lake_contract": self._lake_decision_status(snapshot_now),
                 "bars_processed": self.bars_processed,
                 "evals": self.evals,
                 "live_evals": self.live_evals,

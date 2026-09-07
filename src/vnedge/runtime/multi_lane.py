@@ -36,6 +36,7 @@ from ccxt.base.errors import NetworkError, NotSupported
 
 from vnedge.config.risk_config import ABSOLUTE_MAX_LEVERAGE, RiskConfig
 from vnedge.dashboard.health_bands import annotate
+from vnedge.data.bar_identity import bar_content_sha256
 from vnedge.data.candles import CandleParquetStore
 from vnedge.data.ccxt_client import CcxtPublicClient
 from vnedge.data.data_quality_gate import validate_candles
@@ -449,6 +450,7 @@ class MultiLaneProvider:
                 "latency": self._lanes[lid].get("session", {}).get("latency"),
                 "latency_recovery": self._lanes[lid].get("session", {}).get("latency_recovery"),
                 "runtime_readiness": self._lanes[lid].get("session", {}).get("runtime_readiness"),
+                "lake_contract": self._lanes[lid].get("session", {}).get("lake_contract"),
                 # feed-continuity guard: non-null ⇒ lane is reduce-only (gap/stall)
                 "degraded": self._lanes[lid].get("session", {}).get("degraded"),
                 "gapped_candles": self._lanes[lid].get("session", {}).get("gapped_candles", 0),
@@ -1062,33 +1064,43 @@ def _canonical_candle_frame(
     matching canonical rows. Strict scanners can then fail closed until their
     own exact-data window is complete instead of treating a missing field as 0.
     """
-    candles = [
-        candle
-        for candle in store.read(symbol, timeframe)
-        if since_ms <= int(candle.open_time.timestamp() * 1000) < until_ms
+    records = [
+        record
+        for record in store.read_records(symbol, timeframe)
+        if since_ms <= int(record.open_time.timestamp() * 1000) < until_ms
+        and record.identity_persisted
+        and record.source == "canonical_tick_lake"
+        and record.data_quality == "ok"
+        and record.coverage_ok
     ]
-    if not candles:
+    if not records:
         return pd.DataFrame()
     return pd.DataFrame(
         {
-            "timestamp": pd.to_datetime([candle.open_time for candle in candles], utc=True),
-            "open": [float(candle.open) for candle in candles],
-            "high": [float(candle.high) for candle in candles],
-            "low": [float(candle.low) for candle in candles],
-            "close": [float(candle.close) for candle in candles],
-            "volume": [float(candle.volume) for candle in candles],
-            "quote_volume": [float(candle.quote_volume) for candle in candles],
-            "trade_count": [candle.trade_count for candle in candles],
-            "taker_buy_volume": [float(candle.taker_buy_volume) for candle in candles],
+            "timestamp": pd.to_datetime([record.open_time for record in records], utc=True),
+            "open": [float(record.candle.open) for record in records],
+            "high": [float(record.candle.high) for record in records],
+            "low": [float(record.candle.low) for record in records],
+            "close": [float(record.candle.close) for record in records],
+            "volume": [float(record.volume_base) for record in records],
+            "quote_volume": [float(record.volume_notional) for record in records],
+            "trade_count": [record.candle.trade_count for record in records],
+            "taker_buy_volume": [
+                float(record.candle.taker_buy_volume) for record in records
+            ],
             "vwap": [
-                float(candle.vwap) if candle.vwap is not None else float("nan")
-                for candle in candles
+                float(record.candle.vwap)
+                if record.candle.vwap is not None
+                else float("nan")
+                for record in records
             ],
             "data_quality": "ok",
             "is_closed": True,
             "timeframe": timeframe,
             "symbol": symbol,
             "candle_source": "canonical_tick_lake",
+            "content_sha256": [record.content_sha256 for record in records],
+            "coverage_ok": True,
         }
     )
 
@@ -1098,6 +1110,7 @@ def _overlay_canonical_history(
     canonical: pd.DataFrame,
     *,
     allow_validated_exchange_ohlcv: bool = False,
+    timeframe: str | None = None,
 ) -> pd.DataFrame:
     """Overlay exact trade-derived rows onto one validated venue history.
 
@@ -1118,7 +1131,7 @@ def _overlay_canonical_history(
         out["data_quality"] = default_quality
         out["is_closed"] = True
         out["candle_source"] = default_source
-        return out
+        return _stamp_closed_frame_identity(out, timeframe=timeframe)
     out = history.copy()
     out["data_quality"] = default_quality
     out["is_closed"] = True
@@ -1132,7 +1145,52 @@ def _overlay_canonical_history(
         if len(overlap):
             out.loc[overlap, name] = exact.loc[overlap, name]
     out["candle_source"] = out["candle_source"].fillna(default_source)
-    return out.reset_index().sort_values("timestamp").reset_index(drop=True)
+    return _stamp_closed_frame_identity(
+        out.reset_index().sort_values("timestamp").reset_index(drop=True),
+        timeframe=timeframe,
+    )
+
+
+def _stamp_closed_frame_identity(
+    frame: pd.DataFrame,
+    *,
+    timeframe: str | None = None,
+) -> pd.DataFrame:
+    """Bind each warm-up row to the exact source and closed-bar bytes used.
+
+    Official Delta context remains explicitly tagged and is only permitted by
+    contracts that declare it.  This function does not make official OHLC a
+    canonical decision candle.
+    """
+    if frame.empty:
+        return frame
+    out = frame.copy()
+    timeframe = timeframe or (
+        str(out["timeframe"].iloc[-1]) if "timeframe" in out else None
+    )
+    if not timeframe:
+        # Callers use one timeframe per frame; infer it from close cadence only
+        # when the explicit column is absent would be ambiguous, so fail closed.
+        out["content_sha256"] = None
+        return out
+    seconds = _timeframe_ms(timeframe) // 1000
+    hashes: list[str | None] = []
+    for row in out.to_dict("records"):
+        source = str(row.get("candle_source") or "unreported")
+        opened = pd.Timestamp(row["timestamp"]).to_pydatetime()
+        hashes.append(
+            bar_content_sha256(
+                row,
+                open_time=opened,
+                close_time=opened + pd.Timedelta(seconds=seconds).to_pytimedelta(),
+                source=source,
+            )
+            if bool(row.get("is_closed")) and source != "unreported"
+            else None
+        )
+    out["content_sha256"] = hashes
+    out["coverage_ok"] = out.get("data_quality", "gap").astype(str).eq("ok")
+    return out
 
 
 _VALIDATED_EXCHANGE_OHLCV_STRATEGIES: frozenset[str] = frozenset()
@@ -1482,6 +1540,7 @@ async def build_lane(
             history,
             canonical_history,
             allow_validated_exchange_ohlcv=allow_validated_exchange_ohlcv,
+            timeframe=spec.timeframe,
         )
         strategy_requirement = _strategy_warmup_requirement(spec)
         if len(history) <= strategy_requirement:
@@ -1529,6 +1588,7 @@ async def build_lane(
                     exchange_context,
                     exact_context,
                     allow_validated_exchange_ohlcv=True,
+                    timeframe=context_timeframe,
                 )
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)

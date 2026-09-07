@@ -1,12 +1,14 @@
 """Measurement-first roster and remaining multi-lane primitives."""
 
 import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from vnedge.data.candles import CandleParquetStore
+from vnedge.data.candles import Candle, CandleParquetStore
 from vnedge.runtime.canonical_candle_router import CanonicalCandleRouter
 from vnedge.runtime.latency_store import RecorderLatencyStore
 from vnedge.runtime.latency_tracker import LatencyTracker
@@ -17,6 +19,7 @@ from vnedge.runtime.multi_lane import (
     _allows_validated_exchange_context,
     _allows_validated_exchange_ohlcv,
     _build_single_strategy,
+    _canonical_candle_frame,
     _canonical_runtime_store,
     _overlay_canonical_history,
     _warmup_since_for_timeframe,
@@ -214,9 +217,12 @@ def test_htf_v2_allows_validated_price_only_context_but_not_decision_history():
         exchange,
         pd.DataFrame(),
         allow_validated_exchange_ohlcv=True,
+        timeframe="1d",
     )
     assert overlaid.iloc[0]["candle_source"] == "exchange_ohlcv_validated"
     assert overlaid.iloc[0]["data_quality"] == "ok"
+    assert len(overlaid.iloc[0]["content_sha256"]) == 64
+    assert bool(overlaid.iloc[0]["coverage_ok"]) is True
     assert not _allows_validated_exchange_ohlcv(
         LaneSpec(
             lane_id="htf_v2",
@@ -253,6 +259,43 @@ def test_htf_v2_allows_validated_price_only_context_but_not_decision_history():
             strategy_id="range_expansion_realtime_v2",
         )
     )
+
+
+def test_canonical_warmup_excludes_partial_or_unstamped_lake_rows(tmp_path):
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    opened = datetime(2026, 8, 22, tzinfo=UTC)
+
+    def bar(hour: int) -> Candle:
+        start = opened + timedelta(hours=hour)
+        return Candle(
+            symbol="BTCUSD",
+            timeframe="1h",
+            open_time=start,
+            close_time=start + timedelta(hours=1),
+            open=Decimal(100 + hour),
+            high=Decimal(101 + hour),
+            low=Decimal(99 + hour),
+            close=Decimal("100.5") + hour,
+            volume=Decimal(1),
+            quote_volume=Decimal("100.5") + hour,
+            trade_count=1,
+            taker_buy_volume=Decimal(1),
+            vwap=Decimal("100.5") + hour,
+            is_closed=True,
+        )
+
+    store.upsert((bar(0),))
+    store.upsert((bar(1),), data_quality="partial", coverage_ok=False)
+    frame = _canonical_candle_frame(
+        store,
+        "BTCUSD",
+        "1h",
+        since_ms=int(opened.timestamp() * 1000),
+        until_ms=int((opened + timedelta(hours=2)).timestamp() * 1000),
+    )
+
+    assert frame["timestamp"].tolist() == [pd.Timestamp(opened)]
+    assert frame.iloc[0]["coverage_ok"]
 
 
 def test_context_warmup_uses_its_own_timeframe_clock():

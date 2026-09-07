@@ -171,9 +171,10 @@ def test_pipeline_builds_exact_1m_to_1d_chain_deterministically() -> None:
         "5m": 48,
         "15m": 16,
         "1h": 4,
-        "4h": 1,
-        "1d": 0,
-    }
+            "4h": 1,
+            "1d": 0,
+            "1w": 0,
+        }
     four_hour = output["4h"][0]
     assert (four_hour.open, four_hour.close) == (D("100"), D("339"))
     assert four_hour.volume == D("240")
@@ -336,6 +337,88 @@ def test_store_reads_exact_canonical_bar_from_its_partition(tmp_path) -> None:
     ) is None
 
 
+def test_get_bar_returns_persisted_provenance_without_asof_carry(tmp_path) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    expected = candle_at(0)
+    store.upsert((expected,))
+
+    record = store.get_bar(expected.symbol, "1h", expected.open_time)
+
+    assert record is not None
+    assert record.candle == expected
+    assert record.exchange == "delta_india"
+    assert record.source == "canonical_tick_lake"
+    assert record.identity_persisted is True
+    assert len(record.content_sha256) == 64
+    assert record.data_quality == "ok"
+    assert record.coverage_ok is True
+    assert record.volume_base == expected.volume
+    assert record.volume_notional == expected.quote_volume
+    assert record.parent_open == floor_time(expected.open_time, "4h")
+    assert store.get_bar(
+        expected.symbol,
+        "1h",
+        expected.open_time + timedelta(hours=1),
+    ) is None
+
+
+def test_legacy_partition_discloses_unstamped_then_migrates(tmp_path) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    expected = candle_at(0)
+    store.upsert((expected,))
+    path = store.partition_path(expected)
+    legacy = pd.read_parquet(path).drop(
+        columns=[
+            "source",
+            "content_sha256",
+            "data_quality",
+            "coverage_ok",
+            "parent_open",
+            "is_closed",
+        ]
+    )
+    legacy.to_parquet(path, index=False)
+
+    before = store.get_bar(expected.symbol, "1h", expected.open_time)
+    assert before is not None and before.identity_persisted is False
+
+    assert store.stamp_legacy_partitions(expected.symbol, "1h") == 1
+    after = store.get_bar(expected.symbol, "1h", expected.open_time)
+    assert after is not None and after.identity_persisted is True
+    assert after.content_sha256 == before.content_sha256
+
+
+def test_week_buckets_start_monday_and_require_seven_complete_dailies() -> None:
+    monday = datetime(2026, 8, 17, tzinfo=UTC)
+    days = tuple(
+        Candle(
+            symbol="BTCUSD",
+            timeframe="1d",
+            open_time=monday + timedelta(days=offset),
+            close_time=monday + timedelta(days=offset + 1),
+            open=D("100"),
+            high=D("102"),
+            low=D("99"),
+            close=D("101"),
+            volume=D("2"),
+            quote_volume=D("202"),
+            trade_count=2,
+            vwap=D("101"),
+        )
+        for offset in range(7)
+    )
+
+    week = merge_candles("BTCUSD", "1w", days)
+
+    assert floor_time(monday + timedelta(days=3), "1w") == monday
+    assert week.open_time == monday
+    assert week.close_time == monday + timedelta(days=7)
+    assert week.volume == D("14")
+    assert week.quote_volume == D("1414")
+    with pytest.raises(ValueError, match="exactly 7"):
+        merge_candles("BTCUSD", "1w", days[:-1])
+
+
 def test_pipeline_restart_repairs_interior_holes_without_filling_source_gap(tmp_path) -> None:
     trades = [
         Trade(START + timedelta(minutes=minute), D(str(100 + minute)), D("1"))
@@ -444,6 +527,47 @@ def test_parquet_store_partitions_round_trips_and_upserts(tmp_path) -> None:
     forming = replace(one_hour, is_closed=False)
     with pytest.raises(ValueError, match="forming"):
         store.upsert((forming,))
+
+
+def test_delta_legacy_rows_fail_closed_when_partition_is_upgraded(tmp_path) -> None:
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    first = candle_at(0)
+    path = store.partition_path(first)
+    path.parent.mkdir(parents=True)
+    legacy = CandleParquetStore._frame(
+        (first,),
+        source="canonical_tick_lake",
+        data_quality="ok",
+        coverage_ok=True,
+    ).drop(
+        columns=[
+            "source",
+            "content_sha256",
+            "data_quality",
+            "coverage_ok",
+            "parent_open",
+            "is_closed",
+        ]
+    )
+    legacy.to_parquet(path, index=False)
+
+    store.upsert((candle_at(1),))
+
+    migrated = store.get_bar(first.symbol, first.timeframe, first.open_time)
+    assert migrated is not None
+    assert migrated.identity_persisted is True
+    assert migrated.data_quality == "partial"
+    assert migrated.coverage_ok is False
+    from vnedge.data.lake_contract import audit_lake
+
+    audit = audit_lake(
+        tmp_path / "candles",
+        exchange="delta_india",
+        symbol=first.symbol,
+        timeframe=first.timeframe,
+    )
+    assert audit["identity_stamped_rows"] == 2
+    assert audit["decision_eligible_rows"] == 1
 
 
 def test_parquet_partition_lock_preserves_concurrent_writers(tmp_path) -> None:

@@ -14,6 +14,7 @@ from typing import Final, Literal
 
 import pandas as pd
 
+from vnedge.data.bar_identity import bar_content_sha256
 from vnedge.data.candles import Candle
 from vnedge.strategy.arm_evidence import (
     FrozenPermissionSnapshot,
@@ -58,26 +59,30 @@ def _context_frame(candles: pd.DataFrame) -> pd.DataFrame:
 
 
 def _append_candle(frame: pd.DataFrame, candle: Candle) -> pd.DataFrame:
-    row = pd.DataFrame(
-        [
-            {
-                "timestamp": candle.open_time,
-                "open": float(candle.open),
-                "high": float(candle.high),
-                "low": float(candle.low),
-                "close": float(candle.close),
-                "volume": float(candle.volume),
-                "quote_volume": float(candle.quote_volume),
-                "trade_count": candle.trade_count,
-                "vwap": float(candle.vwap) if candle.vwap is not None else math.nan,
-                "is_closed": True,
-                "data_quality": "ok",
-                "timeframe": candle.timeframe,
-                "symbol": candle.symbol,
-                "candle_source": "canonical_tick_lake",
-            }
-        ]
+    values: dict[str, object] = {
+        "timestamp": candle.open_time,
+        "open": float(candle.open),
+        "high": float(candle.high),
+        "low": float(candle.low),
+        "close": float(candle.close),
+        "volume": float(candle.volume),
+        "quote_volume": float(candle.quote_volume),
+        "trade_count": candle.trade_count,
+        "vwap": float(candle.vwap) if candle.vwap is not None else math.nan,
+        "is_closed": True,
+        "data_quality": "ok",
+        "coverage_ok": True,
+        "timeframe": candle.timeframe,
+        "symbol": candle.symbol,
+        "candle_source": "canonical_tick_lake",
+    }
+    values["content_sha256"] = bar_content_sha256(
+        values,
+        open_time=candle.open_time,
+        close_time=candle.close_time,
+        source="canonical_tick_lake",
     )
+    row = pd.DataFrame([values])
     return _context_frame(pd.concat([frame, row], ignore_index=True)).tail(800).reset_index(drop=True)
 
 

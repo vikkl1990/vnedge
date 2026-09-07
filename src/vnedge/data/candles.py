@@ -21,7 +21,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from vnedge.data.bar_identity import bar_content_sha256
 from vnedge.data.parquet_store import sanitize_symbol
 from vnedge.data.symbols import canonical_symbol
 from vnedge.data.vwap import vwap_from_sums
@@ -51,6 +52,7 @@ TF_SECONDS: dict[str, int] = {
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
     "1d": 24 * 60 * 60,
+    "1w": 7 * 24 * 60 * 60,
 }
 
 CANDLE_STORAGE_COLUMNS = (
@@ -65,7 +67,18 @@ CANDLE_STORAGE_COLUMNS = (
     "trade_count",
     "taker_buy_volume",
     "vwap",
+    "source",
+    "content_sha256",
+    "data_quality",
+    "coverage_ok",
+    "parent_open",
+    "is_closed",
 )
+
+BAR_SOURCES = frozenset(
+    {"canonical_tick_lake", "official_delta_ohlc", "repaired"}
+)
+BAR_QUALITIES = frozenset({"ok", "gap", "partial"})
 
 _DECIMAL_FIELDS = (
     "open",
@@ -136,6 +149,16 @@ def floor_time(timestamp: datetime, timeframe: str) -> datetime:
     """Return the UTC epoch-aligned start of ``timestamp``'s bucket."""
     timestamp = _utc(timestamp)
     seconds = _timeframe_seconds(timeframe)
+    if timeframe == "1w":
+        # UTC week identity is Monday 00:00, not the Unix epoch's Thursday.
+        monday = timestamp - timedelta(
+            days=timestamp.weekday(),
+            hours=timestamp.hour,
+            minutes=timestamp.minute,
+            seconds=timestamp.second,
+            microseconds=timestamp.microsecond,
+        )
+        return monday
     epoch_seconds = int(timestamp.timestamp())
     floored = epoch_seconds - (epoch_seconds % seconds)
     return datetime.fromtimestamp(floored, tz=UTC)
@@ -506,6 +529,69 @@ class CandleWriteResult:
     rows_written: int
 
 
+@dataclass(frozen=True, slots=True)
+class CanonicalBarRecord:
+    """One exact lake lookup: candle bytes plus persisted provenance."""
+
+    exchange: str
+    candle: Candle
+    source: str
+    content_sha256: str
+    data_quality: str
+    coverage_ok: bool
+    parent_open: datetime | None
+    identity_persisted: bool
+
+    @property
+    def symbol(self) -> str:
+        return self.candle.symbol
+
+    @property
+    def timeframe(self) -> str:
+        return self.candle.timeframe
+
+    @property
+    def open_time(self) -> datetime:
+        return self.candle.open_time
+
+    @property
+    def close_time(self) -> datetime:
+        return self.candle.close_time
+
+    @property
+    def volume_base(self) -> Decimal:
+        return self.candle.volume
+
+    @property
+    def volume_notional(self) -> Decimal:
+        return self.candle.quote_volume
+
+
+_PARENT_TIMEFRAME = {
+    "1m": "5m",
+    "5m": "15m",
+    "15m": "1h",
+    "1h": "4h",
+    "4h": "1d",
+    "1d": "1w",
+}
+
+
+def _parent_open(candle: Candle) -> datetime | None:
+    parent_tf = _PARENT_TIMEFRAME.get(candle.timeframe)
+    return floor_time(candle.open_time, parent_tf) if parent_tf else None
+
+
+def _decision_hash_row(row: dict[str, object]) -> dict[str, object]:
+    """Mirror the float normalization used by scanner feature frames."""
+    normalized = dict(row)
+    for name in (*_DECIMAL_FIELDS, "trade_count"):
+        value = normalized.get(name)
+        if value is not None:
+            normalized[name] = float(value)
+    return normalized
+
+
 class CandleParquetStore:
     """Locked atomic store using daily intraday and monthly hourly files."""
 
@@ -518,7 +604,7 @@ class CandleParquetStore:
         if self.exchange:
             root = root / f"exchange={self.exchange}"
         directory = root / sanitize_symbol(candle.symbol) / candle.timeframe
-        if candle.timeframe in {"1h", "4h", "1d"}:
+        if candle.timeframe in {"1h", "4h", "1d", "1w"}:
             name = candle.open_time.strftime("%Y-%m.parquet")
         else:
             name = candle.open_time.strftime("%Y-%m-%d.parquet")
@@ -537,6 +623,12 @@ class CandleParquetStore:
                 pa.field("trade_count", pa.int64(), nullable=False),
                 pa.field("taker_buy_volume", decimal, nullable=False),
                 pa.field("vwap", decimal, nullable=True),
+                pa.field("source", pa.string(), nullable=False),
+                pa.field("content_sha256", pa.string(), nullable=False),
+                pa.field("data_quality", pa.string(), nullable=False),
+                pa.field("coverage_ok", pa.bool_(), nullable=False),
+                pa.field("parent_open", pa.timestamp("us", tz="UTC"), nullable=True),
+                pa.field("is_closed", pa.bool_(), nullable=False),
             ]
         )
 
@@ -566,18 +658,96 @@ class CandleParquetStore:
         return quantized
 
     @classmethod
-    def _frame(cls, candles: Sequence[Candle]) -> pd.DataFrame:
+    def _frame(
+        cls,
+        candles: Sequence[Candle],
+        *,
+        source: str,
+        data_quality: str,
+        coverage_ok: bool,
+    ) -> pd.DataFrame:
         rows = []
         for candle in candles:
             row: dict[str, object] = {
                 "open_time": candle.open_time,
                 "close_time": candle.close_time,
                 "trade_count": candle.trade_count,
+                "source": source,
+                "data_quality": data_quality,
+                "coverage_ok": coverage_ok,
+                "parent_open": _parent_open(candle),
+                "is_closed": candle.is_closed,
             }
             for name in _DECIMAL_FIELDS:
                 row[name] = cls._storage_decimal(getattr(candle, name))
+            row["content_sha256"] = bar_content_sha256(
+                _decision_hash_row(row),
+                open_time=candle.open_time,
+                close_time=candle.close_time,
+                source=source,
+            )
             rows.append(row)
         return pd.DataFrame(rows, columns=cls._schema().names)
+
+    @classmethod
+    def _upgrade_frame(
+        cls,
+        frame: pd.DataFrame,
+        *,
+        source: str,
+        timeframe: str | None = None,
+        data_quality: str = "ok",
+        coverage_ok: bool = True,
+    ) -> pd.DataFrame:
+        """Stamp legacy numeric partitions before their next atomic rewrite."""
+        upgraded = frame.copy()
+        if "source" not in upgraded:
+            upgraded["source"] = source
+        else:
+            upgraded["source"] = upgraded["source"].fillna(source)
+        if "data_quality" not in upgraded:
+            upgraded["data_quality"] = data_quality
+        else:
+            upgraded["data_quality"] = upgraded["data_quality"].fillna(data_quality)
+        if "coverage_ok" not in upgraded:
+            upgraded["coverage_ok"] = coverage_ok
+        else:
+            upgraded["coverage_ok"] = upgraded["coverage_ok"].fillna(coverage_ok).astype(bool)
+        if "is_closed" not in upgraded:
+            upgraded["is_closed"] = True
+        else:
+            upgraded["is_closed"] = upgraded["is_closed"].fillna(True).astype(bool)
+        if "parent_open" not in upgraded:
+            upgraded["parent_open"] = pd.Series(
+                pd.NaT,
+                index=upgraded.index,
+                dtype="datetime64[ns, UTC]",
+            )
+        else:
+            upgraded["parent_open"] = pd.to_datetime(
+                upgraded["parent_open"], utc=True, errors="coerce"
+            )
+        if timeframe in _PARENT_TIMEFRAME:
+            parent_tf = _PARENT_TIMEFRAME[timeframe]
+            missing_parent = upgraded["parent_open"].isna()
+            upgraded.loc[missing_parent, "parent_open"] = [
+                floor_time(pd.Timestamp(value).to_pydatetime(), parent_tf)
+                for value in upgraded.loc[missing_parent, "open_time"]
+            ]
+        if "content_sha256" not in upgraded:
+            upgraded["content_sha256"] = None
+        for index, row in upgraded.iterrows():
+            row_source = str(row.get("source") or source)
+            if not str(row.get("content_sha256") or "").strip():
+                opened = pd.Timestamp(row["open_time"]).to_pydatetime()
+                closed = pd.Timestamp(row["close_time"]).to_pydatetime()
+                upgraded.at[index, "content_sha256"] = bar_content_sha256(
+                    _decision_hash_row(row.to_dict()),
+                    open_time=opened,
+                    close_time=closed,
+                    source=row_source,
+                )
+        return upgraded.loc[:, cls._schema().names]
 
     @classmethod
     def _write_atomic(cls, path: Path, frame: pd.DataFrame) -> None:
@@ -590,7 +760,20 @@ class CandleParquetStore:
         pq.write_table(table, tmp)
         os.replace(tmp, path)
 
-    def upsert(self, candles: Iterable[Candle]) -> CandleWriteResult:
+    def upsert(
+        self,
+        candles: Iterable[Candle],
+        *,
+        source: str = "canonical_tick_lake",
+        data_quality: str = "ok",
+        coverage_ok: bool = True,
+    ) -> CandleWriteResult:
+        if source not in BAR_SOURCES:
+            raise ValueError(f"unsupported candle source: {source}")
+        if data_quality not in BAR_QUALITIES:
+            raise ValueError(f"unsupported candle data_quality: {data_quality}")
+        if data_quality != "ok" and coverage_ok:
+            raise ValueError("non-ok candle data cannot claim coverage_ok")
         groups: dict[Path, list[Candle]] = {}
         for candle in candles:
             if not candle.is_closed:
@@ -599,11 +782,29 @@ class CandleParquetStore:
 
         rows_written = 0
         for path, partition in groups.items():
-            new_frame = self._frame(partition)
+            new_frame = self._frame(
+                partition,
+                source=source,
+                data_quality=data_quality,
+                coverage_ok=coverage_ok,
+            )
             lock_path = path.with_suffix(f"{path.suffix}.lock")
             with _exclusive_lock(lock_path):
                 if path.exists():
-                    existing = pd.read_parquet(path)
+                    # A pre-schema Delta partition cannot be promoted merely
+                    # because a newer bar lands in the same file. Historical
+                    # Delta rows may predate contract-to-base conversion;
+                    # keep them readable and hashed, but fail them closed
+                    # until an explicit tape rebuild or operator attestation.
+                    legacy_quality = "partial" if self.exchange == "delta_india" else "ok"
+                    legacy_coverage = self.exchange != "delta_india"
+                    existing = self._upgrade_frame(
+                        pd.read_parquet(path),
+                        source="canonical_tick_lake",
+                        timeframe=partition[0].timeframe,
+                        data_quality=legacy_quality,
+                        coverage_ok=legacy_coverage,
+                    )
                     frame = pd.concat([existing, new_frame], ignore_index=True)
                 else:
                     frame = new_frame
@@ -613,7 +814,47 @@ class CandleParquetStore:
             rows_written += len(partition)
         return CandleWriteResult(tuple(sorted(groups)), rows_written)
 
+    def stamp_legacy_partitions(
+        self,
+        symbol: str,
+        timeframe: str,
+        *,
+        source: str = "canonical_tick_lake",
+    ) -> int:
+        """Atomically migrate legacy partitions to the provenance schema.
+
+        The caller must select the source explicitly.  This method never mixes
+        official backfill into the canonical live source and never changes
+        OHLCV values.
+        """
+        if source not in BAR_SOURCES:
+            raise ValueError(f"unsupported candle source: {source}")
+        _timeframe_seconds(timeframe)
+        root = self.root / f"exchange={self.exchange}" if self.exchange else self.root
+        directory = root / sanitize_symbol(canonical_symbol(symbol)) / timeframe
+        rows = 0
+        for path in sorted(directory.glob("*.parquet")):
+            lock_path = path.with_suffix(f"{path.suffix}.lock")
+            with _exclusive_lock(lock_path):
+                frame = pd.read_parquet(path)
+                upgraded = self._upgrade_frame(
+                    frame,
+                    source=source,
+                    timeframe=timeframe,
+                )
+                self._write_atomic(path, upgraded)
+                rows += len(upgraded)
+        return rows
+
     def read(self, symbol: str, timeframe: str) -> list[Candle]:
+        return [record.candle for record in self.read_records(symbol, timeframe)]
+
+    def read_records(
+        self,
+        symbol: str,
+        timeframe: str,
+    ) -> list[CanonicalBarRecord]:
+        """Read an ordered series without dropping provenance or coverage."""
         _timeframe_seconds(timeframe)
         symbol = canonical_symbol(symbol)
         root = self.root
@@ -626,27 +867,72 @@ class CandleParquetStore:
         frame = pd.concat(frames, ignore_index=True)
         frame = frame.drop_duplicates(subset="open_time", keep="last")
         frame = frame.sort_values("open_time")
-        candles = []
-        for row in frame.to_dict("records"):
-            candles.append(
-                Candle(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    open_time=row["open_time"].to_pydatetime(),
-                    close_time=row["close_time"].to_pydatetime(),
-                    open=row["open"],
-                    high=row["high"],
-                    low=row["low"],
-                    close=row["close"],
-                    volume=row["volume"],
-                    quote_volume=row["quote_volume"],
-                    trade_count=int(row["trade_count"]),
-                    taker_buy_volume=row["taker_buy_volume"],
-                    vwap=row["vwap"],
-                    is_closed=True,
-                )
-            )
-        return candles
+        return [
+            self._record_from_row(row, symbol=symbol, timeframe=timeframe)
+            for row in frame.to_dict("records")
+        ]
+
+    def _record_from_row(
+        self,
+        row: Mapping[str, object],
+        *,
+        symbol: str,
+        timeframe: str,
+    ) -> CanonicalBarRecord:
+        opened = pd.Timestamp(row["open_time"]).to_pydatetime()
+        closed = pd.Timestamp(row["close_time"]).to_pydatetime()
+        candle = Candle(
+            symbol=symbol,
+            timeframe=timeframe,
+            open_time=opened,
+            close_time=closed,
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            volume=row["volume"],
+            quote_volume=row["quote_volume"],
+            trade_count=int(row["trade_count"]),
+            taker_buy_volume=row["taker_buy_volume"],
+            vwap=row["vwap"],
+            is_closed=bool(row.get("is_closed", True)),
+        )
+        raw_source = row.get("source")
+        source = (
+            str(raw_source)
+            if raw_source is not None and not pd.isna(raw_source)
+            else "canonical_tick_lake"
+        )
+        raw_hash = row.get("content_sha256")
+        persisted_hash = (
+            str(raw_hash).strip().lower()
+            if raw_hash is not None and not pd.isna(raw_hash)
+            else ""
+        )
+        expected_hash = bar_content_sha256(
+            _decision_hash_row(dict(row)),
+            open_time=candle.open_time,
+            close_time=candle.close_time,
+            source=source,
+        )
+        if persisted_hash and persisted_hash != expected_hash:
+            raise ValueError("stored candle content_sha256 mismatch")
+        raw_parent = row.get("parent_open")
+        parent_open = (
+            pd.Timestamp(raw_parent).to_pydatetime()
+            if raw_parent is not None and not pd.isna(raw_parent)
+            else _parent_open(candle)
+        )
+        return CanonicalBarRecord(
+            exchange=self.exchange or "unreported",
+            candle=candle,
+            source=source,
+            content_sha256=persisted_hash or expected_hash,
+            data_quality=str(row.get("data_quality", "ok")),
+            coverage_ok=bool(row.get("coverage_ok", True)),
+            parent_open=parent_open,
+            identity_persisted=bool(persisted_hash),
+        )
 
     def read_at(
         self,
@@ -671,7 +957,7 @@ class CandleParquetStore:
         directory = root / sanitize_symbol(symbol) / timeframe
         name = (
             opened.strftime("%Y-%m.parquet")
-            if timeframe in {"1h", "4h", "1d"}
+            if timeframe in {"1h", "4h", "1d", "1w"}
             else opened.strftime("%Y-%m-%d.parquet")
         )
         path = directory / name
@@ -702,6 +988,45 @@ class CandleParquetStore:
             is_closed=True,
         )
 
+    def get_bar(
+        self,
+        symbol: str,
+        timeframe: str,
+        open_time: datetime,
+    ) -> CanonicalBarRecord | None:
+        """Return only the exact immutable bar identity requested.
+
+        This API intentionally has no as-of fallback.  A missing parent is a
+        missing parent; callers must not carry the previous row forward.
+        Legacy partitions remain readable but disclose
+        ``identity_persisted=False`` until ``stamp_legacy_partitions`` runs.
+        """
+        _timeframe_seconds(timeframe)
+        symbol = canonical_symbol(symbol)
+        opened = _utc(open_time)
+        root = self.root / f"exchange={self.exchange}" if self.exchange else self.root
+        directory = root / sanitize_symbol(symbol) / timeframe
+        name = (
+            opened.strftime("%Y-%m.parquet")
+            if timeframe in {"1h", "4h", "1d", "1w"}
+            else opened.strftime("%Y-%m-%d.parquet")
+        )
+        path = directory / name
+        if not path.exists():
+            return None
+        frame = pd.read_parquet(path)
+        if frame.empty or "open_time" not in frame:
+            return None
+        times = pd.to_datetime(frame["open_time"], utc=True)
+        matches = frame.loc[times.eq(pd.Timestamp(opened))]
+        if matches.empty:
+            return None
+        return self._record_from_row(
+            matches.iloc[-1].to_dict(),
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+
 
 _AGGREGATION_CHAIN = (
     ("1s", "1m"),
@@ -710,6 +1035,7 @@ _AGGREGATION_CHAIN = (
     ("15m", "1h"),
     ("1h", "4h"),
     ("4h", "1d"),
+    ("1d", "1w"),
 )
 
 

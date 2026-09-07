@@ -21,6 +21,7 @@ import pyarrow.parquet as pq
 from vnedge.data.candles import Candle, CandleParquetStore, CandlePipeline, floor_time
 from vnedge.data.parquet_store import sanitize_symbol
 from vnedge.data.symbols import canonical_symbol
+from vnedge.exchange.delta_snapshot_validation import BASELINE as DELTA_PRODUCT_BASELINE
 
 _GAPFILL_NAME = re.compile(r"^\d+-gapfill-(\d+)-[0-9a-f]+\.parquet$")
 
@@ -119,8 +120,15 @@ def bootstrap_candles(
     symbols: Iterable[str],
     days: int = 3,
     close_through: datetime | None = None,
+    replace_existing: bool = False,
 ) -> BootstrapReport:
-    """Replay recent shards and atomically upsert closed canonical candles."""
+    """Replay recent shards and atomically upsert closed canonical candles.
+
+    ``replace_existing`` is explicit repair mode. It replays the selected raw
+    tape even when a minute already exists so corrected contract sizing or
+    aggregation code produces a new content hash. Normal recorder restarts
+    retain the cheap skip-existing path.
+    """
     total_shards = total_trades = total_rejected = total_candles = 0
     total_skipped_existing_minutes = 0
     symbol_count = 0
@@ -130,6 +138,14 @@ def bootstrap_candles(
     for symbol in symbols:
         symbol_count += 1
         canonical = _symbol_key(symbol)
+        contract_value = Decimal(1)
+        if source_exchange == "delta_india":
+            product = DELTA_PRODUCT_BASELINE.get(canonical)
+            if product is None:
+                raise ValueError(
+                    f"Delta candle bootstrap has no frozen contract multiplier for {canonical}"
+                )
+            contract_value = Decimal(str(product["contract_value"]))
         existing_minute_ms = {
             int(candle.open_time.timestamp() * 1_000) for candle in store.read(canonical, "1m")
         }
@@ -146,7 +162,7 @@ def bootstrap_candles(
             interval = _shard_interval(shard)
             if interval is not None:
                 shard_minutes = _interval_minutes(*interval)
-                if shard_minutes.issubset(existing_minute_ms):
+                if not replace_existing and shard_minutes.issubset(existing_minute_ms):
                     # The whole authoritative shard is already canonical. Do
                     # not scan millions of trades merely to skip each row.
                     skipped_minutes.update(shard_minutes)
@@ -162,7 +178,7 @@ def bootstrap_candles(
                     floor_time(datetime.fromtimestamp(ts_ms / 1_000, tz=UTC), "1m").timestamp()
                     * 1_000
                 )
-                if minute_ms in existing_minute_ms:
+                if not replace_existing and minute_ms in existing_minute_ms:
                     skipped_minutes.add(minute_ms)
                     continue
                 if last_timestamp is not None and ts_ms < last_timestamp:
@@ -176,7 +192,7 @@ def bootstrap_candles(
                     pipeline.on_trade(
                         datetime.fromtimestamp(ts_ms / 1000, tz=UTC),
                         Decimal(str(price)),
-                        Decimal(str(amount)),
+                        Decimal(str(amount)) * contract_value,
                         buyer_maker,
                     )
                     total_trades += 1
@@ -215,6 +231,11 @@ def main(argv: list[str] | None = None) -> int:
         default="BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT",
     )
     parser.add_argument("--days", type=int, default=3)
+    parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="rebuild selected existing bars from the raw tape (repair mode)",
+    )
     args = parser.parse_args(argv)
     symbols = _csv(args.symbols)
     if not symbols:
@@ -229,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             target_exchange=args.target_exchange,
             symbols=symbols,
             days=args.days,
+            replace_existing=args.replace_existing,
         )
     print(
         "canonical candle bootstrap: "

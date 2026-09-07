@@ -6,6 +6,7 @@ import logging
 import math
 from collections import deque
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -648,12 +649,19 @@ async def test_delta_recorder_writes_book_and_trade_shards(tmp_path):
     )
     assert book.loc[0, "bid"] == 62697.5 and book.loc[0, "ask"] == 62698.0
     assert book.loc[0, "bid_px_1"] == 62697.0  # full L2 ladder captured
+    assert book.loc[0, "captured_at_ms"] >= book.loc[0, "ts_ms"]
+    assert book.loc[0, "overflow_drops"] == 0
+    assert book.loc[0, "evidence_scope"] == "recorder_raw"
+    assert not bool(book.loc[0, "parity_eligible"])
     trades = pd.concat(
         [pd.read_parquet(s) for s in (base / "stream=trades" / day).glob("*.parquet")],
         ignore_index=True,
     )
     assert trades.loc[0, "price"] == 62698.0
     assert trades.loc[0, "amount"] == 3.0
+    assert trades.loc[0, "size_contracts"] == 3.0
+    assert trades.loc[0, "contract_value"] == 0.001
+    assert trades.loc[0, "base_amount"] == 0.003
     assert trades.loc[0, "side"] == "buy"  # buyer is the taker/aggressor
     assert pd.isna(trades.loc[0, "trade_id"])
 
@@ -698,7 +706,7 @@ def test_delta_recorder_reorders_compact_batch_before_candle_sink(tmp_path):
 
         @staticmethod
         def on_trade(_symbol, trade):
-            applied.append(trade["timestamp"])
+            applied.append((trade["timestamp"], trade["amount"]))
 
     rec.candle_sink = Sink()
     for offset in (200, 100, 500):
@@ -714,8 +722,35 @@ def test_delta_recorder_reorders_compact_batch_before_candle_sink(tmp_path):
         )
     rec._drain_delta_reorder("BTCUSD", force=True)
 
-    assert applied == [DAY_TS + 100, DAY_TS + 200, DAY_TS + 500]
+    assert applied == [
+        (DAY_TS + 100, 1),
+        (DAY_TS + 200, 1),
+        (DAY_TS + 500, 1),
+    ]
     assert rec.trade_count == 3
+
+
+def test_delta_candle_sink_converts_contracts_once_at_boundary(tmp_path) -> None:
+    sink = CanonicalCandleSink(
+        "delta_india",
+        ["BTCUSD"],
+        tmp_path / "candles",
+    )
+
+    sink.on_trade(
+        "BTCUSD",
+        {
+            "timestamp": DAY_TS,
+            "price": 62_000.0,
+            "amount": 3,
+            "side": "buy",
+        },
+    )
+
+    forming = sink.pipelines["BTCUSD"].builder.forming()
+    assert forming is not None
+    assert forming.volume == Decimal("0.003")
+    assert forming.quote_volume == Decimal("186.000")
 
 
 def test_delta_recorder_boundary_trails_reorder_window(tmp_path):
