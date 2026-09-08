@@ -217,6 +217,95 @@ def test_ready_ignores_foreign_exchange_prerequisite_for_delta_lane(
     assert response.json()["reasons"] == []
 
 
+def test_ready_ignores_foreign_exchange_lake_health_for_delta_lane(
+    tmp_path, monkeypatch
+):
+    lake = tmp_path / "lake_health.json"
+    lake.write_text(
+        '{"status":"degraded","checked_at":"2026-08-22T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_PATH", str(lake))
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_EXCHANGE", "binanceusdm")
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "feed_health": {"candles": "stale"},
+            "lane_health": {"process_healthy": True},
+            "lanes": [
+                {
+                    "lane_id": "shadow_delta_btc",
+                    "exchange": "delta_india",
+                    "observation_class": "shadow_observe",
+                    "runtime_readiness": {
+                        "data_ready": True,
+                        "decision_ready": True,
+                        "parity_ready": False,
+                        "execution_ready": False,
+                        "live_ready": False,
+                    },
+                    "lake_contract": {
+                        "identity_ok": True,
+                        "daily_bars": 800,
+                        "ema200_ready": True,
+                        "missing_context_tfs": [],
+                    },
+                }
+            ],
+        }
+    )
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["reasons"] == []
+
+
+def test_ready_keeps_matching_exchange_lake_failure_closed(tmp_path, monkeypatch):
+    lake = tmp_path / "lake_health.json"
+    lake.write_text(
+        '{"status":"degraded","checked_at":"2026-08-22T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_PATH", str(lake))
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_EXCHANGE", "delta_india")
+    monkeypatch.setenv("CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS", "999999999")
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "feed_health": {"candles": "ok"},
+            "lane_health": {"process_healthy": True},
+            "lanes": [
+                {
+                    "lane_id": "shadow_delta_btc",
+                    "exchange": "delta_india",
+                    "observation_class": "shadow_observe",
+                    "runtime_readiness": {
+                        "data_ready": True,
+                        "decision_ready": True,
+                        "parity_ready": False,
+                        "execution_ready": False,
+                        "live_ready": False,
+                    },
+                    "lake_contract": {
+                        "identity_ok": True,
+                        "daily_bars": 800,
+                        "ema200_ready": True,
+                        "missing_context_tfs": [],
+                    },
+                }
+            ],
+        }
+    )
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 503
+    assert "canonical_lake_unhealthy" in response.json()["reasons"]
+
+
 def test_ready_exposes_delta_daily_and_identity_blockers():
     provider = SnapshotProvider()
     provider.publish(

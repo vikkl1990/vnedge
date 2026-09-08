@@ -22,8 +22,10 @@ services:
       # and referrers. Production always uses the bearer-to-cookie login flow.
       DASHBOARD_ALLOW_QUERY_TOKEN: "0"
       # /health is process liveness; /ready additionally consumes this
-      # cross-process evidence and fails while the canonical lake has holes.
+      # cross-process evidence and fails while the matching exchange's
+      # canonical lake has holes. The pulse owner below records Binance only.
       CANDLE_LAKE_HEALTH_PATH: data/gaps/lake_health.json
+      CANDLE_LAKE_HEALTH_EXCHANGE: binanceusdm
       CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS: "${CANDLE_LAKE_HEALTH_MAX_AGE_SECONDS:-1200}"
       SCANNER_PREREQ_HEALTH_PATH: data/reports/scanner_startup_health.json
       VNEDGE_SECRETS_KEY: "${VNEDGE_SECRETS_KEY:-}"

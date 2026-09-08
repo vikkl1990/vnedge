@@ -779,7 +779,22 @@ def create_app(
             reasons.append("lane_process_unhealthy")
 
         lake_path_raw = os.environ.get("CANDLE_LAKE_HEALTH_PATH", "").strip()
-        if lake_path_raw:
+        lake_exchange = os.environ.get("CANDLE_LAKE_HEALTH_EXCHANGE", "").strip().lower()
+        operational_exchanges = {
+            str(lane.get("exchange") or lane.get("lane_exchange") or "").strip().lower()
+            for lane in operational_lanes
+        }
+        # The canonical owner currently reports Binance tick-lake health.  A
+        # genuine Binance repair conflict must remain visible, but it is not
+        # evidence that a Delta decision lane's independently bound candle
+        # ladder is unhealthy.  Unscoped artifacts retain the legacy
+        # fail-closed behavior.
+        lake_health_applies = not (
+            lake_exchange
+            and operational_exchanges
+            and lake_exchange not in operational_exchanges
+        )
+        if lake_path_raw and lake_health_applies:
             try:
                 lake = json.loads(Path(lake_path_raw).read_text(encoding="utf-8"))
                 if lake.get("status") != "healthy":
