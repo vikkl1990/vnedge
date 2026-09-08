@@ -84,8 +84,13 @@ The research loop is opt-in and remains evidence-only:
 docker compose --profile research up -d research-loop
 ```
 
-It may ingest public candles and funding data and publish walk-forward evidence.
-It cannot change the capital roster, promote a strategy, or route orders.
+It may ingest public candles and funding data, materialize at most one candidate
+per cycle from the finite Arena proposal catalog, run sandbox + causality +
+rolling walk-forward gates, and publish immutable evidence. Existing candidates
+are retested at most daily by default (`AI_RESEARCH_RETEST_SECONDS=86400`). It
+cannot change the capital roster, register or promote a strategy, access venue
+credentials, or route orders. Disable only candidate creation with
+`AI_AUTO_CREATE_ENABLED=0`; validation and evidence collection may continue.
 
 ## Paper-capital evaluation is frozen
 
@@ -197,8 +202,15 @@ ssh -N -L 8080:127.0.0.1:8080 user@host
 Then open `http://127.0.0.1:8080/app/` and enter `DASHBOARD_TOKEN` on the sign-in
 screen. The URL remains non-secret. For direct HTTP tunnel access set
 `DASHBOARD_COOKIE_SECURE=false`; keep the production default `true` for HTTPS.
-The optional Caddy service can expose TLS on port 8765; configure
-`DASHBOARD_ALLOWLIST` before making it internet-reachable.
+The optional Caddy service binds TLS to VM loopback on port 8765 by default.
+Tunnel it explicitly (`ssh -L 8765:127.0.0.1:8765 ...`). Configure
+`DASHBOARD_ALLOWLIST`, a trusted certificate, and the host firewall before any
+deliberate internet-facing port mapping.
+
+If direct access is deliberately retained during migration, set both
+`DASHBOARD_BIND_IP=0.0.0.0` and a narrow `DASHBOARD_ALLOWLIST` CIDR in the
+VM-local `.env`. Setting the bind override without the allowlist is forbidden
+operationally; the repository default remains loopback.
 
 The IP-based `:8765` configuration uses a self-signed certificate and is not a
 production-trusted browser endpoint. Verify it with the explicit public

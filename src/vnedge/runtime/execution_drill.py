@@ -38,14 +38,20 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from vnedge.config.risk_config import RiskConfig
 from vnedge.config.settings import Settings
-from vnedge.execution.evidence import DecisionEnvelope, ExecutionEvidence
+from vnedge.execution.evidence import (
+    CostDecisionEvidence,
+    DecisionEnvelope,
+    ExecutionEvidence,
+)
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState  # noqa: F401
+from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import (
     AccountState,
@@ -258,7 +264,38 @@ async def run_execution_drill(
             estimated_slippage_bps=_DRILL_SLIPPAGE_BPS, funding_rate=0.0,
             exchange_healthy=True,
         )
-        evidence = ExecutionEvidence.from_decision(decision_envelope)
+        # A drill is not an alpha strategy, but it is still a risk-increasing
+        # live order. Treat the explicit distance from touch as conservative
+        # available room and run the same tariff wall before the gateway. The
+        # hard 15% offset dwarfs the normal round-trip cost; no approval is
+        # fabricated and the exact verdict is retained in evidence.
+        drill_room_bps = Decimal(str(config.far_offset_pct)) * Decimal(100)
+        cost_gate = CostGate(CostProfile.SWING)
+        cost_result = cost_gate.evaluate(
+            signal_edge_bps=drill_room_bps,
+            side="buy",
+            urgency="taker",
+            expected_holding_seconds=0,
+            symbol=config.symbol,
+            available_room_bps=drill_room_bps,
+        )
+        if not cost_result.approved:
+            report.add("cost_gate", False, cost_result.reason or "cost gate rejected")
+            journal.append("execution_drill", {"report": _to_dict(report)})
+            return report
+        report.add(
+            "cost_gate",
+            True,
+            f"safety room {drill_room_bps}bps clears "
+            f"{cost_result.cost.gate_cost_bps}bps wall",
+        )
+        evidence = ExecutionEvidence.from_decision(
+            decision_envelope,
+            cost_decision=CostDecisionEvidence.from_result(
+                cost_result,
+                profile=cost_gate.profile.value,
+            ),
+        )
         order = await kernel.submit(intent, account, market, evidence=evidence, now=now)
         if order.state is OrderState.RISK_REJECTED:
             report.add(

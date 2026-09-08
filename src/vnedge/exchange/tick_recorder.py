@@ -31,6 +31,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -203,6 +204,47 @@ def _normalize_trade_batch(
     return accepted, rejected
 
 
+@dataclass
+class TradeStreamCoverage:
+    """Per-symbol websocket coverage used to disclose truncated buckets."""
+
+    gap_start: datetime
+    gaps: list[tuple[datetime, datetime]] = field(default_factory=list)
+    connected: bool = False
+
+    def mark_connected(self, at: datetime) -> None:
+        at = _aware_utc(at)
+        if self.connected:
+            return
+        if at > self.gap_start:
+            self.gaps.append((self.gap_start, at))
+        self.connected = True
+
+    def mark_disconnected(self, at: datetime) -> None:
+        at = _aware_utc(at)
+        if not self.connected:
+            return
+        self.connected = False
+        self.gap_start = at
+
+    def quality(self, candle: Candle) -> tuple[str, bool]:
+        intervals: list[tuple[datetime, datetime | None]] = [*self.gaps]
+        if not self.connected:
+            intervals.append((self.gap_start, None))
+        for start, end in intervals:
+            if start < candle.close_time and (end is None or end > candle.open_time):
+                return "partial", False
+        # Bound retained history after the bucket can no longer overlap it.
+        self.gaps[:] = [gap for gap in self.gaps if gap[1] > candle.close_time]
+        return "ok", True
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("coverage timestamp must be timezone-aware")
+    return value.astimezone(UTC)
+
+
 class CanonicalCandleSink:
     """Feed public trades into per-symbol canonical candle pipelines.
 
@@ -220,6 +262,7 @@ class CanonicalCandleSink:
         restore_at: datetime | None = None,
         subscribers: Iterable[Callable[[Candle], None]] = (),
         timing_sink: Callable[[str, float], None] | None = None,
+        track_stream_coverage: bool = False,
     ) -> None:
         store = CandleParquetStore(root, exchange=exchange)
         self.exchange = exchange
@@ -241,15 +284,27 @@ class CanonicalCandleSink:
                     str(product["contract_value"])
                 )
         bound_subscribers = tuple(subscribers)
+        started_at = _aware_utc(restore_at or datetime.now(UTC))
+        self.trade_coverage = {
+            symbol: TradeStreamCoverage(
+                started_at,
+                connected=not track_stream_coverage,
+            )
+            for symbol in symbols
+        }
         self.pipelines = {
             symbol: CandlePipeline(
                 canonical_symbol(symbol),
                 store=store,
                 subscribers=bound_subscribers,
                 timing_sink=timing_sink,
+                quality_resolver=self.trade_coverage[symbol].quality,
             )
             for symbol in symbols
         }
+        for symbol, pipeline in self.pipelines.items():
+            if pipeline.builder.closed_through is not None:
+                self.trade_coverage[symbol].gap_start = pipeline.builder.closed_through
         self.restored_last_trade_ts_ms: dict[str, int] = {}
         self.restored_trade_keys: dict[str, set[str]] = {symbol: set() for symbol in symbols}
         self.restored_trade_bodies: dict[str, dict[str, TradeBody]] = {
@@ -260,6 +315,12 @@ class CanonicalCandleSink:
         }
         if tick_root is not None:
             self.restore_forming_from_tick_lake(Path(tick_root), at=restore_at or datetime.now(UTC))
+
+    def mark_trade_stream_connected(self, symbol: str, at: datetime) -> None:
+        self.trade_coverage[symbol].mark_connected(at)
+
+    def mark_trade_stream_disconnected(self, symbol: str, at: datetime) -> None:
+        self.trade_coverage[symbol].mark_disconnected(at)
 
     def would_publish_on_trade(self, symbol: str, timestamp_ms: int) -> bool:
         """Whether this trade will close the current base candle.
@@ -295,6 +356,8 @@ class CanonicalCandleSink:
                 continue
             if not pipeline.persistence_healthy:
                 return "canonical_persist_unhealthy"
+            if not self.trade_coverage[venue_symbol].connected:
+                return "canonical_trade_stream_uncovered"
             return None
         return "canonical_producer_symbol_unowned"
 
@@ -782,6 +845,7 @@ class TickRecorder:
                 tick_root=root,
                 subscribers=candle_subscribers,
                 timing_sink=self.recorder_latency.record,
+                track_stream_coverage=not books_only,
             )
             if candle_root is not None
             else None
@@ -1128,11 +1192,17 @@ class TickRecorder:
         while True:
             try:
                 trades = await self._ex.watch_trades(symbol)
+                if self.candle_sink is not None:
+                    self.candle_sink.mark_trade_stream_connected(symbol, datetime.now(UTC))
                 self._ingest_trade_batch(symbol, trades, buf)
                 now = clock()
                 if buf.should_flush(now):
                     buf.flush(now)
             except asyncio.CancelledError:
+                if self.candle_sink is not None:
+                    self.candle_sink.mark_trade_stream_disconnected(
+                        symbol, datetime.now(UTC)
+                    )
                 late, candle_rejected = self._drain_trade_reorder(symbol, buf, force=True)
                 self._report_skipped_trades(
                     symbol,
@@ -1144,6 +1214,10 @@ class TickRecorder:
                 buf.flush(clock())
                 raise
             except Exception as exc:  # noqa: BLE001
+                if self.candle_sink is not None:
+                    self.candle_sink.mark_trade_stream_disconnected(
+                        symbol, datetime.now(UTC)
+                    )
                 logger.warning("%s trades error: %s", symbol, exc)
                 await asyncio.sleep(_BACKOFF)
 
@@ -1354,6 +1428,7 @@ class DeltaTickRecorder:
                 tick_root=root,
                 subscribers=candle_subscribers,
                 timing_sink=self.recorder_latency.record,
+                track_stream_coverage=not books_only,
             )
             if candle_root is not None
             else None
@@ -1418,6 +1493,7 @@ class DeltaTickRecorder:
             connect=connect,
             on_book=self._on_book,
             on_trade=self._on_trade,
+            on_connection_state=self._on_trade_connection_state,
         )
 
     @staticmethod
@@ -1561,6 +1637,15 @@ class DeltaTickRecorder:
             sym,
             through_ms=self._max_seen_trade_ts_ms[sym] - _TRADE_REORDER_MS,
         )
+
+    def _on_trade_connection_state(self, connected: bool, at: datetime) -> None:
+        if self.candle_sink is None or self.books_only:
+            return
+        for symbol in self.symbols:
+            if connected:
+                self.candle_sink.mark_trade_stream_connected(symbol, at)
+            else:
+                self.candle_sink.mark_trade_stream_disconnected(symbol, at)
 
     def _drain_delta_reorder(
         self,

@@ -220,3 +220,50 @@ def test_publish_evidence_store_writes_json_feed_and_sqlite(tmp_path):
             "FROM evidence_records"
         ).fetchall()
     assert rows == [("range_expansion_breakout_v1", "5m", -4.25, 0, 0)]
+
+
+def test_continuous_ai_pipeline_is_collected_as_non_authoritative_evidence(tmp_path):
+    reports = tmp_path / "live_research"
+    reports.mkdir()
+    (reports / "continuous_ai_pipeline_latest.json").write_text(
+        json.dumps(
+            {
+                "cycle_id": "cycle-1",
+                "generated_at": "2026-09-08T00:00:00+00:00",
+                "dataset": {
+                    "exchange": "delta_india",
+                    "symbol": "BTC/USD:USD",
+                    "timeframe": "1h",
+                    "source": "canonical_tick_lake",
+                },
+                "candidates": [
+                    {
+                        "strategy_id": "ai_candidate_v1",
+                        "source_file": "candidate.py",
+                        "source_sha256": "a" * 64,
+                        "evidence_id": "proof-1",
+                        "verdict": "REJECT",
+                        "reasons": ["profit factor below gate"],
+                        "causality": {"passed": True},
+                        "walk_forward": {
+                            "oos_trades": 18,
+                            "oos_net_usd": -4.5,
+                            "windows": 6,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    payload = build_research_evidence_index(report_dir=reports, pine_kb_path=None)
+    rows = [
+        row
+        for row in payload["records"]
+        if row["source_kind"] == "continuous_ai_pipeline"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["strategy_id"] == "ai_candidate_v1"
+    assert rows[0]["samples"] == 18
+    assert rows[0]["can_trade"] is False
+    assert rows[0]["can_promote"] is False
+    assert rows[0]["metadata"]["oos_net_usd"] == -4.5

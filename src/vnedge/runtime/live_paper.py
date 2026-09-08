@@ -4705,6 +4705,9 @@ class LivePaperSession:
                 raw, now
             ):
                 self._discard_deferred_quotes("candle_continuity_rejected")
+                # A bad decision candle must block new structure, not stop
+                # protective tick work or the clock-based exit policy.
+                await self._idle_housekeeping(now)
                 continue
             canonical_wait_started = time.perf_counter()
             canonical_ready = await self._await_canonical_candle(raw)
@@ -4717,6 +4720,7 @@ class LivePaperSession:
             self.latency.record_canonical_wait(canonical_wait_ms)
             if not self._append_candle(raw):
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
+                await self._idle_housekeeping(now)
                 continue
             htf_wait_started = time.perf_counter()
             htf_boundary = await self._refresh_canonical_strategy_context(raw)
@@ -4727,6 +4731,7 @@ class LivePaperSession:
                 )
             if not self._sync_quote():
                 self._discard_deferred_quotes("candle_or_quote_sync_rejected")
+                await self._idle_housekeeping(now)
                 continue
             if not canonical_ready:
                 self._enter_degraded("canonical_bar_timeout", recoverable=True)

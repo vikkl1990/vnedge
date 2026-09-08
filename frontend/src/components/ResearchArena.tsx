@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import type { AgenticResearchStatus, BacktestRunSummary, StrategyWorkflowRevision } from "../api";
-import { useAgenticResearchStatus, useBacktestLab, useResearchScorecard, useStrategyWorkflow } from "../queries";
+import type { AgenticResearchStatus, BacktestRunSummary, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
+import { useAgenticResearchStatus, useBacktestLab, useResearchPipeline, useResearchScorecard, useStrategyWorkflow } from "../queries";
 import { BacktestLabPanel, StrategyWorkflowPanel } from "../panels/Panels";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "./Terminal";
 import { PatternAtlas } from "./PatternAtlas";
@@ -86,12 +86,53 @@ function entryClock(row: StrategyWorkflowRevision) {
   return row.params?.runtime?.entry_clock || "not reported";
 }
 
-function PipelineView({ revisions }: { revisions: StrategyWorkflowRevision[] }) {
+function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | undefined }) {
+  const candidates = pipeline?.candidates ?? [];
+  const verdictTone = (verdict: string): "good" | "bad" | "warn" => verdict === "CANDIDATE" ? "good" : verdict.startsWith("REFUSED") || verdict === "ERROR" ? "bad" : "warn";
+  return (
+    <div className="arena-surface p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="eyebrow">Continuous AI / ML research conveyor</div>
+          <h3 className="mt-2 text-[17px] font-semibold">Create → sandbox → prove causality → rolling OOS → retain evidence</h3>
+          <p className="mt-2 max-w-3xl text-[11px] leading-6 text-dim">One catalogued source at most per cycle. Re-tests are daily by default. ML remains non-binding until the resolved-label floor is met. No result can register, promote, edit the roster, or trade.</p>
+        </div>
+        <div className="flex gap-2">
+          <TerminalBadge tone={pipeline?.artifact_available ? "good" : "warn"}>{titleCase(pipeline?.status ?? "not started")}</TerminalBadge>
+          <TerminalBadge tone="bad">authority false</TerminalBadge>
+        </div>
+      </div>
+      <div className="arena-auto-stages mt-5">
+        {(pipeline?.stages ?? []).map((stage) => <div key={stage.key}><span>{stage.label}</span><strong>{stage.count}</strong><small>{titleCase(stage.state)}</small></div>)}
+        {!pipeline?.stages?.length && <div className="arena-auto-stage-empty">Start the optional research profile to publish the first cycle.</div>}
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_280px]">
+        <div className="overflow-x-auto">
+          <table className="arena-candidate-table">
+            <thead><tr><th>Candidate / proof</th><th>Verdict</th><th>Causal</th><th>OOS trades</th><th>Booked net</th></tr></thead>
+            <tbody>{candidates.slice(0, 12).map((row) => <tr key={row.evidence_id ?? row.strategy_id}><td><b>{row.strategy_id}</b><small>{row.evidence_id?.slice(0, 12) ?? "proof pending"} · {row.source_sha256?.slice(0, 8) ?? "source hash pending"}</small></td><td><TerminalBadge tone={verdictTone(row.verdict)}>{titleCase(row.verdict)}</TerminalBadge></td><td>{row.causality?.passed ? "yes" : "no"}</td><td>{row.walk_forward?.oos_trades ?? "—"}</td><td className={(row.walk_forward?.oos_net_usd ?? 0) < 0 ? "text-short" : "text-long"}>{formatMoney(row.walk_forward?.oos_net_usd)}</td></tr>)}</tbody>
+          </table>
+          {!candidates.length && <div className="arena-empty"><strong>No candidate evidence yet.</strong><span>The display stays empty until a real sandbox/OOS cycle publishes.</span></div>}
+        </div>
+        <div className="arena-ml-card">
+          <div className="eyebrow">ML meta-label gate</div>
+          <strong>{pipeline?.ml.samples ?? 0}<small> / {pipeline?.ml.min_to_train ?? 200}</small></strong>
+          <div className="arena-progress"><i style={{ width: `${Math.min(100, (pipeline?.ml.samples ?? 0) / Math.max(1, pipeline?.ml.min_to_train ?? 200) * 100)}%` }} /></div>
+          <p>{titleCase(pipeline?.ml.stage ?? "unavailable")}</p>
+          <span>binding=false · can_trade=false</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PipelineView({ revisions, pipeline }: { revisions: StrategyWorkflowRevision[]; pipeline: ResearchPipelinePayload | undefined }) {
   const counts = arenaPipelineCounts(revisions);
   const oosPass = revisions.filter((row) => row.stage === "OOS_PASS").length;
   const oosReject = revisions.filter((row) => row.stage === "OOS_REJECT").length;
   return (
     <div className="space-y-4">
+      <ContinuousPipeline pipeline={pipeline} />
       <div className="arena-pipeline" aria-label="Research strategy pipeline">
         {PIPELINE_STAGES.map((step, index) => (
           <div key={step.id} className={`arena-pipeline__step ${step.id === "eligible" ? "arena-pipeline__step--locked" : ""}`}>
@@ -201,6 +242,7 @@ export function ResearchArena({ onNavigate }: { onNavigate: (tab: string) => voi
   const lab = useBacktestLab();
   const scorecard = useResearchScorecard();
   const agents = useAgenticResearchStatus();
+  const pipeline = useResearchPipeline();
   const revisions = workflow.data?.revisions ?? [];
   const failures = revisions.filter((row) => ["QUARANTINED", "KILLED", "OOS_REJECT"].includes(row.stage)).length;
   const activeProofs = (lab.data?.runs ?? []).filter((row) => !["COMPLETE", "FAILED", "REJECTED"].includes(row.status)).length;
@@ -213,10 +255,10 @@ export function ResearchArena({ onNavigate }: { onNavigate: (tab: string) => voi
         <div className="arena-hero__lock"><span>AUTHORITY</span><strong>RESEARCH ONLY</strong><small>can_trade=false · can_promote=false</small></div>
       </section>
       <nav className="arena-nav" aria-label="Research Arena views">{ARENA_VIEWS.map((item) => <button key={item.id} type="button" onClick={() => setView(item.id)} className={view === item.id ? "is-active" : ""}><span>{item.label}</span><small>{item.eyebrow}</small></button>)}</nav>
-      {(workflow.isError || lab.isError || agents.isError) && <div className="rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-[11px] text-warn" role="status">Some Arena evidence sources are unavailable. Missing records remain unknown; zero is not substituted.</div>}
+      {(workflow.isError || lab.isError || agents.isError || pipeline.isError) && <div className="rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-[11px] text-warn" role="status">Some Arena evidence sources are unavailable. Missing records remain unknown; zero is not substituted.</div>}
       <div className="arena-view-head"><div><span>{selected.eyebrow}</span><h2>{selected.label}</h2></div><p>Read-only evidence projection · immutable IDs · after-cost metrics</p></div>
       {view === "book" && <StrategyWorkflowPanel />}
-      {view === "pipeline" && <PipelineView revisions={revisions} />}
+      {view === "pipeline" && <PipelineView revisions={revisions} pipeline={pipeline.data} />}
       {view === "backtests" && <BacktestLabPanel />}
       {view === "forward" && <ForwardQueue revisions={revisions} minimumSamples={scorecard.data?.performance_policy.min_samples ?? 30} />}
       {view === "campaigns" && <Campaigns runs={lab.data?.runs ?? []} actions={agents.data?.operator_queue ?? []} onNavigate={onNavigate} />}

@@ -502,7 +502,12 @@ async def test_reader_loop_consumes_stream_and_subscribes():
         ),
     ]
     fake = _FakeWs(frames)
-    client = DeltaPublicWsClient(["BTC/USD:USD"], connect=lambda url: fake)
+    connection_states = []
+    client = DeltaPublicWsClient(
+        ["BTC/USD:USD"],
+        connect=lambda url: fake,
+        on_connection_state=lambda connected, at: connection_states.append(connected),
+    )
 
     await client.start()
     # let the reader task drain the fake stream
@@ -522,3 +527,5 @@ async def test_reader_loop_consumes_stream_and_subscribes():
 
     assert client.quote("BTCUSD") == (100.0, 101.0)
     assert client.funding_rate["BTCUSD"] == 0.0002
+    assert True in connection_states
+    assert connection_states[-1] is False

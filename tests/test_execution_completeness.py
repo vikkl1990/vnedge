@@ -281,3 +281,20 @@ async def test_live_reconciler_never_guesses_unknown_status(tmp_path):
     assert resolved == []
     assert order.state is S.RECONCILING  # still blocking new risk
     assert om.has_unresolved_orders
+
+
+async def test_live_reconciler_uses_adapter_native_status_normaliser(tmp_path):
+    class NativeAdapter(FakeLiveAdapter):
+        def normalise_order_status(self, payload, order):
+            assert payload == {"state": "open", "size": 5, "unfilled_size": 3}
+            return {"status": "open", "filled": 0.2}
+
+    om, order = await stuck_order(tmp_path)
+    resolved = await LiveReconciler(
+        om,
+        NativeAdapter({"state": "open", "size": 5, "unfilled_size": 3}),
+    ).resolve_unknown_orders()
+
+    assert resolved == [order.client_order_id]
+    assert order.state is S.PARTIALLY_FILLED
+    assert order.filled_quantity == pytest.approx(0.2)

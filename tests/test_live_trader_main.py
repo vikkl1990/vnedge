@@ -70,7 +70,7 @@ class FakeFeed:
 
 
 class FakeStrategy(BaseStrategy):
-    strategy_id = "funding_mean_reversion_v1"
+    strategy_id = "trend_continuation_v1"
     warmup_bars = 2
 
     def prepare(self, candles):

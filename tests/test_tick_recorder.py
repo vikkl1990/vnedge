@@ -12,10 +12,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from vnedge.data.candles import CandleParquetStore, CandlePipeline
 from vnedge.exchange.tick_recorder import (
     CanonicalCandleSink,
     DeltaTickRecorder,
     TickRecorder,
+    TradeStreamCoverage,
     _book_row,
     _Buffer,
     _delta_ob,
@@ -23,6 +25,37 @@ from vnedge.exchange.tick_recorder import (
 )
 
 DAY_TS = 1_751_000_000_000  # fixed ms timestamp
+
+
+def test_uncovered_trade_bucket_is_persisted_partial_but_not_published(tmp_path):
+    start = datetime(2026, 9, 8, tzinfo=UTC)
+    coverage = TradeStreamCoverage(start)
+    store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
+    seen = []
+    pipeline = CandlePipeline(
+        "BTCUSD",
+        store=store,
+        subscribers=(seen.append,),
+        quality_resolver=coverage.quality,
+    )
+
+    pipeline.on_trade(start + timedelta(seconds=10), Decimal("100"), Decimal("0.001"))
+    assert pipeline.advance_time(start + timedelta(minutes=1)) == ()
+    records = store.read_records("BTCUSD", "1m")
+    assert len(records) == 1
+    assert records[0].data_quality == "partial"
+    assert records[0].coverage_ok is False
+    assert seen == []
+
+    coverage.mark_connected(start + timedelta(minutes=1))
+    pipeline.on_trade(
+        start + timedelta(minutes=1, seconds=10),
+        Decimal("101"),
+        Decimal("0.001"),
+    )
+    published = pipeline.advance_time(start + timedelta(minutes=2))
+    assert [bar.timeframe for bar in published] == ["1m"]
+    assert seen == list(published)
 
 
 def _ob(n_bid, n_ask):

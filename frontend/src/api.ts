@@ -1377,6 +1377,70 @@ export interface StrategyWorkflowPayload {
   can_promote: false;
 }
 
+export interface ResearchPipelineCandidate {
+  strategy_id: string;
+  source_file: string;
+  source_sha256?: string;
+  evidence_id?: string;
+  verdict: string;
+  reasons?: string[];
+  causality?: { passed?: boolean; fired_bars?: number } | null;
+  walk_forward?: {
+    windows?: number;
+    oos_trades?: number;
+    oos_net_usd?: number;
+    passed?: boolean;
+  } | null;
+  can_trade: false;
+  can_promote: false;
+}
+
+export interface ResearchPipelinePayload {
+  artifact_available?: boolean;
+  artifact?: ArtifactMetadata;
+  pipeline_id: string;
+  cycle_id?: string;
+  generated_at?: string;
+  last_evaluated_at?: string | null;
+  next_evaluation_at?: string | null;
+  status: string;
+  evaluation_status: string;
+  creation?: {
+    status?: string;
+    strategy_id?: string;
+    source_file?: string;
+    blueprint_id?: string;
+    reason?: string;
+  } | null;
+  stages: Array<{ key: string; label: string; count: number; state: string }>;
+  summary: {
+    source_files?: number;
+    evaluated_candidates?: number;
+    causal_candidates?: number;
+    candidate_verdicts?: Record<string, number>;
+    rejected_files?: number;
+    untouched_judgment_queue?: number;
+    model_stage?: string;
+    model_samples?: number;
+  };
+  dataset?: { exchange?: string; symbol?: string; timeframe?: string; bars?: number; source?: string };
+  candidates: ResearchPipelineCandidate[];
+  rejected_files?: Array<{ file?: string; reason?: string }>;
+  ml: { stage: string; samples: number; min_to_train: number; binding: false; can_trade: false };
+  policy: {
+    max_new_sources_per_cycle?: number;
+    retest_seconds?: number;
+    auto_register?: false;
+    roster_mutation?: false;
+    capital_mutation?: false;
+    can_trade: false;
+    can_promote: false;
+  };
+  can_trade: false;
+  can_promote: false;
+  live_orders_enabled: false;
+}
+
 export interface MlStage {
   key: string;
   label: string;

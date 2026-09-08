@@ -9,11 +9,18 @@ import pytest
 from vnedge.config.risk_config import RiskConfig
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
 from vnedge.data.schemas import normalize_candles
+from vnedge.exchange.live_feed import QuoteUpdate
 from vnedge.exchange.readonly_account import PositionRead
 from vnedge.execution.journal import DecisionJournal
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
-from vnedge.execution.private_stream import PrivateStreamHealth
+from vnedge.execution.order_state import OrderState
+from vnedge.execution.private_stream import (
+    PrivateFillUpdate,
+    PrivateStreamEventApplier,
+    PrivateStreamHealth,
+)
+from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.position_sizer import SymbolLimits
 from vnedge.risk.protections import ProtectionConfig, ProtectionState
@@ -51,6 +58,14 @@ class FakeFeed:
         for r in rows:
             self.closed_candles.put_nowait(r)
         self.quote = quote
+        now = datetime.now(UTC)
+        self.last_quote_update = QuoteUpdate(
+            ts=now,
+            received_ts=now,
+            bid=float(quote[0]),
+            ask=float(quote[1]),
+            source="test_fixture",
+        )
 
     def market_state(self):
         return MarketState(
@@ -123,6 +138,8 @@ def wire(settings, feed, adapter, accounts, tmp_path, strategy, **session_kw):
     om = OrderManager(gateway, journal, adapter)
     reconciler = LiveReconciler(om, adapter)
     hist = normalize_candles([[BASE + i * HOUR, 100.0, 101.0, 99.0, 100.0, 10.0] for i in range(5)])
+    session_kw.setdefault("entry_cost_gate", CostGate(CostProfile.SWING))
+    session_kw.setdefault("capital_eligibility_check", lambda _strategy_id: True)
     return LiveTraderSession(
         strategy,
         feed,
@@ -166,7 +183,70 @@ class OneShotLong(BaseStrategy):
         if self._fired or len(df) < self.at_bar:
             return None
         self._fired = True
-        return SignalIntent("long", stop_price=95.0, take_profit_price=106.0)
+        return SignalIntent(
+            "long",
+            stop_price=95.0,
+            take_profit_price=106.0,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="test_fixture_v1",
+        )
+
+
+def test_live_session_requires_capital_approval_authority(tmp_path):
+    with pytest.raises(RuntimeError, match="CAPITAL_APPROVED"):
+        wire(
+            live_settings(),
+            FakeFeed([]),
+            FakeLiveAdapter(),
+            FakeAccounts(),
+            tmp_path,
+            OneShotLong(),
+            capital_eligibility_check=lambda _strategy_id: False,
+        )
+
+
+async def test_live_entry_rejects_stale_quote_before_adapter(tmp_path):
+    feed = FakeFeed([])
+    old = datetime.now(UTC) - timedelta(seconds=30)
+    feed.last_quote_update = QuoteUpdate(
+        ts=old,
+        received_ts=old,
+        bid=99.99,
+        ask=100.01,
+        source="test_fixture",
+    )
+    adapter = FakeLiveAdapter()
+    session, _ = wire(
+        live_settings(), feed, adapter, FakeAccounts(), tmp_path, OneShotLong()
+    )
+
+    await session._submit_entry(
+        SignalIntent(
+            "long",
+            stop_price=95.0,
+            expected_gross_edge_bps=100.0,
+            edge_model_id="test_fixture_v1",
+        ),
+        datetime.now(UTC),
+    )
+
+    assert adapter.submitted == []
+    assert session._last_entry_block.startswith("quote_stale:")
+
+
+async def test_live_entry_rejects_unversioned_cost_edge_before_adapter(tmp_path):
+    adapter = FakeLiveAdapter()
+    session, _ = wire(
+        live_settings(), FakeFeed([]), adapter, FakeAccounts(), tmp_path, OneShotLong()
+    )
+
+    await session._submit_entry(
+        SignalIntent("long", stop_price=95.0),
+        datetime.now(UTC),
+    )
+
+    assert adapter.submitted == []
+    assert session._last_entry_block == "cost_gate:missing_versioned_edge"
 
 
 # --- THE GATE ---------------------------------------------------------------------
@@ -394,9 +474,18 @@ async def test_live_exit_plan_survives_reject_and_resubmits_same_decision(tmp_pa
 
     await session._submit_exit("stop", datetime.now(UTC))
 
-    assert session._plan is None
+    assert session._plan is not None  # venue ACK is not proof that the position is flat
     exits = [o for o in om.orders.values() if o.intent.reduce_only]
     assert len(exits) == 2
+    final_exit = exits[-1]
+    om.apply_venue_order_update(
+        client_order_id=final_exit.client_order_id,
+        state=OrderState.FILLED,
+        note="private fill fixture",
+        filled_quantity=final_exit.intent.quantity,
+    )
+    session._resolve_pending_exit(final_exit.client_order_id)
+    assert session._plan is None
     records = om._journal.read_all()
     intents = [
         r["payload"]
@@ -432,9 +521,18 @@ async def test_live_timeout_lost_exit_plan_waits_for_reconcile_before_retry(tmp_
     await session._reconcile()
     await session._submit_exit("stop", datetime.now(UTC))
 
-    assert session._plan is None
+    assert session._plan is not None
     exits = [o for o in om.orders.values() if o.intent.reduce_only]
     assert len(exits) == 2
+    final_exit = exits[-1]
+    om.apply_venue_order_update(
+        client_order_id=final_exit.client_order_id,
+        state=OrderState.FILLED,
+        note="private fill fixture",
+        filled_quantity=final_exit.intent.quantity,
+    )
+    session._resolve_pending_exit(final_exit.client_order_id)
+    assert session._plan is None
     records = om._journal.read_all()
     intents = [
         r["payload"]
@@ -671,7 +769,7 @@ async def test_a1_stop_exit_via_shared_engine_full_position(tmp_path):
     # a bar whose LOW breaches the 95 stop → the shared engine returns a stop exit
     bar = pd.Series({"high": 101.0, "low": 94.0, "close": 96.0})
     await session._manage_exit(bar, __import__("datetime").datetime.now(__import__("datetime").UTC))
-    assert session.orders_submitted >= 1 and session._plan is None  # full-position exit fired
+    assert session.orders_submitted >= 1 and session._plan is not None
 
 
 async def test_a1_no_hit_holds_and_does_not_exit(tmp_path):
@@ -715,7 +813,7 @@ async def test_live_tick_stop_uses_shared_exit_engine(tmp_path):
         if r["kind"] == "order_intent" and r["payload"]["intent"]["reduce_only"]
     )
     assert evidence["strategy_id"].endswith(":exit:tick_stop")
-    assert session._plan is None
+    assert session._plan is not None
 
 
 def test_a1_trailing_tightens_stop(tmp_path):
@@ -810,6 +908,14 @@ async def test_l3_stop_exit_arms_protection_cooldown(tmp_path):
     session._entry_bar_ts = pd.Timestamp(BASE, unit="ms", tz="UTC")
     session._bars = 3
     await session._submit_exit("stop", datetime.now(UTC))  # a live stop exit
+    exit_order = next(order for order in session.om.orders.values() if order.intent.reduce_only)
+    session.om.apply_venue_order_update(
+        client_order_id=exit_order.client_order_id,
+        state=OrderState.FILLED,
+        note="private fill fixture",
+        filled_quantity=exit_order.intent.quantity,
+    )
+    session._resolve_pending_exit(exit_order.client_order_id)
     allowed, reason = prot.entries_allowed(4)  # 4 < cooldown_until(3+5)
     assert allowed is False and "cooldown" in reason  # the exit armed the breaker
 
@@ -884,12 +990,12 @@ async def test_l3_daily_factory_read_fault_fails_closed(tmp_path):
 
 
 # --- L1 increment 2: immutable hash-chained fill ledger on the live path ---
-async def test_l1inc2_accepted_entry_is_chained_and_deduped(tmp_path):
+async def test_private_fill_is_the_only_chained_execution_record(tmp_path):
     from vnedge.execution.fill_ledger import FillLedger, verify_chain
 
     ledger = FillLedger(tmp_path / "fills.jsonl")
     adapter = FakeLiveAdapter()
-    session, _ = wire(
+    session, om = wire(
         live_settings(),
         FakeFeed([bar(0)]),
         adapter,
@@ -899,14 +1005,36 @@ async def test_l1inc2_accepted_entry_is_chained_and_deduped(tmp_path):
         fill_ledger=ledger,
     )
     await session.run(max_bars=1)
-    assert ledger.records == 1  # the accepted entry was chained
+    assert ledger.records == 0  # an ACK is not a fill
+    entry = next(order for order in om.orders.values() if not order.intent.reduce_only)
+    health = PrivateStreamHealth()
+    applier = PrivateStreamEventApplier(
+        om,
+        fill_ledger=ledger,
+        venue="binanceusdm",
+        health=health,
+    )
+    assert applier.apply_fill(PrivateFillUpdate(
+        client_order_id=entry.client_order_id,
+        exchange_order_id=entry.exchange_order_id,
+        trade_id="venue-trade-1",
+        symbol=entry.intent.symbol,
+        side="buy",
+        price=100.25,
+        quantity=entry.intent.quantity,
+        fee_cost=0.07,
+        fee_currency="USD",
+        raw={"realizedPnl": "0.0"},
+    ))
+    session._ledger_sweep(datetime.now(UTC))
+    assert ledger.records == 1
     assert verify_chain(tmp_path / "fills.jsonl").ok  # tamper-evident chain intact
     rec = [
         __import__("json").loads(line)
         for line in (tmp_path / "fills.jsonl").read_text().splitlines()
     ][0]
-    assert rec["kind"] == "entry" and rec["side"] == "buy"
-    assert rec["fee_usd"] is None  # honest: not faked pending the fill stream
+    assert rec["record_type"] == "fill" and rec["side"] == "buy"
+    assert rec["price"] == 100.25 and rec["fee_usd"] == 0.07
     session._ledger_sweep(datetime.now(UTC))  # a second sweep must NOT double-record
     assert ledger.records == 1
     assert session._report().fills == 1  # report reflects the ledger count
@@ -920,7 +1048,8 @@ async def test_fill_ledger_failure_latches_entries_off_but_reports_reduce_only(t
             raise OSError("disk unavailable")
 
     adapter = FakeLiveAdapter()
-    session, _ = wire(
+    health = PrivateStreamHealth()
+    session, om = wire(
         live_settings(),
         FakeFeed([bar(0)]),
         adapter,
@@ -929,15 +1058,34 @@ async def test_fill_ledger_failure_latches_entries_off_but_reports_reduce_only(t
         OneShotLong(at_bar=6),
         fill_ledger=BrokenLedger(),
         require_fill_ledger=True,
+        private_stream_health=health,
     )
 
     await session.run(max_bars=1)
+    entry = next(order for order in om.orders.values() if not order.intent.reduce_only)
+    applier = PrivateStreamEventApplier(
+        om,
+        fill_ledger=session.fill_ledger,
+        health=health,
+    )
+    assert applier.apply_fill(PrivateFillUpdate(
+        client_order_id=entry.client_order_id,
+        exchange_order_id=entry.exchange_order_id,
+        trade_id="venue-trade-ledger-fault",
+        symbol=entry.intent.symbol,
+        side="buy",
+        price=100.25,
+        quantity=entry.intent.quantity,
+        fee_cost=0.07,
+        fee_currency="USD",
+        raw={},
+    ))
 
     assert len(adapter.submitted) == 1
     assert session.entries_allowed is False
     readiness = session._runtime_readiness()
     assert readiness.execution_ready is False
-    assert "fill_ledger_write_failed" in readiness.execution_blockers
+    assert "private_fill_ledger_write_failed" in readiness.execution_blockers
 
 
 def test_required_fill_ledger_missing_blocks_new_live_entries(tmp_path):

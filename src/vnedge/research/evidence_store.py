@@ -15,11 +15,12 @@ import json
 import sqlite3
 import time
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Iterable
+from typing import Any
 
 
 EVIDENCE_STORE_ID = "research_evidence_index_v1"
@@ -88,6 +89,7 @@ def build_research_evidence_index(
         ("contract_matrix", root / "vnedge_algo_ml_pro_contract_matrix_latest.json", _records_from_contract_matrix),
         ("candidate_replay", root / "candidate_replay_latest.json", _records_from_candidate_replay),
         ("filtered_replay", root / "filtered_replay_latest.json", _records_from_filtered_replay),
+        ("continuous_ai_pipeline", root / "continuous_ai_pipeline_latest.json", _records_from_continuous_ai_pipeline),
     )
     loaded_artifacts: list[dict[str, Any]] = []
     missing_artifacts: list[str] = []
@@ -498,6 +500,57 @@ def _record(**kwargs: Any) -> EvidenceRecord:
     payload = {**kwargs}
     record_id = _record_id(payload)
     return EvidenceRecord(record_id=record_id, **payload)
+
+
+def _records_from_continuous_ai_pipeline(
+    payload: dict[str, Any], *, source_artifact: str
+) -> list[EvidenceRecord]:
+    """Project sandboxed AI candidates into the unified evidence index."""
+
+    dataset = payload.get("dataset") if isinstance(payload.get("dataset"), dict) else {}
+    generated_at = str(payload.get("generated_at") or "")
+    rows: list[EvidenceRecord] = []
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        walk = candidate.get("walk_forward") if isinstance(candidate.get("walk_forward"), dict) else {}
+        causality = candidate.get("causality") if isinstance(candidate.get("causality"), dict) else {}
+        verdict = str(candidate.get("verdict") or "UNKNOWN")
+        reasons = candidate.get("reasons") if isinstance(candidate.get("reasons"), list) else []
+        rows.append(
+            _record(
+                source_kind="continuous_ai_pipeline",
+                source_artifact=source_artifact,
+                strategy_id=str(candidate.get("strategy_id") or ""),
+                exchange=str(dataset.get("exchange") or ""),
+                symbol=str(dataset.get("symbol") or ""),
+                timeframe=str(dataset.get("timeframe") or ""),
+                status=_status_from_net_and_verdict(None, verdict),
+                verdict=verdict,
+                samples=_int(walk.get("oos_trades")),
+                avg_net_bps=None,
+                profit_factor=None,
+                win_rate_pct=None,
+                failure_mode=str(reasons[0] if reasons else ""),
+                next_action=(
+                    "PRE_REGISTER_UNTOUCHED_JUDGMENT"
+                    if verdict == "CANDIDATE"
+                    else "RETAIN_FAILURE_EVIDENCE"
+                ),
+                source_ref=str(candidate.get("evidence_id") or ""),
+                source_hash=str(candidate.get("source_sha256") or ""),
+                generated_at=generated_at,
+                metadata={
+                    "cycle_id": payload.get("cycle_id"),
+                    "source_file": candidate.get("source_file"),
+                    "causality_passed": bool(causality.get("passed")),
+                    "oos_net_usd": _float(walk.get("oos_net_usd")),
+                    "windows": _int(walk.get("windows")),
+                    "dataset_source": dataset.get("source"),
+                },
+            )
+        )
+    return rows
 
 
 def _summary(

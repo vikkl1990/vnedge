@@ -13,6 +13,7 @@ from vnedge.execution.private_stream import (
     PrivateFillUpdate,
     PrivateOrderUpdate,
     PrivateStreamEventApplier,
+    PrivateStreamHealth,
     normalize_fill_update,
     normalize_order_update,
 )
@@ -214,6 +215,39 @@ async def test_l1inc3_unmatched_fill_is_not_chained(tmp_path):
     )
     assert not applier.apply_fill(fill)   # unmatched → not applied
     assert ledger.records == 0            # and not chained (OM journals it as an anomaly)
+
+
+async def test_fill_ledger_fault_stays_latched_after_later_stream_event(tmp_path):
+    class BrokenLedger:
+        def append(self, _record):
+            raise OSError("disk full")
+
+    om, order = await submitted_order(tmp_path)
+    order.exchange_order_id = "ex_1"
+    health = PrivateStreamHealth()
+    applier = PrivateStreamEventApplier(
+        om,
+        fill_ledger=BrokenLedger(),
+        health=health,
+    )
+    assert applier.apply_fill(PrivateFillUpdate(
+        client_order_id=order.client_order_id,
+        exchange_order_id="ex_1",
+        trade_id="ledger-fault-1",
+        symbol=SYM,
+        side="buy",
+        price=100.0,
+        quantity=0.5,
+        fee_cost=0.01,
+        fee_currency="USDT",
+        raw={},
+    ))
+    assert health.fill_ledger_healthy is False
+    assert "OSError" in (health.fill_ledger_error or "")
+
+    health.mark_event("fill")
+    assert health.connected is True
+    assert health.fill_ledger_healthy is False
 
 
 async def test_unmapped_fill_can_be_retried_after_order_mapping(tmp_path):

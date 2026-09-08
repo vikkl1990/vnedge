@@ -193,6 +193,34 @@ def test_delta_contract_spec_converts_base_quantity_to_integer_contracts():
     assert fake.calls[0]["size"] == 20
 
 
+def test_delta_reconciliation_normalises_contract_fill_to_base_quantity():
+    adapter = DeltaRestExecutionAdapter(
+        product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD")
+    )
+    order = _order(quantity=0.005, notional_usd=320.0, limit_price=64000.0)
+
+    status = adapter.normalise_order_status(
+        {"id": 42, "state": "open", "size": 5, "unfilled_size": 2},
+        order,
+    )
+
+    assert status == {"status": "open", "filled": pytest.approx(0.003)}
+
+
+def test_delta_closed_without_unfilled_size_is_treated_as_fully_filled():
+    adapter = DeltaRestExecutionAdapter(
+        product_ids={"BTCUSD": 27}, contract_specs=_specs("BTCUSD")
+    )
+    order = _order(quantity=0.005, notional_usd=320.0, limit_price=64000.0)
+
+    status = adapter.normalise_order_status(
+        {"id": 42, "state": "closed", "size": 5},
+        order,
+    )
+
+    assert status == {"status": "closed", "filled": pytest.approx(0.005)}
+
+
 def test_delta_contract_spec_rejects_base_quantity_below_one_contract():
     fake = FakeDelta()
     a = DeltaRestExecutionAdapter(

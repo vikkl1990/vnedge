@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
@@ -276,6 +277,21 @@ def test_failed_subscriber_isolated_and_durable_store_still_advances(tmp_path) -
     assert pipeline.subscriber_failures == 1
     assert pipeline.persistence_healthy is True
     assert seen == store.read("BTCUSDT", "1m")
+
+
+def test_canonical_parquet_write_fsyncs_file_and_directory(tmp_path, monkeypatch) -> None:
+    calls: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        calls.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    store = CandleParquetStore(tmp_path, exchange="delta_india")
+    store.upsert((candle_at(0),))
+
+    assert len(calls) >= 2
 
 
 def test_pipeline_reports_publish_and_persist_clocks_without_changing_delivery() -> None:

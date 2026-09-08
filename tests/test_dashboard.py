@@ -258,6 +258,43 @@ def test_strategy_workflow_endpoint_is_read_only_and_auth_gated(tmp_path):
     assert payload["can_trade"] is False and payload["can_promote"] is False
 
 
+def test_continuous_research_pipeline_endpoint_is_auth_gated_and_read_only(tmp_path):
+    artifact = tmp_path / "pipeline.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "pipeline_id": "continuous_ai_research_v1",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "RUNNING",
+                "evaluation_status": "EVALUATED",
+                "summary": {"evaluated_candidates": 3},
+                "stages": [],
+                "candidates": [],
+                "ml": {"stage": "COLLECTING_LABELS", "samples": 4, "min_to_train": 200},
+                # Even a tampered artifact cannot grant authority through API.
+                "can_trade": True,
+                "can_promote": True,
+                "live_orders_enabled": True,
+            }
+        )
+    )
+    provider = SnapshotProvider()
+    provider.publish({"mode": "shadow", "equity": 500.0})
+    c = TestClient(
+        create_app(
+            provider,
+            token="t3st-token",
+            continuous_ai_pipeline_path=artifact,
+        )
+    )
+    assert c.get("/research-pipeline").status_code == 401
+    payload = c.get("/research-pipeline?token=t3st-token").json()
+    assert payload["summary"]["evaluated_candidates"] == 3
+    assert payload["can_trade"] is False
+    assert payload["can_promote"] is False
+    assert payload["live_orders_enabled"] is False
+
+
 def test_scorecard_names_current_runtime_scanners_without_inheriting_old_evidence(
     tmp_path,
 ):

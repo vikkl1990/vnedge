@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -305,6 +306,48 @@ class DeltaRestExecutionAdapter:
             return None
         return payload
 
+    def normalise_order_status(
+        self,
+        payload: dict,
+        order: ManagedOrder,
+    ) -> dict[str, object]:
+        """Translate Delta's native order body into reconciliation truth.
+
+        Delta reports ``state`` and contract ``size``/``unfilled_size``;
+        OrderManager tracks base quantity.  The conversion is therefore the
+        filled contract fraction of the already-frozen intent quantity.  No
+        fill price or fee is fabricated when the REST body omits it.
+        """
+
+        raw_state = str(payload.get("state") or payload.get("status") or "").lower()
+        state_map = {
+            "pending": "open",
+            "open": "open",
+            "closed": "closed",
+            "filled": "closed",
+            "cancelled": "cancelled",
+            "canceled": "cancelled",
+            "rejected": "rejected",
+        }
+        status = state_map.get(raw_state, raw_state)
+        total_contracts = _finite_nonnegative(payload.get("size"))
+        unfilled_contracts = _finite_nonnegative(payload.get("unfilled_size"))
+        filled_contracts = _finite_nonnegative(payload.get("filled_size"))
+        if filled_contracts is None and total_contracts is not None:
+            if unfilled_contracts is None:
+                filled_contracts = total_contracts if status == "closed" else 0.0
+            else:
+                filled_contracts = max(0.0, total_contracts - unfilled_contracts)
+        if total_contracts is None or total_contracts <= 0 or filled_contracts is None:
+            filled_base = order.filled_quantity
+        else:
+            fraction = min(max(filled_contracts / total_contracts, 0.0), 1.0)
+            filled_base = float(order.intent.quantity) * fraction
+        return {
+            "status": status,
+            "filled": max(float(order.filled_quantity), filled_base),
+        }
+
 
 def _order_type(raw: str) -> _DeltaEnumValue:
     value = str(raw or "").lower()
@@ -377,3 +420,15 @@ def _normalise_delta_status(result: object, *, default: str = "open") -> str:
 def _looks_not_found(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(token in msg for token in ("not found", "404", "does not exist", "no order"))
+
+
+def _finite_nonnegative(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0:
+        return None
+    return number

@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Protocol
 
 import pandas as pd
 
 from vnedge.config.settings import LIVE_CONFIRMATION_PHRASE, Settings, TradingMode
+from vnedge.data.candles import TF_SECONDS
 from vnedge.data.time_machine import TimeMachine
 from vnedge.exchange.readonly_account import PositionRead
 from vnedge.execution.evidence import CostDecisionEvidence, ExecutionEvidence
@@ -39,6 +42,7 @@ from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.live_reconciliation import LiveReconciler
 from vnedge.execution.order_manager import FlattenTarget, OrderManager
 from vnedge.execution.order_state import OrderState
+from vnedge.risk.cost_gate import CostGate
 from vnedge.risk.position_sizer import SymbolLimits, size_position
 from vnedge.risk.protections import ProtectionState
 from vnedge.risk.risk_manager import AccountState, OrderIntent
@@ -76,6 +80,7 @@ class AccountProvider(Protocol):
 
 class PrivateStreamHealthProvider(Protocol):
     connected: bool
+    fill_ledger_healthy: bool
 
     def age_seconds(self, now: datetime | None = None) -> float: ...
 
@@ -111,6 +116,8 @@ class LiveTraderSession:
         daily_factory: DailySignalFactoryConfig | None = None,
         fill_ledger: FillLedger | None = None,
         require_fill_ledger: bool = False,
+        entry_cost_gate: CostGate | None = None,
+        capital_eligibility_check: Callable[[str], bool] | None = None,
     ) -> None:
         # --- THE GATE: no live trader without all three live gates open ---
         if not settings.is_live:
@@ -144,6 +151,17 @@ class LiveTraderSession:
         if allow_partial_tp:
             raise RuntimeError(
                 "live partial TP is disabled until OMS/journal partial-fill parity is proven"
+            )
+        if entry_cost_gate is None:
+            raise RuntimeError(
+                "live session requires an explicit CostGate; new risk may not use "
+                "not_evaluated cost evidence"
+            )
+        if capital_eligibility_check is None:
+            raise RuntimeError("live session requires an explicit capital eligibility authority")
+        if not capital_eligibility_check(strategy.strategy_id):
+            raise RuntimeError(
+                f"strategy {strategy.strategy_id!r} is not CAPITAL_APPROVED"
             )
         self.strategy = strategy
         self.feed = feed
@@ -207,6 +225,8 @@ class LiveTraderSession:
         # fill stream (increment 3) — recorded null now, never faked.
         self.fill_ledger = fill_ledger
         self.require_fill_ledger = require_fill_ledger
+        self.entry_cost_gate = entry_cost_gate
+        self._capital_eligibility_check = capital_eligibility_check
         self._ledgered_orders: set[str] = set()
         self._ledger_halt = False
         self._ledger_error: str | None = None
@@ -248,8 +268,13 @@ class LiveTraderSession:
             self.settings.trading_mode is not TradingMode.EMERGENCY_REDUCE_ONLY
             and not self._reconciliation_halt
             and not self._ledger_halt
+            and self._private_fill_ledger_ready()
             and not (self.require_fill_ledger and self.fill_ledger is None)
         )
+
+    def _private_fill_ledger_ready(self) -> bool:
+        health = self.private_stream_health
+        return health is None or bool(getattr(health, "fill_ledger_healthy", True))
 
     def _runtime_readiness(self, now: datetime | None = None) -> RuntimeReadiness:
         at = now or datetime.now(UTC)
@@ -263,6 +288,9 @@ class LiveTraderSession:
             else None,
             "reconciliation_halt" if self._reconciliation_halt else None,
             "fill_ledger_write_failed" if self._ledger_halt else None,
+            "private_fill_ledger_write_failed"
+            if not self._private_fill_ledger_ready()
+            else None,
             "fill_ledger_unavailable"
             if self.require_fill_ledger and self.fill_ledger is None
             else None,
@@ -434,6 +462,12 @@ class LiveTraderSession:
         logger.info("live entry blocked by hygiene gate: %s", block)
 
     async def _submit_entry(self, sig: SignalIntent, now: datetime) -> None:
+        # Re-check on every new-risk attempt. The registry is immutable for a
+        # process lifetime today; retaining the check here makes revocation a
+        # safe future extension and prevents direct-call bypasses in this API.
+        if not self._capital_eligibility_check(self.strategy.strategy_id):
+            self._note_entry_block("capital_not_approved")
+            return
         account = await self._read_account()
         if account is None:
             return  # fail-closed: skip this entry, do not crash the loop
@@ -447,8 +481,63 @@ class LiveTraderSession:
                 self.settings.live_small_capital_cap_usd,
             )
             return
-        bid, ask = self.feed.quote
+        quote_update = getattr(self.feed, "last_quote_update", None)
+        if quote_update is None:
+            self._note_entry_block("quote_missing")
+            return
+        quote_clock = getattr(quote_update, "received_ts", None) or getattr(
+            quote_update, "ts", None
+        )
+        if quote_clock is None:
+            self._note_entry_block("quote_timestamp_missing")
+            return
+        if quote_clock.tzinfo is None or quote_clock.utcoffset() is None:
+            self._note_entry_block("quote_timestamp_naive")
+            return
+        quote_age_raw_s = (now - quote_clock.astimezone(UTC)).total_seconds()
+        if quote_age_raw_s < -self.settings.risk.max_data_staleness_seconds:
+            self._note_entry_block(f"quote_clock_skew:{-quote_age_raw_s:.3f}s")
+            return
+        event_clock = quote_update.ts.astimezone(UTC)
+        received_clock = (quote_update.received_ts or quote_update.ts).astimezone(UTC)
+        event_lead_s = (event_clock - received_clock).total_seconds()
+        if event_lead_s > self.settings.risk.max_data_staleness_seconds:
+            self._note_entry_block(f"quote_event_clock_skew:{event_lead_s:.3f}s")
+            return
+        quote_age_s = max(0.0, quote_age_raw_s)
+        if quote_age_s > self.settings.risk.max_data_staleness_seconds:
+            self._note_entry_block(f"quote_stale:{quote_age_s:.3f}s")
+            return
+        # Bind pricing and evidence to the same immutable quote observation.
+        # Reading ``feed.quote`` separately permits a websocket update between
+        # the freshness check and sizing, producing an unprovable hybrid.
+        bid, ask = quote_update.bid, quote_update.ask
+        if not all(math.isfinite(float(value)) and float(value) > 0 for value in (bid, ask)):
+            self._note_entry_block("quote_invalid")
+            return
+        if float(ask) < float(bid):
+            self._note_entry_block("quote_crossed")
+            return
         ref = ask if sig.side == "long" else bid
+
+        if sig.expected_gross_edge_bps is None or sig.edge_model_id is None:
+            self._note_entry_block("cost_gate:missing_versioned_edge")
+            return
+        expected_holding_seconds = max(
+            1,
+            int(self._max_holding_bars)
+            * int(TF_SECONDS.get(self.timeframe, 60)),
+        )
+        cost_decision = self.entry_cost_gate.evaluate(
+            signal_edge_bps=Decimal(str(sig.expected_gross_edge_bps)),
+            side="buy" if sig.side == "long" else "sell",
+            urgency="taker",
+            expected_holding_seconds=expected_holding_seconds,
+            symbol=self.symbol,
+        )
+        if not cost_decision.approved:
+            self._note_entry_block(f"cost_gate:{cost_decision.reason or 'rejected'}")
+            return
         sizing = size_position(
             equity_usd=account.equity_usd,
             entry_price=ref,
@@ -480,7 +569,20 @@ class LiveTraderSession:
             return
         evidence = ExecutionEvidence.from_decision(
             sig.decision_envelope,
-            cost_decision=CostDecisionEvidence.not_evaluated("live_trader"),
+            quote_sequence=getattr(quote_update, "sequence", None),
+            bbo_ts=quote_update.ts,
+            quote_age_ms=max(
+                0.0,
+                (
+                    (quote_update.received_ts or quote_update.ts)
+                    - quote_update.ts
+                ).total_seconds()
+                * 1000.0,
+            ),
+            cost_decision=CostDecisionEvidence.from_result(
+                cost_decision,
+                profile=self.entry_cost_gate.profile.value,
+            ),
         )
         order = await self.execution_kernel.submit(
             intent,
@@ -569,7 +671,7 @@ class LiveTraderSession:
             now=now,
         )
         self.orders_submitted += 1
-        if order.state in _EXIT_ACCEPTED_STATES:
+        if order.state is OrderState.FILLED:
             if self.protections is not None:
                 self.protections.on_exit(reason, self._bars)  # arm post-stop breaker
             self._clear_exit_plan()
@@ -683,7 +785,12 @@ class LiveTraderSession:
             await self._submit_exit(decision.reason, now)
 
     def _preserve_exit_plan(self, base_key: str, order) -> None:
-        if order.state in (OrderState.TIMEOUT_UNKNOWN, OrderState.RECONCILING):
+        if order.state in (
+            OrderState.ACKNOWLEDGED,
+            OrderState.PARTIALLY_FILLED,
+            OrderState.TIMEOUT_UNKNOWN,
+            OrderState.RECONCILING,
+        ):
             self._pending_exit_orders[base_key] = order.client_order_id
         elif order.state in _EXIT_RETRYABLE_STATES:
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
@@ -995,76 +1102,32 @@ class LiveTraderSession:
         if base_key is None:
             return
         order = self.om.orders[client_order_id]
-        if order.state in _EXIT_ACCEPTED_STATES:
+        if order.state is OrderState.FILLED:
             if self.protections is not None:
                 parts = base_key.split("|")  # exit|SYMBOL|reason|ts
                 if len(parts) >= 3:
                     self.protections.on_exit(parts[2], self._bars)
             self._clear_exit_plan()
             return
+        if order.state in (OrderState.ACKNOWLEDGED, OrderState.PARTIALLY_FILLED):
+            # An acknowledgement is not a flat position. Keep both the plan
+            # and the pending order identity until a private fill or a settled
+            # position read confirms the venue is flat.
+            return
         if order.state in _EXIT_RETRYABLE_STATES:
             self._pending_exit_orders.pop(base_key, None)
             self._exit_retry_attempts[base_key] = self._exit_retry_attempts.get(base_key, 0) + 1
 
     def _ledger_sweep(self, now: datetime) -> None:
-        """Append any OM order that reached an accepted/filled state and isn't
-        chained yet. Resume-aware + deduped by client_order_id, so a restart
-        continues the chain rather than re-recording. A write fault latches new
-        entries off while reduce-only exits continue through the normal path."""
-        if self.fill_ledger is None:
-            return
-        try:
-            bid, ask = getattr(self.feed, "quote", (None, None))
-            ref = (float(bid) + float(ask)) / 2.0 if bid and ask else None
-        except Exception:  # noqa: BLE001
-            ref = None
-        for coid, order in list(self.om.orders.items()):
-            if coid in self._ledgered_orders or order.state not in _EXIT_ACCEPTED_STATES:
-                continue
-            try:
-                self.fill_ledger.append(
-                    {
-                        "ts": now.isoformat(),
-                        "mode": self.settings.trading_mode.value,
-                        "venue": getattr(self.feed, "exchange_id", "live"),
-                        "strategy_id": self.strategy.strategy_id,
-                        "symbol": order.intent.symbol,
-                        "side": "buy" if order.intent.side == "long" else "sell",
-                        "quantity": order.intent.quantity,
-                        "price": ref,  # feed mid; exact fill px awaits the fill stream
-                        "fee_usd": None,  # unknown until the private fill stream
-                        "realized_pnl_usd": None,
-                        "client_order_id": coid,
-                        "exchange_order_id": order.exchange_order_id,
-                        "kind": "exit" if order.intent.reduce_only else "entry",
-                        "state": order.state.value,
-                        "record_type": "order_ack",  # honest: acceptance, not an enriched fill
-                    }
-                )
-                self._ledgered_orders.add(coid)
-            except Exception as exc:  # noqa: BLE001 — the ledger must not wedge the loop
-                logger.error("fill ledger append failed for %s: %s", coid, exc)
-                self._ledger_halt = True
-                self._ledger_error = str(exc)
-                try:
-                    self.om.journal.append(
-                        "execution_readiness_blocked",
-                        {
-                            "ts": now.isoformat(),
-                            "reason": "fill_ledger_write_failed",
-                            "detail": self._ledger_error,
-                            "client_order_id": coid,
-                            "entries_allowed": False,
-                            "reduce_only_exits_allowed": True,
-                        },
-                    )
-                except Exception as journal_exc:  # noqa: BLE001 - latch is authoritative
-                    logger.error(
-                        "failed to journal fill-ledger halt for %s: %s",
-                        coid,
-                        journal_exc,
-                    )
-                return
+        """Compatibility hook; exact private fills are the sole ledger writer.
+
+        Order acknowledgements and terminal order states do not contain enough
+        information to reconstruct execution price, fees, or individual venue
+        trade ids. Synthesizing those records from the current BBO would both
+        fabricate economics and duplicate fills already written by
+        ``PrivateStreamEventApplier``.
+        """
+        del now
 
     def _report(self) -> RunReport:
         # L1: real equity / peak-drawdown / net-since-start from the venue account

@@ -34,7 +34,7 @@ class TelegramNotifier:
         self._timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "TelegramNotifier | None":
+    def from_env(cls) -> TelegramNotifier | None:
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         chat = os.environ.get("TELEGRAM_CHAT_ID", "")
         return cls(token, chat) if token and chat else None
@@ -42,9 +42,19 @@ class TelegramNotifier:
     def send(self, alert: dict) -> None:
         prefix = _SEVERITY_PREFIX.get(alert["severity"], "")
         text = f"{prefix} VNEDGE {alert['rule_id']}\n{alert['message']}\n({alert.get('mode', '')})"
-        response = httpx.post(
-            self._url,
-            json={"chat_id": self._chat_id, "text": text},
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                self._url,
+                json={"chat_id": self._chat_id, "text": text},
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as exc:
+            # httpx exception strings include the request URL, which embeds
+            # the Telegram bot token. Never let it reach an alert/log sink.
+            raise RuntimeError(
+                f"Telegram delivery failed ({type(exc).__name__})"
+            ) from None
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Telegram API returned HTTP {response.status_code}"
+            )

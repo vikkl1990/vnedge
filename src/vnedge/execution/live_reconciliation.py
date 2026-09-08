@@ -12,12 +12,13 @@ from __future__ import annotations
 import logging
 
 from vnedge.execution.order_manager import OrderManager
-from vnedge.execution.order_state import OrderState, UNRESOLVED_STATES
+from vnedge.execution.order_state import UNRESOLVED_STATES, OrderState
 
 logger = logging.getLogger(__name__)
 
 _CCXT_STATUS_MAP = {
     "closed": OrderState.FILLED,
+    "filled": OrderState.FILLED,
     "canceled": OrderState.CANCELLED,
     "cancelled": OrderState.CANCELLED,
     "expired": OrderState.CANCELLED,
@@ -45,8 +46,12 @@ class LiveReconciler:
                 )
                 resolved.append(order.client_order_id)
                 continue
-            s = str(status.get("status", ""))
+            normalise = getattr(self._adapter, "normalise_order_status", None)
+            if callable(normalise):
+                status = normalise(status, order)
+            s = str(status.get("status", "")).lower()
             filled = float(status.get("filled") or 0.0)
+            fees = float(status.get("fee") or status.get("fees_paid") or 0.0)
             if s == "open":
                 target = (
                     OrderState.PARTIALLY_FILLED if filled > 0 else OrderState.ACKNOWLEDGED
@@ -63,6 +68,8 @@ class LiveReconciler:
             self._om.resolve_order(
                 order.client_order_id, target,
                 f"venue reports {s} (filled {filled})",
+                filled_quantity=filled,
+                fees_paid=fees,
             )
             resolved.append(order.client_order_id)
         return resolved

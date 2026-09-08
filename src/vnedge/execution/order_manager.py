@@ -20,6 +20,7 @@ Hard rules enforced here:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -739,16 +740,34 @@ class OrderManager:
         self._journal.append("reconciling", self._lifecycle_envelope(client_order_id))
 
     def resolve_order(
-        self, client_order_id: str, resolved_state: OrderState, note: str
+        self,
+        client_order_id: str,
+        resolved_state: OrderState,
+        note: str,
+        *,
+        filled_quantity: float | None = None,
+        fees_paid: float | None = None,
     ) -> None:
         """Resolve an unknown order to what the EXCHANGE says it is. This is
         the only exit from TIMEOUT_UNKNOWN — never assumption."""
         order = self.orders[client_order_id]
+        if filled_quantity is not None:
+            filled = float(filled_quantity)
+            if not math.isfinite(filled) or filled < 0:
+                raise ValueError("reconciled filled_quantity must be finite and non-negative")
+            order.filled_quantity = max(order.filled_quantity, filled)
+        if fees_paid is not None:
+            fees = float(fees_paid)
+            if not math.isfinite(fees) or fees < 0:
+                raise ValueError("reconciled fees_paid must be finite and non-negative")
+            order.fees_paid = max(order.fees_paid, fees)
         order.transition(resolved_state, f"reconciled: {note}")
         self._journal.append("order_resolved", {
             **self._lifecycle_envelope(client_order_id),
             "state": resolved_state.value,
             "note": note,
+            "filled_quantity": order.filled_quantity,
+            "fees_paid": order.fees_paid,
         })
 
     def apply_venue_order_update(

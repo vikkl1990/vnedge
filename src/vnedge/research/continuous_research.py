@@ -310,7 +310,41 @@ async def run_cycle() -> list[dict]:
                 records.extend(run_walk_forwards(store, target))
         except Exception:
             logger.exception("research target %s failed", target.label)
-    publish(records, targets)
+    if os.environ.get("AI_RESEARCH_PIPELINE_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }:
+        try:
+            from vnedge.research.continuous_ai_pipeline import (
+                run_continuous_ai_pipeline,
+            )
+
+            run_continuous_ai_pipeline(
+                store,
+                targets,
+                auto_create=os.environ.get("AI_AUTO_CREATE_ENABLED", "0")
+                .strip()
+                .lower()
+                not in {"0", "false", "no"},
+                retest_seconds=float(
+                    os.environ.get("AI_RESEARCH_RETEST_SECONDS", "86400")
+                ),
+            )
+        except Exception:
+            # Research automation may fail a cycle; it must never sink the
+            # fixed registered-strategy evidence loop or mutate runtime state.
+            logger.exception("continuous AI research pipeline failed")
+    publish(
+        ResearchPayload(
+            records=records,
+            ai_candidates=_load_ai_candidates_latest(),
+            cascade_reversion=_load_cascade_reversion_latest(),
+            event_taker_replay=_load_event_taker_latest(),
+            leadlag_echo_scalp=_load_leadlag_echo_scalp_latest(),
+        ),
+        targets,
+    )
     return records
 
 

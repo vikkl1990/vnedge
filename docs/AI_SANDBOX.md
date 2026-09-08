@@ -91,7 +91,30 @@ The payload is published to `research/live_research/ai_candidates.json` and
 folded into the continuous-research document
 (`vnedge.research.continuous_research`) exactly like the cascade-reversion hook,
 so it runs on the existing research cadence — **no new always-on service.**
-Toggle with `AI_CANDIDATE_RESEARCH_ENABLED=0`.
+Toggle the conveyor with `AI_RESEARCH_PIPELINE_ENABLED=0`.
+
+## Continuous Arena pipeline
+
+`vnedge.research.continuous_ai_pipeline` is the durable orchestration layer used
+by the optional `research-loop` Compose profile. It adds two capabilities while
+preserving the same sandbox boundary:
+
+- a finite, result-independent proposal catalog may materialize **at most one**
+  new source file per cycle; existing source is immutable and a hash conflict is
+  refused rather than overwritten;
+- every evaluation receives a source hash and evidence ID, is retained as a
+  per-cycle JSON artifact plus append-only feed entry, and is projected through
+  `/research-pipeline` into the Arena.
+
+The catalog is intentionally finite. After it is exhausted, the loop continues
+to discover externally authored AI candidates and retest all candidates on the
+daily evidence cadence. It does not generate unbounded parameter mutations from
+failed results. `AI_AUTO_CREATE_ENABLED=0` stops materialization without
+stopping validation and evidence collection.
+
+The ML panel is the existing meta-label status, not an authority shortcut. It
+remains non-binding until the resolved-label minimum and locked validation gates
+pass; it never auto-registers or promotes a strategy.
 
 ### Hard guards (stamped on the payload, summary, policy, and every row)
 

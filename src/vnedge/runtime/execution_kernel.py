@@ -96,6 +96,19 @@ class ExecutionKernel:
             raise PermissionError(
                 "new risk requires a decision envelope minted from closed-bar ARM truth"
             )
+        # A live venue is the final authority boundary.  Paper/replay may retain
+        # explicitly ineligible diagnostics, but a real risk-increasing order
+        # must carry the immutable verdict from the pre-sizing CostGate.  This
+        # is deliberately enforced here as well as in the caller so a future
+        # runtime cannot accidentally route around the tariff wall.
+        if (
+            self.adapter_kind is AdapterKind.LIVE
+            and not intent.reduce_only
+            and evidence.cost_decision.approved is not True
+        ):
+            raise PermissionError(
+                "live new risk requires an approved CostGate decision in execution evidence"
+            )
 
 
 def build_kernel(

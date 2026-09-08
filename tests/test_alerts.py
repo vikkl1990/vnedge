@@ -3,7 +3,11 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import httpx
+import pytest
+
 from vnedge.monitoring.alerts import AlertEngine, AlertRule, default_trial_rules
+from vnedge.monitoring.notifiers import TelegramNotifier
 
 NOW = datetime(2026, 7, 3, 12, 0, tzinfo=UTC)
 
@@ -109,3 +113,32 @@ def test_default_rules_null_safe_on_empty_snapshot(tmp_path):
     engine = AlertEngine(default_trial_rules(10.0), tmp_path / "a.jsonl")
     fired = engine.evaluate({})   # empty snapshot — null-safe conditions must not fail-loud
     assert not any(a["rule_id"].endswith("_error") for a in fired)
+
+
+def test_telegram_http_failure_never_leaks_bot_token(monkeypatch):
+    token = "secret-token-must-not-escape"
+
+    class Response:
+        status_code = 500
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
+    notifier = TelegramNotifier(token, "chat")
+    with pytest.raises(RuntimeError) as exc:
+        notifier.send({"severity": "critical", "rule_id": "x", "message": "boom"})
+    assert token not in str(exc.value)
+    assert "HTTP 500" in str(exc.value)
+
+
+def test_telegram_transport_failure_never_leaks_bot_token(monkeypatch):
+    token = "secret-token-must-not-escape"
+
+    def fail(*args, **kwargs):
+        request = httpx.Request("POST", args[0])
+        raise httpx.ConnectError("failed", request=request)
+
+    monkeypatch.setattr(httpx, "post", fail)
+    notifier = TelegramNotifier(token, "chat")
+    with pytest.raises(RuntimeError) as exc:
+        notifier.send({"severity": "critical", "rule_id": "x", "message": "boom"})
+    assert token not in str(exc.value)
+    assert "ConnectError" in str(exc.value)

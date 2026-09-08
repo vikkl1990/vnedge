@@ -360,6 +360,11 @@ services:
       RESEARCH_EXCHANGES: "${RESEARCH_EXCHANGES:-binanceusdm,bybit,delta_india}"
       RESEARCH_SYMBOLS: "${RESEARCH_SYMBOLS:-BTC/USDT:USDT,ETH/USDT:USDT}"
       RESEARCH_STRATEGIES: "${RESEARCH_STRATEGIES:-}"
+      # This service is already opt-in via the research profile. The AI
+      # conveyor remains research-only and has no venue secrets or adapters.
+      AI_RESEARCH_PIPELINE_ENABLED: "${AI_RESEARCH_PIPELINE_ENABLED:-1}"
+      AI_AUTO_CREATE_ENABLED: "${AI_AUTO_CREATE_ENABLED:-1}"
+      AI_RESEARCH_RETEST_SECONDS: "${AI_RESEARCH_RETEST_SECONDS:-86400}"
       ALPHA_FACTORY_ENABLED: "0"
     volumes:
       - ./data:/app/data
@@ -639,7 +644,9 @@ services:
         fi
         exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
-      - "8765:8765"
+      # Loopback-only by default. A public bind requires the explicit VM-local
+      # DASHBOARD_BIND_IP override plus the Caddy DASHBOARD_ALLOWLIST.
+      - "${DASHBOARD_BIND_IP:-127.0.0.1}:8765:8765"
     healthcheck:
       test: ["CMD-SHELL", "wget -q --no-check-certificate --spider https://127.0.0.1:8765/healthz"]
       interval: 30s

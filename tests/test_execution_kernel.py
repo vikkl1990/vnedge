@@ -6,7 +6,11 @@ from typing import Any, cast
 
 import pytest
 
-from vnedge.execution.evidence import DecisionEnvelope, ExecutionEvidence
+from vnedge.execution.evidence import (
+    CostDecisionEvidence,
+    DecisionEnvelope,
+    ExecutionEvidence,
+)
 from vnedge.execution.order_manager import OrderManager
 from vnedge.risk.risk_manager import AccountState, MarketState, OrderIntent
 from vnedge.runtime.execution_contract import (
@@ -120,7 +124,34 @@ def _evidence(
         permission_snapshot=snapshot,
         entry_clock="next_15m_open",
     )
-    return ExecutionEvidence.from_decision(decision)
+    return ExecutionEvidence.from_decision(
+        decision,
+        cost_decision=CostDecisionEvidence(
+            approved=True,
+            profile="test_cost_v1",
+            expected_net_bps="80",
+            total_cost_bps="20",
+            min_required_bps="4",
+            expected_gross_edge_bps="100",
+        ),
+    )
+
+
+async def test_live_new_risk_refuses_missing_cost_approval() -> None:
+    manager = _RecordingOrderManager()
+    kernel = ExecutionKernel(
+        ExecutionContext(DataClock.LIVE, ExecutionStage.LIVE_SMALL),
+        cast(OrderManager, manager),
+        AdapterKind.LIVE,
+    )
+    evidence = replace(
+        _evidence(),
+        cost_decision=CostDecisionEvidence.not_evaluated("fixture"),
+    )
+
+    with pytest.raises(PermissionError, match="approved CostGate"):
+        await kernel.submit(_intent(), _account(), _market(), evidence=evidence)
+    assert manager.calls == []
 
 
 def _permission_snapshot() -> FrozenPermissionSnapshot:

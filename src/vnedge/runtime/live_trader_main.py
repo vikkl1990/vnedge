@@ -47,11 +47,16 @@ from vnedge.execution.private_stream import (
     PrivateStreamEventApplier,
     PrivateStreamHealth,
 )
+from vnedge.risk.cost_gate import CostGate, CostProfile
 from vnedge.risk.kill_switch import KillSwitch
 from vnedge.risk.risk_manager import PreTradeRiskGateway
 from vnedge.runtime.execution_contract import KERNEL_PATH_ID
 from vnedge.runtime.live_trader import LiveTraderSession
 from vnedge.runtime.pre_live_checklist import run_pre_live_checklist_from_env
+from vnedge.strategy.scanner_contracts import (
+    resolve_scanner_cost_profile,
+    scanner_runtime_contract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,8 +188,41 @@ def _default_strategy(strategy_id: str):
     return get_strategy_class(strategy_id)()
 
 
+def _capital_eligibility_check(strategy_id: str) -> bool:
+    from vnedge.strategy.strategy_registry import is_capital_eligible
+
+    return is_capital_eligible(strategy_id)
+
+
 def _default_fill_ledger(config: LiveTraderRunConfig) -> FillLedger:
     return FillLedger(f"logs/live/{config.exchange}_{config.strategy_id}.fills.jsonl")
+
+
+def _entry_cost_gate(config: LiveTraderRunConfig) -> CostGate:
+    """Resolve the immutable tariff card used by the registered strategy.
+
+    A capital path must never infer costs from the chart or target distance.
+    Unknown legacy strategies retain the venue-conservative swing profile;
+    their missing versioned edge still causes the session to reject entries.
+    """
+
+    contract = scanner_runtime_contract(config.strategy_id)
+    if contract is not None:
+        profile_id = resolve_scanner_cost_profile(
+            contract,
+            exchange_id=config.exchange,
+        )
+    elif "delta" in config.exchange.lower():
+        profile_id = CostProfile.DELTA_SWING.value
+    else:
+        profile_id = CostProfile.SWING.value
+    try:
+        profile = CostProfile(profile_id)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"strategy {config.strategy_id!r} resolved unknown cost profile {profile_id!r}"
+        ) from exc
+    return CostGate(profile)
 
 
 def _default_private_stream(config, applier, health):
@@ -300,7 +338,12 @@ async def run_live_trader(
     # the session gates entries on — so require_private_stream is True on live.
     fill_ledger = (fill_ledger_factory or _default_fill_ledger)(config)
     health = PrivateStreamHealth()
-    applier = PrivateStreamEventApplier(om, fill_ledger=fill_ledger, venue=config.exchange)
+    applier = PrivateStreamEventApplier(
+        om,
+        fill_ledger=fill_ledger,
+        venue=config.exchange,
+        health=health,
+    )
     stream = (private_stream_factory or _default_private_stream)(config, applier, health)
 
     session = LiveTraderSession(
@@ -325,6 +368,8 @@ async def run_live_trader(
         require_fill_ledger=True,
         private_stream_health=health,
         require_private_stream=True,
+        entry_cost_gate=_entry_cost_gate(config),
+        capital_eligibility_check=_capital_eligibility_check,
     )
     stop_event = asyncio.Event()
     stream_task = asyncio.create_task(

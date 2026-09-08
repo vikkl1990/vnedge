@@ -755,7 +755,17 @@ class CandleParquetStore:
         table = pa.Table.from_pandas(frame, schema=cls._schema(), preserve_index=False)
         tmp = path.with_suffix(".parquet.tmp")
         pq.write_table(table, tmp)
+        # ``os.replace`` is atomic but not durable by itself. Flush both the
+        # new inode and its directory entry before a closed candle may be
+        # treated as restart-safe canonical truth.
+        with tmp.open("rb") as handle:
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def upsert(
         self,
@@ -1063,6 +1073,7 @@ class CandlePipeline:
         subscribers: Iterable[Callable[[Candle], None]] = (),
         rejected_trade_sink: Callable[[RejectedTrade], None] | None = None,
         timing_sink: Callable[[str, float], None] | None = None,
+        quality_resolver: Callable[[Candle], tuple[str, bool]] | None = None,
     ) -> None:
         if base_timeframe not in {"1s", "1m"}:
             raise ValueError("live candle pipeline base_timeframe must be '1s' or '1m'")
@@ -1072,6 +1083,7 @@ class CandlePipeline:
         self.subscribers = tuple(subscribers)
         self.rejected_trade_sink = rejected_trade_sink
         self.timing_sink = timing_sink
+        self.quality_resolver = quality_resolver
         self.subscriber_failures = 0
         self.persistence_healthy = True
         self.last_persistence_error: str | None = None
@@ -1112,21 +1124,49 @@ class CandlePipeline:
         gaps still fail closed through ``aggregate_candle_series``.
         """
         assert self.store is not None
-        base_rows = self.store.read(self.symbol, self.builder.timeframe)
-        if base_rows:
+        read_records = getattr(self.store, "read_records", None)
+        if not callable(read_records):
+            base_rows = self.store.read(self.symbol, self.builder.timeframe)
+            base_records = ()
+        else:
+            base_records = read_records(self.symbol, self.builder.timeframe)
+            base_rows = [
+                record.candle
+                for record in base_records
+                if record.data_quality == "ok" and record.coverage_ok
+            ]
+        if base_records:
             # The base builder is also restart state. Without this boundary a
             # replayed/late trade can reopen history that Parquet has already
             # declared immutable.
+            self.builder._closed_through = max(
+                record.candle.close_time for record in base_records
+            )
+        elif base_rows:
             self.builder._closed_through = max(candle.close_time for candle in base_rows)
         rebuilt_count = 0
         for source, target in _AGGREGATION_CHAIN:
             aggregator = self._aggregators.get(source)
             if aggregator is None:
                 continue
-            source_rows = self.store.read(self.symbol, source)
+            if callable(read_records):
+                source_rows = [
+                    record.candle
+                    for record in read_records(self.symbol, source)
+                    if record.data_quality == "ok" and record.coverage_ok
+                ]
+            else:
+                source_rows = self.store.read(self.symbol, source)
             if not source_rows:
                 continue
-            target_rows = self.store.read(self.symbol, target)
+            if callable(read_records):
+                target_rows = [
+                    record.candle
+                    for record in read_records(self.symbol, target)
+                    if record.data_quality == "ok" and record.coverage_ok
+                ]
+            else:
+                target_rows = self.store.read(self.symbol, target)
             existing_opens = {candle.open_time for candle in target_rows}
             complete = aggregate_candle_series(
                 self.symbol,
@@ -1162,6 +1202,20 @@ class CandlePipeline:
     def _publish(self, candle: Candle, published: list[Candle]) -> None:
         if not candle.is_closed:
             raise ValueError("pipeline may publish closed candles only")
+        data_quality, coverage_ok = (
+            self.quality_resolver(candle)
+            if self.quality_resolver is not None
+            else ("ok", True)
+        )
+        if data_quality not in BAR_QUALITIES:
+            raise ValueError(f"unsupported resolved candle quality: {data_quality}")
+        if data_quality != "ok" and coverage_ok:
+            raise ValueError("non-ok resolved candle cannot claim coverage_ok")
+        if not coverage_ok:
+            # Preserve the truncated bucket as forensic evidence, but never
+            # publish it to scanners or feed it into the parent ladder.
+            self._persist(candle, data_quality=data_quality, coverage_ok=False)
+            return
         published.append(candle)
         # Strategy/runtime delivery is the primary live path; Parquet is the
         # durable audit sink.  Publish first so a synchronous file write cannot
@@ -1188,28 +1242,45 @@ class CandlePipeline:
                     else "aggregate_publish_ms"
                 )
                 self.timing_sink(metric, (time.perf_counter() - publish_started) * 1000.0)
-        if self.store is not None:
-            persist_started = time.perf_counter()
-            try:
-                self.store.upsert((candle,))
-            except Exception as exc:
-                self.persistence_healthy = False
-                self.last_persistence_error = f"{type(exc).__name__}: {exc}"
-                raise
-            else:
-                self.persistence_healthy = True
-                self.last_persistence_error = None
-            finally:
-                if self.timing_sink is not None:
-                    self.timing_sink(
-                        "parquet_persist_ms",
-                        (time.perf_counter() - persist_started) * 1000.0,
-                    )
+        self._persist(candle, data_quality=data_quality, coverage_ok=coverage_ok)
         aggregator = self._aggregators.get(candle.timeframe)
         if aggregator is not None:
             higher = aggregator.on_candle(candle)
             if higher is not None:
                 self._publish(higher, published)
+
+    def _persist(
+        self,
+        candle: Candle,
+        *,
+        data_quality: str,
+        coverage_ok: bool,
+    ) -> None:
+        if self.store is None:
+            return
+        persist_started = time.perf_counter()
+        try:
+            if data_quality == "ok" and coverage_ok:
+                self.store.upsert((candle,))
+            else:
+                self.store.upsert(
+                    (candle,),
+                    data_quality=data_quality,
+                    coverage_ok=coverage_ok,
+                )
+        except Exception as exc:
+            self.persistence_healthy = False
+            self.last_persistence_error = f"{type(exc).__name__}: {exc}"
+            raise
+        else:
+            self.persistence_healthy = True
+            self.last_persistence_error = None
+        finally:
+            if self.timing_sink is not None:
+                self.timing_sink(
+                    "parquet_persist_ms",
+                    (time.perf_counter() - persist_started) * 1000.0,
+                )
 
     def on_trade(
         self,

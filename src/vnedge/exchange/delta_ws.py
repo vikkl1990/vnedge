@@ -103,6 +103,7 @@ class DeltaPublicWsClient:
         on_book: Callable[[str, list, list, dict], None] | None = None,
         on_trade: Callable[[str, dict], None] | None = None,
         on_candle: Callable[[str, str, list], None] | None = None,
+        on_connection_state: Callable[[bool, datetime], None] | None = None,
         heartbeat: HeartbeatConfig | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -118,6 +119,7 @@ class DeltaPublicWsClient:
         self.on_trade = on_trade
         # on_candle(symbol, timeframe, [ts_ms, o, h, l, c, v]) — CLOSED candles only
         self.on_candle = on_candle
+        self.on_connection_state = on_connection_state
         self.heartbeat_config = heartbeat or HeartbeatConfig(
             ping_interval_s=20.0,
             pong_timeout_s=20.0,
@@ -205,21 +207,25 @@ class DeltaPublicWsClient:
                 continue
             try:
                 async with connect(self.url) as ws:
-                    self._heartbeat.reset(self._monotonic())
-                    # Enable the official server heartbeat immediately.  It is
-                    # transport liveness only and never refreshes book/trade age.
-                    await ws.send(json.dumps({"type": "enable_heartbeat"}))
-                    await ws.send(json.dumps(self._subscribe_msg()))
-                    iterator = ws.__aiter__()
-                    while not self._closed:
-                        try:
-                            raw = await asyncio.wait_for(
-                                anext(iterator),
-                                timeout=self.heartbeat_config.transport_silence_s,
-                            )
-                        except StopAsyncIteration:
-                            break
-                        self._handle_raw(raw)
+                    try:
+                        self._heartbeat.reset(self._monotonic())
+                        # Enable the official server heartbeat immediately.  It is
+                        # transport liveness only and never refreshes book/trade age.
+                        await ws.send(json.dumps({"type": "enable_heartbeat"}))
+                        await ws.send(json.dumps(self._subscribe_msg()))
+                        self._notify_connection(True)
+                        iterator = ws.__aiter__()
+                        while not self._closed:
+                            try:
+                                raw = await asyncio.wait_for(
+                                    anext(iterator),
+                                    timeout=self.heartbeat_config.transport_silence_s,
+                                )
+                            except StopAsyncIteration:
+                                break
+                            self._handle_raw(raw)
+                    finally:
+                        self._notify_connection(False)
                 if not self._closed:
                     self.healthy = False
                     self._mark_error(ConnectionError("delta websocket stream ended"))
@@ -481,6 +487,14 @@ class DeltaPublicWsClient:
         self._consecutive_errors = 0
         self._backoff.reset()
         self.healthy = True
+
+    def _notify_connection(self, connected: bool) -> None:
+        if self.on_connection_state is None:
+            return
+        try:
+            self.on_connection_state(connected, self._now())
+        except Exception:
+            logger.exception("Delta websocket connection-state callback failed")
 
     def _touch_transport(self, *, pong: bool = False) -> None:
         self.last_transport_at = self._now()

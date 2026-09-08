@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 from vnedge.execution.fill_ledger import FillLedger
 from vnedge.execution.order_manager import OrderManager
@@ -70,6 +71,8 @@ class PrivateStreamHealth:
     last_error: str | None = None
     orders_seen: int = 0
     fills_seen: int = 0
+    fill_ledger_healthy: bool = True
+    fill_ledger_error: str | None = None
 
     def mark_event(self, kind: Literal["order", "fill"]) -> None:
         self.connected = True
@@ -84,6 +87,15 @@ class PrivateStreamHealth:
         self.connected = False
         self.last_error = f"{type(exc).__name__}: {exc}"
 
+    def mark_fill_ledger_error(self, exc: BaseException) -> None:
+        """Latch a durable-accounting fault independently of socket health.
+
+        A later private-stream event may prove that the socket is alive, but it
+        cannot repair a fill that failed to enter the immutable ledger.
+        """
+        self.fill_ledger_healthy = False
+        self.fill_ledger_error = f"{type(exc).__name__}: {exc}"
+
     def age_seconds(self, now: datetime | None = None) -> float:
         if self.last_event_at is None:
             return float("inf")
@@ -97,6 +109,8 @@ class PrivateStreamHealth:
             "last_error": self.last_error,
             "orders_seen": self.orders_seen,
             "fills_seen": self.fills_seen,
+            "fill_ledger_healthy": self.fill_ledger_healthy,
+            "fill_ledger_error": self.fill_ledger_error,
         }
 
 
@@ -109,6 +123,7 @@ class PrivateStreamEventApplier:
         *,
         fill_ledger: FillLedger | None = None,
         venue: str = "live",
+        health: PrivateStreamHealth | None = None,
     ) -> None:
         self._om = order_manager
         self._seen_trade_ids: set[str] = set()
@@ -118,6 +133,7 @@ class PrivateStreamEventApplier:
         # execution record, superseding the coarse null-economics acceptance sweep.
         self._fill_ledger = fill_ledger
         self._venue = venue
+        self._health = health
 
     def apply_order(self, update: PrivateOrderUpdate) -> bool:
         client_id = self._resolve_client_id(update.client_order_id, update.exchange_order_id)
@@ -167,7 +183,7 @@ class PrivateStreamEventApplier:
             self._ledger_fill(update, client_id)
         return applied
 
-    def _ledger_fill(self, update: "PrivateFillUpdate", client_id: str | None) -> None:
+    def _ledger_fill(self, update: PrivateFillUpdate, client_id: str | None) -> None:
         """Chain the REAL fill (price/fee/realized-pnl) into the immutable ledger.
         FAIL-SAFE: a ledger fault is logged, never raised into the stream loop.
         Only matched fills are chained (unmatched ones are journaled as anomalies
@@ -191,6 +207,8 @@ class PrivateStreamEventApplier:
                 "record_type": "fill",
             })
         except Exception as exc:  # noqa: BLE001 — the ledger must never break the stream
+            if self._health is not None:
+                self._health.mark_fill_ledger_error(exc)
             logger.error("private fill ledger append failed for %s: %s", update.trade_id, exc)
 
     def _resolve_client_id(

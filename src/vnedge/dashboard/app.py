@@ -598,6 +598,7 @@ def create_app(
     evidence_index_path: Path | None = None,
     execution_replay_profile_path: Path | None = None,
     strategy_workflow_path: Path | None = None,
+    continuous_ai_pipeline_path: Path | None = None,
     token_store: TokenStore | None = None,
     agent_token_store: AgentTokenStore | None = None,
     agent_audit_path: Path | None = None,
@@ -1187,6 +1188,10 @@ def create_app(
         or Path("research/live_research/strategy_workflow_latest.json")
     )
     strategy_workflow_override = strategy_workflow_path is not None
+    continuous_ai_pipeline_file = (
+        continuous_ai_pipeline_path
+        or Path("research/live_research/continuous_ai_pipeline_latest.json")
+    )
     paper_lane_activation_file = (
         paper_lane_activation_path
         or Path("research/live_research/paper_lane_activation_latest.json")
@@ -1891,6 +1896,48 @@ def create_app(
         return JSONResponse(
             _refresh_source_status(payload), headers=_identity(user)
         )
+
+    @app.get("/research-pipeline")
+    async def research_pipeline(request: Request) -> JSONResponse:
+        """Continuous AI research state; evidence-only and GET-only."""
+        user = _authorized(request)
+        payload = _artifact_payload(
+            continuous_ai_pipeline_file,
+            {
+                "artifact_available": False,
+                "pipeline_id": "continuous_ai_research_v1",
+                "status": "NOT_STARTED",
+                "evaluation_status": "WAITING",
+                "stages": [],
+                "summary": {},
+                "dataset": {},
+                "candidates": [],
+                "rejected_files": [],
+                "ml": {
+                    "stage": "UNAVAILABLE",
+                    "samples": 0,
+                    "min_to_train": 200,
+                    "binding": False,
+                    "can_trade": False,
+                },
+                "policy": {
+                    "auto_register": False,
+                    "roster_mutation": False,
+                    "capital_mutation": False,
+                    "can_trade": False,
+                    "can_promote": False,
+                },
+                "can_trade": False,
+                "can_promote": False,
+                "live_orders_enabled": False,
+            },
+            expected_interval_seconds=2 * 60 * 60,
+        )
+        # Never trust an artifact to grant authority, even if it is malformed.
+        payload["can_trade"] = False
+        payload["can_promote"] = False
+        payload["live_orders_enabled"] = False
+        return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/agent-jobs")
     async def agent_jobs(request: Request, limit: int = 100) -> JSONResponse:
