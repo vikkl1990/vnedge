@@ -117,6 +117,19 @@ class ExpansionAcceptanceEngine:
         self.last_hold_ms = max(0.0, (ended_at - started_at).total_seconds() * 1000.0)
         self.hold_observation_id += 1
 
+    def _reject_broken_quote(self, reason: str, *, received_at: datetime) -> None:
+        """Broken market evidence cannot bridge two parts of a quote hold.
+
+        Preserve arms and any accepted position; only in-flight probes reset.
+        Do not advance the last valid quote identity/clock on rejected data.
+        """
+        for lifecycle in (self.long, self.short):
+            if lifecycle.state is AcceptanceState.PROBE:
+                self._observe_hold(lifecycle.probe_started_at, received_at)
+                lifecycle.rearm()
+        self.quote_contract_rejects += 1
+        self.last_reason = reason
+
     def note_quote_overflow(self, total_drops: int, *, observed_at: datetime | None = None) -> None:
         """Fail closed when acceptance evidence was evicted upstream.
 
@@ -170,6 +183,15 @@ class ExpansionAcceptanceEngine:
                     state=(AcceptanceState.ARMED if arm.allow_short else AcceptanceState.DORMANT),
                     rearms=short_rearms,
                 )
+            elif arm != self.arm:
+                # Episode budgets span multiple decision bars, but a hold is
+                # proof for ONE frozen arm. Do not transplant old samples to
+                # a new bar/snapshot or changed levels under the same episode.
+                for lifecycle in (self.long, self.short):
+                    if lifecycle.state is AcceptanceState.PROBE:
+                        if self.last_quote_ts is not None:
+                            self._observe_hold(lifecycle.probe_started_at, self.last_quote_ts)
+                        lifecycle.rearm()
             self.arm = arm
             grace = arm.expires_after_bars or self.config.arm_grace_bars
             self.arm_expires_bar = arm.bar_index + grace
@@ -213,21 +235,18 @@ class ExpansionAcceptanceEngine:
         if received.tzinfo is None:
             raise ValueError("quote receive timestamp must be timezone-aware")
         if not (0 < bid <= ask) or not math.isfinite(bid) or not math.isfinite(ask):
-            self.last_reason = "invalid_quote"
+            self._reject_broken_quote("invalid_quote", received_at=received)
             return None
         future_skew = (ts - received).total_seconds()
         if future_skew > self.config.max_quote_future_skew_seconds:
-            self.last_reason = "quote_clock_skew"
-            self.quote_contract_rejects += 1
+            self._reject_broken_quote("quote_clock_skew", received_at=received)
             return None
         lag_seconds = max(0.0, (received - ts).total_seconds())
         if exchange_timestamped and lag_seconds > self.config.max_quote_lag_seconds:
-            self.last_reason = "quote_ingest_lag"
-            self.quote_contract_rejects += 1
+            self._reject_broken_quote("quote_ingest_lag", received_at=received)
             return None
         if self.last_quote_ts is not None and ts < self.last_quote_ts:
-            self.last_reason = "quote_out_of_order"
-            self.quote_contract_rejects += 1
+            self._reject_broken_quote("quote_out_of_order", received_at=received)
             return None
         identity: tuple[object, ...]
         if sequence is not None:

@@ -265,7 +265,9 @@ def test_research_model_can_run_in_shadow_but_cannot_bind_cost_gate() -> None:
     hybrid = HybridFeeModel(DELTA_INDIA_REFERENCE, research)
 
     live = hybrid.predict(features(), "taker", "taker")
-    shadow = hybrid.predict(features(), "taker", "taker", shadow=True)
+    shadow = hybrid.predict(
+        replace(features(), venue="binanceusdm"), "taker", "taker", shadow=True,
+    )
 
     assert live.fallback_reason == "model_not_runtime_approved"
     assert live.capital_safe is True and live.model_id == "rules_only"
@@ -349,11 +351,11 @@ def test_cost_gate_keeps_its_rules_floor_and_accepts_only_higher_ml_cost() -> No
     low = HybridFeeModel(
         FeeSchedule(Decimal(1), Decimal(1), schedule_id="low-test"),
         QuantileModel("0", "1"),
-    ).predict(features(), "taker", "taker")
+    ).predict(replace(features(), venue="binanceusdm"), "taker", "taker")
     high = HybridFeeModel(
         DELTA_INDIA_REFERENCE,
         QuantileModel("8", "12"),
-    ).predict(features(), "taker", "taker")
+    ).predict(replace(features(), venue="binanceusdm"), "taker", "taker")
 
     baseline = gate.evaluate(**common)
     guarded_low = gate.evaluate(**common, fee_model_prediction=low)
@@ -417,6 +419,47 @@ def test_cost_gate_uses_discount_only_from_account_verified_schedule() -> None:
     )
     assert mismatch.cost.fee_bps == Decimal("11.80")
     assert mismatch.cost.execution_model_reason == "fee_prediction_context_mismatch"
+
+
+@pytest.mark.parametrize("venue,entry,exit", [
+    ("delta_india", "maker", "taker"),
+    ("delta_india", "taker", "maker"),
+    ("binanceusdm", "taker", "taker"),
+    ("bybit", "taker", "taker"),
+])
+def test_verified_fee_prediction_cannot_cross_venue_or_liquidity_routes(
+    venue, entry, exit,
+) -> None:
+    schedule = FeeSchedule(
+        Decimal(5), Decimal(2), gst=Decimal("0.18"),
+        account_verified=True, verification_id="fixture-statement",
+    )
+    prediction = HybridFeeModel(schedule).predict(
+        replace(features(urgency=entry), venue=venue), entry, exit,
+    )
+    result = CostGate(CostProfile.DELTA_SCALP).evaluate(
+        signal_edge_bps=20, side="buy", urgency="taker",
+        expected_holding_seconds=600, symbol="BTCUSDT",
+        fee_model_prediction=prediction,
+    )
+    assert result.cost.fee_bps == Decimal("11.80")
+    assert result.cost.execution_model_reason == "fee_prediction_context_mismatch"
+    assert not result.cost.fee_schedule_account_verified
+    assert not result.approved
+
+
+def test_legacy_prediction_without_route_cannot_replace_tariff() -> None:
+    prediction = HybridFeeModel(DELTA_INDIA_REFERENCE).predict(
+        features(), "taker", "taker",
+    )
+    legacy = replace(prediction, predicted_venue=None, entry_liquidity=None,
+                     exit_liquidity=None)
+    result = CostGate(CostProfile.DELTA_SCALP).evaluate(
+        signal_edge_bps=100, side="buy", urgency="taker",
+        expected_holding_seconds=600, symbol="BTCUSDT",
+        fee_model_prediction=legacy,
+    )
+    assert result.cost.execution_model_reason == "fee_prediction_context_mismatch"
 
 
 def test_features_reject_naive_time_and_future_unsafe_ranges() -> None:

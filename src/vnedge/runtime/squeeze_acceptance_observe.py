@@ -20,7 +20,7 @@ from vnedge.execution.evidence import (
 from vnedge.execution.exit_engine import ExitConfig, ExitDecision, ExitEngine
 from vnedge.execution.trigger_engine import FireDecision, Side
 from vnedge.runtime.conversion_taxonomy import conversion_reject_category
-from vnedge.runtime.execution_contract import KERNEL_PATH_ID, RESEARCH_OBSERVE_PATH_ID
+from vnedge.runtime.execution_contract import RESEARCH_OBSERVE_PATH_ID
 from vnedge.runtime.expansion_acceptance import CompressionArm, ExpansionAcceptanceEngine
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
 from vnedge.runtime.latency_tracker import (
@@ -364,7 +364,8 @@ class SqueezeAcceptanceObserveRunner:
         overflow_drops: int = 0,
         book: BookImbalance | None = None,
     ) -> FireDecision | None:
-        if math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask:
+        valid_top = math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask
+        if valid_top:
             self._last_bid = bid
             self._last_ask = ask
         if self._restore_error is not None:
@@ -372,6 +373,13 @@ class SqueezeAcceptanceObserveRunner:
         hold_observation = self.acceptance.hold_observation_id
         self.acceptance.note_quote_overflow(overflow_drops, observed_at=ts)
         if self.open_meta is not None:
+            if not valid_top:
+                # No simulated fill can be priced from a corrupt book. This
+                # does not block any reduce-only intent at the risk gateway;
+                # keep protection active for the next usable market price.
+                self.acceptance.last_reason = "invalid_quote"
+                self.acceptance.quote_contract_rejects += 1
+                return None
             pos = self.exits.pos
             price = bid if pos is not None and pos.side == "long" else ask
             tick_started = time.perf_counter()
@@ -420,6 +428,10 @@ class SqueezeAcceptanceObserveRunner:
         if arm_decision is None:
             self.rejected += 1
             self._count_rejection(("decision_envelope_missing",))
+            # Acceptance reserves a position and fire budget before this
+            # authority check. An identity rejection must release both, just
+            # like a CostGate rejection; no trade was opened.
+            self.acceptance.notify_rejected()
             self.acceptance.last_reason = "decision_envelope_missing"
             return None
         arm_evidence = arm.evidence.as_dict() if arm is not None and arm.evidence else None

@@ -418,6 +418,10 @@ class FeeModelPrediction:
     capital_safe: bool
     fallback_reason: str | None = None
     feature_schema_version: str = FEATURE_SCHEMA_VERSION
+    # Missing on legacy predictions: these cannot replace the gate's tariff.
+    predicted_venue: Venue | None = None
+    entry_liquidity: Liquidity | None = None
+    exit_liquidity: Liquidity | None = None
 
     def __post_init__(self) -> None:
         numeric = (
@@ -455,6 +459,12 @@ class FeeModelPrediction:
             raise ValueError("unsupported fee schedule modifier")
         if not self.predicted_symbol.strip():
             raise ValueError("predicted_symbol is required")
+        if self.predicted_venue not in {None, "delta_india", "binanceusdm", "bybit"}:
+            raise ValueError("unsupported prediction venue")
+        if any(role not in {None, "maker", "taker"} for role in (
+            self.entry_liquidity, self.exit_liquidity,
+        )):
+            raise ValueError("unsupported prediction liquidity")
         if self.expected_holding_seconds is not None and (
             isinstance(self.expected_holding_seconds, bool)
             or self.expected_holding_seconds < 0
@@ -567,6 +577,7 @@ class HybridFeeModel:
                 reason=reason,
                 schedule_calculation=schedule_calculation,
                 predicted_symbol=features.symbol,
+                predicted_venue=features.venue,
                 expected_holding_seconds=expected_holding_seconds,
             )
 
@@ -588,6 +599,7 @@ class HybridFeeModel:
                 reason="model_prediction_invalid",
                 schedule_calculation=schedule_calculation,
                 predicted_symbol=features.symbol,
+                predicted_venue=features.venue,
                 expected_holding_seconds=expected_holding_seconds,
             )
 
@@ -602,6 +614,7 @@ class HybridFeeModel:
             reason=None,
             schedule_calculation=schedule_calculation,
             predicted_symbol=features.symbol,
+            predicted_venue=features.venue,
             expected_holding_seconds=expected_holding_seconds,
         )
 
@@ -618,6 +631,7 @@ class HybridFeeModel:
         reason: str | None,
         schedule_calculation: RoundTripFeeCalculation,
         predicted_symbol: str,
+        predicted_venue: Venue,
         expected_holding_seconds: int | None,
     ) -> FeeModelPrediction:
         used = max(p90, floor)
@@ -634,6 +648,9 @@ class HybridFeeModel:
             schedule_modifiers_applied=schedule_calculation.applied_modifiers,
             schedule_fallback_reason=schedule_calculation.fallback_reason,
             predicted_symbol=predicted_symbol.upper(),
+            predicted_venue=predicted_venue,
+            entry_liquidity=schedule_calculation.entry.liquidity,
+            exit_liquidity=schedule_calculation.exit.liquidity,
             expected_holding_seconds=expected_holding_seconds,
             fallback=fallback,
             capital_safe=capital_safe,

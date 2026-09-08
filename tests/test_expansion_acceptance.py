@@ -1,5 +1,6 @@
 """V3 lifecycle tests: re-arm, two-sided independence, quote acceptance."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -79,6 +80,73 @@ def test_quote_hold_accepts_at_current_ask_not_old_level() -> None:
     assert engine.short.state is AcceptanceState.ARMED
     assert engine.hold_observation_id == 1
     assert engine.last_hold_ms == 5000.0
+
+
+@pytest.mark.parametrize("reason,bid,ask,event_s,receive_s", [
+    ("invalid_quote", float("nan"), 100.09, 3, 3),
+    ("invalid_quote", 101.0, 100.09, 3, 3),
+    ("quote_clock_skew", 100.08, 100.09, 10, 3),
+    ("quote_ingest_lag", 100.08, 100.09, 3, 6),
+    ("quote_out_of_order", 100.08, 100.09, 1, 3),
+])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_broken_quote_cannot_bridge_an_active_hold(
+    reason, bid, ask, event_s, receive_s, side,
+) -> None:
+    engine = _armed()
+    t0 = datetime(2026, 8, 20, tzinfo=UTC)
+    touch = {"bid": 100.08, "ask": 100.09} if side == "long" else {
+        "bid": 98.91, "ask": 98.92,
+    }
+    for seconds in (0, 2):
+        assert engine.observe_quote(
+            **touch, ts=t0 + timedelta(seconds=seconds), bar_index=10,
+        ) is None
+    lifecycle = engine.long if side == "long" else engine.short
+    assert lifecycle.state is AcceptanceState.PROBE
+    last_identity = engine.last_quote_identity
+    assert engine.observe_quote(
+        bid=bid, ask=ask, ts=t0 + timedelta(seconds=event_s),
+        received_ts=t0 + timedelta(seconds=receive_s),
+        exchange_timestamped=True, bar_index=10,
+    ) is None
+    assert engine.last_reason == reason
+    assert engine.quote_contract_rejects == 1
+    assert lifecycle.state is AcceptanceState.ARMED
+    assert lifecycle.probe_samples == 0
+    assert engine.last_quote_identity == last_identity
+    # This would have been the third sample completing the old five-second
+    # hold. It must instead start a fresh hold after the broken observation.
+    assert engine.observe_quote(
+        **touch, ts=t0 + timedelta(seconds=7), bar_index=10,
+    ) is None
+    assert lifecycle.probe_samples == 1
+    assert not engine.position_open
+    assert engine.observe_quote(
+        **touch, ts=t0 + timedelta(seconds=9), bar_index=10,
+    ) is None
+    assert engine.observe_quote(
+        **touch, ts=t0 + timedelta(seconds=12), bar_index=10,
+    ) is not None
+
+
+def test_new_arm_same_episode_cannot_inherit_previous_hold_samples() -> None:
+    engine = _armed()
+    t0 = datetime(2026, 8, 20, tzinfo=UTC)
+    for seconds in (0, 2):
+        engine.observe_quote(bid=100.08, ask=100.09,
+                             ts=t0 + timedelta(seconds=seconds), bar_index=10)
+    assert engine.arm is not None
+    # An exact rebind is idempotent; a new decision bar is different proof,
+    # even if the compression episode and price levels have not changed.
+    engine.update_arm(engine.arm)
+    assert engine.long.probe_samples == 2
+    engine.update_arm(replace(engine.arm, bar_index=11))
+    assert engine.long.probe_samples == 0
+    assert engine.long.probes == 1  # do not erase the episode's budget
+    assert engine.observe_quote(bid=100.08, ask=100.09,
+                                ts=t0 + timedelta(seconds=5), bar_index=11) is None
+    assert not engine.position_open
 
 
 def test_required_l1_imbalance_rearms_failed_probe_then_accepts_supported_side() -> None:
@@ -305,6 +373,27 @@ class _Journal:
 
     def append(self, kind: str, payload: dict) -> None:
         self.records.append((kind, payload))
+
+
+def test_missing_arm_envelope_releases_phantom_position_and_fire_budget() -> None:
+    journal = _Journal()
+    runner = SqueezeAcceptanceObserveRunner(journal=journal, symbol="BTCUSD")
+    runner.acceptance = _armed()
+    runner.current_bar_index = 10
+    t0 = datetime(2026, 8, 20, tzinfo=UTC)
+    for seconds in (0, 2, 5):
+        assert runner.on_quote(
+            bid=100.08, ask=100.09, ts=t0 + timedelta(seconds=seconds),
+        ) is None
+    assert runner.acceptance.last_reason == "decision_envelope_missing"
+    assert runner.rejected == 1
+    assert not runner.acceptance.position_open
+    assert runner.acceptance.active_side is None
+    assert runner.acceptance.fires_today == 0
+    assert runner.acceptance.long.fires == 0
+    assert runner.acceptance.long.state is AcceptanceState.ARMED
+    assert not runner.has_open
+    assert not any(kind == "decision_accepted" for kind, _ in journal.records)
 
 
 def test_shadow_runner_reports_rejection_categories_without_double_counting() -> None:
@@ -587,6 +676,10 @@ def test_shadow_runner_checks_protective_stop_on_each_quote() -> None:
 
     # The very next BBO breaches the protective stop. No candle close is
     # required and no acceptance rule is consulted for the exit.
+    for bid, ask in ((0.0, 99.01), (99.0, 98.0), (float("nan"), 99.01)):
+        runner.on_quote(bid=bid, ask=ask, ts=t0 + timedelta(seconds=6))
+        assert runner.has_open
+        assert not any(kind == "shadow_outcome" for kind, _ in journal.records)
     runner.on_quote(
         bid=99.0,
         ask=99.01,

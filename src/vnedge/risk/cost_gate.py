@@ -169,6 +169,16 @@ class CostGate:
         prediction_context_matches = bool(
             fee_model_prediction is not None
             and fee_model_prediction.predicted_symbol.upper() == symbol.upper()
+            and fee_model_prediction.entry_liquidity == ("maker" if is_maker else "taker")
+            # The gate budgets a taker protective exit, never a hoped-for
+            # passive close. A quote for a cheaper route is not transferable.
+            and fee_model_prediction.exit_liquidity == "taker"
+            and fee_model_prediction.predicted_venue is not None
+            and (
+                fee_model_prediction.predicted_venue == "delta_india"
+                if self.profile.value.startswith("delta_")
+                else fee_model_prediction.predicted_venue in {"binanceusdm", "bybit"}
+            )
             and (
                 "scalper_close_waiver"
                 not in fee_model_prediction.schedule_modifiers_applied
