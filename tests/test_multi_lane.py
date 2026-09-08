@@ -296,6 +296,55 @@ def test_htf_v2_allows_validated_price_only_context_but_not_decision_history():
     )
 
 
+def test_partial_canonical_overlay_keeps_one_scoped_series_identity():
+    timestamps = pd.to_datetime(
+        ["2026-08-22T00:00:00Z", "2026-08-23T00:00:00Z"]
+    )
+    exchange = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "volume": [10.0, 11.0],
+        }
+    )
+    canonical = pd.DataFrame(
+        {
+            "timestamp": [timestamps[-1]],
+            "symbol": ["BTC/USD:USD"],
+            "timeframe": ["1d"],
+            "open": [101.0],
+            "high": [103.0],
+            "low": [100.0],
+            "close": [102.0],
+            "volume": [0.01],
+            "quote_volume": [1.02],
+            "data_quality": ["ok"],
+            "is_closed": [True],
+            "candle_source": ["canonical_tick_lake"],
+            "coverage_ok": [True],
+        }
+    )
+
+    overlaid = _overlay_canonical_history(
+        exchange,
+        canonical,
+        allow_validated_exchange_ohlcv=True,
+        timeframe="1d",
+        symbol="BTC/USD:USD",
+    )
+
+    assert set(overlaid["symbol"]) == {"BTCUSD"}
+    assert set(overlaid["timeframe"]) == {"1d"}
+    assert list(overlaid["candle_source"]) == [
+        "exchange_ohlcv_validated",
+        "canonical_tick_lake",
+    ]
+    assert overlaid["content_sha256"].str.len().eq(64).all()
+
+
 def test_canonical_warmup_excludes_partial_or_unstamped_lake_rows(tmp_path):
     store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
     opened = datetime(2026, 8, 22, tzinfo=UTC)

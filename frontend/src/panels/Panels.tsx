@@ -480,7 +480,7 @@ function BacktestEquityChart({ points }: { points: Array<{ ts: string; equity_us
   );
 }
 
-function BacktestLabPanel() {
+export function BacktestLabPanel() {
   const identity = useWhoAmI();
   const [selectedRunId, setSelectedRunId] = useState("");
   const [compareRunId, setCompareRunId] = useState("");
@@ -708,7 +708,7 @@ function BacktestLabPanel() {
   );
 }
 
-function StrategyWorkflowPanel() {
+export function StrategyWorkflowPanel() {
   const workflow = useStrategyWorkflow();
   const [stage, setStage] = useState("all");
   const [symbol, setSymbol] = useState("all");

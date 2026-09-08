@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
-import { PatternAtlas } from "./components/PatternAtlas";
+import { ResearchArena } from "./components/ResearchArena";
 import { CockpitCommandBar } from "./components/CockpitCommandBar";
 import { StrategyWorkbench } from "./components/StrategyWorkbench";
 import { LiveStateBridge } from "./components/LiveStateBridge";
@@ -13,7 +13,6 @@ import {
   BookPanel,
   MarketPanel,
   PositionsPanel,
-  ResearchPanel,
   RiskPanel,
   SystemPanel,
 } from "./panels/Panels";
@@ -33,18 +32,19 @@ const TABS = [
   { id: "book", label: "Book" },
   { id: "evidence", label: "Evidence" },
   { id: "data", label: "Data" },
-  { id: "lab", label: "Lab" },
+  { id: "arena", label: "Arena" },
   { id: "settings", label: "Settings" },
 ];
 
 const LEGACY_TABS: Record<string, string> = {
   pulse: "strategy",
-  patterns: "lab",
+  patterns: "arena",
   chart: "tape",
   desk: "monitor",
   risk: "strategy",
   journal: "evidence",
-  research: "lab",
+  research: "arena",
+  lab: "arena",
   system: "data",
 };
 
@@ -129,7 +129,7 @@ export default function App() {
       { id: "book", label: "Book", hint: "kernel book · positions · market", run: () => navigate("book") },
       { id: "evidence", label: "Evidence", hint: "decision identities · journal stream", run: () => navigate("evidence") },
       { id: "data", label: "Data", hint: "transport · lake · process health", run: () => navigate("data") },
-      { id: "lab", label: "Lab", hint: "diagnostic patterns · research only", run: () => navigate("lab") },
+      { id: "arena", label: "Arena", hint: "book · pipeline · backtests · agents", run: () => navigate("arena") },
       { id: "risk", label: "Open risk console", hint: "read-only halt · journal · checklist", run: openRisk },
       { id: "settings", label: "Settings", hint: "profile · encrypted exchange connections", run: () => navigate("settings") },
     ],
@@ -176,7 +176,7 @@ export default function App() {
       )}
       {tab === "evidence" && <JournalPanel />}
       {tab === "data" && <SystemPanel />}
-      {tab === "lab" && <div className="space-y-4"><PatternAtlas onNavigate={(next) => navigate(LEGACY_TABS[next] ?? next)} /><ResearchPanel /></div>}
+      {tab === "arena" && <ResearchArena onNavigate={(next) => navigate(LEGACY_TABS[next] ?? next)} />}
       {tab === "settings" && <SettingsPanel />}
 
       <footer className="cockpit-footer">

@@ -145,7 +145,7 @@ def test_v2_does_not_carry_stale_hour_parent_across_missing_hour() -> None:
     frame = frame.loc[frame["timestamp"].dt.floor("h") != missing_hour].reset_index(drop=True)
 
     prepared = strategy.prepare(frame)
-    expected_hour = prepared["timestamp"].dt.floor("h")
+    expected_hour = (prepared["timestamp"] + pd.Timedelta(minutes=15)).dt.floor("h")
     stale = prepared["bos15_parent_available_at"].notna() & (
         prepared["bos15_parent_available_at"] != expected_hour
     )
@@ -154,6 +154,22 @@ def test_v2_does_not_carry_stale_hour_parent_across_missing_hour() -> None:
     missing = prepared.loc[~prepared["bos15_parent_identity_ok"]]
     assert not missing.empty
     assert missing["bos15_structure_trend"].eq("unavailable").all()
+
+
+def test_v2_binds_the_newly_closed_hour_on_a_45_minute_decision() -> None:
+    strategy = StructureBos15mTriggerV2()
+    strategy._hourly = _HourlyContext()
+    frame = _history()
+    prepared = strategy.prepare(frame)
+    row = prepared.loc[
+        prepared["timestamp"].eq(pd.Timestamp("2026-08-22 08:45", tz="UTC"))
+    ].iloc[0]
+
+    assert row["bos15_parent_available_at"] == pd.Timestamp(
+        "2026-08-22 09:00", tz="UTC"
+    )
+    assert bool(row["bos15_parent_identity_ok"]) is True
+    assert row["bos15_structure_trend"] == "up"
 
 
 def test_v2_diagnostics_name_higher_timeframe_conflict() -> None:

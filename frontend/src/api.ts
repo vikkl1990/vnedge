@@ -1056,6 +1056,9 @@ export interface BacktestRunSummary {
   blocked_reason?: string | null;
   error?: string | null;
   execution?: string | null;
+  bundle_id?: string | null;
+  parity_status?: string | null;
+  code_sha?: string | null;
 }
 
 export interface BacktestCurvePoint {
@@ -1317,6 +1320,34 @@ export interface StrategyWorkflowRevision {
     sample_qualified: boolean;
   };
   latest_run: { symbol?: string; timeframe?: string; data_provenance?: string } | null;
+  latest_judgment?: {
+    verdict?: string;
+    run_kind?: string;
+    symbol?: string;
+    timeframe?: string;
+    data_provenance?: string;
+  } | null;
+  params?: {
+    runtime?: { entry_clock?: string; decision_tf?: string };
+    execution_policy?: Record<string, {
+      entry_route?: string;
+      maker_fill_ttl_bars?: number;
+      cost_profile_id?: string;
+    }>;
+  };
+  shadow_evidence?: {
+    evaluations?: number | null;
+    fires?: number | null;
+    accepted_entries?: number | null;
+    armed_entries?: number | null;
+    virtual_candidates?: number | null;
+    virtual_approved?: number | null;
+    virtual_rejected?: number | null;
+    virtual_resolved?: number | null;
+    virtual_pending?: number | null;
+    performance_eligible?: boolean;
+    failed_gates?: Record<string, number>;
+  } | null;
   can_trade: false;
   can_promote: false;
 }
@@ -1417,6 +1448,35 @@ export interface AgenticResearchStatus {
     state?: string;
     age_minutes?: number;
     generated_at?: string;
+  }>;
+  agent_scorecards?: Array<{
+    agent_id: string;
+    source: string;
+    role: string;
+    health_score: number;
+    freshness_minutes: number;
+    critical_actions: number;
+    warning_actions: number;
+    action_count: number;
+    summary: Record<string, unknown>;
+    status: string;
+    can_trade: false;
+    can_promote: false;
+  }>;
+  operator_queue?: Array<{
+    entity_id?: string;
+    source?: string;
+    strategy_id?: string;
+    exchange?: string;
+    symbol?: string;
+    timeframe?: string;
+    action?: string;
+    bucket?: string;
+    severity?: string;
+    priority?: number;
+    reason?: string;
+    can_trade: false;
+    can_promote: false;
   }>;
   operator_answer?: string;
   can_trade: false;

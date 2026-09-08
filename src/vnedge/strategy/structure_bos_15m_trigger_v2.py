@@ -246,7 +246,11 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 right_on="available_at",
                 direction="backward",
             ).sort_values("_row")
-            expected_parent = ts.dt.floor("h")
+            # A 15m decision may use the hour that is closed at its own close.
+            # In particular, the 12:45-13:00 decision legitimately binds the
+            # 12:00-13:00 parent (available_at=13:00).  Flooring bar-open
+            # incorrectly rejected every :45 decision and hid valid structure.
+            expected_parent = (ts + pd.Timedelta(minutes=15)).dt.floor("h")
             parent_available = pd.to_datetime(
                 merged["available_at"], utc=True, errors="coerce"
             )

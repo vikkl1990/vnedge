@@ -1126,6 +1126,7 @@ def _overlay_canonical_history(
     *,
     allow_validated_exchange_ohlcv: bool = False,
     timeframe: str | None = None,
+    symbol: str | None = None,
 ) -> pd.DataFrame:
     """Overlay exact trade-derived rows onto one validated venue history.
 
@@ -1146,6 +1147,10 @@ def _overlay_canonical_history(
         out["data_quality"] = default_quality
         out["is_closed"] = True
         out["candle_source"] = default_source
+        if timeframe is not None:
+            out["timeframe"] = timeframe
+        if symbol is not None:
+            out["symbol"] = canonical_symbol(symbol)
         return _stamp_closed_frame_identity(out, timeframe=timeframe)
     out = history.copy()
     out["data_quality"] = default_quality
@@ -1160,6 +1165,15 @@ def _overlay_canonical_history(
         if len(overlap):
             out.loc[overlap, name] = exact.loc[overlap, name]
     out["candle_source"] = out["candle_source"].fillna(default_source)
+    # Warm-up and exact lake rows are one scoped market series.  Overlaying
+    # only the intersecting rows must not leave the official prefix with a
+    # null or venue-spelled identity; downstream structure validation would
+    # otherwise reject the whole frame as cross-market/mixed-timeframe data.
+    # Provenance remains row-local in candle_source and content_sha256.
+    if timeframe is not None:
+        out["timeframe"] = timeframe
+    if symbol is not None:
+        out["symbol"] = canonical_symbol(symbol)
     return _stamp_closed_frame_identity(
         out.reset_index().sort_values("timestamp").reset_index(drop=True),
         timeframe=timeframe,
@@ -1556,6 +1570,7 @@ async def build_lane(
             canonical_history,
             allow_validated_exchange_ohlcv=allow_validated_exchange_ohlcv,
             timeframe=spec.timeframe,
+            symbol=spec.data_symbol,
         )
         strategy_requirement = _strategy_warmup_requirement(spec)
         if len(history) <= strategy_requirement:
@@ -1604,6 +1619,7 @@ async def build_lane(
                     exact_context,
                     allow_validated_exchange_ohlcv=True,
                     timeframe=context_timeframe,
+                    symbol=spec.data_symbol,
                 )
         try:
             raw_f = await rest.fetch_funding_history(spec.symbol, since, until)
