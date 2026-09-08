@@ -74,7 +74,7 @@ _EQUITY_SUFFIX = ".equity.jsonl"
 # they are not strategy lanes and must never be compared with the desired
 # lane roster.  Keep this allowlist narrow and explicit: an unknown journal
 # remains an ORPHAN and is still recoverably archived at startup.
-_NON_LANE_JOURNAL_IDS = frozenset({"shadow_portfolio"})
+_NON_LANE_JOURNAL_IDS = frozenset({"delta_product_specs", "shadow_portfolio"})
 # How much file tail to scan for the newest record / newest lane_eval.
 # lane_eval is written every evaluated bar, so it dominates recent history;
 # 256 KiB of tail is thousands of records.

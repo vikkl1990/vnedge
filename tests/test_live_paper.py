@@ -2495,6 +2495,19 @@ def test_scanner_prerequisite_health_blocks_only_new_arms(tmp_path, monkeypatch)
     assert session._candle_path_arm_block(datetime.now(UTC)) is None
 
 
+def test_foreign_exchange_prerequisite_health_does_not_block_lane(tmp_path, monkeypatch):
+    session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
+    health = tmp_path / "scanner_health.json"
+    monkeypatch.setenv("SCANNER_PREREQ_HEALTH_PATH", str(health))
+    health.write_text(
+        '{"status":"retrying","arms_allowed":false,"exchange":"delta_india"}',
+        encoding="utf-8",
+    )
+
+    assert session.feed.exchange_id == "fake"
+    assert session._candle_path_arm_block(datetime.now(UTC)) is None
+
+
 def test_integrated_persist_health_blocks_only_new_arms(tmp_path):
     session, _ = build_session(tmp_path, FakeFeed([]), mode=RunnerMode.SHADOW)
     session.canonical_arm_health = lambda: "canonical_persist_unhealthy"

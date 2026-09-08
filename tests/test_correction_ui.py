@@ -42,6 +42,8 @@ def snapshot() -> dict:
                 "mode": "shadow (live data)",
                 "symbol": "BTC/USD:USD",
                 "timeframe": "1h",
+                "price": {"bid": 78999.5, "ask": 79000.0, "mid": 78999.75, "spread_bps": 0.063},
+                "funding_rate": 0.0001,
                 "candle_source": "canonical_tick_lake",
                 "decision_transport": "router",
                 "drought": {
@@ -110,6 +112,9 @@ def test_lanes_are_policy_labelled_and_empty_capital_is_explicit() -> None:
     assert measurement["candle_age_ms"] == 4200.0
     assert measurement["candle_source"] == "canonical_tick_lake"
     assert measurement["decision_transport"] == "router"
+    assert measurement["price"]["bid"] == 78999.5
+    assert measurement["price"]["ask"] == 79000.0
+    assert measurement["funding_rate"] == pytest.approx(0.0001)
     assert measurement["drought"]["drought_class"] == "playbook_wait"
     assert measurement["drought"]["mreg_ready"] is None
     assert measurement["bar_close_processing_ms"] == 120.0

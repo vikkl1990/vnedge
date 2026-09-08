@@ -1647,9 +1647,12 @@ class LivePaperSession:
         prerequisite_path = os.environ.get("SCANNER_PREREQ_HEALTH_PATH", "").strip()
         if prerequisite_path:
             try:
+                from vnedge.runtime.scanner_startup import prerequisite_blocks_exchange
+
                 prerequisite = json.loads(Path(prerequisite_path).read_text(encoding="utf-8"))
                 status = str(prerequisite.get("status") or "unknown")
-                if status != "ready" or prerequisite.get("arms_allowed") is not True:
+                lane_exchange = str(getattr(self.feed, "exchange_id", "") or "")
+                if prerequisite_blocks_exchange(prerequisite, lane_exchange):
                     return f"scanner_prerequisite_{status}"
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 return "scanner_prerequisite_unreadable"

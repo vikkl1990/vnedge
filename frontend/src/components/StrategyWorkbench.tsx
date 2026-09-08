@@ -1,6 +1,7 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo } from "react";
 import type { CorrectionLane, ScannerAuditEvent } from "../api";
 import { useJournal, useLanes } from "../queries";
+import { useUi } from "../store";
 import { TerminalBadge } from "./Terminal";
 
 const ScannerChart = lazy(() => import("./ScannerChart").then((module) => ({ default: module.ScannerChart })));
@@ -18,6 +19,65 @@ const text = (value: unknown, fallback = "not reported") =>
 
 const booleanTone = (value: unknown): "info" | "bad" | "neutral" =>
   value === true || value === 1 ? "info" : value === false || value === 0 ? "bad" : "neutral";
+
+const objectRecord = (value: unknown): Record<string, unknown> =>
+  value != null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+const firstReported = (...values: unknown[]) =>
+  values.find((value) => value != null && value !== "");
+
+export function regimeView(evaluation: Record<string, unknown>) {
+  const features = objectRecord(evaluation.features);
+  return {
+    ready: firstReported(evaluation.mreg_ready, features.mreg_ready),
+    state: firstReported(evaluation.mreg_state, features.regime_state, features.mreg_state),
+    ema200Ready: firstReported(
+      evaluation.mreg_ema200_ready,
+      features.ema200_ready,
+      features.mreg_ema200_ready,
+    ),
+    dailyObservations: firstReported(
+      evaluation.mreg_daily_observations,
+      features.daily_observations,
+      features.mreg_daily_observations,
+    ),
+    emaState: firstReported(evaluation.mreg_ema_state, features.regime_ema_state),
+    macdImpulse: firstReported(
+      evaluation.mreg_macd_impulse,
+      features.regime_macd_impulse,
+    ),
+    rsiZone: firstReported(evaluation.mreg_rsi_zone, features.regime_rsi_zone),
+  };
+}
+
+export function structureView(evaluation: Record<string, unknown>) {
+  const features = objectRecord(evaluation.features);
+  return {
+    ready: firstReported(evaluation.bos15_structure_ready, features.bos15_structure_ready),
+    oneHourTrend: firstReported(
+      evaluation.bos15_structure_trend,
+      features.bos15_structure_trend,
+      features.structure_1h,
+    ),
+    fourHourTrend: firstReported(
+      evaluation.bos15_htf_structure_trend,
+      features.bos15_htf_structure_trend,
+      features.htf_4h,
+    ),
+    parentIdentity: firstReported(
+      evaluation.bos15_parent_identity_ok,
+      features.bos15_parent_identity_ok,
+    ),
+    avwap: firstReported(
+      evaluation.mreg_avwap_source,
+      features.mreg_avwap_source,
+      evaluation.bos15_dual_avwap_bias,
+      features.bos15_dual_avwap_bias,
+    ),
+  };
+}
 
 function InspectorSection({ title, kicker, children }: { title: string; kicker: string; children: React.ReactNode }) {
   return (
@@ -40,7 +100,6 @@ function Fact({ label, value, tone = "neutral" }: { label: string; value: string
 function Funnel({ lane }: { lane: CorrectionLane }) {
   const items = [
     ["Eval", lane.funnel.evals ?? 0],
-    ["Ready", lane.funnel.ready ?? 0],
     ["Setup", lane.lifecycle.armed_entries],
     ["Evidence", lane.lifecycle.candidates],
     ["Accept", lane.lifecycle.accepted],
@@ -88,12 +147,15 @@ export function StrategyWorkbench() {
   const lanesQuery = useLanes();
   const journal = useJournal(100, 0);
   const lanes = useMemo(() => (lanesQuery.data?.lanes ?? []).filter((lane) => lane.observation_class === "shadow_observe"), [lanesQuery.data]);
-  const [selectedId, setSelectedId] = useState("");
+  const selectedId = useUi((state) => state.selectedLaneId);
+  const setSelectedId = useUi((state) => state.setSelectedLane);
   const lane = lanes.find((item) => item.lane_id === selectedId) ?? lanes[0] ?? null;
   useEffect(() => {
     if (!selectedId && lanes[0]) setSelectedId(lanes[0].lane_id);
   }, [lanes, selectedId]);
   const evaluation = lane?.last_eval ?? {};
+  const regime = regimeView(evaluation);
+  const structure = structureView(evaluation);
   const contextAges = lane?.runtime_contract?.context_age_seconds ?? {};
   const gateCounts = lane?.drought?.primary_gate_counts_24h ?? {};
   const gateTotal = Object.values(gateCounts).reduce((sum, value) => sum + value, 0);
@@ -132,20 +194,20 @@ export function StrategyWorkbench() {
           </div>
 
           <InspectorSection title="Regime" kicker="permission">
-            <Fact label="Ready" value={text(evaluation.mreg_ready, text(lane.drought?.mreg_ready))} tone={booleanTone(evaluation.mreg_ready ?? lane.drought?.mreg_ready)} />
-            <Fact label="State" value={text(evaluation.mreg_state, "flat / unknown")} tone={evaluation.mreg_state === "continuation" ? "info" : "neutral"} />
-            <Fact label="EMA 200" value={text(evaluation.mreg_ema200_ready, "not reported")} tone={booleanTone(evaluation.mreg_ema200_ready)} />
-            <Fact label="Daily bars" value={text(evaluation.mreg_daily_observations, "—")} />
-            <Fact label="EMA · MACD · RSI" value={`${text(evaluation.mreg_ema_state, "—")} · ${text(evaluation.mreg_macd_impulse, "—")} · ${text(evaluation.mreg_rsi_zone, "—")}`} />
-            <div className="context-age-grid">{["4h", "1d", "1w"].map((tf) => <div key={tf}><span>{tf}</span><strong>{age(contextAges[tf])}</strong></div>)}</div>
+            <Fact label="Ready" value={text(regime.ready, text(lane.drought?.mreg_ready))} tone={booleanTone(regime.ready ?? lane.drought?.mreg_ready)} />
+            <Fact label="State" value={text(regime.state, "flat / unknown")} tone={regime.state === "continuation" ? "info" : "neutral"} />
+            <Fact label="EMA 200" value={text(regime.ema200Ready, "not reported")} tone={booleanTone(regime.ema200Ready)} />
+            <Fact label="Daily bars" value={text(regime.dailyObservations, "—")} />
+            <Fact label="EMA · MACD · RSI" value={`${text(regime.emaState, "—")} · ${text(regime.macdImpulse, "—")} · ${text(regime.rsiZone, "—")}`} />
+            <div className="context-age-grid">{(lane.runtime_contract?.context_tfs ?? []).map((tf) => <div key={tf}><span>{tf}</span><strong>{age(contextAges[tf])}</strong></div>)}</div>
           </InspectorSection>
 
           <InspectorSection title="Structure" kicker="geometry">
-            <Fact label="Ready" value={text(evaluation.bos15_structure_ready, text(lane.drought?.structure_ready))} tone={booleanTone(evaluation.bos15_structure_ready ?? lane.drought?.structure_ready)} />
-            <Fact label="1h trend" value={text(evaluation.bos15_structure_trend)} />
-            <Fact label="4h trend" value={text(evaluation.bos15_htf_structure_trend)} />
-            <Fact label="Parent identity" value={text(evaluation.bos15_parent_identity_ok)} tone={booleanTone(evaluation.bos15_parent_identity_ok)} />
-            <Fact label="AVWAP" value={text(evaluation.mreg_avwap_source, text(evaluation.bos15_dual_avwap_bias, "unused"))} />
+            <Fact label="Ready" value={text(structure.ready, text(lane.drought?.structure_ready))} tone={booleanTone(structure.ready ?? lane.drought?.structure_ready)} />
+            <Fact label="1h trend" value={text(structure.oneHourTrend)} />
+            <Fact label="4h trend" value={text(structure.fourHourTrend)} />
+            <Fact label="Parent identity" value={text(structure.parentIdentity)} tone={booleanTone(structure.parentIdentity)} />
+            <Fact label="AVWAP" value={text(structure.avwap, "unused")} />
           </InspectorSection>
 
           <InspectorSection title="Drought" kicker={text(lane.drought?.drought_class, "unknown")}>

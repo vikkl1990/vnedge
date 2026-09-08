@@ -803,15 +803,26 @@ def create_app(
         prerequisite_path = os.environ.get("SCANNER_PREREQ_HEALTH_PATH", "").strip()
         if prerequisite_path:
             try:
+                from vnedge.runtime.scanner_startup import prerequisite_blocks_exchange
+
                 prerequisite = json.loads(
                     Path(prerequisite_path).read_text(encoding="utf-8")
                 )
-                if prerequisite.get("status") != "ready":
-                    reasons.append(
-                        f"scanner_prerequisite_{prerequisite.get('status') or 'unknown'}"
+                scoped_lanes = operational_lanes or lanes
+                prerequisite_applies = not scoped_lanes or any(
+                    prerequisite_blocks_exchange(
+                        prerequisite,
+                        str(lane.get("exchange") or lane.get("lane_exchange") or ""),
                     )
-                if prerequisite.get("arms_allowed") is not True:
-                    reasons.append("scanner_arms_blocked")
+                    for lane in scoped_lanes
+                )
+                if prerequisite_applies:
+                    if prerequisite.get("status") != "ready":
+                        reasons.append(
+                            f"scanner_prerequisite_{prerequisite.get('status') or 'unknown'}"
+                        )
+                    if prerequisite.get("arms_allowed") is not True:
+                        reasons.append("scanner_arms_blocked")
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 reasons.append("scanner_prerequisite_status_unreadable")
 

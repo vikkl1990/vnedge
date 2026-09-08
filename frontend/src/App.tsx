@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { PatternAtlas } from "./components/PatternAtlas";
 import { CockpitCommandBar } from "./components/CockpitCommandBar";
@@ -56,7 +56,20 @@ export default function App() {
   };
   const [tab, setTab] = useState(initialTab);
   const [riskOpen, setRiskOpen] = useState(false);
+  const riskDialogRef = useRef<HTMLDivElement | null>(null);
+  const riskCloseRef = useRef<HTMLButtonElement | null>(null);
+  const riskReturnFocusRef = useRef<HTMLElement | null>(null);
   const setPalette = useUi((s) => s.setPalette);
+  const openRisk = useCallback(() => {
+    riskReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setRiskOpen(true);
+  }, []);
+  const closeRisk = useCallback(() => {
+    setRiskOpen(false);
+    window.requestAnimationFrame(() => riskReturnFocusRef.current?.focus());
+  }, []);
   const navigate = useCallback((next: string) => {
     if (!TABS.some((item) => item.id === next)) return;
     setTab(next);
@@ -78,6 +91,36 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!riskOpen) return;
+    riskCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRisk();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        riskDialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [closeRisk, riskOpen]);
+
   const commands: Command[] = useMemo(
     () => [
       { id: "strategy", label: "Strategy", hint: "active system · chart · proof", run: () => navigate("strategy") },
@@ -87,10 +130,10 @@ export default function App() {
       { id: "evidence", label: "Evidence", hint: "decision identities · journal stream", run: () => navigate("evidence") },
       { id: "data", label: "Data", hint: "transport · lake · process health", run: () => navigate("data") },
       { id: "lab", label: "Lab", hint: "diagnostic patterns · research only", run: () => navigate("lab") },
-      { id: "risk", label: "Open risk console", hint: "read-only halt · journal · checklist", run: () => setRiskOpen(true) },
+      { id: "risk", label: "Open risk console", hint: "read-only halt · journal · checklist", run: openRisk },
       { id: "settings", label: "Settings", hint: "profile · encrypted exchange connections", run: () => navigate("settings") },
     ],
-    [navigate],
+    [navigate, openRisk],
   );
 
   return (
@@ -101,7 +144,7 @@ export default function App() {
       <LiveStateBridge />
       <BuildVersionGuard />
       <Header />
-      <CockpitCommandBar onOpenRisk={() => setRiskOpen(true)} />
+      <CockpitCommandBar onOpenRisk={openRisk} />
       <div className="workbench-nav sticky top-0 z-30 flex items-center justify-between gap-3 px-2 py-2.5 backdrop-blur-xl flex-wrap">
         <TerminalTabs tabs={TABS} active={tab} onChange={navigate} />
         <button
@@ -144,9 +187,9 @@ export default function App() {
 
       <CommandPalette commands={commands} />
       {riskOpen && (
-        <div className="risk-drawer-backdrop" role="dialog" aria-modal="true" aria-label="Read-only risk console" onMouseDown={(event) => { if (event.target === event.currentTarget) setRiskOpen(false); }}>
+        <div ref={riskDialogRef} className="risk-drawer-backdrop" role="dialog" aria-modal="true" aria-label="Read-only risk console" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRisk(); }}>
           <aside className="risk-drawer">
-            <header><div><span className="eyebrow">Authority boundary</span><h2>Risk console</h2></div><button type="button" onClick={() => setRiskOpen(false)} aria-label="Close risk console">×</button></header>
+            <header><div><span className="eyebrow">Authority boundary</span><h2>Risk console</h2></div><button ref={riskCloseRef} type="button" onClick={closeRisk} aria-label="Close risk console">×</button></header>
             <div className="risk-drawer__body"><RiskPanel /></div>
             <footer>Read only · reduce-only safeguards remain server-owned</footer>
           </aside>

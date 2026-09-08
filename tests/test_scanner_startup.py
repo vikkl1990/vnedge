@@ -10,6 +10,7 @@ from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD
 from vnedge.runtime.multi_lane import LaneSpec
 from vnedge.runtime.scanner_startup import (
     archive_retired_lane_artifacts,
+    prerequisite_blocks_exchange,
     prerequisite_commands,
     run_prerequisites,
     write_health,
@@ -103,10 +104,19 @@ def test_startup_health_artifact_is_atomic_and_fail_closed(tmp_path) -> None:
     payload = __import__("json").loads(path.read_text(encoding="utf-8"))
     assert payload["status"] == "recovering"
     assert payload["arms_allowed"] is False
+    assert payload["exchange"] == "binanceusdm"
+    assert prerequisite_blocks_exchange(payload, "binanceusdm") is True
+    assert prerequisite_blocks_exchange(payload, "delta_india") is False
     write_health("ready", detail="proved", environ=env)
     payload = __import__("json").loads(path.read_text(encoding="utf-8"))
     assert payload["arms_allowed"] is True
     assert not path.with_suffix(".json.tmp").exists()
+
+
+def test_unscoped_legacy_prerequisite_health_remains_fail_closed() -> None:
+    assert prerequisite_blocks_exchange(
+        {"status": "retrying", "arms_allowed": False}, "delta_india"
+    ) is True
 
 
 def test_restart_archives_retired_lanes_but_preserves_active_evidence(

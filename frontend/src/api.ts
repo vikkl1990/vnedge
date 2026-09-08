@@ -473,6 +473,8 @@ export interface CorrectionLane {
   permission_snapshot_id: string | null;
   symbol: string;
   timeframe: string;
+  price: PriceBook | null;
+  funding_rate: number | null;
   capital: boolean;
   venue_rtt_ms: number | null;
   candle_status: string;

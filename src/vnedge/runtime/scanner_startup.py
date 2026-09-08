@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYMBOLS = "BTC/USDT:USDT,ETH/USDT:USDT"
 MINIMUM_ARCHIVE_DAYS = 2
 DEFAULT_HEALTH_PATH = Path("data/reports/scanner_startup_health.json")
+DEFAULT_PREREQUISITE_EXCHANGE = "binanceusdm"
 
 
 def _active_requirements(environ: Mapping[str, str]) -> Mapping[str, int]:
@@ -181,10 +182,38 @@ def write_health(
         "detail": detail,
         "checked_at": datetime.now(UTC).isoformat(),
         "arms_allowed": status == "ready",
+        # The startup workflow above repairs the Binance canonical ladder.
+        # Its state must never disable a Delta decision lane merely because
+        # both processes share one dashboard health directory.
+        "exchange": str(
+            environ.get("SCANNER_PREREQ_EXCHANGE", DEFAULT_PREREQUISITE_EXCHANGE)
+        ).strip().lower(),
     }
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def prerequisite_blocks_exchange(
+    payload: Mapping[str, object],
+    exchange: str,
+) -> bool:
+    """Whether one scoped prerequisite artifact blocks ``exchange``.
+
+    Old unhealthy artifacts did not carry scope and remain fail-closed until
+    the canonical owner publishes the first versioned/scoped heartbeat.  A
+    legacy artifact that explicitly reports ready remains non-blocking.
+    """
+    unhealthy = (
+        payload.get("status") != "ready"
+        or payload.get("arms_allowed") is not True
+    )
+    scoped_exchange = str(payload.get("exchange") or "").strip().lower()
+    if not scoped_exchange:
+        return unhealthy
+    if scoped_exchange != str(exchange).strip().lower():
+        return False
+    return unhealthy
 
 
 def recover_until_ready(

@@ -173,6 +173,50 @@ def test_ready_uses_delta_operational_lane_not_primary_measurement_feed():
     assert payload["readiness"]["parity_ready"] is False
 
 
+def test_ready_ignores_foreign_exchange_prerequisite_for_delta_lane(
+    tmp_path, monkeypatch
+):
+    prerequisite = tmp_path / "scanner_health.json"
+    prerequisite.write_text(
+        '{"status":"retrying","arms_allowed":false,"exchange":"binanceusdm"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SCANNER_PREREQ_HEALTH_PATH", str(prerequisite))
+    provider = SnapshotProvider()
+    provider.publish(
+        {
+            "mode": "shadow",
+            "feed_health": {"candles": "stale"},
+            "lane_health": {"process_healthy": True},
+            "lanes": [
+                {
+                    "lane_id": "shadow_delta_btc",
+                    "exchange": "delta_india",
+                    "observation_class": "shadow_observe",
+                    "runtime_readiness": {
+                        "data_ready": True,
+                        "decision_ready": True,
+                        "parity_ready": False,
+                        "execution_ready": False,
+                        "live_ready": False,
+                    },
+                    "lake_contract": {
+                        "identity_ok": True,
+                        "daily_bars": 800,
+                        "ema200_ready": True,
+                        "missing_context_tfs": [],
+                    },
+                }
+            ],
+        }
+    )
+
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+
+    assert response.status_code == 200
+    assert response.json()["reasons"] == []
+
+
 def test_ready_exposes_delta_daily_and_identity_blockers():
     provider = SnapshotProvider()
     provider.publish(

@@ -124,6 +124,14 @@ def _number(value: object) -> float | None:
     return round(number, 3)
 
 
+def _precise_number(value: object) -> float | None:
+    """Parse rates without applying the cockpit's three-decimal USD rounding."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def _latency_value(lane: Mapping[str, Any], name: str) -> float | None:
     latency = _mapping(lane.get("latency"))
     metric = _mapping(latency.get(name))
@@ -487,6 +495,11 @@ def build_lanes_payload(
                 ),
                 "symbol": str(lane.get("symbol") or ""),
                 "timeframe": str(lane.get("timeframe") or ""),
+                # Preserve the selected lane's own quote. The global /state
+                # price belongs to the primary measurement lane and must not
+                # be presented as the Delta strategy book.
+                "price": dict(_mapping(lane.get("price"))) or None,
+                "funding_rate": _precise_number(lane.get("funding_rate")),
                 "capital": capital,
                 "venue_rtt_ms": _number(lane.get("venue_rtt_ms"))
                 or _latency_value(lane, "venue_rtt_ms"),

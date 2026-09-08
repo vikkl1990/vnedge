@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "../components/Terminal";
 import { useAgenticResearchStatus, useBacktestLab, useDataProducts, useJournal, useLanes, useMeta, useMlStatus, useOperatorProfile, useReadiness, useResearchScorecard, useRiskSnapshot, useSnapshot, useStrategyWorkflow, useWhoAmI } from "../queries";
 import { apiPost, type ArtifactMetadata, type BacktestDay, type BacktestJobAccepted, type BacktestMonth, type BacktestRunSummary, type BacktestTrade, type CorrectionLane, type JournalRow, type LaneHealth, type LaneHealthProblem, type Position } from "../api";
+import { useUi } from "../store";
 
 const usd = (n: unknown) =>
   typeof n === "number" ? `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}` : "—";
@@ -189,7 +190,7 @@ export function DeskPanel() {
             <summary className="cursor-pointer list-none text-[11px] font-mono"><span className="text-txt">{lane.symbol} · {lane.timeframe}</span><span className="float-right text-dim">inspect lane ▾</span></summary>
             <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
               <span className="text-faint">virtual purse</span><span className="text-right font-mono">{usd(lane.sizing_profile?.starting_equity_usd ?? lane.equity_usd)}</span>
-              <span className="text-faint">margin / leverage</span><span className="text-right font-mono">{usd(lane.sizing_profile?.fixed_margin_usd)} / ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>
+              <span className="text-faint">margin / hard leverage cap</span><span className="text-right font-mono">{usd(lane.sizing_profile?.fixed_margin_usd)} / ≤{lane.sizing_profile?.max_leverage ?? "—"}x</span>
               <span className="text-faint">bars / evaluations</span><span className="text-right font-mono">{lane.funnel.bars ?? 0} / {lane.funnel.evals ?? 0}</span>
               <span className="text-faint">armed / candidate / accepted</span><span className="text-right font-mono">{lane.lifecycle.armed_entries} / {lane.lifecycle.candidates} / {lane.lifecycle.accepted}</span>
               <span className="text-faint">rejects total / cost</span><span className="text-right font-mono">{lane.lifecycle.rejected} / {lane.lifecycle.cost_rejected}</span>
@@ -376,7 +377,7 @@ export function RiskPanel() {
             const ticketNotional = (profile.fixed_margin_usd ?? 0) * (profile.max_leverage ?? 0);
             const cap = profile.max_symbol_exposure_usd ?? profile.max_total_exposure_usd ?? 0;
             const configuredPct = cap > 0 ? Math.min(100, ticketNotional / cap * 100) : 0;
-            return <div key={profile.lane_id} className="border border-line px-3 py-2 text-[10px]"><div className="flex items-center justify-between"><span className="font-mono text-txt">{profile.symbol}</span><span className="font-mono text-faint">ticket ≤ {usd(ticketNotional)}</span></div><div className="mt-1 text-dim">{usd(profile.starting_equity_usd)} purse · {usd(profile.fixed_margin_usd)} margin · ≤{profile.max_leverage ?? "—"}x · cap {usd(cap)}</div><div className="mt-2 h-1 bg-line/60"><div className="h-full bg-info/80" style={{ width: `${configuredPct}%` }} /></div></div>;
+            return <div key={profile.lane_id} className="border border-line px-3 py-2 text-[10px]"><div className="flex items-center justify-between"><span className="font-mono text-txt">{profile.symbol}</span><span className="font-mono text-faint">hard notional ceiling {usd(ticketNotional)}</span></div><div className="mt-1 text-dim">{usd(profile.starting_equity_usd)} purse · {usd(profile.fixed_margin_usd)} margin · hard ≤{profile.max_leverage ?? "—"}x · exposure cap {usd(cap)}</div><div className="mt-2 h-1 bg-line/60"><div className="h-full bg-info/80" style={{ width: `${configuredPct}%` }} /></div></div>;
           })}
           {!data.sizing_profiles.length && <div className="text-[11px] text-dim">Sizing telemetry not reported.</div>}
         </div>
@@ -1106,11 +1107,20 @@ export function PositionsPanel() {
 const num = (n: unknown, d = 2) => (typeof n === "number" ? n.toFixed(d) : "—");
 
 export function MarketPanel() {
-  const { data, isLoading, isError } = useSnapshot();
-  const p = data?.price ?? null;
-  const fr = data?.funding_rate;
+  const lanes = useLanes();
+  const selectedLaneId = useUi((state) => state.selectedLaneId);
+  const operational = (lanes.data?.lanes ?? []).filter(
+    (lane) => lane.observation_class === "shadow_observe",
+  );
+  const lane = operational.find((item) => item.lane_id === selectedLaneId)
+    ?? operational[0]
+    ?? null;
+  const p = lane?.price ?? null;
+  const fr = lane?.funding_rate;
+  const isLoading = lanes.isLoading;
+  const isError = lanes.isError;
   return (
-    <TerminalPanel title="Market" meta={isLoading ? "loading…" : isError ? "unknown" : (data?.symbol as string) ?? "—"}>
+    <TerminalPanel title="Market" meta={isLoading ? "loading…" : isError ? "unknown" : lane ? `${lane.symbol} · ${lane.exchange}` : "no operational lane"}>
       {p ? (
         <div className="flex items-end gap-10 flex-wrap">
           <Kpi label="Mid" value={priceText(p.mid)} />
@@ -1124,7 +1134,7 @@ export function MarketPanel() {
           />
         </div>
       ) : (
-        <div className={`text-[12px] font-mono ${isError ? "text-short" : "text-dim"}`} role={isError ? "alert" : undefined}>{isError ? "market snapshot unavailable — quote unknown" : isLoading ? "loading live quote…" : "no live quote (warming / no book)"}</div>
+        <div className={`text-[12px] font-mono ${isError ? "text-short" : "text-dim"}`} role={isError ? "alert" : undefined}>{isError ? "operational lane quote unavailable — market unknown" : isLoading ? "loading lane quote…" : "selected lane has no live quote (warming / no book)"}</div>
       )}
     </TerminalPanel>
   );

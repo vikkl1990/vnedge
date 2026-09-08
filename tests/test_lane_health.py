@@ -15,6 +15,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from vnedge.runtime.lane_health import (
     SILENT_EVAL_SECONDS,
     VERDICT_MISSING,
@@ -188,9 +190,10 @@ def test_verdict_orphan_journal_without_desired_spec(tmp_path):
     assert report.totals["active"] == 1  # orphans not counted as active desired lanes
 
 
-def test_runtime_wide_shadow_portfolio_journal_is_not_an_orphan(tmp_path):
+@pytest.mark.parametrize("runtime_id", ["shadow_portfolio", "delta_product_specs"])
+def test_runtime_wide_journal_is_not_an_orphan(tmp_path, runtime_id):
     write_journal(tmp_path, "lane_a", ok_records())
-    write_journal(tmp_path, "shadow_portfolio", ok_records())
+    write_journal(tmp_path, runtime_id, ok_records())
 
     report = audit_lanes(tmp_path, desired=[spec("lane_a")], now=NOW)
 
