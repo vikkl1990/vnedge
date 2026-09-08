@@ -14,13 +14,11 @@ https://:8765 {
 	# command wrapper translates commas to the spaces Caddy's remote_ip
 	# matcher expects before Caddy starts.
 	#
-	#   *** WARNING: EMPTY DASHBOARD_ALLOWLIST = ALLOW ALL. The default
-	#   *** below (0.0.0.0/0 ::/0) preserves the historical behaviour:
-	#   *** every IP on the internet reaches this endpoint and only
-	#   *** DASHBOARD_TOKEN stands in the way. Set the allowlist unless
-	#   *** you explicitly accept that. See docs/DEPLOY.md §7.
+	#   Empty DASHBOARD_ALLOWLIST permits loopback health/tunnel traffic only.
+	#   A direct public bind therefore needs an explicit external CIDR as well
+	#   as DASHBOARD_BIND_IP=0.0.0.0. See docs/DEPLOY.md §7.
 	# --------------------------------------------------------------------
-	@allowed remote_ip {$DASHBOARD_ALLOWLIST:0.0.0.0/0 ::/0}
+	@allowed remote_ip {$DASHBOARD_ALLOWLIST:127.0.0.1/32 ::1/128}
 	handle @allowed {
 		reverse_proxy multi-lane-shadow:8080
 	}
@@ -40,7 +38,7 @@ https://:8765 {
 #   4. Optionally retire the self-signed :8765 block above.
 #
 # {$DASHBOARD_DOMAIN} {
-# 	@allowed remote_ip {$DASHBOARD_ALLOWLIST:0.0.0.0/0 ::/0}
+# 	@allowed remote_ip {$DASHBOARD_ALLOWLIST:127.0.0.1/32 ::1/128}
 # 	handle @allowed {
 # 		reverse_proxy multi-lane-shadow:8080
 # 	}
