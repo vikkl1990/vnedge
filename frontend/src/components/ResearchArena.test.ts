@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgenticResearchStatus, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
-import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, experimentReadout } from "./ResearchArena";
+import type { AgenticResearchStatus, ResearchDataReadiness, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
+import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, ExperimentDataReadiness, experimentReadout } from "./ResearchArena";
 
 const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) => ({
   revision_id: `${stage}:revision`,
@@ -27,6 +27,36 @@ const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) 
 });
 
 describe("research arena projections", () => {
+  it("shows historical coverage diagnostics without implying approval or repair", () => {
+    const data: ResearchDataReadiness = {
+      schema_version: 1, scope: "supplied_experiment_frame", observed_at: "2026-09-09T03:00:00Z",
+      exchange: "delta_india", symbol: "BTC/USD:USD", timeframe: "1h",
+      stored_rows: 196, verified_unique_bars: 189, required_bars: 2160,
+      row_shortfall: 1964, contiguous_shortfall: 2060,
+      first_open: "2026-09-01T00:00:00Z", last_open: "2026-09-09T01:00:00Z",
+      longest_contiguous_bars: 100, latest_contiguous_bars: 10,
+      longest_from_open: "2026-09-01T00:00:00Z", longest_to_open: "2026-09-05T03:00:00Z",
+      missing_internal_bars: 5, gap_range_count: 1,
+      gap_ranges: [{ from_open: "2026-09-06T00:00:00Z", to_open: "2026-09-06T04:00:00Z", missing_bars: 5 }],
+      gap_ranges_truncated: false, duplicate_slots: 0, out_of_order_rows: 0,
+      invalid_row_counts: { coverage_unproven: 7 }, source_counts: { canonical_tick_lake: 196 },
+      blockers: ["history_shortfall", "row_proof_failures", "internal_gaps"],
+      historical_coverage: "outside_frame_unknown", repair_authorized: false, can_trade: false, can_promote: false,
+    };
+    const html = renderToStaticMarkup(createElement(ExperimentDataReadiness, { data }));
+    expect(html).toContain("196 / 2160");
+    expect(html).toContain("Verified unique bars");
+    expect(html).toContain("coverage unproven × 7");
+    expect(html).toContain("5 missing bars");
+    expect(html).toContain("not current live readiness");
+    expect(html).toContain("does not authorize trimming the frozen window");
+    expect(html).toContain("no bars are filled here");
+  });
+  it("keeps legacy attempts explicitly unmeasured", () => {
+    const html = renderToStaticMarkup(createElement(ExperimentDataReadiness, {}));
+    expect(html).toContain("Data diagnostics unavailable for this attempt");
+    expect(html).not.toContain("0 / 2160");
+  });
   it("separates inventory from attempts and renders every deferred candidate", () => {
     const pipeline: ResearchPipelinePayload = {
       pipeline_id: "continuous_ai_research_v2", evaluation_status: "CACHED",

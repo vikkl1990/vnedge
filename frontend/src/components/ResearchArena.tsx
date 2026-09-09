@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AgenticResearchStatus, BacktestRunSummary, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
+import type { AgenticResearchStatus, BacktestRunSummary, ResearchDataReadiness, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
 import { useAgenticResearchStatus, useBacktestLab, useResearchPipeline, useResearchScorecard, useStrategyWorkflow } from "../queries";
 import { BacktestLabPanel, StrategyWorkflowPanel } from "../panels/Panels";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "./Terminal";
@@ -95,6 +95,39 @@ export function experimentReadout(row: ResearchPipelineCandidate) {
   };
 }
 
+export function ExperimentDataReadiness({ data }: { data?: ResearchDataReadiness }) {
+  if (!data) return <p className="mt-3 text-sm text-dim">Data diagnostics unavailable for this attempt. Existing evidence is unchanged; the next scheduled preflight will capture them.</p>;
+  return <section className="mt-3 rounded border border-line p-3 text-sm" aria-label="Experiment data readiness">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <strong>Input coverage · {data.symbol} · {data.timeframe}</strong>
+      <TerminalBadge tone="warn">measurement only</TerminalBadge>
+    </div>
+    <p className="mt-2 text-dim">Captured {data.observed_at}. This attempt's frame, not current live readiness.</p>
+    <dl className="mt-3 grid grid-cols-2 gap-2">
+      <dt>Stored / required</dt><dd>{data.stored_rows} / {data.required_bars}</dd>
+      <dt>Verified unique bars</dt><dd>{data.verified_unique_bars}</dd>
+      <dt>Longest continuous run</dt><dd>{data.longest_contiguous_bars}</dd>
+      <dt>Continuous tail</dt><dd>{data.latest_contiguous_bars}</dd>
+      <dt>History row shortfall</dt><dd>{data.row_shortfall}</dd>
+      <dt>Continuous-run shortfall</dt><dd>{data.contiguous_shortfall}</dd>
+      <dt>Absent internal slots</dt><dd>{data.missing_internal_bars}</dd>
+      <dt>Duplicate slots / reversed rows</dt><dd>{data.duplicate_slots} / {data.out_of_order_rows}</dd>
+    </dl>
+    <p className="mt-3 break-words text-dim">Observed opens: {data.first_open ?? "none"} → {data.last_open ?? "none"}.</p>
+    <p className="mt-2 text-warn">{data.blockers.length ? data.blockers.map(titleCase).join(" · ") : "No data defects found; preflight and research gates still apply."}</p>
+    {Object.keys(data.invalid_row_counts).length > 0 && <div className="mt-3">
+      <strong>Row proof failures (first failure per row)</strong>
+      {Object.entries(data.invalid_row_counts).map(([reason, count]) => <p key={reason}>{titleCase(reason)} × {count}</p>)}
+    </div>}
+    <p className="mt-2 text-dim">Sources: {Object.entries(data.source_counts).map(([source, n]) => `${source} ${n}`).join(" · ") || "none"}.</p>
+    {data.gap_ranges.length > 0 && <details className="mt-3">
+      <summary className="cursor-pointer">Inspect {data.gap_range_count} internal gap ranges{data.gap_ranges_truncated ? " (last 32 shown)" : ""}</summary>
+      {data.gap_ranges.map(gap => <p key={gap.from_open} className="mt-2 break-words">{gap.from_open} → {gap.to_open}: {gap.missing_bars} missing bars</p>)}
+    </details>}
+    <p className="mt-3 text-dim">History outside this frame is unknown. A valid sub-run does not authorize trimming the frozen window. Repair needs independent tape coverage; no bars are filled here.</p>
+  </section>;
+}
+
 export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | undefined }) {
   const candidates = pipeline?.candidates ?? [];
   const verdictTone = (verdict: string): "good" | "bad" | "warn" => verdict === "CANDIDATE" ? "good" : verdict.startsWith("REFUSED") || verdict === "ERROR" ? "bad" : "warn";
@@ -141,6 +174,7 @@ export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePay
                   <small>{row.entry_clock ?? "clock unverified"} · {row.cost_profile_id ?? "cost unverified"} · {row.booked_round_bps == null ? "—" : `${row.booked_round_bps.toFixed(2)} bps / round`}</small>
                   <details className="mt-2 max-w-lg"><summary className="cursor-pointer text-accent">Inspect evidence and gaps</summary>
                     <p className="mt-2">Preflight: {titleCase(proof.preflight)}. Bars: {row.preflight?.bars_available ?? "—"} / {row.preflight?.bars_required ?? "—"}; warmup {row.preflight?.warmup_bars ?? "—"}.</p>
+                    <ExperimentDataReadiness data={row.preflight?.data_readiness} />
                     <p className="mt-2 break-all">Packet: {row.packet_id ?? "missing"}<br />Dataset: {row.dataset_sha256 ?? "missing"}<br />Attempt: {row.attempt_id ?? "missing"}</p>
                     <p className="mt-2">Verified checks: {row.falsification?.agreed.map(titleCase).join(" · ") || "none reported"}</p>
                     <p className="mt-2 text-short">Challenges: {row.falsification?.contested.map(titleCase).join(" · ") || "none reported—not approval"}</p>

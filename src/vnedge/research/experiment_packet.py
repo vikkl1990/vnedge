@@ -147,11 +147,16 @@ def preflight(
             code = str(exc)
             invalid[code] = invalid.get(code, 0) + 1
     failures.extend(sorted(invalid))
+    from vnedge.research.data_readiness import describe_research_input
+    readiness = describe_research_input(
+        candles, exchange=spec.exchange, symbol=spec.symbol, timeframe=spec.timeframe,
+        required_bars=required, exact_volume=spec.exact_volume, now=now,
+    )
     return {"status": "READY_TO_TEST" if not failures else "NOT_TESTABLE",
             "as_of": now.isoformat(),
             "failures": failures, "invalid_row_counts": invalid,
             "bars_available": len(candles), "bars_required": required,
-            "warmup_bars": warmup_bars}
+            "warmup_bars": warmup_bars, "data_readiness": readiness}
 
 
 def freeze_packet(

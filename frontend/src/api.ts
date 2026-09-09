@@ -1403,6 +1403,39 @@ export interface StrategyWorkflowPayload {
   can_promote: false;
 }
 
+export interface ResearchDataReadiness {
+  schema_version: number;
+  scope: string;
+  observed_at: string;
+  exchange: string;
+  symbol: string;
+  timeframe: string;
+  stored_rows: number;
+  verified_unique_bars: number;
+  required_bars: number;
+  row_shortfall: number;
+  contiguous_shortfall: number;
+  first_open: string | null;
+  last_open: string | null;
+  longest_contiguous_bars: number;
+  latest_contiguous_bars: number;
+  longest_from_open: string | null;
+  longest_to_open: string | null;
+  missing_internal_bars: number;
+  gap_range_count: number;
+  gap_ranges: Array<{ from_open: string; to_open: string; missing_bars: number }>;
+  gap_ranges_truncated: boolean;
+  duplicate_slots: number;
+  out_of_order_rows: number;
+  invalid_row_counts: Record<string, number>;
+  source_counts: Record<string, number>;
+  blockers: string[];
+  historical_coverage: string;
+  repair_authorized: false;
+  can_trade: false;
+  can_promote: false;
+}
+
 export interface ResearchPipelineCandidate {
   strategy_id: string;
   source_file: string;
@@ -1420,6 +1453,7 @@ export interface ResearchPipelineCandidate {
     bars_available: number;
     bars_required: number;
     warmup_bars: number;
+    data_readiness?: ResearchDataReadiness;
   };
   falsification?: {
     kind: string;

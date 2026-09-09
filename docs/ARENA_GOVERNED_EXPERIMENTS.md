@@ -136,6 +136,28 @@ The existing 2,160-hour Arena window remains unchanged. Repairing a short lake
 does not create 90 days. A longer complete official public trade archive or a
 separately verified tape manifest is still required to backfill missing history.
 
+### Per-attempt data readiness diagnostics
+
+New preflight packets contain `data_readiness` scoped to their exact supplied
+frame and capture time. Arena exposes stored rows versus the contract requirement,
+independently verified unique bars, the longest continuous verified run, the
+continuous verified tail, row and continuous-run shortfalls, and internal missing
+open-time ranges (last 32 displayed; full counts retained). Proof failures are
+counted separately from absent rows; they use the first failed proof per row.
+Duplicate slots are excluded from verified history, not deduplicated into it.
+Reversed input order is explicit even if individual hashes pass.
+
+These are diagnostics, not another admission gate. Existing preflight decides
+admission unchanged. A usable sub-run never authorizes clipping the frozen
+train/test input; historical coverage outside the supplied frame stays unknown.
+No ETA assumes future gap-free collection. No repair command or automatic
+backfill is granted by this view, and `can_trade`/`can_promote` remain false.
+
+Packets and old completed attempts are not rewritten or rerun to populate the
+new fields. Legacy cached attempts show diagnostics unavailable until the normal
+scheduled preflight captures a new report. Data-reader failures remain explicit
+NOT_TESTABLE reasons; absent reports must not be displayed as zero gaps.
+
 Scoped rollout uses `VNEDGE_DEPLOY_SERVICES="delta-recorder multi-lane-shadow research-loop agent-job-runner" bash scripts/deploy.sh`.
 It retains the deployment lock and build-before-recreate rule, uses a fast-forward
 merge, and verifies serving SHAs without claiming runtime readiness.
