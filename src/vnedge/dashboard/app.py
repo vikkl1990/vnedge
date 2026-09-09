@@ -1905,7 +1905,7 @@ def create_app(
             continuous_ai_pipeline_file,
             {
                 "artifact_available": False,
-                "pipeline_id": "continuous_ai_research_v1",
+                "pipeline_id": "continuous_ai_research_v2",
                 "status": "NOT_STARTED",
                 "evaluation_status": "WAITING",
                 "stages": [],

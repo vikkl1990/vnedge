@@ -1382,6 +1382,28 @@ export interface ResearchPipelineCandidate {
   source_file: string;
   source_sha256?: string;
   evidence_id?: string;
+  packet_id?: string;
+  attempt_id?: string;
+  dataset_sha256?: string;
+  cost_profile_id?: string;
+  entry_clock?: string;
+  booked_round_bps?: number;
+  preflight?: {
+    status: string;
+    failures: string[];
+    bars_available: number;
+    bars_required: number;
+    warmup_bars: number;
+  };
+  falsification?: {
+    kind: string;
+    status: string;
+    agreed: string[];
+    contested: string[];
+    unverified: string[];
+    can_trade: false;
+    can_promote: false;
+  };
   verdict: string;
   reasons?: string[];
   causality?: { passed?: boolean; fired_bars?: number } | null;

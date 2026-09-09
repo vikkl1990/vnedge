@@ -267,3 +267,22 @@ def test_continuous_ai_pipeline_is_collected_as_non_authoritative_evidence(tmp_p
     assert rows[0]["can_trade"] is False
     assert rows[0]["can_promote"] is False
     assert rows[0]["metadata"]["oos_net_usd"] == -4.5
+
+
+def test_governed_packets_keep_per_candidate_market_clock_and_cost_identity():
+    from vnedge.research.evidence_store import _records_from_continuous_ai_pipeline
+
+    rows = _records_from_continuous_ai_pipeline({
+        "dataset": {"source": "per_candidate_frozen_packet"},
+        "candidates": [{"strategy_id": "ai_candidate", "packet_id": "packet-1",
+                        "dataset": {"exchange": "delta_india", "symbol": "ETH/USD:USD", "timeframe": "15m"},
+                        "entry_clock": "quote_hold", "cost_profile_id": "delta_scalp",
+                        "verdict": "NOT_TESTABLE", "reasons": ["lane_bbo_replay_required"]}],
+    }, source_artifact="pipeline.json")
+    row = rows[0]
+    assert (row.exchange, row.symbol, row.timeframe) == ("delta_india", "ETH/USD:USD", "15m")
+    assert (row.route, row.fee_model) == ("quote_hold", "delta_scalp")
+    assert row.status != "failed"
+    assert row.next_action == "RESOLVE_EVIDENCE_GAPS"
+    assert row.metadata["packet_id"] == "packet-1"
+    assert row.can_trade is False

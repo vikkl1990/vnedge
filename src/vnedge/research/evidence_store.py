@@ -513,6 +513,7 @@ def _records_from_continuous_ai_pipeline(
     for candidate in payload.get("candidates") or []:
         if not isinstance(candidate, dict):
             continue
+        candidate_dataset = candidate.get("dataset") if isinstance(candidate.get("dataset"), dict) else dataset
         walk = candidate.get("walk_forward") if isinstance(candidate.get("walk_forward"), dict) else {}
         causality = candidate.get("causality") if isinstance(candidate.get("causality"), dict) else {}
         verdict = str(candidate.get("verdict") or "UNKNOWN")
@@ -522,9 +523,11 @@ def _records_from_continuous_ai_pipeline(
                 source_kind="continuous_ai_pipeline",
                 source_artifact=source_artifact,
                 strategy_id=str(candidate.get("strategy_id") or ""),
-                exchange=str(dataset.get("exchange") or ""),
-                symbol=str(dataset.get("symbol") or ""),
-                timeframe=str(dataset.get("timeframe") or ""),
+                exchange=str(candidate_dataset.get("exchange") or ""),
+                symbol=str(candidate_dataset.get("symbol") or ""),
+                timeframe=str(candidate_dataset.get("timeframe") or ""),
+                route=str(candidate.get("entry_clock") or ""),
+                fee_model=str(candidate.get("cost_profile_id") or ""),
                 status=_status_from_net_and_verdict(None, verdict),
                 verdict=verdict,
                 samples=_int(walk.get("oos_trades")),
@@ -535,6 +538,7 @@ def _records_from_continuous_ai_pipeline(
                 next_action=(
                     "PRE_REGISTER_UNTOUCHED_JUDGMENT"
                     if verdict == "CANDIDATE"
+                    else "RESOLVE_EVIDENCE_GAPS" if verdict in {"NOT_TESTABLE", "ERROR", "DEFERRED_BUDGET"}
                     else "RETAIN_FAILURE_EVIDENCE"
                 ),
                 source_ref=str(candidate.get("evidence_id") or ""),
@@ -547,6 +551,11 @@ def _records_from_continuous_ai_pipeline(
                     "oos_net_usd": _float(walk.get("oos_net_usd")),
                     "windows": _int(walk.get("windows")),
                     "dataset_source": dataset.get("source"),
+                    "packet_id": candidate.get("packet_id"),
+                    "dataset_sha256": candidate.get("dataset_sha256"),
+                    "booked_round_bps": candidate.get("booked_round_bps"),
+                    "falsification": candidate.get("falsification"),
+                    "performance_eligible": False,
                 },
             )
         )

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { AgenticResearchStatus, StrategyWorkflowRevision } from "../api";
-import { arenaAgentRanking, arenaPipelineCounts } from "./ResearchArena";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { AgenticResearchStatus, ResearchPipelineCandidate, StrategyWorkflowRevision } from "../api";
+import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, experimentReadout } from "./ResearchArena";
 
 const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) => ({
   revision_id: `${stage}:revision`,
@@ -25,6 +27,20 @@ const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) 
 });
 
 describe("research arena projections", () => {
+  it("does not turn missing preflight or causality into a result", () => {
+    const row: ResearchPipelineCandidate = { strategy_id: "ai_test", source_file: "test.py",
+      verdict: "NOT_TESTABLE", reasons: ["history_insufficient"], can_trade: false, can_promote: false };
+    expect(experimentReadout(row)).toEqual({ preflight: "UNVERIFIED", audit: "UNVERIFIED",
+      causal: "not tested", gaps: ["history_insufficient"] });
+  });
+
+  it("renders the research boundary without inventing a running swarm", () => {
+    const html = renderToStaticMarkup(createElement(ContinuousPipeline, { pipeline: undefined }));
+    expect(html).toContain("Independent audit is deterministic, not an AI vote");
+    expect(html).toContain("No candidate evidence yet");
+    expect(html).toContain("authority false");
+  });
+
   it("keeps OOS failures in the pipeline and never infers capital eligibility", () => {
     const counts = arenaPipelineCounts([
       revision("REGISTERED"),

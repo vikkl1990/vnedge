@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { AgenticResearchStatus, BacktestRunSummary, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
+import type { AgenticResearchStatus, BacktestRunSummary, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
 import { useAgenticResearchStatus, useBacktestLab, useResearchPipeline, useResearchScorecard, useStrategyWorkflow } from "../queries";
 import { BacktestLabPanel, StrategyWorkflowPanel } from "../panels/Panels";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "./Terminal";
@@ -86,7 +86,16 @@ function entryClock(row: StrategyWorkflowRevision) {
   return row.params?.runtime?.entry_clock || "not reported";
 }
 
-function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | undefined }) {
+export function experimentReadout(row: ResearchPipelineCandidate) {
+  return {
+    preflight: row.preflight?.status ?? "UNVERIFIED",
+    audit: row.falsification?.status ?? "UNVERIFIED",
+    causal: row.causality?.passed == null ? "not tested" : row.causality.passed ? "yes" : "no",
+    gaps: Array.from(new Set([...(row.reasons ?? []), ...(row.preflight?.failures ?? []), ...(row.falsification?.unverified ?? [])])),
+  };
+}
+
+export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | undefined }) {
   const candidates = pipeline?.candidates ?? [];
   const verdictTone = (verdict: string): "good" | "bad" | "warn" => verdict === "CANDIDATE" ? "good" : verdict.startsWith("REFUSED") || verdict === "ERROR" ? "bad" : "warn";
   return (
@@ -94,8 +103,8 @@ function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="eyebrow">Continuous AI / ML research conveyor</div>
-          <h3 className="mt-2 text-[17px] font-semibold">Create → sandbox → prove causality → rolling OOS → retain evidence</h3>
-          <p className="mt-2 max-w-3xl text-[11px] leading-6 text-dim">One catalogued source at most per cycle. Re-tests are daily by default. ML remains non-binding until the resolved-label floor is met. No result can register, promote, edit the roster, or trade.</p>
+          <h3 className="mt-2 text-[17px] font-semibold">Propose → preflight → freeze → test → challenge</h3>
+          <p className="mt-2 max-w-3xl text-[11px] leading-6 text-dim">One bounded proposal per cycle. Data, clock and costs must be declared before replay. Independent audit is deterministic, not an AI vote. Rolling OOS remains exploratory; missing funding, cost stress and execution parity stay visible. No result can promote or trade.</p>
         </div>
         <div className="flex gap-2">
           <TerminalBadge tone={pipeline?.artifact_available ? "good" : "warn"}>{titleCase(pipeline?.status ?? "not started")}</TerminalBadge>
@@ -109,10 +118,28 @@ function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | 
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_280px]">
         <div className="overflow-x-auto">
           <table className="arena-candidate-table">
-            <thead><tr><th>Candidate / proof</th><th>Verdict</th><th>Causal</th><th>OOS trades</th><th>Booked net</th></tr></thead>
-            <tbody>{candidates.slice(0, 12).map((row) => <tr key={row.evidence_id ?? row.strategy_id}><td><b>{row.strategy_id}</b><small>{row.evidence_id?.slice(0, 12) ?? "proof pending"} · {row.source_sha256?.slice(0, 8) ?? "source hash pending"}</small></td><td><TerminalBadge tone={verdictTone(row.verdict)}>{titleCase(row.verdict)}</TerminalBadge></td><td>{row.causality?.passed ? "yes" : "no"}</td><td>{row.walk_forward?.oos_trades ?? "—"}</td><td className={(row.walk_forward?.oos_net_usd ?? 0) < 0 ? "text-short" : "text-long"}>{formatMoney(row.walk_forward?.oos_net_usd)}</td></tr>)}</tbody>
+            <thead><tr><th>Candidate / frozen experiment</th><th>Verdict / audit</th><th>Causal</th><th>OOS trades</th><th>Booked net*</th></tr></thead>
+            <tbody>{candidates.slice(0, 12).map((row) => {
+              const proof = experimentReadout(row);
+              return <tr key={row.evidence_id ?? row.strategy_id}>
+                <td><b>{row.strategy_id}</b><small>packet {row.packet_id?.slice(0, 12) ?? "missing"} · source {row.source_sha256?.slice(0, 8) ?? "unverified"}</small>
+                  <small>{row.entry_clock ?? "clock unverified"} · {row.cost_profile_id ?? "cost unverified"} · {row.booked_round_bps == null ? "—" : `${row.booked_round_bps.toFixed(2)} bps / round`}</small>
+                  <details className="mt-2 max-w-lg"><summary className="cursor-pointer text-accent">Inspect evidence and gaps</summary>
+                    <p className="mt-2">Preflight: {titleCase(proof.preflight)}. Bars: {row.preflight?.bars_available ?? "—"} / {row.preflight?.bars_required ?? "—"}; warmup {row.preflight?.warmup_bars ?? "—"}.</p>
+                    <p className="mt-2 break-all">Packet: {row.packet_id ?? "missing"}<br />Dataset: {row.dataset_sha256 ?? "missing"}<br />Attempt: {row.attempt_id ?? "missing"}</p>
+                    <p className="mt-2">Verified checks: {row.falsification?.agreed.map(titleCase).join(" · ") || "none reported"}</p>
+                    <p className="mt-2 text-short">Challenges: {row.falsification?.contested.map(titleCase).join(" · ") || "none reported—not approval"}</p>
+                    <p className="mt-2 text-warn">Unresolved: {proof.gaps.map(titleCase).join(" · ") || "none reported—not promotion"}</p>
+                  </details>
+                </td>
+                <td><TerminalBadge tone={verdictTone(row.verdict)}>{titleCase(row.verdict)}</TerminalBadge><small>{titleCase(proof.audit)}</small></td>
+                <td>{proof.causal}</td><td>{row.walk_forward?.oos_trades ?? "—"}</td>
+                <td className={(row.walk_forward?.oos_net_usd ?? 0) < 0 ? "text-short" : "text-long"}>{formatMoney(row.walk_forward?.oos_net_usd)}</td>
+              </tr>;
+            })}</tbody>
           </table>
           {!candidates.length && <div className="arena-empty"><strong>No candidate evidence yet.</strong><span>The display stays empty until a real sandbox/OOS cycle publishes.</span></div>}
+          <p className="mt-3 text-[10px] text-dim">*Research backtest only. Funding excluded on governed packets; product limits are unverified research assumptions. This is not operational execution PnL.</p>
         </div>
         <div className="arena-ml-card">
           <div className="eyebrow">ML meta-label gate</div>

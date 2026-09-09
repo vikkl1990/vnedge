@@ -46,7 +46,8 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
 
     calls = 0
 
-    def fake_build(store, targets, *, strategy_dir):
+    def fake_build(store, targets, *, strategy_dir, experiment_dir, candidate_offset):
+        assert experiment_dir == out / "experiments"
         nonlocal calls
         calls += 1
         filename = next(strategy_dir.glob("*.py")).name
@@ -108,6 +109,23 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
     assert cached["evaluation_status"] == "CACHED"
     assert calls == 1
     assert len((out / "continuous_ai_pipeline_feed.jsonl").read_text().splitlines()) == 1
+
+    # Externally authored changes cannot inherit cached evidence from old bytes.
+    contract = next(strategy_dir.glob("*.experiment.json"))
+    contract.write_text(contract.read_text() + "\n")
+    changed = pipeline.run_continuous_ai_pipeline(
+        object(), (), strategy_dir=strategy_dir, out_dir=out,
+        now=now + timedelta(hours=2), retest_seconds=86_400,
+    )
+    assert changed["evaluation_status"] == "EVALUATED"
+    assert calls == 2
+    (out / "ai_candidates.json").write_text("{}")
+    repaired = pipeline.run_continuous_ai_pipeline(
+        object(), (), strategy_dir=strategy_dir, out_dir=out,
+        now=now + timedelta(hours=3),
+    )
+    assert repaired["evaluation_status"] == "EVALUATED"
+    assert calls == 3
 
 
 def test_pipeline_never_exposes_registration_roster_or_capital_authority(tmp_path, monkeypatch):

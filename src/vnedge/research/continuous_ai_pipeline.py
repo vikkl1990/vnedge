@@ -33,13 +33,24 @@ from vnedge.research.ai_candidate_research import (
     write_ai_candidates_payload,
 )
 from vnedge.strategy.ai_sandbox import validate_strategy_source
+from vnedge.research.experiment_packet import ExperimentSpec, json_bytes, persist_once
 
-PIPELINE_ID = "continuous_ai_research_v1"
+PIPELINE_ID = "continuous_ai_research_v2"
 DEFAULT_OUT_DIR = Path("research/live_research")
 DEFAULT_LATEST = DEFAULT_OUT_DIR / "continuous_ai_pipeline_latest.json"
 DEFAULT_FEED = DEFAULT_OUT_DIR / "continuous_ai_pipeline_feed.jsonl"
 DEFAULT_EVIDENCE_DIR = DEFAULT_OUT_DIR / "ai_pipeline_evidence"
 DEFAULT_ML_STATUS = DEFAULT_OUT_DIR / "ml_pipeline_status.json"
+
+
+def _materialize_contract(destination: Path, blueprint: CandidateBlueprint, digest: str) -> None:
+    spec = ExperimentSpec(
+        strategy_id=f"ai_{blueprint.strategy_id}", source_sha256=digest,
+        claim=blueprint.note,
+        invalidation="Reject if frozen rolling OOS gates fail after declared taker costs.",
+        cost_profile_id="delta_swing",
+    )
+    persist_once(destination.with_suffix(".experiment.json"), json_bytes(spec.model_dump(mode="json")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +245,10 @@ def materialize_next_blueprint(
                     "actual_sha256": existing,
                     "reason": "candidate source is immutable; refusing overwrite",
                 }
+            try:
+                _materialize_contract(destination, blueprint, digest)
+            except ValueError as exc:
+                return {"status": "CONFLICT", "source_file": destination.name, "reason": str(exc)}
             continue
         validation = validate_strategy_source(source)
         if not validation.ok:
@@ -251,6 +266,7 @@ def materialize_next_blueprint(
             os.fsync(handle.fileno())
             temporary = Path(handle.name)
         os.replace(temporary, destination)
+        _materialize_contract(destination, blueprint, digest)
         return {
             "status": "CREATED",
             "blueprint_id": blueprint.blueprint_id,
@@ -272,6 +288,8 @@ def _source_inventory(strategy_dir: Path) -> list[dict[str, str]]:
         if path.name.startswith("_"):
             continue
         rows.append({"file": path.name, "sha256": _sha(path.read_bytes())})
+        contract = path.with_suffix(".experiment.json")
+        rows[-1]["contract_sha256"] = _sha(contract.read_bytes()) if contract.exists() else ""
     return rows
 
 
@@ -321,16 +339,18 @@ def _candidate_evidence(
         source_file = str(candidate.get("source_file") or "")
         identity = {
             "strategy_id": candidate.get("strategy_id"),
-            "source_sha256": source_hashes.get(source_file, ""),
+            "source_sha256": candidate.get("source_sha256") or source_hashes.get(source_file, ""),
             "dataset": dataset,
             "verdict": candidate.get("verdict"),
             "walk_forward": candidate.get("walk_forward"),
             "causality": candidate.get("causality"),
+            "packet_id": candidate.get("packet_id"),
+            "falsification": candidate.get("falsification"),
         }
         rows.append(
             {
                 **candidate,
-                "source_sha256": source_hashes.get(source_file, ""),
+                "source_sha256": candidate.get("source_sha256") or source_hashes.get(source_file, ""),
                 "evidence_id": _sha(json.dumps(identity, sort_keys=True, default=str))[:24],
                 "can_trade": False,
                 "can_promote": False,
@@ -363,15 +383,22 @@ def run_continuous_ai_pipeline(
     previous = _read_json(latest_path)
     creation = materialize_next_blueprint(strategy_root) if auto_create else None
     created = bool(creation and creation.get("status") == "CREATED")
+    inventory = _source_inventory(strategy_root)
     age = _age_seconds(previous, generated_at)
-    due = force_evaluate or created or age is None or age >= max(60.0, retest_seconds)
-
     ai_path = root / AI_CANDIDATES_LATEST
+    cached_hash = _sha(ai_path.read_bytes()) if ai_path.is_file() else None
+    due = (force_evaluate or created or inventory != previous.get("source_inventory")
+           or previous.get("governance_version") != "experiment_packet_v1"
+           or cached_hash is None or cached_hash != previous.get("evaluation_sha256")
+           or age is None or age >= max(60.0, retest_seconds))
+
     if due:
         evaluation = build_ai_candidates_payload(
             store,
             _ordered_targets(targets),
             strategy_dir=strategy_root,
+            experiment_dir=root / "experiments",
+            candidate_offset=int((previous.get("governance") or {}).get("next_candidate_offset", 0)),
         )
         write_ai_candidates_payload(evaluation, root)
         evaluation_status = "EVALUATED"
@@ -381,7 +408,6 @@ def run_continuous_ai_pipeline(
         evaluation_status = "CACHED"
         last_evaluated_at = str(previous.get("last_evaluated_at") or "")
 
-    inventory = _source_inventory(strategy_root)
     candidates = _candidate_evidence(evaluation, inventory)
     verdicts: dict[str, int] = {}
     causal = 0
@@ -402,7 +428,9 @@ def run_continuous_ai_pipeline(
         "candidate_evidence": [row.get("evidence_id") for row in candidates],
     }
     cycle_id = _sha(json.dumps(cycle_identity, sort_keys=True))[:24]
-    status = "RUNNING" if candidates or inventory else "WAITING_FOR_PROPOSALS"
+    status = "EVIDENCE_AVAILABLE" if candidates else "WAITING_FOR_PROPOSALS"
+    if candidates and all(c.get("verdict") in {"NOT_TESTABLE", "ERROR", "DEFERRED_BUDGET"} for c in candidates):
+        status = "BLOCKED_EVIDENCE"
     pipeline = {
         "pipeline_id": PIPELINE_ID,
         "cycle_id": cycle_id,
@@ -414,13 +442,20 @@ def run_continuous_ai_pipeline(
             else None
         ),
         "status": status,
+        "governance_version": "experiment_packet_v1",
+        "evaluation_sha256": _sha(ai_path.read_bytes()) if ai_path.is_file() else None,
+        "source_inventory": inventory,
+        "governance": evaluation.get("governance") or {},
         "evaluation_status": evaluation_status,
         "creation": creation,
         "stages": [
             {"key": "PROPOSE", "label": "Bounded proposals", "count": len(inventory), "state": "ACTIVE"},
-            {"key": "SANDBOX", "label": "AST sandbox", "count": len(candidates), "state": "PASS" if candidates else "WAIT"},
+            {"key": "PREFLIGHT", "label": "Data / cost preflight", "count": sum(c.get("preflight", {}).get("status") == "READY_TO_TEST" for c in candidates), "state": "REVIEW"},
+            {"key": "PACKET", "label": "Frozen packets", "count": sum(bool(c.get("packet_id")) for c in candidates), "state": "RECORDED"},
+            {"key": "SANDBOX", "label": "AST accepted", "count": len(candidates), "state": "PASS" if candidates else "WAIT"},
             {"key": "CAUSALITY", "label": "Causality", "count": causal, "state": "PASS" if causal else "WAIT"},
-            {"key": "WALK_FORWARD", "label": "Rolling OOS", "count": len(candidates), "state": evaluation_status},
+            {"key": "WALK_FORWARD", "label": "Rolling OOS", "count": sum(bool(c.get("walk_forward")) for c in candidates), "state": evaluation_status},
+            {"key": "FALSIFY", "label": "Independent audit", "count": sum(bool(c.get("falsification")) for c in candidates), "state": "RESEARCH_ONLY"},
             {"key": "ML", "label": "Meta-label ML", "count": model_samples, "state": model_stage},
             {"key": "HUMAN_REVIEW", "label": "Human review", "count": verdicts.get("CANDIDATE", 0), "state": "LOCKED"},
         ],

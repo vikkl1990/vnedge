@@ -448,6 +448,8 @@ def build_ai_candidates_payload(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     train_bars: int = DEFAULT_TRAIN_BARS,
     test_bars: int = DEFAULT_TEST_BARS,
+    experiment_dir: Path | None = None,
+    candidate_offset: int = 0,
 ) -> dict:
     """Resolve a dataset from ``store`` and run the AI candidate research.
 
@@ -455,6 +457,13 @@ def build_ai_candidates_payload(
     candles are not available (so the causality gate still runs offline). The
     fallback is honest about being too short to walk-forward — those candidates
     land as ``INSUFFICIENT_DATA``, never as a spurious pass."""
+    if experiment_dir is not None:
+        from vnedge.research.governed_ai_research import run_governed_ai_research
+
+        return run_governed_ai_research(
+            store, targets, strategy_dir=Path(strategy_dir), out_dir=experiment_dir,
+            candidate_offset=candidate_offset,
+        )
     exchange, symbol, timeframe = _primary_target(targets)
     dataset_source = "parquet"
     try:
