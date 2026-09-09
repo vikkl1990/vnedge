@@ -212,3 +212,20 @@ def test_runtime_fingerprint_works_without_git_in_container(monkeypatch):
     assert len(result["code_sha256"]) == 64
     assert result["python"]
     assert result["git_commit"]  # BUILD_SHA when present, otherwise explicit unavailable
+
+
+def test_installed_wheel_fingerprints_package_and_workdir_build_stamp(tmp_path, monkeypatch):
+    from vnedge.research import experiment_packet
+
+    installed = tmp_path / "site-packages/vnedge/research/experiment_packet.py"
+    installed.parent.mkdir(parents=True)
+    installed.write_text("# installed source")
+    work = tmp_path / "app"
+    work.mkdir()
+    (work / "BUILD_SHA").write_text("b" * 40)
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(experiment_packet, "__file__", str(installed))
+    before = experiment_packet.runtime_identity()
+    assert before["git_commit"] == "b" * 40
+    installed.write_text("# changed installed source")
+    assert experiment_packet.runtime_identity()["code_sha256"] != before["code_sha256"]

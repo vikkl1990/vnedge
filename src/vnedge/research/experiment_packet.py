@@ -72,6 +72,7 @@ def persist_once(path: Path, data: bytes) -> None:
 
 def runtime_identity() -> dict[str, str]:
     root = Path(__file__).resolve().parents[3]
+    package = Path(__file__).resolve().parents[1]
     def git(*args: str) -> str:
         try:
             result = subprocess.run(
@@ -84,12 +85,14 @@ def runtime_identity() -> dict[str, str]:
         # Production images have neither a .git checkout nor a git executable.
         # The build stamps its revision separately; content fingerprint remains
         # mandatory regardless of whether that optional attribution is present.
-        stamp = root / "BUILD_SHA"
-        return stamp.read_text().strip() if stamp.is_file() else "unavailable"
+        for stamp in (root / "BUILD_SHA", Path.cwd() / "BUILD_SHA"):
+            if stamp.is_file():
+                return stamp.read_text().strip()
+        return "unavailable"
     # Includes uncommitted/untracked Python implementations, not only HEAD.
     code = hashlib.sha256()
-    for file in sorted((root / "src" / "vnedge").rglob("*.py")):
-        code.update(str(file.relative_to(root)).encode())
+    for file in sorted(package.rglob("*.py")):
+        code.update(str(file.relative_to(package)).encode())
         code.update(file.read_bytes())
     return {"git_commit": git("rev-parse", "HEAD"), "code_sha256": code.hexdigest(),
             "python": platform.python_version(), "pandas": pd.__version__, "numpy": np.__version__}
