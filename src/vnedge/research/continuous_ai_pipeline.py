@@ -443,6 +443,7 @@ def run_continuous_ai_pipeline(
     status = "EVIDENCE_AVAILABLE" if candidates else "WAITING_FOR_PROPOSALS"
     lake_root = getattr(store, "root", None)
     lake_repair = _read_json(Path(lake_root).parent / "reports/delta_lake_repair.json") if lake_root is not None else {}
+    recovery_plan = _read_json(Path(lake_root).parent / "reports/delta_recovery_plan.json") if lake_root is not None else {}
     if candidates and all(c.get("verdict") in {"NOT_TESTABLE", "ERROR", "DEFERRED_BUDGET"} for c in candidates):
         status = "BLOCKED_EVIDENCE"
     pipeline = {
@@ -456,6 +457,7 @@ def run_continuous_ai_pipeline(
         "next_queue_at": next_queue.isoformat() if next_queue else None,
         "status": status,
         "lake_repair": lake_repair,
+        "recovery_plan": recovery_plan,
         "governance_version": "canonical_queue_v2",
         "evaluation_sha256": _sha(ai_path.read_bytes()) if ai_path.is_file() else None,
         "source_inventory": inventory,

@@ -234,6 +234,7 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
                                   symbols: Sequence[str], environ: Mapping[str, str],
                                   lease_fd: int) -> None:
     from vnedge.data.delta_lake_repair import _atomic, repair_delta_lake
+    from vnedge.data.delta_recovery_plan import build_delta_recovery_report
 
     interval = _positive_seconds(environ, "VNEDGE_DELTA_REPAIR_INTERVAL_SECONDS", 900)
     authority = {**environ, INHERITED_WRITER_LEASE_FD: str(lease_fd)}
@@ -251,6 +252,18 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
             _atomic(data_root / "reports/delta_lake_repair.json", json.dumps({
                 "generated_at": datetime.now(UTC).isoformat(), "status": "ERROR",
                 "reason": f"{type(exc).__name__}:{exc}", "can_trade": False}).encode())
+        # Read-only planning is separate from repair and cannot authorize writes.
+        # A failed plan must not erase the owner's repair audit.
+        try:
+            recovery = await asyncio.to_thread(build_delta_recovery_report, data_root,
+                                              candle_root, symbols=tuple(symbols))
+            _atomic(data_root / "reports/delta_recovery_plan.json", json.dumps(recovery, sort_keys=True).encode())
+        except Exception as exc:
+            logger.exception("Delta recovery planning failed; repair authority unchanged")
+            _atomic(data_root / "reports/delta_recovery_plan.json", json.dumps({
+                "generated_at": datetime.now(UTC).isoformat(), "status": "ERROR",
+                "reason": f"{type(exc).__name__}:{exc}", "can_apply": False,
+                "can_trade": False, "can_promote": False}).encode())
         await asyncio.sleep(interval)
 
 

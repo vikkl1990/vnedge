@@ -128,6 +128,28 @@ export function ExperimentDataReadiness({ data }: { data?: ResearchDataReadiness
   </section>;
 }
 
+export function RecoveryPlan({ report }: { report: ResearchPipelinePayload["recovery_plan"] }) {
+  return <section className="mt-4 rounded-lg border border-line p-4 text-[11px] text-dim" aria-label="Canonical recovery plan">
+    <h4 className="font-semibold text-text">Verified history recovery plan</h4>
+    <p className="mt-2">Read-only inventory, not experiment admission. Only the canonical owner may repair; no apply or promotion controls.</p>
+    <p>Observed: {report?.generated_at ?? "not published"}. This is a snapshot, not current feed readiness.</p>
+    {report?.reason && <p className="text-warn">{report.reason}</p>}
+    {!Object.keys(report?.symbols ?? {}).length && <p className="mt-2">Recovery inventory unavailable; missing evidence is not zero gaps.</p>}
+    {Object.entries(report?.symbols ?? {}).map(([symbol, plan]) => <details className="mt-3" key={symbol}>
+      <summary className="cursor-pointer text-accent">{symbol} · {titleCase(plan.status)} · verified {plan.counts ? (plan.counts.VERIFIED ?? 0) : "—"} / {plan.required_hours ?? "—"} hours</summary>
+      <p className="mt-2">Window: {plan.window_open ?? "unknown"} → {plan.window_close ?? "unknown"} (end exclusive).</p>
+      <p className="break-all">Plan: {plan.plan_id ?? "unavailable"}</p>
+      <ul className="mt-2">{Object.entries(plan.counts ?? {}).map(([status, count]) => <li key={status}>{titleCase(status)}: {count} hours</li>)}</ul>
+      <p className="mt-2">Raw-day presence does not prove interval coverage. No local raw day means unavailable locally—not repaired by official OHLC.</p>
+      {Object.entries(plan.blocked_parent_counts ?? {}).map(([tf, count]) => <p className="text-warn" key={tf}>{tf}: {count} parent proposals blocked by unsafe target partitions.</p>)}
+      {plan.errors?.map((error, i) => <p className="text-warn" key={i}>{error}</p>)}
+      <div className="mt-2 max-h-64 overflow-y-auto">{plan.ranges?.map((range) => <p key={range.open_time}>{range.open_time} → {range.close_time} · {range.hours} hours · {titleCase(range.status)}</p>)}</div>
+      {plan.ranges_truncated && <p className="text-warn">Showing the latest {plan.ranges?.length ?? 0} of {plan.range_count} ranges. Not a complete execution queue.</p>}
+    </details>)}
+    <p className="mt-3">Plans expire when input partitions change. Frozen experiment windows and preflight checks remain unchanged.</p>
+  </section>;
+}
+
 export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePayload | undefined }) {
   const candidates = pipeline?.candidates ?? [];
   const verdictTone = (verdict: string): "good" | "bad" | "warn" => verdict === "CANDIDATE" ? "good" : verdict.startsWith("REFUSED") || verdict === "ERROR" ? "bad" : "warn";
@@ -163,6 +185,7 @@ export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePay
           {" "}Unit-corrected partial rows are not eligible history.
         </p>)}
       </div>}
+      <RecoveryPlan report={pipeline?.recovery_plan} />
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_280px]">
         <div className="overflow-x-auto">
           <table className="arena-candidate-table">

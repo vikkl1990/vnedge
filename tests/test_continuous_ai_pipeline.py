@@ -38,9 +38,14 @@ def test_pipeline_primary_target_order_prefers_delta_india_btc():
 
 
 def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, monkeypatch):
+    from types import SimpleNamespace
     strategy_dir = tmp_path / "strategies"
     out = tmp_path / "research"
     now = datetime(2026, 9, 8, tzinfo=UTC)
+    store = SimpleNamespace(root=tmp_path / "data/candles")
+    recovery_path = tmp_path / "data/reports/delta_recovery_plan.json"
+    recovery_path.parent.mkdir(parents=True)
+    recovery_path.write_text(json.dumps({"generated_at": "first", "can_apply": False}))
     source = pipeline.materialize_next_blueprint(strategy_dir)
     assert source is not None
 
@@ -87,10 +92,11 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
     )
 
     first = pipeline.run_continuous_ai_pipeline(
-        object(), (), strategy_dir=strategy_dir, out_dir=out,
+        store, (), strategy_dir=strategy_dir, out_dir=out,
         force_evaluate=True, now=now,
     )
     assert first["evaluation_status"] == "EVALUATED"
+    assert first["recovery_plan"]["generated_at"] == "first"
     assert first["summary"]["evaluated_candidates"] == 1
     assert first["summary"]["causal_candidates"] == 1
     assert first["ml"] == {
@@ -102,11 +108,13 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
     assert list((out / "ai_pipeline_evidence").glob("*.json"))
     assert len((out / "continuous_ai_pipeline_feed.jsonl").read_text().splitlines()) == 1
 
+    recovery_path.write_text(json.dumps({"generated_at": "updated", "can_apply": False}))
     cached = pipeline.run_continuous_ai_pipeline(
-        object(), (), strategy_dir=strategy_dir, out_dir=out,
+        store, (), strategy_dir=strategy_dir, out_dir=out,
         now=now + timedelta(hours=1), retest_seconds=86_400,
     )
     assert cached["evaluation_status"] == "CACHED"
+    assert cached["recovery_plan"]["generated_at"] == "updated"
     assert cached["next_evaluation_at"] == first["next_evaluation_at"]
     assert calls == 1
     assert len((out / "continuous_ai_pipeline_feed.jsonl").read_text().splitlines()) == 1

@@ -1478,6 +1478,24 @@ export interface ResearchPipelineCandidate {
 }
 
 export interface ResearchPipelinePayload {
+  recovery_plan?: {
+    generated_at?: string;
+    status?: string;
+    reason?: string;
+    symbols?: Record<string, {
+      plan_id?: string;
+      status: string;
+      required_hours?: number;
+      window_open?: string;
+      window_close?: string;
+      counts?: Record<string, number>;
+      errors?: string[];
+      ranges?: Array<{ open_time: string; close_time: string; hours: number; status: string }>;
+      range_count?: number;
+      ranges_truncated?: boolean;
+      blocked_parent_counts?: Record<string, number>;
+    }>;
+  };
   lake_repair?: {
     generated_at?: string;
     status?: string;

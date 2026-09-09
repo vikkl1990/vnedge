@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgenticResearchStatus, ResearchDataReadiness, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
-import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, ExperimentDataReadiness, experimentReadout } from "./ResearchArena";
+import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, ExperimentDataReadiness, experimentReadout, RecoveryPlan } from "./ResearchArena";
 
 const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) => ({
   revision_id: `${stage}:revision`,
@@ -27,6 +27,26 @@ const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) 
 });
 
 describe("research arena projections", () => {
+  it("renders recovery evidence without granting write authority", () => {
+    const html = renderToStaticMarkup(createElement(RecoveryPlan, { report: {
+      generated_at: "2026-09-09T03:00:00Z", symbols: { BTCUSD: {
+        status: "GAPS_REMAIN", plan_id: "proof-id", required_hours: 2160,
+        counts: { VERIFIED: 189, RAW_DAY_PRESENT_COVERAGE_UNPROVEN: 20 },
+        ranges: [{ open_time: "2026-09-01T00:00:00Z", close_time: "2026-09-01T01:00:00Z", hours: 1, status: "PRESENT_PROOF_INVALID" }],
+      } },
+    } }));
+    expect(html).toContain("189 / 2160 hours");
+    expect(html).toContain("proof-id");
+    expect(html).toContain("raw day present coverage unproven: 20 hours");
+    expect(html).toContain("not experiment admission");
+    expect(html).toContain("end exclusive");
+    expect(html).not.toContain("<button");
+  });
+  it("does not present missing recovery reports as success", () => {
+    const html = renderToStaticMarkup(createElement(RecoveryPlan, { report: undefined }));
+    expect(html).toContain("missing evidence is not zero gaps");
+    expect(html).not.toContain("0 / 2160");
+  });
   it("shows historical coverage diagnostics without implying approval or repair", () => {
     const data: ResearchDataReadiness = {
       schema_version: 1, scope: "supplied_experiment_frame", observed_at: "2026-09-09T03:00:00Z",

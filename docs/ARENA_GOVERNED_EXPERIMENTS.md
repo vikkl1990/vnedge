@@ -167,3 +167,64 @@ Targeted tests: `tests/test_arena_canonical_input.py`, `tests/test_experiment_pa
 Tests include bad identities/coverage/gaps, unsupported clocks/context, missing
 contracts/data, captured-source binding, write-before-replay, retained failures,
 immutable artifact conflicts, cache invalidation, and non-promoting audit results.
+## Verified recovery planning
+
+The canonical owner's existing maintenance loop publishes a separate,
+read-only `data/reports/delta_recovery_plan.json` after its repair audit.
+The research worker projects that report into Arena; it does not rerun completed
+experiments or modify their frozen contracts when the report changes.
+
+The inventory covers the last 2,160 **closed** UTC hours per BTC/ETH symbol,
+including leading missing history, not only internal holes. It validates
+persisted closed/coverage booleans, source, content hash, partition identity,
+alignment and candle geometry before using a child. Duplicate slots are invalid.
+Missing parents can be described through the 1m → 5m → 15m → 1h chain; existing
+invalid rows are never replacement candidates. A target partition with missing
+legacy metadata blocks a proposal because upserting there could upgrade other
+rows accidentally.
+
+Hourly classifications are `VERIFIED`, `REBUILD_FROM_VERIFIED_CHILDREN`,
+`PRESENT_PROOF_INVALID`, `TARGET_PARTITION_UNSAFE`,
+`RAW_DAY_PRESENT_COVERAGE_UNPROVEN`, `NO_LOCAL_RAW_DAY`, and `INPUT_UNREADABLE`.
+Raw-day filenames are inventory hints only. There is no supported historical
+raw-completeness manifest in this slice, so raw replay is **not authorized**.
+Official OHLC must not fill this canonical research window.
+
+Each report carries exact input-partition byte hashes and a plan hash. Reads
+are not an atomic cross-partition snapshot; plans expire as inputs change and
+the canonical owner must revalidate before any repair. The planner cannot apply
+anything. It cannot trim an experiment window, relax preflight, promote, or
+trade. A verified rolling inventory is not admission for a different frozen
+experiment window.
+
+Budgets: 250,000 scanned rows per timeframe, 128 MiB per partition, at most 256
+displayed missing ranges and 128 detailed parent candidates, with full counts
+and truncation flags. Truncated candidates are not an executable repair queue.
+Planning errors are recorded separately and do not erase the repair audit.
+
+Read-only audit (JSON to stdout; no report/candle writes):
+
+```sh
+.venv/bin/python -m vnedge.data.delta_recovery_plan \
+  --data-root data --candle-root data/candles --symbol BTCUSD
+```
+
+### Read-only VM audit, 2026-09-09 16:24–16:25 UTC
+
+The planner was executed from stdin in the research container against its
+read-only candle mount, without installing a writer or saving candle changes.
+Window: 2026-06-11 16:00 UTC through 2026-09-09 16:00 UTC, end exclusive.
+
+| Hourly classification | BTC | ETH |
+| --- | ---: | ---: |
+| Verified | 201 | 200 |
+| Present, proof invalid | 7 | 7 |
+| Raw day present, interval coverage unproven | 600 | 601 |
+| No local raw day | 1,352 | 1,352 |
+| Reconstructable from verified children | 0 | 0 |
+
+These are observations, not a backtest result or a repair success. Both frozen
+2,160-bar experiments remain ineligible. The preceding coverage diagnostics
+release `9536de6d8d94e2149aadf0381479a01d98f13faa` is deployed; this recovery
+planner is a subsequent build and must be deployed separately before the
+owner publishes its report automatically.

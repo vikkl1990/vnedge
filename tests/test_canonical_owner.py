@@ -9,6 +9,41 @@ import vnedge.exchange.canonical_owner as owner
 from vnedge.exchange.canonical_owner import maintenance_commands
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_fails", [False, True])
+async def test_delta_planning_is_read_only_separate_from_repair(tmp_path, monkeypatch, repair_fails):
+    import vnedge.data.delta_lake_repair as repair
+    import vnedge.data.delta_recovery_plan as recovery
+    calls = []
+
+    def repair_once(*args, **kwargs):
+        assert kwargs["apply"] is True
+        calls.append("repair")
+        if repair_fails:
+            raise ValueError("repair_failed")
+        return {"symbols": {"BTCUSD": {"parents_inserted": 0}}}
+
+    def plan_once(*args, **kwargs):
+        assert "apply" not in kwargs and "environ" not in kwargs
+        calls.append("plan")
+        return {"symbols": {}, "can_apply": False}
+
+    async def sleep_once(seconds):
+        if seconds != 10:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(repair, "repair_delta_lake", repair_once)
+    monkeypatch.setattr(recovery, "build_delta_recovery_report", plan_once)
+    monkeypatch.setattr(owner.asyncio, "sleep", sleep_once)
+    with pytest.raises(asyncio.CancelledError):
+        await owner._delta_maintenance_loop(tmp_path, tmp_path / "candles",
+            symbols=("BTCUSD",), environ={}, lease_fd=99)
+    assert calls == ["repair", "plan"]
+    assert json.loads((tmp_path / "reports/delta_recovery_plan.json").read_text())["can_apply"] is False
+    audit = json.loads((tmp_path / "reports/delta_lake_repair.json").read_text())
+    assert (audit.get("status") == "ERROR") is repair_fails
+
+
 def test_binance_owner_attests_legacy_identity_once(tmp_path, monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
 
