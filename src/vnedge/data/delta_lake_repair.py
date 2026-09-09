@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -35,7 +36,13 @@ LADDER = ("1m", "5m", "15m", "1h", "4h", "1d", "1w")
 
 def _atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.stat() if path.exists() else None
     with NamedTemporaryFile(dir=path.parent, delete=False) as f:
+        # NamedTemporaryFile defaults to 0600. Preserve shared lake access;
+        # reports/backups contain public market data, not credentials.
+        if previous is not None:
+            os.fchown(f.fileno(), previous.st_uid, previous.st_gid)
+        os.fchmod(f.fileno(), stat.S_IMODE(previous.st_mode) if previous else 0o644)
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
@@ -189,8 +196,8 @@ def _repair_delta_lake(
                         if row.get("is_closed") is True:
                             verified[tf].append(store._record_from_row(row, symbol=symbol, timeframe=tf).candle)
                     if changed and apply:
-                        # Exact pre-change bytes remain recoverable; no prices,
-                        # hashes, quality or coverage fields are rewritten.
+                        # Exact pre-change bytes remain recoverable, including
+                        # pre-provenance contract-unit rows rebuilt as partial.
                         backup = data_root / "repairs/delta/backups" / (hashlib.sha256(before).hexdigest()+".parquet")
                         if not backup.exists():
                             _atomic(backup, before)

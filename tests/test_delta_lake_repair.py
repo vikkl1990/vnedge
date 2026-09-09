@@ -13,6 +13,18 @@ from vnedge.exchange.writer_lease import CanonicalWriterLease, CanonicalWriterLe
 START = datetime(2026, 8, 31, tzinfo=UTC)
 
 
+def test_atomic_preserves_shared_access(tmp_path):
+    from vnedge.data.delta_lake_repair import _atomic
+    path = tmp_path / "report.json"
+    _atomic(path, b"{}")
+    assert path.stat().st_mode & 0o777 == 0o644
+    path.chmod(0o640)
+    owner = (path.stat().st_uid, path.stat().st_gid)
+    _atomic(path, b'{"updated":true}')
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert (path.stat().st_uid, path.stat().st_gid) == owner
+
+
 def fixtures(tmp_path):
     store = CandleParquetStore(tmp_path / "candles", exchange="delta_india")
     candles = [Candle(symbol="BTCUSD", timeframe="1m", open_time=START+timedelta(minutes=i),
