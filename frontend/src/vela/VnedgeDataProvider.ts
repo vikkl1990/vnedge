@@ -9,6 +9,7 @@ import type {
 import {
   fetchChartCandles,
   type ChartCandle,
+  type ChartCandles,
   type ChartTimeframe,
 } from "../api";
 
@@ -52,6 +53,9 @@ function toVelaBar(candle: ChartCandle): OHLCV {
 function orderedUnique(candles: ChartCandle[]): OHLCV[] {
   const byTime = new Map<number, OHLCV>();
   for (const candle of candles) {
+    if (candle.source !== "canonical_tick_lake" || !candle.identity_ok) {
+      throw new Error("chart_source_or_identity_unverified");
+    }
     const bar = toVelaBar(candle);
     if (
       Number.isFinite(bar.time) &&
@@ -60,7 +64,13 @@ function orderedUnique(candles: ChartCandle[]): OHLCV[] {
       Number.isFinite(bar.low) &&
       Number.isFinite(bar.close)
     ) {
+      const previous = byTime.get(bar.time);
+      if (previous && barSignature(previous) !== barSignature(bar)) {
+        throw new Error("chart_conflicting_duplicate");
+      }
       byTime.set(bar.time, bar);
+    } else {
+      throw new Error("chart_ohlc_nonfinite");
     }
   }
   return [...byTime.values()].sort((left, right) => left.time - right.time);
@@ -74,6 +84,34 @@ interface Subscription {
   timer: ReturnType<typeof setInterval> | null;
   inFlight: boolean;
   lastSignature: string;
+  lastTime: number | null;
+}
+
+export interface ChartFeedState {
+  status: "LOADING" | "CLOSED" | "WATCH" | "UNVERIFIED" | "STALE" | "ERROR" | "EMPTY" | "RELOADING";
+  reason: string;
+  lastSuccessAt: number | null;
+  lastBarTime: number | null;
+  gapSlots: number;
+  excludedSources: Record<string, number>;
+}
+
+const TF_MS: Record<ChartTimeframe, number> = {
+  "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000,
+};
+
+export function chartFeedState(payload: ChartCandles, now = Date.now()): ChartFeedState {
+  const bars = payload.candles;
+  const last = bars[bars.length - 1];
+  const width = TF_MS[chartTimeframe(payload.timeframe)];
+  const gapSlots = bars.slice(1).reduce((n, b, i) => n + Math.max(0, (b.time - bars[i].time) * 1000 / width - 1), 0);
+  const unverified = bars.some(b => b.proof_state === "UNVERIFIED" || !b.proof_state);
+  const stale = last && now - (last.close_time ?? last.time) * 1000 > width + 30_000;
+  const status = stale ? "STALE" : unverified ? "UNVERIFIED" : last?.proof_state ?? (payload.status === "UNVERIFIED" ? "UNVERIFIED" : "EMPTY");
+  return { status, reason: gapSlots ? `${gapSlots} missing bar slots; not interpolated` :
+    stale ? "no recent lake close" : status === "UNVERIFIED" ? "persisted proof missing or invalid" : "lake only · display, not trading readiness",
+    lastSuccessAt: now, lastBarTime: last ? last.time * 1000 : null,
+    gapSlots, excludedSources: payload.excluded_sources ?? {} };
 }
 
 /**
@@ -85,12 +123,53 @@ interface Subscription {
  */
 export class VnedgeDataProvider implements DataProvider {
   private readonly subscriptions = new Map<string, Subscription>();
+  private destroyed = false;
+  private invalidated = false;
+  private revisions = new Map<string, { hash: string; cutoff: number | null }>();
+  private latest = new Map<string, number>();
+  private state: ChartFeedState = { status: "LOADING", reason: "loading lake", lastSuccessAt: null, lastBarTime: null, gapSlots: 0, excludedSources: {} };
 
   constructor(
     readonly market: VnedgeProviderMarket,
     private readonly fetcher: CandleFetcher = fetchChartCandles,
     private readonly pollMs = 10_000,
+    private readonly hooks: {
+      onState?: (state: ChartFeedState) => void;
+      onRevision?: () => void;
+    } = {},
   ) {}
+
+  private notify(state: ChartFeedState) {
+    if (this.destroyed) return;
+    this.state = state;
+    this.hooks.onState?.(state);
+  }
+
+  private accept(payload: ChartCandles, tf: string, latestRead: boolean,
+                 baseline?: { hash: string; cutoff: number | null }) {
+    if (this.destroyed || this.invalidated) throw new Error("chart_load_superseded");
+    if (payload.status === "ERROR") throw new Error("chart_store_read_failed");
+    if (payload.exchange !== this.market.exchange || payload.timeframe !== tf ||
+        canonicalChartSymbol(payload.symbol) !== canonicalChartSymbol(this.market.symbol) ||
+        payload.source_policy !== "canonical_tick_lake_only" || !payload.series_revision) {
+      throw new Error("chart_series_identity_missing_or_mismatch");
+    }
+    const prior = this.revisions.get(tf);
+    if (baseline && payload.previous_revision !== null && payload.previous_revision !== undefined &&
+        baseline.hash !== payload.previous_revision) {
+      this.invalidated = true;
+      this.notify({ ...this.state, status: "RELOADING", reason: "lake revision changed; discarding chart cache" });
+      this.hooks.onRevision?.();
+      throw new Error("chart_revision_changed");
+    }
+    // Older pages do not move a live poll's baseline backward.
+    if (!prior || (latestRead && (payload.revision_cutoff_ms ?? -Infinity) >= (prior.cutoff ?? -Infinity)))
+      this.revisions.set(tf, { hash: payload.series_revision, cutoff: payload.revision_cutoff_ms ?? null });
+    const bars = orderedUnique(payload.candles);
+    if (bars.length) this.latest.set(tf, Math.max(this.latest.get(tf) ?? -Infinity, bars[bars.length - 1].time));
+    if (latestRead || !prior) this.notify(chartFeedState(payload));
+    return bars;
+  }
 
   info(): ProviderInfo {
     return {
@@ -138,14 +217,16 @@ export class VnedgeDataProvider implements DataProvider {
     const requested = canonicalChartSymbol(ticker);
     const expected = canonicalChartSymbol(this.market.symbol);
     if (requested !== expected) return [];
+    const baseline = this.revisions.get(timeframe);
     const payload = await this.fetcher(
       this.market.symbol,
       chartTimeframe(timeframe),
       range.limit ?? 500,
       this.market.exchange,
-      { fromMs: range.from, toMs: range.to },
+      { fromMs: range.from, toMs: range.to,
+        revisionBeforeMs: baseline?.cutoff ?? undefined },
     );
-    return orderedUnique(payload.candles);
+    return this.accept(payload, timeframe, range.to === undefined, baseline);
   }
 
   subscribe(
@@ -154,6 +235,9 @@ export class VnedgeDataProvider implements DataProvider {
     onBar: (bar: OHLCV) => void,
   ): () => void {
     const tf = chartTimeframe(timeframe);
+    if (canonicalChartSymbol(ticker) !== canonicalChartSymbol(this.market.symbol)) {
+      throw new Error("chart_subscription_market_mismatch");
+    }
     const key = `${canonicalChartSymbol(ticker)}:${tf}`;
     let subscription = this.subscriptions.get(key);
     if (!subscription) {
@@ -162,6 +246,7 @@ export class VnedgeDataProvider implements DataProvider {
         timer: null,
         inFlight: false,
         lastSignature: "",
+        lastTime: this.latest.get(tf) ?? null,
       };
       this.subscriptions.set(key, subscription);
     }
@@ -169,24 +254,41 @@ export class VnedgeDataProvider implements DataProvider {
 
     const poll = async () => {
       const current = this.subscriptions.get(key);
-      if (!current || current.inFlight || current.callbacks.size === 0) return;
+      if (this.destroyed || this.invalidated || !current || current.callbacks.size === 0) return;
+      if (this.state.lastSuccessAt && Date.now() - this.state.lastSuccessAt > 30_000) {
+        this.notify({ ...this.state, status: "STALE", reason: "lake poll has not completed for 30s" });
+      }
+      if (current.inFlight) return;
       current.inFlight = true;
       try {
+        const baseline = this.revisions.get(tf);
         const payload = await this.fetcher(
           this.market.symbol,
           tf,
-          3,
+          5000,
           this.market.exchange,
+          { fromMs: current.lastTime ?? undefined,
+            revisionBeforeMs: baseline?.cutoff ?? undefined },
         );
-        const bars = orderedUnique(payload.candles);
-        const latest = bars[bars.length - 1];
-        if (!latest) return;
-        const signature = barSignature(latest);
-        if (signature === current.lastSignature) return;
-        current.lastSignature = signature;
-        for (const callback of current.callbacks) callback(latest);
-      } catch {
-        // A read-only chart poll must never affect lane health or scanner state.
+        if (this.destroyed || this.subscriptions.get(key) !== current) return;
+        const bars = this.accept(payload, tf, true, baseline);
+        if (payload.truncated && current.lastTime !== null) {
+          this.invalidated = true;
+          this.notify({ ...this.state, status: "RELOADING", reason: "chart_catchup_window_exceeded" });
+          this.hooks.onRevision?.();
+          throw new Error("chart_catchup_window_exceeded");
+        }
+        for (const bar of bars) {
+          if (current.lastTime !== null && bar.time < current.lastTime) continue;
+          const signature = barSignature(bar);
+          if (signature === current.lastSignature) continue;
+          current.lastSignature = signature;
+          current.lastTime = bar.time;
+          for (const callback of current.callbacks) callback(bar);
+        }
+      } catch (error) {
+        if (!this.invalidated) this.notify({ ...this.state, status: "ERROR",
+          reason: error instanceof Error ? error.message : "chart_poll_failed" });
       } finally {
         current.inFlight = false;
       }
@@ -209,6 +311,7 @@ export class VnedgeDataProvider implements DataProvider {
   }
 
   destroy() {
+    this.destroyed = true;
     for (const subscription of this.subscriptions.values()) {
       if (subscription.timer !== null) clearInterval(subscription.timer);
     }

@@ -3,7 +3,7 @@
 // Presentation only: this component never supplies market data to a lane.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Vela } from "@luxalgo/vela";
+import { Vela, BarStore, MultiProviderFeed, NativeRenderer } from "@luxalgo/vela";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchChartCandles,
@@ -11,6 +11,7 @@ import {
   type ChartTimeframe,
   type CorrectionLane,
   type ScannerAuditEvent,
+  type ChartCandle,
 } from "../api";
 import { useJournal, useLanes } from "../queries";
 import { TerminalBadge, TerminalPanel } from "./Terminal";
@@ -18,6 +19,8 @@ import { TelescopeWorkspace } from "./TelescopeWorkspace";
 import {
   canonicalChartSymbol,
   VnedgeDataProvider,
+  type ChartFeedState,
+  chartFeedState,
 } from "../vela/VnedgeDataProvider";
 
 const TIMEFRAMES: ChartTimeframe[] = ["5m", "15m", "1h", "4h"];
@@ -61,6 +64,7 @@ interface Plan {
   reason: string;
   strategy_id: string;
   kind: "signal" | "entry";
+  decision_bar_content_hash: string;
 }
 
 export interface EventMarker {
@@ -72,9 +76,13 @@ export interface EventMarker {
   event_price: number | null;
   reason: string;
   strategy_id: string;
+  decision_id: string;
+  decision_bar_content_hash: string;
+  permission_snapshot_id: string;
+  permission_snapshot: NonNullable<ScannerAuditEvent["permission_snapshot"]>;
 }
 
-interface CandleBar {
+interface CandleBar extends Omit<ChartCandle, "time"> {
   time: number;
   open: number;
   high: number;
@@ -128,13 +136,12 @@ function eventMatchesMarket(
 ) {
   if (canonicalSymbol(event.symbol) !== canonicalSymbol(market.symbol)) return false;
   const eventExchange = event.exchange || laneExchanges.get(event.lane);
-  return !eventExchange || eventExchange === market.exchange;
+  return eventExchange === market.exchange;
 }
 
 export function eventTimeMs(event: ScannerAuditEvent) {
   if (event.kind === "entry") return Date.parse(event.entry_ts || event.ts);
-  if (event.kind === "exit") return Date.parse(event.ts);
-  return Date.parse(event.bar_ts || event.ts);
+  return Date.parse(event.ts);
 }
 
 export function bucketOpenMs(timestamp: number, timeframe: ChartTimeframe) {
@@ -142,13 +149,20 @@ export function bucketOpenMs(timestamp: number, timeframe: ChartTimeframe) {
   return Math.floor(timestamp / width) * width;
 }
 
-function causalBarMs(event: ScannerAuditEvent, fallback: number, timeframe: ChartTimeframe) {
-  const explicit = Date.parse(event.bar_ts || "");
-  return Number.isFinite(explicit) ? explicit : bucketOpenMs(fallback, timeframe);
+export function hasBoundChartEvidence(event: ScannerAuditEvent, timeframe: ChartTimeframe) {
+  const bar = event.permission_snapshot?.decision_bar;
+  const opened = Date.parse(event.bar_ts || "");
+  return event.evidence_bound === true && !!event.decision_id && !!event.permission_snapshot_id &&
+    event.permission_snapshot?.snapshot_id === event.permission_snapshot_id &&
+    !!event.decision_bar_content_hash && bar?.content_sha256 === event.decision_bar_content_hash &&
+    event.timeframe === timeframe && Number.isFinite(opened) && opened % TF_MS[timeframe] === 0 &&
+    Date.parse(bar.open_time) === opened && Date.parse(bar.close_time) === opened + TF_MS[timeframe];
 }
 
-function evidenceKey(event: ScannerAuditEvent) {
-  return event.decision_id || event.intent_key || event.permission_snapshot_id || event.ts;
+export function chartEvidenceMatch(hash: string, bar: ChartCandle | undefined | null) {
+  if (!bar) return "OUTSIDE WINDOW / MISSING";
+  if (bar.content_sha256 !== hash) return "REVISED / DIFFERENT BAR";
+  return bar.proof_state === "CLOSED" && bar.hash_valid ? "EXACT CLOSED BAR" : "UNVERIFIED BAR";
 }
 
 export function toPlans(
@@ -161,17 +175,19 @@ export function toPlans(
   const plans: Plan[] = [];
   for (const event of events) {
     if (!eventMatchesMarket(event, market, laneExchanges)) continue;
-    if (event.timeframe && event.timeframe !== timeframe) continue;
+    if (!hasBoundChartEvidence(event, timeframe)) continue;
     if (event.kind !== "signal" && event.kind !== "entry") continue;
+    if (event.kind === "entry" && !event.approved) continue;
     const entry = event.entry_price ?? event.decision_price ?? event.price;
     const stop = event.stop_price;
     if (typeof entry !== "number" || typeof stop !== "number") continue;
     const eventTs = eventTimeMs(event);
     if (!Number.isFinite(eventTs)) continue;
     plans.push({
-      key: `${event.lane}:${evidenceKey(event)}:${event.kind}`,
+      key: `${event.lane}:${event.decision_id}:${event.kind}`,
       event_ts_ms: eventTs,
-      bar_ts_ms: causalBarMs(event, eventTs, timeframe),
+      bar_ts_ms: Date.parse(event.bar_ts),
+      decision_bar_content_hash: event.decision_bar_content_hash!,
       side: event.side,
       entry,
       stop,
@@ -195,7 +211,7 @@ export function toEventMarkers(
   const markers: EventMarker[] = [];
   for (const event of events) {
     if (!eventMatchesMarket(event, market, laneExchanges)) continue;
-    if (event.timeframe && event.timeframe !== timeframe) continue;
+    if (!hasBoundChartEvidence(event, timeframe)) continue;
     if (
       event.kind !== "signal" &&
       event.kind !== "evaluation" &&
@@ -210,9 +226,13 @@ export function toEventMarkers(
     if (!Number.isFinite(eventTs)) continue;
     const eventPrice = event.entry_price ?? event.decision_price ?? event.price;
     markers.push({
-      key: `${event.lane}:${evidenceKey(event)}:${event.kind}`,
+      key: `${event.lane}:${event.decision_id}:${event.kind}`,
       event_ts_ms: eventTs,
-      bar_ts_ms: causalBarMs(event, eventTs, timeframe),
+      bar_ts_ms: Date.parse(event.bar_ts),
+      decision_id: event.decision_id!,
+      decision_bar_content_hash: event.decision_bar_content_hash!,
+      permission_snapshot_id: event.permission_snapshot_id!,
+      permission_snapshot: event.permission_snapshot!,
       side: event.side,
       kind: event.kind,
       event_price: typeof eventPrice === "number" ? eventPrice : null,
@@ -309,14 +329,18 @@ export function ScannerChart() {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>("15m");
   const [marketReadyKey, setMarketReadyKey] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"detail" | "telescope">("detail");
-  const [showContext, setShowContext] = useState(true);
-  const [showSession, setShowSession] = useState(true);
+  const [showContext, setShowContext] = useState(false);
+  const [showSession, setShowSession] = useState(false);
   const [annotations, setAnnotations] = useState(false);
   const [selectedEvidenceKey, setSelectedEvidenceKey] = useState<string>("");
   const [logScale, setLogScale] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const vpvrRef = useRef<{ remove?: () => void } | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
+  const [chartEpoch, setChartEpoch] = useState(0);
+  const [revisionNotice, setRevisionNotice] = useState(false);
+  const [feedState, setFeedState] = useState<ChartFeedState | null>(null);
+  const [historyState, setHistoryState] = useState("loading");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartInstance | null>(null);
   const providerRef = useRef<VnedgeDataProvider | null>(null);
@@ -376,6 +400,7 @@ export function ScannerChart() {
   const bars = useMemo<CandleBar[]>(
     () =>
       (candles.data?.candles ?? []).map((candle) => ({
+        ...candle,
         time: candle.time * 1000,
         open: candle.open,
         high: candle.high,
@@ -414,6 +439,9 @@ export function ScannerChart() {
     [journal.data, laneExchanges, selectedMarket, timeframe],
   );
   const lifecycle = useMemo(() => lifecycleSummary(eventMarkers), [eventMarkers]);
+  const unboundEvents = (journal.data?.scanner_events ?? []).filter(event => selectedMarket &&
+    eventMatchesMarket(event, selectedMarket, laneExchanges) && event.timeframe === timeframe &&
+    !hasBoundChartEvidence(event, timeframe));
   const selectedEvidence =
     eventMarkers.find((marker) => marker.key === selectedEvidenceKey) ??
     eventMarkers[0] ??
@@ -421,6 +449,11 @@ export function ScannerChart() {
   const selectedEvidenceBar = selectedEvidence
     ? bars.find((bar) => bar.time === selectedEvidence.bar_ts_ms) ?? null
     : null;
+  const clickEvidence = useRef({ markers: eventMarkers, bars });
+  clickEvidence.current = { markers: eventMarkers, bars };
+  const windowState = candles.data ? chartFeedState(candles.data) : null;
+  const tapeState = feedState && ["ERROR", "STALE", "RELOADING"].includes(feedState.status)
+    ? feedState : windowState ?? feedState;
 
   // Vela owns its bar array through the canonical provider. We recreate only
   // on an operator market/TF switch; tail updates append through subscribe().
@@ -435,10 +468,27 @@ export function ScannerChart() {
     ) return;
     let cancelled = false;
     setMarketReadyKey(null);
+    setFeedState(null);
+    setHistoryState("loading");
+    // The library's default module cache survives destroy(). An explicitly
+    // owned Vela cache makes revision reload real and leaves other panes alone.
+    const cache = new BarStore();
+    const feed = new MultiProviderFeed(cache);
+    const renderer = new NativeRenderer();
+    const providerName = `vnedge_${selectedMarket.exchange}`;
     const provider = new VnedgeDataProvider({
       exchange: selectedMarket.exchange,
       symbol: selectedMarket.symbol,
       label: selectedMarket.label,
+    }, fetchChartCandles, 10_000, {
+      onState: state => { if (!cancelled) setFeedState(state); },
+      onRevision: () => {
+        if (cancelled) return;
+        setRevisionNotice(true);
+        setMarketReadyKey(null);
+        setChartEpoch(value => value + 1);
+        void candles.refetch();
+      },
     });
     providerRef.current = provider;
     const load = async () => {
@@ -448,16 +498,29 @@ export function ScannerChart() {
           chartRef.current.destroy?.();
         }
         drawnIdsRef.current = [];
+        await feed.registerProvider(providerName, provider);
+        if (cancelled) return;
         const chart = new Vela(containerRef.current as HTMLDivElement, {
-          symbol: `vnedge:${canonicalChartSymbol(selectedMarket.symbol)}`,
+          symbol: `${providerName}:${canonicalChartSymbol(selectedMarket.symbol)}`,
           timeframe,
           bars: 500,
           live: true,
           theme: "dark",
-        });
+        }, { dataFeed: feed, renderer });
         chartRef.current = chart;
+        renderer.onClick(event => {
+          if (cancelled || event.time == null) return;
+          const current = clickEvidence.current;
+          const bar = current.bars.find(b => b.time === event.time);
+          const match = current.markers.find(m => m.bar_ts_ms === event.time &&
+            chartEvidenceMatch(m.decision_bar_content_hash, bar) === "EXACT CLOSED BAR");
+          if (match) setSelectedEvidenceKey(match.key);
+        });
         chart.drawings?.showToolbar?.(false);
-        await chart.data.registerProvider("vnedge", provider);
+        chart.on("history:complete", event => {
+          if (!cancelled) setHistoryState(event.reason === "aborted" ? "ERROR · history fetch failed" :
+            event.reason === "genesis" ? "source exhausted · coverage not proven" : "requested depth loaded");
+        });
         try {
           const saved = localStorage.getItem("vnedge.chart.config");
           if (saved) chart.renderer?.applyConfig?.(JSON.parse(saved));
@@ -485,11 +548,14 @@ export function ScannerChart() {
       }
       chartRef.current = null;
       provider.destroy();
+      feed.destroy();
+      cache.clear();
       if (providerRef.current === provider) providerRef.current = null;
       drawnIdsRef.current = [];
     };
   }, [
     chartIdentity,
+    chartEpoch,
     selectedMarket?.exchange,
     selectedMarket?.label,
     selectedMarket?.symbol,
@@ -537,9 +603,7 @@ export function ScannerChart() {
     chartRef.current?.drawings?.showToolbar?.(annotations);
   }, [annotations]);
 
-  // Journal overlays are bucketed onto the selected TF. Their cards retain
-  // actual event time, so a 12:07 acceptance is drawn on the 12:00 15m bar but
-  // remains labelled 12:07 instead of pretending the entry occurred at close.
+  // Only the exact hashed decision bar may carry operational drawings.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || marketReadyKey !== chartIdentity || bars.length === 0) return;
@@ -559,7 +623,7 @@ export function ScannerChart() {
     for (const marker of eventMarkers) {
       if (marker.kind === "evaluation") continue;
       const bar = barByTime.get(marker.bar_ts_ms);
-      if (!bar) continue;
+      if (!bar || chartEvidenceMatch(marker.decision_bar_content_hash, bar) !== "EXACT CLOSED BAR") continue;
       if (marker.kind === "rejection") {
         const isQuality = /gap|lag|timeout|stale|candle|data/i.test(marker.reason);
         if (!isQuality) continue;
@@ -647,6 +711,7 @@ export function ScannerChart() {
 
     for (const plan of plans.slice(0, OVERLAY_PLANS)) {
       if (plan.bar_ts_ms < firstTime || plan.bar_ts_ms > lastTime) continue;
+      if (chartEvidenceMatch(plan.decision_bar_content_hash, barByTime.get(plan.bar_ts_ms)) !== "EXACT CLOSED BAR") continue;
       try {
         const zone = drawings.add("box", {
           paneId: "price",
@@ -927,6 +992,16 @@ export function ScannerChart() {
                 : "loading…"}
           </span>
         </div>
+        {viewMode === "detail" && <div className="mb-3 flex flex-wrap items-center gap-3 rounded border border-line bg-bg/80 p-3 text-sm font-mono" role="status" aria-live="polite">
+          <TerminalBadge tone={candles.isError || tapeState?.status === "ERROR" ? "bad" : tapeState?.status === "CLOSED" ? "good" : "warn"}>
+            {candles.isError ? "ERROR" : tapeState?.status ?? "LOADING"}
+          </TerminalBadge>
+          <span>{candles.isError ? "Lake read failed; empty history is not assumed" : tapeState?.reason ?? "Loading canonical lake"}</span>
+          <span className="text-dim">History: {historyState}</span>
+          {feedState?.lastSuccessAt && <span className="text-dim">Last refresh {new Date(feedState.lastSuccessAt).toISOString().slice(11, 19)} UTC</span>}
+          {!!Object.keys(feedState?.excludedSources ?? {}).length && <span className="text-dim">Excluded sources: {Object.entries(feedState!.excludedSources).map(([source, count]) => `${source} ${count}`).join(" · ")}</span>}
+          {revisionNotice && <span className="text-brand">Lake revision reloaded; decision evidence unchanged</span>}
+        </div>}
         {viewMode === "telescope" ? (
           <TelescopeWorkspace market={selectedMarket} />
         ) : <div className="relative">
@@ -977,6 +1052,14 @@ export function ScannerChart() {
                 </TerminalBadge>
               </div>
               <div className="mt-2 text-txt">{selectedEvidence.strategy_id || "unattributed scanner"}</div>
+              <div className="mt-2 break-all text-xs text-dim">Decision: {selectedEvidence.decision_id}</div>
+              <div className="mt-1 break-all text-xs text-dim">Snapshot: {selectedEvidence.permission_snapshot_id}</div>
+              <div className="mt-1 break-all text-xs text-dim">Decision hash: {selectedEvidence.decision_bar_content_hash}</div>
+              <div className="mt-2 text-sm text-brand">{chartEvidenceMatch(selectedEvidence.decision_bar_content_hash, selectedEvidenceBar)}</div>
+              {selectedEvidenceBar && <div className="mt-1 text-xs text-dim">Source: {selectedEvidenceBar.source ?? "unknown"} · quality: {selectedEvidenceBar.data_quality ?? "unknown"} · coverage: {String(selectedEvidenceBar.coverage_ok ?? "unknown")}</div>}
+              {(selectedEvidence.permission_snapshot.context_bars ?? []).map(ref => <div key={ref.timeframe} className="mt-2 break-all text-xs text-dim">
+                Frozen {ref.timeframe}: {ref.open_time} → {ref.close_time}<br />{ref.source ?? "source unreported"} · {ref.content_sha256 ?? "hash unreported"}
+              </div>)}
               <div className="mt-1 break-words text-faint">{selectedEvidence.reason || "no reason reported"}</div>
               <div className="mt-2 grid grid-cols-2 gap-1 text-dim">
                 <span>event</span><span className="text-right text-txt">{new Date(selectedEvidence.event_ts_ms).toISOString().slice(5, 19).replace("T", " ")}</span>
@@ -1003,6 +1086,12 @@ export function ScannerChart() {
               <div className="mt-1 truncate text-faint" title={marker.reason}>{marker.reason || "no reason reported"}</div>
             </button>
           ))}
+          {unboundEvents.length > 0 && <details className="rounded border border-line p-3 text-sm">
+            <summary className="cursor-pointer">Unbound diagnostics ({unboundEvents.length}) · no chart markers</summary>
+            {unboundEvents.slice(0, 10).map((event, index) => <div key={`${event.lane}:${event.ts}:${index}`} className="mt-2 break-words text-xs text-dim">
+              {event.kind} · {event.strategy_id} · {event.ts}<br />{event.evidence_error || "decision/snapshot/bar identity incomplete"} · {event.reason}
+            </div>)}
+          </details>}
           <div className="my-1 border-t border-line" />
           <div className="text-[10px] font-mono text-dim">TRADE PLANS</div>
           {plans.length === 0 && (

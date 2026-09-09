@@ -592,6 +592,34 @@ _EVENT_KINDS = _ORDER_KINDS | {
 }
 
 
+def _chart_binding(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy validated ARM proof; never mint chart ids from event timestamps."""
+    from vnedge.execution.evidence import DecisionEnvelope
+
+    for container in (payload, payload.get("signal"), payload.get("execution_evidence")):
+        if not isinstance(container, Mapping):
+            continue
+        raw = container.get("arm_envelope")
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            envelope = DecisionEnvelope.from_dict(raw)
+            if any(row.get("decision_id") not in (None, envelope.decision_id)
+                   for row in (payload, container)):
+                raise ValueError("decision_id_mismatch")
+            return {"evidence_bound": True, "evidence_error": None,
+                    "decision_id": envelope.decision_id,
+                    "permission_snapshot_id": envelope.snapshot_id,
+                    "permission_snapshot": envelope.permission_snapshot.as_dict(),
+                    "decision_bar_content_hash": envelope.decision_bar_content_hash,
+                    "bar_ts": envelope.bar_open.isoformat(),
+                    "strategy_id": envelope.strategy_id, "symbol": envelope.symbol,
+                    "timeframe": envelope.timeframe, "side": envelope.side}
+        except (ValueError, TypeError, KeyError):
+            return {"evidence_bound": False, "evidence_error": "invalid_arm_envelope"}
+    return {"evidence_bound": False, "evidence_error": "arm_envelope_missing"}
+
+
 def _scanner_audit_events(
     journal_rows: list[tuple[str, dict[str, Any]]],
 ) -> list[dict[str, Any]]:
@@ -603,7 +631,7 @@ def _scanner_audit_events(
     Waiting evaluations are reduced to the newest row per lane to avoid
     covering the price chart with one rejection marker per bar.
     """
-    intents: dict[str, dict[str, Any]] = {}
+    intents: dict[tuple[str, str], dict[str, Any]] = {}
     decisions: dict[tuple[str, str], dict[str, Any]] = {}
     latest_waiting: dict[str, dict[str, Any]] = {}
     output: list[dict[str, Any]] = []
@@ -628,8 +656,7 @@ def _scanner_audit_events(
             fired = bool(payload.get("fired"))
             row = {
                 "lane": lane,
-                # Signal markers belong to the close that made the structure
-                # causal, never the open identity of the decision candle.
+                # Event time and decision-bar open remain different clocks.
                 "ts": str(payload.get("decision_at") or ts),
                 "bar_ts": str(payload.get("bar_ts") or ts),
                 "kind": "signal" if fired else "evaluation",
@@ -650,6 +677,7 @@ def _scanner_audit_events(
                     or "no_signal_observed"
                 ),
                 "backfill": bool(payload.get("backfill")),
+                **_chart_binding(payload),
             }
             decisions[(lane, row["bar_ts"])] = row
             if fired:
@@ -689,15 +717,16 @@ def _scanner_audit_events(
                     or payload.get("explanation")
                     or ", ".join(payload.get("failed_checks") or [])
                 ),
+                **_chart_binding(payload),
             }
             if key:
-                intents[key] = row
+                intents[(lane, key)] = row
             output.append(row)
             continue
 
         if kind in {"shadow_outcome", "scalp_shadow_outcome"}:
             key = str(payload.get("intent_key") or "")
-            intent_row = intents.get(key, {})
+            intent_row = intents.get((lane, key), {})
             output.append(
                 {
                     "lane": lane,
@@ -724,6 +753,7 @@ def _scanner_audit_events(
                         payload.get("virtual_net_usd", payload.get("taker_net_usd"))
                     ),
                     "bars_held": int(_float(payload.get("bars_held"))),
+                    **_chart_binding(payload),
                 }
             )
             continue
@@ -757,6 +787,7 @@ def _scanner_audit_events(
                     "target_price": payload.get("take_profit_price"),
                     "approved": False,
                     "reason": str(payload.get("reason") or kind),
+                    **_chart_binding(payload),
                 }
             )
 

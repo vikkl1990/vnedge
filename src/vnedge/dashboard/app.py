@@ -1361,6 +1361,7 @@ def create_app(
         n: int = 500,
         from_ms: int | None = None,
         to_ms: int | None = None,
+        revision_before_ms: int | None = None,
     ) -> JSONResponse:
         """Canonical OHLCV for the chart.
 
@@ -1370,15 +1371,15 @@ def create_app(
         """
         user = _authorized(request)
         store = CandleParquetStore(Path("data/candles"), exchange=exchange)
-        payload = await asyncio.to_thread(
-            candles_payload,
-            store,
-            symbol,
-            timeframe,
-            limit=n,
-            from_ms=from_ms,
-            to_ms=to_ms,
-        )
+        from vnedge.dashboard.chart_series import ChartReadError
+        try:
+            payload = await asyncio.to_thread(
+                candles_payload, store, symbol, timeframe, limit=n,
+                from_ms=from_ms, to_ms=to_ms, revision_before_ms=revision_before_ms,
+            )
+        except ChartReadError as exc:
+            return JSONResponse({"status": "ERROR", "detail": str(exc)},
+                                status_code=503, headers=_identity(user))
         return JSONResponse(payload, headers=_identity(user))
 
     @app.get("/api/candles/{symbol}/context")

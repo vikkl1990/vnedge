@@ -204,6 +204,15 @@ export interface ChartCandle {
   low: number;
   close: number;
   volume: number;
+  source?: string | null;
+  content_sha256?: string | null;
+  close_time?: number | null; // epoch seconds
+  is_closed?: boolean | null;
+  data_quality?: string | null;
+  coverage_ok?: boolean | null;
+  hash_valid?: boolean;
+  identity_ok?: boolean;
+  proof_state?: "CLOSED" | "WATCH" | "UNVERIFIED";
 }
 
 export interface ChartCandles {
@@ -214,6 +223,14 @@ export interface ChartCandles {
   truncated: boolean;
   range?: { from_ms?: number | null; to_ms?: number | null };
   candles: ChartCandle[];
+  exchange?: string;
+  status?: "OK" | "EMPTY" | "UNVERIFIED" | "ERROR";
+  source_policy?: string;
+  series_revision?: string;
+  revision_cutoff_ms?: number | null;
+  previous_revision?: string | null;
+  excluded_sources?: Record<string, number>;
+  fetched_at?: string;
 }
 
 export interface MechanismFvgZone {
@@ -264,7 +281,7 @@ export async function fetchChartCandles(
   timeframe: ChartTimeframe,
   n = 500,
   exchange = "binanceusdm",
-  range?: { fromMs?: number; toMs?: number },
+  range?: { fromMs?: number; toMs?: number; revisionBeforeMs?: number },
 ): Promise<ChartCandles> {
   // The HTTP/storage identity is canonical (BTCUSDT / BTCUSD), while lanes
   // carry venue-native CCXT symbols (BTC/USDT:USDT / BTC/USD:USD).
@@ -275,6 +292,7 @@ export async function fetchChartCandles(
   const q = new URLSearchParams({ timeframe, n: String(n), exchange });
   if (range?.fromMs !== undefined) q.set("from_ms", String(Math.trunc(range.fromMs)));
   if (range?.toMs !== undefined) q.set("to_ms", String(Math.trunc(range.toMs)));
+  if (range?.revisionBeforeMs !== undefined) q.set("revision_before_ms", String(Math.trunc(range.revisionBeforeMs)));
   return apiGet<ChartCandles>(
     `/api/candles/${encodeURIComponent(dataSymbol)}?${q}`,
   );
@@ -915,6 +933,14 @@ export interface ScannerAuditEvent {
   intent_key?: string;
   decision_id?: string | null;
   permission_snapshot_id?: string | null;
+  decision_bar_content_hash?: string | null;
+  permission_snapshot?: {
+    snapshot_id?: string;
+    decision_bar?: { open_time: string; close_time: string; content_sha256?: string; source?: string };
+    context_bars?: Array<{ timeframe: string; open_time: string; close_time: string; content_sha256?: string; source?: string }>;
+  } | null;
+  evidence_bound?: boolean;
+  evidence_error?: string | null;
   strategy_id: string;
   exchange?: string;
   symbol: string;

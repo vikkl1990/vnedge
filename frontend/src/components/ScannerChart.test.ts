@@ -6,7 +6,7 @@ import {
   type ScannerAuditEvent,
 } from "../api";
 
-vi.mock("@luxalgo/vela", () => ({ Vela: class Vela {} }));
+vi.mock("@luxalgo/vela", () => ({ Vela: class Vela {}, BarStore: class {}, MultiProviderFeed: class {}, NativeRenderer: class {} }));
 
 import {
   bucketOpenMs,
@@ -17,6 +17,7 @@ import {
   toEventMarkers,
   toPlans,
   type MarketChoice,
+  chartEvidenceMatch,
 } from "./ScannerChart";
 
 const event = (overrides: Partial<ScannerAuditEvent> = {}): ScannerAuditEvent => ({
@@ -26,6 +27,15 @@ const event = (overrides: Partial<ScannerAuditEvent> = {}): ScannerAuditEvent =>
   kind: "entry",
   source_event: "shadow_intent",
   intent_key: "intent-1",
+  decision_id: "decision-1",
+  permission_snapshot_id: "snapshot-1",
+  decision_bar_content_hash: "hash-1",
+  evidence_bound: true,
+  permission_snapshot: { snapshot_id: "snapshot-1", decision_bar: {
+    open_time: overrides.bar_ts || "2026-09-04T12:00:00.000Z",
+    close_time: new Date(Date.parse(overrides.bar_ts || "2026-09-04T12:00:00.000Z") + 900_000).toISOString(),
+    content_sha256: "hash-1",
+  }, context_bars: [] },
   strategy_id: "structure_bos_realtime_v2",
   exchange: "delta_india",
   symbol: "BTC/USD:USD",
@@ -56,7 +66,7 @@ describe("scanner chart evidence mapping", () => {
   it("uses actual acceptance time for entries and structure time for signals", () => {
     expect(eventTimeMs(event())).toBe(Date.parse("2026-09-04T12:07:03.000Z"));
     expect(eventTimeMs(event({ kind: "signal" }))).toBe(
-      Date.parse("2026-09-04T12:00:00.000Z"),
+      Date.parse("2026-09-04T12:07:03.000Z"),
     );
   });
 
@@ -197,5 +207,25 @@ describe("scanner chart evidence mapping", () => {
         high: 113,
       },
     ]);
+  });
+
+  it("never substitutes timestamps or intent keys for missing decision proof", () => {
+    for (const change of [{ decision_id: null }, { bar_ts: "" }, { evidence_bound: false },
+      { permission_snapshot: null }, { timeframe: "" }, { decision_bar_content_hash: "different" }]) {
+      expect(toPlans([event(change)], deltaMarket, "15m", new Map())).toEqual([]);
+      expect(toEventMarkers([event(change)], deltaMarket, "15m", new Map())).toEqual([]);
+    }
+  });
+
+  it("refuses an unknown venue even when the symbol matches", () => {
+    expect(toEventMarkers([event({ exchange: undefined })], deltaMarket, "15m", new Map())).toEqual([]);
+  });
+
+  it("does not redraw original evidence onto repaired or unverified bars", () => {
+    const bar = { time: 1, open: 1, high: 1, low: 1, close: 1, volume: 1,
+      content_sha256: "hash-1", hash_valid: true, proof_state: "CLOSED" as const };
+    expect(chartEvidenceMatch("hash-1", bar)).toBe("EXACT CLOSED BAR");
+    expect(chartEvidenceMatch("old-hash", bar)).toBe("REVISED / DIFFERENT BAR");
+    expect(chartEvidenceMatch("hash-1", { ...bar, hash_valid: false })).toBe("UNVERIFIED BAR");
   });
 });
