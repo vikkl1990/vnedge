@@ -47,3 +47,11 @@ deploy/certs/
 research/experiments/
 research/htf_data/
 research/universe/
+# Arena materializes these three bounded templates at runtime. Immutable
+# source/spec copies are captured in research evidence, not deployment dirt.
+/data/strategies/ai/auto_arena_ema_pullback_21_100_v1.py
+/data/strategies/ai/auto_arena_ema_pullback_21_100_v1.experiment.json
+/data/strategies/ai/auto_arena_ema_pullback_30_120_v1.py
+/data/strategies/ai/auto_arena_ema_pullback_30_120_v1.experiment.json
+/data/strategies/ai/auto_arena_ema_pullback_50_200_v1.py
+/data/strategies/ai/auto_arena_ema_pullback_50_200_v1.experiment.json
