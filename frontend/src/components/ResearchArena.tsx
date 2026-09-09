@@ -111,15 +111,30 @@ export function ContinuousPipeline({ pipeline }: { pipeline: ResearchPipelinePay
           <TerminalBadge tone="bad">authority false</TerminalBadge>
         </div>
       </div>
+      <p className="mt-4 text-[11px] text-dim" aria-label="Research queue status">
+        Discovered {pipeline?.summary.discovered_candidates ?? "—"} · attempted {pipeline?.summary.attempted_candidates ?? "—"} · deferred {pipeline?.summary.deferred_candidates ?? "—"} · backtested {pipeline?.summary.backtested_candidates ?? "—"}.
+        {" "}Next queue: {pipeline?.next_queue_at ?? "none scheduled"} · next retest: {pipeline?.next_retest_at ?? "unreported"}.
+        {" "}Scheduled eligibility times; execution waits for the worker cycle.
+      </p>
       <div className="arena-auto-stages mt-5">
         {(pipeline?.stages ?? []).map((stage) => <div key={stage.key}><span>{stage.label}</span><strong>{stage.count}</strong><small>{titleCase(stage.state)}</small></div>)}
         {!pipeline?.stages?.length && <div className="arena-auto-stage-empty">Start the optional research profile to publish the first cycle.</div>}
       </div>
+      {pipeline?.lake_repair && <div className="mt-4 text-[11px] text-dim">
+        Last lake repair audit: {pipeline.lake_repair.generated_at ?? "unreported"}.
+        {pipeline.lake_repair.reason && <p className="text-warn">{pipeline.lake_repair.reason}</p>}
+        {Object.entries(pipeline.lake_repair.symbols ?? {}).map(([symbol, audit]) => <p key={symbol}>
+          {symbol}: verified 1h {audit.levels?.["1h"]?.verified_bars ?? "—"} / {audit.arena_required_1h ?? "—"};
+          {" "}missing verified slots {audit.levels?.["1h"]?.missing_internal_slots ?? "—"};
+          {" "}raw days {audit.raw_days ?? "—"}. {titleCase(audit.historical_coverage ?? "coverage unreported")}.
+          {" "}Unit-corrected partial rows are not eligible history.
+        </p>)}
+      </div>}
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_280px]">
         <div className="overflow-x-auto">
           <table className="arena-candidate-table">
             <thead><tr><th>Candidate / frozen experiment</th><th>Verdict / audit</th><th>Causal</th><th>OOS trades</th><th>Booked net*</th></tr></thead>
-            <tbody>{candidates.slice(0, 12).map((row) => {
+            <tbody>{candidates.map((row) => {
               const proof = experimentReadout(row);
               return <tr key={row.evidence_id ?? row.strategy_id}>
                 <td><b>{row.strategy_id}</b><small>packet {row.packet_id?.slice(0, 12) ?? "missing"} · source {row.source_sha256?.slice(0, 8) ?? "unverified"}</small>

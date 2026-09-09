@@ -4,11 +4,11 @@
 # Two concurrent `docker compose up` invocations SIGKILLed the whole stack on
 # 2026-07-07 (trial lanes down ~30min with an open position). This script is
 # the ONLY sanctioned deploy path: it takes an exclusive lock, refuses dirty
-# trees, resets to origin/main, builds THEN recreates (never both at once, to
+# trees, fast-forwards to origin/main, builds THEN recreates (never both at once, to
 # avoid the 2026-07-11 swap-thrash), and verifies lanes resume.
 set -euo pipefail
 
-# Read the whole body into memory before running it: `git reset` below can
+# Read the whole body into memory before running it: `git merge` below can
 # rewrite THIS file mid-deploy, and bash reads scripts lazily — a brace
 # group forces a full parse first, so no old/new line mixing (2026-07-11).
 {
@@ -29,7 +29,7 @@ fi
 DEPLOY_START=$(date +%s)
 PREV=$(git rev-parse HEAD)
 git fetch --prune origin
-git reset --hard origin/main
+git merge --ff-only origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 echo "deploying $(git rev-parse --short HEAD)"
 
@@ -114,6 +114,26 @@ if [ "$NEED_BUILD" = 1 ]; then
         esac
         docker tag "$APP_BUILD_IMAGE" "${COMPOSE_PROJECT}-${svc}:latest"
     done
+fi
+
+# Optional scoped rollout: leave other recorders/services uninterrupted.
+# Exit here reports serving provenance only, NEVER full /ready or live_ready.
+if [ -n "${VNEDGE_DEPLOY_SERVICES:-}" ]; then
+    for svc in $VNEDGE_DEPLOY_SERVICES; do
+        case "$svc" in
+            delta-recorder|multi-lane-shadow|research-loop|agent-job-runner) ;;
+            *) echo "unsupported scoped deploy target: $svc" >&2; exit 1 ;;
+        esac
+    done
+    for svc in $VNEDGE_DEPLOY_SERVICES; do
+        docker compose --profile research up -d --no-build --no-deps "$svc"
+        actual=$(docker compose exec -T "$svc" cat /app/BUILD_SHA)
+        if [ "$actual" != "$HEAD_SHA" ]; then
+            echo "serving provenance mismatch for $svc" >&2; exit 1
+        fi
+    done
+    echo "scoped rollout serving $HEAD_SHA; operational readiness remains separately gated"
+    exit 0
 fi
 
 # Recreate from the already-built image. --no-build guarantees no build spike

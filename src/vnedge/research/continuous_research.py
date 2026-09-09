@@ -319,9 +319,10 @@ async def run_cycle() -> list[dict]:
             from vnedge.research.continuous_ai_pipeline import (
                 run_continuous_ai_pipeline,
             )
+            from vnedge.research.canonical_input import CanonicalResearchStore
 
             run_continuous_ai_pipeline(
-                store,
+                CanonicalResearchStore(os.environ.get("AI_CANONICAL_CANDLE_ROOT", "data/candles")),
                 targets,
                 auto_create=os.environ.get("AI_AUTO_CREATE_ENABLED", "0")
                 .strip()

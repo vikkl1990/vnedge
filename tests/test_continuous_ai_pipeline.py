@@ -46,7 +46,7 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
 
     calls = 0
 
-    def fake_build(store, targets, *, strategy_dir, experiment_dir, candidate_offset):
+    def fake_build(store, targets, *, strategy_dir, experiment_dir, candidate_offset, previous_candidates):
         assert experiment_dir == out / "experiments"
         nonlocal calls
         calls += 1
@@ -107,6 +107,7 @@ def test_pipeline_evaluates_collects_evidence_then_uses_daily_cache(tmp_path, mo
         now=now + timedelta(hours=1), retest_seconds=86_400,
     )
     assert cached["evaluation_status"] == "CACHED"
+    assert cached["next_evaluation_at"] == first["next_evaluation_at"]
     assert calls == 1
     assert len((out / "continuous_ai_pipeline_feed.jsonl").read_text().splitlines()) == 1
 
@@ -142,3 +143,42 @@ def test_pipeline_never_exposes_registration_roster_or_capital_authority(tmp_pat
     assert payload["policy"]["roster_mutation"] is False
     assert payload["policy"]["capital_mutation"] is False
     assert payload["live_orders_enabled"] is False
+
+
+def test_queue_drains_without_retesting_finished_candidates_or_resetting_daily_clock(tmp_path, monkeypatch):
+    import pandas as pd
+    from vnedge.research import governed_ai_research as governed
+
+    class EmptyStore:
+        def read_candles(self, *args):
+            return pd.DataFrame()
+
+    strategy_dir = tmp_path / "strategies"
+    for _ in pipeline.BLUEPRINTS:
+        pipeline.materialize_next_blueprint(strategy_dir)
+    monkeypatch.setattr(governed, "MAX_CANDIDATES_PER_CYCLE", 1)
+    start = datetime(2026, 9, 9, tzinfo=UTC)
+    kwargs = dict(strategy_dir=strategy_dir, out_dir=tmp_path / "out", queue_seconds=3600)
+    targets = [ResearchTarget("delta_india", "BTC/USD:USD")]
+    first = pipeline.run_continuous_ai_pipeline(EmptyStore(), targets, now=start, **kwargs)
+    assert first["summary"]["attempted_candidates"] == 1
+    assert first["summary"]["deferred_candidates"] == 2
+    assert first["summary"]["evaluated_candidates"] == 0
+    original = next(c for c in first["candidates"] if c.get("attempt_id"))
+    early = pipeline.run_continuous_ai_pipeline(EmptyStore(), targets, now=start + timedelta(minutes=30), **kwargs)
+    assert early["evaluation_status"] == "CACHED"
+    assert early["next_evaluation_at"] == first["next_evaluation_at"]
+    for hour in (1, 2):
+        batch = pipeline.run_continuous_ai_pipeline(EmptyStore(), targets, now=start + timedelta(hours=hour), **kwargs)
+        assert batch["summary"]["attempted_this_cycle"] == 1
+        assert batch["summary"]["attempted_candidates"] == hour + 1
+        assert batch["last_evaluated_at"] == first["last_evaluated_at"]
+        assert next(c for c in batch["candidates"] if c["strategy_id"] == original["strategy_id"])["attempt_id"] == original["attempt_id"]
+    assert batch["next_queue_at"] is None
+    assert batch["next_evaluation_at"] == (start + timedelta(days=1)).isoformat()
+    assert len(list((tmp_path / "out/experiments/attempts").glob("*.started.json"))) == 3
+    cached = pipeline.run_continuous_ai_pipeline(EmptyStore(), targets, now=start + timedelta(hours=3), **kwargs)
+    assert cached["evaluation_status"] == "CACHED"
+    tomorrow = pipeline.run_continuous_ai_pipeline(EmptyStore(), targets, now=start + timedelta(days=1), **kwargs)
+    assert tomorrow["summary"]["attempted_candidates"] == 1
+    assert tomorrow["summary"]["deferred_candidates"] == 2

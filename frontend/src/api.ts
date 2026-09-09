@@ -1418,6 +1418,18 @@ export interface ResearchPipelineCandidate {
 }
 
 export interface ResearchPipelinePayload {
+  lake_repair?: {
+    generated_at?: string;
+    status?: string;
+    reason?: string;
+    symbols?: Record<string, {
+      historical_coverage?: string;
+      raw_days?: number;
+      arena_required_1h?: number;
+      legacy_units_rebuilt_partial?: number;
+      levels?: Record<string, { verified_bars?: number; missing_internal_slots?: number }>;
+    }>;
+  };
   artifact_available?: boolean;
   artifact?: ArtifactMetadata;
   pipeline_id: string;
@@ -1425,6 +1437,8 @@ export interface ResearchPipelinePayload {
   generated_at?: string;
   last_evaluated_at?: string | null;
   next_evaluation_at?: string | null;
+  next_queue_at?: string | null;
+  next_retest_at?: string | null;
   status: string;
   evaluation_status: string;
   creation?: {
@@ -1438,6 +1452,11 @@ export interface ResearchPipelinePayload {
   summary: {
     source_files?: number;
     evaluated_candidates?: number;
+    discovered_candidates?: number;
+    attempted_candidates?: number;
+    deferred_candidates?: number;
+    attempted_this_cycle?: number;
+    backtested_candidates?: number;
     causal_candidates?: number;
     candidate_verdicts?: Record<string, number>;
     rejected_files?: number;

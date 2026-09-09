@@ -31,6 +31,7 @@ MAX_INPUT_BARS = 20000
 def run_governed_ai_research(
     store: Any, targets: Sequence[Any], *, strategy_dir: Path, out_dir: Path,
     candidate_offset: int = 0,
+    previous_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     loaded, rejected = _scan_ai_dir(strategy_dir)
@@ -41,14 +42,21 @@ def run_governed_ai_research(
     queue = sorted(loaded.items())
     offset = max(0, candidate_offset) % max(1, len(queue))
     queue = queue[offset:] + queue[:offset]
-    for index, (strategy_id, (cls, filename)) in enumerate(queue):
+    previous = {c["strategy_id"]: c for c in (previous_candidates or [])
+                if c.get("verdict") != "DEFERRED_BUDGET"}
+    attempted = 0
+    for strategy_id, (cls, filename) in queue:
+        if strategy_id in previous:
+            candidates.append(previous[strategy_id])
+            continue
         entry = _base_entry(cls, filename)
         entry.update(verdict="NOT_TESTABLE", causality=None, walk_forward=None,
                      performance_eligible=False)
-        if index >= MAX_CANDIDATES_PER_CYCLE:
+        if attempted >= MAX_CANDIDATES_PER_CYCLE:
             entry.update(verdict="DEFERRED_BUDGET", reasons=["cycle_candidate_budget"])
             candidates.append(entry)
             continue
+        attempted += 1
         attempt_id = uuid4().hex
         source = (strategy_dir / filename).read_bytes()
         entry.update(attempt_id=attempt_id, source_sha256=digest(source))
@@ -59,8 +67,11 @@ def run_governed_ai_research(
             "can_trade": False, "can_promote": False,
         }))
         try:
+            contract_path = (strategy_dir / filename).with_suffix(".experiment.json")
+            if not contract_path.is_file():
+                raise ValueError("experiment_contract_missing")
             spec = ExperimentSpec.model_validate_json(
-                (strategy_dir / filename).with_suffix(".experiment.json").read_bytes()
+                contract_path.read_bytes()
             )
             # Execute the captured source, not a class from an earlier directory
             # scan if an external author changed the file between those reads.
@@ -115,6 +126,7 @@ def run_governed_ai_research(
         "dataset": {"source": "per_candidate_frozen_packet"},
         "candidates": candidates, "rejected_files": rejected,
         "governance": {"version": "experiment_packet_v1", "falsifier": "deterministic_not_llm",
+                       "attempted_this_cycle": attempted,
                        "max_candidates_per_cycle": MAX_CANDIDATES_PER_CYCLE,
                        "max_input_bars": MAX_INPUT_BARS, "synthetic_fallback": False,
                        "next_candidate_offset": (offset + MAX_CANDIDATES_PER_CYCLE) % max(1, len(queue)),

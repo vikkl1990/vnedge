@@ -368,6 +368,7 @@ def run_continuous_ai_pipeline(
     auto_create: bool = False,
     force_evaluate: bool = False,
     retest_seconds: float = 86_400.0,
+    queue_seconds: float = 3600.0,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Run one bounded create/test/evidence cycle.
@@ -387,10 +388,15 @@ def run_continuous_ai_pipeline(
     age = _age_seconds(previous, generated_at)
     ai_path = root / AI_CANDIDATES_LATEST
     cached_hash = _sha(ai_path.read_bytes()) if ai_path.is_file() else None
-    due = (force_evaluate or created or inventory != previous.get("source_inventory")
-           or previous.get("governance_version") != "experiment_packet_v1"
+    refresh = (force_evaluate or created or inventory != previous.get("source_inventory")
+           or previous.get("governance_version") != "canonical_queue_v2"
            or cached_hash is None or cached_hash != previous.get("evaluation_sha256")
            or age is None or age >= max(60.0, retest_seconds))
+    pending = any(c.get("verdict") == "DEFERRED_BUDGET" for c in previous.get("candidates", []))
+    last_batch = previous.get("last_batch_at") or previous.get("last_evaluated_at")
+    batch_age = _age_seconds({"last_evaluated_at": last_batch}, generated_at)
+    drain = pending and (batch_age is None or batch_age >= max(60.0, queue_seconds))
+    due = refresh or drain
 
     if due:
         evaluation = build_ai_candidates_payload(
@@ -399,16 +405,22 @@ def run_continuous_ai_pipeline(
             strategy_dir=strategy_root,
             experiment_dir=root / "experiments",
             candidate_offset=int((previous.get("governance") or {}).get("next_candidate_offset", 0)),
+            previous_candidates=None if refresh else previous.get("candidates"),
         )
         write_ai_candidates_payload(evaluation, root)
         evaluation_status = "EVALUATED"
-        last_evaluated_at = generated_at.isoformat()
+        last_evaluated_at = generated_at.isoformat() if refresh else str(previous.get("last_evaluated_at"))
     else:
         evaluation = _read_json(ai_path)
         evaluation_status = "CACHED"
         last_evaluated_at = str(previous.get("last_evaluated_at") or "")
 
     candidates = _candidate_evidence(evaluation, inventory)
+    last_batch_at = generated_at.isoformat() if due else last_batch
+    next_retest = datetime.fromisoformat(last_evaluated_at) + timedelta(seconds=max(60.0, retest_seconds))
+    deferred = sum(c.get("verdict") == "DEFERRED_BUDGET" for c in candidates)
+    next_queue = (datetime.fromisoformat(last_batch_at) + timedelta(seconds=max(60.0, queue_seconds))) if deferred else None
+    next_due = min(next_retest, next_queue) if next_queue else next_retest
     verdicts: dict[str, int] = {}
     causal = 0
     for row in candidates:
@@ -429,6 +441,8 @@ def run_continuous_ai_pipeline(
     }
     cycle_id = _sha(json.dumps(cycle_identity, sort_keys=True))[:24]
     status = "EVIDENCE_AVAILABLE" if candidates else "WAITING_FOR_PROPOSALS"
+    lake_root = getattr(store, "root", None)
+    lake_repair = _read_json(Path(lake_root).parent / "reports/delta_lake_repair.json") if lake_root is not None else {}
     if candidates and all(c.get("verdict") in {"NOT_TESTABLE", "ERROR", "DEFERRED_BUDGET"} for c in candidates):
         status = "BLOCKED_EVIDENCE"
     pipeline = {
@@ -436,13 +450,13 @@ def run_continuous_ai_pipeline(
         "cycle_id": cycle_id,
         "generated_at": generated_at.isoformat(),
         "last_evaluated_at": last_evaluated_at or None,
-        "next_evaluation_at": (
-            (generated_at + timedelta(seconds=max(60.0, retest_seconds))).isoformat()
-            if due
-            else None
-        ),
+        "last_batch_at": last_batch_at,
+        "next_evaluation_at": next_due.isoformat(),
+        "next_retest_at": next_retest.isoformat(),
+        "next_queue_at": next_queue.isoformat() if next_queue else None,
         "status": status,
-        "governance_version": "experiment_packet_v1",
+        "lake_repair": lake_repair,
+        "governance_version": "canonical_queue_v2",
         "evaluation_sha256": _sha(ai_path.read_bytes()) if ai_path.is_file() else None,
         "source_inventory": inventory,
         "governance": evaluation.get("governance") or {},
@@ -461,7 +475,12 @@ def run_continuous_ai_pipeline(
         ],
         "summary": {
             "source_files": len(inventory),
-            "evaluated_candidates": len(candidates),
+            "discovered_candidates": len(candidates),
+            "attempted_candidates": len(candidates) - deferred,
+            "deferred_candidates": deferred,
+            "attempted_this_cycle": int((evaluation.get("governance") or {}).get("attempted_this_cycle", 0)) if due else 0,
+            "evaluated_candidates": sum(bool(c.get("causality")) for c in candidates),
+            "backtested_candidates": sum(bool(c.get("walk_forward")) for c in candidates),
             "causal_candidates": causal,
             "candidate_verdicts": verdicts,
             "rejected_files": len(evaluation.get("rejected_files") or []),
@@ -483,6 +502,7 @@ def run_continuous_ai_pipeline(
             "proposal_catalog": "finite_result_independent_v1",
             "max_new_sources_per_cycle": 1,
             "retest_seconds": max(60.0, retest_seconds),
+            "queue_seconds": max(60.0, queue_seconds),
             "sandbox_required": True,
             "causality_required": True,
             "rolling_oos_required": True,
@@ -519,7 +539,7 @@ def run_continuous_ai_pipeline(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", default="data")
+    parser.add_argument("--data-root", default="data/candles", help="Canonical recorder root; no OHLC fallback")
     parser.add_argument("--strategy-dir", default=AI_STRATEGY_DIR)
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--interval-seconds", type=float, default=3600.0)
@@ -528,10 +548,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force-evaluate", action="store_true")
     args = parser.parse_args(argv)
 
-    from vnedge.data.parquet_store import ParquetStore
+    from vnedge.research.canonical_input import CanonicalResearchStore
     from vnedge.research.universe import load_research_targets
 
-    store = ParquetStore(args.data_root)
+    store = CanonicalResearchStore(args.data_root)
     while True:
         result = run_continuous_ai_pipeline(
             store,

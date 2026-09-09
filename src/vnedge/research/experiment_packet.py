@@ -121,6 +121,8 @@ def preflight(
     previous: datetime | None = None
     for row in candles.to_dict("records"):
         try:
+            if not isinstance(row.get("is_closed"), (bool, np.bool_)) or not row["is_closed"]:
+                raise ValueError("decision_row_not_closed")
             ref = assert_decision_row(row, timeframe=spec.timeframe)
             if ref.close_time > now:
                 raise ValueError("future_bar")
@@ -128,11 +130,12 @@ def preflight(
                                   ("timeframe", spec.timeframe)):
                 if row.get(key) != expected:
                     raise ValueError(f"{key}_identity_missing_or_mismatch")
-            if row.get("coverage_ok") not in (True, 1):
+            if not isinstance(row.get("coverage_ok"), (bool, np.bool_)) or not row["coverage_ok"]:
                 raise ValueError("coverage_unproven")
-            if previous is not None and (ref.open_time - previous).total_seconds() != seconds:
-                raise ValueError("non_consecutive_bars")
+            prior_open = previous
             previous = ref.open_time
+            if prior_open is not None and (ref.open_time - prior_open).total_seconds() != seconds:
+                raise ValueError("non_consecutive_bars")
             volume = float(row.get("volume", float("nan")))
             if not np.isfinite(volume) or volume < 0:
                 raise ValueError("base_volume_invalid")

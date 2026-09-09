@@ -450,6 +450,7 @@ def build_ai_candidates_payload(
     test_bars: int = DEFAULT_TEST_BARS,
     experiment_dir: Path | None = None,
     candidate_offset: int = 0,
+    previous_candidates: list[dict] | None = None,
 ) -> dict:
     """Resolve a dataset from ``store`` and run the AI candidate research.
 
@@ -463,6 +464,7 @@ def build_ai_candidates_payload(
         return run_governed_ai_research(
             store, targets, strategy_dir=Path(strategy_dir), out_dir=experiment_dir,
             candidate_offset=candidate_offset,
+            previous_candidates=previous_candidates,
         )
     exchange, symbol, timeframe = _primary_target(targets)
     dataset_source = "parquet"

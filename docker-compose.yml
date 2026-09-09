@@ -365,9 +365,11 @@ services:
       AI_RESEARCH_PIPELINE_ENABLED: "${AI_RESEARCH_PIPELINE_ENABLED:-1}"
       AI_AUTO_CREATE_ENABLED: "${AI_AUTO_CREATE_ENABLED:-1}"
       AI_RESEARCH_RETEST_SECONDS: "${AI_RESEARCH_RETEST_SECONDS:-86400}"
+      AI_CANONICAL_CANDLE_ROOT: /app/data/candles
       ALPHA_FACTORY_ENABLED: "0"
     volumes:
       - ./data:/app/data
+      - ./data/candles:/app/data/candles:ro
       - ./research/live_research:/app/research/live_research
       - ./logs:/app/logs:ro
     logging:

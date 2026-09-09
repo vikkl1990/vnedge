@@ -22,6 +22,7 @@ from vnedge.data.candle_bootstrap import bootstrap_candles
 from vnedge.data.candles import CandleParquetStore
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
 from vnedge.exchange.writer_lease import CanonicalWriterLease
+from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD
 from vnedge.runtime.scanner_startup import (
     prerequisite_commands,
     run_prerequisites,
@@ -229,6 +230,30 @@ async def _maintenance_loop(
         await asyncio.sleep(tail_interval)
 
 
+async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
+                                  symbols: Sequence[str], environ: Mapping[str, str],
+                                  lease_fd: int) -> None:
+    from vnedge.data.delta_lake_repair import _atomic, repair_delta_lake
+
+    interval = _positive_seconds(environ, "VNEDGE_DELTA_REPAIR_INTERVAL_SECONDS", 900)
+    authority = {**environ, INHERITED_WRITER_LEASE_FD: str(lease_fd)}
+    # Record first; never spend a historical replay window disconnected.
+    await asyncio.sleep(10)
+    while True:
+        try:
+            report = await asyncio.to_thread(
+                repair_delta_lake, data_root, candle_root, symbols=tuple(symbols),
+                apply=True, environ=authority)
+            _atomic(data_root / "reports/delta_lake_repair.json", json.dumps(report, sort_keys=True).encode())
+            logger.info("Delta quality-aware repair: %s", json.dumps(report["symbols"], sort_keys=True))
+        except Exception as exc:
+            logger.exception("Delta repair failed; no readiness claimed")
+            _atomic(data_root / "reports/delta_lake_repair.json", json.dumps({
+                "generated_at": datetime.now(UTC).isoformat(), "status": "ERROR",
+                "reason": f"{type(exc).__name__}:{exc}", "can_trade": False}).encode())
+        await asyncio.sleep(interval)
+
+
 async def run_owner(
     *,
     exchange: str,
@@ -246,13 +271,8 @@ async def run_owner(
     tasks: tuple[asyncio.Task[None], ...] = ()
     try:
         if exchange == "delta_india":
-            await asyncio.to_thread(
-                _bootstrap_delta_tail,
-                symbols=symbols,
-                data_root=data_root,
-                candle_root=candle_root,
-                environ=environ,
-            )
+            # Raw presence cannot attest historical completeness. The Delta
+            # repair worker below replaces the old trust-all startup replay.
             recorder = DeltaTickRecorder(
                 list(symbols),
                 data_root,
@@ -289,8 +309,14 @@ async def run_owner(
         # recorder still holds the same process-lifetime writer lease and
         # produces the exact forward canonical ladder used by Delta lanes.
         if exchange == "delta_india":
-            tasks = (recorder_task,)
-            await recorder_task
+            maintenance_task = asyncio.create_task(
+                _delta_maintenance_loop(data_root, candle_root, symbols=symbols,
+                                        environ=environ, lease_fd=lease.fileno),
+                name="delta-canonical-maintenance")
+            tasks = (recorder_task, maintenance_task)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
             raise RuntimeError("Delta canonical recorder exited unexpectedly")
         maintenance_task = asyncio.create_task(
             _maintenance_loop(environ, lease_fd=lease.fileno),

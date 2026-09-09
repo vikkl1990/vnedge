@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgenticResearchStatus, ResearchPipelineCandidate, StrategyWorkflowRevision } from "../api";
+import type { AgenticResearchStatus, ResearchPipelineCandidate, ResearchPipelinePayload, StrategyWorkflowRevision } from "../api";
 import { arenaAgentRanking, arenaPipelineCounts, ContinuousPipeline, experimentReadout } from "./ResearchArena";
 
 const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) => ({
@@ -27,6 +27,23 @@ const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) 
 });
 
 describe("research arena projections", () => {
+  it("separates inventory from attempts and renders every deferred candidate", () => {
+    const pipeline: ResearchPipelinePayload = {
+      pipeline_id: "continuous_ai_research_v2", evaluation_status: "CACHED",
+      policy: { can_trade: false, can_promote: false },
+      can_trade: false, can_promote: false, live_orders_enabled: false,
+      status: "BLOCKED_EVIDENCE", stages: [],
+      summary: { discovered_candidates: 16, attempted_candidates: 8, deferred_candidates: 8, backtested_candidates: 0 },
+      next_queue_at: "2026-09-09T02:00:00+00:00", next_retest_at: "2026-09-10T01:00:00+00:00",
+      candidates: Array.from({ length: 16 }, (_, i) => ({ strategy_id: `candidate_${i}`, source_file: `${i}.py`, verdict: "DEFERRED_BUDGET", reasons: [], can_trade: false, can_promote: false })),
+      ml: { samples: 0, min_to_train: 200, stage: "COLLECTING_LABELS", binding: false, can_trade: false },
+    };
+    const html = renderToStaticMarkup(createElement(ContinuousPipeline, { pipeline }));
+    expect(html).toContain("Discovered 16 · attempted 8 · deferred 8 · backtested 0");
+    expect(html).toContain("candidate_15");
+    expect(html).toContain("2026-09-09T02:00:00+00:00");
+    expect(html).toContain("execution waits for the worker cycle");
+  });
   it("does not turn missing preflight or causality into a result", () => {
     const row: ResearchPipelineCandidate = { strategy_id: "ai_test", source_file: "test.py",
       verdict: "NOT_TESTABLE", reasons: ["history_insufficient"], can_trade: false, can_promote: false };
