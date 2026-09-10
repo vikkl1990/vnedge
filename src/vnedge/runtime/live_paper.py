@@ -1785,12 +1785,14 @@ class LivePaperSession:
         at = now or datetime.now(UTC)
         data_block = self._candle_path_arm_block(at)
         lake_contract = self._lake_decision_status(at)
+        awaiting_evaluation = lake_contract["evaluation_status"] == "awaiting_first_evaluation"
         decision_blockers: list[str | None] = [
+            "awaiting_first_evaluation" if awaiting_evaluation else None,
             "strategy_warmup_incomplete"
             if len(self.candles) <= self.strategy.warmup_bars
             else None,
             "decision_identity_unproven"
-            if not lake_contract["identity_ok"]
+            if not awaiting_evaluation and not lake_contract["identity_ok"]
             else None,
             "daily_context_below_200"
             if lake_contract["daily_required"]
@@ -1798,6 +1800,7 @@ class LivePaperSession:
             else None,
             "daily_ema200_not_ready"
             if lake_contract["daily_required"]
+            and not awaiting_evaluation
             and not lake_contract["ema200_ready"]
             else None,
             "htf_context_identity_missing"
@@ -1894,7 +1897,10 @@ class LivePaperSession:
             daily_bars = int(float(features.get("daily_observations") or 0))
         except (TypeError, ValueError):
             daily_bars = 0
-        ema200_ready = bool(features.get("ema200_ready", False))
+        # Loaded history is observable before the first evaluation; committed
+        # EMA readiness is not. Unknown must block without claiming warmup failed.
+        evaluated = bool(last_eval)
+        ema200_ready = bool(features.get("ema200_ready", False)) if evaluated else None
         context_tfs = tuple(
             self.runtime_contract.context_tfs
             if self.runtime_contract is not None
@@ -1968,6 +1974,7 @@ class LivePaperSession:
             if not bound:
                 missing.append(timeframe)
         return {
+            "evaluation_status": "evaluated" if evaluated else "awaiting_first_evaluation",
             "identity_ok": identity_ok,
             "candle_source": source,
             "decision_transport": str(data_source.get("decision_transport") or "unreported"),

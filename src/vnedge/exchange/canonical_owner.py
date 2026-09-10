@@ -209,6 +209,8 @@ async def _maintenance_loop(
         environ, "VNEDGE_CANONICAL_FULL_REPAIR_INTERVAL_SECONDS", 86_400.0
     )
     retry_interval = _positive_seconds(environ, "VNEDGE_CANONICAL_REPAIR_RETRY_SECONDS", 60.0)
+    retry_delay = retry_interval
+    max_retry_delay = max(retry_interval, tail_interval)
     next_full = 0.0
     while True:
         full = time.monotonic() >= next_full
@@ -222,9 +224,17 @@ async def _maintenance_loop(
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("canonical owner maintenance failed; arms remain blocked")
-            await asyncio.sleep(retry_interval)
+            # Immutable conflicts do not become safe by hammering the same
+            # full backfill every minute. Keep the failure visible and the
+            # health gate closed, but bound retries independently of recording.
+            logger.exception(
+                "canonical owner maintenance failed; arms remain blocked; retry in %.1fs",
+                retry_delay,
+            )
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(max_retry_delay, retry_delay * 2)
             continue
+        retry_delay = retry_interval
         if full:
             next_full = time.monotonic() + full_interval
         await asyncio.sleep(tail_interval)

@@ -600,6 +600,43 @@ async def test_registered_official_htf_refresh_preserves_source_without_lake_wri
     assert await session._await_canonical_candle([decision, 1, 1, 1, 1, 1]) is False
 
 
+@pytest.mark.parametrize("daily_count", [20, 800])
+def test_readiness_distinguishes_awaiting_evaluation_from_failed_ema(tmp_path, monkeypatch, daily_count):
+    from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+
+    strategy = CanonicalContextLong()
+    now = datetime(2026, 9, 10, tzinfo=UTC)
+    strategy._regime_frames = {"1d": pd.DataFrame({
+        "timestamp": pd.date_range(end=now-timedelta(days=1), periods=daily_count, freq="D"),
+        "candle_source": "exchange_ohlcv_validated",
+        "content_sha256": "a" * 64,
+    })}
+    strategy._regime_health = {"1d": True}
+    session, _ = build_session(tmp_path, FakeFeed([]), strategy=strategy)
+    session.runtime_contract = replace(scanner_runtime_contract("htf_regime_continuation_15m_v2"),
+                                       context_timeframes=("1d",))
+    monkeypatch.setattr(session, "_candle_path_arm_block", lambda at: None)
+    status = session._lake_decision_status(now)
+    readiness = session._runtime_readiness(now)
+    assert status["evaluation_status"] == "awaiting_first_evaluation"
+    assert status["daily_bars"] == daily_count
+    assert status["ema200_ready"] is None
+    assert "awaiting_first_evaluation" in readiness.decision_blockers
+    assert "daily_ema200_not_ready" not in readiness.decision_blockers
+    assert "decision_identity_unproven" not in readiness.decision_blockers
+    assert ("daily_context_below_200" in readiness.decision_blockers) == (daily_count < 200)
+    assert not readiness.decision_ready and not readiness.live_ready
+
+    session.last_eval = {"decision_at": now.isoformat(), "features": {"ema200_ready": False}}
+    assert session._lake_decision_status(now)["ema200_ready"] is False
+    readiness = session._runtime_readiness(now)
+    assert "awaiting_first_evaluation" not in readiness.decision_blockers
+    assert "daily_ema200_not_ready" in readiness.decision_blockers
+    assert "decision_identity_unproven" in readiness.decision_blockers
+    session.last_eval["features"]["ema200_ready"] = True
+    assert "daily_ema200_not_ready" not in session._runtime_readiness(now).decision_blockers
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["missing", "error", "stale", "corrupt"])
 async def test_official_htf_refresh_fails_closed_and_retries(tmp_path, monkeypatch, failure):

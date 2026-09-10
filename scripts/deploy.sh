@@ -121,7 +121,7 @@ fi
 if [ -n "${VNEDGE_DEPLOY_SERVICES:-}" ]; then
     for svc in $VNEDGE_DEPLOY_SERVICES; do
         case "$svc" in
-            delta-recorder|multi-lane-shadow|research-loop|agent-job-runner|dashboard-tls) ;;
+            pulse-recorder|delta-recorder|multi-lane-shadow|research-loop|agent-job-runner|dashboard-tls) ;;
             *) echo "unsupported scoped deploy target: $svc" >&2; exit 1 ;;
         esac
     done

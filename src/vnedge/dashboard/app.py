@@ -754,6 +754,7 @@ def create_app(
                     "live_ready": runtime.get("live_ready") is True,
                     "identity_ok": lake_contract.get("identity_ok") is True,
                     "daily_bars": lake_contract.get("daily_bars"),
+                    "evaluation_status": lake_contract.get("evaluation_status", "unreported"),
                     "ema200_ready": lake_contract.get("ema200_ready"),
                     "missing_context_tfs": lake_contract.get("missing_context_tfs") or [],
                 }
@@ -762,7 +763,9 @@ def create_app(
                     reasons.append(f"lane_data_not_ready:{lane_id}")
                 if not row["decision_ready"]:
                     reasons.append(f"lane_decision_not_ready:{lane_id}")
-                if not row["identity_ok"]:
+                if row["evaluation_status"] == "awaiting_first_evaluation":
+                    reasons.append(f"lane_awaiting_first_evaluation:{lane_id}")
+                elif not row["identity_ok"]:
                     reasons.append(f"lane_identity_unproven:{lane_id}")
             readiness_layers = {
                 "data_ready": all(row["data_ready"] for row in layer_rows),

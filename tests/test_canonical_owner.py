@@ -10,6 +10,31 @@ from vnedge.exchange.canonical_owner import maintenance_commands
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcomes,expected", [
+    ([False] * 6, [60, 120, 240, 480, 900, 900]),
+    ([False, False, True, False], [60, 120, 900, 60]),
+])
+async def test_maintenance_retries_back_off_and_reset_only_on_success(monkeypatch, outcomes, expected):
+    attempts = iter(outcomes)
+    sleeps = []
+
+    def cycle(*args, **kwargs):
+        if not next(attempts):
+            raise RuntimeError("immutable repair conflict")
+
+    async def sleep(delay):
+        sleeps.append(delay)
+        if len(sleeps) == len(expected):
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(owner, "_run_maintenance_cycle", cycle)
+    monkeypatch.setattr(owner.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await owner._maintenance_loop({}, lease_fd=99)
+    assert sleeps == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("repair_fails", [False, True])
 async def test_delta_planning_is_read_only_separate_from_repair(tmp_path, monkeypatch, repair_fails):
     import vnedge.data.delta_lake_repair as repair

@@ -22,6 +22,7 @@ from vnedge.strategy.htf_regime_continuation_15m import (
     HtfRegimeContinuation15mV1,
 )
 from vnedge.strategy.market_regime import DEFAULT_CONFIG, MarketRegimeMachine
+from vnedge.strategy.structure_bos_15m_trigger_v2 import structure_health_diagnostics
 from vnedge.strategy.structure_bos_15m_trigger_v3 import StructureBos15mTriggerV3
 
 STRATEGY_ID: Final = "htf_regime_continuation_15m_v2"
@@ -129,7 +130,8 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
 
         def flag(name: str) -> bool:
             try:
-                return bool(float(row.get(name, 0)))
+                value = row.get(name, 0)
+                return not pd.isna(value) and bool(float(value))
             except (TypeError, ValueError):
                 return False
 
@@ -144,6 +146,7 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         missing_context = self._missing_permission_context(row)
         checks = (
             (not missing_context, "htf_context_missing"),
+            (flag("bos15_parent_identity_ok"), "structure_parent_missing"),
             (flag("mreg_ready"), "market_regime_not_ready"),
             (str(row.get("mreg_state")) == "continuation", "regime_flat"),
             (regime_side, "family_mismatch"),
@@ -158,6 +161,7 @@ class HtfRegimeContinuation15mV2(HtfRegimeContinuation15mV1):
         features = dict(diagnostics.get("features", {}))
         features.update(
             {
+                **structure_health_diagnostics(row),
                 "structure_source": "canonical_ohlc_price_only_v1",
                 "avwap_source": "unavailable",
                 "entry_structure": "closed_1h_structure_plus_15m_reclaim",

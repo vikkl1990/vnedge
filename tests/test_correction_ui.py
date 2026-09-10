@@ -16,6 +16,18 @@ from vnedge.dashboard.correction_ui import (
 NOW = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
 
 
+def test_lanes_preserve_unknown_ema_before_first_evaluation() -> None:
+    state = snapshot()
+    state["lanes"][0]["lake_contract"] = {
+        "evaluation_status": "awaiting_first_evaluation",
+        "daily_bars": 800,
+        "ema200_ready": None,
+    }
+    payload = build_lanes_payload(state, now=NOW)
+    lane = next(lane for lane in payload["lanes"] if lane["lane_id"] == "measurement_delta_btc")
+    assert lane["lake_contract"] == state["lanes"][0]["lake_contract"]
+
+
 def snapshot() -> dict:
     return {
         "mode": "shadow (live data)",

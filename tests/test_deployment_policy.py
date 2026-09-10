@@ -86,6 +86,19 @@ def test_tls_edge_has_an_explicit_healthcheck() -> None:
     assert "127.0.0.1:8765" in command
 
 
+def test_scoped_binance_owner_deploy_does_not_require_delta_restart() -> None:
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+    start = deploy.index('if [ -n "${VNEDGE_DEPLOY_SERVICES:-}" ]')
+    end = deploy.index("# Recreate from the already-built image", start)
+    scoped = deploy[start:end]
+    assert "pulse-recorder|delta-recorder|multi-lane-shadow" in scoped
+    assert '--no-build --no-deps "$svc"' in scoped
+    assert "unsupported scoped deploy target" in scoped
+    assert "serving provenance mismatch" in scoped
+    assert "pulse-recorder delta-recorder" not in scoped
+    assert "exit 0" in scoped
+
+
 def test_legacy_recovery_writers_are_not_default_services() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     for service_name in ("gap-recovery", "vision-recovery"):

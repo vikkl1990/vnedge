@@ -173,6 +173,30 @@ def test_ready_uses_delta_operational_lane_not_primary_measurement_feed():
     assert payload["readiness"]["parity_ready"] is False
 
 
+def test_ready_names_startup_without_claiming_ema_or_identity_failure():
+    provider = SnapshotProvider()
+    provider.publish({
+        "mode": "shadow",
+        "lane_health": {"process_healthy": True},
+        "lanes": [{
+            "lane_id": "shadow_delta_btc",
+            "exchange": "delta_india",
+            "observation_class": "shadow_observe",
+            "runtime_readiness": {"data_ready": True, "decision_ready": False},
+            "lake_contract": {
+                "evaluation_status": "awaiting_first_evaluation",
+                "identity_ok": False, "daily_bars": 800, "ema200_ready": None,
+            },
+        }],
+    })
+    response = TestClient(create_app(provider, token="t")).get("/ready")
+    assert response.status_code == 503
+    payload = response.json()
+    assert "lane_awaiting_first_evaluation:shadow_delta_btc" in payload["reasons"]
+    assert "lane_identity_unproven:shadow_delta_btc" not in payload["reasons"]
+    assert payload["can_trade"] is False
+
+
 def test_ready_ignores_foreign_exchange_prerequisite_for_delta_lane(
     tmp_path, monkeypatch
 ):

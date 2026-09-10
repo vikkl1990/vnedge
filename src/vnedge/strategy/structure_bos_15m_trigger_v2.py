@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -26,7 +27,28 @@ from vnedge.strategy.arm_evidence import (
 )
 from vnedge.strategy.base_strategy import BaseStrategy, SignalIntent
 from vnedge.strategy.structure_bos_1h import PARAMS as BOS_1H_PARAMS
-from vnedge.strategy.structure_bos_1h import StructureBos1H
+from vnedge.strategy.structure_bos_1h import STRUCTURE_HEALTH_DEFAULTS, StructureBos1H
+
+
+def structure_health_diagnostics(row: pd.Series) -> dict[str, object]:
+    """Project the joined parent's evidence, never infer swings from the chart."""
+    identity = row.get("bos15_parent_identity_ok")
+    parent_ok = identity is not None and not pd.isna(identity) and bool(identity)
+    ready = row.get("bos15_structure_ready")
+    fields: dict[str, object] = {
+        "bos15_parent_identity_ok": parent_ok,
+        "bos15_structure_ready": ready is not None and not pd.isna(ready) and bool(ready),
+    }
+    for name in ("parent_available_at", *STRUCTURE_HEALTH_DEFAULTS):
+        value = row.get(f"bos15_{name}")
+        fields[f"bos15_{name}"] = (
+            None if value is None or pd.isna(value) or value in ("", "unavailable")
+            else value.isoformat() if isinstance(value, (datetime, pd.Timestamp))
+            else value.item() if hasattr(value, "item") else value
+        )
+    if not parent_ok:
+        fields["bos15_structure_health_reason"] = "structure_parent_missing"
+    return fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,11 +242,14 @@ class StructureBos15mTriggerV2(BaseStrategy):
             "bos_atr",
             "htf_structure_trend",
             "mtf_reason",
+            *STRUCTURE_HEALTH_DEFAULTS,
         )
+        text_columns = {
+            "structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason",
+            *(name for name, default in STRUCTURE_HEALTH_DEFAULTS.items() if isinstance(default, str)),
+        }
         for name in context_columns:
-            out[f"bos15_{name}"] = math.nan if name not in {
-                "structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason"
-            } else "unavailable"
+            out[f"bos15_{name}"] = "unavailable" if name in text_columns else math.nan
         out["bos15_parent_available_at"] = pd.NaT
         out["bos15_parent_identity_ok"] = False
 
@@ -262,7 +287,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
                 unavailable = (
                     "unavailable"
                     if name
-                    in {"structure_trend", "dual_avwap_bias", "htf_structure_trend", "mtf_reason"}
+                    in text_columns
                     else math.nan
                 )
                 values.loc[~parent_identity_ok] = unavailable
@@ -483,6 +508,7 @@ class StructureBos15mTriggerV2(BaseStrategy):
             "primary_failed_gate": failures[0] if failures else None,
             "all_failed_gates": failures,
             "features": {
+                **structure_health_diagnostics(row),
                 "bos15_quality_ok": quality_ok,
                 "bos15_session_ok": session_ok,
                 "bos15_structure_ready": structure_ready,

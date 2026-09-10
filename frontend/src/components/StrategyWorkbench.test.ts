@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { regimeView, structureView } from "./StrategyWorkbench";
 
 describe("strategy workbench evaluation projection", () => {
+  it("shows loaded daily history without inventing EMA readiness at startup", () => {
+    const result = regimeView({}, { evaluation_status: "awaiting_first_evaluation", daily_bars: 800, ema200_ready: null });
+    expect(result.dailyObservations).toBe(800);
+    expect(result.ema200Ready).toBeUndefined();
+  });
+
+  it("preserves zero confirmed lows and the quality reset evidence", () => {
+    const result = structureView({ features: {
+      bos15_structure_health_reason: "confirmed_swing_pair_not_ready",
+      bos15_confirmed_high_count: 1,
+      bos15_confirmed_low_count: 0,
+      bos15_last_quality_reset_at: "2026-09-10T00:00:00+00:00",
+      bos15_eligible_bars_since_reset: 14,
+    } });
+    expect(result.highCount).toBe(1);
+    expect(result.lowCount).toBe(0);
+    expect(result.reason).toBe("confirmed_swing_pair_not_ready");
+    expect(result.lastReset).toBe("2026-09-10T00:00:00+00:00");
+    expect(result.barsSinceReset).toBe(14);
+  });
   it("reads the runtime regime fields from the feature envelope", () => {
     expect(regimeView({
       mreg_ready: true,

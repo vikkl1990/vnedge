@@ -430,6 +430,18 @@ def test_data_quality_gap_cannot_create_or_bridge_structure() -> None:
 
     assert not bool(prepared.loc[_BREAK_INDEX - 5, "structure_ready"])
     assert strategy.signal(prepared, _BREAK_INDEX) is None
+    gap = _BREAK_INDEX - 5
+    assert prepared.loc[gap, "structure_health_reason"] == "structure_parent_ineligible"
+    assert prepared.loc[gap, "confirmed_high_count"] == 0
+    assert prepared.loc[gap, "confirmed_low_count"] == 0
+    assert prepared.loc[gap, "eligible_bars_since_reset"] == 0
+    assert prepared.loc[_BREAK_INDEX, "last_quality_reset_at"] == (
+        frame.loc[gap, "timestamp"] + pd.Timedelta(hours=1)
+    ).isoformat()
+    assert prepared.loc[_BREAK_INDEX, "eligible_bars_since_reset"] == 5
+    assert prepared.loc[_BREAK_INDEX, "confirmed_low_count"] == 0
+    assert prepared.loc[_BREAK_INDEX, "last_low_confirmed_at"] == ""
+    assert prepared.loc[_BREAK_INDEX, "structure_health_reason"] == "confirmed_swing_pair_not_ready"
 
 
 def test_missing_canonical_integrity_fields_fail_closed() -> None:
@@ -453,11 +465,13 @@ def test_forming_bar_cannot_trigger_dataframe_adapter() -> None:
 
 
 def test_prepare_and_signal_are_truncation_invariant_at_every_boundary() -> None:
+    from vnedge.strategy.structure_bos_1h import STRUCTURE_HEALTH_DEFAULTS
     frame = _canonical_frame()
     htf = _htf_frame()
     full_strategy = StructureBos1H(htf_candles=htf)
     full = full_strategy.prepare(frame)
     columns = [
+        *STRUCTURE_HEALTH_DEFAULTS,
         "structure_ready",
         "structure_trend",
         "structure_labels",

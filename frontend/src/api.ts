@@ -537,6 +537,11 @@ export interface CorrectionLane {
     recovery_ms: number;
     band: "ok" | "degraded" | "blocked" | "unknown" | string;
   }>;
+  lake_contract?: {
+    evaluation_status?: "awaiting_first_evaluation" | "evaluated";
+    daily_bars?: number;
+    ema200_ready?: boolean | null;
+  };
   runtime_readiness: {
     data_ready: boolean;
     decision_ready: boolean;

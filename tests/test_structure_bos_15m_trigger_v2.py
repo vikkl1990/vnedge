@@ -26,7 +26,13 @@ class _HourlyContext:
     )
 
     def prepare(self, hours: pd.DataFrame) -> pd.DataFrame:
+        from vnedge.strategy.structure_bos_1h import STRUCTURE_HEALTH_DEFAULTS
         out = hours.copy()
+        for name, default in STRUCTURE_HEALTH_DEFAULTS.items():
+            out[name] = default
+        out["structure_health_reason"] = "directional_ready"
+        out["confirmed_high_count"] = 2
+        out["confirmed_low_count"] = 2
         out["structure_ready"] = True
         out["structure_trend"] = "up"
         out["last_swing_high"] = 101.0
@@ -154,6 +160,13 @@ def test_v2_does_not_carry_stale_hour_parent_across_missing_hour() -> None:
     missing = prepared.loc[~prepared["bos15_parent_identity_ok"]]
     assert not missing.empty
     assert missing["bos15_structure_trend"].eq("unavailable").all()
+    assert missing["bos15_confirmed_high_count"].isna().all()
+    assert missing["bos15_confirmed_low_count"].isna().all()
+    report = strategy.evaluation_diagnostics(prepared, len(prepared) - 1)
+    assert report["features"]["bos15_structure_health_reason"] == "structure_parent_missing"
+    assert report["features"]["bos15_confirmed_high_count"] is None
+    assert report["features"]["bos15_confirmed_low_count"] is None
+    assert report["eligible"] is False
 
 
 def test_v2_binds_the_newly_closed_hour_on_a_45_minute_decision() -> None:

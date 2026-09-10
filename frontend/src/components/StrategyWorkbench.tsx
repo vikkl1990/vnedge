@@ -28,7 +28,7 @@ const objectRecord = (value: unknown): Record<string, unknown> =>
 const firstReported = (...values: unknown[]) =>
   values.find((value) => value != null && value !== "");
 
-export function regimeView(evaluation: Record<string, unknown>) {
+export function regimeView(evaluation: Record<string, unknown>, lake: CorrectionLane["lake_contract"] = {}) {
   const features = objectRecord(evaluation.features);
   return {
     ready: firstReported(evaluation.mreg_ready, features.mreg_ready),
@@ -37,11 +37,13 @@ export function regimeView(evaluation: Record<string, unknown>) {
       evaluation.mreg_ema200_ready,
       features.ema200_ready,
       features.mreg_ema200_ready,
+      lake?.ema200_ready,
     ),
     dailyObservations: firstReported(
       evaluation.mreg_daily_observations,
       features.daily_observations,
       features.mreg_daily_observations,
+      lake?.daily_bars,
     ),
     emaState: firstReported(evaluation.mreg_ema_state, features.regime_ema_state),
     macdImpulse: firstReported(
@@ -70,6 +72,13 @@ export function structureView(evaluation: Record<string, unknown>) {
       evaluation.bos15_parent_identity_ok,
       features.bos15_parent_identity_ok,
     ),
+    reason: firstReported(features.bos15_structure_health_reason),
+    highCount: firstReported(features.bos15_confirmed_high_count),
+    lowCount: firstReported(features.bos15_confirmed_low_count),
+    lastReset: firstReported(features.bos15_last_quality_reset_at),
+    barsSinceReset: firstReported(features.bos15_eligible_bars_since_reset),
+    lastHighConfirmed: firstReported(features.bos15_last_high_confirmed_at),
+    lastLowConfirmed: firstReported(features.bos15_last_low_confirmed_at),
     avwap: firstReported(
       evaluation.mreg_avwap_source,
       features.mreg_avwap_source,
@@ -92,7 +101,7 @@ function Fact({ label, value, tone = "neutral" }: { label: string; value: string
   return (
     <div className="inspector-fact">
       <span>{label}</span>
-      <strong className={`fact-tone fact-tone--${tone}`}>{value}</strong>
+      <strong title={value} className={`fact-tone fact-tone--${tone}`}>{value}</strong>
     </div>
   );
 }
@@ -154,7 +163,7 @@ export function StrategyWorkbench() {
     if (!selectedId && lanes[0]) setSelectedId(lanes[0].lane_id);
   }, [lanes, selectedId]);
   const evaluation = lane?.last_eval ?? {};
-  const regime = regimeView(evaluation);
+  const regime = regimeView(evaluation, lane?.lake_contract);
   const structure = structureView(evaluation);
   const contextAges = lane?.runtime_contract?.context_age_seconds ?? {};
   const gateCounts = lane?.drought?.primary_gate_counts_24h ?? {};
@@ -194,9 +203,11 @@ export function StrategyWorkbench() {
           </div>
 
           <InspectorSection title="Regime" kicker="permission">
+            {lane.lake_contract?.evaluation_status === "awaiting_first_evaluation" &&
+              <Fact label="Evaluation" value="Awaiting first closed-bar evaluation" tone="warn" />}
             <Fact label="Ready" value={text(regime.ready, text(lane.drought?.mreg_ready))} tone={booleanTone(regime.ready ?? lane.drought?.mreg_ready)} />
             <Fact label="State" value={text(regime.state, "flat / unknown")} tone={regime.state === "continuation" ? "info" : "neutral"} />
-            <Fact label="EMA 200" value={text(regime.ema200Ready, "not reported")} tone={booleanTone(regime.ema200Ready)} />
+            <Fact label="EMA 200" value={text(regime.ema200Ready, lane.lake_contract?.evaluation_status === "awaiting_first_evaluation" ? "awaiting evaluation" : "not reported")} tone={booleanTone(regime.ema200Ready)} />
             <Fact label="Daily bars" value={text(regime.dailyObservations, "—")} />
             <Fact label="EMA · MACD · RSI" value={`${text(regime.emaState, "—")} · ${text(regime.macdImpulse, "—")} · ${text(regime.rsiZone, "—")}`} />
             <div className="context-age-grid">{(lane.runtime_contract?.context_tfs ?? []).map((tf) => <div key={tf}><span>{tf}</span><strong>{age(contextAges[tf])}</strong></div>)}</div>
@@ -207,6 +218,12 @@ export function StrategyWorkbench() {
             <Fact label="1h trend" value={text(structure.oneHourTrend)} />
             <Fact label="4h trend" value={text(structure.fourHourTrend)} />
             <Fact label="Parent identity" value={text(structure.parentIdentity)} tone={booleanTone(structure.parentIdentity)} />
+            <Fact label="Structure reason" value={text(structure.reason)} />
+            <Fact label="Confirmed highs / lows" value={`${text(structure.highCount, "—")} / 2 · ${text(structure.lowCount, "—")} / 2`} />
+            <Fact label="Last quality reset (UTC)" value={text(structure.lastReset, structure.barsSinceReset == null ? "not reported" : "none in frame")} />
+            <Fact label="Eligible bars since reset" value={text(structure.barsSinceReset, "—")} />
+            <Fact label="Last high confirmed (UTC)" value={text(structure.lastHighConfirmed, "none reported")} />
+            <Fact label="Last low confirmed (UTC)" value={text(structure.lastLowConfirmed, "none reported")} />
             <Fact label="AVWAP" value={text(structure.avwap, "unused")} />
           </InspectorSection>
 

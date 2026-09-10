@@ -348,7 +348,20 @@ def evaluate_bos_intents(
     return tuple(survived)
 
 
+STRUCTURE_HEALTH_DEFAULTS: dict[str, object] = {
+    # Diagnostics only: never consumed by fire, sizing, or permission logic.
+    "structure_health_reason": "invalid_series",
+    "confirmed_high_count": 0,
+    "confirmed_low_count": 0,
+    "last_quality_reset_at": "",
+    "eligible_bars_since_reset": 0,
+    "last_high_confirmed_at": "",
+    "last_low_confirmed_at": "",
+}
+
+
 _FEATURE_DEFAULTS: dict[str, object] = {
+    **STRUCTURE_HEALTH_DEFAULTS,
     "structure_ready": False,
     "structure_trend": StructureTrend.NONE.value,
     "structure_labels": "",
@@ -528,11 +541,22 @@ def _add_structure_features(
 
     highs: deque[SwingAnchor] = deque(maxlen=2)
     lows: deque[SwingAnchor] = deque(maxlen=2)
+    health_rows: list[dict[str, object]] = []
+    last_reset = ""
+    eligible_since_reset = 0
     for index, usable in enumerate(eligible):
         if not usable:
             highs.clear()
             lows.clear()
+            last_reset = bars[index].close_time.isoformat()
+            eligible_since_reset = 0
+            health_rows.append({
+                **STRUCTURE_HEALTH_DEFAULTS,
+                "structure_health_reason": "structure_parent_ineligible",
+                "last_quality_reset_at": last_reset,
+            })
             continue
+        eligible_since_reset += 1
         for anchor in confirmations.get(index, []):
             (lows if anchor.kind == SwingKind.LOW else highs).append(anchor)
 
@@ -549,6 +573,19 @@ def _add_structure_features(
             low_last=last_low,
         )
         trend = classify_hh_hl(pair)
+        health_rows.append({
+            "structure_health_reason": (
+                "confirmed_swing_pair_not_ready" if trend == StructureTrend.NONE
+                else "structure_range" if trend == StructureTrend.RANGE
+                else "directional_ready"
+            ),
+            "confirmed_high_count": len(highs),
+            "confirmed_low_count": len(lows),
+            "last_quality_reset_at": last_reset,
+            "eligible_bars_since_reset": eligible_since_reset,
+            "last_high_confirmed_at": last_high.confirmed_at.isoformat() if last_high else "",
+            "last_low_confirmed_at": last_low.confirmed_at.isoformat() if last_low else "",
+        })
         labels = structure_labels(pair)
         state = StructureState(
             as_of=bars[index].close_time,
@@ -582,6 +619,10 @@ def _add_structure_features(
         if high_vwap is not None:
             _set_feature(out, index, "swing_high_avwap", float(high_vwap))
         _set_feature(out, index, "dual_avwap_bias", bias)
+    if health_rows:
+        health_frame = pd.DataFrame(health_rows, index=out.index)
+        for name in STRUCTURE_HEALTH_DEFAULTS:
+            out[name] = health_frame[name]
     return out
 
 

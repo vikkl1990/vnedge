@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from vnedge.data.candles import Candle
 from vnedge.strategy.htf_regime_continuation_15m import (
@@ -20,6 +21,33 @@ from vnedge.strategy.strategy_registry import (
     is_capital_eligible,
     is_shadow_observe_eligible,
 )
+
+
+@pytest.mark.parametrize("parent_ok", [False, True])
+def test_v2_keeps_parent_and_swing_reset_evidence_in_diagnostics(monkeypatch, parent_ok):
+    strategy = HtfRegimeContinuation15mV2()
+    monkeypatch.setattr(HtfRegimeContinuation15mV1, "evaluation_diagnostics", lambda *args: {})
+    monkeypatch.setattr(strategy, "_missing_permission_context", lambda row: ())
+    frame = pd.DataFrame([{
+        "mreg_ready": 1,
+        "mreg_state": "mean_revert",
+        "bos15_parent_identity_ok": parent_ok,
+        "bos15_structure_ready": False if parent_ok else np.nan,
+        "bos15_structure_health_reason": "confirmed_swing_pair_not_ready",
+        "bos15_confirmed_high_count": 1 if parent_ok else np.nan,
+        "bos15_confirmed_low_count": 0 if parent_ok else np.nan,
+        "bos15_last_quality_reset_at": "2026-09-10T00:00:00+00:00" if parent_ok else "unavailable",
+    }])
+    report = strategy.evaluation_diagnostics(frame, 0)
+    features = report["features"]
+    assert features["bos15_parent_identity_ok"] is parent_ok
+    assert features["bos15_structure_ready"] is False
+    assert report["primary_failed_gate"] == ("regime_flat" if parent_ok else "structure_parent_missing")
+    assert "structure_not_ready" in report["all_failed_gates"]
+    assert features["bos15_confirmed_low_count"] == (0 if parent_ok else None)
+    assert features["bos15_structure_health_reason"] == (
+        "confirmed_swing_pair_not_ready" if parent_ok else "structure_parent_missing")
+    assert report["eligible"] is False
 
 
 def test_regime_strategy_is_next_open_research_only() -> None:

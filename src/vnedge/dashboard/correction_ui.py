@@ -558,6 +558,7 @@ def build_lanes_payload(
                 "health_reason": health_reasons[0] if health_reasons else None,
                 "health_reasons": health_reasons,
                 "health_details": health_details,
+                "lake_contract": dict(_mapping(lane.get("lake_contract"))),
                 "runtime_readiness": (
                     dict(_mapping(lane.get("runtime_readiness")))
                     if lane.get("runtime_readiness")
