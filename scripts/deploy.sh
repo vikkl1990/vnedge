@@ -121,11 +121,26 @@ fi
 if [ -n "${VNEDGE_DEPLOY_SERVICES:-}" ]; then
     for svc in $VNEDGE_DEPLOY_SERVICES; do
         case "$svc" in
-            delta-recorder|multi-lane-shadow|research-loop|agent-job-runner) ;;
+            delta-recorder|multi-lane-shadow|research-loop|agent-job-runner|dashboard-tls) ;;
             *) echo "unsupported scoped deploy target: $svc" >&2; exit 1 ;;
         esac
     done
     for svc in $VNEDGE_DEPLOY_SERVICES; do
+        if [ "$svc" = dashboard-tls ]; then
+            docker compose up -d --no-build --no-deps --force-recreate dashboard-tls
+            edge_ok=0
+            for _ in $(seq 1 30); do
+                if docker compose exec -T dashboard-tls wget -q --no-check-certificate --spider https://127.0.0.1:8765/healthz; then
+                    edge_ok=1
+                    break
+                fi
+                sleep 2
+            done
+            if [ "$edge_ok" != 1 ]; then
+                echo "scoped TLS edge failed its real listener health check" >&2; exit 1
+            fi
+            continue
+        fi
         docker compose --profile research up -d --no-build --no-deps "$svc"
         actual=$(docker compose exec -T "$svc" cat /app/BUILD_SHA)
         if [ "$actual" != "$HEAD_SHA" ]; then

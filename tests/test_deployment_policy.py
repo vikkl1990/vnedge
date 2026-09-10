@@ -47,8 +47,10 @@ def test_deploy_refreshes_tls_upstream_without_recreating_lane_dependency() -> N
     refresh = (
         "docker compose up -d --no-build --no-deps --force-recreate dashboard-tls"
     )
-    refresh_index = deploy.index(refresh)
     lane_proof_index = deploy.index("freshness OK: container recreated")
+    # Full rollout's edge refresh still follows full lane provenance. A
+    # separate scoped branch may also refresh only the edge earlier in source.
+    refresh_index = deploy.index(refresh, lane_proof_index)
     edge_index = deploy.index("waiting for TLS edge health")
     assert lane_proof_index < refresh_index < edge_index
 

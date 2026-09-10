@@ -223,6 +223,32 @@ curl --cacert cert.pem https://HOST:8765/healthz
 For production browser access, configure a DNS name and ACME certificate first;
 enable HSTS only after the valid-certificate path is serving reliably.
 
+### Explicit public measurement access
+
+Default remains private. A deliberate public dashboard can set
+`DASHBOARD_PUBLIC_READ_ONLY=1` and `DASHBOARD_ALLOWLIST=0.0.0.0/0,::/0` in the
+VM-local `.env`, with `DASHBOARD_BIND_IP=0.0.0.0`. This exposes dashboard state,
+performance, journal and research data to everyone. Do not use it when those
+read models contain information you intend to keep private.
+
+Retain the operator token and JWT secret; never blank or publish them. Anonymous
+visitors receive only a short-lived **viewer** cookie from `/whoami`. Existing
+CSRF-protected refresh and read-only WebSockets work without token entry.
+Settings, credentials, backtest submission and the separate Agent Gateway keep
+their existing authentication/permission checks. Capital gates are unchanged.
+
+Scoped rollout: `VNEDGE_DEPLOY_SERVICES="multi-lane-shadow dashboard-tls" bash scripts/deploy.sh`.
+This restarts only the dashboard runtime and TLS edge, not the canonical owners
+or research workers. Verify anonymous `/whoami` is viewer, `/app/` loads, and
+Settings/backtest writes reject the viewer. `/ready` remains an independent
+workflow check and may still return 503.
+
+To revert, restore `DASHBOARD_PUBLIC_READ_ONLY=0` and the prior narrow allowlist,
+then repeat the scoped rollout. Public viewer cookies are refused immediately
+by the restarted private app, even if the JWT signing key is unchanged. A trusted
+DNS/TLS deployment is still recommended; public view does not fix self-signed
+certificate warnings.
+
 ## Verification and shutdown
 
 ```bash

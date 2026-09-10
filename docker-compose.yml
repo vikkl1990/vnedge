@@ -18,6 +18,8 @@ services:
       DASHBOARD_USERS: "${DASHBOARD_USERS:-}"
       DASHBOARD_JWT_SECRET: "${DASHBOARD_JWT_SECRET:-}"
       DASHBOARD_COOKIE_SECURE: "${DASHBOARD_COOKIE_SECURE:-true}"
+      # Explicit public measurement view only; operator/agent auth stays on.
+      DASHBOARD_PUBLIC_READ_ONLY: "${DASHBOARD_PUBLIC_READ_ONLY:-0}"
       # Credentials in URLs leak into browser history, proxy logs, screenshots,
       # and referrers. Production always uses the bearer-to-cookie login flow.
       DASHBOARD_ALLOW_QUERY_TOKEN: "0"

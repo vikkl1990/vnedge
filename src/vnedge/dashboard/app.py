@@ -4,6 +4,8 @@ Hard invariants, enforced structurally:
 - No token, no dashboard: `create_app` refuses to start without at least one
   authorized user (legacy shared token or per-user store — see auth.py and
   docs/DASHBOARD_AUTH.md).
+- Explicit public-view opt-in grants measurements as viewer only; operator
+  credentials remain required and privileged/agent routes remain protected.
 - Zero order or promotion actions: scoped mutations can manage operator
   settings or queue a bounded research-only backtest, but cannot mutate
   trading state, execute research inline, or promote a strategy.
@@ -121,6 +123,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _APP_START = time.time()
 _SESSION_COOKIE = "vnedge_session"
+_PUBLIC_VIEWER_NAME = "__vnedge_public_viewer__"
 _CSRF_COOKIE = "vnedge_csrf"
 
 
@@ -631,6 +634,11 @@ def create_app(
             "— no token, no dashboard"
         )
     store = TokenStore(users)
+    if any(user.name == _PUBLIC_VIEWER_NAME for user in users):
+        raise ValueError("reserved public dashboard identity")
+    # Explicit opt-in exposes measurement data only. Operator credentials are
+    # still required at startup and every privileged route retains RBAC.
+    public_read_only = os.environ.get("DASHBOARD_PUBLIC_READ_ONLY", "0").strip() == "1"
     # Short-lived session tokens: present the root token once to POST /auth/session
     # to mint a JWT, then the root secret stops travelling on every request.
     issuer = session_issuer if session_issuer is not None else SessionIssuer.from_env()
@@ -906,6 +914,15 @@ def create_app(
             ),
         )
 
+    def _credential(candidate: str) -> AuthResult:
+        result = issuer.verify(candidate) or store.authenticate(candidate)
+        if result.name == _PUBLIC_VIEWER_NAME and not public_read_only:
+            return AuthResult(authorized=False, reason="public dashboard access disabled")
+        return result
+
+    def _public_viewer() -> AuthResult:
+        return AuthResult(authorized=True, name=_PUBLIC_VIEWER_NAME, role="viewer")
+
     def _authorized(request: Request) -> AuthResult:
         """Authenticate the request; raise 401 (with the store's reason —
         e.g. expiry) on failure. Never returns an unauthorized result."""
@@ -928,13 +945,10 @@ def create_app(
         # A short-lived session JWT is honored first; anything that isn't one of
         # ours (verify -> None) falls through to the long-lived token store, so
         # existing tokens keep working unchanged.
-        session = issuer.verify(candidate)
-        if session is not None:
-            if not session.authorized:
-                raise HTTPException(status_code=401, detail=session.reason or "invalid session")
-            request.state.vnedge_auth_method = method
-            return session
-        result = store.authenticate(candidate)
+        result = _credential(candidate)
+        if not result.authorized and public_read_only and request.method in {"GET", "HEAD"}:
+            request.state.vnedge_auth_method = "public_viewer"
+            return _public_viewer()
         if not result.authorized:
             raise HTTPException(
                 status_code=401, detail=result.reason or "missing or invalid token"
@@ -990,6 +1004,7 @@ def create_app(
                 "expires_at": session.expires_at.isoformat(),
                 "name": user.name,
                 "role": user.role,
+                "permissions": permissions_for(user.role),
                 "rotated": True,
             },
             headers=_identity(user),
@@ -1463,6 +1478,10 @@ def create_app(
         the server still enforces every control server-side via
         `_require_permission`."""
         user = _authorized(request)
+        if getattr(request.state, "vnedge_auth_method", "") == "public_viewer":
+            # Existing browser refresh/WS code uses the same short-lived cookie
+            # flow. Never place a shared viewer/operator credential in the UI.
+            return _issue_session_response(user)
         return JSONResponse(
             {
                 "name": user.name,
@@ -3360,7 +3379,9 @@ def create_app(
     async def market_pulse_stream(websocket: WebSocket) -> None:
         """Five-second coalesced pulse stream; never forwards individual ticks."""
         candidate = websocket.cookies.get(_SESSION_COOKIE, "")
-        result = issuer.verify(candidate) or store.authenticate(candidate)
+        result = _credential(candidate)
+        if not result.authorized and public_read_only:
+            result = _public_viewer()
         if not result.authorized:
             await websocket.close(
                 code=4401,
@@ -3393,7 +3414,9 @@ def create_app(
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
         candidate = websocket.cookies.get(_SESSION_COOKIE, "")
-        result = issuer.verify(candidate) or store.authenticate(candidate)
+        result = _credential(candidate)
+        if not result.authorized and public_read_only:
+            result = _public_viewer()
         if not result.authorized:
             await websocket.close(
                 code=4401, reason=(result.reason or "missing or invalid token")[:120]
