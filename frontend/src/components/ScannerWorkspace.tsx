@@ -174,7 +174,7 @@ export function ScannerWorkspace({
               label="signal drought"
               value={(selected.drought?.drought_class ?? "not observed").replace(/_/g, " ")}
               detail={`eval ${selected.drought?.eval_age_s == null ? "n/a" : age(selected.drought.eval_age_s)} · setup ${selected.drought?.setup_age_s == null ? "none" : age(selected.drought.setup_age_s)} · evidence ${selected.drought?.evidence_age_s == null ? "none" : age(selected.drought.evidence_age_s)} · ${selected.drought?.decision_transport ?? selected.decision_transport}`}
-              tone={selected.drought?.drought_class === "ops_silent" || selected.drought?.drought_class === "identity_bug" ? "bad" : selected.drought?.drought_class === "quote_or_cost_wait" ? "warn" : "info"}
+              tone={["ops_silent", "identity_bug", "context_unhealthy"].includes(selected.drought?.drought_class ?? "") ? "bad" : selected.drought?.drought_class === "quote_or_cost_wait" ? "warn" : "info"}
             />
             {clock?.entry_clock === "execution_route" && <Criterion
               label="route evidence"

@@ -15,6 +15,7 @@ from typing import Literal
 DroughtClass = Literal[
     "ops_silent",
     "identity_bug",
+    "context_unhealthy",
     "quote_or_cost_wait",
     "playbook_wait",
     "healthy_wait",
@@ -315,6 +316,12 @@ class SignalDroughtTracker:
             or self.last_primary_failed_gate == "entry_evidence_rejected"
         ):
             drought_class = "identity_bug"
+        elif self.last_primary_failed_gate in {
+            "htf_context_missing", "market_regime_not_ready", "structure_parent_missing",
+        } or self.mreg_ready is False:
+            # Current data/permission failure outranks historic playbook counts
+            # and old, still-unaccepted setups. A missing plane (None) is unused.
+            drought_class = "context_unhealthy"
         elif self.last_setup_at is not None and (
             self.last_accept_at is None or self.last_setup_at > self.last_accept_at
         ):

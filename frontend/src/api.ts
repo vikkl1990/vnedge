@@ -464,7 +464,7 @@ export interface CorrectionLane {
   candle_source: string;
   decision_transport: string;
   drought: {
-    drought_class: "ops_silent" | "identity_bug" | "quote_or_cost_wait" | "playbook_wait" | "healthy_wait";
+    drought_class: "ops_silent" | "identity_bug" | "context_unhealthy" | "quote_or_cost_wait" | "playbook_wait" | "healthy_wait";
     last_decision_open: string | null;
     last_decision_close: string | null;
     last_eval_at: string | null;

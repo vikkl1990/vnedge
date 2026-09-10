@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -551,6 +552,96 @@ async def test_runtime_retries_missed_htf_bind_on_next_decision_bar(tmp_path):
     assert strategy.context == [context]
     assert strategy.context_health[-1] == ("4h", True)
     assert session._canonical_context_retry == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cached", [False, True])
+async def test_registered_official_htf_refresh_preserves_source_without_lake_write(tmp_path, monkeypatch, cached):
+    from vnedge.runtime.context_refresh import official_context_row
+    from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+
+    strategy = CanonicalContextLong()
+    strategy._regime_frames = {"4h": pd.DataFrame()}
+    strategy.bind_canonical_context = lambda tf, frame: strategy._regime_frames.update({tf: frame})
+    session, _ = build_session(tmp_path, FakeFeed([]), strategy=strategy,
+                               canonical_candle_store=IndexedCanonicalStore(None),
+                               canonical_candle_wait_seconds=0.1)
+    session.runtime_contract = replace(scanner_runtime_contract("htf_regime_continuation_15m_v2"),
+                                       context_timeframes=("4h",))
+    opened = datetime(2026, 8, 26, tzinfo=UTC)
+    row = official_context_row([[int(opened.timestamp()*1000), 100, 104, 99, 103, 10]],
+        symbol=SYM, timeframe="4h", opened=opened, now=opened+timedelta(hours=4))
+    calls = []
+    async def fetch(tf, at):
+        calls.append((tf, at)); return row
+    monkeypatch.setattr(session, "_fetch_official_context_row", fetch)
+    if cached:
+        strategy._regime_frames["4h"] = pd.DataFrame([row])
+    decision = int((opened+timedelta(hours=3)).timestamp()*1000)
+    await session._refresh_canonical_strategy_context([decision, 1, 1, 1, 1, 1])
+    assert len(calls) == (0 if cached else 1)
+    bound = strategy._regime_frames["4h"].iloc[-1]
+    assert bound["candle_source"] == "exchange_ohlcv_validated"
+    assert bound["content_sha256"] == row["content_sha256"]
+    assert strategy.context == []  # never passed official OHLC as a canonical Candle
+    assert strategy.context_health[-1] == ("4h", True)
+    assert session._canonical_context_retry == set()
+    journal = session.journal.read_all()
+    assert any(r["kind"] == "context_source_bound" for r in journal)
+    assert not any(r["kind"] == "canonical_context_timeout" for r in journal)
+    assert session.canonical_candle_store.candle is None
+    strategy._regime_health = {"4h": True}
+    # No last_eval after restart must not compare every row against pandas NaT.
+    session.last_eval = None
+    status = session._lake_decision_status(opened + timedelta(hours=4))
+    assert status["context"]["4h"]["bound"] is True
+    assert status["identity_ok"] is False  # still no evaluated decision identity
+    # Canonical-only 15m decision authority is unchanged.
+    assert await session._await_canonical_candle([decision, 1, 1, 1, 1, 1]) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "error", "stale", "corrupt"])
+async def test_official_htf_refresh_fails_closed_and_retries(tmp_path, monkeypatch, failure):
+    from vnedge.runtime.context_refresh import official_context_row
+    from vnedge.strategy.scanner_contracts import scanner_runtime_contract
+
+    strategy = CanonicalContextLong()
+    strategy._regime_frames = {"4h": pd.DataFrame()}
+    strategy.bind_canonical_context = lambda tf, frame: strategy._regime_frames.update({tf: frame})
+    session, _ = build_session(tmp_path, FakeFeed([]), strategy=strategy,
+                               canonical_candle_store=IndexedCanonicalStore(None),
+                               canonical_candle_wait_seconds=0.1)
+    session.runtime_contract = replace(scanner_runtime_contract("htf_regime_continuation_15m_v2"),
+                                       context_timeframes=("4h",))
+    opened = datetime(2026, 8, 26, tzinfo=UTC)
+    async def fetch(tf, at):
+        if failure == "error": raise OSError("unavailable")
+        if failure == "missing": return None
+        actual = at-timedelta(hours=4) if failure == "stale" else at
+        row = official_context_row([[int(actual.timestamp()*1000), 100,104,99,103,10]],
+            symbol=SYM, timeframe=tf, opened=actual, now=at+timedelta(hours=4))
+        if failure == "corrupt": row["content_sha256"] = "0"*64
+        return row
+    monkeypatch.setattr(session, "_fetch_official_context_row", fetch)
+    await session._refresh_canonical_strategy_context([
+        int((opened+timedelta(hours=3)).timestamp()*1000), 1,1,1,1,1])
+    assert strategy.context_health[-1] == ("4h", False)
+    assert session._canonical_context_retry == {"4h"}
+    assert strategy._regime_frames["4h"].empty
+
+
+@pytest.mark.asyncio
+async def test_canonical_only_context_does_not_fetch_official(tmp_path, monkeypatch):
+    strategy = CanonicalContextLong()
+    session, _ = build_session(tmp_path, FakeFeed([]), strategy=strategy,
+                               canonical_candle_store=IndexedCanonicalStore(None))
+    async def forbidden(*args):
+        pytest.fail("canonical-only strategy must not fetch official context")
+    monkeypatch.setattr(session, "_fetch_official_context_row", forbidden)
+    opened = datetime(2026, 8, 26, 3, tzinfo=UTC)
+    await session._refresh_canonical_strategy_context([int(opened.timestamp()*1000),1,1,1,1,1])
+    assert strategy.context_health[-1] == ("4h", False)
 
 
 def test_active_scanner_runtime_contract_controls_cost_and_hold(tmp_path):

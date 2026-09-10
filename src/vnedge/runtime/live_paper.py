@@ -76,6 +76,11 @@ from vnedge.runtime.canonical_candle_router import (
     next_durable_candle,
 )
 from vnedge.runtime.canonical_parity import assert_router_authority_artifact
+from vnedge.runtime.context_refresh import (
+    OFFICIAL_CONTEXT_SOURCE,
+    exact_context_row,
+    official_context_row,
+)
 from vnedge.runtime.daily_factory import (
     entry_block_reason,
     session_day,
@@ -1151,13 +1156,43 @@ class LivePaperSession:
                 return False
             await asyncio.sleep(min(poll, max(0.0, deadline - loop.time())))
 
+    async def _fetch_official_context_row(
+        self, timeframe: str, opened: datetime,
+    ) -> dict | None:
+        """Bounded public fetch for an explicitly registered HTF source only."""
+        from vnedge.data.ccxt_client import CcxtPublicClient
+
+        async with CcxtPublicClient(self.feed.exchange_id) as rest:
+            rows = await rest.fetch_candles(
+                self.config.symbol, timeframe, int(opened.timestamp() * 1000),
+                int((opened + timedelta(seconds=TF_SECONDS[timeframe])).timestamp() * 1000),
+            )
+        return official_context_row(rows, symbol=self.config.symbol, timeframe=timeframe,
+                                    opened=opened, now=datetime.now(UTC))
+
+    def _bind_registered_context_row(self, timeframe: str, row: dict) -> None:
+        """Preserve row provenance and the warm-up prefix; never write the lake."""
+        frames = self.strategy._regime_frames
+        frame = frames.get(timeframe, pd.DataFrame())
+        merged = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
+        merged = (merged.drop_duplicates("timestamp", keep="last")
+                  .sort_values("timestamp").tail(max(800, len(frame))).reset_index(drop=True))
+        self.strategy.bind_canonical_context(timeframe, merged)
+        self.journal.append("context_source_bound", {
+            "strategy_id": self.strategy.strategy_id, "symbol": self.config.symbol,
+            "timeframe": timeframe, "bar_ts": pd.Timestamp(row["timestamp"]).isoformat(),
+            "source": row["candle_source"], "content_sha256": row["content_sha256"],
+            "ohlcv": {k: float(row[k]) for k in ("open", "high", "low", "close", "volume")},
+            "scope": "htf_permission_only", "canonical_lake_modified": False,
+        })
+
     async def _refresh_canonical_strategy_context(self, raw_row: list) -> bool:
         """Advance HTF context at its close boundary and retry missed binds.
 
         The venue LTF close is merely the clock event. A structure scanner may
-        consume a new 4h state only after the exact trade-derived 4h candle is
-        durable. Missing context blocks that scanner's newest decision without
-        degrading unrelated exits or measurement lanes.
+        consume only exact closed identities from its registered context sources.
+        V2 permits validated official HTF OHLC, unlike its canonical-only 15m
+        decisions. Missing context blocks entries, never unrelated exits.
         """
         timeframes = (
             self.runtime_contract.context_tfs
@@ -1200,7 +1235,23 @@ class LivePaperSession:
             opened = pd.to_datetime(expected_open_ms, unit="ms", utc=True)
             deadline = loop.time() + float(self.config.canonical_candle_wait_seconds)
             canonical: Candle | None = None
+            registered_row: dict | None = None
+            sources = self.runtime_contract.context_candle_sources if self.runtime_contract else ()
+            allow_official = (
+                OFFICIAL_CONTEXT_SOURCE in sources
+                and callable(getattr(self.strategy, "bind_canonical_context", None))
+                and isinstance(getattr(self.strategy, "_regime_frames", None), dict)
+            )
+            if allow_official:
+                registered_row = exact_context_row(
+                    self.strategy._regime_frames.get(timeframe, pd.DataFrame()),
+                    symbol=self.config.symbol, timeframe=timeframe,
+                    opened=opened.to_pydatetime(), allowed_sources=tuple(sources),
+                )
+            official_attempted = False
             while canonical is None:
+                if registered_row is not None:
+                    break
                 try:
                     get_bar = getattr(self.canonical_candle_store, "get_bar", None)
                     if callable(get_bar):
@@ -1228,6 +1279,25 @@ class LivePaperSession:
                         )
                 except (OSError, ValueError):
                     canonical = None
+                if canonical is None and allow_official and not official_attempted:
+                    official_attempted = True
+                    try:
+                        candidate = await asyncio.wait_for(
+                            self._fetch_official_context_row(timeframe, opened.to_pydatetime()),
+                            timeout=min(5.0, float(self.config.canonical_candle_wait_seconds)),
+                        )
+                        if candidate is not None:
+                            registered_row = exact_context_row(
+                                pd.DataFrame([candidate]), symbol=self.config.symbol,
+                                timeframe=timeframe, opened=opened.to_pydatetime(),
+                                allowed_sources=(OFFICIAL_CONTEXT_SOURCE,),
+                            )
+                    except Exception as exc:  # noqa: BLE001 - public adapter failures must fail closed
+                        logger.warning("HTF official context unavailable: %s %s %s",
+                                       self.config.symbol, timeframe, type(exc).__name__)
+                    # Do not spend another eight seconds polling a known gap.
+                    # The next closed decision retries; no permission is invented.
+                    break
                 if canonical is not None or loop.time() >= deadline:
                     break
                 await asyncio.sleep(
@@ -1236,7 +1306,7 @@ class LivePaperSession:
                         max(0.0, deadline - loop.time()),
                     )
                 )
-            if canonical is None:
+            if canonical is None and registered_row is None:
                 self._canonical_context_retry.add(timeframe)
                 if callable(set_health):
                     set_health(timeframe, False)
@@ -1251,11 +1321,12 @@ class LivePaperSession:
                     },
                 )
                 continue
-            ingest(canonical)
+            if registered_row is not None:
+                self._bind_registered_context_row(timeframe, registered_row)
+            else:
+                ingest(canonical)
             self._canonical_context_retry.discard(timeframe)
-            self._canonical_context_last_closed_at[timeframe] = canonical.open_time + timedelta(
-                milliseconds=context_ms
-            )
+            self._canonical_context_last_closed_at[timeframe] = expected_close
             if callable(set_health):
                 set_health(timeframe, True)
             self.journal.append(
@@ -1265,6 +1336,7 @@ class LivePaperSession:
                     "symbol": self.config.symbol,
                     "timeframe": timeframe,
                     "bar_ts": opened.isoformat(),
+                    "source": registered_row["candle_source"] if registered_row else "canonical_tick_lake",
                 },
             )
         return boundary_observed
@@ -1839,6 +1911,8 @@ class LivePaperSession:
         missing: list[str] = []
         decision_close_raw = last_eval.get("decision_at")
         try:
+            if not decision_close_raw or pd.isna(pd.Timestamp(decision_close_raw)):
+                raise ValueError("no decision evaluated since startup")
             decision_close = pd.Timestamp(decision_close_raw).to_pydatetime()
             if decision_close.tzinfo is None:
                 decision_close = decision_close.replace(tzinfo=UTC)
@@ -1846,6 +1920,14 @@ class LivePaperSession:
                 decision_close = decision_close.astimezone(UTC)
         except (TypeError, ValueError):
             decision_close = at
+        if features.get("daily_observations") is None and isinstance(frames, dict):
+            daily = frames.get("1d")
+            if isinstance(daily, pd.DataFrame) and "timestamp" in daily:
+                # Before the first live evaluation, show the actual loaded
+                # closed prefix instead of claiming warm-up history is absent.
+                # EMA readiness still requires evaluated feature evidence.
+                daily_bars = int((pd.to_datetime(daily.timestamp, utc=True, errors="coerce")
+                                  + pd.Timedelta(days=1) <= pd.Timestamp(decision_close)).sum())
         for timeframe in context_tfs:
             frame = frames.get(timeframe) if isinstance(frames, dict) else None
             row: pd.Series | None = None

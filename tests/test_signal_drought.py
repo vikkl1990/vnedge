@@ -139,6 +139,19 @@ def test_long_eval_age_is_ops_silent() -> None:
     assert out.drought_class == "ops_silent"
 
 
+@pytest.mark.parametrize("gate", ["htf_context_missing", "market_regime_not_ready", "structure_parent_missing"])
+def test_current_context_failure_overrides_historical_playbook_mode(gate):
+    value = tracker()
+    for i in range(10):
+        note_eval(value, at=NOW-timedelta(minutes=15*(10-i)), primary="regime_flat")
+    note_eval(value, primary=gate, all_failed=(gate, "regime_flat"))
+    out = value.snapshot(now=NOW+timedelta(seconds=10), timeframe_seconds=900)
+    assert out.drought_class == "context_unhealthy"
+    assert out.primary_gate_counts_24h["regime_flat"] == 10
+    note_eval(value, at=NOW+timedelta(minutes=15), primary="regime_flat")
+    assert value.snapshot(now=NOW+timedelta(minutes=16), timeframe_seconds=900).drought_class == "playbook_wait"
+
+
 def test_primary_and_all_histograms_roll_for_24_hours() -> None:
     value = tracker()
     note_eval(value, at=NOW - timedelta(hours=25), primary="old", all_failed=("old",))
