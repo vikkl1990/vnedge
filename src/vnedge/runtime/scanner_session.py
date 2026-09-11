@@ -41,7 +41,7 @@ class SessionCosts:
       from explicit settled prints by the position ledger. The pre-trade
       safety reserve is deliberately excluded from booked trade PnL.
     * ``cost_model`` None -- the legacy FEE-ONLY behaviour. It understates the
-      true cost by slip_in + slip_out + safety (8 bps on delta_scalp) and is
+      modeled cost by slip_in + slip_out (6 bps on delta_scalp) and is
       retained only so older measurements remain reproducible.
 
     ``taker_bps`` defaults to 5.9 because that is Delta's all-in taker leg
@@ -73,7 +73,7 @@ class SessionCosts:
                      free_close_within_bars: int = 0,
                      bar_minutes: float = 5.0,
                      funding_bps_per_8h: float = 0.0) -> SessionCosts:
-        """Build booked execution costs from the canonical profile.
+        """Build estimated research costs from the canonical profile.
 
         The profile still owns its safety reserve for entry gating; completed
         scanner trades exclude that non-venue reserve in ``round_trip_bps``.
@@ -143,6 +143,10 @@ class ScannerTrade:
     #: gross_bps it gives MFE CAPTURE: what fraction of the trade's best
     #: moment the exit actually banked.
     mfe_bps: float = 0.0
+    cost_basis: str = "research_estimate"
+    cost_profile_id: str = "legacy_fee_only"
+    cost_config_sha256: str | None = None
+    entry_liquidity: str = "taker"
 
     @property
     def entry_time(self) -> dt.datetime:
@@ -330,6 +334,9 @@ class ScannerSession:
             net_bps=gross - fee, gross_bps=gross, fee_bps=fee,
             chase_bps=opened["chase_bps"],
             mfe_bps=decision.mfe / opened["entry"] * 1e4 if opened["entry"] else 0.0,
+            cost_profile_id=(self.costs.cost_model.profile if self.costs.cost_model else "legacy_fee_only"),
+            cost_config_sha256=(self.costs.cost_model.config_sha256 if self.costs.cost_model else None),
+            entry_liquidity="maker" if opened.get("maker", False) else "taker",
         )
         self.trades.append(trade)
         self.trigger.notify_flat(i, won=decision.won)

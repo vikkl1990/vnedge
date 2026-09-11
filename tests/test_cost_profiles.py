@@ -23,6 +23,7 @@ def test_profiles_registered():
         "delta_swing_eth_v1",
         "scalp",
         "delta_scalp",
+        "delta_scalp_v2",
     }
 
 

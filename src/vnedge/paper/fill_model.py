@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from vnedge.plan.cash_costs import fee_cash
 from vnedge.plan.cost_model import (
-    DEFAULT_MAKER_FEE_BPS, DEFAULT_SLIP_BPS, DEFAULT_TAKER_FEE_BPS,
+    DEFAULT_MAKER_FEE_BPS,
+    DEFAULT_SLIP_BPS,
+    DEFAULT_TAKER_FEE_BPS,
 )
 
 
@@ -37,7 +40,7 @@ class FillModel(BaseModel):
 
     def fee_usd(self, notional_usd: float, *, maker: bool = False) -> float:
         bps = self.maker_fee_bps if maker else self.taker_fee_bps
-        return abs(notional_usd) * bps / 10_000.0
+        return float(fee_cash(notional_usd, bps))
 
     def fill_quantity(self, requested: float) -> float:
         if self.partial_fill_fraction is None:

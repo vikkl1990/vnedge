@@ -485,6 +485,9 @@ def replay_scanner(
     return {
         "schema_version": 2,
         "net_bps_semantics": "booked_execution",
+        "cost_basis": "research_estimate",
+        "cost_profile_id": cost_profile,
+        "cost_config_sha256": cost_model.config_sha256,
         "generated_at": datetime.now(UTC).isoformat(),
         "strategy_id": strategy_id,
         "entry_clock": entry_clock,
@@ -1823,6 +1826,7 @@ def main() -> None:
         atomic_write(args.out, {
             "schema_version": 2,
             "net_bps_semantics": "booked_execution",
+            "cost_basis": "research_estimate",
             "generated_at": datetime.now(UTC).isoformat(),
             "read_only": True,
             "replays": [

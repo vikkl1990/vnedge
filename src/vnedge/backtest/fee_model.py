@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from vnedge.plan.cash_costs import fee_cash
 from vnedge.plan.cost_model import DEFAULT_MAKER_FEE_BPS, DEFAULT_TAKER_FEE_BPS
 
 
@@ -21,7 +22,7 @@ class FeeModel(BaseModel):
     taker_bps: float = Field(default=DEFAULT_TAKER_FEE_BPS, ge=0)
 
     def taker_fee_usd(self, notional_usd: float) -> float:
-        return abs(notional_usd) * self.taker_bps / 10_000.0
+        return float(fee_cash(notional_usd, self.taker_bps))
 
     def maker_fee_usd(self, notional_usd: float) -> float:
-        return abs(notional_usd) * self.maker_bps / 10_000.0
+        return float(fee_cash(notional_usd, self.maker_bps))

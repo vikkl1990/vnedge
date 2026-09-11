@@ -5,7 +5,10 @@ allowed a private fee assumption; a plan's cost fields are filled from here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import hashlib
+import json
+from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 
 # Canonical default fee/slip constants — the ONE source. The backtest FeeModel /
 # SlippageModel and the paper FillModel default from these (see their modules),
@@ -34,6 +37,7 @@ class CostModelConfig:
     gate_safety_mult: float = 2.0
     free_exit_within_minutes: float | None = None
     free_exit_fee_bps: float = 0.0
+    execution_policy: str = "legacy_v1"
 
 
 # Named cost worlds. One CostModel per lane profile — no private fee assumptions.
@@ -67,6 +71,11 @@ _DELTA_SCALP = CostModelConfig(
     safety_buffer_bps=2.0, gate_safety_mult=3.5,
     maker_adverse_bps=1.5, fee_gst_mult=1.18,
 )
+# Opt-in correction, not an alias: existing experiments retain their old bills.
+# Maker adverse selection is a floor, not a discount against entry impact.
+_DELTA_SCALP_V2 = replace(
+    _DELTA_SCALP, profile="delta_scalp_v2", execution_policy="conservative_shared_v2",
+)
 COST_PROFILES: dict[str, CostModelConfig] = {
     "swing": _SWING,
     "delta_swing": _DELTA_SWING,
@@ -74,6 +83,7 @@ COST_PROFILES: dict[str, CostModelConfig] = {
     "delta_swing_eth_v1": _DELTA_SWING_ETH_V1,
     "scalp": _SCALP,
     "delta_scalp": _DELTA_SCALP,
+    "delta_scalp_v2": _DELTA_SCALP_V2,
 }
 
 
@@ -98,6 +108,37 @@ class CostModel:
     def fee_bps(self, *, maker: bool = False) -> float:
         return self.config.maker_fee_bps if maker else self.config.taker_fee_bps
 
+    @property
+    def config_sha256(self) -> str:
+        payload = json.dumps(asdict(self.config), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def execution_bps(
+        self, *, maker_entry: bool = False, aggressive: bool = False,
+        legacy_gate: bool = False,
+    ) -> Decimal:
+        """Estimated round-trip impact; NOT a charge to subtract from fills.
+
+        Legacy gates used a cheaper maker floor than legacy research. Preserve
+        those frozen paths explicitly. New v2 profiles share the stricter floor.
+        """
+        c = self.config
+        entry = Decimal(str(c.default_slip_entry_bps))
+        exit_ = Decimal(str(c.default_slip_exit_bps))
+        adverse = Decimal(str(c.maker_adverse_bps))
+        if c.execution_policy == "conservative_shared_v2":
+            if maker_entry:
+                entry = max(entry, adverse)
+        elif c.execution_policy == "legacy_v1":
+            if legacy_gate and maker_entry:
+                entry = adverse
+        else:
+            raise ValueError(f"unknown execution policy: {c.execution_policy}")
+        if aggressive:
+            entry *= Decimal("1.5")
+            exit_ *= Decimal("1.5")
+        return entry + exit_
+
     def round_trip_bps(
         self, *, maker_entry: bool = False, maker_exit: bool = False,
         funding_bps: float = 0.0, include_safety: bool = True,
@@ -118,7 +159,11 @@ class CostModel:
             fee_out = c.free_exit_fee_bps
         funding = funding_bps if c.funding_accrual else 0.0
         fees = (self.fee_bps(maker=maker_entry) + fee_out) * c.fee_gst_mult
-        rt = fees + c.default_slip_entry_bps + c.default_slip_exit_bps + funding
+        if c.execution_policy == "legacy_v1":
+            # Preserve historical float operation order as well as assumptions.
+            rt = fees + c.default_slip_entry_bps + c.default_slip_exit_bps + funding
+        else:
+            rt = fees + float(self.execution_bps(maker_entry=maker_entry)) + funding
         if include_safety:
             rt += c.safety_buffer_bps
         return rt
@@ -127,7 +172,10 @@ class CostModel:
         self, gross_bps: float, *, funding_bps: float = 0.0,
         maker_entry: bool = False, maker_exit: bool = False,
     ) -> float:
-        """Booked PnL: gross move minus fees/slippage/funding only.
+        """Estimated research net: gross move minus modeled costs only.
+
+        Do not apply this to actual fill-to-fill PnL: execution prices already
+        contain spread/impact. Actual charges require cash reconciliation.
 
         The safety reserve belongs to pre-trade gating and is never charged to
         the account. Call ``round_trip_bps(include_safety=True)`` explicitly

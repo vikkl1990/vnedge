@@ -50,6 +50,11 @@ class CostDecisionEvidence:
     gate_cost_bps: str | None = None
     approval_gross_floor_bps: str | None = None
     reason: str | None = None
+    cost_basis: str | None = None
+    cost_profile_id: str | None = None
+    cost_config_sha256: str | None = None
+    execution_policy: str | None = None
+    estimated_execution_bps: str | None = None
 
     @classmethod
     def not_evaluated(cls, reason: str = "not_evaluated") -> CostDecisionEvidence:
@@ -83,10 +88,18 @@ class CostDecisionEvidence:
                 str(getattr(cost, "approval_gross_floor_bps", "")) or None
             ),
             reason=str(reason) if reason else None,
+            cost_basis=getattr(cost, "cost_basis", None),
+            cost_profile_id=getattr(cost, "cost_profile_id", None),
+            cost_config_sha256=getattr(cost, "cost_config_sha256", None),
+            execution_policy=getattr(cost, "execution_policy", None),
+            estimated_execution_bps=(
+                str(cost.estimated_execution_bps)
+                if getattr(cost, "estimated_execution_bps", None) is not None else None
+            ),
         )
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "approved": self.approved,
             "profile": self.profile,
             "expected_net_bps": self.expected_net_bps,
@@ -99,6 +112,14 @@ class CostDecisionEvidence:
             "approval_gross_floor_bps": self.approval_gross_floor_bps,
             "reason": self.reason,
         }
+        # Preserve old evidence bytes when reading a legacy/no-cost snapshot;
+        # new gate results carry attribution all the way into the journal.
+        for name in ("cost_basis", "cost_profile_id", "cost_config_sha256",
+                     "execution_policy", "estimated_execution_bps"):
+            value = getattr(self, name)
+            if value is not None:
+                payload[name] = value
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from vnedge.plan.cost_model import (
     COST_PROFILES,
+    CostModel,
 )
 from vnedge.risk.fee_model import FeeModelPrediction
 
@@ -43,6 +44,7 @@ class CostProfile(str, Enum):
     DELTA_SWING_BTC_V1 = "delta_swing_btc_v1"
     DELTA_SWING_ETH_V1 = "delta_swing_eth_v1"
     DELTA_SCALP = "delta_scalp"  # Delta India HF (adds 18% GST on fees)
+    DELTA_SCALP_V2 = "delta_scalp_v2"
 
 
 class CostEstimate(BaseModel):
@@ -52,8 +54,13 @@ class CostEstimate(BaseModel):
     funding_bps: Decimal  # signed: +cost for the paying side, -rebate for the other
     total_cost_bps: Decimal
     # Explicit, non-overlapping cost semantics. ``total_cost_bps`` remains a
-    # compatibility alias for booked execution cost.
+    # compatibility alias for ESTIMATED execution cost, never actual charges.
     booked_execution_bps: Decimal
+    estimated_execution_bps: Decimal
+    cost_basis: str = "pretrade_estimate"
+    cost_profile_id: str
+    cost_config_sha256: str
+    execution_policy: str
     safety_reserve_bps: Decimal
     gate_cost_bps: Decimal
     approval_gross_floor_bps: Decimal
@@ -144,16 +151,10 @@ class CostGate:
         fee_bps = (entry_fee + exit_fee) * _dec(p.fee_gst_mult)
 
         # --- Slippage / adverse selection, round trip. ---
-        aggressive = urgency == "aggressive"
-        taker_slip = _dec(p.default_slip_exit_bps)
-        exit_slip = taker_slip * (Decimal("1.5") if aggressive else Decimal(1))
-        if is_maker:
-            slippage_bps = _dec(p.maker_adverse_bps) + exit_slip
-        else:
-            entry_slip = _dec(p.default_slip_entry_bps) * (
-                Decimal("1.5") if aggressive else Decimal(1)
-            )
-            slippage_bps = entry_slip + exit_slip  # cross both legs
+        model = CostModel(p)
+        slippage_bps = model.execution_bps(
+            maker_entry=is_maker, aggressive=urgency == "aggressive", legacy_gate=True,
+        )
 
         # Only a capital-safe prediction can bind. An account-verified fee
         # schedule may replace the generic tariff profile; otherwise the card
@@ -287,6 +288,10 @@ class CostGate:
                 funding_bps=funding_bps,
                 total_cost_bps=total,
                 booked_execution_bps=booked_execution,
+                estimated_execution_bps=total,
+                cost_profile_id=p.profile,
+                cost_config_sha256=model.config_sha256,
+                execution_policy=p.execution_policy,
                 safety_reserve_bps=safety_reserve,
                 gate_cost_bps=gate_cost,
                 approval_gross_floor_bps=approval_gross_floor,

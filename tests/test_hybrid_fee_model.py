@@ -71,24 +71,24 @@ def test_scalper_offer_waives_only_eligible_close_leg() -> None:
 
     assert schedule.fee_bps("taker", leg="open") == Decimal("5.90")
     assert schedule.fee_bps(
-        "taker", leg="close", symbol="BTCUSDT", hold_seconds=1800
+        "taker", leg="close", symbol="BTCUSDT", hold_seconds=1800, as_of=NOW
     ) == Decimal(0)
     assert schedule.round_trip_bps(
-        "maker", "taker", symbol="BTCUSDT", hold_seconds=1800
+        "maker", "taker", symbol="BTCUSDT", hold_seconds=1800, as_of=NOW
     ) == Decimal("2.36")
 
     too_late = schedule.calculation(
-        "taker", leg="close", symbol="BTCUSDT", hold_seconds=1801
+        "taker", leg="close", symbol="BTCUSDT", hold_seconds=1801, as_of=NOW
     )
     assert too_late.all_in_fee_bps == Decimal("5.90")
     assert too_late.fallback_reason == "scalper_window_exceeded"
 
     no_consent = replace(schedule, scalper_consent=False).calculation(
-        "taker", leg="close", symbol="BTCUSDT", hold_seconds=60
+        "taker", leg="close", symbol="BTCUSDT", hold_seconds=60, as_of=NOW
     )
-    missing_hold = schedule.calculation("taker", leg="close", symbol="BTCUSDT")
+    missing_hold = schedule.calculation("taker", leg="close", symbol="BTCUSDT", as_of=NOW)
     ineligible = schedule.calculation(
-        "taker", leg="close", symbol="SOLUSDT", hold_seconds=60
+        "taker", leg="close", symbol="SOLUSDT", hold_seconds=60, as_of=NOW
     )
     assert no_consent.fallback_reason == "scalper_consent_missing"
     assert missing_hold.fallback_reason == "scalper_context_missing"
@@ -127,16 +127,16 @@ def test_deto_and_verified_stacking_follow_deterministic_order() -> None:
         schedule_id="delta-stacked-v1",
     )
 
-    assert deto_only.round_trip_bps("taker", "taker") == Decimal("8.8500")
+    assert deto_only.round_trip_bps("taker", "taker", as_of=NOW) == Decimal("8.8500")
     stacked_rt = stacked.round_trip_calculation(
-        "taker", "taker", symbol="BTCUSDT", hold_seconds=600
+        "taker", "taker", symbol="BTCUSDT", hold_seconds=600, as_of=NOW
     )
     assert stacked_rt.total_bps == Decimal("4.4250")
     assert stacked_rt.entry.applied_modifiers == ("deto",)
     assert stacked_rt.exit.applied_modifiers == ("scalper_close_waiver",)
 
     one_hour = stacked.round_trip_calculation(
-        "taker", "taker", symbol="BTCUSDT", hold_seconds=3600
+        "taker", "taker", symbol="BTCUSDT", hold_seconds=3600, as_of=NOW
     )
     assert one_hour.total_bps == Decimal("8.8500")
     assert one_hour.applied_modifiers == ("deto",)
@@ -173,7 +173,7 @@ def test_unknown_discount_or_stacking_state_fails_to_base_plus_gst(
         schedule_id="delta-unconfirmed-stack",
     )
 
-    calculation = schedule.calculation("taker")
+    calculation = schedule.calculation("taker", as_of=NOW)
     assert calculation.all_in_fee_bps == Decimal("5.90")
     assert calculation.applied_modifiers == ()
     assert calculation.fallback_reason == reason

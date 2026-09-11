@@ -16,6 +16,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal, Protocol
 
+from vnedge.plan.cash_costs import fee_cash
+
 Venue = Literal["delta_india", "binanceusdm", "bybit"]
 Liquidity = Literal["taker", "maker"]
 FeeLeg = Literal["open", "close"]
@@ -46,6 +48,10 @@ class FeeCalculation:
     all_in_fee_bps: Decimal
     applied_modifiers: tuple[str, ...]
     fallback_reason: str | None = None
+
+    def estimated_cash(self, notional: Decimal) -> Decimal:
+        """Account-aware estimate per leg; GST is already in all_in_fee_bps."""
+        return fee_cash(notional, self.all_in_fee_bps)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +216,10 @@ class FeeSchedule:
         )
         if any_discount and not self.discounts_verified:
             fallback_reason = "discount_state_unverified"
+        elif any_discount and evaluation_time is None:
+            # An expiry cannot be validated without the decision's clock.
+            # Do not silently grant a historical discount indefinitely.
+            fallback_reason = "discount_evaluation_time_missing"
         elif any_discount and discounts_expired:
             fallback_reason = "discount_verification_expired"
         elif (
