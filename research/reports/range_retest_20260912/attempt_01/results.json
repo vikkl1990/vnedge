@@ -1,0 +1,720 @@
+{
+  "strategy_id": "range_break_retest_5m_v1",
+  "spec": {
+    "strategy_id": "range_break_retest_5m_v1",
+    "exchange": "delta_india",
+    "symbols": [
+      "BTCUSD",
+      "ETHUSD"
+    ],
+    "timeframe": "5m",
+    "entry_clock": "next_5m_open",
+    "context_timeframes": [],
+    "range_bars": 20,
+    "min_breakout_body_fraction": 0.6,
+    "max_extension_fraction": 0.25,
+    "retest_tolerance_fraction": 0.05,
+    "min_close_location": 0.6,
+    "stop_pad_fraction": 0.05,
+    "min_room_cost_multiple": 2.0,
+    "min_net_reward_risk": 1.5,
+    "max_hold_bars": 3,
+    "cost_profile_id": "delta_scalp_v2",
+    "cost_config_sha256": "e04d112e35708157a77fc5b5721e4e2c4b2c0ce6d05c71b65bff3bf443e7b13a",
+    "booked_round_bps": 17.8
+  },
+  "source_hashes": {
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/research/reports/range_retest_20260912/replay.py": "1cf4ea6e643b903d6bc4bfa05c5276e8f68239754b8ca3bfb824282ebe7d5bec",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/src/vnedge/research/range_break_retest.py": "ef0b5cddcd656dadeb9cfbeace5676690c1e40f01ea8dc76f880995df1959e33",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/research/reports/range_retest_20260912/CONTRACT.md": "18b5e346647317ce2f39a7abb3bd15e4795593f0fb5deae407485c45d2797fde",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/research/reports/burst_response_20260912/screen.py": "974b0114da7c6f544bf118658f5ddf9d0b143d0a63bfa466b5b5091b2cce46e1",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/src/vnedge/data/bar_identity.py": "301014ea2bbdcbf17dad60b503147904ccfcd1cc9f5537a7431b1d937f8ac7a8",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/src/vnedge/strategy/arm_evidence.py": "703596212a029a700f28d48ff2a4034e7126a4f3e550067b8714dfa5ecb00596",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/src/vnedge/strategy/base_strategy.py": "862773b9f57e94e56197040b81831ad4c7610620c48eb6fe37644063ce1bb537",
+    "/Users/scorpion/Documents/ChatGPT/MultiExchangeBOT/src/vnedge/plan/cost_model.py": "48c399a20060cc8d24b83bb2af765060c154d636b407518d55e26a448584f447"
+  },
+  "git_revision": "ab2044081971e82a089350b9d69dcd9f13f13c32",
+  "start": "2026-09-01T00:00:00+00:00",
+  "end_exclusive": "2026-09-11T00:00:00+00:00",
+  "untouched_oos": false,
+  "funding": "excluded",
+  "symbols": {
+    "BTCUSD": {
+      "counts": {
+        "stored_decisions": 2864,
+        "scheduled_decisions": 2880,
+        "missing_decisions": 16,
+        "evaluations": 2864,
+        "candidates": 5,
+        "measured": 5
+      },
+      "primary_failed_gates": {
+        "warmup_incomplete": 21,
+        "no_fresh_range_break": 2345,
+        "breakout_body_too_small": 117,
+        "breakout_overextended": 40,
+        "boundary_retest_missing": 100,
+        "retest_entry_overextended": 9,
+        "retest_hold_failed": 11,
+        "net_reward_risk_too_small": 8,
+        "retest_close_location_weak": 6,
+        "target_room_below_cost_floor": 4,
+        "decision_window_gap_or_duplicate": 198
+      },
+      "all_failed_gates": {
+        "warmup_incomplete": 21,
+        "no_fresh_range_break": 2345,
+        "breakout_body_too_small": 117,
+        "breakout_overextended": 43,
+        "boundary_retest_missing": 213,
+        "retest_entry_overextended": 75,
+        "target_room_below_cost_floor": 93,
+        "net_reward_risk_too_small": 181,
+        "retest_hold_failed": 159,
+        "retest_close_location_weak": 190,
+        "invalid_stop_target_geometry": 3,
+        "decision_window_gap_or_duplicate": 198
+      },
+      "minute_inputs": {
+        "files": [
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-01.parquet",
+            "sha256": "73313c3d6903613ad2a670c986fc6aa8377f5fa46b26ed418bbfe2b4a1ca9836"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-02.parquet",
+            "sha256": "805ec8af7c831d4fa27cd8dd89f77d0b02157db9bd68b0692e0e1345f75db058"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-03.parquet",
+            "sha256": "cdadf2da96e88569e9109f07c1523e993a0f27791a95cf8ca96ef724a32cad60"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-04.parquet",
+            "sha256": "332505188be233d8786cada55d16c20cba0cfc402e3e0ddca53ef2c6025a6792"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-05.parquet",
+            "sha256": "95e94dc1ce53b4f340cce63a8f502465041755d0a4506fb32270aaf7523585db"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-06.parquet",
+            "sha256": "820366646c29ee0881f8993eadb18516b700ba6d8eefa16dffd59166ba5eb4b6"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-07.parquet",
+            "sha256": "c165274a1643af8466bc036b4f98d9a7bc01e8b4440725cf9194e2f73e06ca17"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-08.parquet",
+            "sha256": "ad310bc01e606351b8acaa55f3f3df67a57f784e8bd0693be422fcd854d29344"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-09.parquet",
+            "sha256": "2be15a525f553d0307f8ecb791aaf37cf5d9f71bccdd4b5005b528617f222946"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-10.parquet",
+            "sha256": "2276cee6827751e3c3d68ee421fedb52ef973778fe671c1b37c20399956982f8"
+          }
+        ],
+        "stored_minutes": 14394,
+        "expected_minutes": 14400,
+        "missing_minutes": 6,
+        "eligible_minutes": 14378,
+        "invalid_reason_counts": {
+          "coverage_quality": 16
+        }
+      },
+      "decision_inputs": [
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-01.parquet",
+          "sha256": "53513009592129d273b8ebfcd88a33fc08a5e87ccd128116ac736e19875f343c"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-02.parquet",
+          "sha256": "7bff4e3350f4190d08e746c23f769218a463386eed7b4637da6bb06dae960f50"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-03.parquet",
+          "sha256": "5fff6c97e19f20196b08e92e97abc84ebfcbba70c93d3cfaf9ca91ce0f52727d"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-04.parquet",
+          "sha256": "770da2b4a48242110571ed67d75cf3186d63a200d9f553136072c6516feea657"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-05.parquet",
+          "sha256": "2588e4d3d1828309001d576dcc4a6b452f39e34cd4fcf3bb1f1e24cbf458d717"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-06.parquet",
+          "sha256": "8c3de38612ca1a2b37426406aea0ac4ffd665a31f2e33bc53cb9ac3786b45795"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-07.parquet",
+          "sha256": "17ec4f95562faa6610accac9d57102ce2cc38352f03b1091eb1aac0915100e7f"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-08.parquet",
+          "sha256": "fb937d88dbe4469e6fdec706f3f25045199384ee2af3cdb3b2a42fd6fe413912"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-09.parquet",
+          "sha256": "9c7960fd56afe599086a2a628b7dbb43549756edb1d248efc90ef23768d2e775"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-10.parquet",
+          "sha256": "3aad3831c7a105d0cb72428a39665bac7dec34477b08d245bacc5b57c8041b4a"
+        }
+      ],
+      "events": [
+        {
+          "decision_open": "2026-09-02T09:40:00+00:00",
+          "decision_close": "2026-09-02T09:45:00+00:00",
+          "entry_time": "2026-09-02T09:45:00+00:00",
+          "decision_id": "dec_17d76723010de6711a9e3dc9",
+          "snapshot_id": "a8d4f7e27742d870b32214cf",
+          "evidence_id": "95702bc842730cd2c348482cf72c47caecc18b572fc4f1a136bcc13c06c0f541",
+          "episode_id": "44f916889e9bff9b53b446f5ca99474ff8ac7b614329b1ef64c9c6b5ddef4a64",
+          "side": "short",
+          "stop_price": 76680.0,
+          "target_price": 75646.0,
+          "reserved_until": "2026-09-02T09:50:00+00:00",
+          "quality_score": 55.53272115995132,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 76537.5,
+          "status": "measured",
+          "exit_proxy": 76680.0,
+          "exit_known_by": "2026-09-02T09:50:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -18.61832435080757,
+          "net_bps": -36.418324350807566
+        },
+        {
+          "decision_open": "2026-09-03T13:40:00+00:00",
+          "decision_close": "2026-09-03T13:45:00+00:00",
+          "entry_time": "2026-09-03T13:45:00+00:00",
+          "decision_id": "dec_0dc9040386c204c372f974fc",
+          "snapshot_id": "236fe9db7f4be66c5dc6e408",
+          "evidence_id": "a6d9ae2b0037e2d57237afe8a573fd80118b3196ac78f4b2934eecd1bdc70214",
+          "episode_id": "6d49187441f75270b27cebb0c818af037652c8f5f7c926f678b5ae6b7689d2f2",
+          "side": "long",
+          "stop_price": 78698.075,
+          "target_price": 79657.0,
+          "reserved_until": "2026-09-03T14:00:00+00:00",
+          "quality_score": 66.83483925866963,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 78858.5,
+          "status": "measured",
+          "exit_proxy": 78810.5,
+          "exit_known_by": "2026-09-03T14:00:00+00:00",
+          "exit_reason": "timeout",
+          "exit_timing": "minute_close",
+          "gross_bps": -6.086851766138324,
+          "net_bps": -23.886851766138324
+        },
+        {
+          "decision_open": "2026-09-03T15:00:00+00:00",
+          "decision_close": "2026-09-03T15:05:00+00:00",
+          "entry_time": "2026-09-03T15:05:00+00:00",
+          "decision_id": "dec_7a01f998f938f9ee81907f4e",
+          "snapshot_id": "a2c1245c00fee82a683a84e2",
+          "evidence_id": "3fff0973ea734346b206221d0994d057e2f3f0b07816313bb3fbee34bc6e2b71",
+          "episode_id": "c9fb09ca16218e080a00012b7596965ae741682d62eace1a501fa577c16ce9c0",
+          "side": "long",
+          "stop_price": 80361.275,
+          "target_price": 82532.5,
+          "reserved_until": "2026-09-03T15:13:00+00:00",
+          "quality_score": 57.49638022293935,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 80789.0,
+          "status": "measured",
+          "exit_proxy": 80361.275,
+          "exit_known_by": "2026-09-03T15:13:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -52.94347002686051,
+          "net_bps": -70.7434700268605
+        },
+        {
+          "decision_open": "2026-09-03T19:55:00+00:00",
+          "decision_close": "2026-09-03T20:00:00+00:00",
+          "entry_time": "2026-09-03T20:00:00+00:00",
+          "decision_id": "dec_3016dc0e0a68546ba4e4b0fd",
+          "snapshot_id": "d0fa9480ce8e0d00dab67561",
+          "evidence_id": "88ef11f625638e881ef553892161990e36582e86ffaee91b23b2ea368690a65f",
+          "episode_id": "a319855e558b057c1f836675a20f52549e832e53393d439da5aefe5c578424c9",
+          "side": "long",
+          "stop_price": 81597.075,
+          "target_price": 82371.0,
+          "reserved_until": "2026-09-03T20:01:00+00:00",
+          "quality_score": 54.127722518370874,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 81743.5,
+          "status": "measured",
+          "exit_proxy": 81597.075,
+          "exit_known_by": "2026-09-03T20:01:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -17.912739239206445,
+          "net_bps": -35.71273923920644
+        },
+        {
+          "decision_open": "2026-09-08T15:55:00+00:00",
+          "decision_close": "2026-09-08T16:00:00+00:00",
+          "entry_time": "2026-09-08T16:00:00+00:00",
+          "decision_id": "dec_3c90973ac65b69f68d99c620",
+          "snapshot_id": "4eaf94d0470ace47badebd75",
+          "evidence_id": "53ef88e0ee87595479db06e91806a2769833dd183471db3377783a566f21095c",
+          "episode_id": "89d8ff240c7a4267fe49b4e47fba26660a52386c01f1f14a23e5f1bcdda4e677",
+          "side": "long",
+          "stop_price": 78748.325,
+          "target_price": 79527.5,
+          "reserved_until": "2026-09-08T16:02:00+00:00",
+          "quality_score": 65.69337442548202,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 78878.0,
+          "status": "measured",
+          "exit_proxy": 78748.325,
+          "exit_known_by": "2026-09-08T16:02:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -16.43994523187753,
+          "net_bps": -34.23994523187753
+        }
+      ],
+      "summary": {
+        "n": 5,
+        "gross_mean_bps": -22.400266122978074,
+        "net_mean_bps": -40.20026612297808,
+        "net_median_bps": -35.71273923920644,
+        "net_win_rate": 0.0,
+        "profit_factor": 0.0,
+        "drawdown_cumulative_net_bps": 201.00133061489038,
+        "fee_only_mean_bps": -34.20026612297808,
+        "stress_mean_bps": -46.20026612297808,
+        "best_removed_mean_bps": -44.27861971218801,
+        "descriptive_day_bootstrap_95_mean_bps": [
+          -43.44768701073509,
+          -34.23994523187753
+        ],
+        "reporting_blocks_not_oos": {
+          "first_five_days": {
+            "n": 4,
+            "mean_net_bps": -41.69034634575321
+          },
+          "second_five_days": {
+            "n": 1,
+            "mean_net_bps": -34.23994523187753
+          }
+        },
+        "daily_net_bps": {
+          "2026-09-01 00:00:00+00:00": 0,
+          "2026-09-02 00:00:00+00:00": -36.418324350807566,
+          "2026-09-03 00:00:00+00:00": -130.34306103220527,
+          "2026-09-04 00:00:00+00:00": 0,
+          "2026-09-05 00:00:00+00:00": 0,
+          "2026-09-06 00:00:00+00:00": 0,
+          "2026-09-07 00:00:00+00:00": 0,
+          "2026-09-08 00:00:00+00:00": -34.23994523187753,
+          "2026-09-09 00:00:00+00:00": 0,
+          "2026-09-10 00:00:00+00:00": 0
+        },
+        "verdict": "INSUFFICIENT_SAMPLE",
+        "can_trade": false,
+        "can_promote": false,
+        "performance_eligible": false
+      },
+      "exit_counts": {
+        "stop": 4,
+        "timeout": 1
+      }
+    },
+    "ETHUSD": {
+      "counts": {
+        "stored_decisions": 2863,
+        "scheduled_decisions": 2880,
+        "missing_decisions": 17,
+        "evaluations": 2863,
+        "candidates": 6,
+        "measured": 6
+      },
+      "primary_failed_gates": {
+        "warmup_incomplete": 21,
+        "no_fresh_range_break": 2373,
+        "breakout_overextended": 43,
+        "breakout_body_too_small": 103,
+        "boundary_retest_missing": 67,
+        "retest_hold_failed": 14,
+        "retest_close_location_weak": 5,
+        "retest_entry_overextended": 4,
+        "net_reward_risk_too_small": 8,
+        "decision_window_gap_or_duplicate": 219
+      },
+      "all_failed_gates": {
+        "warmup_incomplete": 21,
+        "no_fresh_range_break": 2373,
+        "breakout_overextended": 45,
+        "boundary_retest_missing": 171,
+        "retest_close_location_weak": 160,
+        "retest_entry_overextended": 67,
+        "target_room_below_cost_floor": 58,
+        "net_reward_risk_too_small": 129,
+        "breakout_body_too_small": 103,
+        "retest_hold_failed": 133,
+        "invalid_stop_target_geometry": 5,
+        "decision_window_gap_or_duplicate": 219
+      },
+      "minute_inputs": {
+        "files": [
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-01.parquet",
+            "sha256": "c8f3856da610747565fe4d7bef17efe510dbd30026d7ca08eb40bd324d9dc331"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-02.parquet",
+            "sha256": "058305b7ca314d57a1b60d80f5ea25d7ce463f94b7bc0c9f0ea540690c21236c"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-03.parquet",
+            "sha256": "219a2fad05b296658bc5ae5754467e1a900b27ef1db12ae865b4b8ebc0bcc3bd"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-04.parquet",
+            "sha256": "9d52a4a076fb0d2d63133c9d5ff1ae6b7263e7541b032cb870b704b613489b75"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-05.parquet",
+            "sha256": "edea3e8d16b565453575af045a753f0c621c90acfc7fa8aee1988ce3bc19f805"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-06.parquet",
+            "sha256": "3f6d71314532954d717ed48e338ea66f27d2c3e4b58460efb15ad04cf21e0616"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-07.parquet",
+            "sha256": "f81610739ab52c4d4740a23ad7bf42830b36c6d27f065612a1163da079e616ab"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-08.parquet",
+            "sha256": "d885d57c900bbcee8b6cd4841f7743e1d65abd262769ee73b3a41af39b8fa39b"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-09.parquet",
+            "sha256": "a821883312cf2b1cd7352276f6c6931738a9768abde3eb97bd85a1f6912ea1de"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-10.parquet",
+            "sha256": "3acaf84c73e66588df203d63c3467f808a64de1383a06e79ac221074140da6bf"
+          }
+        ],
+        "stored_minutes": 14394,
+        "expected_minutes": 14400,
+        "missing_minutes": 6,
+        "eligible_minutes": 14377,
+        "invalid_reason_counts": {
+          "coverage_quality": 17
+        }
+      },
+      "decision_inputs": [
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-01.parquet",
+          "sha256": "9cbefd27ebd008248fb3fb71317a0cfab189260cced03a87942da18ffbf79fa6"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-02.parquet",
+          "sha256": "4056bc10b959073ee8f96aaffa20a4c1c137acd7f54446ff688b1cb92ff7c0f7"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-03.parquet",
+          "sha256": "b3ccaca805d0ac45951719e03a169d083d083f742832aa833c6a74e02eb1b5c6"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-04.parquet",
+          "sha256": "5157a19dfc8820a66dc32c43de686a89961ee19729b5d3fab27908c2cb20fbd7"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-05.parquet",
+          "sha256": "fb905c9823c9f3a7830f53dba180239f7c2d7b3cddd3ab86b9ff25e5a38285a1"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-06.parquet",
+          "sha256": "9c48c192326c2c2d6d56548eccb63aa8f48a1770a677f68eea748991f01684e7"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-07.parquet",
+          "sha256": "e998dd0252d39f2d16ff30fa231d648e11f96a66c64202de9524c6e59aed0633"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-08.parquet",
+          "sha256": "f1dd96b26de327e1ad06509fe7b6ccce29211cc4505036515d680bbad1bd6f2d"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-09.parquet",
+          "sha256": "8e11074e2baba8dd84862a1283351d5461bbe98079c6e0e57c6a0df0917c314f"
+        },
+        {
+          "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-10.parquet",
+          "sha256": "e522e2586d3e25000a2ed6a5fd38f3ddc6105b2b1bb99e7a0f0475d48556551a"
+        }
+      ],
+      "events": [
+        {
+          "decision_open": "2026-09-03T14:25:00+00:00",
+          "decision_close": "2026-09-03T14:30:00+00:00",
+          "entry_time": "2026-09-03T14:30:00+00:00",
+          "decision_id": "dec_f8fff6061acdf055bf523f7c",
+          "snapshot_id": "fde745043d962f48c66fa1ba",
+          "evidence_id": "0f1111af9bf87350c95e0dceb978175f4f26de0c62dd2548df1145c83b65b469",
+          "episode_id": "ef78059fe973851c32eaccb098c5b32f1ed9d3b39c0b4dee01c01b89adff3577",
+          "side": "long",
+          "stop_price": 2443.4449999999997,
+          "target_price": 2477.0,
+          "reserved_until": "2026-09-03T14:45:00+00:00",
+          "quality_score": 60.04743219713767,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2449.45,
+          "status": "measured",
+          "exit_proxy": 2455.8,
+          "exit_known_by": "2026-09-03T14:45:00+00:00",
+          "exit_reason": "timeout",
+          "exit_timing": "minute_close",
+          "gross_bps": 25.924187062402737,
+          "net_bps": 8.124187062402736
+        },
+        {
+          "decision_open": "2026-09-03T15:55:00+00:00",
+          "decision_close": "2026-09-03T16:00:00+00:00",
+          "entry_time": "2026-09-03T16:00:00+00:00",
+          "decision_id": "dec_29aa47dccee8ddd42b6dda79",
+          "snapshot_id": "3b362ad8481fc9695b79a31a",
+          "evidence_id": "aaa22ccba37a0480ab60d56d674d1337530586ac19d4167f8b3b5d8970e941fb",
+          "episode_id": "254591fcf1978c7efb2d5d5265e54f20b8f248b11b2621f8793f8164769e0f07",
+          "side": "long",
+          "stop_price": 2502.2799999999997,
+          "target_price": 2576.4,
+          "reserved_until": "2026-09-03T16:04:00+00:00",
+          "quality_score": 80.55611177998955,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2516.05,
+          "status": "measured",
+          "exit_proxy": 2502.2799999999997,
+          "exit_known_by": "2026-09-03T16:04:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -54.728642117606306,
+          "net_bps": -72.52864211760631
+        },
+        {
+          "decision_open": "2026-09-06T23:35:00+00:00",
+          "decision_close": "2026-09-06T23:40:00+00:00",
+          "entry_time": "2026-09-06T23:40:00+00:00",
+          "decision_id": "dec_0ea6aaeaa6fafd3eeedccdba",
+          "snapshot_id": "f2e03216364a438e2564389d",
+          "evidence_id": "876f16c3005116885fbae8686cb6c419d675cdbaa78c5e8110de95bcf1314b42",
+          "episode_id": "4bc5bacbe04538778fb3655d79285613f84cdb47d4f08224015c4b55fa8f5252",
+          "side": "long",
+          "stop_price": 2514.2775,
+          "target_price": 2542.8999999999996,
+          "reserved_until": "2026-09-06T23:55:00+00:00",
+          "quality_score": 47.828841282700274,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2519.8,
+          "status": "measured",
+          "exit_proxy": 2514.3,
+          "exit_known_by": "2026-09-06T23:55:00+00:00",
+          "exit_reason": "timeout",
+          "exit_timing": "minute_close",
+          "gross_bps": -21.827129137232948,
+          "net_bps": -39.62712913723295
+        },
+        {
+          "decision_open": "2026-09-07T01:45:00+00:00",
+          "decision_close": "2026-09-07T01:50:00+00:00",
+          "entry_time": "2026-09-07T01:50:00+00:00",
+          "decision_id": "dec_5b24cc150b325c4f871b5616",
+          "snapshot_id": "1ce96f612a69e47910fc6176",
+          "evidence_id": "efef1e8342661550d72aa8fa6cf7fa1991098cc18af0e3a556b8cd21b486caad",
+          "episode_id": "5e375e371345579798b25b24a1f59c61ef0ab20178f0b2851b4ba33150947bcd",
+          "side": "short",
+          "stop_price": 2502.135,
+          "target_price": 2478.3,
+          "reserved_until": "2026-09-07T01:54:00+00:00",
+          "quality_score": 52.89019093739941,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2499.4,
+          "status": "measured",
+          "exit_proxy": 2502.135,
+          "exit_known_by": "2026-09-07T01:54:00+00:00",
+          "exit_reason": "stop",
+          "exit_timing": "intraminute",
+          "gross_bps": -10.942626230294739,
+          "net_bps": -28.74262623029474
+        },
+        {
+          "decision_open": "2026-09-07T17:45:00+00:00",
+          "decision_close": "2026-09-07T17:50:00+00:00",
+          "entry_time": "2026-09-07T17:50:00+00:00",
+          "decision_id": "dec_1eda91dc891fa4926d0e0d71",
+          "snapshot_id": "91f8a3de98bef58a77b71a90",
+          "evidence_id": "34630515284b454c3c15ddbeb182297c7b89559bf55de2932bbc0a2cfa03dbcd",
+          "episode_id": "df813461a300ac83f60ff2380fb9045b13067f809d1631fb3cb3495bd27f97f0",
+          "side": "long",
+          "stop_price": 2489.755,
+          "target_price": 2512.5,
+          "reserved_until": "2026-09-07T18:05:00+00:00",
+          "quality_score": 56.809401831504644,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2493.8,
+          "status": "measured",
+          "exit_proxy": 2494.35,
+          "exit_known_by": "2026-09-07T18:05:00+00:00",
+          "exit_reason": "timeout",
+          "exit_timing": "minute_close",
+          "gross_bps": 2.205469564517948,
+          "net_bps": -15.594530435482053
+        },
+        {
+          "decision_open": "2026-09-08T15:40:00+00:00",
+          "decision_close": "2026-09-08T15:45:00+00:00",
+          "entry_time": "2026-09-08T15:45:00+00:00",
+          "decision_id": "dec_afe94beaf18d79c7a85e6563",
+          "snapshot_id": "17ffdef860dfaf788507abb3",
+          "evidence_id": "c8c443de25313b5a27d5eda744d59f638ba4a4a7103741e28c1c7165143fa170",
+          "episode_id": "b1fba09855fb6cb44f70a64520677cf060111dfd36c2b43594879feba25adfd2",
+          "side": "long",
+          "stop_price": 2488.1575000000003,
+          "target_price": 2531.75,
+          "reserved_until": "2026-09-08T16:00:00+00:00",
+          "quality_score": 59.894588226042494,
+          "cost_profile_id": "delta_scalp_v2",
+          "booked_round_bps": 17.8,
+          "fill_assumption": "canonical_1m_ohlc_next_open_stop_first",
+          "path_id": "research_observe",
+          "can_trade": false,
+          "can_promote": false,
+          "performance_eligible": false,
+          "entry_proxy": 2495.5,
+          "status": "measured",
+          "exit_proxy": 2497.85,
+          "exit_known_by": "2026-09-08T16:00:00+00:00",
+          "exit_reason": "timeout",
+          "exit_timing": "minute_close",
+          "gross_bps": 9.416950510918731,
+          "net_bps": -8.38304948908127
+        }
+      ],
+      "summary": {
+        "n": 6,
+        "gross_mean_bps": -8.325298391215762,
+        "net_mean_bps": -26.125298391215765,
+        "net_median_bps": -22.168578332888394,
+        "net_win_rate": 0.16666666666666666,
+        "profit_factor": 0.04927453465349346,
+        "drawdown_cumulative_net_bps": 164.87597740969733,
+        "fee_only_mean_bps": -20.125298391215768,
+        "stress_mean_bps": -32.125298391215765,
+        "best_removed_mean_bps": -32.975195481939465,
+        "descriptive_day_bootstrap_95_mean_bps": [
+          -39.62712913723295,
+          -12.978225770350313
+        ],
+        "reporting_blocks_not_oos": {
+          "first_five_days": {
+            "n": 2,
+            "mean_net_bps": -32.202227527601785
+          },
+          "second_five_days": {
+            "n": 4,
+            "mean_net_bps": -23.086833823022754
+          }
+        },
+        "daily_net_bps": {
+          "2026-09-01 00:00:00+00:00": 0,
+          "2026-09-02 00:00:00+00:00": 0,
+          "2026-09-03 00:00:00+00:00": -64.40445505520357,
+          "2026-09-04 00:00:00+00:00": 0,
+          "2026-09-05 00:00:00+00:00": 0,
+          "2026-09-06 00:00:00+00:00": -39.62712913723295,
+          "2026-09-07 00:00:00+00:00": -44.33715666577679,
+          "2026-09-08 00:00:00+00:00": -8.38304948908127,
+          "2026-09-09 00:00:00+00:00": 0,
+          "2026-09-10 00:00:00+00:00": 0
+        },
+        "verdict": "INSUFFICIENT_SAMPLE",
+        "can_trade": false,
+        "can_promote": false,
+        "performance_eligible": false
+      },
+      "exit_counts": {
+        "timeout": 4,
+        "stop": 2
+      }
+    }
+  },
+  "can_trade": false,
+  "can_promote": false,
+  "performance_eligible": false
+}

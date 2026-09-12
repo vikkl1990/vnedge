@@ -1,0 +1,205 @@
+{
+  "schema_version": 2,
+  "net_bps_semantics": "booked_execution",
+  "cost_basis": "research_estimate",
+  "cost_profile_id": "delta_swing_btc_v1",
+  "cost_config_sha256": "9db58be461817a1a07c0406f40606f97014fba7a149cc0411d109bdaeaaf7b03",
+  "generated_at": "2026-09-12T02:33:23.545783+00:00",
+  "strategy_id": "htf_regime_continuation_15m_v2__BTCUSD",
+  "entry_clock": "next_15m_open",
+  "clock_cohort": "closed_15m->next_15m_open",
+  "capital_eligible": false,
+  "read_only": true,
+  "exchange_id": "delta_india",
+  "cost_profile": "delta_swing_btc_v1",
+  "execution_cost_bps": 15.799999999999999,
+  "gate_cost_bps": 18.799999999999997,
+  "funding_bps": 0,
+  "funding_included": false,
+  "funding_event_count": 0,
+  "performance_eligible": false,
+  "performance_blockers": [
+    "funding_history_not_replayed",
+    "risk_gateway_not_replayed"
+  ],
+  "bars": 946,
+  "canonical_context_timeframes": [
+    "4h",
+    "1d"
+  ],
+  "context_quality": {
+    "4h": {
+      "bars": 800,
+      "continuity_breaks": 0,
+      "quarantined_bars": 0
+    },
+    "1d": {
+      "bars": 800,
+      "continuity_breaks": 0,
+      "quarantined_bars": 0
+    }
+  },
+  "continuity_breaks": 0,
+  "evaluations": 721,
+  "signals": 0,
+  "trades": 0,
+  "position_conflicts": 0,
+  "gross_bps": 0,
+  "net_execution_bps": 0,
+  "net_gate_bps": 0,
+  "net_bps": 0,
+  "failed_gates": {
+    "regime_flat": 721,
+    "family_mismatch": 721,
+    "side_alignment_missing": 721,
+    "reclaim_not_meaningful": 361,
+    "closed_15m_reclaim_missing": 516,
+    "one_hour_structure_unresolved": 201,
+    "structure_parent_missing": 41,
+    "structure_not_ready": 41
+  },
+  "lifecycle": {
+    "watching": 586,
+    "break_detected": 135
+  },
+  "setup_funnel": {
+    "engine_status": "ready",
+    "warmup_bars_required": 224,
+    "evaluable_bars": 721,
+    "bars_quarantined": 0,
+    "evaluations": 721,
+    "eligible_evaluations": 0,
+    "signals": 0,
+    "admitted_trades": 0,
+    "near_misses": 721,
+    "blocked_by": {
+      "regime_flat": 721,
+      "family_mismatch": 721,
+      "side_alignment_missing": 721,
+      "reclaim_not_meaningful": 361,
+      "closed_15m_reclaim_missing": 516,
+      "one_hour_structure_unresolved": 201,
+      "structure_parent_missing": 41,
+      "structure_not_ready": 41
+    },
+    "closest_threshold": {}
+  },
+  "regime_reasons": {
+    "weekly_range_macd_off": 721
+  },
+  "structure_reasons": {
+    "directional_ready": 520,
+    "structure_range": 160,
+    "structure_parent_missing": 41
+  },
+  "input": {
+    "start": "2026-09-01T00:00:00+00:00",
+    "end_exclusive": "2026-09-11T00:00:00+00:00",
+    "first_bar": "2026-09-01 00:00:00+00:00",
+    "last_bar": "2026-09-10 23:45:00+00:00",
+    "expected_slots": 960,
+    "stored_rows": 946,
+    "missing_opens": [
+      "2026-09-07 12:45:00+00:00",
+      "2026-09-08 16:30:00+00:00",
+      "2026-09-08 16:45:00+00:00",
+      "2026-09-08 17:45:00+00:00",
+      "2026-09-08 19:15:00+00:00",
+      "2026-09-08 20:15:00+00:00",
+      "2026-09-09 02:15:00+00:00",
+      "2026-09-09 02:30:00+00:00",
+      "2026-09-09 06:30:00+00:00",
+      "2026-09-09 16:30:00+00:00",
+      "2026-09-09 20:00:00+00:00",
+      "2026-09-09 21:00:00+00:00",
+      "2026-09-09 22:45:00+00:00",
+      "2026-09-09 23:00:00+00:00"
+    ],
+    "quality_counts": {
+      "ok": 946
+    },
+    "htf_source_counts": {
+      "4h": {
+        "exchange_ohlcv_validated": 747,
+        "canonical_tick_lake": 53
+      },
+      "1d": {
+        "exchange_ohlcv_validated": 793,
+        "canonical_tick_lake": 7
+      }
+    },
+    "files": [
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-01.parquet",
+        "sha256": "8fb38a2438210b7b0b61d6cb798fbcffa8eb93199fa61ba1c7b69557faf09e25"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-02.parquet",
+        "sha256": "2e45696c53ab84b99d35306dccaa72574537b9f4867594cf967439b65aca9fd3"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-03.parquet",
+        "sha256": "9f23e63256a6b031f51f8cd612755d72bf67e366744f2552d0d8778f40d838db"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-04.parquet",
+        "sha256": "77f11a999fd1785409a529b8db2844158db7a745bd77c100a40c75d15a6b726e"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-05.parquet",
+        "sha256": "c68550ef62faea520d8f4573f6b8fcb81c733728087a4f5bd92b0bfa44019a3d"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-06.parquet",
+        "sha256": "ac04365f76f37bfdc8a8b3dbb0b462dd8ec601b694424dbc810f78a7bee4379c"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-07.parquet",
+        "sha256": "7bea887cc792042415369a1ffc62551482c735b0e7b0c0a7357a17d7a1060578"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-08.parquet",
+        "sha256": "add71cb19e5aa3e0aa139dcecd4b0aca2f88f0b501544774e1f5eb26a730a38b"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-09.parquet",
+        "sha256": "1a6e434167c8515e6ebcfcc5fd04f29fc341e6412581021c69002797cd1731bb"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/15m/2026-09-10.parquet",
+        "sha256": "5edd0bc797fcc5af5a410aeb226289e33e9f908078205ce9eba7602652f2bbcb"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/4h/2026-09.parquet",
+        "sha256": "8136c357cfd266cb4e0a781cb743cbb0866992e53d27feca9f0234372ac88007"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/shadow_observe_htf_regime_continuation_15m_v2__btcusd_delta_india_btc_usd_usd_15m.context_4h.candles.parquet",
+        "sha256": "d3292abcb6b04bc03c07d1b7e4036e84ab07bdb87f82dbf08910517f11e15fb0",
+        "source": "official_delta_ohlcv_cache"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1d/2026-09.parquet",
+        "sha256": "71284fcd1d624f31852a53a81847ca097fa78547cb5442c3d97504093643e349"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/shadow_observe_htf_regime_continuation_15m_v2__btcusd_delta_india_btc_usd_usd_15m.context_1d.candles.parquet",
+        "sha256": "70334084fbe792dd237e091b3c047a70d910829edadbf1dcd152c323adffd7b6",
+        "source": "official_delta_ohlcv_cache"
+      }
+    ]
+  },
+  "evidence_limitations": [
+    "Exploratory already-seen window; not untouched OOS.",
+    "Existing scanner replay applies explicit-quality warmup quarantine; not lane-by-lane live transport parity.",
+    "Replay does not execute live target admission, CostGate, sizing or kernel submission.",
+    "Replay outcome loop does not reproduce every strategy/trailing exit; nonzero outcomes are not execution proof.",
+    "No repaired bars, loosened gates, new edge estimates or strategy changes.",
+    "Zero trades mean economics unmeasured, not zero-risk or successful parity."
+  ],
+  "approval_parity_eligible": false,
+  "source_revision": "ab2044081971e82a089350b9d69dcd9f13f13c32",
+  "economics_verdict": "UNMEASURED_ZERO_TRADES",
+  "can_trade": false,
+  "can_promote": false
+}

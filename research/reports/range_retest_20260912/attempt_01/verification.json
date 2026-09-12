@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "sources_verified": 8,
+  "result_sha256": "49ca7c194d4f30ef8e936593a6eeab0a019f8d1dd56535097215d1a4906f7706",
+  "symbols": {
+    "BTCUSD": {
+      "evaluations": 2864,
+      "candidates": 5,
+      "measured": 5,
+      "exit_counts": {
+        "stop": 4,
+        "timeout": 1
+      }
+    },
+    "ETHUSD": {
+      "evaluations": 2863,
+      "candidates": 6,
+      "measured": 6,
+      "exit_counts": {
+        "timeout": 4,
+        "stop": 2
+      }
+    }
+  }
+}

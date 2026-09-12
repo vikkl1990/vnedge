@@ -1,0 +1,50 @@
+{
+  "evidence_kind": "synthetic_plumbing_only",
+  "fixture_sha256": "c1a75f560c72670aa30c41315f3495a8519668a02b39965c06180bdd27d6646f",
+  "registered_htf_logic_changed": false,
+  "historical_signals_used": false,
+  "synthetic_edge_bps_positive_control_only": 100.0,
+  "performance_eligible": false,
+  "can_trade": false,
+  "can_promote": false,
+  "cases": [
+    {
+      "case": "targetless_missing_edge_like_htf",
+      "signals": 1,
+      "orders_submitted": 0,
+      "simulated_fills": 0,
+      "rejections": [
+        "cost_gate: no favorable target/edge hypothesis"
+      ],
+      "assertions_passed": true
+    },
+    {
+      "case": "targetless_with_synthetic_edge",
+      "signals": 1,
+      "orders_submitted": 0,
+      "simulated_fills": 0,
+      "rejections": [
+        "cost_gate: no favorable target/edge hypothesis"
+      ],
+      "assertions_passed": true
+    },
+    {
+      "case": "target_with_missing_edge",
+      "signals": 1,
+      "orders_submitted": 0,
+      "simulated_fills": 0,
+      "rejections": [
+        "cost_gate: edge_estimate_missing"
+      ],
+      "assertions_passed": true
+    },
+    {
+      "case": "target_with_synthetic_edge_positive_control",
+      "signals": 1,
+      "orders_submitted": 1,
+      "simulated_fills": 1,
+      "rejections": [],
+      "assertions_passed": true
+    }
+  ]
+}

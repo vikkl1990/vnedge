@@ -1,0 +1,33 @@
+{
+  "checks_passed": true,
+  "upstream_files_verified": 165,
+  "evaluations": {
+    "BTCUSD": 2864,
+    "ETHUSD": 2863
+  },
+  "signals": {
+    "BTCUSD": 104,
+    "ETHUSD": 162
+  },
+  "ml_verdicts": {
+    "ETHUSD": {
+      "UNREACHABLE": 162
+    },
+    "BTCUSD": {
+      "UNREACHABLE": 104
+    }
+  },
+  "calls_with_history_gaps": {
+    "BTCUSD": 983,
+    "ETHUSD": 1715
+  },
+  "artifact_sha256": "d1309e389071abf351ea5a0c4cdfb4ab0fc8cb71d9055683ddad183617a5b59b",
+  "python": "3.13.3",
+  "dependencies": {
+    "pandas": "3.0.5",
+    "numpy": "2.5.2",
+    "pydantic": "2.13.4",
+    "PyYAML": "6.0.3",
+    "requests": "2.34.2"
+  }
+}

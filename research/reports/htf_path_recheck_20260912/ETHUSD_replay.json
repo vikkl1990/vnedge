@@ -1,0 +1,207 @@
+{
+  "schema_version": 2,
+  "net_bps_semantics": "booked_execution",
+  "cost_basis": "research_estimate",
+  "cost_profile_id": "delta_swing_eth_v1",
+  "cost_config_sha256": "be5d12dc3143304155f6772c02212054ec18aeff5805e811c6ca092f9af78109",
+  "generated_at": "2026-09-12T02:33:31.593212+00:00",
+  "strategy_id": "htf_regime_continuation_15m_v2__ETHUSD",
+  "entry_clock": "next_15m_open",
+  "clock_cohort": "closed_15m->next_15m_open",
+  "capital_eligible": false,
+  "read_only": true,
+  "exchange_id": "delta_india",
+  "cost_profile": "delta_swing_eth_v1",
+  "execution_cost_bps": 15.799999999999999,
+  "gate_cost_bps": 18.799999999999997,
+  "funding_bps": 0,
+  "funding_included": false,
+  "funding_event_count": 0,
+  "performance_eligible": false,
+  "performance_blockers": [
+    "funding_history_not_replayed",
+    "risk_gateway_not_replayed"
+  ],
+  "bars": 945,
+  "canonical_context_timeframes": [
+    "4h",
+    "1d"
+  ],
+  "context_quality": {
+    "4h": {
+      "bars": 800,
+      "continuity_breaks": 0,
+      "quarantined_bars": 0
+    },
+    "1d": {
+      "bars": 800,
+      "continuity_breaks": 0,
+      "quarantined_bars": 0
+    }
+  },
+  "continuity_breaks": 0,
+  "evaluations": 720,
+  "signals": 0,
+  "trades": 0,
+  "position_conflicts": 0,
+  "gross_bps": 0,
+  "net_execution_bps": 0,
+  "net_gate_bps": 0,
+  "net_bps": 0,
+  "failed_gates": {
+    "regime_flat": 720,
+    "family_mismatch": 720,
+    "side_alignment_missing": 720,
+    "reclaim_not_meaningful": 335,
+    "closed_15m_reclaim_missing": 517,
+    "one_hour_structure_unresolved": 273,
+    "structure_parent_missing": 45,
+    "structure_not_ready": 45
+  },
+  "lifecycle": {
+    "watching": 601,
+    "break_detected": 119
+  },
+  "setup_funnel": {
+    "engine_status": "ready",
+    "warmup_bars_required": 224,
+    "evaluable_bars": 720,
+    "bars_quarantined": 0,
+    "evaluations": 720,
+    "eligible_evaluations": 0,
+    "signals": 0,
+    "admitted_trades": 0,
+    "near_misses": 720,
+    "blocked_by": {
+      "regime_flat": 720,
+      "family_mismatch": 720,
+      "side_alignment_missing": 720,
+      "reclaim_not_meaningful": 335,
+      "closed_15m_reclaim_missing": 517,
+      "one_hour_structure_unresolved": 273,
+      "structure_parent_missing": 45,
+      "structure_not_ready": 45
+    },
+    "closest_threshold": {}
+  },
+  "regime_reasons": {
+    "weekly_range_macd_off": 704,
+    "daily_4h_macd_impulse_fade": 16
+  },
+  "structure_reasons": {
+    "directional_ready": 447,
+    "structure_range": 228,
+    "structure_parent_missing": 45
+  },
+  "input": {
+    "start": "2026-09-01T00:00:00+00:00",
+    "end_exclusive": "2026-09-11T00:00:00+00:00",
+    "first_bar": "2026-09-01 00:00:00+00:00",
+    "last_bar": "2026-09-10 23:45:00+00:00",
+    "expected_slots": 960,
+    "stored_rows": 945,
+    "missing_opens": [
+      "2026-09-04 23:30:00+00:00",
+      "2026-09-07 12:45:00+00:00",
+      "2026-09-08 16:30:00+00:00",
+      "2026-09-08 16:45:00+00:00",
+      "2026-09-08 17:45:00+00:00",
+      "2026-09-08 19:15:00+00:00",
+      "2026-09-08 20:15:00+00:00",
+      "2026-09-09 02:15:00+00:00",
+      "2026-09-09 02:30:00+00:00",
+      "2026-09-09 06:30:00+00:00",
+      "2026-09-09 16:30:00+00:00",
+      "2026-09-09 20:00:00+00:00",
+      "2026-09-09 21:00:00+00:00",
+      "2026-09-09 22:45:00+00:00",
+      "2026-09-09 23:00:00+00:00"
+    ],
+    "quality_counts": {
+      "ok": 945
+    },
+    "htf_source_counts": {
+      "4h": {
+        "exchange_ohlcv_validated": 748,
+        "canonical_tick_lake": 52
+      },
+      "1d": {
+        "exchange_ohlcv_validated": 794,
+        "canonical_tick_lake": 6
+      }
+    },
+    "files": [
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-01.parquet",
+        "sha256": "20a478578ed36666d99f980015cbac3a90c0bceb2591c41e5c3c9057b0e183c0"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-02.parquet",
+        "sha256": "74cb9a00387d6903ba4d8902ab11853d2b4e8f3fa76f553e135e2a3527ca821e"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-03.parquet",
+        "sha256": "15b21a2d50f27693383041eacd934c271c1739bac671db7d10897e49666cf650"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-04.parquet",
+        "sha256": "a648615e02bf3a0a97e894995e5d53b92196daa386863dd029b4aeec54471b7b"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-05.parquet",
+        "sha256": "06cc9618959e5c11e1d63c21d67a75cbce175026502a205dc1d764c2214b15a1"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-06.parquet",
+        "sha256": "1767345735ea593dd1596809c32899819d40c4221c9ffe84d8df6926e79a6665"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-07.parquet",
+        "sha256": "5ae3264c941e98edd31322530179966f2b3fb1c2d297b4a967fbd35d584b58ed"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-08.parquet",
+        "sha256": "0884dbb2462e130e26733390edffc1882864096e8fb8ecfd87b349bb4428d13b"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-09.parquet",
+        "sha256": "55f4a8744c7e920364360da991852cf1de293615f48ef843e1c44f13cd38a211"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/15m/2026-09-10.parquet",
+        "sha256": "c653e158d3db64b6f06446cd9a4b14c1274baa6580ae65b1eb436d4eb8a5ce46"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/4h/2026-09.parquet",
+        "sha256": "861a222ec2c941ae6dfee627384fa2d6b7d06f4073ea385a13d359bc7d0cd544"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/shadow_observe_htf_regime_continuation_15m_v2__ethusd_delta_india_eth_usd_usd_15m.context_4h.candles.parquet",
+        "sha256": "fa3fbe56cdc4945af73bd30adf3d5028246152e7510bf011944b5d515df57b67",
+        "source": "official_delta_ohlcv_cache"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1d/2026-09.parquet",
+        "sha256": "e0111f5da9eb2d2f021ed85030e83000ac673e078cf26571e74672d7f4a849cb"
+      },
+      {
+        "path": "/tmp/vnedge-htf-recheck.PInWIi/shadow_observe_htf_regime_continuation_15m_v2__ethusd_delta_india_eth_usd_usd_15m.context_1d.candles.parquet",
+        "sha256": "41351acad66d0cb5e635769d6ee8faac5848ae47252bab838a77c253c3658c1f",
+        "source": "official_delta_ohlcv_cache"
+      }
+    ]
+  },
+  "evidence_limitations": [
+    "Exploratory already-seen window; not untouched OOS.",
+    "Existing scanner replay applies explicit-quality warmup quarantine; not lane-by-lane live transport parity.",
+    "Replay does not execute live target admission, CostGate, sizing or kernel submission.",
+    "Replay outcome loop does not reproduce every strategy/trailing exit; nonzero outcomes are not execution proof.",
+    "No repaired bars, loosened gates, new edge estimates or strategy changes.",
+    "Zero trades mean economics unmeasured, not zero-risk or successful parity."
+  ],
+  "approval_parity_eligible": false,
+  "source_revision": "ab2044081971e82a089350b9d69dcd9f13f13c32",
+  "economics_verdict": "UNMEASURED_ZERO_TRADES",
+  "can_trade": false,
+  "can_promote": false
+}
