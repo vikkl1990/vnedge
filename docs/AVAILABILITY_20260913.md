@@ -44,11 +44,17 @@ Ubuntu VM at `/home/ubuntu/vnedge`; edit the user/path for another host.
 Install after committed deployment:
 
 ```sh
+sudo install -d -o ubuntu -g ubuntu -m 755 /home/ubuntu/vnedge/data/reports
 sudo install -m 644 deploy/vnedge-watchdog.service /etc/systemd/system/vnedge-watchdog.service
 sudo install -m 644 deploy/vnedge-watchdog.timer /etc/systemd/system/vnedge-watchdog.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now vnedge-watchdog.timer
+sudo systemctl start vnedge-watchdog.service
 ```
+
+The host user must be able to atomically replace the report in that directory.
+Container-created directories may be root-owned; set ownership on the reports
+directory only, never recursively change existing research artifacts.
 
 Before deliberate maintenance, stop the timer; resume it afterwards.
 `sudo systemctl disable --now vnedge-watchdog.timer` disables automatic recovery.
