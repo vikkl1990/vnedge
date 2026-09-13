@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "result_sha256": "97e1a0c1b260bc8290610c0c46a4c8fb078bbbe618ad626b252606f7e50e3dc6",
+  "checks": {
+    "BTCUSD:slope_cross": {
+      "measured": 98,
+      "saved_events": 99
+    },
+    "BTCUSD:volume_only_ablation": {
+      "measured": 316,
+      "saved_events": 319
+    },
+    "ETHUSD:slope_cross": {
+      "measured": 96,
+      "saved_events": 97
+    },
+    "ETHUSD:volume_only_ablation": {
+      "measured": 307,
+      "saved_events": 310
+    }
+  }
+}
