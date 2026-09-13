@@ -79,6 +79,7 @@ def audit_records(journals: dict[str, list[dict]], feature_logs: dict[str, list[
     cohorts: dict[tuple, dict] = {}
     features: dict[tuple, list[dict]] = defaultdict(list)
     envelopes: dict[tuple, dict[str, DecisionEnvelope]] = defaultdict(dict)
+    conflicted: set[tuple[str, str]] = set()
     outcomes: list[tuple[str, dict]] = []
     event_times: list[datetime] = []
     source_ids: list[str] = []
@@ -128,6 +129,9 @@ def audit_records(journals: dict[str, list[dict]], feature_logs: dict[str, list[
             counts["journal_records"] += 1
             p = record.get("payload") if isinstance(record.get("payload"), dict) else {}
             kind = record.get("kind")
+            if not isinstance(kind, str):
+                exclusions["invalid_journal_kind"] += 1
+                continue
             stamp = _stamp(record.get("ts"))
             if stamp:
                 event_times.append(stamp)
@@ -149,20 +153,23 @@ def audit_records(journals: dict[str, list[dict]], feature_logs: dict[str, list[
                     envelopes[(lane, envelope.decision_id)][_hash(envelope.as_dict())] = envelope
                 except (TypeError, ValueError, KeyError, AttributeError):
                     exclusions["invalid_envelope"] += 1
-    counts["bound_decisions"] = sum(len(proofs) == 1 for proofs in envelopes.values())
+                    claimed = p.get("decision_id") or ev.get("decision_id")
+                    if isinstance(claimed, str):
+                        conflicted.add((lane, claimed))
+    counts["bound_decisions"] = sum(len(proofs) == 1 and key not in conflicted for key, proofs in envelopes.items())
     for key, rows in features.items():
         if len(rows) != 1:
             exclusions["conflicting_feature_rows"] += 1
             continue
         proofs = envelopes.get(key, {})
-        if len(proofs) != 1:
+        if len(proofs) != 1 or key in conflicted:
             exclusions["feature_without_unique_envelope"] += 1
             continue
         row, envelope = rows[0], next(iter(proofs.values()))
         checks = (("symbol", envelope.symbol), ("strategy_id", envelope.strategy_id),
                   ("timeframe", envelope.timeframe), ("side", envelope.side),
                   ("decision_bar_hash", envelope.decision_bar_content_hash))
-        if any(row.get(k) != expected for k, expected in checks) or _stamp(row.get("bar_ts")) != envelope.bar_open:
+        if row.get("lane") != key[0] or any(row.get(k) != expected for k, expected in checks) or _stamp(row.get("bar_ts")) != envelope.bar_open:
             exclusions["feature_identity_mismatch"] += 1
             continue
         counts["exact_feature_matches"] += 1

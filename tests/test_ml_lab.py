@@ -49,6 +49,12 @@ def test_wrong_bar_backfill_and_missing_features_visible():
     assert all(x["missing_rows"] == 1 for x in report["feature_missingness"])
     report = audit_records({}, {"lane": [feature(backfill=True)]})
     assert report["exclusions"]["feature_backfill_or_unknown"] == 1
+    broken = rec(proof=True)
+    broken["payload"]["execution_evidence"]["arm_envelope"]["side"] = "short"
+    report = audit_records({"lane": [rec(proof=True), broken, {"kind": {}}]}, {"lane": [feature()]})
+    assert report["counts"]["bound_decisions"] == 0
+    assert report["counts"]["exact_feature_matches"] == 0
+    assert report["exclusions"]["invalid_journal_kind"] == 1
 
 
 def test_exit_intents_and_research_results_are_not_operational_labels():
