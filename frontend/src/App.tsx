@@ -5,6 +5,7 @@ import { CockpitCommandBar } from "./components/CockpitCommandBar";
 import { StrategyWorkbench } from "./components/StrategyWorkbench";
 import { LiveStateBridge } from "./components/LiveStateBridge";
 import { ServiceHealth } from "./components/ServiceHealth";
+import { SignalQueue } from "./components/SignalQueue";
 import { BuildVersionGuard } from "./components/BuildVersionGuard";
 import { TerminalTabs } from "./components/Terminal";
 import {
@@ -29,6 +30,7 @@ const ScannerChart = lazy(() =>
 const TABS = [
   { id: "strategy", label: "Strategy" },
   { id: "monitor", label: "Monitor" },
+  { id: "signals", label: "Signals" },
   { id: "tape", label: "Tape" },
   { id: "book", label: "Book" },
   { id: "evidence", label: "Evidence" },
@@ -126,6 +128,7 @@ export default function App() {
     () => [
       { id: "strategy", label: "Strategy", hint: "active system · chart · proof", run: () => navigate("strategy") },
       { id: "monitor", label: "Monitor", hint: "fleet drought · readiness · lanes", run: () => navigate("monitor") },
+      { id: "signals", label: "Signals", hint: "evaluations · arms · orders · evidence", run: () => navigate("signals") },
       { id: "tape", label: "Tape", hint: "canonical candles · evidence overlays", run: () => navigate("tape") },
       { id: "book", label: "Book", hint: "kernel book · positions · market", run: () => navigate("book") },
       { id: "evidence", label: "Evidence", hint: "decision identities · journal stream", run: () => navigate("evidence") },
@@ -158,6 +161,7 @@ export default function App() {
 
       {tab === "strategy" && <StrategyWorkbench />}
       {tab === "monitor" && <DeskPanel />}
+      {tab === "signals" && <SignalQueue />}
       {tab === "tape" && (
         <Suspense
           fallback={

@@ -28,6 +28,7 @@ import re
 import secrets
 import shutil
 import socket
+import sqlite3
 import time
 from collections import Counter
 from datetime import UTC, datetime
@@ -877,6 +878,8 @@ def create_app(
     # Per-lane files (equity/fills/journals/alerts) live next to the primary
     # equity history unless a journal dir is given explicitly.
     lane_dir = journal_dir or (history_path.parent if history_path is not None else None)
+    from vnedge.dashboard.signal_queue import SignalQueue
+    signal_queue = SignalQueue(lane_dir)
     # Resolve the runbooks doc across both layouts: dev (repo checkout, where
     # _REPO_ROOT/docs works) and the container (pip-installed package, where
     # __file__ points into site-packages but docs/ is COPYed to the WORKDIR).
@@ -1685,6 +1688,40 @@ def create_app(
                      f'attachment; filename="vnedge_{lane_label}.csv"',
                      **_identity(user)},
         )
+
+    @app.get("/api/signal-queue")
+    async def signal_queue_page(request: Request, limit: int = 25, cursor: str = "") -> JSONResponse:
+        from vnedge.dashboard.signal_queue import FILTERS, page
+        user = _authorized(request)
+        filters = {key: request.query_params[key] for key in FILTERS if key in request.query_params}
+        try:
+            if not 1 <= limit <= 100 or len(cursor) > 512:
+                raise ValueError("invalid queue limit or cursor")
+            projection = await asyncio.to_thread(signal_queue.snapshot, provider.latest())
+            payload = page(projection, filters=filters, limit=limit, cursor=cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except RuntimeError:
+            raise HTTPException(status_code=409, detail="Queue changed; refresh the first page") from None
+        except (OSError, sqlite3.Error):
+            raise HTTPException(status_code=503, detail="Signal queue index unavailable") from None
+        return JSONResponse(payload, headers=_identity(user))
+
+    @app.get("/api/signal-queue/{row_key}")
+    async def signal_queue_detail(request: Request, row_key: str) -> JSONResponse:
+        user = _authorized(request)
+        if len(row_key) != 64 or any(c not in "0123456789abcdef" for c in row_key):
+            raise HTTPException(status_code=400, detail="Invalid queue row key")
+        try:
+            projection = await asyncio.to_thread(signal_queue.snapshot, provider.latest())
+        except (OSError, sqlite3.Error):
+            raise HTTPException(status_code=503, detail="Signal queue index unavailable") from None
+        row = next((row for row in projection["rows"] if row["row_key"] == row_key), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Row absent from the active recent-history window")
+        return JSONResponse({"row": row, "generated_at": projection["generated_at"],
+                             "sources": projection["sources"], "history_complete": False,
+                             "can_trade": False, "can_promote": False}, headers=_identity(user))
 
     @app.get("/trade-journal")
     async def trade_journal(
