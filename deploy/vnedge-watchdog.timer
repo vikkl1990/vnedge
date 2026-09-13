@@ -1,0 +1,11 @@
+[Unit]
+Description=Check VNEDGE services each minute
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60s
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

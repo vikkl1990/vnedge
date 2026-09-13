@@ -105,3 +105,10 @@ def test_legacy_recovery_writers_are_not_default_services() -> None:
         assert compose["services"][service_name]["profiles"] == [
             "legacy-canonical-repair"
         ]
+
+
+def test_failed_rollout_never_tears_down_healthy_fleet():
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+    assert "docker compose down" not in deploy
+    failure = deploy[deploy.index("if ! recreate_in_waves;"):deploy.index('echo "waiting for lanes..."')]
+    assert "exit 1" in failure

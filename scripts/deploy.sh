@@ -163,8 +163,8 @@ fi
 # until another clean bar. The old scanner can remain online while the recorder
 # restarts; it is replaced only after the recorder logs that restoration is
 # complete. Remaining services are still batched to cap memory pressure.
-# On a daemon race (name-in-use mid-recreate — took the fleet down 2026-07-31),
-# self-heal once with down --remove-orphans, then fall back to a plain up.
+# On a daemon race, preserve all still-running services and stop the deploy.
+# A failed recreate is never permission to tear down the entire fleet.
 retire_legacy_canonical_writers() {
     # Profiles control service selection; they do not stop a container that an
     # older revision already started.  Retire the former repair writers before
@@ -246,9 +246,8 @@ recreate_in_waves() {
     return 0
 }
 if ! recreate_in_waves; then
-    echo "waved recreate raced — self-healing: down --remove-orphans + retry" >&2
-    docker compose down --remove-orphans || true
-    recreate_in_waves || docker compose up -d --no-build
+    echo "waved recreate failed — preserving running services; investigate failed service" >&2
+    exit 1
 fi
 
 echo "waiting for lanes..."

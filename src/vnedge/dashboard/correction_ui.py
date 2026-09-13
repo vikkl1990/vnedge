@@ -288,10 +288,13 @@ def _scanner_lifecycle(
     session_state = (
         "blocked" if "session" in waiting_lower or "outside_session" in state_text else "eligible"
     )
-    if health in {"blocked", "degraded"}:
-        setup_state = "degraded"
-    elif open_positions > 0 or pending > 0 or perf.get("open_position"):
+    # Operations warnings are not setup states. In particular a soft latency
+    # warning must not erase a real holding/armed state or a healthy denial.
+    # Hard entry blocks remain visible separately in health/readiness.
+    if open_positions > 0 or pending > 0 or perf.get("open_position"):
         setup_state = "holding"
+    elif health == "blocked":
+        setup_state = "degraded"
     elif state_text.endswith("_accepted"):
         setup_state = "accepted"
     elif armed_current:

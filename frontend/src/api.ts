@@ -165,7 +165,9 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  return apiRequest<T>(path);
+  // A half-open HTTP request otherwise pins Query in "fetching" forever,
+  // preventing interval retries. Bound reads only; never retry mutations.
+  return apiRequest<T>(path, { signal: AbortSignal.timeout(20_000) });
 }
 
 export async function apiPut<T>(path: string, body: unknown): Promise<T> {

@@ -138,7 +138,7 @@ export function StatusStrip() {
 }
 
 export function DeskPanel() {
-  const { data } = useLanes();
+  const { data, isError } = useLanes();
   const lanes = data?.lanes ?? [];
   const setupTone = (state: CorrectionLane["lifecycle"]["state"]): "good" | "info" | "warn" | "bad" | "neutral" => (
     state === "accepted" || state === "holding" ? "good"
@@ -181,6 +181,7 @@ export function DeskPanel() {
   ];
   return (
     <TerminalPanel title="Desk · runtime lanes" meta={`${lanes.length} active · policy truth · read only`}>
+      {isError && <div role="alert" className="mb-4 border border-warn p-3 text-warn">Lane refresh interrupted — retrying automatically. Any rows below are the last received snapshot, not current proof.</div>}
       {data?.snapshot_state !== "fresh" && <div className="mb-4 rounded-lg border border-short/50 bg-short/10 px-3 py-2 text-[12px] text-short" role="alert"><strong>Lane snapshot {data?.snapshot_state ?? "unknown"}.</strong> Setup states and counters are not live. Age {data?.snapshot_age_ms == null ? "not reported" : ageSec(data.snapshot_age_ms / 1000)}; SLA {data?.snapshot_sla_ms == null ? "—" : ageSec(data.snapshot_sla_ms / 1000)}.</div>}
       {data?.banner && <div className="mb-4 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-[12px] text-warn">{data.banner}</div>}
       {lanes.length ? <DenseTable columns={cols} rows={lanes} rowKey={(lane) => lane.lane_id} /> : <div className="text-faint text-[12px] p-2">No lane telemetry.</div>}

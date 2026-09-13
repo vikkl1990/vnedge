@@ -362,6 +362,7 @@ def _audit_one(
     equity_path: Path,
     timeframe: str,
     now: float,
+    live_eval: Mapping[str, object] | None = None,
 ) -> tuple[bool, float | None, float | None, bool, bool, bool]:
     """Shared file-level probe: (exists, record_age, eval_age, evaluating,
     stale, silent) for one lane's journal/equity pair."""
@@ -371,6 +372,18 @@ def _audit_one(
     journal_last_ts, last_eval_ts = (
         _scan_tail(journal_path) if exists else (None, None)
     )
+    # A busy diagnostics WAL can push an hourly evaluation out of its bounded
+    # tail. The running lane's recorded evaluation is independent proof; do
+    # not confuse "not in this tail" with "did not happen for 24h".
+    # This never creates a record, repairs a missing WAL, or accepts backfill.
+    if live_eval and live_eval.get("backfill") is False:
+        try:
+            at = datetime.fromisoformat(str(live_eval.get("eval_at")))
+            stamp = at.timestamp() if at.tzinfo is not None else float("nan")
+            if 0 <= now - stamp <= EVAL_TIMEFRAME_MULTIPLE * tf_seconds:
+                last_eval_ts = _newest(last_eval_ts, stamp)
+        except (ValueError, TypeError, OverflowError):
+            pass
     equity_last_ts = (
         _scan_tail(equity_path)[0] if equity_path.exists() else None
     )
@@ -404,6 +417,7 @@ def audit_lanes(
     *,
     desired: list[LaneSpec] | None = None,
     now: float | None = None,
+    live_evaluations: Mapping[str, Mapping[str, object]] | None = None,
 ) -> LaneHealthReport:
     """Cross-check desired lane specs against the journal directory.
 
@@ -432,7 +446,8 @@ def audit_lanes(
         journal_path = journal_dir / f"{spec.lane_id}{_JOURNAL_SUFFIX}"
         equity_path = journal_dir / f"{spec.lane_id}{_EQUITY_SUFFIX}"
         exists, record_age, eval_age, evaluating, stale, silent = _audit_one(
-            journal_path, equity_path, spec.timeframe, now
+            journal_path, equity_path, spec.timeframe, now,
+            (live_evaluations or {}).get(spec.lane_id),
         )
         mode = getattr(spec.mode, "value", str(spec.mode))
         shadow_trades = shadow_wins = shadow_losses = 0

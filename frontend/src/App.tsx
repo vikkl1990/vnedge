@@ -4,6 +4,7 @@ import { ResearchArena } from "./components/ResearchArena";
 import { CockpitCommandBar } from "./components/CockpitCommandBar";
 import { StrategyWorkbench } from "./components/StrategyWorkbench";
 import { LiveStateBridge } from "./components/LiveStateBridge";
+import { ServiceHealth } from "./components/ServiceHealth";
 import { BuildVersionGuard } from "./components/BuildVersionGuard";
 import { TerminalTabs } from "./components/Terminal";
 import {
@@ -175,7 +176,7 @@ export default function App() {
         </div>
       )}
       {tab === "evidence" && <JournalPanel />}
-      {tab === "data" && <SystemPanel />}
+      {tab === "data" && <><ServiceHealth /><SystemPanel /></>}
       {tab === "arena" && <ResearchArena onNavigate={(next) => navigate(LEGACY_TABS[next] ?? next)} />}
       {tab === "settings" && <SettingsPanel />}
 

@@ -16,6 +16,26 @@ from vnedge.dashboard.correction_ui import (
 NOW = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("positions,expected", [(0, "watching"), (1, "holding")])
+def test_soft_ops_warning_does_not_replace_setup_state(positions, expected):
+    state = snapshot()
+    lane = state["lanes"][0]
+    lane["gapped_candles"] = 0
+    lane["positions"] = positions
+    lane["latency"]["decision_lag_ms"] = {"p95": 1500, "n": 25}
+    row = build_lanes_payload(state, now=NOW)["lanes"][0]
+    assert row["health"] == "degraded"
+    assert row["lifecycle"]["state"] == expected
+
+
+def test_hard_ops_block_remains_visible_without_hiding_position():
+    state = snapshot()
+    state["lanes"][0]["positions"] = 1
+    row = build_lanes_payload(state, now=NOW)["lanes"][0]
+    assert row["health"] == "blocked"
+    assert row["lifecycle"]["state"] == "holding"
+
+
 def test_lanes_preserve_unknown_ema_before_first_evaluation() -> None:
     state = snapshot()
     state["lanes"][0]["lake_contract"] = {

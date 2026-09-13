@@ -50,7 +50,7 @@ export function useReadiness() {
   return useQuery({
     queryKey: ["readiness"],
     queryFn: async (): Promise<ReadinessStatus> => {
-      const response = await fetch("/ready", { cache: "no-store", credentials: "same-origin" });
+      const response = await fetch("/ready", { cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(20_000) });
       let body: { status?: string; reasons?: unknown } = {};
       try { body = await response.json() as typeof body; } catch { /* fail visible below */ }
       return {

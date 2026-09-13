@@ -1325,6 +1325,17 @@ def create_app(
             )
         return JSONResponse(build_lanes_payload(snapshot), headers=_identity(user))
 
+    @app.get("/api/services")
+    async def services(request: Request) -> JSONResponse:
+        """Read-only host process health, never a trading-readiness signal."""
+        user = _authorized(request)
+        from vnedge.dashboard.service_status import service_status
+
+        return JSONResponse(
+            service_status(Path("data/reports/service_watchdog.json")),
+            headers=_identity(user),
+        )
+
     @app.get("/api/risk/snapshot")
     async def correction_risk(request: Request) -> JSONResponse:
         """Truthful kill, halt, journal, stream, and live-block posture."""

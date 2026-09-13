@@ -38,6 +38,60 @@ NOW = 1_751_900_000.0  # fixed 'now' for deterministic ages
 
 HOUR = 3600.0
 
+
+@pytest.mark.asyncio
+async def test_runtime_audit_does_not_block_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    import vnedge.runtime.lane_health as health_module
+    entered = threading.Event()
+    release = threading.Event()
+    real = health_module.audit_lanes
+    def slow(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(health_module, "audit_lanes", slow)
+    write_journal(tmp_path, "live", [(5, "lane_eval")], now=time.time())
+    provider = MultiLaneProvider("live", lane_specs=[spec("live")], journal_dir=tmp_path)
+    try:
+        pending = provider._lane_health()
+        assert pending["process_healthy"] is False
+        await asyncio.wait_for(asyncio.to_thread(entered.wait, 1), timeout=2)
+        # A second HTTP snapshot returns while disk scanning is still blocked.
+        assert provider._lane_health()["summary"] == "audit pending"
+    finally:
+        release.set()
+    await asyncio.wrap_future(provider._health_future)
+    assert provider._lane_health()["process_healthy"] is True
+
+
+def test_live_recorded_eval_prevents_false_silent_from_bounded_tail(tmp_path):
+    write_journal(tmp_path, "live", [(90000, "start"), (2, "diagnostic")])
+    assert audit_lanes(tmp_path, desired=[spec("live")], now=NOW).rows[0].verdict == VERDICT_SILENT
+    report = audit_lanes(tmp_path, desired=[spec("live")], now=NOW,
+                         live_evaluations={"live": {"eval_at": _iso(NOW - 60), "backfill": False}})
+    assert report.rows[0].verdict == VERDICT_OK
+    assert report.rows[0].last_eval_age_seconds == 60
+
+
+@pytest.mark.parametrize("evaluation", [
+    {"eval_at": "invalid", "backfill": False},
+    {"eval_at": datetime.fromtimestamp(NOW + 60, UTC).isoformat(), "backfill": False},
+    {"eval_at": datetime.fromtimestamp(NOW - 60, UTC).isoformat(), "backfill": True},
+    {"eval_at": datetime.fromtimestamp(NOW - 90000, UTC).isoformat(), "backfill": False},
+    {"eval_at": datetime.fromtimestamp(NOW - 60, UTC).replace(tzinfo=None).isoformat(), "backfill": False},
+])
+def test_invalid_live_evidence_cannot_hide_silent(tmp_path, evaluation):
+    write_journal(tmp_path, "live", [(90000, "start"), (2, "diagnostic")])
+    assert audit_lanes(tmp_path, desired=[spec("live")], now=NOW,
+                       live_evaluations={"live": evaluation}).rows[0].verdict == VERDICT_SILENT
+
+
+def test_live_eval_cannot_hide_missing_journal(tmp_path):
+    assert audit_lanes(tmp_path, desired=[spec("live")], now=NOW,
+                       live_evaluations={"live": {"eval_at": _iso(NOW - 60), "backfill": False}}).rows[0].verdict == VERDICT_MISSING
+
 # Deterministic single-lane environment for CLI-level tests: one binance
 # shadow funding-MR lane, no candidate/manifest/delta extras.
 CLI_ENV = {

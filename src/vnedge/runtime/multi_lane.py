@@ -24,6 +24,7 @@ import numbers
 import os
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -183,6 +184,9 @@ class _LaneSink:
         self._parent._publish(self._lane_id, self._exchange, snapshot)
 
 
+_HEALTH_AUDITOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lane-health")
+
+
 class MultiLaneProvider:
     """Holds each lane's latest snapshot. latest() returns the primary lane
     (flat, backward-compatible) with a `lanes` array appended for comparison."""
@@ -210,6 +214,7 @@ class MultiLaneProvider:
         self._health_journal_dir = Path(journal_dir) if journal_dir is not None else None
         self._health_cache: dict | None = None
         self._health_at = 0.0
+        self._health_future: Future | None = None
         self._runtime_control = dict(runtime_control or {})
         self._canonical_router = canonical_router
         self._specs_by_id = {spec.lane_id: spec for spec in (lane_specs or [])}
@@ -245,6 +250,24 @@ class MultiLaneProvider:
         if self._health_specs is None or self._health_journal_dir is None:
             return None
         now = time.monotonic()
+        if self._health_future is not None:
+            if self._health_future.done():
+                try:
+                    self._health_cache = self._health_future.result().to_snapshot()
+                except Exception as exc:  # observability cannot kill the HTTP loop
+                    logger.warning("lane-health audit failed: %s", exc)
+                    self._health_cache = self._health_cache or {
+                        "healthy": False, "process_healthy": False,
+                        "production_healthy": False, "summary": "audit failed",
+                        "problems": [],
+                    }
+                self._health_future = None
+            else:
+                return self._health_cache or {
+                    "healthy": False, "process_healthy": False,
+                    "production_healthy": False, "summary": "audit pending",
+                    "problems": [],
+                }
         if self._health_cache is not None and (
             now - self._health_at < self.LANE_HEALTH_INTERVAL_SECONDS
         ):
@@ -253,7 +276,29 @@ class MultiLaneProvider:
         try:
             from vnedge.runtime.lane_health import audit_lanes
 
-            report = audit_lanes(self._health_journal_dir, desired=self._health_specs)
+            evaluations = {
+                lid: dict(snap.get("session", {}).get("last_eval") or {})
+                for lid, snap in self._lanes.items()
+            }
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                pass  # Synchronous CLI/tests retain the synchronous contract.
+            else:
+                self._health_future = _HEALTH_AUDITOR.submit(
+                    audit_lanes, self._health_journal_dir,
+                    desired=list(self._health_specs), live_evaluations=evaluations,
+                )
+                return self._health_cache or {
+                    "healthy": False, "process_healthy": False,
+                    "production_healthy": False, "summary": "audit pending",
+                    "problems": [],
+                }
+            report = audit_lanes(
+                self._health_journal_dir,
+                desired=self._health_specs,
+                live_evaluations=evaluations,
+            )
             self._health_cache = report.to_snapshot()
         except Exception as exc:  # noqa: BLE001 — observability must not crash lanes
             logger.warning("lane-health audit failed: %s", exc)
