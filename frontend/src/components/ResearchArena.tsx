@@ -4,12 +4,14 @@ import { useAgenticResearchStatus, useBacktestLab, useResearchPipeline, useResea
 import { BacktestLabPanel, StrategyWorkflowPanel } from "../panels/Panels";
 import { DenseTable, TerminalBadge, TerminalPanel, type Column } from "./Terminal";
 import { PatternAtlas } from "./PatternAtlas";
+import { MLLab } from "./MLLab";
 
-type ArenaView = "book" | "pipeline" | "backtests" | "forward" | "campaigns" | "agents" | "failures";
+type ArenaView = "book" | "pipeline" | "backtests" | "forward" | "campaigns" | "agents" | "failures" | "ml";
 
 const ARENA_VIEWS: Array<{ id: ArenaView; label: string; eyebrow: string }> = [
   { id: "book", label: "The Book", eyebrow: "immutable revisions" },
   { id: "pipeline", label: "Pipeline", eyebrow: "idea to eligibility" },
+  { id: "ml", label: "ML Lab", eyebrow: "features · labels · validation" },
   { id: "backtests", label: "Backtests", eyebrow: "canonical command centre" },
   { id: "forward", label: "Forward Queue", eyebrow: "trade-count evidence" },
   { id: "campaigns", label: "Campaigns", eyebrow: "bounded experiments" },
@@ -357,6 +359,7 @@ export function ResearchArena({ onNavigate }: { onNavigate: (tab: string) => voi
       {(workflow.isError || lab.isError || agents.isError || pipeline.isError) && <div className="rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-[11px] text-warn" role="status">Some Arena evidence sources are unavailable. Missing records remain unknown; zero is not substituted.</div>}
       <div className="arena-view-head"><div><span>{selected.eyebrow}</span><h2>{selected.label}</h2></div><p>Read-only evidence projection · immutable IDs · after-cost metrics</p></div>
       {view === "book" && <StrategyWorkflowPanel />}
+      {view === "ml" && <MLLab />}
       {view === "pipeline" && <PipelineView revisions={revisions} pipeline={pipeline.data} />}
       {view === "backtests" && <BacktestLabPanel />}
       {view === "forward" && <ForwardQueue revisions={revisions} minimumSamples={scorecard.data?.performance_policy.min_samples ?? 30} />}

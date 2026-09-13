@@ -2104,6 +2104,13 @@ def create_app(
             headers=_identity(user),
         )
 
+    @app.get("/api/ml-lab")
+    async def ml_lab(request: Request) -> JSONResponse:
+        from vnedge.dashboard.ml_lab import ml_lab_payload
+        user = _authorized(request)
+        payload = await asyncio.to_thread(ml_lab_payload, ml_pipeline_status_file)
+        return JSONResponse(payload, headers=_identity(user))
+
     @app.get("/ml-status")
     async def ml_status(request: Request) -> JSONResponse:
         """ML pipeline status — the meta-labeling training set accumulating from

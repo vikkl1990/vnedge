@@ -1,14 +1,8 @@
-"""ML pipeline status — makes the ML integration VISIBLE and honest.
+"""ML evidence status — bounded, read-only feature/journal audit.
 
-The ML foundation (validation, robustness, features, dataset builder) is built
-but role ① (meta-labeling) is data-gated: it needs the paper trials' realized
-outcomes as labels. This job answers, on a cadence, "where is ML actually?" so
-the dashboard can show it emerging instead of it being invisible backend code.
-
-It runs the real meta-label dataset builder over the live decision journals +
-candles, so the training-set count GROWS as the trials mature — that growing
-number is the honest signal that ML is progressing. No model is trained here;
-this only measures readiness against the locked promotion gates.
+Legacy entry-bar feature reconstruction and research outcomes no longer feed
+operational readiness. The status job never trains; final ledger labels and
+preregistered chronological validation remain separate delivery requirements.
 
 Run periodically:  python -m vnedge.research.ml_pipeline_status --interval-seconds 300
 """
@@ -29,6 +23,7 @@ from vnedge.ml.feature_matrix import (  # noqa: F401
     build_feature_matrix,
 )
 from vnedge.ml.meta_label_dataset import build_meta_label_dataset, load_lane_journal_trades
+from vnedge.ml.lab_audit import build_ml_lab_audit
 
 #: labels needed before role ① can honestly train (>= this, then validate).
 MIN_LABELS_TO_TRAIN = 200
@@ -105,51 +100,32 @@ def _load_lane_candles(lane_dir: Path) -> dict:
 
 
 def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
-    """Assemble the current, honest ML pipeline state."""
-    trades = load_lane_journal_trades(lane_dir)
-    candles = _load_candles(data_root)
-    lane_candles = _load_lane_candles(lane_dir)
-    frame = None
-    if candles or lane_candles:
-        frame, summary = build_meta_label_dataset(
-            trades, candles, candles_by_lane=lane_candles, params=FeatureParams()
-        )
-    else:
-        summary = {"samples": 0, "win_rate": 0.0, "by_strategy": {}}
+    """Audit recorded evidence only. Status collection never fits a model.
 
-    samples = int(summary.get("samples", 0))
-
-    # Run the real gated meta-labeling harness over the built dataset. It
-    # degrades honestly (COLLECTING/TRAINABLE) below the data floor and only
-    # trains + validates through the locked DSR/PBO/CPCV gates once there's
-    # enough. Never fatal — the status job must publish even if training errors.
+    data_root remains a CLI compatibility argument; no candle fallback is used.
+    The old entry-bar join is exploratory only, not operational label proof.
+    """
+    audit = build_ml_lab_audit(lane_dir)
+    samples = audit["operational_labels"]
     validation = None
-    if frame is not None and samples > 0:
-        try:
-            from vnedge.ml.meta_labeler import evaluate_meta_labeler
-
-            validation = evaluate_meta_labeler(frame).to_dict()
-        except Exception as exc:  # noqa: BLE001 — observability must not crash
-            validation = {"status": "ERROR", "reason": str(exc)[:200], "passed": False}
-
-    v_status = (validation or {}).get("status", "")
-    trainable = bool((validation or {}).get("trainable"))
-    validated = v_status in ("VALIDATED_PASS", "VALIDATED_FAIL")
-    passed = bool((validation or {}).get("passed"))
-    stage = "COLLECTING_LABELS" if samples < MIN_LABELS_TO_TRAIN else "READY_TO_TRAIN"
+    trainable = validated = passed = False
+    stage = "BLOCKED_LABEL_PROOF" if audit["counts"]["feature_rows"] or audit["counts"]["exit_records"] else "COLLECTING_LABELS"
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "active_role": _ROLE_ORDER[0],
         "role_order": list(_ROLE_ORDER),
         "stage": stage,
+        "audit_schema": audit["schema"],
+        "audit": audit,
+        "training_status": "BLOCKED_LABEL_PROOF",
         "stages": [
             {"key": "FOUNDATION", "label": "Foundation", "done": True,
              "detail": "validation · robustness · features · dataset builder"},
             {"key": "COLLECTING_LABELS", "label": "Collecting labels", "done": samples >= MIN_LABELS_TO_TRAIN,
-             "detail": f"{samples} / {MIN_LABELS_TO_TRAIN} labeled trades", "active": stage == "COLLECTING_LABELS"},
+             "detail": f"{samples} / {MIN_LABELS_TO_TRAIN} ledger-bound labels; exit records are not labels", "active": True},
             {"key": "TRAIN", "label": "Train + calibrate", "done": validated,
-             "detail": "HistGradientBoosting + isotonic",
+             "detail": "not run; calibration artifact required",
              "active": trainable and not validated},
             {"key": "VALIDATE", "label": "Validate (DSR/PBO)", "done": passed,
              "detail": "must clear the locked gates", "active": validated and not passed},
@@ -160,10 +136,10 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
         ],
         "dataset": {
             "samples": samples,
-            "win_rate_pct": round(float(summary.get("win_rate", 0.0)) * 100, 1),
+            "win_rate_pct": None,
             "min_to_train": MIN_LABELS_TO_TRAIN,
             "progress_pct": round(min(100.0, samples / MIN_LABELS_TO_TRAIN * 100), 1),
-            "by_strategy": summary.get("by_strategy", {}),
+            "by_strategy": {},
         },
         "foundation": {
             "validation": True,
@@ -208,10 +184,9 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
             "non-binding shadow; judgment on untouched windows only"
         ),
         "note": (
-            "Meta-labeling is DATA-GATED: it trains once enough primary-signal "
-            "outcomes accumulate from the paper trials (4h fires ~2/week). The "
-            "count above is the real, growing training set — nothing is trained "
-            "or promoted until it clears the locked gates on untouched data."
+            "Operational labels require a resolved entry/exit/fee/funding ledger "
+            "joined to exact feature evidence. Exit submissions and research "
+            "outcomes do not count. This worker audits; it never trains."
         ),
     }
 
@@ -230,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         status = build_ml_pipeline_status(
             lane_dir=Path(args.lane_dir), data_root=Path(args.data_root)
         )
-        out.write_text(json.dumps(status, indent=2))
+        temporary = out.with_suffix(out.suffix + ".tmp")
+        temporary.write_text(json.dumps(status, indent=2, allow_nan=False))
+        temporary.replace(out)
         print(f"ml_pipeline_status: stage={status['stage']} samples={status['dataset']['samples']}", flush=True)
 
     once()
