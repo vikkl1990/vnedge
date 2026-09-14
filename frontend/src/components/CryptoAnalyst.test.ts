@@ -32,6 +32,7 @@ describe("Crypto Analyst", () => {
     expect(html).toContain("Market data and technical analysis are separate");
     expect(html).toContain("Public mark price");
     expect(html).toContain("Last closed price");
+    expect(html).toContain("Public observations and technical coverage</small><b>1<span>");
     expect(analystMatches(market, "", "trend_watch", "all")).toBe(false);
     expect(market.metrics).toEqual({});
   });
