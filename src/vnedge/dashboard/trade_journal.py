@@ -61,9 +61,20 @@ def build_trade_journal(
     # named lane is always honored directly.
     active = _active_lane_ids(snapshot) if not lane else None
 
-    fills = _fill_rows(root, lane=lane, since=since_dt, config=config, active=active)
+    source_issues: list[str] = []
+    if not lane and not active:
+        source_issues.append("active_fleet_scope_unavailable")
+    journal_paths = _paths(root, ".journal.jsonl", lane, active)
+    fill_paths = _paths(root, ".fills.jsonl", lane, active)
+    if not journal_paths and not fill_paths:
+        source_issues.append("no_journal_or_fill_sources")
+    expected = {lane} if lane else active
+    present = {_lane_from_path(p, ".journal.jsonl") for p in journal_paths}
+    if expected and expected - present:
+        source_issues.append("active_lane_journals_missing")
+    fills = _fill_rows(root, lane=lane, since=since_dt, config=config, active=active, issues=source_issues)
     journal_rows = _journal_rows(
-        root, lane=lane, since=since_dt, config=config, active=active
+        root, lane=lane, since=since_dt, config=config, active=active, issues=source_issues
     )
     evidence, evidence_state = _scanner_evidence(scanner_evidence_path)
 
@@ -149,6 +160,14 @@ def build_trade_journal(
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "lane": lane or "all",
+        "source_coverage": {
+            "state": "partial" if source_issues else "bounded_window",
+            "issues": sorted(set(source_issues)),
+            "journal_files": len(journal_paths),
+            "fill_files": len(fill_paths),
+            "history_complete": False,
+            "note": "Numeric summaries describe readable records only; no ledger reconciliation is asserted.",
+        },
         "summary": {
             "positions": len(positions),
             "orders": totals["orders"],
@@ -222,7 +241,7 @@ def build_trade_journal(
     }
 
 
-def _tail_lines(path: Path, max_bytes: int) -> list[str]:
+def _tail_lines(path: Path, max_bytes: int, issues: list[str] | None = None) -> list[str]:
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -230,6 +249,8 @@ def _tail_lines(path: Path, max_bytes: int) -> list[str]:
             handle.seek(max(0, size - max_bytes))
             data = handle.read()
     except OSError:
+        if issues is not None:
+            issues.append("source_read_failed")
         return []
     lines = data.decode("utf-8", errors="replace").splitlines()
     if size > max_bytes and lines:
@@ -339,14 +360,20 @@ def _merge_evidence_shadow(
     return [*actual, *shadow.values()]
 
 
-def _iter_jsonl(path: Path, *, max_bytes: int) -> Iterable[dict[str, Any]]:
-    for line in _tail_lines(path, max_bytes):
+def _iter_jsonl(path: Path, *, max_bytes: int, issues: list[str] | None = None) -> Iterable[dict[str, Any]]:
+    for line in _tail_lines(path, max_bytes, issues):
+        if not line.strip():
+            continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
+            if issues is not None:
+                issues.append("invalid_source_record")
             continue
         if isinstance(row, dict):
             yield row
+        elif issues is not None:
+            issues.append("invalid_source_record")
 
 
 def _paths(
@@ -476,11 +503,12 @@ def _fill_rows(
     since: datetime | None,
     config: TradeJournalConfig,
     active: set[str] | None = None,
+    issues: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in _paths(root, ".fills.jsonl", lane, active):
         lane_id = _lane_from_path(path, ".fills.jsonl")
-        for raw in _iter_jsonl(path, max_bytes=config.tail_bytes):
+        for raw in _iter_jsonl(path, max_bytes=config.tail_bytes, issues=issues):
             ts = _record_ts(raw)
             if not _after_since(ts, since):
                 continue
@@ -513,11 +541,12 @@ def _journal_rows(
     since: datetime | None,
     config: TradeJournalConfig,
     active: set[str] | None = None,
+    issues: list[str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     rows: list[tuple[str, dict[str, Any]]] = []
     for path in _paths(root, ".journal.jsonl", lane, active):
         lane_id = _lane_from_path(path, ".journal.jsonl")
-        for raw in _iter_jsonl(path, max_bytes=config.tail_bytes):
+        for raw in _iter_jsonl(path, max_bytes=config.tail_bytes, issues=issues):
             ts = _record_ts(raw, raw.get("payload") if isinstance(raw.get("payload"), dict) else {})
             if not _after_since(ts, since):
                 continue

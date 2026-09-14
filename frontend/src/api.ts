@@ -968,6 +968,7 @@ export interface ScannerAuditEvent {
 
 export interface JournalPayload {
   generated_at: string;
+  source_coverage?: { state: string; issues: string[]; journal_files: number; fill_files: number; history_complete: false };
   summary: {
     positions: number;
     open_orders: number;
@@ -1486,6 +1487,14 @@ export interface ResearchPipelineCandidate {
 
 export interface ResearchPipelinePayload {
   recovery_plan?: {
+    forward_replay?: {
+      generated_at?: string;
+      symbols?: Record<string, { restored_minutes?: number; candidate_minutes?: number;
+        sessions_inspected?: number; rejected?: string[]; reason?: string; status?: string }>;
+    };
+    raw_audit?: Record<string, { status?: string; coverage?: string; shard_count?: number;
+      window_open?: string; window_close?: string; counts?: Record<string, number>;
+      valid_rows?: number; max_interprint_gap_ms?: number | null; reason?: string }>;
     generated_at?: string;
     status?: string;
     reason?: string;

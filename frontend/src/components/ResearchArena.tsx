@@ -143,6 +143,16 @@ export function RecoveryPlan({ report }: { report: ResearchPipelinePayload["reco
       <p className="break-all">Plan: {plan.plan_id ?? "unavailable"}</p>
       <ul className="mt-2">{Object.entries(plan.counts ?? {}).map(([status, count]) => <li key={status}>{titleCase(status)}: {count} hours</li>)}</ul>
       <p className="mt-2">Raw-day presence does not prove interval coverage. No local raw day means unavailable locally—not repaired by official OHLC.</p>
+      <p className="mt-2">Forward replay: {report?.forward_replay?.symbols?.[symbol]?.restored_minutes ?? "—"} original minutes restored;
+        {" "}{report?.forward_replay?.symbols?.[symbol]?.sessions_inspected ?? "—"} sessions inspected. Previously published hashes only—not new historical coverage.</p>
+      {report?.forward_replay?.symbols?.[symbol]?.reason && <p className="text-warn">{report.forward_replay.symbols[symbol].reason}</p>}
+      {report?.forward_replay?.symbols?.[symbol]?.rejected?.map((reason, i) => <p key={`replay-${i}`} className="text-warn">Replay rejected: {reason}</p>)}
+      {report?.raw_audit?.[symbol] && <div className="mt-2">
+        <p>Raw audit: {titleCase(report.raw_audit[symbol].status ?? "unknown")} · {report.raw_audit[symbol].shard_count ?? "—"} shards · {report.raw_audit[symbol].valid_rows ?? "—"} unit-valid prints.</p>
+        <p>{report.raw_audit[symbol].window_open ?? "unknown"} → {report.raw_audit[symbol].window_close ?? "unknown"}. Timestamp density is not completeness proof.</p>
+        {Object.entries(report.raw_audit[symbol].counts ?? {}).map(([key, count]) => <p key={key}>{titleCase(key)}: {count}</p>)}
+        {report.raw_audit[symbol].reason && <p className="text-warn">{report.raw_audit[symbol].reason}</p>}
+      </div>}
       {Object.entries(plan.blocked_parent_counts ?? {}).map(([tf, count]) => <p className="text-warn" key={tf}>{tf}: {count} parent proposals blocked by unsafe target partitions.</p>)}
       {plan.errors?.map((error, i) => <p className="text-warn" key={i}>{error}</p>)}
       <div className="mt-2 max-h-64 overflow-y-auto">{plan.ranges?.map((range) => <p key={range.open_time}>{range.open_time} → {range.close_time} · {range.hours} hours · {titleCase(range.status)}</p>)}</div>
@@ -272,12 +282,17 @@ function ArenaMetric({ label, value, tone = "neutral" }: { label: string; value:
   return <div className="arena-metric"><span>{label}</span><strong className={colors[tone]}>{value}</strong></div>;
 }
 
-function ForwardQueue({ revisions, minimumSamples }: { revisions: StrategyWorkflowRevision[]; minimumSamples: number }) {
+export function activeProofCount(runs: BacktestRunSummary[]): number {
+  return runs.filter(row => ["QUEUED", "PENDING", "RUNNING"].includes(row.status)).length;
+}
+
+export function ForwardQueue({ revisions, minimumSamples }: { revisions: StrategyWorkflowRevision[]; minimumSamples: number }) {
   const rows = revisions.filter((row) => row.stage === "SHADOW_OBSERVE" || row.shadow_evidence != null).map((row) => {
-    const resolved = Number(row.shadow_evidence?.virtual_resolved ?? 0);
-    const pending = Number(row.shadow_evidence?.virtual_pending ?? 0);
-    const accepted = Number(row.shadow_evidence?.accepted_entries ?? row.shadow_evidence?.virtual_approved ?? 0);
-    return { row, resolved, pending, accepted, target: minimumSamples, progress: Math.min(100, resolved / Math.max(1, minimumSamples) * 100) };
+    const count = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+    const resolved = count(row.shadow_evidence?.virtual_resolved);
+    const pending = count(row.shadow_evidence?.virtual_pending);
+    const accepted = count(row.shadow_evidence?.accepted_entries ?? row.shadow_evidence?.virtual_approved);
+    return { row, resolved, pending, accepted, target: minimumSamples, progress: resolved == null ? null : Math.min(100, resolved / Math.max(1, minimumSamples) * 100) };
   });
   return (
     <TerminalPanel title="Forward Test Queue" meta="progress is resolved trades · never elapsed days">
@@ -286,8 +301,8 @@ function ForwardQueue({ revisions, minimumSamples }: { revisions: StrategyWorkfl
           {rows.map(({ row, resolved, pending, accepted, target, progress }) => (
             <article key={row.revision_id} className="arena-forward-card">
               <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">{row.symbols.join(" · ") || "unbound market"}</div><h3>{row.strategy_id}</h3></div><TerminalBadge tone={row.shadow_evidence?.performance_eligible ? "good" : "warn"}>{row.shadow_evidence?.performance_eligible ? "eligible evidence" : "diagnostic only"}</TerminalBadge></div>
-              <div className="mt-5 flex items-end justify-between"><strong className="font-mono text-3xl">{resolved}<small> / {target}</small></strong><span className="font-mono text-[10px] text-faint">{accepted} accepted · {pending} pending</span></div>
-              <div className="arena-progress mt-3"><i style={{ width: `${progress}%` }} /></div>
+              <div className="mt-5 flex items-end justify-between"><strong className="font-mono text-3xl">{resolved ?? "—"}<small> / {target}</small></strong><span className="font-mono text-[10px] text-faint">{accepted ?? "—"} accepted · {pending ?? "—"} pending</span></div>
+              {progress == null ? <p className="mt-3 text-warn">Forward outcome evidence not reported.</p> : <div className="arena-progress mt-3"><i style={{ width: `${progress}%` }} /></div>}
               <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-dim"><span>clock <b>{titleCase(entryClock(row))}</b></span><span>cost <b>{primaryCostProfile(row)}</b></span></div>
             </article>
           ))}
@@ -346,7 +361,7 @@ export function ResearchArena({ onNavigate }: { onNavigate: (tab: string) => voi
   const pipeline = useResearchPipeline();
   const revisions = workflow.data?.revisions ?? [];
   const failures = revisions.filter((row) => ["QUARANTINED", "KILLED", "OOS_REJECT"].includes(row.stage)).length;
-  const activeProofs = (lab.data?.runs ?? []).filter((row) => !["COMPLETE", "FAILED", "REJECTED"].includes(row.status)).length;
+  const activeProofs = activeProofCount(lab.data?.runs ?? []);
   const selected = useMemo(() => ARENA_VIEWS.find((item) => item.id === view) ?? ARENA_VIEWS[1], [view]);
   return (
     <main className="research-arena space-y-3">

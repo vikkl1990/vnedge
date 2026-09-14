@@ -108,7 +108,7 @@ if [ "$NEED_BUILD" = 1 ]; then
     # Tag ALL services' images (force every profile), so the `research` fleet can
     # be opted in later (COMPOSE_PROFILES=research) without a rebuild. Only the
     # RECREATE below is profile-scoped — tagging must cover everything.
-    for svc in $(COMPOSE_PROFILES=research,legacy-canonical-repair,standalone-book-evidence docker compose config --services); do
+    for svc in $(COMPOSE_PROFILES=research,analyst,legacy-canonical-repair,standalone-book-evidence docker compose config --services); do
         case "$svc" in
             "$APP_BUILD_SERVICE"|dashboard-tls) continue ;;
         esac

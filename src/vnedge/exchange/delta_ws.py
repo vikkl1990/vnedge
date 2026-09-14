@@ -104,6 +104,7 @@ class DeltaPublicWsClient:
         on_trade: Callable[[str, dict], None] | None = None,
         on_candle: Callable[[str, str, list], None] | None = None,
         on_connection_state: Callable[[bool, datetime], None] | None = None,
+        on_trade_fault: Callable[[str, str], None] | None = None,
         heartbeat: HeartbeatConfig | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -120,6 +121,7 @@ class DeltaPublicWsClient:
         # on_candle(symbol, timeframe, [ts_ms, o, h, l, c, v]) — CLOSED candles only
         self.on_candle = on_candle
         self.on_connection_state = on_connection_state
+        self.on_trade_fault = on_trade_fault
         self.heartbeat_config = heartbeat or HeartbeatConfig(
             ping_interval_s=20.0,
             pong_timeout_s=20.0,
@@ -328,6 +330,8 @@ class DeltaPublicWsClient:
             price = float(msg["price"] if "price" in msg else msg["p"])
             size = float(msg["size"] if "size" in msg else msg["s"])
         except (KeyError, TypeError, ValueError):
+            if self.on_trade_fault is not None:
+                self.on_trade_fault(sym, "trade_parse_rejected")
             return
         # taker side drives aggressor; buyer taker => buy print, seller taker => sell
         seller_role = msg.get("seller_role")
@@ -335,7 +339,14 @@ class DeltaPublicWsClient:
             seller_role = {"t": "taker", "m": "maker"}.get(str(msg.get("r") or ""))
         taker = "sell" if seller_role == "taker" else "buy"
         ts_raw = msg.get("timestamp", msg.get("t"))
-        ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._now_ms()
+        try:
+            ts_ms = int(ts_raw) // 1000 if ts_raw is not None else self._now_ms()
+        except (TypeError, ValueError, OverflowError):
+            if self.on_trade_fault is not None:
+                self.on_trade_fault(sym, "trade_timestamp_rejected")
+            return
+        if ts_raw is None and self.on_trade_fault is not None:
+            self.on_trade_fault(sym, "trade_timestamp_fallback")
         trade = {
             "symbol": sym,
             "price": price,
@@ -343,6 +354,7 @@ class DeltaPublicWsClient:
             "side": taker,
             "ts_ms": ts_ms,
             "trade_id": msg.get("trade_id") or msg.get("id"),
+            "exchange_timestamped": ts_raw is not None,
         }
         self.last_trade[sym] = trade
         self.last_trade_at = self._now()

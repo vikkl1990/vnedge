@@ -164,6 +164,7 @@ def test_handle_compact_india_trade_frame():
         "side": "sell",
         "ts_ms": 1_788_194_075_400,
         "trade_id": None,
+        "exchange_timestamped": True,
     }
     assert seen == [("BTCUSD", trade)]
 

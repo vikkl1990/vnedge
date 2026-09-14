@@ -6,6 +6,7 @@ import { StrategyWorkbench } from "./components/StrategyWorkbench";
 import { LiveStateBridge } from "./components/LiveStateBridge";
 import { ServiceHealth } from "./components/ServiceHealth";
 import { SignalQueue } from "./components/SignalQueue";
+import { CryptoAnalyst } from "./components/CryptoAnalyst";
 import { BuildVersionGuard } from "./components/BuildVersionGuard";
 import { TerminalTabs } from "./components/Terminal";
 import {
@@ -28,6 +29,7 @@ const ScannerChart = lazy(() =>
 );
 
 const TABS = [
+  { id: "analyst", label: "Analyst" },
   { id: "strategy", label: "Strategy" },
   { id: "monitor", label: "Monitor" },
   { id: "signals", label: "Signals" },
@@ -126,6 +128,7 @@ export default function App() {
 
   const commands: Command[] = useMemo(
     () => [
+      { id: "analyst", label: "Crypto Analyst", hint: "market overview · opportunities · symbol diagnosis", run: () => navigate("analyst") },
       { id: "strategy", label: "Strategy", hint: "active system · chart · proof", run: () => navigate("strategy") },
       { id: "monitor", label: "Monitor", hint: "fleet drought · readiness · lanes", run: () => navigate("monitor") },
       { id: "signals", label: "Signals", hint: "evaluations · arms · orders · evidence", run: () => navigate("signals") },
@@ -145,10 +148,10 @@ export default function App() {
       <div className="app-ambient__orb app-ambient__orb--one" />
       <div className="app-ambient__orb app-ambient__orb--two" />
       <div className="app-shell mx-auto flex min-h-full max-w-[2200px] flex-col gap-3 px-3 py-3 md:px-5 md:py-4">
-      <LiveStateBridge />
+      {tab !== "analyst" && <LiveStateBridge />}
       <BuildVersionGuard />
-      <Header />
-      <CockpitCommandBar onOpenRisk={openRisk} />
+      {tab !== "analyst" && <Header />}
+      {tab !== "analyst" && <CockpitCommandBar onOpenRisk={openRisk} />}
       <div className="workbench-nav sticky top-0 z-30 flex items-center justify-between gap-3 px-2 py-2.5 backdrop-blur-xl flex-wrap">
         <TerminalTabs tabs={TABS} active={tab} onChange={navigate} />
         <button
@@ -160,6 +163,7 @@ export default function App() {
       </div>
 
       {tab === "strategy" && <StrategyWorkbench />}
+      {tab === "analyst" && <CryptoAnalyst />}
       {tab === "monitor" && <DeskPanel />}
       {tab === "signals" && <SignalQueue />}
       {tab === "tape" && (

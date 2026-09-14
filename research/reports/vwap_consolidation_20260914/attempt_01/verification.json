@@ -1,0 +1,23 @@
+{
+  "verified": true,
+  "measured_baseline_episodes": 71,
+  "unique_variant_decision_ids": 95,
+  "result_sha256": "7ed7e8e5e4a51c0c1ce8c8ae17ab0a25996dec2cfa0327922c6e818646596735",
+  "source_hashes": {
+    "research/reports/vwap_consolidation_20260914/replay.py": "66c95e5f9c94726755ea5d945b0d4e55c352dab9e20789e67c5a3575dd1a70a6",
+    "research/reports/vwap_consolidation_20260914/CONTRACT.md": "55995b231c34fc6cb4fdbdf37b5e572708dd0a8e8bd27b8da7b43f2194bc8233",
+    "research/reports/vwap_consolidation_20260914/verify.py": "e51456542b46a897eb35ef55a7e0f63d71c709756d62fb7ec308e536a1fb9002",
+    "research/reports/burst_response_20260912/screen.py": "974b0114da7c6f544bf118658f5ddf9d0b143d0a63bfa466b5b5091b2cce46e1",
+    "research/reports/range_retest_20260912/replay.py": "1cf4ea6e643b903d6bc4bfa05c5276e8f68239754b8ca3bfb824282ebe7d5bec",
+    "src/vnedge/data/bar_identity.py": "301014ea2bbdcbf17dad60b503147904ccfcd1cc9f5537a7431b1d937f8ac7a8",
+    "src/vnedge/data/vwap.py": "fb19b6c91a12f775c31af3f5857de9341356329f8c9e8c0c9ea496c0aaeb3f38",
+    "src/vnedge/plan/cost_model.py": "48c399a20060cc8d24b83bb2af765060c154d636b407518d55e26a448584f447",
+    "src/vnedge/plan/cash_costs.py": "b105d4515d09ad2d118a6320ec23e586f0ab01d6c23a568f6d394f815a6aac18",
+    "src/vnedge/strategy/arm_evidence.py": "703596212a029a700f28d48ff2a4034e7126a4f3e550067b8714dfa5ecb00596",
+    "src/vnedge/strategy/base_strategy.py": "862773b9f57e94e56197040b81831ad4c7610620c48eb6fe37644063ce1bb537",
+    "src/vnedge/execution/evidence.py": "8a8d62bb50c23bb17dba152eabe90f9834ca944f7de9ba776c7e138418b42549"
+  },
+  "can_trade": false,
+  "can_promote": false,
+  "scope": "Artifact identities and arithmetic, not economic or execution proof"
+}

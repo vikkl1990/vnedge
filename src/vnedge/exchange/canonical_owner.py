@@ -15,14 +15,15 @@ import logging
 import os
 import time
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from vnedge.data.candle_bootstrap import bootstrap_candles
 from vnedge.data.candles import CandleParquetStore
+from vnedge.data.symbols import canonical_symbol
 from vnedge.exchange.tick_recorder import DeltaTickRecorder, TickRecorder
-from vnedge.exchange.writer_lease import CanonicalWriterLease
-from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD
+from vnedge.exchange.writer_lease import INHERITED_WRITER_LEASE_FD, CanonicalWriterLease
 from vnedge.runtime.scanner_startup import (
     prerequisite_commands,
     run_prerequisites,
@@ -243,7 +244,9 @@ async def _maintenance_loop(
 async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
                                   symbols: Sequence[str], environ: Mapping[str, str],
                                   lease_fd: int) -> None:
+    from vnedge.data.delta_coverage import reproduce_sealed_minutes
     from vnedge.data.delta_lake_repair import _atomic, repair_delta_lake
+    from vnedge.data.delta_raw_audit import audit_raw_day
     from vnedge.data.delta_recovery_plan import build_delta_recovery_report
 
     interval = _positive_seconds(environ, "VNEDGE_DELTA_REPAIR_INTERVAL_SECONDS", 900)
@@ -251,6 +254,19 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
     # Record first; never spend a historical replay window disconnected.
     await asyncio.sleep(10)
     while True:
+        forward: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "symbols": {}, "can_trade": False}
+        for symbol in symbols:
+            try:
+                result = await asyncio.to_thread(reproduce_sealed_minutes, data_root,
+                    candle_root, symbol=symbol, apply=True, environ=authority)
+                forward["symbols"][symbol] = result
+            except Exception as exc:
+                logger.exception("Delta sealed-minute reproduction rejected")
+                forward["symbols"][symbol] = {"status": "ERROR", "reason": f"{type(exc).__name__}:{exc}"}
+        try:
+            _atomic(data_root / "reports/delta_forward_recovery.json", json.dumps(forward, sort_keys=True).encode())
+        except OSError:
+            logger.exception("Delta forward recovery report write failed; continuing owner maintenance")
         try:
             report = await asyncio.to_thread(
                 repair_delta_lake, data_root, candle_root, symbols=tuple(symbols),
@@ -267,6 +283,18 @@ async def _delta_maintenance_loop(data_root: Path, candle_root: Path, *,
         try:
             recovery = await asyncio.to_thread(build_delta_recovery_report, data_root,
                                               candle_root, symbols=tuple(symbols))
+            recovery["forward_replay"] = forward
+            # One closed UTC day per symbol; old history requires an explicit
+            # bounded audit, never an automatic units/coverage upgrade.
+            day = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y%m%d")
+            raw = {}
+            for symbol in symbols:
+                audit = await asyncio.to_thread(audit_raw_day, data_root, symbol, day)
+                _atomic(data_root / "reports/delta_raw_audit" / f"{canonical_symbol(symbol)}-{day}.json",
+                    json.dumps(audit, sort_keys=True).encode())
+                raw[symbol] = {k: v for k, v in audit.items() if k != "shards"}
+                raw[symbol]["shard_count"] = len(audit.get("shards", []))
+            recovery["raw_audit"] = raw
             _atomic(data_root / "reports/delta_recovery_plan.json", json.dumps(recovery, sort_keys=True).encode())
         except Exception as exc:
             logger.exception("Delta recovery planning failed; repair authority unchanged")

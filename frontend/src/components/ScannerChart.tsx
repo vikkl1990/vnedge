@@ -989,15 +989,15 @@ export function ScannerChart() {
               ? `${candles.data.count} bars · ${candles.data.source}`
               : candles.isError
                 ? "candles unavailable"
-                : "loading…"}
+                : selectedMarket ? "loading…" : "no eligible lane"}
           </span>
         </div>
         {viewMode === "detail" && <div className="mb-3 flex flex-wrap items-center gap-3 rounded border border-line bg-bg/80 p-3 text-sm font-mono" role="status" aria-live="polite">
           <TerminalBadge tone={candles.isError || tapeState?.status === "ERROR" ? "bad" : tapeState?.status === "CLOSED" ? "good" : "warn"}>
-            {candles.isError ? "ERROR" : tapeState?.status ?? "LOADING"}
+            {!selectedMarket ? "UNAVAILABLE" : candles.isError ? "ERROR" : tapeState?.status ?? "LOADING"}
           </TerminalBadge>
-          <span>{candles.isError ? "Lake read failed; empty history is not assumed" : tapeState?.reason ?? "Loading canonical lake"}</span>
-          <span className="text-dim">History: {historyState}</span>
+          <span>{!selectedMarket ? "No eligible lane; no lake request is running" : candles.isError ? "Lake read failed; empty history is not assumed" : tapeState?.reason ?? "Loading canonical lake"}</span>
+          <span className="text-dim">History: {selectedMarket ? historyState : "not requested"}</span>
           {feedState?.lastSuccessAt && <span className="text-dim">Last refresh {new Date(feedState.lastSuccessAt).toISOString().slice(11, 19)} UTC</span>}
           {!!Object.keys(feedState?.excludedSources ?? {}).length && <span className="text-dim">Excluded sources: {Object.entries(feedState!.excludedSources).map(([source, count]) => `${source} ${count}`).join(" · ")}</span>}
           {revisionNotice && <span className="text-brand">Lake revision reloaded; decision evidence unchanged</span>}

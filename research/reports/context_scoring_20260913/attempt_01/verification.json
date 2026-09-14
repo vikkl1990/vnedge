@@ -1,0 +1,1251 @@
+{
+  "verified": true,
+  "books": 170,
+  "event_records": 2530,
+  "raw_result_sha256": "d6c8468dcbfe9753bff584d7d5aabb7b3fadb70161f2b5136cc51f10c0d30194",
+  "verifier_sha256": "93091d9890ec9993c54662ef981c0e2dd8df0edbbde3ca59426560debd9b1c43",
+  "original_helper_confidence_intervals": "DO_NOT_USE_wrong_resampling_calendar_for_split",
+  "phase_specific_descriptive_intervals": {
+    "BTCUSD|breakout20|baseline|train": {
+      "n": 88,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -20.536622586160593,
+        -17.498960590439612
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|baseline|test": {
+      "n": 73,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -19.512611489136802,
+        -14.988288590657822
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|balanced60|train": {
+      "n": 27,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|balanced60|test": {
+      "n": 29,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|regime60|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|regime60|test": {
+      "n": 10,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_structure|train": {
+      "n": 27,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_structure|test": {
+      "n": 20,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_location|train": {
+      "n": 29,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_location|test": {
+      "n": 35,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -18.62500594712517,
+        -13.087195907772548
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_momentum|train": {
+      "n": 28,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_momentum|test": {
+      "n": 35,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -19.94083651585643,
+        -13.462224258292853
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_candle|train": {
+      "n": 27,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_candle|test": {
+      "n": 30,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -23.303619663585962,
+        -11.672590626932248
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_participation|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|breakout20|without_participation|test": {
+      "n": 16,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|baseline|train": {
+      "n": 66,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -20.966169780524467,
+        -17.81039058175302
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|baseline|test": {
+      "n": 44,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -21.749382294039066,
+        -15.520175552723604
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|balanced60|train": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|balanced60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|regime60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_structure|train": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_structure|test": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_location|train": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_location|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_momentum|train": {
+      "n": 10,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_momentum|test": {
+      "n": 3,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_candle|train": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_candle|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_participation|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|wick_reversal20|without_participation|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|baseline|train": {
+      "n": 114,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -18.857374129813547,
+        -13.192507020182601
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|baseline|test": {
+      "n": 87,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -20.019321519727622,
+        -15.658232732632435
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|balanced60|train": {
+      "n": 13,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|balanced60|test": {
+      "n": 12,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|regime60|train": {
+      "n": 11,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|regime60|test": {
+      "n": 5,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_structure|train": {
+      "n": 25,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_structure|test": {
+      "n": 15,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_location|train": {
+      "n": 27,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_location|test": {
+      "n": 18,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_momentum|train": {
+      "n": 22,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_momentum|test": {
+      "n": 13,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_candle|train": {
+      "n": 12,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_candle|test": {
+      "n": 6,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_participation|train": {
+      "n": 25,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|ema20_reclaim|without_participation|test": {
+      "n": 20,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|baseline|train": {
+      "n": 23,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|baseline|test": {
+      "n": 24,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|balanced60|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|balanced60|test": {
+      "n": 19,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|regime60|train": {
+      "n": 9,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|regime60|test": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_structure|train": {
+      "n": 11,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_structure|test": {
+      "n": 9,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_location|train": {
+      "n": 18,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_location|test": {
+      "n": 19,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_momentum|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_momentum|test": {
+      "n": 19,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_candle|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_candle|test": {
+      "n": 18,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_participation|train": {
+      "n": 14,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|bos3|without_participation|test": {
+      "n": 11,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|baseline|train": {
+      "n": 35,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -25.797982576946712,
+        -17.825206956012618
+      ],
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|baseline|test": {
+      "n": 21,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|balanced60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|balanced60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|regime60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|regime60|test": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_structure|train": {
+      "n": 5,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_structure|test": {
+      "n": 3,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_location|train": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_location|test": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_momentum|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_momentum|test": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_candle|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_candle|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_participation|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "BTCUSD|choch3|without_participation|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|baseline|train": {
+      "n": 73,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -25.814301107526653,
+        -14.380925794206389
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|baseline|test": {
+      "n": 68,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -20.47256857245619,
+        -16.78546257712154
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|balanced60|train": {
+      "n": 21,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|balanced60|test": {
+      "n": 23,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|regime60|train": {
+      "n": 7,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|regime60|test": {
+      "n": 7,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_structure|train": {
+      "n": 24,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_structure|test": {
+      "n": 22,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_location|train": {
+      "n": 26,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_location|test": {
+      "n": 25,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_momentum|train": {
+      "n": 24,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_momentum|test": {
+      "n": 25,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_candle|train": {
+      "n": 20,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_candle|test": {
+      "n": 21,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_participation|train": {
+      "n": 9,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|breakout20|without_participation|test": {
+      "n": 10,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|baseline|train": {
+      "n": 41,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -22.03662328239533,
+        -8.814834126583854
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|baseline|test": {
+      "n": 41,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -24.008360524378364,
+        -10.75527435481466
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|balanced60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|balanced60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|regime60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_structure|train": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_structure|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_location|train": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_location|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_momentum|train": {
+      "n": 9,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_momentum|test": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_candle|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_candle|test": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_participation|train": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|wick_reversal20|without_participation|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|baseline|train": {
+      "n": 127,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -15.660079192086295,
+        -7.555980227286359
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|baseline|test": {
+      "n": 78,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": [
+        -27.443342830366344,
+        -13.272249641370339
+      ],
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|balanced60|train": {
+      "n": 7,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|balanced60|test": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|regime60|train": {
+      "n": 6,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|regime60|test": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_structure|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_structure|test": {
+      "n": 19,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_location|train": {
+      "n": 17,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_location|test": {
+      "n": 16,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_momentum|train": {
+      "n": 11,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_momentum|test": {
+      "n": 5,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_candle|train": {
+      "n": 3,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_candle|test": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_participation|train": {
+      "n": 20,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|ema20_reclaim|without_participation|test": {
+      "n": 18,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|baseline|train": {
+      "n": 21,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|baseline|test": {
+      "n": 21,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|balanced60|train": {
+      "n": 14,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|balanced60|test": {
+      "n": 13,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|regime60|train": {
+      "n": 5,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|regime60|test": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_structure|train": {
+      "n": 7,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_structure|test": {
+      "n": 7,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_location|train": {
+      "n": 16,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_location|test": {
+      "n": 15,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_momentum|train": {
+      "n": 16,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_momentum|test": {
+      "n": 14,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_candle|train": {
+      "n": 13,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_candle|test": {
+      "n": 13,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_participation|train": {
+      "n": 10,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|bos3|without_participation|test": {
+      "n": 8,
+      "calendar_days": 5,
+      "active_days": 4,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|baseline|train": {
+      "n": 29,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|baseline|test": {
+      "n": 23,
+      "calendar_days": 5,
+      "active_days": 5,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|balanced60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|balanced60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|regime60|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|regime60|test": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|session_regime60|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_structure|train": {
+      "n": 5,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_structure|test": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 2,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_location|train": {
+      "n": 4,
+      "calendar_days": 5,
+      "active_days": 3,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_location|test": {
+      "n": 2,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_momentum|train": {
+      "n": 1,
+      "calendar_days": 5,
+      "active_days": 1,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_momentum|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_candle|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_candle|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_participation|train": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    },
+    "ETHUSD|choch3|without_participation|test": {
+      "n": 0,
+      "calendar_days": 5,
+      "active_days": 0,
+      "descriptive_day_bootstrap_95": null,
+      "inferential_significance": false
+    }
+  },
+  "can_trade": false,
+  "can_promote": false,
+  "performance_eligible": false
+}

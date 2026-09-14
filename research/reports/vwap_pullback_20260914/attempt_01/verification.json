@@ -1,0 +1,163 @@
+{
+  "verified": true,
+  "result_sha256": "9ba8faedbe8e27e36c14e94b5d0ac8c8471a98d3885cfe2dc3ef091757a06048",
+  "verifier_sha256": "2e29ddac96adefa45f7ee81acc51214ec831730026f0d9224eafe1031c7a210d",
+  "can_trade": false,
+  "can_promote": false,
+  "symbols": {
+    "BTCUSD": {
+      "common_setups": 8,
+      "unique_measured_episodes": 0,
+      "nonzero_cells": 0,
+      "unique_variant_arm_ids": 78,
+      "pivot_timestamps_checked": 16,
+      "immediate_entry_diagnostics": [
+        {
+          "origin_open": "2026-09-02T15:55:00+00:00",
+          "extension_atr": 1.1295566083916442,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-02T19:35:00+00:00",
+          "extension_atr": 1.1301984952214286,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-02T23:25:00+00:00",
+          "extension_atr": 1.3046984521253946,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-04T05:15:00+00:00",
+          "extension_atr": 1.6502146203754344,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-06T12:50:00+00:00",
+          "extension_atr": 2.0693523928274606,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-06T19:45:00+00:00",
+          "extension_atr": 1.2772847373119938,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-10T04:00:00+00:00",
+          "extension_atr": 1.4954684236333082,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-10T05:10:00+00:00",
+          "extension_atr": 3.3025096471283044,
+          "status": "rejected_entry_extension"
+        }
+      ],
+      "contraction_setups": 3,
+      "expansion_setups": 2,
+      "both_volume_setups": 0,
+      "baseline_timing_counts": {
+        "immediate_none_wide_short": {
+          "rejected_entry_extension": 8
+        },
+        "delay3_none_wide_short": {
+          "rejected_entry_extension": 4,
+          "rejected_stop_during_delay": 3,
+          "rejected_entry_geometry": 1
+        },
+        "higher_low3_none_wide_short": {
+          "rejected_higher_low_unconfirmed": 4,
+          "rejected_stop_during_delay": 3,
+          "rejected_entry_extension": 1
+        }
+      }
+    },
+    "ETHUSD": {
+      "common_setups": 12,
+      "unique_measured_episodes": 1,
+      "nonzero_cells": 4,
+      "unique_variant_arm_ids": 138,
+      "pivot_timestamps_checked": 48,
+      "immediate_entry_diagnostics": [
+        {
+          "origin_open": "2026-09-01T05:00:00+00:00",
+          "extension_atr": 1.8072664629827215,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-02T05:10:00+00:00",
+          "extension_atr": 2.0486791339499604,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-03T04:45:00+00:00",
+          "extension_atr": 1.5015655276437223,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-03T08:25:00+00:00",
+          "extension_atr": 1.8603696816485094,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-04T10:25:00+00:00",
+          "extension_atr": 0.6381883318631602,
+          "status": "measured"
+        },
+        {
+          "origin_open": "2026-09-04T12:25:00+00:00",
+          "extension_atr": 3.3483760037308508,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-05T10:30:00+00:00",
+          "extension_atr": 2.439302290271536,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-05T12:30:00+00:00",
+          "extension_atr": 3.125447412718299,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-05T14:50:00+00:00",
+          "extension_atr": 1.756040721904232,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-06T02:30:00+00:00",
+          "extension_atr": 1.0630472588486797,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-06T03:35:00+00:00",
+          "extension_atr": 2.9006199121242697,
+          "status": "rejected_entry_extension"
+        },
+        {
+          "origin_open": "2026-09-08T14:45:00+00:00",
+          "extension_atr": 1.432364751429066,
+          "status": "rejected_entry_extension"
+        }
+      ],
+      "contraction_setups": 6,
+      "expansion_setups": 3,
+      "both_volume_setups": 0,
+      "baseline_timing_counts": {
+        "immediate_none_wide_short": {
+          "rejected_entry_extension": 11,
+          "measured": 1
+        },
+        "delay3_none_wide_short": {
+          "rejected_entry_extension": 9,
+          "rejected_stop_during_delay": 3
+        },
+        "higher_low3_none_wide_short": {
+          "rejected_higher_low_unconfirmed": 5,
+          "rejected_entry_extension": 4,
+          "rejected_stop_during_delay": 3
+        }
+      }
+    }
+  }
+}

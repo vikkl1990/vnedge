@@ -1,0 +1,1301 @@
+{
+  "contract_sha256": "55995b231c34fc6cb4fdbdf37b5e572708dd0a8e8bd27b8da7b43f2194bc8233",
+  "source_sha256": "66c95e5f9c94726755ea5d945b0d4e55c352dab9e20789e67c5a3575dd1a70a6",
+  "git_revision": "1ffa0932f4d5aa9d397e97e93b1c720cde41fdc5",
+  "cost_profile_id": "delta_scalp_v2",
+  "cost_config_sha256": "e04d112e35708157a77fc5b5721e4e2c4b2c0ce6d05c71b65bff3bf443e7b13a",
+  "nominal_booked_round_bps": 17.799999999999997,
+  "gate_wall_bps": 19.799999999999997,
+  "fill_assumption": "canonical_1m_next_5m_open_stop_first_with_3bps_adverse_each_leg",
+  "funding": "unavailable",
+  "untouched_oos": false,
+  "can_trade": false,
+  "can_promote": false,
+  "performance_eligible": false,
+  "symbols": {
+    "BTCUSD": {
+      "inputs": {
+        "minutes": {
+          "files": [
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-01.parquet",
+              "sha256": "73313c3d6903613ad2a670c986fc6aa8377f5fa46b26ed418bbfe2b4a1ca9836"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-02.parquet",
+              "sha256": "805ec8af7c831d4fa27cd8dd89f77d0b02157db9bd68b0692e0e1345f75db058"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-03.parquet",
+              "sha256": "cdadf2da96e88569e9109f07c1523e993a0f27791a95cf8ca96ef724a32cad60"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-04.parquet",
+              "sha256": "332505188be233d8786cada55d16c20cba0cfc402e3e0ddca53ef2c6025a6792"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-05.parquet",
+              "sha256": "95e94dc1ce53b4f340cce63a8f502465041755d0a4506fb32270aaf7523585db"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-06.parquet",
+              "sha256": "820366646c29ee0881f8993eadb18516b700ba6d8eefa16dffd59166ba5eb4b6"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-07.parquet",
+              "sha256": "c165274a1643af8466bc036b4f98d9a7bc01e8b4440725cf9194e2f73e06ca17"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-08.parquet",
+              "sha256": "ad310bc01e606351b8acaa55f3f3df67a57f784e8bd0693be422fcd854d29344"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-09.parquet",
+              "sha256": "2be15a525f553d0307f8ecb791aaf37cf5d9f71bccdd4b5005b528617f222946"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/1m/2026-09-10.parquet",
+              "sha256": "2276cee6827751e3c3d68ee421fedb52ef973778fe671c1b37c20399956982f8"
+            }
+          ],
+          "stored_minutes": 14394,
+          "expected_minutes": 14400,
+          "missing_minutes": 6,
+          "eligible_minutes": 14378,
+          "invalid_reason_counts": {
+            "coverage_quality": 16
+          }
+        },
+        "decisions": [
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-01.parquet",
+            "sha256": "53513009592129d273b8ebfcd88a33fc08a5e87ccd128116ac736e19875f343c"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-02.parquet",
+            "sha256": "7bff4e3350f4190d08e746c23f769218a463386eed7b4637da6bb06dae960f50"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-03.parquet",
+            "sha256": "5fff6c97e19f20196b08e92e97abc84ebfcbba70c93d3cfaf9ca91ce0f52727d"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-04.parquet",
+            "sha256": "770da2b4a48242110571ed67d75cf3186d63a200d9f553136072c6516feea657"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-05.parquet",
+            "sha256": "2588e4d3d1828309001d576dcc4a6b452f39e34cd4fcf3bb1f1e24cbf458d717"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-06.parquet",
+            "sha256": "8c3de38612ca1a2b37426406aea0ac4ffd665a31f2e33bc53cb9ac3786b45795"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-07.parquet",
+            "sha256": "17ec4f95562faa6610accac9d57102ce2cc38352f03b1091eb1aac0915100e7f"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-08.parquet",
+            "sha256": "fb937d88dbe4469e6fdec706f3f25045199384ee2af3cdb3b2a42fd6fe413912"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-09.parquet",
+            "sha256": "9c7960fd56afe599086a2a628b7dbb43549756edb1d248efc90ef23768d2e775"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/BTCUSD/5m/2026-09-10.parquet",
+            "sha256": "3aad3831c7a105d0cb72428a39665bac7dec34477b08d245bacc5b57c8041b4a"
+          }
+        ],
+        "eligible_5m": 2864,
+        "rejected": {
+          "decision_row_not_closed": 16
+        }
+      },
+      "diagnostics": {
+        "session_coverage_or_warmup": 567,
+        "no_consolidation_breakout": 2013,
+        "shared_episode_reservation": 145,
+        "session_warmup": 126,
+        "baseline_arms": 29,
+        "session_covered_bars": 2397
+      },
+      "cells": {
+        "base": {
+          "summary": {
+            "n": 29,
+            "counts": {
+              "measured": 29
+            },
+            "gross_mean_bps": -0.22375398022162873,
+            "net_before_funding_mean_bps": -18.018149433953422,
+            "net_bps": null,
+            "profit_factor": 0.12513117019329786,
+            "drawdown_unit_notional_bps": 522.5263335846493,
+            "descriptive_day_bootstrap_95_bps": [
+              -24.830646130609896,
+              -12.441413614939622
+            ],
+            "stress_before_funding_mean_bps": -24.009082342788325,
+            "verdict": "INSUFFICIENT"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 5,
+                "counts": {
+                  "measured": 5
+                },
+                "gross_mean_bps": 4.9560821415934875,
+                "net_before_funding_mean_bps": -12.844474551920593,
+                "net_bps": null,
+                "profit_factor": 0.3277685187263906,
+                "drawdown_unit_notional_bps": 95.53609812787597,
+                "descriptive_day_bootstrap_95_bps": [
+                  -36.93144654206883,
+                  12.92157834989299
+                ],
+                "stress_before_funding_mean_bps": -18.838510735260957,
+                "verdict": "INSUFFICIENT"
+              },
+              "06-12": {
+                "n": 7,
+                "counts": {
+                  "measured": 7
+                },
+                "gross_mean_bps": -3.3018166946312855,
+                "net_before_funding_mean_bps": -21.09255089692532,
+                "net_bps": null,
+                "profit_factor": 0.12776551005699835,
+                "drawdown_unit_notional_bps": 147.64785627847724,
+                "descriptive_day_bootstrap_95_bps": [
+                  -32.052194271655125,
+                  -3.8353841428582176
+                ],
+                "stress_before_funding_mean_bps": -27.081639717776902,
+                "verdict": "INSUFFICIENT"
+              },
+              "12-18": {
+                "n": 8,
+                "counts": {
+                  "measured": 8
+                },
+                "gross_mean_bps": 4.418216125276209,
+                "net_before_funding_mean_bps": -13.38170079481235,
+                "net_bps": null,
+                "profit_factor": 0.1691511576879757,
+                "drawdown_unit_notional_bps": 107.05360635849878,
+                "descriptive_day_bootstrap_95_bps": [
+                  -33.8741901619786,
+                  0.5314466628578272
+                ],
+                "stress_before_funding_mean_bps": -19.375414739020712,
+                "verdict": "INSUFFICIENT"
+              },
+              "18-24": {
+                "n": 9,
+                "counts": {
+                  "measured": 9
+                },
+                "gross_mean_bps": -4.8335875860205935,
+                "net_before_funding_mean_bps": -22.62249979867447,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 203.60249818807026,
+                "descriptive_day_bootstrap_95_bps": [
+                  -31.202938659095913,
+                  -13.545735936033207
+                ],
+                "stress_before_funding_mean_bps": -28.610670925328073,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 3,
+                "counts": {
+                  "measured": 3
+                },
+                "gross_mean_bps": 9.965881596342152,
+                "net_before_funding_mean_bps": -7.8406340840921205,
+                "net_bps": null,
+                "profit_factor": 0.44560488033221307,
+                "drawdown_unit_notional_bps": 42.42804710541376,
+                "descriptive_day_bootstrap_95_bps": [
+                  -42.42804710541376,
+                  11.892425644202378
+                ],
+                "stress_before_funding_mean_bps": -13.83767167183211,
+                "verdict": "INSUFFICIENT"
+              },
+              "down": {
+                "n": 2,
+                "counts": {
+                  "measured": 2
+                },
+                "gross_mean_bps": -8.37710339737674,
+                "net_before_funding_mean_bps": -26.161800717885143,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 52.323601435770286,
+                "descriptive_day_bootstrap_95_bps": [
+                  -28.82639388616424,
+                  -23.49720754960605
+                ],
+                "stress_before_funding_mean_bps": -32.147848900488306,
+                "verdict": "INSUFFICIENT"
+              },
+              "range": {
+                "n": 24,
+                "counts": {
+                  "measured": 24
+                },
+                "gross_mean_bps": -0.8180126425291755,
+                "net_before_funding_mean_bps": -18.611701245691776,
+                "net_bps": null,
+                "profit_factor": 0.11110209928388151,
+                "drawdown_unit_notional_bps": 446.68082989660263,
+                "descriptive_day_bootstrap_95_bps": [
+                  -26.191629116559856,
+                  -12.988582001236937
+                ],
+                "stress_before_funding_mean_bps": -24.602278130182853,
+                "verdict": "INSUFFICIENT"
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 24,
+              "counts": {
+                "measured": 24
+              },
+              "gross_mean_bps": -0.5995833137649452,
+              "net_before_funding_mean_bps": -18.393531731222577,
+              "net_bps": null,
+              "profit_factor": 0.08955530399755239,
+              "drawdown_unit_notional_bps": 441.4447615493418,
+              "descriptive_day_bootstrap_95_bps": [
+                -26.418802549730263,
+                -11.618282046995931
+              ],
+              "stress_before_funding_mean_bps": -24.38423947818715,
+              "verdict": "INSUFFICIENT"
+            },
+            "last_three_days": {
+              "n": 5,
+              "counts": {
+                "measured": 5
+              },
+              "gross_mean_bps": 1.5802268207862906,
+              "net_before_funding_mean_bps": -16.216314407061482,
+              "net_bps": null,
+              "profit_factor": 0.2786035189340181,
+              "drawdown_unit_notional_bps": 112.39529740358041,
+              "descriptive_day_bootstrap_95_bps": [
+                -16.216314407061482,
+                -16.216314407061482
+              ],
+              "stress_before_funding_mean_bps": -22.208328092873966,
+              "verdict": "INSUFFICIENT"
+            }
+          }
+        },
+        "vwap": {
+          "summary": {
+            "n": 1,
+            "counts": {
+              "measured": 1
+            },
+            "gross_mean_bps": 8.269433167944484,
+            "net_before_funding_mean_bps": -9.535064644491783,
+            "net_bps": null,
+            "profit_factor": 0.0,
+            "drawdown_unit_notional_bps": 9.535064644491783,
+            "descriptive_day_bootstrap_95_bps": [
+              -9.535064644491783,
+              -9.535064644491783
+            ],
+            "stress_before_funding_mean_bps": -15.531085878618672,
+            "verdict": "INSUFFICIENT"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "06-12": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "12-18": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "18-24": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": 8.269433167944484,
+                "net_before_funding_mean_bps": -9.535064644491783,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 9.535064644491783,
+                "descriptive_day_bootstrap_95_bps": [
+                  -9.535064644491783,
+                  -9.535064644491783
+                ],
+                "stress_before_funding_mean_bps": -15.531085878618672,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": 8.269433167944484,
+                "net_before_funding_mean_bps": -9.535064644491783,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 9.535064644491783,
+                "descriptive_day_bootstrap_95_bps": [
+                  -9.535064644491783,
+                  -9.535064644491783
+                ],
+                "stress_before_funding_mean_bps": -15.531085878618672,
+                "verdict": "INSUFFICIENT"
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 1,
+              "counts": {
+                "measured": 1
+              },
+              "gross_mean_bps": 8.269433167944484,
+              "net_before_funding_mean_bps": -9.535064644491783,
+              "net_bps": null,
+              "profit_factor": 0.0,
+              "drawdown_unit_notional_bps": 9.535064644491783,
+              "descriptive_day_bootstrap_95_bps": [
+                -9.535064644491783,
+                -9.535064644491783
+              ],
+              "stress_before_funding_mean_bps": -15.531085878618672,
+              "verdict": "INSUFFICIENT"
+            },
+            "last_three_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            }
+          },
+          "selected_minus_rejected_95_bps": [
+            2.9721872440365233,
+            16.114331968104718
+          ]
+        },
+        "volume": {
+          "summary": {
+            "n": 8,
+            "counts": {
+              "measured": 8
+            },
+            "gross_mean_bps": 0.6036801136849457,
+            "net_before_funding_mean_bps": -17.191699544901724,
+            "net_bps": null,
+            "profit_factor": 0.07958738032877896,
+            "drawdown_unit_notional_bps": 137.53359635921382,
+            "descriptive_day_bootstrap_95_bps": [
+              -22.8916704486797,
+              -10.480809452888586
+            ],
+            "stress_before_funding_mean_bps": -23.183128175042892,
+            "verdict": "INSUFFICIENT"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 4,
+                "counts": {
+                  "measured": 4
+                },
+                "gross_mean_bps": -6.096614647263521,
+                "net_before_funding_mean_bps": -23.884024531968993,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 95.53609812787597,
+                "descriptive_day_bootstrap_95_bps": [
+                  -43.12137982348162,
+                  -11.202436997768874
+                ],
+                "stress_before_funding_mean_bps": -29.87143897065281,
+                "verdict": "INSUFFICIENT"
+              },
+              "06-12": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "12-18": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": 29.722441083588347,
+                "net_before_funding_mean_bps": 11.892425644202378,
+                "net_bps": null,
+                "profit_factor": null,
+                "drawdown_unit_notional_bps": 0.0,
+                "descriptive_day_bootstrap_95_bps": [
+                  11.892425644202378,
+                  11.892425644202378
+                ],
+                "stress_before_funding_mean_bps": 5.883551769381005,
+                "verdict": "INSUFFICIENT"
+              },
+              "18-24": {
+                "n": 3,
+                "counts": {
+                  "measured": 3
+                },
+                "gross_mean_bps": -0.16884719501823278,
+                "net_before_funding_mean_bps": -17.963307958513393,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 53.88992387554018,
+                "descriptive_day_bootstrap_95_bps": [
+                  -37.10384932875675,
+                  -4.090810123254005
+                ],
+                "stress_before_funding_mean_bps": -23.954273762370974,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": 29.722441083588347,
+                "net_before_funding_mean_bps": 11.892425644202378,
+                "net_bps": null,
+                "profit_factor": null,
+                "drawdown_unit_notional_bps": 0.0,
+                "descriptive_day_bootstrap_95_bps": [
+                  11.892425644202378,
+                  11.892425644202378
+                ],
+                "stress_before_funding_mean_bps": 5.883551769381005,
+                "verdict": "INSUFFICIENT"
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 7,
+                "counts": {
+                  "measured": 7
+                },
+                "gross_mean_bps": -3.55614288201554,
+                "net_before_funding_mean_bps": -21.346574571916598,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 149.4260220034162,
+                "descriptive_day_bootstrap_95_bps": [
+                  -39.37700867034239,
+                  -10.480809452888586
+                ],
+                "stress_before_funding_mean_bps": -27.335511024246305,
+                "verdict": "INSUFFICIENT"
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 8,
+              "counts": {
+                "measured": 8
+              },
+              "gross_mean_bps": 0.6036801136849457,
+              "net_before_funding_mean_bps": -17.191699544901724,
+              "net_bps": null,
+              "profit_factor": 0.07958738032877896,
+              "drawdown_unit_notional_bps": 137.53359635921382,
+              "descriptive_day_bootstrap_95_bps": [
+                -22.8916704486797,
+                -10.480809452888586
+              ],
+              "stress_before_funding_mean_bps": -23.183128175042892,
+              "verdict": "INSUFFICIENT"
+            },
+            "last_three_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            }
+          },
+          "selected_minus_rejected_95_bps": [
+            -7.238808098911074,
+            12.091526256471454
+          ]
+        },
+        "both": {
+          "summary": {
+            "n": 0,
+            "counts": {},
+            "verdict": "INSUFFICIENT",
+            "net_bps": null
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "06-12": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "12-18": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "18-24": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            },
+            "last_three_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            }
+          }
+        }
+      },
+      "events_sha256": "18220320811186066ca604ab280495d81104064f18fde00062987d1cb585f599"
+    },
+    "ETHUSD": {
+      "inputs": {
+        "minutes": {
+          "files": [
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-01.parquet",
+              "sha256": "c8f3856da610747565fe4d7bef17efe510dbd30026d7ca08eb40bd324d9dc331"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-02.parquet",
+              "sha256": "058305b7ca314d57a1b60d80f5ea25d7ce463f94b7bc0c9f0ea540690c21236c"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-03.parquet",
+              "sha256": "219a2fad05b296658bc5ae5754467e1a900b27ef1db12ae865b4b8ebc0bcc3bd"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-04.parquet",
+              "sha256": "9d52a4a076fb0d2d63133c9d5ff1ae6b7263e7541b032cb870b704b613489b75"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-05.parquet",
+              "sha256": "edea3e8d16b565453575af045a753f0c621c90acfc7fa8aee1988ce3bc19f805"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-06.parquet",
+              "sha256": "3f6d71314532954d717ed48e338ea66f27d2c3e4b58460efb15ad04cf21e0616"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-07.parquet",
+              "sha256": "f81610739ab52c4d4740a23ad7bf42830b36c6d27f065612a1163da079e616ab"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-08.parquet",
+              "sha256": "d885d57c900bbcee8b6cd4841f7743e1d65abd262769ee73b3a41af39b8fa39b"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-09.parquet",
+              "sha256": "a821883312cf2b1cd7352276f6c6931738a9768abde3eb97bd85a1f6912ea1de"
+            },
+            {
+              "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/1m/2026-09-10.parquet",
+              "sha256": "3acaf84c73e66588df203d63c3467f808a64de1383a06e79ac221074140da6bf"
+            }
+          ],
+          "stored_minutes": 14394,
+          "expected_minutes": 14400,
+          "missing_minutes": 6,
+          "eligible_minutes": 14377,
+          "invalid_reason_counts": {
+            "coverage_quality": 17
+          }
+        },
+        "decisions": [
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-01.parquet",
+            "sha256": "9cbefd27ebd008248fb3fb71317a0cfab189260cced03a87942da18ffbf79fa6"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-02.parquet",
+            "sha256": "4056bc10b959073ee8f96aaffa20a4c1c137acd7f54446ff688b1cb92ff7c0f7"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-03.parquet",
+            "sha256": "b3ccaca805d0ac45951719e03a169d083d083f742832aa833c6a74e02eb1b5c6"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-04.parquet",
+            "sha256": "5157a19dfc8820a66dc32c43de686a89961ee19729b5d3fab27908c2cb20fbd7"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-05.parquet",
+            "sha256": "fb905c9823c9f3a7830f53dba180239f7c2d7b3cddd3ab86b9ff25e5a38285a1"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-06.parquet",
+            "sha256": "9c48c192326c2c2d6d56548eccb63aa8f48a1770a677f68eea748991f01684e7"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-07.parquet",
+            "sha256": "e998dd0252d39f2d16ff30fa231d648e11f96a66c64202de9524c6e59aed0633"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-08.parquet",
+            "sha256": "f1dd96b26de327e1ad06509fe7b6ccce29211cc4505036515d680bbad1bd6f2d"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-09.parquet",
+            "sha256": "8e11074e2baba8dd84862a1283351d5461bbe98079c6e0e57c6a0df0917c314f"
+          },
+          {
+            "path": "/tmp/vnedge-htf-recheck.PInWIi/ETHUSD/5m/2026-09-10.parquet",
+            "sha256": "e522e2586d3e25000a2ed6a5fd38f3ddc6105b2b1bb99e7a0f0475d48556551a"
+          }
+        ],
+        "eligible_5m": 2863,
+        "rejected": {
+          "decision_row_not_closed": 17
+        }
+      },
+      "diagnostics": {
+        "session_coverage_or_warmup": 592,
+        "no_consolidation_breakout": 1931,
+        "shared_episode_reservation": 210,
+        "session_warmup": 105,
+        "baseline_arms": 42,
+        "session_covered_bars": 2393
+      },
+      "cells": {
+        "base": {
+          "summary": {
+            "n": 42,
+            "counts": {
+              "measured": 42
+            },
+            "gross_mean_bps": -8.603448554180138,
+            "net_before_funding_mean_bps": -26.38787664478398,
+            "net_bps": null,
+            "profit_factor": 0.051428100755424,
+            "drawdown_unit_notional_bps": 1108.2908190809271,
+            "descriptive_day_bootstrap_95_bps": [
+              -35.13411461225995,
+              -16.884582606924162
+            ],
+            "stress_before_funding_mean_bps": -32.373789222488064,
+            "verdict": "EXPLORATORY_ONLY"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 7,
+                "counts": {
+                  "measured": 7
+                },
+                "gross_mean_bps": -7.563343359787384,
+                "net_before_funding_mean_bps": -25.349008620322678,
+                "net_bps": null,
+                "profit_factor": 0.1260383988706509,
+                "drawdown_unit_notional_bps": 200.7350546748998,
+                "descriptive_day_bootstrap_95_bps": [
+                  -48.18199584698344,
+                  6.924562129239116
+                ],
+                "stress_before_funding_mean_bps": -31.335544332013406,
+                "verdict": "INSUFFICIENT"
+              },
+              "06-12": {
+                "n": 14,
+                "counts": {
+                  "measured": 14
+                },
+                "gross_mean_bps": -7.708191778518384,
+                "net_before_funding_mean_bps": -25.49368474676158,
+                "net_bps": null,
+                "profit_factor": 0.05769077031591096,
+                "drawdown_unit_notional_bps": 356.91158645466214,
+                "descriptive_day_bootstrap_95_bps": [
+                  -35.037610520360566,
+                  -13.921652959419193
+                ],
+                "stress_before_funding_mean_bps": -31.48013367879472,
+                "verdict": "INSUFFICIENT"
+              },
+              "12-18": {
+                "n": 8,
+                "counts": {
+                  "measured": 8
+                },
+                "gross_mean_bps": -11.994540641143969,
+                "net_before_funding_mean_bps": -29.774935142464198,
+                "net_bps": null,
+                "profit_factor": 0.035743125178460046,
+                "drawdown_unit_notional_bps": 238.88164690988813,
+                "descriptive_day_bootstrap_95_bps": [
+                  -47.328942296220234,
+                  -12.786834898948802
+                ],
+                "stress_before_funding_mean_bps": -35.75881609419177,
+                "verdict": "INSUFFICIENT"
+              },
+              "18-24": {
+                "n": 13,
+                "counts": {
+                  "measured": 13
+                },
+                "gross_mean_bps": -8.04080197912654,
+                "net_before_funding_mean_bps": -25.82589931879174,
+                "net_bps": null,
+                "profit_factor": 0.011240695201214498,
+                "drawdown_unit_notional_bps": 335.73669114429265,
+                "descriptive_day_bootstrap_95_bps": [
+                  -34.124402872567366,
+                  -16.254960631552756
+                ],
+                "stress_before_funding_mean_bps": -31.812148981826496,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 4,
+                "counts": {
+                  "measured": 4
+                },
+                "gross_mean_bps": -35.18833605761468,
+                "net_before_funding_mean_bps": -52.94114232416162,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 211.76456929664647,
+                "descriptive_day_bootstrap_95_bps": [
+                  -83.16388308988783,
+                  -30.477958132307315
+                ],
+                "stress_before_funding_mean_bps": -58.91112771774641,
+                "verdict": "INSUFFICIENT"
+              },
+              "down": {
+                "n": 2,
+                "counts": {
+                  "measured": 2
+                },
+                "gross_mean_bps": 29.078065424791298,
+                "net_before_funding_mean_bps": 11.248816448445455,
+                "net_bps": null,
+                "profit_factor": null,
+                "drawdown_unit_notional_bps": 0.0,
+                "descriptive_day_bootstrap_95_bps": [
+                  0.6465210658560846,
+                  21.851111831034824
+                ],
+                "stress_before_funding_mean_bps": 5.240328623396094,
+                "verdict": "INSUFFICIENT"
+              },
+              "range": {
+                "n": 36,
+                "counts": {
+                  "measured": 36
+                },
+                "gross_mean_bps": -7.742989608185828,
+                "net_before_funding_mean_bps": -25.528441185588104,
+                "net_bps": null,
+                "profit_factor": 0.03929469416807694,
+                "drawdown_unit_notional_bps": 919.0238826811715,
+                "descriptive_day_bootstrap_95_bps": [
+                  -32.46382546912916,
+                  -18.128505913752303
+                ],
+                "stress_before_funding_mean_bps": -31.51486927000847,
+                "verdict": "EXPLORATORY_ONLY"
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 36,
+              "counts": {
+                "measured": 36
+              },
+              "gross_mean_bps": -10.741839804934461,
+              "net_before_funding_mean_bps": -28.523724351508495,
+              "net_bps": null,
+              "profit_factor": 0.014344780982460201,
+              "drawdown_unit_notional_bps": 1026.8540766543058,
+              "descriptive_day_bootstrap_95_bps": [
+                -37.57911520029898,
+                -19.688616213334715
+              ],
+              "stress_before_funding_mean_bps": -34.50835580469529,
+              "verdict": "EXPLORATORY_ONLY"
+            },
+            "last_three_days": {
+              "n": 6,
+              "counts": {
+                "measured": 6
+              },
+              "gross_mean_bps": 4.226898950345782,
+              "net_before_funding_mean_bps": -13.572790404436887,
+              "net_bps": null,
+              "profit_factor": 0.35663738475301243,
+              "drawdown_unit_notional_bps": 118.43242331047612,
+              "descriptive_day_bootstrap_95_bps": [
+                -23.785107244458764,
+                6.851843275606874
+              ],
+              "stress_before_funding_mean_bps": -19.566389729244662,
+              "verdict": "INSUFFICIENT"
+            }
+          }
+        },
+        "vwap": {
+          "summary": {
+            "n": 1,
+            "counts": {
+              "measured": 1
+            },
+            "gross_mean_bps": -27.097595591918378,
+            "net_before_funding_mean_bps": -44.86002552045999,
+            "net_bps": null,
+            "profit_factor": 0.0,
+            "drawdown_unit_notional_bps": 44.86002552045999,
+            "descriptive_day_bootstrap_95_bps": [
+              -44.86002552045999,
+              -44.86002552045999
+            ],
+            "stress_before_funding_mean_bps": -50.834858130834476,
+            "verdict": "INSUFFICIENT"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "06-12": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "12-18": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "18-24": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": -27.097595591918378,
+                "net_before_funding_mean_bps": -44.86002552045999,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 44.86002552045999,
+                "descriptive_day_bootstrap_95_bps": [
+                  -44.86002552045999,
+                  -44.86002552045999
+                ],
+                "stress_before_funding_mean_bps": -50.834858130834476,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 1,
+                "counts": {
+                  "measured": 1
+                },
+                "gross_mean_bps": -27.097595591918378,
+                "net_before_funding_mean_bps": -44.86002552045999,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 44.86002552045999,
+                "descriptive_day_bootstrap_95_bps": [
+                  -44.86002552045999,
+                  -44.86002552045999
+                ],
+                "stress_before_funding_mean_bps": -50.834858130834476,
+                "verdict": "INSUFFICIENT"
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 1,
+              "counts": {
+                "measured": 1
+              },
+              "gross_mean_bps": -27.097595591918378,
+              "net_before_funding_mean_bps": -44.86002552045999,
+              "net_bps": null,
+              "profit_factor": 0.0,
+              "drawdown_unit_notional_bps": 44.86002552045999,
+              "descriptive_day_bootstrap_95_bps": [
+                -44.86002552045999,
+                -44.86002552045999
+              ],
+              "stress_before_funding_mean_bps": -50.834858130834476,
+              "verdict": "INSUFFICIENT"
+            },
+            "last_three_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            }
+          },
+          "selected_minus_rejected_95_bps": [
+            -29.135083699149792,
+            -10.27061452975969
+          ]
+        },
+        "volume": {
+          "summary": {
+            "n": 14,
+            "counts": {
+              "measured": 14
+            },
+            "gross_mean_bps": -15.77163226670635,
+            "net_before_funding_mean_bps": -33.54753404535423,
+            "net_bps": null,
+            "profit_factor": 0.06401437544738903,
+            "drawdown_unit_notional_bps": 469.6654766349592,
+            "descriptive_day_bootstrap_95_bps": [
+              -59.2231658929232,
+              -13.977453879703203
+            ],
+            "stress_before_funding_mean_bps": -39.52915211619703,
+            "verdict": "INSUFFICIENT"
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 4,
+                "counts": {
+                  "measured": 4
+                },
+                "gross_mean_bps": -15.298559230381983,
+                "net_before_funding_mean_bps": -33.075023713397734,
+                "net_bps": null,
+                "profit_factor": 0.1496990910942927,
+                "drawdown_unit_notional_bps": 155.592089186232,
+                "descriptive_day_bootstrap_95_bps": [
+                  -58.311257600587524,
+                  23.291994332641057
+                ],
+                "stress_before_funding_mean_bps": -39.056925205464346,
+                "verdict": "INSUFFICIENT"
+              },
+              "06-12": {
+                "n": 4,
+                "counts": {
+                  "measured": 4
+                },
+                "gross_mean_bps": -21.21693787204143,
+                "net_before_funding_mean_bps": -38.98636264393994,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 155.94545057575976,
+                "descriptive_day_bootstrap_95_bps": [
+                  -73.0696553565086,
+                  -19.931595220483327
+                ],
+                "stress_before_funding_mean_bps": -44.96471839573208,
+                "verdict": "INSUFFICIENT"
+              },
+              "12-18": {
+                "n": 4,
+                "counts": {
+                  "measured": 4
+                },
+                "gross_mean_bps": -20.629244925062242,
+                "net_before_funding_mean_bps": -38.39936873783391,
+                "net_bps": null,
+                "profit_factor": 0.054360343182725784,
+                "drawdown_unit_notional_bps": 162.42706600133127,
+                "descriptive_day_bootstrap_95_bps": [
+                  -82.21012856358897,
+                  -0.21388083020654047
+                ],
+                "stress_before_funding_mean_bps": -44.37807658040586,
+                "verdict": "INSUFFICIENT"
+              },
+              "18-24": {
+                "n": 2,
+                "counts": {
+                  "measured": 2
+                },
+                "gross_mean_bps": 3.888058188026844,
+                "net_before_funding_mean_bps": -13.911228127136456,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 27.82245625427291,
+                "descriptive_day_bootstrap_95_bps": [
+                  -20.614453388927867,
+                  -7.208002865345044
+                ],
+                "stress_before_funding_mean_bps": -19.9046244501746,
+                "verdict": "INSUFFICIENT"
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 3,
+                "counts": {
+                  "measured": 3
+                },
+                "gross_mean_bps": -37.88524954618011,
+                "net_before_funding_mean_bps": -55.63484792539549,
+                "net_bps": null,
+                "profit_factor": 0.0,
+                "drawdown_unit_notional_bps": 166.90454377618647,
+                "descriptive_day_bootstrap_95_bps": [
+                  -96.54764252708895,
+                  -27.344296470813017
+                ],
+                "stress_before_funding_mean_bps": -61.6032175800504,
+                "verdict": "INSUFFICIENT"
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 11,
+                "counts": {
+                  "measured": 11
+                },
+                "gross_mean_bps": -9.740645735940781,
+                "net_before_funding_mean_bps": -27.523721168979343,
+                "net_bps": null,
+                "profit_factor": 0.0959189674973745,
+                "drawdown_unit_notional_bps": 326.05292719141386,
+                "descriptive_day_bootstrap_95_bps": [
+                  -52.04692231483845,
+                  -2.5367592784541984
+                ],
+                "stress_before_funding_mean_bps": -33.50895244423701,
+                "verdict": "INSUFFICIENT"
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 12,
+              "counts": {
+                "measured": 12
+              },
+              "gross_mean_bps": -19.72420518886473,
+              "net_before_funding_mean_bps": -37.49540551577632,
+              "net_bps": null,
+              "profit_factor": 0.01924603889921845,
+              "drawdown_unit_notional_bps": 449.9448661893158,
+              "descriptive_day_bootstrap_95_bps": [
+                -65.04187741396592,
+                -15.20163852927643
+              ],
+              "stress_before_funding_mean_bps": -43.47465557371449,
+              "verdict": "INSUFFICIENT"
+            },
+            "last_three_days": {
+              "n": 2,
+              "counts": {
+                "measured": 2
+              },
+              "gross_mean_bps": 7.94380526624394,
+              "net_before_funding_mean_bps": -9.86030522282172,
+              "net_bps": null,
+              "profit_factor": 0.5415155499813008,
+              "drawdown_unit_notional_bps": 43.0126047782845,
+              "descriptive_day_bootstrap_95_bps": [
+                -9.86030522282172,
+                -9.86030522282172
+              ],
+              "stress_before_funding_mean_bps": -15.856131371092255,
+              "verdict": "INSUFFICIENT"
+            }
+          },
+          "selected_minus_rejected_95_bps": [
+            -36.67201431421701,
+            10.328868037423618
+          ]
+        },
+        "both": {
+          "summary": {
+            "n": 0,
+            "counts": {},
+            "verdict": "INSUFFICIENT",
+            "net_bps": null
+          },
+          "strata": {
+            "session": {
+              "00-06": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "06-12": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "12-18": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "18-24": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              }
+            },
+            "regime": {
+              "up": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "down": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              },
+              "range": {
+                "n": 0,
+                "counts": {},
+                "verdict": "INSUFFICIENT",
+                "net_bps": null
+              }
+            }
+          },
+          "chronological_not_oos": {
+            "first_seven_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            },
+            "last_three_days": {
+              "n": 0,
+              "counts": {},
+              "verdict": "INSUFFICIENT",
+              "net_bps": null
+            }
+          }
+        }
+      },
+      "events_sha256": "0f0059f8253bc68722967c31028b0b1b0f9969932bc1b912a6bf5052ba3afb55"
+    }
+  }
+}

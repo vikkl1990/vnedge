@@ -1,0 +1,61 @@
+{
+  "schema_version": 2,
+  "net_bps_semantics": "booked_execution",
+  "generated_at": "2026-09-08T18:33:18.169904+00:00",
+  "strategy_id": "range_expansion_observer_v4",
+  "entry_clock": "next_15m_open",
+  "clock_cohort": "closed_15m->next_15m_open",
+  "capital_eligible": false,
+  "read_only": true,
+  "exchange_id": "delta_india",
+  "cost_profile": "delta_swing",
+  "execution_cost_bps": 15.799999999999999,
+  "gate_cost_bps": 18.799999999999997,
+  "funding_bps": 0,
+  "funding_included": false,
+  "funding_event_count": 0,
+  "performance_eligible": false,
+  "performance_blockers": [
+    "funding_history_not_replayed",
+    "risk_gateway_not_replayed"
+  ],
+  "bars": 741,
+  "canonical_context_timeframes": [],
+  "context_quality": {},
+  "continuity_breaks": 0,
+  "evaluations": 0,
+  "signals": 0,
+  "trades": 0,
+  "position_conflicts": 0,
+  "gross_bps": 0,
+  "net_execution_bps": 0,
+  "net_gate_bps": 0,
+  "net_bps": 0,
+  "failed_gates": {},
+  "lifecycle": {},
+  "setup_funnel": {
+    "engine_status": "insufficient_warmup_window",
+    "warmup_bars_required": 2017,
+    "evaluable_bars": 0,
+    "bars_quarantined": 0,
+    "evaluations": 0,
+    "eligible_evaluations": 0,
+    "signals": 0,
+    "admitted_trades": 0,
+    "near_misses": 0,
+    "blocked_by": {},
+    "closest_threshold": {}
+  },
+  "records": [],
+  "symbol": "BTCUSD",
+  "release_revision": "86e8a65",
+  "run_provenance": {
+    "start": "2026-09-01 00:00:00+00:00",
+    "last_open": "2026-09-08 18:00:00+00:00",
+    "bar_identity_digest": "080b29ffa8f2be65a9012a99a4b2bb0375df7f029376626fc9676160fb07479e",
+    "source_counts": {
+      "canonical_tick_lake": 741
+    }
+  },
+  "approval_parity_eligible": false
+}

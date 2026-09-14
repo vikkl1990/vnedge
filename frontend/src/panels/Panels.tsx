@@ -278,11 +278,19 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: stri
   );
 }
 
+export function shadowNetTotal(lanes: CorrectionLane[] | undefined, fresh: boolean): number | null {
+  if (!fresh || !lanes) return null;
+  const shadow = lanes.filter(lane => lane.observation_class === "shadow_observe");
+  if (!shadow.length || shadow.some(lane => typeof lane.shadow_perf?.virtual_net_usd !== "number" || !Number.isFinite(lane.shadow_perf.virtual_net_usd))) return null;
+  return shadow.reduce((sum, lane) => sum + lane.shadow_perf!.virtual_net_usd!, 0);
+}
+
 export function BookPanel() {
   const { data: snapshot, isLoading, isError } = useSnapshot();
   const lanes = useLanes();
-  const scope = lanes.data?.portfolio;
-  const shadowNet = (lanes.data?.lanes ?? []).reduce((sum, lane) => sum + (lane.shadow_perf?.virtual_net_usd ?? 0), 0);
+  const fresh = !lanes.isError && lanes.data?.snapshot_state === "fresh";
+  const scope = fresh ? lanes.data?.portfolio : undefined;
+  const shadowNet = shadowNetTotal(lanes.data?.lanes, fresh);
   return (
     <TerminalPanel title="Book · scoped capital" meta={isLoading ? "loading…" : isError ? "error" : "virtual vs nominal kept separate · 5s"}>
       {isError && <div className="mb-4 rounded-md border border-short/40 bg-short/5 px-3 py-2 text-[11px] text-short" role="alert">Account snapshot unavailable. Equity and PnL are unknown.</div>}
@@ -1169,12 +1177,13 @@ export function FeedPanel() {
 export function JournalPanel() {
   const pageSize = 100;
   const [offset, setOffset] = useState(0);
-  const { data, isLoading } = useJournal(pageSize, offset);
+  const { data, isLoading, isError } = useJournal(pageSize, offset);
   const [view, setView] = useState<"all" | "scanner" | "decisions" | "trades">("all");
   const [search, setSearch] = useState("");
   const [laneFilter, setLaneFilter] = useState("all");
   const rows = data?.closed_trades ?? [];
-  const summary = data?.summary;
+  const sourceKnown = !isError && data?.source_coverage?.state === "bounded_window";
+  const summary = sourceKnown ? data?.summary : undefined;
   const actualRows = rows.filter((row) => row.kind === "actual_closing_fill" && row.performance_eligible === true);
   const rowsNet = actualRows.reduce((total, row) => {
     const value = row.net_after_this_fill_fee_usd ?? row.net_pnl_usd;
@@ -1233,7 +1242,8 @@ export function JournalPanel() {
     URL.revokeObjectURL(link.href);
   };
   return (
-    <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : `${data?.page?.totals.closed_trades ?? rows.length} closed · page ${Math.floor(offset / pageSize) + 1} · 20s`}>
+    <TerminalPanel title="Journal · evidence blotter" meta={isLoading ? "loading…" : !sourceKnown ? "source incomplete · readable records only" : `${data?.page?.totals.closed_trades ?? rows.length} closed · page ${Math.floor(offset / pageSize) + 1} · 20s`}>
+      {!sourceKnown && <p role="alert" className="mb-3 text-warn">Journal source unavailable or partial. Totals and reconciliation are unknown; readable records below are not a complete book.</p>}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-line bg-inset p-3">
           <Kpi
@@ -1247,12 +1257,12 @@ export function JournalPanel() {
           <div className="mt-1 text-[9px] font-mono text-faint">shadow modeled {usd(summary?.shadow_execution_fees_usd)}</div>
         </div>
         <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Shadow net" value={usd(summary?.virtual_net_usd)} /></div>
-        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={String(summary?.open_orders ?? 0)} /></div>
+        <div className="rounded-lg border border-line bg-inset p-3"><Kpi label="Open orders" value={summary?.open_orders == null ? "—" : String(summary.open_orders)} /></div>
       </div>
       <div className={`mt-3 rounded-lg border px-3 py-2 text-[11px] ${reconciliationMismatch || !shadowHistoryComplete ? "border-warn/50 bg-warn/5 text-warn" : "border-line bg-inset text-dim"}`}>
-        <span className="font-mono">Evidence reconciliation:</span> paper {completeTradePopulation ? `visible ${usd(rowsNet)} · ledger ${usd(summaryNet)}` : `ledger ${usd(summaryNet)} · page ${usd(rowsNet)}`}
-        {completeTradePopulation ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)}` : " · matched") : " · paged"}
-        {` · shadow ${summary?.shadow_closed_trades ?? 0} closed / ${usd(summary?.virtual_net_usd)} · ${shadowHistoryComplete ? "full-stream matched" : `history ${summary?.shadow_history_state ?? "unavailable"}`}`}
+        <span className="font-mono">Evidence reconciliation:</span> {sourceKnown ? <>paper {completeTradePopulation ? `visible ${usd(rowsNet)} · read-window ${usd(summaryNet)}` : `read-window ${usd(summaryNet)} · page ${usd(rowsNet)}`}
+        {completeTradePopulation && reconciliationDelta != null ? (reconciliationMismatch ? ` · delta ${usd(reconciliationDelta)}` : " · window totals agree (not ledger reconciliation)") : " · paged / unverified"}
+        {` · shadow ${summary?.shadow_closed_trades ?? "—"} closed / ${usd(summary?.virtual_net_usd)} · ${shadowHistoryComplete ? "full-stream evidence present" : `history ${summary?.shadow_history_state ?? "unavailable"}`}`}</> : "unknown — missing source proof"}
       </div>
       {executionContracts.length > 0 ? (
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">

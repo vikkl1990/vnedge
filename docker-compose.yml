@@ -560,6 +560,32 @@ services:
   # and locked validation gates; it never trains a live model or changes a
   # strategy. The System page declares this as a two-hour optional product, so
   # it must have an explicit owner instead of serving a week-old JSON file.
+  # Optional Analyst data product. No keys, execution imports, or candle writes.
+  # Start explicitly with --profile analyst; never creates strategy/roster cells.
+  analyst-evidence:
+    profiles: ["analyst"]
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    command: ["python", "-m", "vnedge.dashboard.analyst_worker", "--interval-seconds", "60"]
+    volumes:
+      - ./data/candles:/app/data/candles:ro
+      - ./data/analyst:/app/data/analyst
+    tmpfs: ["/tmp:size=32m"]
+    mem_limit: 700m
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; from datetime import UTC,datetime; from vnedge.dashboard.analyst_store import AnalystStore,utc; n=datetime.now(UTC); r=AnalystStore(Path('data/analyst/evidence.sqlite')).read('collector','delta_india',now=n)[0]['body']; assert (n-utc(r['generated_at'])).total_seconds()<180 and not r['issues']"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
   funding-evidence:
     build: .
     restart: unless-stopped

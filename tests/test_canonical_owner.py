@@ -37,9 +37,22 @@ async def test_maintenance_retries_back_off_and_reset_only_on_success(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repair_fails", [False, True])
 async def test_delta_planning_is_read_only_separate_from_repair(tmp_path, monkeypatch, repair_fails):
+    import vnedge.data.delta_coverage as coverage
     import vnedge.data.delta_lake_repair as repair
+    import vnedge.data.delta_raw_audit as raw
     import vnedge.data.delta_recovery_plan as recovery
     calls = []
+
+    def forward_once(*args, **kwargs):
+        assert kwargs["apply"] is True
+        assert kwargs["environ"]["VNEDGE_CANONICAL_WRITER_LEASE_FD"] == "99"
+        calls.append("forward")
+        return {"restored_minutes": 0}
+
+    def raw_once(*args, **kwargs):
+        assert "apply" not in kwargs
+        calls.append("raw")
+        return {"status": "NO_LOCAL_SHARDS", "coverage": "UNPROVEN"}
 
     def repair_once(*args, **kwargs):
         assert kwargs["apply"] is True
@@ -59,12 +72,17 @@ async def test_delta_planning_is_read_only_separate_from_repair(tmp_path, monkey
 
     monkeypatch.setattr(repair, "repair_delta_lake", repair_once)
     monkeypatch.setattr(recovery, "build_delta_recovery_report", plan_once)
+    monkeypatch.setattr(coverage, "reproduce_sealed_minutes", forward_once)
+    monkeypatch.setattr(raw, "audit_raw_day", raw_once)
     monkeypatch.setattr(owner.asyncio, "sleep", sleep_once)
     with pytest.raises(asyncio.CancelledError):
         await owner._delta_maintenance_loop(tmp_path, tmp_path / "candles",
             symbols=("BTCUSD",), environ={}, lease_fd=99)
-    assert calls == ["repair", "plan"]
-    assert json.loads((tmp_path / "reports/delta_recovery_plan.json").read_text())["can_apply"] is False
+    assert calls == ["forward", "repair", "plan", "raw"]
+    planned = json.loads((tmp_path / "reports/delta_recovery_plan.json").read_text())
+    assert planned["can_apply"] is False
+    assert planned["forward_replay"]["symbols"]["BTCUSD"]["restored_minutes"] == 0
+    assert planned["raw_audit"]["BTCUSD"]["coverage"] == "UNPROVEN"
     audit = json.loads((tmp_path / "reports/delta_lake_repair.json").read_text())
     assert (audit.get("status") == "ERROR") is repair_fails
 

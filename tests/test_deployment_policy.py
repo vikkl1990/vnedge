@@ -112,3 +112,18 @@ def test_failed_rollout_never_tears_down_healthy_fleet():
     assert "docker compose down" not in deploy
     failure = deploy[deploy.index("if ! recreate_in_waves;"):deploy.index('echo "waiting for lanes..."')]
     assert "exit 1" in failure
+
+
+def test_deploy_tags_images_for_every_optional_profile() -> None:
+    import re
+
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    profiles = {
+        profile
+        for service in compose["services"].values()
+        for profile in service.get("profiles", [])
+    }
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text()
+    match = re.search(r"COMPOSE_PROFILES=([a-z0-9,-]+) docker compose config --services", deploy)
+    assert match is not None
+    assert profiles <= set(match.group(1).split(","))

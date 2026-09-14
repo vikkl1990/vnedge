@@ -1355,6 +1355,54 @@ def create_app(
             headers=_identity(user),
         )
 
+    from vnedge.dashboard.analyst_workspace import AnalystWorkspace
+    analyst_service = AnalystWorkspace(Path("data/candles"), Path("data/analyst/evidence.sqlite"))
+
+    @app.get("/api/crypto-analyst")
+    async def crypto_analyst(request: Request, exchange: str = "delta_india",
+                             timeframe: str = "15m") -> JSONResponse:
+        """Independent technical research, no order or roster authority."""
+        user = _authorized(request)
+        try:
+            payload = await asyncio.to_thread(analyst_service.snapshot, exchange, timeframe)
+        except ValueError:
+            return JSONResponse({"detail": "unsupported_or_unavailable_analyst_scope"},
+                                status_code=422, headers=_identity(user))
+        return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
+
+    @app.get("/api/crypto-analyst/symbol/{symbol}")
+    async def crypto_analyst_symbol(request: Request, symbol: str,
+                                    exchange: str = "delta_india") -> JSONResponse:
+        user = _authorized(request)
+        try:
+            payload = await asyncio.to_thread(analyst_service.dossier, exchange, symbol)
+        except ValueError:
+            return JSONResponse({"detail": "unsupported_analyst_scope"}, status_code=422,
+                                headers=_identity(user))
+        return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
+
+    @app.get("/api/crypto-analyst/history/{symbol}")
+    async def crypto_analyst_history(request: Request, symbol: str,
+                                     exchange: str = "delta_india") -> JSONResponse:
+        user = _authorized(request)
+        try:
+            payload = await asyncio.to_thread(analyst_service.history, exchange, symbol)
+        except ValueError:
+            return JSONResponse({"detail": "unsupported_analyst_scope"}, status_code=422,
+                                headers=_identity(user))
+        return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
+
+    @app.get("/api/crypto-analyst/answer/{symbol}")
+    async def crypto_analyst_answer(request: Request, symbol: str, question: str,
+                                    exchange: str = "delta_india") -> JSONResponse:
+        user = _authorized(request)
+        try:
+            payload = await asyncio.to_thread(analyst_service.answer, exchange, symbol, question)
+        except ValueError:
+            return JSONResponse({"detail": "unsupported_scope_or_question"}, status_code=422,
+                                headers=_identity(user))
+        return JSONResponse(payload, headers={**_identity(user), "Cache-Control": "no-store"})
+
     @app.get("/api/scanners")
     async def scanner_catalog(request: Request) -> JSONResponse:
         """Browsable catalogue of every scanner and the evidence behind it.

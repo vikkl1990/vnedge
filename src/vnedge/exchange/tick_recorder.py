@@ -720,7 +720,8 @@ class _Buffer:
     rename — never rewriting a growing file — so readers never catch a partial
     write and disk cost stays O(rows). Shard names sort by first-row time."""
 
-    def __init__(self, root: Path, exchange: str, symbol: str, stream: str) -> None:
+    def __init__(self, root: Path, exchange: str, symbol: str, stream: str, *,
+                 on_shard: Callable[[Path, int, int], None] | None = None, shard_suffix: str = "") -> None:
         self.root = root
         self.exchange = exchange
         self.symbol = symbol
@@ -728,6 +729,8 @@ class _Buffer:
         self._rows: list[dict] = []
         self._last_flush = 0.0
         self._seq = 0
+        self._on_shard = on_shard
+        self._shard_suffix = shard_suffix
 
     def _shard_dir(self, day: str) -> Path:
         safe = canonical_symbol(self.symbol)
@@ -761,7 +764,7 @@ class _Buffer:
             chunk = chunk.drop(columns="_day")
             d = self._shard_dir(day)
             first_ts = int(chunk["ts_ms"].iloc[0])
-            name = f"{first_ts}-{self._seq:06d}.parquet"
+            name = f"{first_ts}-{self._seq:06d}{self._shard_suffix}.parquet"
             final = d / name
             tmp = d / f".{name}.tmp"
             chunk.to_parquet(tmp, index=False)
@@ -776,6 +779,8 @@ class _Buffer:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
+            if self._on_shard is not None:
+                self._on_shard(final, int(chunk.ts_ms.min()), int(chunk.ts_ms.max()))
         self._seq += 1
         self._rows.clear()
         self._last_flush = now
@@ -1420,13 +1425,14 @@ class DeltaTickRecorder:
             process_id=f"pulse-recorder:{exchange_id}",
         )
         self._clock = clock
+        self._coverage: dict[str, Any] = {}
         self.candle_sink = (
             CanonicalCandleSink(
                 exchange_id,
                 self.symbols,
                 candle_root,
                 tick_root=root,
-                subscribers=candle_subscribers,
+                subscribers=(*candle_subscribers, self._on_coverage_candle),
                 timing_sink=self.recorder_latency.record,
                 track_stream_coverage=not books_only,
             )
@@ -1468,7 +1474,12 @@ class DeltaTickRecorder:
             )
             for symbol in self.symbols
         }
-        self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades") for s in self.symbols}
+        # New session suffix prevents a restart from overwriting an immutable
+        # raw shard with the same first timestamp and reset local sequence.
+        from uuid import uuid4
+        suffix = "-" + uuid4().hex
+        self._trade_bufs = {s: _Buffer(root, exchange_id, s, "trades", shard_suffix=suffix,
+            on_shard=lambda path, first, last, symbol=s: self._coverage_shard(symbol, path, first, last)) for s in self.symbols}
         self._book_bufs = {s: _Buffer(root, exchange_id, s, "book") for s in self.symbols}
         self._trade_reorder: dict[
             str, list[tuple[int, int, dict[str, Any]]]
@@ -1494,7 +1505,23 @@ class DeltaTickRecorder:
             on_book=self._on_book,
             on_trade=self._on_trade,
             on_connection_state=self._on_trade_connection_state,
+            on_trade_fault=self._coverage_fault,
         )
+
+    def _on_coverage_candle(self, candle: Candle) -> None:
+        coverage = self._coverage.get(candle.symbol)
+        if coverage is not None:
+            coverage.published(candle)
+
+    def _coverage_shard(self, symbol: str, path: Path, first: int, last: int) -> None:
+        coverage = self._coverage.get(symbol)
+        if coverage is not None:
+            coverage.shard(path, first, last)
+
+    def _coverage_fault(self, symbol: str, reason: str) -> None:
+        coverage = self._coverage.get(symbol)
+        if coverage is not None:
+            coverage.fault(reason, datetime.now(UTC))
 
     @staticmethod
     def _epoch_ms() -> int:
@@ -1563,6 +1590,8 @@ class DeltaTickRecorder:
                 "size_contracts": float(size_contracts),
                 "contract_value": float(contract_value),
                 "base_amount": float(amount),
+                "received_ts_ms": self._epoch_ms(),
+                "exchange_timestamped": trade.get("exchange_timestamped", False),
                 "side": side,
                 "trade_id": trade_id,
             }
@@ -1579,6 +1608,7 @@ class DeltaTickRecorder:
             )
             public_trade.validate_clock(datetime.now(UTC))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            self._coverage_fault(sym, "normalized_trade_rejected")
             logger.warning("%s trade skipped: %s", sym, exc)
             return
         key = f"{timestamp_ms}:{trade_id}" if trade_id is not None else None
@@ -1589,6 +1619,7 @@ class DeltaTickRecorder:
             previous = self._seen_trade_bodies[sym].get(trade_id)
             if previous is not None and previous != body:
                 metrics["trades_conflict"] += 1
+                self._coverage_fault(sym, "trade_identity_conflict")
                 logger.error(
                     "Delta trade identity conflict: symbol=%s id=%s previous=%s incoming=%s",
                     sym,
@@ -1639,6 +1670,8 @@ class DeltaTickRecorder:
         )
 
     def _on_trade_connection_state(self, connected: bool, at: datetime) -> None:
+        for coverage in self._coverage.values():
+            coverage.connection(connected, at)
         if self.candle_sink is None or self.books_only:
             return
         for symbol in self.symbols:
@@ -1662,6 +1695,7 @@ class DeltaTickRecorder:
             timestamp_ms, _, row = heapq.heappop(pending)
             if last_timestamp is not None and timestamp_ms < last_timestamp:
                 self._trade_metrics[sym]["trades_late_closed"] += 1
+                self._coverage_fault(sym, "reorder_late_drop")
                 continue
             self.recorder_latency.record(
                 TRADE_INGEST_MS,
@@ -1687,6 +1721,7 @@ class DeltaTickRecorder:
                     )
                 except ValueError as exc:
                     self._trade_metrics[sym]["trades_late_closed"] += 1
+                    self._coverage_fault(sym, "closed_watermark_drop")
                     logger.warning(
                         "canonical Delta trade skipped: symbol=%s timestamp=%s reason=%s",
                         sym,
@@ -1712,6 +1747,7 @@ class DeltaTickRecorder:
                 ),
                 "released_through_ts_ms": self._last_trade_ts_ms.get(symbol, 0),
                 "pending_reorder": len(self._trade_reorder.get(symbol, ())),
+                "forward_coverage_healthy": int(bool(self._coverage.get(symbol) and self._coverage[symbol].healthy)),
             }
             for symbol, counters in self._trade_metrics.items()
         }
@@ -1751,6 +1787,10 @@ class DeltaTickRecorder:
             else None
         )
         try:
+            if self.candle_sink is not None and not self.books_only:
+                from vnedge.data.delta_coverage import ForwardCoverage
+                self._coverage = {s: ForwardCoverage(self.root, self.candle_sink.pipelines[s].store.root,
+                    s, started_at=datetime.now(UTC)) for s in self.symbols}
             await self._client.start()
             logger.info(
                 "delta tick recorder: %s %s -> %s",
@@ -1781,6 +1821,20 @@ class DeltaTickRecorder:
                         trade_buf.flush(now)
                 if self.candle_sink is not None:
                     self.candle_sink.advance_time(safe_boundary)
+                for symbol, coverage in self._coverage.items():
+                    coverage.checkpoint(through_ms, self.trade_metrics_snapshot()[symbol], at=wall_now)
+                # Daily rotation bounds verification work. Never carry proof
+                # across a process/day boundary by pretending it began earlier.
+                for symbol, coverage in tuple(self._coverage.items()):
+                    if coverage.started_at.date() != wall_now.date():
+                        connected = coverage.connected_since is not None
+                        coverage.connection(False, wall_now)
+                        from vnedge.data.delta_coverage import ForwardCoverage
+                        replacement = ForwardCoverage(self.root, self.candle_sink.pipelines[symbol].store.root,
+                            symbol, started_at=wall_now)
+                        if connected:
+                            replacement.connection(True, wall_now)
+                        self._coverage[symbol] = replacement
                 if now >= next_latency_snapshot:
                     self.recorder_latency_store.save_from(self.recorder_latency)
                     _write_trade_metrics(
@@ -1799,6 +1853,8 @@ class DeltaTickRecorder:
             raise
         finally:
             try:
+                for coverage in self._coverage.values():
+                    coverage.connection(False, datetime.now(UTC))
                 self.recorder_latency_store.save_from(self.recorder_latency)
                 _write_trade_metrics(
                     self.root,

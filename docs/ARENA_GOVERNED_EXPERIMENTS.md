@@ -228,3 +228,89 @@ These are observations, not a backtest result or a repair success. Both frozen
 release `9536de6d8d94e2149aadf0381479a01d98f13faa` is deployed; this recovery
 planner is a subsequent build and must be deployed separately before the
 owner publishes its report automatically.
+
+## Forward evidence and bounded original-minute reproduction
+
+This slice does **not** certify the old raw history or lower the frozen
+2,160-hour Arena requirement. Data with no original publication evidence remains
+`RAW_DAY_PRESENT_COVERAGE_UNPROVEN`; official OHLC is not a substitute.
+
+The Delta recorder now gives each trade shard a session-unique filename and
+records explicit exchange-time provenance alongside contract/base units. Under
+the existing canonical writer lease it appends a daily-session hash-chained
+journal at `data/coverage/delta_india/<symbol>/<session>.jsonl`, containing:
+
+- Session start and connection/disconnection boundaries.
+- Input faults, coalesced to the first fault per receipt minute to avoid
+  per-print fsync storms; every fault still invalidates that interval, and
+  cumulative counts appear in watermark checkpoints.
+- Watermark and recorder counters. Queue overflow is **unknown**, not zero:
+  the existing reorder heap has no bounded-overflow counter.
+- Seals naming original published **and independently verified persisted**
+  closed minutes, their candle hashes and exact raw-shard byte hashes.
+
+Only full post-start, post-connect intervals with no intervening input fault can
+seal. The publication subscriber queues evidence; the later checkpoint checks
+Parquet after persistence. Journal/shard write failures disable further seals,
+not the existing candle pipeline. A seal proves reproducibility of the recorded
+minute, **not venue-wide completeness**: Delta prints do not supply a complete
+trade sequence. The chain detects corruption under the owner-controlled
+filesystem trust boundary; it is not a signed venue attestation.
+
+The owner's existing maintenance loop may restore a **missing** original minute
+only after verifying the whole session chain and bound shard hashes, explicit
+units and exchange timestamps, unambiguous identified trades, and exact replay
+equality with the original bar hash. Idless identical prints are retained, not
+silently deduplicated. Existing slots—including partial or invalid rows—are never
+overwritten. Legacy target partitions with incomplete provenance are rejected.
+Writes use the inherited writer lease and partition lock, with a fresh check
+under the lock. The normal complete-child repair then handles parent rollups.
+
+Bounds: at most eight sessions, seven recent days and 32 missing-minute attempts
+per symbol per cycle; journals at most 100,000 records / 64 MiB each. Healthy
+partition presence is cached only within the maintenance pass. This cannot
+recover the unsealed gap between an interrupted raw write and original candle
+persistence, unseen history, or an arbitrary operator-authored manifest.
+
+The maintenance loop also audits the preceding closed UTC day's raw shards.
+Audit budgets are 10,000 shards, two million rows and 256 MiB of raw bytes.
+Counts distinguish missing unit/time evidence, malformed rows, conflicting or
+duplicate IDs, idless twins, timestamp ordering and inter-print gaps. Timestamp
+density never authorizes replay. Budget/unreadable failures remain explicit.
+An older day can be inspected read-only, with JSON returned to stdout:
+
+```sh
+.venv/bin/python -m vnedge.data.delta_raw_audit \
+  --data-root data --symbol BTCUSD --day 20260901
+```
+
+Reports: `data/reports/delta_forward_recovery.json` and
+`data/reports/delta_raw_audit/<symbol>-<day>.json`. Compact results are projected
+into `delta_recovery_plan.json` and Arena, labeled as reproduction/measurement,
+not admission. Completed experiments are not rerun and contracts are not
+rewritten. The normal scheduled preflight remains the only research admission
+check; no scanner, cost, roster, kernel, promotion or capital permission changes.
+
+These forward records begin only when this build runs. Deployment cannot create
+proof for previous sessions. Targeted coverage lives in
+`tests/test_delta_forward_coverage.py`, the recorder/WS/owner tests and Arena's
+component tests.
+
+### Read-only VM raw audit of 2026-09-08 UTC
+
+The new auditor was executed from stdin in the existing research container;
+no code was installed and no VM files or candles were changed. Both audits
+returned `AUDITED_UNPROVEN`:
+
+| Observation | BTCUSD | ETHUSD |
+| --- | ---: | ---: |
+| Unit-valid prints in the day | 225,000 | 191,025 |
+| Exchange-timestamp provenance flag absent/unproven | 225,000 | 191,025 |
+| Prints without trade IDs | 225,000 | 191,025 |
+| Identical idless rows, retained as ambiguous | 2,099 | 2,329 |
+| Maximum observed inter-print gap, ms | 71,481 | 69,842 |
+
+This is neither a completeness certificate nor evidence that those gaps are
+necessarily lost trades. Absent provenance does not prove a timestamp was
+wrong. Identical idless prints cannot safely be called duplicates. This one-day
+sample cannot establish the missing 90-day canonical experiment history.

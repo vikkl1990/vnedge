@@ -29,7 +29,11 @@ const revision = (stage: string, extra: Partial<StrategyWorkflowRevision> = {}) 
 describe("research arena projections", () => {
   it("renders recovery evidence without granting write authority", () => {
     const html = renderToStaticMarkup(createElement(RecoveryPlan, { report: {
-      generated_at: "2026-09-09T03:00:00Z", symbols: { BTCUSD: {
+      generated_at: "2026-09-09T03:00:00Z",
+      forward_replay: { symbols: { BTCUSD: { restored_minutes: 2, sessions_inspected: 1, rejected: ["shard_hash_mismatch"] } } },
+      raw_audit: { BTCUSD: { status: "AUDITED_UNPROVEN", shard_count: 4, valid_rows: 200,
+        coverage: "UNPROVEN", counts: { legacy_units_unproven: 3 } } },
+      symbols: { BTCUSD: {
         status: "GAPS_REMAIN", plan_id: "proof-id", required_hours: 2160,
         counts: { VERIFIED: 189, RAW_DAY_PRESENT_COVERAGE_UNPROVEN: 20 },
         ranges: [{ open_time: "2026-09-01T00:00:00Z", close_time: "2026-09-01T01:00:00Z", hours: 1, status: "PRESENT_PROOF_INVALID" }],
@@ -40,6 +44,11 @@ describe("research arena projections", () => {
     expect(html).toContain("raw day present coverage unproven: 20 hours");
     expect(html).toContain("not experiment admission");
     expect(html).toContain("end exclusive");
+    expect(html).toContain("2 original minutes restored");
+    expect(html).toContain("Previously published hashes only");
+    expect(html).toContain("shard_hash_mismatch");
+    expect(html).toContain("Timestamp density is not completeness proof");
+    expect(html).toContain("legacy units unproven: 3");
     expect(html).not.toContain("<button");
   });
   it("does not present missing recovery reports as success", () => {
