@@ -183,7 +183,7 @@ def test_handle_funding_rate_normalises_percent_to_fraction():
     assert client.funding_rate["BTCUSD"] == 0.0001
 
 
-def test_compact_funding_rollover_emits_one_settled_print_without_interval_guess():
+def test_compact_funding_rollover_never_fabricates_a_settled_print():
     client = DeltaPublicWsClient(["BTCUSD"])
     first_realization_us = 1_775_836_800_000_000
     next_realization_us = 1_775_865_600_000_000
@@ -206,8 +206,7 @@ def test_compact_funding_rollover_emits_one_settled_print_without_interval_guess
     )
     assert client.settled_funding_events.get("BTCUSD", []) == []
 
-    # A venue-provided schedule rollover proves the prior print settled and
-    # uses its last observed rate, never the new period's estimate.
+    # Schedule changes do not prove a final rate or cash settlement.
     client._handle(
         {
             "type": "funding_rate",
@@ -216,9 +215,7 @@ def test_compact_funding_rollover_emits_one_settled_print_without_interval_guess
             "nfr": next_realization_us,
         }
     )
-    assert client.settled_funding_events["BTCUSD"] == [
-        (first_realization_us // 1_000, 0.0002)
-    ]
+    assert client.settled_funding_events.get("BTCUSD", []) == []
     assert client.next_funding_at_ms["BTCUSD"] == next_realization_us // 1_000
 
 

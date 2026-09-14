@@ -105,7 +105,7 @@ def audit_records(journals: dict[str, list[dict]], feature_logs: dict[str, list[
             cohort["rows"] += 1
             cohort["fired_rows"] += row.get("decision") == "fired"
             values = row.get("features") if isinstance(row.get("features"), dict) else {}
-            absent = [c for c in FEATURE_COLUMNS if not _finite(values.get(c))]
+            absent = [c for c in FEATURE_COLUMNS if not _finite(values.get(c)) or c in row.get("unavailable_features", [])]
             missing.update(absent)
             cohort["missing_values"] += len(absent)
             cohort["complete_feature_rows"] += not absent
@@ -192,7 +192,7 @@ def audit_records(journals: dict[str, list[dict]], feature_logs: dict[str, list[
         "schema": AUDIT_SCHEMA, "evidence_hash": _hash(sorted(source_ids)),
         "counts": {k: counts[k] for k in ("journal_records", "evaluations", "bound_decisions", "feature_rows",
             "exact_feature_matches", "research_outcomes", "exit_records", "duplicate_feature_records", "duplicate_journal_records")},
-        "operational_labels": 0, "label_status": "LEDGER_JOIN_NOT_IMPLEMENTED",
+        "operational_labels": 0, "label_status": "BOUNDED_AUDIT_NOT_A_LABEL_SOURCE",
         "cohorts": [cohorts[k] for k in sorted(cohorts)],
         "feature_missingness": [{"feature": c, "missing_rows": missing[c]} for c in FEATURE_COLUMNS],
         "exclusions": dict(sorted(exclusions.items())),

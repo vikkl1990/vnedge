@@ -55,7 +55,7 @@ from vnedge.execution.order_manager import OrderManager
 from vnedge.execution.order_state import ManagedOrder, OrderState
 from vnedge.ml.feature_log import FeatureLogWriter
 from vnedge.ml.regime_v0 import RegimeV0
-from vnedge.paper.paper_reconciliation import PaperReconciler
+from vnedge.paper.paper_reconciliation import PaperReconciler, ReconciliationReport
 from vnedge.paper.simulated_exchange import SimulatedExchange
 from vnedge.plan.adapters import signal_intent_to_plan
 from vnedge.plan.cost_model import CostModel
@@ -657,6 +657,7 @@ class LivePaperSession:
         self.protections = ProtectionState(config.effective_protections())
         self._protection_block_logged = False  # one trade_log event per episode
         self._feature_log: FeatureLogWriter | None = None  # W5.1, lazy
+        self._pre_entry_features = None
         self._report_day = None
         self._day_open_equity = config.starting_equity_usd
         self._day_open_fills = 0
@@ -3547,6 +3548,7 @@ class LivePaperSession:
                     "side": booked.side,
                     "notional_usd": booked.notional_usd,
                     "funding_cost_usd": booked.funding_cost_usd,
+                    "applied_at": booked.applied_at,
                     "cash_delta_usd": -booked.funding_cost_usd,
                     "source": booked.source,
                 },
@@ -4123,6 +4125,7 @@ class LivePaperSession:
                     side=(getattr(sig, "side", None) if sig is not None else None),
                     skip_reason=skip_reason,
                     backfill=backfill,
+                    prepared=(self._pre_entry_features if sig is not None and not backfill else None),
                 )
         except Exception:  # noqa: BLE001,S110 — observability must stay fail-soft
             pass
@@ -4247,11 +4250,14 @@ class LivePaperSession:
                     {
                         "ts": now.isoformat(),
                         "mode": self.config.mode.value,
+                        "recorded_at": datetime.now(UTC).isoformat(),
+                        "executed_at": fill.executed_at,
                         "venue": getattr(self.feed, "exchange_id", "paper"),
                         "strategy_id": self.strategy.strategy_id,
                         "symbol": fill.symbol,
                         "side": "buy" if fill.buy else "sell",
                         "quantity": fill.quantity,
+                        "quantity_unit": "base",
                         "price": fill.price,
                         "fee_usd": fill.fee_usd,
                         "realized_pnl_usd": fill.realized_pnl_usd,
@@ -4565,7 +4571,21 @@ class LivePaperSession:
             candidate = getattr(self.strategy, "prepare_latest", None)
             if callable(candidate):
                 prepare = candidate
-        return await asyncio.to_thread(prepare, self.candles)
+        self._pre_entry_features = None
+        def prepare_with_features():
+            frame = prepare(self.candles)
+            vector = None
+            # Only supported paper-ledger labels need the pre-entry contract.
+            # Exits ran before this preparation; ML never gates an exit/order.
+            if self.config.mode is RunnerMode.PAPER:
+                try:
+                    from vnedge.ml.feature_log import prepare_features
+                    vector = prepare_features(frame)
+                except Exception as exc:  # noqa: BLE001 — evidence failure is not trade authority
+                    logger.warning("pre-entry feature preparation unavailable: %s", exc)
+            return frame, vector
+        frame, self._pre_entry_features = await asyncio.to_thread(prepare_with_features)
+        return frame
 
     def _shadow_prime(self, df: pd.DataFrame | None = None) -> None:
         """SHADOW lanes only: backfill observability from seeded bars.
@@ -5145,7 +5165,42 @@ class LivePaperSession:
             if order.state in _EXIT_ACCEPTED_STATES and self._plan is None:
                 self._seed_plan_from_venue(plan, coid)
                 self._plan = plan
+        self._record_ml_accounting_checkpoint(report)
         return report
+
+    def _record_ml_accounting_checkpoint(self, report: ReconciliationReport) -> None:
+        """Read-only paper accounting proof; never changes entry permission.
+
+        Funding coverage is deliberately NOT inferred from reconciliation.
+        The ML label finalizer independently requires its settled-history receipt.
+        """
+        if self.fill_ledger is None or self.config.mode is not RunnerMode.PAPER:
+            return
+        try:
+            from vnedge.execution.order_state import UNRESOLVED_STATES
+
+            self._ledger_new_fills(datetime.now(UTC))
+            venue_orders = {}
+            mismatches = list(report.mismatches)
+            for coid, order in self.om.orders.items():
+                status = self.exchange.get_order_status(coid)
+                if status is None:
+                    continue
+                venue_orders[coid] = {"state": status.state, "quantity": status.filled_qty,
+                                      "fees_usd": status.fee_usd}
+                if abs(order.filled_quantity - status.filled_qty) > 1e-10 or abs(order.fees_paid - status.fee_usd) > 1e-8:
+                    mismatches.append(f"{coid}: accounting quantity/fee mismatch")
+            self.journal.append("ml_accounting_checkpoint", {
+                "fill_tip": self.fill_ledger.tip_hash, "fill_count": self.fill_ledger.records,
+                "clean": not mismatches and not self._ledger_halt,
+                "mismatches": mismatches,
+                "recovery_degraded": self.journal.recovery_degraded,
+                "open_positions": [{"symbol": p.symbol, "quantity": p.quantity} for p in self.exchange.get_positions()],
+                "unresolved_orders": [coid for coid, o in self.om.orders.items() if o.state in UNRESOLVED_STATES],
+                "orders": venue_orders,
+            })
+        except Exception as exc:  # noqa: BLE001 — missing telemetry cannot block an exit
+            logger.warning("ML accounting checkpoint unavailable: %s", exc)
 
     def _resolve_pending_exit(self, client_order_id: str) -> None:
         base_key = next(

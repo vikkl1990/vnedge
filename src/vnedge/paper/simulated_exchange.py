@@ -21,7 +21,9 @@ by the risk gateway; the venue enforces order mechanics.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from vnedge.paper.fill_model import FillModel
 from vnedge.runtime.funding_ledger import FundingPrint, funding_cost_usd
@@ -69,6 +71,7 @@ class PaperFill:
     mid_at_send: float | None = None
     liquidity: str = "taker"
     realized_exec_bps: float | None = None
+    executed_at: str | None = None  # injected runtime clock; None in untimed simulations
 
 
 @dataclass
@@ -92,11 +95,14 @@ class PaperFunding:
     notional_usd: float
     funding_cost_usd: float
     source: str
+    applied_at: str | None = None
 
 
 class SimulatedExchange:
-    def __init__(self, fill_model: FillModel, starting_balance_usd: float = 1_000.0) -> None:
+    def __init__(self, fill_model: FillModel, starting_balance_usd: float = 1_000.0,
+                 *, execution_clock: Callable[[], datetime] | None = None) -> None:
         self.fill_model = fill_model
+        self._execution_clock = execution_clock
         self.balance_usd = starting_balance_usd
         self.quotes: dict[str, tuple[float, float]] = {}  # symbol -> (bid, ask)
         self.positions: dict[str, PaperPosition] = {}
@@ -106,6 +112,19 @@ class SimulatedExchange:
         self.funding: list[PaperFunding] = []
         self._funding_event_keys: set[str] = set()
         self._seq = 0
+
+    def _capture_execution_time(self) -> str | None:
+        """A failed observability clock costs proof, never changes a fill."""
+        if self._execution_clock is None:
+            return None
+        try:
+            stamp = self._execution_clock()
+            if stamp.tzinfo is None:
+                raise ValueError("paper execution clock must be timezone-aware")
+            return stamp.isoformat()
+        except Exception as exc:  # noqa: BLE001 — metadata must not change execution
+            logger.warning("paper execution timestamp unavailable: %s", exc)
+            return None
 
     # --- Market data ----------------------------------------------------------
     def set_quote(self, symbol: str, bid: float, ask: float) -> None:
@@ -141,6 +160,7 @@ class SimulatedExchange:
         if mark_price <= 0:
             raise ValueError("funding mark price must be positive")
         notional = abs(position.quantity) * mark_price
+        applied_at = self._capture_execution_time()
         cost = funding_cost_usd(
             side=position.side,
             notional_usd=notional,
@@ -156,6 +176,7 @@ class SimulatedExchange:
             notional_usd=notional,
             funding_cost_usd=cost,
             source=event.source,
+            applied_at=applied_at,
         )
         self.funding.append(booked)
         return booked
@@ -313,6 +334,7 @@ class SimulatedExchange:
         self, client_order_id: str, symbol: str, buy: bool, qty: float, price: float,
         *, maker: bool = False, mid_at_send: float | None = None,
     ) -> None:
+        executed_at = self._capture_execution_time()
         signed = qty if buy else -qty
         fee = self.fill_model.fee_usd(qty * price, maker=maker)
         self.balance_usd -= fee
@@ -361,6 +383,7 @@ class SimulatedExchange:
                 mid_at_send=mid_at_send,
                 liquidity="maker" if maker else "taker",
                 realized_exec_bps=realized_exec_bps,
+                executed_at=executed_at,
             )
         )
 

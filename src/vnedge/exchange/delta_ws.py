@@ -371,14 +371,10 @@ class DeltaPublicWsClient:
         next_ms = self._timestamp_ms(next_raw)
         if next_ms is not None:
             previous = self._funding_schedule.get(sym)
-            if previous is not None and next_ms > previous[0]:
-                # The schedule rollover proves the prior realization passed.
-                # Use its last observed rate, never the new estimate.
-                events = self.settled_funding_events.setdefault(sym, [])
-                settled = (previous[0], previous[1])
-                if not events or events[-1] != settled:
-                    events.append(settled)
-                    del events[:-64]
+            # A rollover proves only that the advertised schedule changed.
+            # It does NOT identify the final rate or prove a cash settlement.
+            # Keep indicative telemetry; only verified history may populate
+            # settled_funding_events. Never charge the last estimate as fact.
             if previous is None or next_ms >= previous[0]:
                 self._funding_schedule[sym] = (next_ms, rate)
                 self.next_funding_at_ms[sym] = next_ms

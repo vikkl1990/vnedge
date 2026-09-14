@@ -1827,7 +1827,8 @@ async def build_lane(
                 context_watermarks[context_timeframe] = (
                     opened + pd.Timedelta(context_timeframe)
                 ).to_pydatetime()
-    exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd)
+    exchange = SimulatedExchange(venue_fill_model(spec.exchange), config.starting_equity_usd,
+                                 execution_clock=lambda: datetime.now(UTC))
     journal = DecisionJournal(
         journal_dir / f"{spec.lane_id}.journal.jsonl",
         path_id=KERNEL_PATH_ID,

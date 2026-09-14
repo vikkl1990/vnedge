@@ -913,6 +913,36 @@ async def test_strategy_prepare_yields_event_loop_to_peer_lanes(tmp_path):
     assert len(prepared) == len(session.candles)
 
 
+async def test_paper_runtime_records_prepared_vector_before_entry(tmp_path):
+    import json
+    from vnedge.data.bar_identity import bar_content_sha256
+    from vnedge.runtime.live_paper import bind_signal_decision
+    session, _ = build_session(tmp_path, FakeFeed([]), timeframe="1m")
+    session.candles = history(420)
+    session.candles["timestamp"] = session.candles["timestamp"].dt.floor("min")
+    session.candles["candle_source"] = "canonical_tick_lake"
+    session.candles["is_closed"] = True
+    session.candles["data_quality"] = "ok"
+    session.candles["content_sha256"] = [bar_content_sha256(
+        r.to_dict(), open_time=r.timestamp.to_pydatetime(),
+        close_time=(r.timestamp + pd.Timedelta(minutes=1)).to_pydatetime(), source="canonical_tick_lake")
+        for _, r in session.candles.iterrows()]
+    df = await session._prepare_strategy_for_bar()
+    assert session._pre_entry_features is not None
+    sig = bind_signal_decision(session.strategy.signal(df, len(df)-1),
+        strategy_id=session.strategy.strategy_id, symbol=SYM, timeframe="1m",
+        decision_row=df.iloc[-1].to_dict(), entry_clock="next_1m_open")
+    session._record_eval(df, len(df)-1, sig)
+    assert session._feature_log is not None
+    try:
+        record = json.loads(session._feature_log.path.read_text().splitlines()[-1])
+        assert record["decision_id"] == sig.decision_envelope.decision_id
+        assert record["capture_path"] == "pre_entry_prepared_v1"
+        assert record["captured_at"] <= record["ts"] <= datetime.now(UTC).isoformat()
+    finally:
+        session._feature_log.close()
+
+
 async def test_shadow_outcome_reuses_scanner_frame_for_same_bar(tmp_path):
     """Shadow uses the kernel and never constructs the legacy outcome fork."""
     strategy = CountingPrepareLong()
@@ -1877,6 +1907,7 @@ async def test_fills_are_chained_into_the_ledger(tmp_path):
 
     feed = FakeFeed(live_rows(n=1))
     session, exchange = build_session(tmp_path, feed)
+    exchange._execution_clock = lambda: datetime.now(UTC)
     session.fill_ledger = FillLedger(tmp_path / "fills.jsonl")
     await session.run(max_bars=1)
 
@@ -1886,6 +1917,13 @@ async def test_fills_are_chained_into_the_ledger(tmp_path):
     rec = __import__("json").loads((tmp_path / "fills.jsonl").read_text())
     assert rec["symbol"] == SYM and rec["mode"] == "paper"
     assert rec["strategy_id"] == "always_long"
+    assert rec["quantity_unit"] == "base"
+    assert datetime.fromisoformat(rec["executed_at"]).tzinfo is not None
+    assert datetime.fromisoformat(rec["recorded_at"]) >= datetime.fromisoformat(rec["executed_at"])
+    checkpoints = [r["payload"] for r in session.journal.read_all() if r["kind"] == "ml_accounting_checkpoint"]
+    assert checkpoints and checkpoints[-1]["fill_tip"] == rec["hash"]
+    assert checkpoints[-1]["fill_count"] == 1
+    assert checkpoints[-1]["open_positions"]
 
 
 def test_fill_ledger_cursor_commits_each_successful_append(tmp_path):

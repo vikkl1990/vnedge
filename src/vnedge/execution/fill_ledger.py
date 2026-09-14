@@ -77,6 +77,11 @@ class FillLedger:
         self.records += 1
         return h
 
+    @property
+    def tip_hash(self) -> str:
+        """Current durable prefix identity, for read-only accounting receipts."""
+        return self._prev_hash
+
 
 def verify_chain(path: str | Path) -> ChainReport:
     """Walk the ledger and verify every link. Any tamper -> first bad line."""

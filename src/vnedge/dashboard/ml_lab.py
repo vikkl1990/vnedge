@@ -14,7 +14,7 @@ def ml_lab_payload(path: Path, *, now: datetime | None = None) -> dict:
     result = {"schema": "ml_lab_view_v1", "served_at": now.isoformat(),
               "artifact_state": "MISSING", "worker_generated_at": None, "source_as_of": None,
               "worker_age_s": None, "source_age_s": None, "audit": None,
-              "can_trade": False, "can_promote": False, "can_train": False}
+              "pipeline": None, "can_trade": False, "can_promote": False, "can_train": False}
     try:
         if path.is_symlink():
             raise ValueError("symlink")
@@ -47,8 +47,11 @@ def ml_lab_payload(path: Path, *, now: datetime | None = None) -> dict:
                 raise ValueError("future source")
             result.update(source_as_of=source_stamp.isoformat(), source_age_s=max(0, source_age))
         result["audit"] = {**audit, "can_trade": False, "can_promote": False}
+        pipeline = payload.get("pipeline")
+        if isinstance(pipeline, dict) and pipeline.get("schema") == "ml_lab_pipeline_v1":
+            result["pipeline"] = {**pipeline, "can_trade": False, "can_promote": False}
     except FileNotFoundError:
         pass
     except (OSError, ValueError, TypeError, OverflowError):
-        result.update(artifact_state="INVALID", audit=None)
+        result.update(artifact_state="INVALID", audit=None, pipeline=None)
     return result

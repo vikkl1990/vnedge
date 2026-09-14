@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from vnedge.ml.feature_log import (
     FEATURE_LOG_SCHEMA_VERSION,
@@ -59,6 +60,10 @@ def test_row_carries_full_identity_and_contract(tmp_path: Path):
     assert record["decision"] == "fired" and record["backfill"] is False
     assert record["decision_bar_hash"] == _BAR_HASH
     assert record["source_row_count"] == len(frame)
+    assert record["captured_at"] <= record["ts"]
+    assert record["required_warmup_rows"] == FeatureParams().warmup_bars
+    assert "oi_z" in record["unavailable_features"]
+    assert "funding_rate" in record["unavailable_features"]
     assert set(record["features"].keys()) == set(FEATURE_COLUMNS)
     assert writer.rows_written == 1 and writer.errors == 0
 
@@ -114,6 +119,36 @@ def test_fingerprint_covers_params_and_inputs():
     assert base != changed, "params change must change the fingerprint"
     with_funding = feature_fingerprint(FeatureParams(), ("funding",))
     assert with_funding != base, "optional-input contract must change it"
+
+
+def test_prepared_features_are_durable_before_enqueue_returns(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+    from vnedge.ml.feature_log import prepare_features
+    frame = _frame()
+    frame["content_sha256"] = _BAR_HASH
+    prepared = prepare_features(frame)
+    writer = _writer(tmp_path)
+    # Prove neither feature computation nor queue draining is used at persist.
+    monkeypatch.setattr("vnedge.ml.feature_log.build_feature_matrix", lambda *a: pytest.fail("recomputed"))
+    try:
+        assert writer.enqueue(frame, len(frame)-1, decision="fired", bar_ts=prepared.bar_ts,
+                              decision_bar_hash=_BAR_HASH, decision_id="D1", side="long", prepared=prepared)
+        entry_at = datetime.now(UTC).isoformat()
+        record = json.loads(writer.path.read_text().splitlines()[0])
+        assert record["captured_at"] <= record["ts"] <= entry_at
+        assert record["capture_path"] == "pre_entry_prepared_v1"
+        assert record["features"] == dict(prepared.values)
+        assert not writer.enqueue(frame, len(frame)-1, decision="fired", bar_ts=prepared.bar_ts,
+                                  decision_bar_hash="b"*64, decision_id="D2", side="long", prepared=prepared)
+        assert len(writer.path.read_text().splitlines()) == 1
+    finally:
+        writer.close()
+
+
+def test_pre_entry_missing_identity_refused():
+    from vnedge.ml.feature_log import prepare_features
+    with pytest.raises(ValueError, match="canonical_hash"):
+        prepare_features(_frame())
 
 
 def test_read_refuses_mixed_and_unexpected_fingerprints(tmp_path: Path):

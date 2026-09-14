@@ -99,17 +99,29 @@ def _load_lane_candles(lane_dir: Path) -> dict:
     return frames
 
 
-def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
+def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path, lab_root: Path | None = None) -> dict:
     """Audit recorded evidence only. Status collection never fits a model.
 
     data_root remains a CLI compatibility argument; no candle fallback is used.
     The old entry-bar join is exploratory only, not operational label proof.
     """
     audit = build_ml_lab_audit(lane_dir)
-    samples = audit["operational_labels"]
+    from vnedge.ml.lab_pipeline import pipeline_summary
+    pipeline = pipeline_summary(lab_root or Path("research/ml_lab"), lane_dir)
+    samples = pipeline.get("ledger_bound_paper_labels", 0)
+    try:
+        from vnedge.ml.lab_pipeline import read_object
+        funding = read_object(data_root.parent / "funding_evidence" / "status.json")
+        age = (datetime.now(UTC) - datetime.fromisoformat(funding["generated_at"])).total_seconds()
+        funding["stale"] = not 0 <= age < 1900
+    except (OSError, ValueError, KeyError, TypeError):
+        funding = {"markets": [], "stale": True, "reason": "funding_evidence_unavailable"}
+    pipeline["funding_evidence"] = funding
     validation = None
     trainable = validated = passed = False
     stage = "BLOCKED_LABEL_PROOF" if audit["counts"]["feature_rows"] or audit["counts"]["exit_records"] else "COLLECTING_LABELS"
+    if pipeline["runs_total"]:
+        stage = "RESEARCH_REPORT_AVAILABLE"
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -118,11 +130,12 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path) -> dict:
         "stage": stage,
         "audit_schema": audit["schema"],
         "audit": audit,
-        "training_status": "BLOCKED_LABEL_PROOF",
+        "pipeline": pipeline,
+        "training_status": "RESEARCH_REPORT_AVAILABLE" if pipeline["runs_total"] else "BLOCKED_LABEL_PROOF",
         "stages": [
             {"key": "FOUNDATION", "label": "Foundation", "done": True,
              "detail": "validation · robustness · features · dataset builder"},
-            {"key": "COLLECTING_LABELS", "label": "Collecting labels", "done": samples >= MIN_LABELS_TO_TRAIN,
+            {"key": "COLLECTING_LABELS", "label": "Collecting labels", "done": False,
              "detail": f"{samples} / {MIN_LABELS_TO_TRAIN} ledger-bound labels; exit records are not labels", "active": True},
             {"key": "TRAIN", "label": "Train + calibrate", "done": validated,
              "detail": "not run; calibration artifact required",
@@ -195,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--lane-dir", default="logs/paper_trials")
     ap.add_argument("--data-root", default="data/normalized")
+    ap.add_argument("--lab-root", default="research/ml_lab")
     ap.add_argument("--output", default="research/live_research/ml_pipeline_status.json")
     ap.add_argument("--interval-seconds", type=float, default=0.0)
     args = ap.parse_args(argv)
@@ -203,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def once() -> None:
         status = build_ml_pipeline_status(
-            lane_dir=Path(args.lane_dir), data_root=Path(args.data_root)
+            lane_dir=Path(args.lane_dir), data_root=Path(args.data_root), lab_root=Path(args.lab_root)
         )
         temporary = out.with_suffix(out.suffix + ".tmp")
         temporary.write_text(json.dumps(status, indent=2, allow_nan=False))

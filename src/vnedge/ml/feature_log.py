@@ -34,9 +34,10 @@ import hashlib
 import json
 import logging
 import math
+import os
 import queue
 import threading
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,59 @@ FEATURE_CALC_VERSION = 1
 _SENTINEL = object()
 
 
+@dataclass(frozen=True)
+class PreparedFeatures:
+    """An off-loop, pre-signal vector; never backdated to the bar close."""
+
+    captured_at: str
+    bar_ts: str
+    bar_hash: str
+    fingerprint: str
+    source_rows: int
+    source_start: str
+    values: tuple[tuple[str, float | None], ...]
+
+
+def prepare_features(frame: pd.DataFrame, params: FeatureParams | None = None) -> PreparedFeatures:
+    """Called on a worker before signal/entry. No disk, registry or execution IO."""
+    params = params or FeatureParams()
+    captured = datetime.now(UTC).isoformat()
+    snapshot = frame.copy(deep=True)
+    last = snapshot.iloc[-1]
+    bar_hash = str(last.get("content_sha256") or "")
+    if len(bar_hash) != 64 or any(c not in "0123456789abcdef" for c in bar_hash):
+        raise ValueError("pre_entry_canonical_hash_required")
+    matrix = build_feature_matrix(snapshot, None, params)
+    values = []
+    for column in FEATURE_COLUMNS:
+        number = float(matrix.iloc[-1].get(column, math.nan))
+        values.append((column, number if math.isfinite(number) else None))
+    return PreparedFeatures(
+        captured,
+        pd.Timestamp(last["timestamp"]).isoformat(),
+        bar_hash,
+        feature_fingerprint(params),
+        len(snapshot),
+        str(snapshot["timestamp"].iloc[0]),
+        tuple(values),
+    )
+
+
+def unavailable_features(features: dict, optional_inputs: list[str] | tuple[str, ...]) -> list[str]:
+    """Distinguish missing feeds from the legacy neutral feature values."""
+    absent = {name for name, value in features.items() if value is None}
+    for source, names in (
+        ("funding", ("funding_rate", "funding_pct", "funding_z")),
+        ("open_interest", ("oi_z", "oi_change", "oi_price_div")),
+        ("benchmark", ("rel_ret", "rel_strength_z")),
+    ):
+        if source not in optional_inputs:
+            absent.update(names)
+    if features.get("taker_flow_coverage") != 1:
+        absent.update(("taker_buy_ratio", "delta_ratio", "delta_z", "cvd_slope", "delta_price_div"))
+    return sorted(absent)
+
+
 def _params_signature(params: FeatureParams) -> str:
     """Stable JSON of the (possibly nested) FeatureParams dataclass."""
 
@@ -64,9 +118,7 @@ def _params_signature(params: FeatureParams) -> str:
     return json.dumps(_plain(params), sort_keys=True, default=str)
 
 
-def feature_fingerprint(
-    params: FeatureParams, optional_inputs: tuple[str, ...] = ()
-) -> str:
+def feature_fingerprint(params: FeatureParams, optional_inputs: tuple[str, ...] = ()) -> str:
     """Fingerprint the full feature CONTRACT, not just column names.
 
     Covers ordered columns + serialized params + calc version + which optional
@@ -115,6 +167,7 @@ class FeatureLogWriter:
         self.errors = 0
         self.dropped = 0
         self._logged_error_types: set[str] = set()
+        self._write_lock = threading.Lock()
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=max_queue)
         self._worker = threading.Thread(
             target=self._run, name=f"feature-log:{lane_id or strategy_id}", daemon=True
@@ -133,6 +186,7 @@ class FeatureLogWriter:
         side: str | None = None,
         skip_reason: str | None = None,
         backfill: bool = False,
+        prepared: PreparedFeatures | None = None,
     ) -> bool:
         """Copy the bounded working prefix and hand it to the worker.
 
@@ -149,6 +203,7 @@ class FeatureLogWriter:
             snapshot = frame.iloc[: index + 1].copy(deep=True)
             local_index = index
             meta = {
+                "captured_at": datetime.now(UTC).isoformat(),
                 "bar_ts": bar_ts,
                 "decision": decision,
                 "decision_id": decision_id,
@@ -163,7 +218,33 @@ class FeatureLogWriter:
                     else None
                 ),
             }
-            self._queue.put_nowait((snapshot, local_index, meta))
+            funding_snapshot = self._funding.copy(deep=True) if self._funding is not None else None
+            if prepared is not None:
+                if (
+                    backfill
+                    or decision != "fired"
+                    or not decision_id
+                    or side not in {"long", "short"}
+                    or prepared.fingerprint != self.fingerprint
+                    or prepared.bar_hash != decision_bar_hash
+                    or pd.Timestamp(prepared.bar_ts) != pd.Timestamp(bar_ts)
+                    or prepared.source_rows != len(snapshot)
+                ):
+                    raise ValueError("pre_entry_feature_identity_mismatch")
+                meta["captured_at"] = prepared.captured_at
+                # Only the small computed vector is synchronously persisted.
+                # The caller submits an entry AFTER this returns. Never wait
+                # for the background queue (which includes historical rows).
+                self._write_one(
+                    snapshot,
+                    local_index,
+                    meta,
+                    funding_snapshot,
+                    prepared_features=dict(prepared.values),
+                    durable=True,
+                )
+                return True
+            self._queue.put_nowait((snapshot, local_index, meta, funding_snapshot))
             return True
         except queue.Full:
             self.dropped += 1
@@ -186,19 +267,36 @@ class FeatureLogWriter:
             finally:
                 self._queue.task_done()
 
-    def _write_one(self, snapshot: pd.DataFrame, index: int, meta: dict) -> None:
-        matrix = build_feature_matrix(snapshot, self._funding, self.params)
-        row = matrix.iloc[index]
+    def _write_one(
+        self,
+        snapshot: pd.DataFrame,
+        index: int,
+        meta: dict,
+        funding_snapshot: pd.DataFrame | None = None,
+        *,
+        prepared_features: dict | None = None,
+        durable: bool = False,
+    ) -> None:
         features: dict[str, float | None] = {}
-        for column in FEATURE_COLUMNS:
-            value = row.get(column)
-            number = float(value) if value is not None else math.nan
-            features[column] = None if math.isnan(number) else number
+        if prepared_features is not None:
+            features = prepared_features
+        else:
+            matrix = build_feature_matrix(snapshot, funding_snapshot, self.params)
+            row = matrix.iloc[index]
+            for column in FEATURE_COLUMNS:
+                value = row.get(column)
+                number = float(value) if value is not None else math.nan
+                features[column] = None if not math.isfinite(number) else number
         record = {
             "v": FEATURE_LOG_SCHEMA_VERSION,
             "fingerprint": self.fingerprint,
             "calc_version": FEATURE_CALC_VERSION,
             "ts": datetime.now(UTC).isoformat(),
+            "captured_at": meta["captured_at"],
+            "required_warmup_rows": self.params.warmup_bars,
+            "warmup_complete": len(snapshot) >= self.params.warmup_bars,
+            "missing_features": [name for name, value in features.items() if value is None],
+            "unavailable_features": unavailable_features(features, self._optional_inputs),
             "bar_ts": meta["bar_ts"],
             "decision_id": meta["decision_id"],
             "strategy_id": self.strategy_id,
@@ -215,20 +313,21 @@ class FeatureLogWriter:
             "source_start_ts": meta["source_start_ts"],
             "optional_inputs": list(self._optional_inputs),
             "features": features,
+            "capture_path": "pre_entry_prepared_v1" if durable else "async_observation_v1",
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        with self._write_lock, self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, allow_nan=False) + "\n")
             handle.flush()
+            if durable:
+                os.fsync(handle.fileno())
         self.rows_written += 1
 
     def _note_error(self, exc: Exception) -> None:
         error_type = type(exc).__name__
         if error_type not in self._logged_error_types:
             self._logged_error_types.add(error_type)
-            logger.warning(
-                "feature log %s (%s) — decisions unaffected", error_type, exc
-            )
+            logger.warning("feature log %s (%s) — decisions unaffected", error_type, exc)
 
     def flush(self, timeout: float = 5.0) -> None:
         """Block until the queue drains (tests / clean checkpoints)."""
@@ -271,34 +370,37 @@ def read_feature_log(
         except OSError:
             continue
         for line in lines:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("v") != FEATURE_LOG_SCHEMA_VERSION:
-                    continue
-                fingerprints.add(str(record.get("fingerprint")))
-                flat = {
-                    key: record.get(key)
-                    for key in (
-                        "ts", "bar_ts", "decision_id", "strategy_id", "symbol",
-                        "timeframe", "exchange", "lane", "side", "decision",
-                        "skip_reason", "backfill", "decision_bar_hash",
-                    )
-                }
-                flat.update(record.get("features") or {})
-                rows.append(flat)
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("v") != FEATURE_LOG_SCHEMA_VERSION:
+                continue
+            fingerprints.add(str(record.get("fingerprint")))
+            flat = {
+                key: record.get(key)
+                for key in (
+                    "ts",
+                    "bar_ts",
+                    "decision_id",
+                    "strategy_id",
+                    "symbol",
+                    "timeframe",
+                    "exchange",
+                    "lane",
+                    "side",
+                    "decision",
+                    "skip_reason",
+                    "backfill",
+                    "decision_bar_hash",
+                )
+            }
+            flat.update(record.get("features") or {})
+            rows.append(flat)
     if len(fingerprints) > 1:
+        raise ValueError(f"feature log mixes feature contracts: {sorted(fingerprints)}")
+    if expected_fingerprint is not None and fingerprints and fingerprints != {expected_fingerprint}:
         raise ValueError(
-            f"feature log mixes feature contracts: {sorted(fingerprints)}"
-        )
-    if (
-        expected_fingerprint is not None
-        and fingerprints
-        and fingerprints != {expected_fingerprint}
-    ):
-        raise ValueError(
-            f"feature log fingerprint {sorted(fingerprints)} != expected "
-            f"{expected_fingerprint!r}"
+            f"feature log fingerprint {sorted(fingerprints)} != expected {expected_fingerprint!r}"
         )
     return pd.DataFrame(rows)

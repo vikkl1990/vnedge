@@ -560,6 +560,24 @@ services:
   # and locked validation gates; it never trains a live model or changes a
   # strategy. The System page declares this as a two-hour optional product, so
   # it must have an explicit owner instead of serving a week-old JSON file.
+  funding-evidence:
+    build: .
+    restart: unless-stopped
+    user: "${VNEDGE_CONTAINER_UID:-1000}:${VNEDGE_CONTAINER_GID:-1000}"
+    command: ["python", "-m", "vnedge.research.funding_evidence", "--interval-seconds", "900"]
+    volumes:
+      - ./data/funding_evidence:/app/data/funding_evidence
+    mem_limit: 400m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,time; from datetime import datetime; p=json.load(open('data/funding_evidence/status.json')); assert time.time()-datetime.fromisoformat(p['generated_at']).timestamp()<1900"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
   ml-pipeline-status:
     build: .
     restart: unless-stopped
@@ -570,6 +588,8 @@ services:
       - python
       - -m
       - vnedge.research.ml_pipeline_status
+      - --lab-root
+      - research/ml_lab
       - --lane-dir
       - logs/paper_trials
       - --data-root
@@ -582,6 +602,7 @@ services:
       - ./logs:/app/logs:ro
       - ./data:/app/data:ro
       - ./research/live_research:/app/research/live_research
+      - ./research/ml_lab:/app/research/ml_lab:ro
     mem_limit: 900m
     healthcheck:
       test:

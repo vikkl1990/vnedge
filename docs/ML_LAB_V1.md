@@ -63,3 +63,9 @@ fold. Counts alone do not authorize fitting, establish profitability or promote.
 
 Rollout scope: multi-lane-shadow (dashboard), ml-pipeline-status, dashboard-tls.
 Canonical recorders remain untouched. No venue credentials are read by audit.
+# Subsequent implementation
+
+The controlled research pipeline built on 2026-09-13 is documented in
+[ML_LAB_PIPELINE.md](ML_LAB_PIPELINE.md). This document describes the original
+bounded audit, which remains distinct from full-prefix accounting validation.
+The new pipeline does not make the audit's exit intentions into labels.
