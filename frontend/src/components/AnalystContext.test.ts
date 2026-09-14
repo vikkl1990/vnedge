@@ -5,6 +5,16 @@ import { AnalystContext, type MarketStage, type Fundamentals } from "./AnalystCo
 
 const stage: MarketStage = {version:"market_stage_analyst_v1", spec_hash:"frozen-spec", timeframe:"4h", state:"current", stage:"base_after_decline", previous_stage:"transition", stage_id:"bar-proof", as_of:new Date().toISOString(), since:new Date().toISOString(), bars_in_state:4, supports:["Flat EMA"], conflicts:["weak_participation"], issues:[], transitions:[{from:"transition",to:"base_after_decline",at:new Date().toISOString()}],watch:[{toward:"advancing_trend",condition:"Two closed confirmations above 200",level:200}]};
 describe("Stage and fundamentals", () => {
+  it("separates reconstructed transitions from receipt-time observation", () => {
+    const html = renderToStaticMarkup(createElement(AnalystContext,{stages:[{...stage,
+      source:"official_delta_ohlc",history_kind:"reconstructed",collected_at:new Date().toISOString(),
+      recorded_at:new Date().toISOString(),note:"Not events observed live"}]}));
+    expect(html).toContain("Official Delta OHLC");
+    expect(html).toContain("Reconstructed time in state");
+    expect(html).toContain("reconstructed transitions");
+    expect(html).toContain("Collected"); expect(html).toContain("recorded");
+    expect(html).not.toContain("observed changes");
+  });
   it("explains memory and confirmation without claiming institutional certainty", () => {
     const html = renderToStaticMarkup(createElement(AnalystContext,{stages:[stage]}));
     expect(html).toContain("base after decline"); expect(html).toContain("4 closed bars");

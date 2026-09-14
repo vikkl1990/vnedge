@@ -23,6 +23,7 @@ from vnedge.dashboard.crypto_analyst import (
 )
 from vnedge.dashboard.crypto_fundamentals import fundamentals_dossier
 from vnedge.dashboard.market_stage import analyse_stage, empty_stage, stage_rows
+from vnedge.dashboard.official_market_stage import current_stage as official_stage, history as official_stage_history
 
 
 def observation(record: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
@@ -209,7 +210,7 @@ class AnalystWorkspace:
                     frame = _empty(symbol, tf, "series_read_failed")
                 frames.append(frame)
             market = self.conditions(exchange, symbol, now)
-            stages = ([empty_stage(tf, "official_stage_not_validated") for tf in ("4h", "1d")]
+            stages = ([official_stage(self.official.store, symbol, tf, now) for tf in ("4h", "1d")]
                       if source == "official_delta" else self.stages(exchange, symbol, now))
             fundamentals = fundamentals_dossier(self.store, symbol, now)
             evidence = []
@@ -222,7 +223,7 @@ class AnalystWorkspace:
                             "kind": "market_stage",
                             "as_of": stage["as_of"],
                             "state": stage["state"],
-                            "source": "canonical_tick_lake",
+                            "source": stage.get("source", "canonical_tick_lake"),
                             "summary": f"{stage['timeframe']}: {stage['stage']}",
                         }
                     )
@@ -310,8 +311,7 @@ class AnalystWorkspace:
     def history(self, exchange: str, symbol: str, source: str = "canonical") -> dict[str, Any]:
         self._source(exchange, source)
         if source == "official_delta":
-            return {"reports": [], "changes": [], "stage_reports": [], "can_trade": False,
-                    "status": "official_candle_snapshots_stored_no_stage_history"}
+            return official_stage_history(self.official.store, symbol, datetime.now(UTC))
         if exchange not in EXCHANGES or not SYMBOL.fullmatch(symbol):
             raise ValueError("unsupported_analyst_scope")
         now = datetime.now(UTC)

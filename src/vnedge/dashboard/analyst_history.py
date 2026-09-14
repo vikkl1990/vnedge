@@ -32,11 +32,12 @@ HISTORY_SPEC = {**SPEC, "version": "crypto_analyst_official_delta_v1",
 SPEC_HASH = digest(HISTORY_SPEC)
 DEFAULT_PATH = Path("data/analyst_official/evidence.sqlite")
 logger = logging.getLogger(__name__)
+HISTORY_TIMEFRAMES = (*TIMEFRAMES, "1d")
 
 
 def validate_scope(exchange: str, symbol: str | None = None, timeframe: str | None = None) -> None:
     if exchange != "delta_india" or (symbol is not None and symbol not in SYMBOLS) or (
-        timeframe is not None and timeframe not in TIMEFRAMES
+        timeframe is not None and timeframe not in HISTORY_TIMEFRAMES
     ):
         raise ValueError("unsupported_official_history_scope")
 
@@ -134,6 +135,8 @@ class OfficialAnalystService:
 
     def snapshot(self, exchange: str, timeframe: str) -> dict[str, Any]:
         validate_scope(exchange, timeframe=timeframe)
+        if timeframe not in TIMEFRAMES:
+            raise ValueError("unsupported_official_profile_timeframe")
         now = datetime.now(UTC)
         markets = [frame(self.store, symbol, timeframe, now) for symbol in SYMBOLS]
         current = [r for r in markets if r["state"] == "current"]
@@ -182,13 +185,19 @@ def main() -> None:
         store = AnalystStore(DEFAULT_PATH, writable=True, wal=False)
         while True:
             issues = []
-            for tf in ("15m", "5m", "1h", "4h"):
+            for tf in ("15m", "5m", "1h", "4h", "1d"):
                 for symbol in SYMBOLS:
                     now = datetime.now(UTC)
                     store.append("collector", "delta_india", {"generated_at": now.isoformat(), "issues": issues, "active_cell": f"{symbol}/{tf}"}, now)
                     try:
                         if collect_cell(store, symbol, tf, now):
                             time.sleep(0.4)
+                        if tf in ("4h", "1d"):
+                            # Independent research product. A failed reporting
+                            # attempt retries against the same frozen source;
+                            # it never changes a scanner or labels a fill.
+                            from vnedge.dashboard.official_market_stage import record_stage
+                            record_stage(store, symbol, tf, datetime.now(UTC))
                     except Exception as exc:  # noqa: BLE001
                         issue = f"{symbol}/{tf}:{type(exc).__name__}"
                         issues.append(issue)

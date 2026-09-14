@@ -164,6 +164,20 @@ def analyse_stage(
         result = empty_stage(tf, "need_60_contiguous_stage_bars")
         result["issues"] += [boundary] if boundary else []
         return result
+    return describe_stage(suffix, exchange, symbol, tf, now, boundary)
+
+
+def describe_stage(
+    suffix: list[dict[str, Any]], exchange: str, symbol: str, tf: str,
+    now: datetime, boundary: str | None, *, spec: dict[str, Any] = SPEC,
+) -> dict[str, Any]:
+    """Descriptive mathematics only, after source-specific validation.
+
+    Canonical callers keep the original spec and identical identities. Separate
+    official-history callers must validate their own source and bind a new spec.
+    """
+    seconds = TF_SECONDS[tf]
+    spec_hash = digest(spec)
     df = pd.DataFrame(suffix)
     close, high, low = (pd.to_numeric(df[k]).astype(float) for k in ("close", "high", "low"))
     ema = close.ewm(span=50, adjust=False, min_periods=50).mean()
@@ -250,8 +264,8 @@ def analyse_stage(
     if candidate != stage:
         conflicts.append("stage_change_pending_second_close")
     body = {
-        "version": SPEC["version"],
-        "spec_hash": SPEC_HASH,
+        "version": spec["version"],
+        "spec_hash": spec_hash,
         "timeframe": tf,
         "stage": stage,
         "previous_stage": previous,
@@ -280,6 +294,6 @@ def analyse_stage(
         "note": "Accumulation/distribution are hypotheses. Bounded causal history, not a compulsory cycle or validated edge.",
     }
     body["stage_id"] = digest(
-        [SPEC_HASH, exchange, symbol, tf, [r["content_sha256"] for r in suffix]]
+        [spec_hash, exchange, symbol, tf, [r["content_sha256"] for r in suffix]]
     )
     return body

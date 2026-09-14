@@ -6,6 +6,7 @@ export interface MarketStage {
   since: string | null; bars_in_state: number; supports: string[]; conflicts: string[];
   issues: string[]; transitions: { from: string; to: string; at: string }[];
   watch: { toward: string; condition: string; level: number }[]; invalidation?: string;
+  source?: string; history_kind?: string; collected_at?: string | null; recorded_at?: string; note?: string;
 }
 export interface FundamentalField {
   metric: string; label: string; status: string; value: number | null; reason: string;
@@ -29,15 +30,16 @@ export function AnalystContext({ stages = [], fundamentals }: { stages?: MarketS
       const current = stage.state === "current" && age >= 0 && age <= (stage.timeframe === "1d" ? 86400 : 14400) * 1500;
       return <article className="ca-stage-card" key={stage.timeframe}>
         <div className="ca-between"><strong>{stage.timeframe}</strong><span className="ca-chip">{current ? label(stage.stage) : stage.state === "current" ? "stale" : stage.state}</span></div>
+        {stage.source === "official_delta_ohlc" && <p className="ca-muted">Official Delta OHLC · reconstructed context, not canonical trade evidence.<br />Collected {time(stage.collected_at)}{stage.recorded_at && <> · recorded {time(stage.recorded_at)}</>}</p>}
         {!current ? <p>No current stage conclusion. {stage.issues.map(label).join(" · ")}</p> : <>
-          <dl className="ca-levels"><div><dt>Previous stage</dt><dd>{label(stage.previous_stage)}</dd></div><div><dt>Observed time in state</dt><dd>{stage.bars_in_state} closed bars</dd></div></dl>
+          <dl className="ca-levels"><div><dt>Previous stage</dt><dd>{label(stage.previous_stage)}</dd></div><div><dt>{stage.history_kind === "reconstructed" ? "Reconstructed time in state" : "Observed time in state"}</dt><dd>{stage.bars_in_state} closed bars</dd></div></dl>
           <small>Confirmed {time(stage.since)} · as of {time(stage.as_of)}</small>
           <p className="ca-muted">Bounded history: duration may be a lower bound. Markets need not follow a fixed cycle.</p>
           <h5>Supporting measurements</h5><ul>{stage.supports.map(s => <li key={s}>{s}</li>)}</ul>
           <h5>Conflicts and gaps</h5><ul>{[...stage.conflicts, ...stage.issues].map(s => <li key={s}>{label(s)}</li>)}</ul>
           <h5>What would confirm a change?</h5>{stage.watch.map(w => <p key={w.toward}><strong>{label(w.toward)}:</strong> {w.condition}</p>)}
           <p>{stage.invalidation}</p>
-          <details><summary>Stage memory · {stage.transitions.length} observed changes</summary>{stage.transitions.map((event, i) => <p key={i}>{time(event.at)}: {label(event.from)} → {label(event.to)}</p>)}</details>
+          <details><summary>Stage memory · {stage.transitions.length} {stage.history_kind === "reconstructed" ? "reconstructed transitions" : "observed changes"}</summary>{stage.note && <p>{stage.note}</p>}{stage.transitions.map((event, i) => <p key={i}>{time(event.at)}: {label(event.from)} → {label(event.to)}</p>)}</details>
         </>}
         <details><summary>Version and evidence</summary><p>{stage.version}</p><code>{stage.spec_hash}</code>{stage.stage_id && <code>{stage.stage_id}</code>}</details>
       </article>;

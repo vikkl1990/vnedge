@@ -25,7 +25,7 @@ interface History {
   status: string;
   reports: { evidence_id: string; available_at: string; body: { frames: Record<string, { bias: string; alignment: number }> } }[];
   changes: { evidence_id: string; available_at: string; body: { event: string } }[];
-  stage_reports?: { evidence_id: string; available_at: string; body: { stages: MarketStage[] } }[];
+  stage_reports?: { evidence_id: string; available_at: string; body: { stages: MarketStage[]; event?: string } }[];
 }
 function n(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "Unavailable" : value.toLocaleString("en-US", { maximumFractionDigits: 4 });
@@ -83,7 +83,7 @@ export function DossierFacts({ data }: { data?: Dossier }) {
 }
 
 export function AnalystEvidence({ exchange, symbol, source = "canonical" }: { exchange: string; symbol: string; source?: string }) {
-  const [tab, setTab] = useState(source === "official_delta" ? "dossier" : "context"), [question, setQuestion] = useState(""), [asked, setAsked] = useState("");
+  const [tab, setTab] = useState("context"), [question, setQuestion] = useState(""), [asked, setAsked] = useState("");
   const scope = new URLSearchParams({ exchange, source });
   const dossier = useQuery({ queryKey: ["analyst-dossier", exchange, symbol, source],
     queryFn: () => apiGet<Dossier>(`/api/crypto-analyst/symbol/${encodeURIComponent(symbol)}?${scope}`), refetchInterval: 30_000, retry: 1 });
@@ -117,12 +117,13 @@ export function AnalystEvidence({ exchange, symbol, source = "canonical" }: { ex
     </div>}
     {tab === "history" && <div>
       <p className="ca-muted">Saved closed-bar reports and profile changes. Baselines are not alerts or fills.</p>
+      {source === "official_delta" && <p className="ca-muted">Official snapshots are recorded when collected. Their earlier transitions are reconstructed, not events the bot observed live. Gaps and source revisions stay visible.</p>}
       {(history.isError || history.data?.status === "evidence_read_failed") && <p role="alert" className="ca-warning">History unavailable; cannot confirm the saved record.</p>}
       {history.isPending && <p>Reading saved evidence…</p>}
-      {!history.isError && history.data?.status === "no_saved_reports" && <p>No saved reports yet. The opt-in Analyst worker must run with eligible canonical data.</p>}
+      {!history.isError && history.data?.status === "no_saved_reports" && <p>No saved reports yet. The Analyst worker needs eligible {source === "official_delta" ? "official history" : "canonical data"}.</p>}
       {history.data?.changes.map(e => <div className="ca-history-row" key={e.evidence_id}><strong>{e.body.event.replace(/_/g, " ")}</strong><small>{when(e.available_at)}</small></div>)}
       {history.data?.reports.map(r => <details key={r.evidence_id}><summary>{when(r.available_at)} · saved report</summary><p>{Object.entries(r.body.frames).map(([tf, f]) => `${tf}: ${f.bias} (${f.alignment})`).join(" · ")}</p><code>{r.evidence_id}</code></details>)}
-      {history.data?.stage_reports?.map(r => <details key={r.evidence_id}><summary>{when(r.available_at)} · market-stage report</summary><p>{r.body.stages.map(s => `${s.timeframe}: ${s.stage.replace(/_/g, " ")}`).join(" · ")}</p><code>{r.evidence_id}</code></details>)}
+      {history.data?.stage_reports?.map(r => <details key={r.evidence_id}><summary>Recorded {when(r.available_at)} · {r.body.event?.replace(/_/g, " ") ?? "market-stage report"}</summary>{r.body.stages.map(s => <div key={s.timeframe}><p>{s.timeframe}: {s.stage.replace(/_/g, " ")} · {s.state} at recording · bar as of {when(s.as_of)}</p><p>{s.source ?? "canonical_tick_lake"} · {s.version}</p>{s.history_kind === "reconstructed" && <details><summary>{s.transitions.length} reconstructed transitions</summary>{s.transitions.map((e, i) => <p key={i}>{when(e.at)}: {e.from.replace(/_/g, " ")} → {e.to.replace(/_/g, " ")}</p>)}</details>}</div>)}<code>{r.evidence_id}</code></details>)}
     </div>}
   </section>;
 }
