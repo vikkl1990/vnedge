@@ -1,7 +1,7 @@
 """Full-prefix execution accounting for ML. Never labels an exit intention.
 
 The bounded dashboard audit is deliberately not an input. Both ledger prefixes
-are verified in memory (the bytes verified are the bytes consumed). Funding
+are verified as read (the bytes verified are the bytes consumed). Funding
 coverage is an independent receipt; absence of a payment is NOT proof of zero.
 Only single-owner, flat-to-flat paper episodes are supported by this version.
 """
@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from collections import Counter
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -43,48 +46,77 @@ def money(value: Any) -> Decimal:
     return result
 
 
-def read_records(path: Path, *, chain: str | None = None) -> list[dict]:
+def iter_records(
+    path: Path, *, chain: str | None = None, max_bytes: int = 2_000_000_000,
+    max_record_bytes: int = 8_000_000,
+) -> Iterator[dict]:
+    """Verify a fixed full prefix incrementally, including irrelevant records.
+
+    Append-only writers may continue after the captured size. A partial record
+    at that boundary, a truncated file, or any bad chain link blocks the audit.
+    Consumers must exhaust the iterator before publishing any derived evidence.
+    """
+    if chain not in {None, "journal", "fills"}:
+        raise ValueError("unknown_chain")
     if path.is_symlink():
         raise ValueError("symlink_refused")
-    with path.open("rb") as stream:
-        raw = stream.read(128_000_001)
-    if len(raw) > 128_000_000:
-        raise ValueError("full_history_limit_exceeded")
-    if raw and not raw.endswith(b"\n"):
-        raise ValueError("incomplete_tail")
-    rows: list[dict] = []
     prev = "0" * 64
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise TypeError("invalid_record")
-        digest(row)
-        if chain:
-            body = {k: v for k, v in row.items() if k not in {"hash", "prev_hash"}}
-            valid = (
-                not _v2_record_error(row)
-                if chain == "journal"
-                else _record_hash(body, prev) == row.get("hash")
-            )
-            if (
-                not valid
-                or row.get("prev_hash") != prev
-                or type(row.get("seq")) is not int
-                or row.get("seq") != len(rows)
-            ):
-                raise ValueError("broken_or_legacy_chain")
-            prev = row["hash"]
-        rows.append(row)
-    return rows
+    seq = 0
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("regular_file_required")
+        remaining = info.st_size
+        if remaining > max_bytes:
+            raise ValueError("full_history_limit_exceeded")
+        while remaining:
+            line = stream.readline(min(remaining, max_record_bytes + 1))
+            if not line:
+                raise ValueError("history_truncated_during_read")
+            if len(line) > max_record_bytes:
+                raise ValueError("record_size_limit_exceeded")
+            remaining -= len(line)
+            if not line.endswith(b"\n"):
+                raise ValueError("incomplete_tail")
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise TypeError("invalid_record")
+            digest(row)
+            if chain:
+                body = {k: v for k, v in row.items() if k not in {"hash", "prev_hash"}}
+                valid = (not _v2_record_error(row) if chain == "journal"
+                         else _record_hash(body, prev) == row.get("hash"))
+                if (not valid or row.get("prev_hash") != prev
+                    or type(row.get("seq")) is not int or row.get("seq") != seq):
+                    raise ValueError("broken_or_legacy_chain")
+                prev = row["hash"]
+            seq += 1
+            yield row
+
+
+def read_records(path: Path, *, chain: str | None = None) -> list[dict]:
+    # Materializing consumers remain bounded; journal accounting uses streaming.
+    return list(iter_records(path, chain=chain, max_bytes=128_000_000))
 
 
 def build_ledger_labels(journal_path: Path, fills_path: Path) -> dict:
     """Return mature labels and explicit rejections; no candle/PnL fallback."""
     rejected: Counter = Counter()
     try:
-        journal = read_records(journal_path, chain="journal")
+        journal = []
+        journal_tip = None
+        retained_bytes = 0
+        relevant = {"order_intent", "ml_accounting_checkpoint", "ml_funding_coverage", "funding_applied"}
+        for record in iter_records(journal_path, chain="journal"):
+            journal_tip = record["hash"]
+            if record["kind"] in relevant:
+                retained_bytes += len(json.dumps(record))
+                if retained_bytes > 64_000_000:
+                    raise ValueError("accounting_record_budget_exceeded")
+                journal.append(record)
         fills = read_records(fills_path, chain="fills")
         orders: dict[str, dict] = {}
         order_times: dict[str, datetime] = {}
@@ -167,7 +199,7 @@ def build_ledger_labels(journal_path: Path, fills_path: Path) -> dict:
             "labels": labels,
             "rejections": {k: v for k, v in rejected.items() if v},
             "source_hash": digest(
-                [journal[-1]["hash"] if journal else None, fills[-1]["hash"] if fills else None]
+                [journal_tip, fills[-1]["hash"] if fills else None]
             ),
             "can_trade": False,
             "can_promote": False,

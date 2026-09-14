@@ -191,3 +191,11 @@ Still required: an authoritative Delta settlement source/contract, complete
 real reconciled paper episodes under an approved roster, enough labels in each
 registered time split, and successful prospective/forward economic validation.
 These cannot be completed by a code deployment or synthetic fixtures.
+
+## Streaming audit and action list
+
+The September 14 local completion slice streams large journal and feature
+prefixes without retaining evaluation telemetry in memory. It adds explicit
+accounting-lane inventory and per-lane failure reasons to ML Lab. Infrastructure
+journals are disclosed separately; an empty inventory never certifies coverage.
+See [implementation limits and remaining external requirements](PENDING_EVIDENCE_BUILD.md).

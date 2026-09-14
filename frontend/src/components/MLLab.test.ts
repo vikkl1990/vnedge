@@ -38,4 +38,22 @@ describe("ML Lab evidence semantics", () => {
     expect(html).not.toContain("VALID EDGE");
     expect(html).not.toContain("Train Top");
   });
+  it("shows owned next actions and per-lane blockers without a start-training button", () => {
+    const data: MLLabPayload = { artifact_state: "CURRENT", audit: null,
+      worker_generated_at: null, source_as_of: null, worker_age_s: 0, source_age_s: null,
+      pipeline: { schema: "ml_lab_pipeline_v1", plans_total: 0, datasets_total: 0,
+        runs_total: 0, predictions_total: 0, failed_attempts: 0, incomplete_attempts: 0,
+        datasets: [], runs: [], predictions: [], errors: [],
+        readiness_worklist: [{id: "funding", title: "Settled funding evidence", status: "PENDING", owner: "external_source", action: "Rate candles are insufficient."}],
+        ledger_sources: [{lane: "fixture_lane", state: "BLOCKED", labels: 0, rejections: {broken_or_legacy_chain: 1}}],
+        non_label_sources: [{file: "delta_product_specs.journal.jsonl", reason: "venue_product_specifications"}] } };
+    const html = renderToStaticMarkup(createElement(MLLabView, { data }));
+    expect(html).toContain("What still needs evidence");
+    expect(html).toContain("Rate candles are insufficient.");
+    expect(html).toContain("fixture_lane");
+    expect(html).toContain("broken or legacy chain: 1");
+    expect(html).toContain("delta_product_specs.journal.jsonl");
+    expect(html).not.toContain("Train Top");
+    expect(html).not.toContain("VALID EDGE");
+  });
 });

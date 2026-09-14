@@ -13,8 +13,10 @@ import hashlib
 import json
 import os
 import stat
+from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -32,6 +34,43 @@ from vnedge.exchange.delta_snapshot_validation import BASELINE
 from vnedge.exchange.writer_lease import canonical_write_authority
 
 LADDER = ("1m", "5m", "15m", "1h", "4h", "1d", "1w")
+
+
+def coverage_worklist(times: list[datetime], present: set[datetime], seconds: int,
+                      *, limit: int = 128) -> dict[str, Any]:
+    """Per-timeframe diagnostics, not a replacement for delta_recovery_plan.
+
+    No prediction of readiness time: holes before/after the observed frame and
+    future capture reliability are unknown. No writes, including in audit mode.
+    """
+    ordered = sorted(set(times))
+    stored = sorted(present)
+    ranges = []
+    count = 0
+    longest = run = 1 if ordered else 0
+    for left, right in pairwise(ordered):
+        missing = max(0, int((right - left).total_seconds() / seconds) - 1)
+        if missing:
+            count += 1
+            first = left + timedelta(seconds=seconds)
+            last = right - timedelta(seconds=seconds)
+            unverified = bisect_left(stored, right) - bisect_left(stored, first)
+            if len(ranges) < limit:
+                ranges.append({"first_open": first.isoformat(), "last_open": last.isoformat(),
+                               "slots": missing, "stored_unverified_slots": unverified,
+                               "absent_slots": max(0, missing - unverified),
+                               "action": "verify_raw_completeness_before_owner_replay",
+                               "repair_authorized": False})
+            run = 1
+        else:
+            run += 1
+        longest = max(longest, run)
+    return {"scope": "internal_observed_frame_only", "gap_ranges": ranges,
+            "gap_range_count": count, "ranges_truncated": count > limit,
+            "longest_contiguous_bars": longest, "latest_contiguous_bars": run,
+            "duplicate_verified_opens": len(times) - len(ordered),
+            "unverified_stored_slots": len(present - set(ordered)),
+            "outside_frame": "unknown", "can_repair_from_raw_presence": False}
 
 
 def _atomic(path: Path, data: bytes) -> None:
@@ -230,6 +269,7 @@ def _repair_delta_lake(
                                      "missing_internal_slots": holes,
                                      "first": times[0].isoformat() if times else None,
                                      "last": times[-1].isoformat() if times else None}
+            detail["levels"][tf]["recovery_plan"] = coverage_worklist(times, present, TF_SECONDS[tf])
             detail["unresolved"][tf] = len(present) - (len(times) - (len(missing) if tf != "1m" else 0))
         detail["arena_required_1h"] = 2160
         detail["arena_history_ready"] = (detail["levels"]["1h"]["verified_bars"] >= 2160

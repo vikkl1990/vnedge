@@ -1,0 +1,13 @@
+# Explicit operator opt-in, not loaded by ordinary deployment.
+# COMPOSE_FILE=docker-compose.yml:deploy/compose.trusted-tls.yml
+# Preserve this COMPOSE_FILE selection for subsequent deploys.
+services:
+  dashboard-tls:
+    environment:
+      DASHBOARD_DOMAIN: "${DASHBOARD_DOMAIN:?A public dashboard domain is required}"
+    ports:
+      - "${DASHBOARD_BIND_IP:-127.0.0.1}:80:80"
+      - "${DASHBOARD_BIND_IP:-127.0.0.1}:443:443"
+    volumes:
+      - ./deploy/Caddyfile.trusted:/etc/caddy/Caddyfile:ro
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile.legacy:ro

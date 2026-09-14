@@ -1,0 +1,92 @@
+{
+  "schema": "reviewed_arena_intake_v1",
+  "purpose": "exploratory_only",
+  "new_id_suffix": "__btcusd_1h_contract_v1",
+  "frozen_market": "delta_india:BTC/USD:USD",
+  "entry_clock": "next_open",
+  "cost_profile_id": "delta_swing",
+  "train_bars": 1440,
+  "test_bars": 720,
+  "max_holding_bars": 48,
+  "prior_evidence": "Retained; not upgraded. These contracts do not assert untouched history.",
+  "candidates": [
+    {
+      "file": "algoalpha_smc_breakout_ai.py",
+      "parent_sha256": "d9b0a617c29825eec6cd9256dcf4d4203ee18c8b5a9c45587b112a5f97632187",
+      "claim": "First closed break of a confirmed 25-wing swing with source-defined structure exits predicts continuation.",
+      "exact_volume": false
+    },
+    {
+      "file": "example_ma_cross_ai.py",
+      "parent_sha256": "e7abbaaace510fcec7c02502a9a8b883b488de416e8e92debf53cca5b6b12227",
+      "claim": "Closed SMA12/SMA48 cross with frozen ATR stop and 2R target predicts continuation.",
+      "exact_volume": false
+    },
+    {
+      "file": "exhaustion_engulfing_ai.py",
+      "parent_sha256": "9aee538d0e0b30f4191d92f23533e2f0b1661fb9505d72b2a5a1caaebb813b6b",
+      "claim": "Closed wide-range engulfing after three directional closes predicts reversal with frozen source exits.",
+      "exact_volume": false
+    },
+    {
+      "file": "fmz_bollinger_reversion_ai.py",
+      "parent_sha256": "be8fe9119584c639502a339e44b1138cf1f4fb91aec1a0b913e86f9c4e7b7d24",
+      "claim": "Closed re-entry through a 20-bar two-standard-deviation band predicts reversion to its current middle band.",
+      "exact_volume": false
+    },
+    {
+      "file": "fmz_donchian_breakout_ai.py",
+      "parent_sha256": "ff33fdf7d21db6ffc9e027c5ec6a16399738214bcd0f268285d9e7b4b749240b",
+      "claim": "Closed breakout of the prior 20-bar Donchian channel predicts continuation with a fixed initial channel stop.",
+      "exact_volume": false
+    },
+    {
+      "file": "fmz_rsi2_pullback_ai.py",
+      "parent_sha256": "e892df5562fb51d47490b911ff3ed7acd096230701aab7db5aba3eb537620c14",
+      "claim": "Closed RSI2 extreme aligned with SMA200 predicts a one-risk-unit reversion using frozen source defaults.",
+      "exact_volume": false
+    },
+    {
+      "file": "fmz_supertrend_flip_ai.py",
+      "parent_sha256": "724ec3749d11858855ce1954758858a661fb6c58b087171fd15ef9ee421d95fe",
+      "claim": "Closed Supertrend direction flip predicts continuation with a fixed initial stop and no fixed profit target.",
+      "exact_volume": false
+    },
+    {
+      "file": "lux_fair_value_gap_ai.py",
+      "parent_sha256": "ea48a35a6c8f51fd59ea88e0d78acda93a649ceae7ca95b7db479e69e10eef82",
+      "claim": "First closed-bar retrace into the freshest unviolated three-bar price gap predicts continuation; no resting-order inference.",
+      "exact_volume": false
+    },
+    {
+      "file": "lux_liquidity_sweep_ai.py",
+      "parent_sha256": "9a3c80597ca5bf02918ed407e39e0e651acb0e9afc5059cd512d86e8f6ea1ed2",
+      "claim": "Closed reclaim after penetration of a prior rolling price extreme predicts reversal; this is an OHLC pattern, not measured liquidity.",
+      "exact_volume": false
+    },
+    {
+      "file": "lux_liquidity_sweep_v2_ai.py",
+      "parent_sha256": "d07bcfd7a48564a634af5231d65f9566f554079cdc3adbd5ccc9f8bb984a2057",
+      "claim": "Closed reclaim of an aged confirmed pivot with source-defined volume and trend conditions predicts reversal toward opposite structure.",
+      "exact_volume": true
+    },
+    {
+      "file": "lux_nadaraya_envelope_ai.py",
+      "parent_sha256": "3f6a41aafe30e776054376edfaa20848ea743dfcd6af2140a7ab465b0294bae7",
+      "claim": "Closed re-entry into a trailing-only Gaussian price envelope predicts reversal using frozen source exits.",
+      "exact_volume": false
+    },
+    {
+      "file": "lux_order_block_ai.py",
+      "parent_sha256": "c441d5df1f2e27b63d894487761dfc8d8acb6881d2275ac4e031064c06d45943",
+      "claim": "First closed-bar retrace into a source-defined breakout origin zone predicts continuation; no institutional-order claim.",
+      "exact_volume": false
+    },
+    {
+      "file": "lux_order_block_v2_ai.py",
+      "parent_sha256": "a8275e1d63f325f4983ca5e09dc2ab2506ba420720c00edb6afbacaa4b2c49bf",
+      "claim": "First closed-bar retrace into a displacement-and-volume-qualified breakout origin zone with slow-trend alignment predicts continuation.",
+      "exact_volume": true
+    }
+  ]
+}

@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from vnedge.execution.evidence import DecisionEnvelope
 from vnedge.ml.feature_log import unavailable_features
-from vnedge.ml.ledger_labels import build_ledger_labels, digest, read_records, timestamp
+from vnedge.ml.lane_inventory import lane_inventory
+from vnedge.ml.ledger_labels import build_ledger_labels, digest, iter_records, timestamp
 from vnedge.ml.trainer import train_classifier
 
 COHORT_FIELDS = (
@@ -205,7 +206,9 @@ def collect_dataset(lane_dir: Path, plan: LabPlan) -> dict:
     rejected: Counter = Counter()
     if not lane_dir.is_dir():
         rejected["lane_directory_missing"] += 1
-    for journal in sorted(lane_dir.glob("*.journal.jsonl")):
+    inventory = lane_inventory(lane_dir)
+    rejected["orphan_fill_ledger"] += len(inventory["orphan_fill_files"])
+    for journal in inventory["journals"]:
         lane = journal.name.removesuffix(".journal.jsonl")
         label_report = build_ledger_labels(journal, lane_dir / f"{lane}.fills.jsonl")
         rejected.update(label_report["rejections"])
@@ -215,10 +218,17 @@ def collect_dataset(lane_dir: Path, plan: LabPlan) -> dict:
         if not label_report["labels"]:
             continue
         try:
-            features = read_records(lane_dir / f"{lane}.features.jsonl")
+            features = iter_records(lane_dir / f"{lane}.features.jsonl")
+            decision_ids = {label["decision_id"] for label in label_report["labels"]}
             grouped: dict[str, dict[str, dict]] = {}
+            retained_bytes = 0
             for feature in features:
-                grouped.setdefault(str(feature.get("decision_id")), {})[digest(feature)] = feature
+                key = str(feature.get("decision_id"))
+                if key in decision_ids:
+                    retained_bytes += len(json.dumps(feature))
+                    if retained_bytes > 64_000_000:
+                        raise ValueError("feature_join_record_budget_exceeded")
+                    grouped.setdefault(key, {})[digest(feature)] = feature
             for label in label_report["labels"]:
                 candidates = grouped.get(label["decision_id"], {})
                 if len(candidates) != 1:
@@ -664,13 +674,25 @@ def pipeline_summary(root: Path, lane_dir: Path | None = None) -> dict:
     if lane_dir is not None:
         labels: dict[str, list[dict]] = {}
         exclusions: Counter = Counter()
-        paths = sorted(lane_dir.glob("*.journal.jsonl"))
-        report["ledger_coverage_complete"] = lane_dir.is_dir() and len(paths) <= 64
+        inventory = lane_inventory(lane_dir)
+        paths = inventory["journals"]
+        report["non_label_sources"] = inventory["not_label_sources"]
+        report["orphan_fill_files"] = inventory["orphan_fill_files"]
+        report["ledger_sources"] = []
+        report["ledger_coverage_complete"] = bool(paths) and lane_dir.is_dir() and len(paths) <= 64 and not inventory["orphan_fill_files"]
+        exclusions["orphan_fill_ledger"] += len(inventory["orphan_fill_files"])
+        if not paths:
+            exclusions["no_accounting_lanes"] += 1
+        if len(paths) > 64:
+            exclusions["accounting_lane_limit_exceeded"] += len(paths) - 64
         for path in paths[:64]:
             found = build_ledger_labels(
                 path, path.with_name(path.name.replace(".journal.jsonl", ".fills.jsonl"))
             )
             exclusions.update(found["rejections"])
+            report["ledger_sources"].append({"lane": path.name.removesuffix(".journal.jsonl"),
+                                            "state": found["state"], "labels": len(found["labels"]),
+                                            "rejections": found["rejections"]})
             report["ledger_coverage_complete"] &= found["state"] == "VERIFIED"
             for label in found["labels"]:
                 labels.setdefault(label["decision_id"], []).append(label)
@@ -684,7 +706,7 @@ def pipeline_summary(root: Path, lane_dir: Path | None = None) -> dict:
         report["label_floor_note"] = (
             "200 train + 50 calibration + 50 holdout per exact cohort; count is not eligibility"
         )
-        report["ledger_exclusions"] = dict(exclusions)
+        report["ledger_exclusions"] = {k: v for k, v in exclusions.items() if v}
         feedback = []
         # Projection only. A prediction at/after exit may never become forward evidence.
         for prediction in report["predictions"]:

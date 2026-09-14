@@ -7,6 +7,9 @@ export interface MLLabPayload {
   pipeline?: {
     schema: string; plans_total: number; datasets_total: number; runs_total: number; predictions_total: number;
     ledger_bound_paper_labels?: number; ledger_coverage_complete?: boolean; ledger_exclusions?: Record<string, number>;
+    ledger_sources?: {lane: string; state: string; labels: number; rejections: Record<string, number>}[];
+    non_label_sources?: {file: string; reason: string}[];
+    readiness_worklist?: {id: string; title: string; status: string; owner: string; action: string}[];
     funding_evidence?: { stale: boolean; markets: {symbol: string; history_archived: boolean; settlement_verified: boolean; reason: string}[] };
     family_results?: {family_id: string; statistics: {raw_trials: number; calendar_days: number; pbo: number; dsr_by_trial: number[]}}[];
     failed_attempts: number; incomplete_attempts: number;
@@ -86,6 +89,19 @@ export function MLLabView({ data, failed = false }: { data?: MLLabPayload; faile
           <div className="mt-3 text-xs"><strong>Funding settlement proof</strong><p className="mt-1 text-dim">{pipeline?.funding_evidence?.stale === false ? "Collector report current" : "Collector report unavailable or stale"}</p>{pipeline?.funding_evidence?.markets.map(m => <p key={m.symbol} className="mt-2 text-warn">{m.symbol}: {m.history_archived ? "history archived" : "history unavailable"} · {m.settlement_verified ? "settlement verified" : "settlement unverified"} · {readable(m.reason)}</p>)}</div>
         </section>
       </div>
+      <section className="mt-4 rounded-xl border border-line p-4"><h3 className="text-sm font-semibold">What still needs evidence</h3>
+        <p className="mt-1 text-xs text-dim">Recorded is not approved. These steps cannot enable trading, start training or manufacture labels.</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">{pipeline?.readiness_worklist?.map(item => <div key={item.id} className="rounded border border-line bg-inset/50 p-3 text-xs">
+          <div className="flex justify-between gap-3"><strong>{item.title}</strong><span className="text-warn">{readable(item.status)}</span></div>
+          <p className="mt-2 text-dim">{readable(item.owner)} · {item.action}</p>
+        </div>)}</div>
+        {!pipeline?.readiness_worklist?.length && <p className="mt-3 text-xs text-dim">Prerequisite report unavailable. No readiness is inferred.</p>}
+      </section>
+      <section className="mt-4 rounded-xl border border-line p-4"><h3 className="text-sm font-semibold">Accounting lanes</h3>
+        {pipeline?.ledger_sources?.map(source => <div key={source.lane} className="mt-3 border-t border-line pt-3 text-xs"><p className="break-all font-mono">{source.lane}</p><p>{source.state} · {source.labels} labels</p><p className="text-warn">{Object.entries(source.rejections).map(([reason, count]) => `${readable(reason)}: ${count}`).join(" · ")}</p></div>)}
+        {!pipeline?.ledger_sources?.length && <p className="mt-3 text-xs text-dim">No accounting-lane report available.</p>}
+        <p className="mt-3 text-xs text-dim">Non-label infrastructure sources: {pipeline?.non_label_sources?.map(s => `${s.file} (${readable(s.reason)})`).join(" · ") || "none reported"}. These are not missing paper trades.</p>
+      </section>
       <section className="mt-4 rounded-xl border border-line p-4"><h3 className="text-sm font-semibold">Exclusion ledger</h3><p className="mt-1 text-xs text-dim">All reasons are counted. One record can fail more than one check.</p>
         <div className="mt-3 grid gap-2 md:grid-cols-2">{Object.entries(audit?.exclusions || {}).sort((a, b) => b[1] - a[1]).map(([reason, n]) => <div key={reason} className="flex justify-between gap-3 rounded bg-inset/60 p-2 text-xs"><span>{readable(reason)}</span><strong className="font-mono text-warn">{n}</strong></div>)}</div>
         {!Object.keys(audit?.exclusions || {}).length && <p className="mt-3 text-xs text-dim">{audit ? "No exclusions in the inspected records. This does not establish label readiness." : "No audit available."}</p>}

@@ -1,0 +1,17 @@
+# Opt-in public-domain endpoint; keep the existing 8765 listener unchanged.
+# Public ACME certificates require the chosen domain to resolve to this VM.
+import /etc/caddy/Caddyfile.legacy
+
+https://{$DASHBOARD_DOMAIN} {
+    @allowed remote_ip {$DASHBOARD_ALLOWLIST:127.0.0.1/32 ::1/128}
+    handle @allowed {
+        reverse_proxy multi-lane-shadow:8080
+    }
+    handle {
+        respond "Forbidden" 403
+    }
+}
+
+http://{$DASHBOARD_DOMAIN} {
+    redir https://{host}{uri} permanent
+}

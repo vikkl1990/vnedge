@@ -117,6 +117,8 @@ def build_ml_pipeline_status(*, lane_dir: Path, data_root: Path, lab_root: Path 
     except (OSError, ValueError, KeyError, TypeError):
         funding = {"markets": [], "stale": True, "reason": "funding_evidence_unavailable"}
     pipeline["funding_evidence"] = funding
+    from vnedge.ml.readiness import readiness_worklist
+    pipeline["readiness_worklist"] = readiness_worklist(audit, pipeline)
     validation = None
     trainable = validated = passed = False
     stage = "BLOCKED_LABEL_PROOF" if audit["counts"]["feature_rows"] or audit["counts"]["exit_records"] else "COLLECTING_LABELS"
