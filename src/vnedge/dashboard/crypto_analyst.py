@@ -77,6 +77,12 @@ def _empty(symbol: str, timeframe: str, reason: str) -> dict[str, Any]:
         "as_of": None,
         "analysis_id": None,
         "can_trade": False,
+        "history": {
+            "required_bars": SPEC["minimum_bars"],
+            "contiguous_bars": 0,
+            "status": "unverified",
+            "reason": reason,
+        },
     }
 
 
@@ -98,13 +104,13 @@ def analyse_rows(
             if closed > now:
                 continue
             closed_flag = row.get("is_closed")
-            if not isinstance(closed_flag, (bool, np.bool_)):
-                return _empty(symbol, timeframe, "closed_bar_proof_missing")
-            if not closed_flag:
+            if isinstance(closed_flag, (bool, np.bool_)) and not closed_flag:
                 continue
             epoch = int(opened.timestamp())
             problem = None
-            if (
+            if not isinstance(closed_flag, (bool, np.bool_)):
+                problem = "closed_bar_proof_missing"
+            elif (
                 opened.microsecond
                 or opened.nanosecond
                 or epoch % seconds
@@ -159,10 +165,21 @@ def analyse_rows(
         suffix.append(row)
         next_epoch = epoch
     suffix.reverse()
+    history = {
+        "required_bars": SPEC["minimum_bars"],
+        "contiguous_bars": len(suffix),
+        "status": "ready" if len(suffix) >= SPEC["minimum_bars"] else "collecting",
+        "reason": cut_reason,
+        "first_open": pd.Timestamp(suffix[0]["open_time"]).isoformat(),
+        "last_close": pd.Timestamp(suffix[-1]["close_time"]).isoformat(),
+        "recovery": "Verified owner repair or uninterrupted new bars; no estimated completion time.",
+    }
     if len(suffix) < SPEC["minimum_bars"]:
         result = _empty(symbol, timeframe, "insufficient_contiguous_history")
         result.update(
-            bars=len(suffix), issues=[x for x in (cut_reason, "need_60_contiguous_bars") if x]
+            bars=len(suffix),
+            history=history,
+            issues=[x for x in (cut_reason, "need_60_contiguous_bars") if x],
         )
         return result
     df = pd.DataFrame(suffix)
@@ -271,6 +288,7 @@ def analyse_rows(
         "alignment": round(score, 1),
         "coverage_pct": sum(c["weight"] for c in components if c["value"] is not None),
         "bars": len(suffix),
+        "history": history,
         "as_of": latest_close.isoformat(),
         "age_s": age,
         "analysis_id": _digest([SPEC_HASH, exchange, symbol, timeframe, source_refs]),

@@ -103,6 +103,42 @@ def test_gap_does_not_get_filled_or_joined_across():
     assert report["state"] == "unavailable"
     assert report["bars"] == 19
     assert "history_gap" in report["issues"]
+    assert report["history"]["contiguous_bars"] == 19
+    assert report["history"]["required_bars"] == 60
+    assert report["history"]["status"] == "collecting"
+    assert report["metrics"] == {}  # public observations never become technical prices
+
+
+def test_old_missing_closed_proof_cuts_history_instead_of_poisoning_new_window():
+    rows = bars()
+    rows[10]["is_closed"] = None
+    report = run(rows)
+    assert report["state"] == "current"
+    assert report["bars"] == 89
+    assert "closed_bar_proof_missing" in report["issues"]
+    assert report["alignment"] == run(rows[11:])["alignment"]
+    assert report["series_hash"] == run(rows[11:])["series_hash"]
+    assert rows[10]["is_closed"] is None  # no repair or attestation by the reader
+
+
+def test_recent_missing_closed_proof_still_blocks_and_reports_progress():
+    rows = bars()
+    rows[-20]["is_closed"] = None
+    report = run(rows)
+    assert report["state"] == "unavailable"
+    assert report["history"]["contiguous_bars"] == 19
+    assert report["history"]["status"] == "collecting"
+    assert "closed_bar_proof_missing" in report["issues"]
+    assert report["alignment"] is None
+
+
+def test_missing_latest_proof_has_no_fabricated_history_progress():
+    rows = bars()
+    rows[-1].pop("is_closed")
+    report = run(rows)
+    assert report["history"]["status"] == "unverified"
+    assert report["history"]["contiguous_bars"] == 0
+    assert report["as_of"] is None
 
 
 def test_old_gap_is_disclosed_and_features_restart_on_contiguous_suffix():

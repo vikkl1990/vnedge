@@ -1,5 +1,26 @@
 # VNEDGE Crypto Analyst — architecture and end-to-end local build
 
+## Market-data visibility correction · 2026-09-14
+
+The market table separates timestamped public REST mark price, spread and USD
+open interest from canonical closed price, technical alignment and setups.
+Public observations remain visible when technical history is unavailable, but
+expire using venue/receipt timestamps and their recorded TTL. They are never
+copied into candle metrics or used to admit a technical scan result.
+
+Each canonical report exposes its required and contiguous verified bar counts,
+latest verified close, and history-cut reason. Product discovery alone is
+reported as “Canonical history not collected,” not technical coverage. There
+is no promised recovery time: another gap can interrupt the window.
+
+Correctness patch: a historical row with missing `is_closed` proof is a break
+in the series, just like an unverified hash or coverage gap. A later complete
+verified suffix may be analyzed; the unproven row is never used or rewritten.
+Missing proof on the latest row still blocks the report. This changes reader
+eligibility for formerly poisoned windows, not the alignment formula, live
+strategy IDs, decision clocks, or trading permissions. Stored reports remain
+unchanged.
+
 ## Build status · 2026-09-14
 
 The second slice connects product discovery → public observations → immutable

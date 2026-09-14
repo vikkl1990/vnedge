@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CryptoAnalystView, analystMatches, analystNumber, type AnalystMarket, type AnalystPayload } from "./CryptoAnalyst";
+import { CryptoAnalystView, analystMatches, analystNumber, publicMarketValues, historyProgress, type AnalystMarket, type AnalystPayload } from "./CryptoAnalyst";
 
 const row: AnalystMarket = { symbol: "BTCUSD", timeframe: "15m", state: "current", bias: "bullish", alignment: 65,
   coverage_pct: 100, analysis_id: "proof", as_of: "2026-09-13T12:00:00Z", supports: ["Price above the EMA stack"],
@@ -13,6 +13,43 @@ const payload: AnalystPayload = { schema: "crypto_analyst_v1", spec_hash: "spec"
   breadth: { bullish: 1, bearish: 0, mixed: 0, denominator: 1 }, markets: [row] };
 
 describe("Crypto Analyst", () => {
+  const publicRow = (): AnalystMarket => ({ ...row, state: "unavailable", bias: "unknown", metrics: {},
+    alignment: null, as_of: null, components: [], supports: [], conflicts: [], setups: [], sparkline: [],
+    issues: ["history_gap", "need_60_contiguous_bars"],
+    history: { required_bars: 60, contiguous_bars: 1, status: "collecting", reason: "history_gap" },
+    market_evidence: { conditions: { state: "current", source: "delta_public_rest_ticker",
+      venue_ts: new Date(Date.now()-1000).toISOString(), received_at: new Date(Date.now()-500).toISOString(),
+      expires_after_s: 120, values: { mark_price: 78506.12, spread_bps: 0.064, open_interest_usd: 72210873 } } } });
+  it("shows public market data while technical history is unavailable without creating a score", () => {
+    const market = publicRow();
+    const html = renderToStaticMarkup(createElement(CryptoAnalystView, { data: { ...payload,
+      markets: [market], universe: { ...payload.universe, current: 0 },
+      breadth: { bullish: 0, bearish: 0, mixed: 0, denominator: 0 } } }));
+    expect(html).toContain("78,506.12");
+    expect(html).toContain("72,210,873");
+    expect(html).toContain("delta_public_rest_ticker");
+    expect(html).toContain("1 / 60 consecutive verified bars");
+    expect(html).toContain("Market data and technical analysis are separate");
+    expect(html).toContain("Public mark price");
+    expect(html).toContain("Last closed price");
+    expect(analystMatches(market, "", "trend_watch", "all")).toBe(false);
+    expect(market.metrics).toEqual({});
+  });
+  it("withholds expired, future, unproven and disconnected public values", () => {
+    const market = publicRow();
+    expect(publicMarketValues(market, Date.now()).mark_price).toBe(78506.12);
+    expect(publicMarketValues(market, Date.now()+121000)).toEqual({});
+    expect(publicMarketValues(market, Date.now()-10000)).toEqual({});
+    expect(publicMarketValues(market, Date.now(), true)).toEqual({});
+    delete market.market_evidence!.conditions.expires_after_s;
+    expect(publicMarketValues(market, Date.now())).toEqual({});
+  });
+  it("does not pretend product discovery is candle coverage", () => {
+    expect(historyProgress({ ...publicRow(), issues: ["no_canonical_analysis_in_covered_universe"] }))
+      .toBe("Canonical history not collected");
+    expect(historyProgress({ ...publicRow(), history: { required_bars: 60, contiguous_bars: 0,
+      status: "unverified", reason: "closed_bar_proof_missing" } })).toContain("History unverified");
+  });
   it("preserves zero and unavailable values", () => {
     expect(analystNumber(0)).toBe("0");
     expect(analystNumber(null)).toBe("—");

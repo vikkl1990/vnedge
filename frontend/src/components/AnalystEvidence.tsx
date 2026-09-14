@@ -52,12 +52,13 @@ export function MarketConditions({ observations }: { observations?: Record<strin
     <div className="ca-between"><h4>Public market conditions</h4><span className="ca-chip">{conditionState}</span></div>
     <p className="ca-muted">Independent REST sample · not lane BBO or trade permission</p>
     <dl className="ca-levels">
+      <div><dt>Public mark price</dt><dd>{n(values?.mark_price)}</dd></div>
       <div><dt>Sample spread (bps)</dt><dd>{n(values?.spread_bps)}</dd></div>
       <div><dt>Open interest (contracts)</dt><dd>{n(values?.open_interest_contracts)}</dd></div>
       <div><dt>Indicative funding (%)</dt><dd>{n(values?.indicative_funding_pct)}</dd></div>
       <div><dt>Aggressor-buy sample (%)</dt><dd>{n(flowState === "current" ? flow?.buy_share_pct : undefined)}</dd></div>
     </dl>
-    <p className="ca-muted">{when(conditions?.venue_ts)} · Funding is not settled cash.</p>
+    <p className="ca-muted">{conditions?.source ?? "No public source"} · {when(conditions?.venue_ts)} · Funding is not settled cash.</p>
     <p className="ca-muted">Flow: {flowState}{flowState === "current" ? ` · ${flow?.sample_trades} prints; incomplete coverage` : ""}. No institution identity inferred.</p>
     {(conditions?.issues ?? []).map(issue => <p className="ca-warning" key={issue}>{issue.replace(/_/g, " ")}</p>)}
   </section>;
