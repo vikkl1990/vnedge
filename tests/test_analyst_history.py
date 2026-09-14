@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import sqlite3
 
 import pytest
 
@@ -102,3 +103,14 @@ def test_workspace_sources_do_not_fallback(tmp_path):
     dossier = workspace.dossier("delta_india", "BTCUSD", "official_delta")
     assert dossier["selected_source"] == "official_delta"
     assert all(s["state"] == "unavailable" for s in dossier["stages"])
+
+
+def test_history_rollback_journal_needs_no_writable_reader_sidecars(tmp_path):
+    path = tmp_path / "history.sqlite"
+    store = AnalystStore(path, writable=True, wal=False)
+    store.append("collector", "delta_india", {"ok": True}, NOW)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert AnalystStore(path).read("collector", "delta_india", now=NOW)[0]["body"] == {"ok": True}
+    assert not list(tmp_path.glob("*-shm"))
+    assert not list(tmp_path.glob("*-wal"))

@@ -179,7 +179,7 @@ def main() -> None:
     DEFAULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with DEFAULT_PATH.with_suffix(".lock").open("a") as lease:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        store = AnalystStore(DEFAULT_PATH, writable=True)
+        store = AnalystStore(DEFAULT_PATH, writable=True, wal=False)
         while True:
             issues = []
             for tf in ("15m", "5m", "1h", "4h"):

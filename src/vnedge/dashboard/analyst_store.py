@@ -35,13 +35,17 @@ def utc(value: str | datetime) -> datetime:
 
 
 class AnalystStore:
-    def __init__(self, path: Path, *, writable: bool = False) -> None:
+    def __init__(self, path: Path, *, writable: bool = False, wal: bool = True) -> None:
         self.path = path
         self.writable = writable
         if writable:
             path.parent.mkdir(parents=True, exist_ok=True)
             with closing(self._connect()) as connection, connection:
-                connection.execute("PRAGMA journal_mode=WAL")
+                # Rollback journal supports a physically read-only dashboard
+                # mount without creating WAL shared-memory sidecars. Existing
+                # stores retain WAL by default; only the isolated history owner
+                # opts out. SQLite locking still serializes writers/readers.
+                connection.execute("PRAGMA journal_mode=" + ("WAL" if wal else "DELETE"))
                 connection.execute("""CREATE TABLE IF NOT EXISTS evidence (
                     id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope TEXT NOT NULL,
                     available_at TEXT NOT NULL, body BLOB NOT NULL)""")

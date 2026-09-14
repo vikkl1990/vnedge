@@ -22,6 +22,9 @@ window. Snapshots are append-only, content-hashed, timestamped at receipt and
 never written into `data/candles`. Dashboard reads are local and read-only.
 The container has no credential file or canonical candle mount. Provision the
 directory as the deployment user before enabling the `analyst` profile.
+This store uses SQLite rollback journaling (not WAL), so a physically read-only
+dashboard mount can read without creating shared-memory sidecars. Existing
+Analyst stores retain their original journal mode.
 
 Rows must be finite, positive OHLC, valid OHLC geometry, aligned UTC opens,
 nonnegative venue volume and closed at the request boundary. Conflicting
