@@ -1360,11 +1360,11 @@ def create_app(
 
     @app.get("/api/crypto-analyst")
     async def crypto_analyst(request: Request, exchange: str = "delta_india",
-                             timeframe: str = "15m") -> JSONResponse:
+                             timeframe: str = "15m", source: str = "canonical") -> JSONResponse:
         """Independent technical research, no order or roster authority."""
         user = _authorized(request)
         try:
-            payload = await asyncio.to_thread(analyst_service.snapshot, exchange, timeframe)
+            payload = await asyncio.to_thread(analyst_service.snapshot, exchange, timeframe, source)
         except ValueError:
             return JSONResponse({"detail": "unsupported_or_unavailable_analyst_scope"},
                                 status_code=422, headers=_identity(user))
@@ -1372,10 +1372,10 @@ def create_app(
 
     @app.get("/api/crypto-analyst/symbol/{symbol}")
     async def crypto_analyst_symbol(request: Request, symbol: str,
-                                    exchange: str = "delta_india") -> JSONResponse:
+                                    exchange: str = "delta_india", source: str = "canonical") -> JSONResponse:
         user = _authorized(request)
         try:
-            payload = await asyncio.to_thread(analyst_service.dossier, exchange, symbol)
+            payload = await asyncio.to_thread(analyst_service.dossier, exchange, symbol, source)
         except ValueError:
             return JSONResponse({"detail": "unsupported_analyst_scope"}, status_code=422,
                                 headers=_identity(user))
@@ -1383,10 +1383,10 @@ def create_app(
 
     @app.get("/api/crypto-analyst/history/{symbol}")
     async def crypto_analyst_history(request: Request, symbol: str,
-                                     exchange: str = "delta_india") -> JSONResponse:
+                                     exchange: str = "delta_india", source: str = "canonical") -> JSONResponse:
         user = _authorized(request)
         try:
-            payload = await asyncio.to_thread(analyst_service.history, exchange, symbol)
+            payload = await asyncio.to_thread(analyst_service.history, exchange, symbol, source)
         except ValueError:
             return JSONResponse({"detail": "unsupported_analyst_scope"}, status_code=422,
                                 headers=_identity(user))
@@ -1394,10 +1394,10 @@ def create_app(
 
     @app.get("/api/crypto-analyst/answer/{symbol}")
     async def crypto_analyst_answer(request: Request, symbol: str, question: str,
-                                    exchange: str = "delta_india") -> JSONResponse:
+                                    exchange: str = "delta_india", source: str = "canonical") -> JSONResponse:
         user = _authorized(request)
         try:
-            payload = await asyncio.to_thread(analyst_service.answer, exchange, symbol, question)
+            payload = await asyncio.to_thread(analyst_service.answer, exchange, symbol, question, source)
         except ValueError:
             return JSONResponse({"detail": "unsupported_scope_or_question"}, status_code=422,
                                 headers=_identity(user))

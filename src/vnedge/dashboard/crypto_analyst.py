@@ -182,6 +182,20 @@ def analyse_rows(
             issues=[x for x in (cut_reason, "need_60_contiguous_bars") if x],
         )
         return result
+    return describe_window(suffix, symbol, exchange, timeframe, now, history, cut_reason)
+
+
+def describe_window(
+    suffix: list[dict[str, Any]], symbol: str, exchange: str, timeframe: str,
+    now: datetime, history: dict[str, Any], cut_reason: str | None,
+    *, source: str = "canonical_tick_lake", spec_hash: str = SPEC_HASH,
+) -> dict[str, Any]:
+    """Shared descriptive mathematics AFTER source-specific validation.
+
+    This is not a scanner or a source validator. Official history has a separate
+    validator and spec identity; it never enters analyse_rows' canonical gate.
+    """
+    seconds = TF_SECONDS[timeframe]
     df = pd.DataFrame(suffix)
     o, h, low, close, vol = (
         pd.to_numeric(df[k]).astype(float) for k in ("open", "high", "low", "close", "volume")
@@ -291,10 +305,10 @@ def analyse_rows(
         "history": history,
         "as_of": latest_close.isoformat(),
         "age_s": age,
-        "analysis_id": _digest([SPEC_HASH, exchange, symbol, timeframe, source_refs]),
+        "analysis_id": _digest([spec_hash, exchange, symbol, timeframe, source_refs]),
         "series_hash": _digest(source_refs),
         "anchor_hash": suffix[-1]["content_sha256"],
-        "source": "canonical_tick_lake",
+        "source": source,
         "supports": supports,
         "conflicts": conflicts,
         "issues": issues,

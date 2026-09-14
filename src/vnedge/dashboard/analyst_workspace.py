@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from vnedge.dashboard.analyst_public import PRODUCT_CAP, SYMBOL
+from vnedge.dashboard.analyst_history import OfficialAnalystService, frame as official_frame
 from vnedge.dashboard.analyst_store import AnalystStore, digest, utc
 from vnedge.dashboard.crypto_analyst import (
     EXCHANGES,
@@ -69,6 +70,7 @@ class AnalystWorkspace:
     def __init__(self, candle_root: Path, evidence_path: Path) -> None:
         self.core = CryptoAnalystService(candle_root)
         self.store = AnalystStore(evidence_path)
+        self.official = OfficialAnalystService(evidence_path.parent.parent / "analyst_official/evidence.sqlite")
         self._lock = threading.Lock()
         self._dossiers: OrderedDict[tuple[str, str], tuple[float, dict[str, Any]]] = OrderedDict()
 
@@ -104,9 +106,16 @@ class AnalystWorkspace:
                 }
         return result
 
-    def snapshot(self, exchange: str, timeframe: str) -> dict[str, Any]:
+    @staticmethod
+    def _source(exchange: str, source: str) -> None:
+        if source not in {"canonical", "official_delta"} or (source == "official_delta" and exchange != "delta_india"):
+            raise ValueError("unsupported_analyst_source")
+
+    def snapshot(self, exchange: str, timeframe: str, source: str = "canonical") -> dict[str, Any]:
+        self._source(exchange, source)
         # Never mutate the frozen v1 core cache or its alignment calculation.
-        report = copy.deepcopy(self.core.snapshot(exchange, timeframe))
+        report = copy.deepcopy((self.official if source == "official_delta" else self.core).snapshot(exchange, timeframe))
+        report["selected_source"] = source
         now = datetime.now(UTC)
         universe = self.universe(exchange, now)
         products = {r["symbol"]: r for r in universe["products"][:PRODUCT_CAP]}
@@ -114,7 +123,7 @@ class AnalystWorkspace:
         for symbol in sorted(products):
             if symbol not in known:
                 report["markets"].append(
-                    _empty(symbol, timeframe, "no_canonical_analysis_in_covered_universe")
+                    _empty(symbol, timeframe, "official_history_outside_selected_universe" if source == "official_delta" else "no_canonical_analysis_in_covered_universe")
                 )
         for row in report["markets"]:
             row["product"] = products.get(row["symbol"])
@@ -123,7 +132,7 @@ class AnalystWorkspace:
         report["public_universe"] = universe
         report["universe"]["displayed"] = len(report["markets"])
         report["universe"]["scope"] = (
-            "public product discovery + separate canonical technical coverage"
+            "public product discovery + separate " + source + " technical coverage"
         )
         report["public_observed_at"] = now.isoformat()
         report["capabilities"] = {
@@ -148,12 +157,22 @@ class AnalystWorkspace:
             )
         except Exception:  # noqa: BLE001
             report["collector"] = {"stale": True, "issues": ["collector_evidence_invalid"]}
+        if source == "official_delta":
+            try:
+                records = self.official.store.read("collector", exchange, now=now)
+                report["history_collector"] = (
+                    {**records[0]["body"], "stale": (now - utc(records[0]["body"]["generated_at"])).total_seconds() > 180}
+                    if records else {"stale": True, "issues": ["official_worker_not_started"]}
+                )
+            except Exception:  # noqa: BLE001
+                report["history_collector"] = {"stale": True, "issues": ["official_collector_evidence_invalid"]}
         return report
 
-    def dossier(self, exchange: str, symbol: str) -> dict[str, Any]:
+    def dossier(self, exchange: str, symbol: str, source: str = "canonical") -> dict[str, Any]:
+        self._source(exchange, source)
         if exchange not in EXCHANGES or not SYMBOL.fullmatch(symbol):
             raise ValueError("unsupported_analyst_scope")
-        key = (exchange, symbol)
+        key = (exchange + "/" + source, symbol)
         with self._lock:
             now = datetime.now(UTC)
             cached = self._dossiers.get(key)
@@ -179,7 +198,7 @@ class AnalystWorkspace:
             frames = []
             for tf in TIMEFRAMES:
                 try:
-                    frame = analyse_rows(
+                    frame = official_frame(self.official.store, symbol, tf, now) if source == "official_delta" else analyse_rows(
                         read_window(self.core.root, exchange, symbol, tf, now),
                         symbol,
                         exchange,
@@ -190,7 +209,8 @@ class AnalystWorkspace:
                     frame = _empty(symbol, tf, "series_read_failed")
                 frames.append(frame)
             market = self.conditions(exchange, symbol, now)
-            stages = self.stages(exchange, symbol, now)
+            stages = ([empty_stage(tf, "official_stage_not_validated") for tf in ("4h", "1d")]
+                      if source == "official_delta" else self.stages(exchange, symbol, now))
             fundamentals = fundamentals_dossier(self.store, symbol, now)
             evidence = []
             evidence.extend(fundamentals["evidence"])
@@ -211,7 +231,7 @@ class AnalystWorkspace:
                     evidence.append(
                         {
                             "id": frame["analysis_id"],
-                            "kind": "canonical_technical",
+                            "kind": source + "_technical",
                             "timeframe": frame["timeframe"],
                             "as_of": frame["as_of"],
                             "state": frame["state"],
@@ -245,6 +265,7 @@ class AnalystWorkspace:
             ]
             body = {
                 "schema": "analyst_dossier_v2",
+                "selected_source": source,
                 "exchange": exchange,
                 "symbol": symbol,
                 "generated_at": now.isoformat(),
@@ -286,7 +307,11 @@ class AnalystWorkspace:
                 results.append(empty_stage(tf, "stage_series_read_failed"))
         return results
 
-    def history(self, exchange: str, symbol: str) -> dict[str, Any]:
+    def history(self, exchange: str, symbol: str, source: str = "canonical") -> dict[str, Any]:
+        self._source(exchange, source)
+        if source == "official_delta":
+            return {"reports": [], "changes": [], "stage_reports": [], "can_trade": False,
+                    "status": "official_candle_snapshots_stored_no_stage_history"}
         if exchange not in EXCHANGES or not SYMBOL.fullmatch(symbol):
             raise ValueError("unsupported_analyst_scope")
         now = datetime.now(UTC)
@@ -309,11 +334,11 @@ class AnalystWorkspace:
                 "can_trade": False,
             }
 
-    def answer(self, exchange: str, symbol: str, question: str) -> dict[str, Any]:
+    def answer(self, exchange: str, symbol: str, question: str, source: str = "canonical") -> dict[str, Any]:
         """Deterministic evidence retrieval. No agent tools, paid model, or write access."""
         if not question.strip() or len(question) > 500:
             raise ValueError("question_length_bound")
-        dossier = self.dossier(exchange, symbol)
+        dossier = self.dossier(exchange, symbol, source)
         q = question.casefold()
         lines: list[dict[str, Any]] = []
         if any(

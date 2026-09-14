@@ -5,6 +5,7 @@ import { AnalystEvidence, MarketConditions, observationState, type PublicObserva
 import "./CryptoAnalyst.css";
 
 export interface AnalystMarket {
+  source?: string;
   symbol: string; timeframe: string; state: string; bias: string;
   alignment: number | null; coverage_pct: number; bars?: number;
   analysis_id: string | null; anchor_hash?: string; series_hash?: string;
@@ -18,6 +19,7 @@ export interface AnalystMarket {
   history?: { required_bars: number; contiguous_bars: number; status: string; reason?: string | null; last_close?: string; recovery?: string };
 }
 export interface AnalystPayload {
+  selected_source?: string;
   schema: string; spec_hash: string; generated_at: string; exchange: string; timeframe: string;
   session: string; brief: string;
   universe: { scope: string; discovered: number; displayed: number; current: number; truncated: boolean };
@@ -25,6 +27,7 @@ export interface AnalystPayload {
   markets: AnalystMarket[];
   public_universe?: { state: string; products: unknown[]; complete?: boolean };
   collector?: { stale: boolean; generated_at?: string; issues: string[] };
+  history_collector?: { stale: boolean; generated_at?: string; issues: string[] };
 }
 
 const SCANS = [
@@ -53,7 +56,7 @@ export function historyProgress(row: AnalystMarket): string {
   if (row.issues.includes("no_canonical_analysis_in_covered_universe")) return "Canonical history not collected";
   if (!h) return human(row.issues[0] ?? row.state);
   if (h.status === "unverified") return `History unverified: ${human(h.reason ?? row.issues[0] ?? "missing proof")}`;
-  return `${h.contiguous_bars} / ${h.required_bars} consecutive verified bars${h.status === "ready" ? " · window ready" : " · collecting"}`;
+  return `${h.contiguous_bars} / ${h.required_bars} consecutive ${row.source === "official_delta_ohlc" ? "official closed" : "verified"} bars${h.status === "ready" ? " · window ready" : " · collecting"}`;
 }
 function human(value: string): string { return value.replace(/_/g, " "); }
 function stamp(value: string | null | undefined): string {
@@ -70,17 +73,21 @@ function Spark({ points, bias }: { points: number[]; bias: string }) {
 export function CryptoAnalyst() {
   const [exchange, setExchange] = useState("delta_india");
   const [timeframe, setTimeframe] = useState("15m");
-  const query = useQuery({ queryKey: ["crypto-analyst", exchange, timeframe],
-    queryFn: () => apiGet<AnalystPayload>(`/api/crypto-analyst?${new URLSearchParams({ exchange, timeframe })}`),
+  const [selectedSource, setSource] = useState("official_delta");
+  const source = exchange === "delta_india" ? selectedSource : "canonical";
+  const query = useQuery({ queryKey: ["crypto-analyst", exchange, timeframe, source],
+    queryFn: () => apiGet<AnalystPayload>(`/api/crypto-analyst?${new URLSearchParams({ exchange, timeframe, source })}`),
     refetchInterval: 30_000, retry: 1 });
-  return <CryptoAnalystView key={`${exchange}:${timeframe}`} data={query.data} error={query.isError}
+  return <CryptoAnalystView key={`${exchange}:${timeframe}:${source}`} data={query.data} error={query.isError} source={source} setSource={setSource}
     loading={query.isFetching} exchange={exchange} timeframe={timeframe} interactiveEvidence
     setExchange={setExchange} setTimeframe={setTimeframe} refresh={() => { void query.refetch(); }} />;
 }
 
 export function CryptoAnalystView({ data, error = false, loading = false, exchange = "delta_india", timeframe = "15m",
+  source = "canonical", setSource = () => {},
   setExchange = () => {}, setTimeframe = () => {}, refresh = () => {}, interactiveEvidence = false,
 }: { data?: AnalystPayload; error?: boolean; loading?: boolean; exchange?: string; timeframe?: string;
+  source?: string; setSource?: (value: string) => void;
   setExchange?: (value: string) => void; setTimeframe?: (value: string) => void; refresh?: () => void; interactiveEvidence?: boolean }) {
   const [view, setView] = useState("overview");
   const [scan, setScan] = useState("all");
@@ -126,12 +133,15 @@ export function CryptoAnalystView({ data, error = false, loading = false, exchan
     <div className="ca-main">
       <header className="ca-toolbar"><div><span className="ca-overline">24/7 MARKETS / CLOSED-BAR ANALYSIS</span><h1>Crypto Analyst<span>.</span></h1></div>
         <div className="ca-controls"><label className="ca-sr" htmlFor="ca-venue">Venue</label><select id="ca-venue" value={exchange} onChange={e => setExchange(e.target.value)}>{VENUES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}</select>
+        <label className="ca-sr" htmlFor="ca-source">Analysis source</label><select id="ca-source" value={source} onChange={e => setSource(e.target.value)}><option value="canonical">Canonical trade lake</option>{exchange === "delta_india" && <option value="official_delta">Official Delta history</option>}</select>
         <label className="ca-sr" htmlFor="ca-tf">Analysis timeframe</label><select id="ca-tf" value={timeframe} onChange={e => setTimeframe(e.target.value)}>{["5m", "15m", "1h", "4h"].map(tf => <option key={tf}>{tf}</option>)}</select>
         <button className="ca-refresh" onClick={refresh} disabled={loading}>{loading ? "Updating…" : "↻ Refresh"}</button></div></header>
       <div className="ca-freshness"><span className={error || staleReport ? "ca-warning" : ""}>● {error ? "Connection unavailable" : staleReport ? "Report stale — historical view" : data ? "Connected · 30s refresh" : "Waiting for market data"}</span><span>{stamp(data?.generated_at)}</span><span>{data?.session ?? "UTC sessions · not exchange opening hours"}</span></div>
       {error && <div role="alert" className="ca-notice">Could not refresh analysis. Any previous report below is historical; it is not a live signal.</div>}
       {storageWarning && <div role="status" className="ca-notice">Watchlist storage is unavailable. Selections will last only for this visit.</div>}
-      {data?.public_universe && <div className="ca-discovery-status"><span className="ca-overline">PUBLIC DISCOVERY</span> {data.public_universe.products.length} products · {data.public_universe.state} · {data.public_universe.complete ? "pagination complete" : "coverage incomplete"}<span>Technical ranks still require canonical bars.</span></div>}
+      {source === "official_delta" && <div className="ca-notice"><strong>OFFICIAL DELTA HISTORY · ANALYSIS ONLY</strong> Separate backfilled OHLC series for 12 markets, refreshed after each close. Not trade-lake evidence. No exact session VWAP, scanner activation, ML promotion or trading permission.</div>}
+      {source === "official_delta" && data?.history_collector && (data.history_collector.stale || data.history_collector.issues.length > 0) && <div role="status" className="ca-warning">Official history refresh: {data.history_collector.stale ? "worker stale or starting" : "partial collection"} · {data.history_collector.issues.join(" · ")}</div>}
+      {data?.public_universe && <div className="ca-discovery-status"><span className="ca-overline">PUBLIC DISCOVERY</span> {data.public_universe.products.length} products · {data.public_universe.state} · {data.public_universe.complete ? "pagination complete" : "coverage incomplete"}<span>{source === "official_delta" ? "Technical ranks use the selected official-history universe." : "Technical ranks still require canonical bars."}</span></div>}
       {data?.collector?.stale && <div className="ca-notice">Public observation worker is not current. Expired samples cannot support live market conclusions.</div>}
       {data && !current.length && <div role="status" className="ca-notice"><strong>Market data and technical analysis are separate.</strong> {publicCount} markets have fresh public mark prices. No technical profiles are ready on {timeframe}. History gaps and proof failures are listed per market; public prices do not replace canonical candles.</div>}
       <div className="ca-intro"><span className="ca-overline">{view === "overview" ? "THE BIG PICTURE" : view === "brief" ? "YOUR MARKET ANALYST" : "FIND WHAT DESERVES ATTENTION"}</span>
@@ -143,7 +153,7 @@ export function CryptoAnalystView({ data, error = false, loading = false, exchan
             <div className="ca-breadth"><span style={{ width: `${bullishShare ?? 0}%` }} /><i style={{ width: `${bearishShare ?? 0}%` }} /></div>
             <div className="ca-between"><span className="ca-bullish">{analystNumber(bullishShare, 0)}% bullish</span><span className="ca-bearish">{analystNumber(bearishShare, 0)}% bearish</span></div>
             <p>{breadth?.denominator ?? 0} synchronized symbols · {breadth?.mixed ?? 0} mixed · equal-weight local coverage, not the whole crypto market.</p><small className="ca-muted">{breadth?.as_of ? stamp(breadth.as_of) : "No shared closed-bar observation"}</small></article>
-          <article className="ca-card"><span className="ca-overline">MARKET DATA / TECHNICAL COVERAGE</span><div className="ca-big">{data ? publicCount : "—"}<small> / {data?.universe.displayed ?? "—"}</small></div><h3>Fresh public mark prices</h3><p>{data?.universe.current ?? 0} markets with current technical analysis. {data?.universe.discovered ?? 0} canonical symbol directories discovered. Public product discovery is not candle coverage.</p>{data?.universe.truncated && <span className="ca-warning">Canonical analysis universe capped at 24 markets</span>}</article>
+          <article className="ca-card"><span className="ca-overline">MARKET DATA / TECHNICAL COVERAGE</span><div className="ca-big">{data ? publicCount : "—"}<small> / {data?.universe.displayed ?? "—"}</small></div><h3>Fresh public mark prices</h3><p>{data?.universe.current ?? 0} markets with current technical analysis. {data?.universe.discovered ?? 0} {source === "official_delta" ? "official-history markets selected" : "canonical symbol directories discovered"}. Public product discovery is not candle coverage.</p>{data?.universe.truncated && <span className="ca-warning">Canonical analysis universe capped at 24 markets</span>}</article>
           <article className="ca-card"><span className="ca-overline">PARTICIPATION</span><div className="ca-big">{data ? current.filter(r => r.setups.includes("volume_expansion")).length : "—"}<small> markets</small></div><h3>Relative volume ≥ 2×</h3><p>Versus the previous 20 bars. Participation is not proof of institutional activity.</p></article>
         </div>
         <article className="ca-brief"><span className="ca-brief-icon">✳</span><div><span className="ca-overline">ANALYST NOTE / EVIDENCE SUMMARY</span><p>{data?.brief ?? "Connect a covered market to build the first briefing. We will show what the data supports and what remains unknown."}</p><small>Rule-generated technical analysis · not an LLM forecast or a validated trading edge.</small></div></article>
@@ -152,7 +162,7 @@ export function CryptoAnalystView({ data, error = false, loading = false, exchan
       <div className="ca-workspace">
         <section className="ca-results"><div className="ca-results-head"><div><h3>{view === "watchlist" ? "My watchlist" : "Opportunity radar"}</h3><small>{rows.length} records · ranked by absolute alignment, not expected profit</small></div>
           <div className="ca-filters"><input aria-label="Search analyst symbols" placeholder="Search symbol…" value={search} onChange={e => setSearch(e.target.value)} /><select aria-label="Direction filter" value={bias} onChange={e => setBias(e.target.value)}><option value="all">Both directions</option><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="mixed">Mixed</option></select><button onClick={() => { setScan("all"); setBias("all"); setSearch(""); }}>Reset</button></div></div>
-          <p className="ca-muted">Public REST observations: mark price, spread and open interest. Separately: canonical closed price and technical profile. Expired public values are withheld.</p>
+          <p className="ca-muted">Public REST observations: mark price, spread and open interest. Separately: {source === "official_delta" ? "official-history" : "canonical"} closed price and technical profile. Expired public values are withheld.</p>
           <div className="ca-table-scroll"><table><thead><tr><th>Watch</th><th>Market</th><th>Public mark price</th><th>Spread (bps)</th><th>OI (USD)</th><th>Last closed price</th><th>12-bar move</th><th>Technical coverage</th><th>Alignment</th><th>Rel. volume</th><th>Recent tape</th></tr></thead><tbody>
             {rows.map(row => { const publicValues = publicMarketValues(row, clock, error || staleReport);
               const observation = row.market_evidence?.conditions;
@@ -184,8 +194,8 @@ export function CryptoAnalystView({ data, error = false, loading = false, exchan
           </> : <div className="ca-empty"><h3>Your analyst is ready</h3><p>Select a covered market to inspect its supporting evidence, contradictions and reference levels.</p></div>}
         </aside>
       </div>
-      {interactiveEvidence && active && <AnalystEvidence key={`${exchange}:${active.symbol}`} exchange={exchange} symbol={active.symbol} />}
-      <footer className="ca-footer"><span>ONE MARKET VIEW · MANY QUESTIONS</span><span>Canonical lake / closed bars / independent analysis · No automatic activation</span></footer>
+      {interactiveEvidence && active && <AnalystEvidence key={`${exchange}:${active.symbol}:${source}`} exchange={exchange} symbol={active.symbol} source={source} />}
+      <footer className="ca-footer"><span>ONE MARKET VIEW · MANY QUESTIONS</span><span>{source === "official_delta" ? "Official Delta history" : "Canonical lake"} / closed bars / independent analysis · No automatic activation</span></footer>
     </div>
   </section>;
 }

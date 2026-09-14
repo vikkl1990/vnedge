@@ -70,7 +70,7 @@ export function DossierFacts({ data }: { data?: Dossier }) {
     <div className="ca-tf-grid">{data.frames.map(frame => <article key={frame.timeframe}>
       <div className="ca-between"><strong>{frame.timeframe}</strong><span className={`ca-chip ca-${frame.state === "current" ? frame.bias : "muted"}`}>{frame.state === "current" ? frame.bias : frame.state}</span></div>
       <p>{frame.state === "current" ? `${frame.alignment} / ±100 alignment` : "No current directional conclusion"}</p><small>{when(frame.as_of)}</small>
-      <p className="ca-muted">{frame.issues.map(i => i.replace(/_/g, " ")).join(" · ") || "Closed canonical evidence"}</p>
+      <p className="ca-muted">{frame.source === "official_delta_ohlc" ? "Official Delta history · " : ""}{frame.issues.map(i => i.replace(/_/g, " ")).join(" · ") || "Closed canonical evidence"}</p>
     </article>)}</div>
     <p className="ca-muted">{data.clock_note}</p>
     {data.conflicts.map(c => <p className="ca-warning" key={c}>↔ {c.replace(/_/g, " ")}</p>)}
@@ -82,15 +82,15 @@ export function DossierFacts({ data }: { data?: Dossier }) {
   </>;
 }
 
-export function AnalystEvidence({ exchange, symbol }: { exchange: string; symbol: string }) {
-  const [tab, setTab] = useState("context"), [question, setQuestion] = useState(""), [asked, setAsked] = useState("");
-  const scope = new URLSearchParams({ exchange });
-  const dossier = useQuery({ queryKey: ["analyst-dossier", exchange, symbol],
+export function AnalystEvidence({ exchange, symbol, source = "canonical" }: { exchange: string; symbol: string; source?: string }) {
+  const [tab, setTab] = useState(source === "official_delta" ? "dossier" : "context"), [question, setQuestion] = useState(""), [asked, setAsked] = useState("");
+  const scope = new URLSearchParams({ exchange, source });
+  const dossier = useQuery({ queryKey: ["analyst-dossier", exchange, symbol, source],
     queryFn: () => apiGet<Dossier>(`/api/crypto-analyst/symbol/${encodeURIComponent(symbol)}?${scope}`), refetchInterval: 30_000, retry: 1 });
-  const history = useQuery({ queryKey: ["analyst-history", exchange, symbol], enabled: tab === "history",
+  const history = useQuery({ queryKey: ["analyst-history", exchange, symbol, source], enabled: tab === "history",
     queryFn: () => apiGet<History>(`/api/crypto-analyst/history/${encodeURIComponent(symbol)}?${scope}`), refetchInterval: 60_000, retry: 1 });
-  const answer = useQuery({ queryKey: ["analyst-answer", exchange, symbol, asked], enabled: !!asked && tab === "ask",
-    queryFn: () => apiGet<Answer>(`/api/crypto-analyst/answer/${encodeURIComponent(symbol)}?${new URLSearchParams({ exchange, question: asked })}`), retry: 1, staleTime: 0 });
+  const answer = useQuery({ queryKey: ["analyst-answer", exchange, symbol, source, asked], enabled: !!asked && tab === "ask",
+    queryFn: () => apiGet<Answer>(`/api/crypto-analyst/answer/${encodeURIComponent(symbol)}?${new URLSearchParams({ exchange, source, question: asked })}`), retry: 1, staleTime: 0 });
   return <section className="ca-evidence-panel" aria-label="Multi-timeframe analyst">
     <div className="ca-between"><h3>Explore {symbol}</h3><span className="ca-overline">EVIDENCE FIRST</span></div>
     <div className="ca-evidence-tabs" role="tablist" aria-label="Evidence views">

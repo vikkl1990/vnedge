@@ -13,6 +13,15 @@ const payload: AnalystPayload = { schema: "crypto_analyst_v1", spec_hash: "spec"
   breadth: { bullish: 1, bearish: 0, mixed: 0, denominator: 1 }, markets: [row] };
 
 describe("Crypto Analyst", () => {
+  it("labels official history separately and never calls it canonical proof", () => {
+    const official = { ...row, source: "official_delta_ohlc", history: { required_bars: 60, contiguous_bars: 512, status: "ready" } };
+    const html = renderToStaticMarkup(createElement(CryptoAnalystView, { source: "official_delta", data: { ...payload, markets: [official] } }));
+    expect(html).toContain("OFFICIAL DELTA HISTORY · ANALYSIS ONLY");
+    expect(html).toContain("No exact session VWAP");
+    expect(html).toContain("official-history markets selected");
+    expect(historyProgress(official)).toContain("official closed bars");
+    expect(html).not.toContain("canonical symbol directories discovered");
+  });
   const publicRow = (): AnalystMarket => ({ ...row, state: "unavailable", bias: "unknown", metrics: {},
     alignment: null, as_of: null, components: [], supports: [], conflicts: [], setups: [], sparkline: [],
     issues: ["history_gap", "need_60_contiguous_bars"],
