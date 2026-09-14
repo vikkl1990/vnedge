@@ -127,3 +127,18 @@ def test_workspace_uses_official_reports_without_relabeling(tmp_path, monkeypatc
     assert all(e["source"] == h.SOURCE for e in dossier["evidence"] if e["kind"] == "market_stage")
     assert len(workspace.history("delta_india", "BTCUSD", "official_delta")["stage_reports"]) == 2
     assert all(stage["state"] == "unavailable" for stage in workspace.dossier("delta_india", "BTCUSD")["stages"])
+
+
+def test_evidence_answer_cannot_describe_reconstruction_as_live_history(store, tmp_path, monkeypatch):
+    rec = source(store)
+    stage = s.classify(rec, "BTCUSD", "4h", NOW)
+    workspace = AnalystWorkspace(tmp_path / "candles", tmp_path / "analyst/evidence.sqlite")
+    monkeypatch.setattr(workspace, "dossier", lambda *args: dict(
+        dossier_id="test", generated_at=NOW.isoformat(), stages=[stage], frames=[],
+        market_evidence={}, gaps=[], conflicts=[], evidence=[], fundamentals={"fields": [], "note": ""}))
+    result = workspace.answer("delta_india", "BTCUSD", "What stage is this market in?", "official_delta")
+    text = " ".join(line["text"] for line in result["answer"])
+    assert "reconstructed closes" in text
+    assert "Official Delta OHLC collected" in text
+    assert "not events the bot observed live" in text
+    assert "observed closes" not in text

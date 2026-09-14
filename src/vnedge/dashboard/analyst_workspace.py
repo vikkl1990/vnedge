@@ -369,10 +369,12 @@ class AnalystWorkspace:
                 else:
                     lines.append(
                         {
-                            "text": f"{stage['timeframe']}: {stage['stage']}, previously {stage['previous_stage'] or 'unknown'}, {stage['bars_in_state']} observed closes in state. History is bounded, not lifetime duration.",
+                            "text": f"{stage['timeframe']}: {stage['stage']}, previously {stage['previous_stage'] or 'unknown'}, {stage['bars_in_state']} {'reconstructed' if stage.get('history_kind') == 'reconstructed' else 'observed'} closes in state. History is bounded, not lifetime duration.",
                             "citations": refs,
                         }
                     )
+                    if stage.get("history_kind") == "reconstructed":
+                        lines.append({"text": f"Official Delta OHLC collected {stage.get('collected_at')}; reconstructed transitions are not events the bot observed live.", "citations": refs})
                     for watch in stage["watch"]:
                         lines.append({"text": watch["condition"], "citations": refs})
                     lines.append({"text": stage["invalidation"], "citations": refs})
